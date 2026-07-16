@@ -1,0 +1,13 @@
+/results/
+/.cache/
+/.pytest_cache/
+/.ruff_cache/
+/.venv/
+__pycache__/
+*.py[cod]
+*.pcap
+*.pcapng
+*.qlog
+*.log
+workloads/*.probe-*/
+workloads/*.sha256.tmp

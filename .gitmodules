@@ -1,0 +1,4 @@
+[submodule "third_party/neqo-qcsd"]
+	path = third_party/neqo-qcsd
+	url = https://github.com/kaisequeira/neqo-qcsd.git
+	branch = qcsd-migration

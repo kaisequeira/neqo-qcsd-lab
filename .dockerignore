@@ -1,0 +1,12 @@
+.git
+third_party/neqo-qcsd/.git
+results
+.cache
+.venv
+.pytest_cache
+.ruff_cache
+**/__pycache__
+**/*.pyc
+**/target
+*.pcap
+*.pcapng

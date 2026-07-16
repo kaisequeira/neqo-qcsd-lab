@@ -1,0 +1,33 @@
+{
+  "schema_version": 2,
+  "header_policy": {
+    "mode": "custom",
+    "overrides": [["accept", "application/octet-stream"], ["x-qcsd-test", "dependency-order"]],
+    "allow_conditional": false,
+    "allow_range": false
+  },
+  "resources": [
+    {
+      "id": 0,
+      "url": "https://127.0.0.1:4433/1048576",
+      "type": "Document",
+      "content_length": 1048576,
+      "data_length": 1048576,
+      "chaff_priority": true,
+      "known_valid": true,
+      "depends_on": [],
+      "headers": [["accept-encoding", "identity"]]
+    },
+    {
+      "id": 1,
+      "url": "https://127.0.0.1:4433/1024",
+      "type": "Script",
+      "content_length": 1024,
+      "data_length": 1024,
+      "chaff_priority": false,
+      "known_valid": true,
+      "depends_on": [0],
+      "headers": [["referer", "https://127.0.0.1:4433/1048576"]]
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+#!/bin/sh
+set -eu
+
+uid="${QCSD_LAB_UID:?QCSD_LAB_UID is required}"
+gid="${QCSD_LAB_GID:?QCSD_LAB_GID is required}"
+
+exec setpriv \
+  --reuid "${uid}" \
+  --regid "${gid}" \
+  --clear-groups \
+  --bounding-set=-all,+net_raw,+net_admin \
+  --inh-caps=+net_raw,+net_admin \
+  --ambient-caps=+net_raw,+net_admin \
+  --no-new-privs \
+  qcsd-lab-internal "$@"

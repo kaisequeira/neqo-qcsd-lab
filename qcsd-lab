@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+COLLECTION_IMAGE="${QCSD_LAB_COLLECTION_IMAGE:-neqo-qcsd-lab-collection:local}"
+DISCOVERY_IMAGE="${QCSD_LAB_DISCOVERY_IMAGE:-neqo-qcsd-lab-discovery:local}"
+
+usage() {
+  echo "Usage: qcsd-lab {doctor|image build|discover|probe|collect|plot|report|test} [arguments...]" >&2
+}
+
+command -v docker >/dev/null 2>&1 || {
+  echo "qcsd-lab requires Docker on the host" >&2
+  exit 1
+}
+
+if ! docker info >/dev/null 2>&1; then
+  echo "Docker is installed but its daemon is unavailable" >&2
+  exit 1
+fi
+
+if [[ "${1:-}" == "image" && "${2:-}" == "build" ]]; then
+  target="${3:-all}"
+  case "${target}" in
+    collection|discovery|all) ;;
+    *) echo "image target must be collection, discovery, or all" >&2; exit 2 ;;
+  esac
+  if [[ "${target}" == "collection" || "${target}" == "all" ]]; then
+    docker build --pull --target collection \
+      --tag "${COLLECTION_IMAGE}" --file "${ROOT}/containers/Dockerfile" "${ROOT}"
+  fi
+  if [[ "${target}" == "discovery" || "${target}" == "all" ]]; then
+    docker build --pull --target discovery \
+      --tag "${DISCOVERY_IMAGE}" --file "${ROOT}/containers/Dockerfile" "${ROOT}"
+  fi
+  exit 0
+fi
+
+if [[ "${1:-}" == "doctor" ]] && ! docker image inspect "${COLLECTION_IMAGE}" >/dev/null 2>&1; then
+  echo "Docker is healthy. Build the pinned collection image with: ./qcsd-lab image build collection"
+  exit 0
+fi
+
+if [[ ! -f "${ROOT}/third_party/neqo-qcsd/Cargo.lock" ]]; then
+  echo "Missing Neqo submodule; run: git submodule update --init --recursive" >&2
+  exit 1
+fi
+
+case "${1:-}" in
+  discover) image="${DISCOVERY_IMAGE}" ;;
+  doctor|probe|collect|plot|report|test) image="${COLLECTION_IMAGE}" ;;
+  *) usage; exit 2 ;;
+esac
+
+if ! docker image inspect "${image}" >/dev/null 2>&1; then
+  echo "Missing image ${image}; run: ./qcsd-lab image build" >&2
+  exit 1
+fi
+
+mkdir -p "${ROOT}/results" "${ROOT}/workloads"
+image_id="$(docker image inspect --format '{{.Id}}' "${image}")"
+runtime=(--rm --security-opt no-new-privileges)
+if [[ "${1:-}" == "discover" ]]; then
+  runtime+=(--user "$(id -u):$(id -g)")
+else
+  # SETUID/SETGID exist only for the root entrypoint's one-time UID transition;
+  # SETPCAP lets that entrypoint reduce the final capability bounding set.
+  runtime+=(
+    --cap-drop ALL
+    --cap-add NET_RAW --cap-add NET_ADMIN
+    --cap-add SETUID --cap-add SETGID --cap-add SETPCAP
+    --env "QCSD_LAB_UID=$(id -u)"
+    --env "QCSD_LAB_GID=$(id -g)"
+  )
+fi
+exec docker run "${runtime[@]}" \
+  --network bridge \
+  --env "HOME=/tmp/qcsd-home" \
+  --env "MPLCONFIGDIR=/tmp/matplotlib" \
+  --env "QCSD_LAB_IMAGE_DIGEST=${image_id}" \
+  --volume "${ROOT}:/lab:ro" \
+  --volume "${ROOT}/results:/lab/results:rw" \
+  --volume "${ROOT}/workloads:/lab/workloads:rw" \
+  --workdir /lab \
+  "${image_id}" "$@"

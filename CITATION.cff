@@ -1,0 +1,25 @@
+cff-version: 1.2.0
+message: "If you use this experiment harness, cite both this software and the QCSD paper."
+title: "neqo-qcsd-lab: Live QCSD Capture and Visualization"
+type: software
+authors:
+  - family-names: "Sequeira"
+    given-names: "Kai"
+date-released: 2026-07-16
+license: MIT
+repository-code: "https://github.com/kaisequeira/neqo-qcsd-lab"
+references:
+  - type: conference-paper
+    title: "QCSD: A QUIC Client-Side Website-Fingerprinting Defence Framework"
+    authors:
+      - family-names: "Smith"
+        given-names: "Jean-Pierre"
+      - family-names: "Dolfi"
+        given-names: "Luca"
+      - family-names: "Mittal"
+        given-names: "Prateek"
+      - family-names: "Perrig"
+        given-names: "Adrian"
+    year: 2022
+    conference: "31st USENIX Security Symposium"
+    url: "https://www.usenix.org/conference/usenixsecurity22/presentation/smith"
