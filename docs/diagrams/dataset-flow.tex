@@ -1,0 +1,50 @@
+\documentclass[tikz,border=0pt]{standalone}
+\input{qcsd-diagram-style.tex}
+
+\begin{document}
+\begin{tikzpicture}[x=1cm,y=1cm]
+  \QCSDSvgMetadata
+    {Concrete paired visit and classifier split example}
+    {Workload A visit 3 expands into undefended, FRONT, and Tamaraw page loads. All three share one test assignment and feed separately trained classifiers when their outer traces validate. Any failure or content drift excludes the entire paired visit from comparison but remains in failure statistics.}
+  \path[use as bounding box] (0,0) rectangle (15.5,7.15);
+
+  \node[caption,font=\bfseries] at (1.55,6.68) {one planned visit};
+  \path[draw=qink,fill=white,line width=.7pt,rounded corners=2pt]
+    (.55,5.22) rectangle (2.55,6.18);
+  \node[caption,font=\bfseries] at (1.55,5.87) {workload A};
+  \node[small note] at (1.55,5.52) {visit 3};
+  \path[draw=qink,fill=qpale,line width=.6pt,rounded corners=1.5pt]
+    (.92,4.45) rectangle (2.18,4.90);
+  \node[caption] at (1.55,4.67) {split: \textbf{TEST}};
+  \node[tiny note,align=center,text width=2.9cm] at (1.55,3.95)
+    {The assignment belongs to the visit,\\not to an individual defense.};
+
+  \draw[plain flow] (2.72,5.70) -- (3.42,5.70);
+  \draw[plain flow] (3.42,2.72) -- (3.42,5.70);
+
+  \foreach \y/\defense in {5.70/Undefended,4.21/FRONT,2.72/Tamaraw} {
+    \draw[flow] (3.42,\y) -- (4.05,\y);
+    \pic[scale=.92] at (4.42,\y) {client};
+    \node[caption,anchor=west] at (4.87,\y) {\defense};
+    \node[tiny note,anchor=west] at (4.87,{\y-.31}) {separate page load};
+
+    \draw[flow] (6.65,\y) -- (7.05,\y);
+    \pic[scale=.93] at (7.40,\y) {capture};
+    \node[small note,anchor=west] at (7.79,{\y+.11}) {outer trace};
+    \node[tiny note,anchor=west] at (7.79,{\y-.20}) {same TEST split};
+
+    \draw[flow] (9.30,\y) -- (10.30,\y);
+    \pic[scale=1.02] at (10.72,\y) {classifier};
+    \node[caption,anchor=west] at (11.20,\y) {\defense\ classifier};
+  }
+
+  \node[small note,anchor=west,align=left] at (10.35,6.55)
+    {Each defense gets its own attacker;\\membership and split stay identical.};
+
+  \draw[failure] (7.40,2.35) -- (7.40,1.13) -- (8.20,1.13);
+  \node[caption,text=qred,anchor=west,align=left,text width=6.4cm] at (8.30,1.35)
+    {If any one load fails, drifts, or lacks a valid outer trace:};
+  \node[small note,anchor=west,align=left,text width=6.4cm] at (8.30,.78)
+    {exclude all three from classifier comparison; retain the event in failure statistics.};
+\end{tikzpicture}
+\end{document}

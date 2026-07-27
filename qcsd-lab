@@ -4,9 +4,26 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COLLECTION_IMAGE="${QCSD_LAB_COLLECTION_IMAGE:-neqo-qcsd-lab-collection:local}"
 DISCOVERY_IMAGE="${QCSD_LAB_DISCOVERY_IMAGE:-neqo-qcsd-lab-discovery:local}"
+DEVELOPMENT_IMAGE="${QCSD_LAB_DEVELOPMENT_IMAGE:-neqo-qcsd-lab-development:local}"
 
 usage() {
-  echo "Usage: qcsd-lab {doctor|image build|discover|probe|collect|plot|report|test} [arguments...]" >&2
+  echo "Usage: qcsd-lab {image build|dev|discover|probe|collect|dataset|test} [arguments...]" >&2
+}
+
+require_submodule() {
+  if [[ ! -f "${ROOT}/neqo-qcsd/Cargo.lock" ]]; then
+    echo "Missing Neqo submodule; run: git submodule update --init --recursive" >&2
+    exit 1
+  fi
+}
+
+build_image() {
+  local target="$1"
+  local tag="$2"
+  local allow_dirty="$3"
+  docker build --pull --target "${target}" \
+    --build-arg "QCSD_ALLOW_DIRTY=${allow_dirty}" \
+    --tag "${tag}" --file "${ROOT}/Dockerfile" "${ROOT}"
 }
 
 command -v docker >/dev/null 2>&1 || {
@@ -20,35 +37,74 @@ if ! docker info >/dev/null 2>&1; then
 fi
 
 if [[ "${1:-}" == "image" && "${2:-}" == "build" ]]; then
-  target="${3:-all}"
-  case "${target}" in
-    collection|discovery|all) ;;
-    *) echo "image target must be collection, discovery, or all" >&2; exit 2 ;;
-  esac
+  require_submodule
+  shift 2
+  target="all"
+  target_seen=0
+  allow_dirty=0
+  while (( $# )); do
+    case "$1" in
+      collection|discovery|all)
+        if (( target_seen )); then
+          echo "image build accepts only one target" >&2
+          exit 2
+        fi
+        target="$1"
+        target_seen=1
+        ;;
+      --dev) allow_dirty=1 ;;
+      *) echo "image target must be collection, discovery, or all; optional flag: --dev" >&2; exit 2 ;;
+    esac
+    shift
+  done
   if [[ "${target}" == "collection" || "${target}" == "all" ]]; then
-    docker build --pull --target collection \
-      --tag "${COLLECTION_IMAGE}" --file "${ROOT}/containers/Dockerfile" "${ROOT}"
+    build_image collection "${COLLECTION_IMAGE}" "${allow_dirty}"
   fi
   if [[ "${target}" == "discovery" || "${target}" == "all" ]]; then
-    docker build --pull --target discovery \
-      --tag "${DISCOVERY_IMAGE}" --file "${ROOT}/containers/Dockerfile" "${ROOT}"
+    build_image discovery "${DISCOVERY_IMAGE}" "${allow_dirty}"
   fi
   exit 0
 fi
 
-if [[ "${1:-}" == "doctor" ]] && ! docker image inspect "${COLLECTION_IMAGE}" >/dev/null 2>&1; then
-  echo "Docker is healthy. Build the pinned collection image with: ./qcsd-lab image build collection"
-  exit 0
+if [[ "${1:-}" == "dev" ]]; then
+  require_submodule
+  shift
+  # This target contains only the reusable compiler and pinned NSS toolchain.
+  # Rebuilding it on entry is inexpensive after the first BuildKit-cached run.
+  docker build --pull --target development \
+    --tag "${DEVELOPMENT_IMAGE}" --file "${ROOT}/Dockerfile" "${ROOT}"
+  mkdir -p \
+    "${ROOT}/.cache/dev/cargo" \
+    "${ROOT}/.cache/dev/home" \
+    "${ROOT}/.cache/dev/target"
+  image_id="$(docker image inspect --format '{{.Id}}' "${DEVELOPMENT_IMAGE}")"
+  command=("$@")
+  if (( ${#command[@]} == 0 )); then
+    command=(/bin/bash)
+  fi
+  terminal=()
+  if [[ -t 0 && -t 1 ]]; then
+    terminal=(-it)
+  fi
+  exec docker run --rm "${terminal[@]}" \
+    --network bridge \
+    --user "$(id -u):$(id -g)" \
+    --env "CARGO_HOME=/cache/cargo" \
+    --env "CARGO_TARGET_DIR=/cache/target" \
+    --env "HOME=/cache/home" \
+    --volume "${ROOT}:/workspace/neqo-qcsd-lab:rw" \
+    --volume "${ROOT}/.cache/dev/cargo:/cache/cargo:rw" \
+    --volume "${ROOT}/.cache/dev/home:/cache/home:rw" \
+    --volume "${ROOT}/.cache/dev/target:/cache/target:rw" \
+    --workdir /workspace/neqo-qcsd-lab/neqo-qcsd \
+    "${image_id}" "${command[@]}"
 fi
 
-if [[ ! -f "${ROOT}/third_party/neqo-qcsd/Cargo.lock" ]]; then
-  echo "Missing Neqo submodule; run: git submodule update --init --recursive" >&2
-  exit 1
-fi
+require_submodule
 
 case "${1:-}" in
   discover) image="${DISCOVERY_IMAGE}" ;;
-  doctor|probe|collect|plot|report|test) image="${COLLECTION_IMAGE}" ;;
+  probe|collect|dataset|test) image="${COLLECTION_IMAGE}" ;;
   *) usage; exit 2 ;;
 esac
 
@@ -57,7 +113,7 @@ if ! docker image inspect "${image}" >/dev/null 2>&1; then
   exit 1
 fi
 
-mkdir -p "${ROOT}/results" "${ROOT}/workloads"
+mkdir -p "${ROOT}/results" "${ROOT}/config/workloads"
 image_id="$(docker image inspect --format '{{.Id}}' "${image}")"
 runtime=(--rm --security-opt no-new-privileges)
 if [[ "${1:-}" == "discover" ]]; then
@@ -73,13 +129,161 @@ else
     --env "QCSD_LAB_GID=$(id -g)"
   )
 fi
-exec docker run "${runtime[@]}" \
-  --network bridge \
-  --env "HOME=/tmp/qcsd-home" \
-  --env "MPLCONFIGDIR=/tmp/matplotlib" \
-  --env "QCSD_LAB_IMAGE_DIGEST=${image_id}" \
-  --volume "${ROOT}:/lab:ro" \
-  --volume "${ROOT}/results:/lab/results:rw" \
-  --volume "${ROOT}/workloads:/lab/workloads:rw" \
-  --workdir /lab \
-  "${image_id}" "$@"
+container=(
+  docker run "${runtime[@]}"
+  --network bridge
+  --env "HOME=/tmp/qcsd-home"
+  --env "MPLCONFIGDIR=/tmp/matplotlib"
+  --env "QCSD_LAB_IMAGE_DIGEST=${image_id}"
+  --volume "${ROOT}:/lab:ro"
+  --volume "${ROOT}/results:/lab/results:rw"
+  --volume "${ROOT}/config/workloads:/lab/config/workloads:rw"
+  --workdir /lab
+)
+
+sidecars=()
+wireguard_environment=()
+cleanup_sidecars() {
+  local name
+  for name in "${sidecars[@]}"; do
+    docker rm -f "${name}" >/dev/null 2>&1 || true
+  done
+}
+
+start_wireguard_gateway() {
+  local name="$1"
+  local test_server_ports="${2:-}"
+  local gateway_private gateway_public client_private client_public
+  gateway_private="$(docker run --rm --entrypoint /usr/bin/wg "${image_id}" genkey)"
+  gateway_public="$(printf '%s\n' "${gateway_private}" | docker run --rm -i --entrypoint /usr/bin/wg "${image_id}" pubkey)"
+  client_private="$(docker run --rm --entrypoint /usr/bin/wg "${image_id}" genkey)"
+  client_public="$(printf '%s\n' "${client_private}" | docker run --rm -i --entrypoint /usr/bin/wg "${image_id}" pubkey)"
+  sidecars+=("${name}")
+  docker run --detach --name "${name}" \
+    --network bridge \
+    --cap-drop ALL --cap-add NET_ADMIN --cap-add NET_RAW \
+    --device /dev/net/tun \
+    --sysctl net.ipv4.ip_forward=1 \
+    --env "QCSD_WG_GATEWAY_PRIVATE_KEY=${gateway_private}" \
+    --env "QCSD_WG_CLIENT_PUBLIC_KEY=${client_public}" \
+    --env "QCSD_WG_TEST_SERVER_PORTS=${test_server_ports}" \
+    --entrypoint /usr/local/bin/wireguard-gateway-entrypoint \
+    "${image_id}" >/dev/null
+  QCSD_GATEWAY_ADDRESS="$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${name}")"
+  QCSD_GATEWAY_PUBLIC_KEY="${gateway_public}"
+  QCSD_CLIENT_PRIVATE_KEY="${client_private}"
+  test -n "${QCSD_GATEWAY_ADDRESS}"
+  sleep 1
+}
+
+run_wireguard_client() {
+  "${container[@]}" \
+    --device /dev/net/tun \
+    --env "QCSD_WG_GATEWAY_ADDRESS=${QCSD_GATEWAY_ADDRESS}" \
+    --env "QCSD_WG_GATEWAY_PUBLIC_KEY=${QCSD_GATEWAY_PUBLIC_KEY}" \
+    --env "QCSD_WG_CLIENT_PRIVATE_KEY=${QCSD_CLIENT_PRIVATE_KEY}" \
+    "${wireguard_environment[@]}" \
+    "${image_id}" "$@"
+}
+
+if [[ "${1:-}" == "test" ]]; then
+  capture_acceptance=0
+  for argument in "$@"; do
+    if [[ "${argument}" == "--capture-acceptance" ]]; then
+      capture_acceptance=1
+    fi
+  done
+  if (( capture_acceptance )); then
+    if [[ ! -c /dev/net/tun ]]; then
+      echo "capture acceptance requires /dev/net/tun for its WireGuard half" >&2
+      exit 1
+    fi
+    trap cleanup_sidecars EXIT INT TERM
+    test_port=4433
+    second_test_port=4434
+    direct_server="qcsd-direct-server-$$"
+    second_direct_server="qcsd-direct-server-two-$$"
+    sidecars+=("${direct_server}" "${second_direct_server}")
+    docker run --detach --name "${direct_server}" \
+      --network bridge \
+      --entrypoint /usr/local/bin/neqo-server \
+      "${image_id}" "0.0.0.0:${test_port}" >/dev/null
+    docker run --detach --name "${second_direct_server}" \
+      --network bridge \
+      --entrypoint /usr/local/bin/neqo-server \
+      "${image_id}" "0.0.0.0:${second_test_port}" >/dev/null
+    direct_address="$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${direct_server}")"
+    second_direct_address="$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${second_direct_server}")"
+    test -n "${direct_address}" && test -n "${second_direct_address}"
+    sleep 1
+    set +e
+    "${container[@]}" \
+      --env "QCSD_CAPTURE_ACCEPTANCE_PART=direct" \
+      --env "QCSD_CAPTURE_SERVER_ADDRESS=${direct_address}" \
+      --env "QCSD_CAPTURE_SERVER_PORT=${test_port}" \
+      --env "QCSD_CAPTURE_SERVER_TWO_ADDRESS=${second_direct_address}" \
+      --env "QCSD_CAPTURE_SERVER_TWO_PORT=${second_test_port}" \
+      "${image_id}" "$@"
+    direct_status=$?
+    set -e
+    docker rm -f "${direct_server}" >/dev/null 2>&1 || true
+    docker rm -f "${second_direct_server}" >/dev/null 2>&1 || true
+    if (( direct_status != 0 )); then
+      exit "${direct_status}"
+    fi
+
+    gateway_name="qcsd-wg-gateway-$$"
+    start_wireguard_gateway "${gateway_name}" "${test_port} ${second_test_port}"
+    wireguard_environment=(
+      --env "QCSD_CAPTURE_ACCEPTANCE_PART=wireguard"
+      --env "QCSD_CAPTURE_SERVER_ADDRESS=10.203.0.1"
+      --env "QCSD_CAPTURE_SERVER_PORT=${test_port}"
+      --env "QCSD_CAPTURE_SERVER_TWO_ADDRESS=10.203.0.1"
+      --env "QCSD_CAPTURE_SERVER_TWO_PORT=${second_test_port}"
+    )
+    set +e
+    run_wireguard_client "$@"
+    wireguard_status=$?
+    set -e
+    exit "${wireguard_status}"
+  fi
+fi
+
+if [[ "${1:-}" == "collect" ]]; then
+  capture_mode=""
+  previous=""
+  for argument in "$@"; do
+    if [[ "${previous}" == "--capture" ]]; then
+      capture_mode="${argument}"
+    fi
+    case "${argument}" in
+      --capture=*) capture_mode="${argument#--capture=}" ;;
+    esac
+    previous="${argument}"
+  done
+  if [[ -z "${capture_mode}" ]]; then
+    echo "collect requires --capture direct or --capture wireguard" >&2
+    exit 2
+  fi
+  if [[ "${capture_mode}" == "direct" ]]; then
+    exec "${container[@]}" "${image_id}" "$@"
+  fi
+  if [[ "${capture_mode}" != "wireguard" ]]; then
+    echo "unsupported capture mode: ${capture_mode}" >&2
+    exit 2
+  fi
+  if [[ ! -c /dev/net/tun ]]; then
+    echo "WireGuard collection requires /dev/net/tun" >&2
+    exit 1
+  fi
+  gateway_name="qcsd-wg-gateway-$$"
+  trap cleanup_sidecars EXIT INT TERM
+  start_wireguard_gateway "${gateway_name}" "${QCSD_WG_TEST_SERVER_PORT:-}"
+  set +e
+  run_wireguard_client "$@"
+  status=$?
+  set -e
+  exit "${status}"
+fi
+
+exec "${container[@]}" "${image_id}" "$@"

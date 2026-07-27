@@ -9,5 +9,5 @@ __pycache__/
 *.pcapng
 *.qlog
 *.log
-workloads/*.probe-*/
-workloads/*.sha256.tmp
+config/workloads/*.probe-*/
+config/workloads/*.tmp

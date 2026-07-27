@@ -1,0 +1,63 @@
+\documentclass[tikz,border=0pt]{standalone}
+\input{qcsd-diagram-style.tex}
+
+\begin{document}
+\begin{tikzpicture}[x=1cm,y=1cm]
+  \QCSDSvgMetadata
+    {QCSD passive observer and capture taps}
+    {The WireGuard classification path has a diagnostic tap before encapsulation and an authoritative passive observer on the encrypted outer flow. Direct mode uses container eth0 for the diagnostic tap and omits WireGuard and the outer tap.}
+  \path[use as bounding box] (0,0) rectangle (15.5,5.4);
+
+  \pic[scale=1.28] at (.95,3.70) {client};
+  \node[caption] at (.95,3.00)
+    {Neqo / QUIC\\[-1pt]\footnotesize QCSD defense};
+
+  \draw[flow] (1.48,3.70) -- (3.00,3.70);
+  \node[small note,above=4pt] at (2.22,3.70) {inner QUIC};
+  \fill[qteal] (2.22,3.70) circle (.065);
+  \draw[diagnostic] (2.22,3.62) -- (2.22,2.42);
+  \pic[scale=1.00] at (2.22,2.08) {capture};
+  \node[small note,text=qteal] at (2.22,1.56) {diagnostic tap};
+  \node[tiny note] at (2.22,1.20)
+    {WireGuard: \texttt{wg0} \quad direct: \texttt{eth0}};
+  \node[tiny note] at (2.22,.86) {origin endpoints visible};
+  \node[tiny note,text width=4.3cm] at (2.22,.42)
+    {Direct mode omits the tunnel and amber tap.};
+
+  \pic[scale=1.18] at (3.46,3.70) {tunnel};
+  \node[caption] at (3.46,3.00)
+    {WireGuard\\[-1pt]\footnotesize encapsulation};
+
+  \draw[authoritative] (3.92,3.70) -- (9.55,3.70);
+  \node[small note,above=4pt] at (6.72,3.70)
+    {encrypted outer UDP flow};
+  \foreach \x/\w in {4.50/.25,4.91/.38,5.47/.21,5.97/.47,6.67/.29,7.15/.20,7.57/.40}
+    \draw[qamber,fill=qamberpale,line width=.55pt,rounded corners=1.2pt]
+      (\x,3.33) rectangle ++(\w,.15);
+
+  \fill[qamber] (6.72,3.70) circle (.075);
+  \draw[qamber,line width=.9pt] (6.72,3.62) -- (6.72,2.42);
+  \pic[scale=1.16] at (6.72,2.04) {observer};
+  \node[small note,text=qamber] at (6.72,1.51)
+    {authoritative tap};
+  \node[tiny note] at (6.72,1.15)
+    {WireGuard-only container \texttt{eth0}};
+  \node[tiny note] at (6.72,.81)
+    {time, size, direction and gateway visible};
+
+  \pic[scale=1.16] at (10.00,3.70) {gateway};
+  \node[caption] at (10.00,3.00)
+    {gateway\\[-1pt]\footnotesize decrypts and routes};
+  \coordinate (fork) at (10.82,3.70);
+  \draw[plain flow] (10.43,3.70) -- (fork);
+  \draw[flow] (fork) |- (12.16,4.27);
+  \draw[flow] (fork) |- (12.16,3.12);
+  \pic[scale=1.08] at (12.60,4.27) {globe};
+  \node[caption,anchor=west] at (13.00,4.27) {DNS resolver};
+  \pic[scale=1.08] at (12.60,3.12) {server};
+  \node[caption,anchor=west] at (13.00,3.12) {HTTP/3 origins};
+
+  \node[small note,anchor=west,align=left,text width=4.6cm] at (10.82,1.36)
+    {Unavailable to the observer:\\destinations, keys, qlogs, responses and schedules};
+\end{tikzpicture}
+\end{document}

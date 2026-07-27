@@ -1,5 +1,4 @@
 {
-  "schema_version": 2,
   "header_policy": {
     "mode": "custom",
     "overrides": [["accept", "application/octet-stream"], ["x-qcsd-test", "dependency-order"]],

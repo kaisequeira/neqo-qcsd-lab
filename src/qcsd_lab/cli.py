@@ -3,28 +3,35 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
-from .campaign import NEQO_CLIENT, collect_campaign
+from .campaign import CampaignIncomplete, NEQO_CLIENT, collect_campaign
+from .dataset import DatasetValidationError, package_dataset, validate_dataset
 from .discover import discover
-from .manifest import write_frozen_manifest
-from .plotting import plot_samples
-from .report import create_report
-from .util import LAB_ROOT, git_commit, run
+from .manifest import runtime_manifest, validate_manifest, write_frozen_manifest
+from .util import LAB_ROOT, run
+
+
+RESPONSE_STABILITY_RUNS = 3
+RESPONSE_STABILITY_INTERVAL_SECONDS = 30
 
 
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(prog="qcsd-lab", description="Live QCSD capture laboratory")
     commands = root.add_subparsers(dest="command", required=True)
 
-    commands.add_parser("doctor", help="check the collection environment")
-
     discovery = commands.add_parser("discover", help="freeze public browser request definitions")
     discovery.add_argument("--url", action="append", required=True)
+    discovery.add_argument(
+        "--allow-origin",
+        action="append",
+        required=True,
+        help="explicit HTTPS origin approved for replay (repeatable)",
+    )
     discovery.add_argument("--output", type=Path, required=True)
     discovery.add_argument("--timeout-ms", type=int, default=60_000)
     discovery.add_argument("--force", action="store_true")
@@ -41,45 +48,81 @@ def parser() -> argparse.ArgumentParser:
         help="retain resources that did not pass direct HTTP/3 preflight",
     )
 
-    collect = commands.add_parser("collect", help="run a versioned sequential campaign")
+    collect = commands.add_parser("collect", help="run a sequential capture campaign")
     collect.add_argument("--campaign", type=Path, required=True)
+    collect.add_argument("--capture", choices=("direct", "wireguard"), required=True)
+    collect.add_argument(
+        "--outer-only",
+        action="store_true",
+        help="omit the optional inner-QUIC view from WireGuard collection",
+    )
+    collect.add_argument("--network-condition")
     collect.add_argument("--results", type=Path, default=Path("/lab/results"))
-    collect.add_argument("--force", action="store_true")
+    collect.add_argument("--resume", type=Path, help="resume an existing result root")
 
-    plot = commands.add_parser("plot", help="render observer, exactness, rate, and comparison plots")
-    plot.add_argument("samples", type=Path, nargs="+")
-    plot.add_argument("--output", type=Path, required=True)
-    plot.add_argument("--bin-ms", type=int, default=50)
-
-    report = commands.add_parser("report", help="aggregate campaign samples")
-    report.add_argument("--results", type=Path, required=True)
-    report.add_argument("--output", type=Path, required=True)
+    dataset = commands.add_parser("dataset", help="validate or package a classifier dataset")
+    dataset_commands = dataset.add_subparsers(dest="dataset_command", required=True)
+    validate = dataset_commands.add_parser("validate", help="validate dataset invariants and PCAP traces")
+    validate.add_argument("root", type=Path)
+    package = dataset_commands.add_parser("package", help="create an observer-only publication package")
+    package.add_argument("root", type=Path)
+    package.add_argument("--pcaps", choices=("primary", "all", "none"), default="primary")
+    package.add_argument("--output", type=Path)
+    package.add_argument("--data-license")
 
     test = commands.add_parser("test", help="run deterministic lab tests")
     test.add_argument("--local-acceptance", action="store_true")
     test.add_argument("--capture-acceptance", action="store_true")
-    test.add_argument("pytest_args", nargs=argparse.REMAINDER)
     return root
 
 
 def main(argv: list[str] | None = None) -> None:
-    args = parser().parse_args(argv)
-    if args.command == "doctor":
-        _doctor()
-    elif args.command == "discover":
-        digest = discover(args.url, args.output, timeout_ms=args.timeout_ms, force=args.force)
+    argument_parser = parser()
+    args, extra = argument_parser.parse_known_args(argv)
+    if extra and args.command != "test":
+        argument_parser.error(f"unrecognized arguments: {' '.join(extra)}")
+    if args.command == "discover":
+        digest = discover(
+            args.url,
+            args.output,
+            allow_origins=args.allow_origin,
+            timeout_ms=args.timeout_ms,
+            force=args.force,
+        )
         print(f"wrote {args.output} ({digest})")
     elif args.command == "probe":
         _probe(args)
     elif args.command == "collect":
-        root = collect_campaign(args.campaign.resolve(), args.results.resolve(), force=args.force)
+        try:
+            root = collect_campaign(
+                args.campaign.resolve(),
+                args.results.resolve(),
+                capture=args.capture,
+                outer_only=args.outer_only,
+                network_condition=args.network_condition,
+                resume=args.resume.resolve() if args.resume else None,
+            )
+        except CampaignIncomplete as error:
+            print(error, file=sys.stderr)
+            raise SystemExit(1) from None
         print(root)
-    elif args.command == "plot":
-        plot_samples([sample.resolve() for sample in args.samples], args.output.resolve(), bin_ms=args.bin_ms)
-        print(args.output)
-    elif args.command == "report":
-        create_report(args.results.resolve(), args.output.resolve())
-        print(args.output)
+    elif args.command == "dataset":
+        if args.dataset_command == "validate":
+            try:
+                result = validate_dataset(args.root.resolve())
+            except DatasetValidationError as error:
+                print(json.dumps({"valid": False, "errors": error.errors}, indent=2))
+                raise SystemExit(1) from None
+            print(json.dumps(result, indent=2))
+        elif args.dataset_command == "package":
+            print(
+                package_dataset(
+                    args.root.resolve(),
+                    pcaps=args.pcaps,
+                    output=args.output.resolve() if args.output else None,
+                    data_license=args.data_license,
+                )
+            )
     elif args.command == "test":
         environment = os.environ.copy()
         if args.local_acceptance:
@@ -87,53 +130,12 @@ def main(argv: list[str] | None = None) -> None:
         if args.capture_acceptance:
             environment["QCSD_RUN_CAPTURE_ACCEPTANCE"] = "1"
         result = subprocess.run(
-            [sys.executable, "-m", "pytest", *args.pytest_args],
+            [sys.executable, "-m", "pytest", "-p", "no:cacheprovider", *extra],
             cwd=LAB_ROOT,
             env=environment,
             check=False,
         )
         raise SystemExit(result.returncode)
-
-
-def _doctor() -> None:
-    required = ["dumpcap", "tshark", "capinfos", "ethtool", "git", "neqo-qcsd-client"]
-    missing = [program for program in required if shutil.which(program) is None]
-    report = {
-        "ok": not missing,
-        "missing": missing,
-        "uid": os.getuid(),
-        "gid": os.getgid(),
-        "image_digest": os.environ.get("QCSD_LAB_IMAGE_DIGEST", "unknown"),
-        "lab_commit": git_commit(LAB_ROOT),
-        "neqo_commit": git_commit(LAB_ROOT / "third_party/neqo-qcsd"),
-        "nss": {
-            "version": os.environ.get("NSS_VERSION", "unknown"),
-            "revision": os.environ.get("NSS_REVISION", "unknown"),
-        },
-        "nspr": {
-            "version": os.environ.get("NSPR_VERSION", "unknown"),
-            "revision": os.environ.get("NSPR_REVISION", "unknown"),
-        },
-        "versions": {},
-    }
-    status = Path("/proc/self/status")
-    if status.exists():
-        report["capabilities"] = {
-            key: value
-            for line in status.read_text(encoding="utf-8").splitlines()
-            if line.startswith(("CapInh:", "CapPrm:", "CapEff:", "CapBnd:", "CapAmb:"))
-            for key, value in [line.split(":", 1)]
-        }
-    for program in required:
-        if program not in missing:
-            version = run([program, "--version"], check=False)
-            report["versions"][program] = version.stdout.splitlines()[0] if version.stdout else "unknown"
-    interface = os.environ.get("QCSD_LAB_INTERFACE", "eth0")
-    report["interface"] = run(["ip", "-details", "link", "show", interface], check=False).stdout
-    report["offloads"] = run(["ethtool", "-k", interface], check=False).stdout
-    print(json.dumps(report, indent=2))
-    if missing:
-        raise SystemExit(1)
 
 
 def _probe(args: argparse.Namespace) -> None:
@@ -144,14 +146,21 @@ def _probe(args: argparse.Namespace) -> None:
         )
         raise SystemExit(1)
     args.output.parent.mkdir(parents=True, exist_ok=True)
+    source = json.loads(args.input_manifest.read_text(encoding="utf-8"))
+    validate_manifest(source)
     with tempfile.TemporaryDirectory(prefix="qcsd-probe-", dir=args.output.parent) as directory:
+        runtime_input = Path(directory) / "input.json"
+        runtime_input.write_text(
+            json.dumps(runtime_manifest(source), indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
         temporary_output = Path(directory) / "resolved.json"
         result = run(
             [
                 NEQO_CLIENT,
                 "probe",
                 "--input-manifest",
-                str(args.input_manifest),
+                str(runtime_input),
                 "--output",
                 str(temporary_output),
                 "--max-bytes",
@@ -163,30 +172,158 @@ def _probe(args: argparse.Namespace) -> None:
             check=False,
         )
         if result.returncode:
+            if result.stdout:
+                print(result.stdout, file=sys.stderr, end="")
             raise SystemExit(result.returncode)
         resolved = json.loads(temporary_output.read_text(encoding="utf-8"))
-    if not args.keep_unavailable:
+        try:
+            resolved = resolve_probe_output(
+                source, resolved, keep_unavailable=args.keep_unavailable
+            )
+        except ValueError as error:
+            if str(error) == "preflight left no directly fetchable HTTP/3 resources":
+                print("preflight left no directly fetchable HTTP/3 resources", file=sys.stderr)
+                raise SystemExit(1)
+            raise
+        if resolved.get("replay") is not None:
+            stability = _probe_response_stability(
+                resolved,
+                Path(directory),
+                max_bytes=args.max_bytes,
+                timeout_seconds=args.timeout_seconds,
+            )
+            resolved["replay"]["response_stability"] = stability
+            required = {resource["id"] for resource in resolved["resources"]}
+            unstable = required - set(stability["stable_resource_ids"])
+            if unstable:
+                ids = ", ".join(map(str, sorted(unstable)))
+                print(
+                    f"preflight found changing responses for resource IDs: {ids}",
+                    file=sys.stderr,
+                )
+                raise SystemExit(1)
+    digest = write_frozen_manifest(args.output, resolved, force=args.force)
+    print(f"wrote {args.output} ({digest})")
+
+
+def _probe_response_stability(
+    manifest: dict, directory: Path, *, max_bytes: int, timeout_seconds: int
+) -> dict:
+    runtime_input = directory / "stability-input.json"
+    runtime_input.write_text(
+        json.dumps(runtime_manifest(manifest), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    runs: list[dict] = []
+    for index in range(RESPONSE_STABILITY_RUNS):
+        if index:
+            time.sleep(RESPONSE_STABILITY_INTERVAL_SECONDS)
+        output = directory / f"stability-{index}"
+        result = run(
+            [
+                NEQO_CLIENT,
+                "run",
+                "--workload",
+                str(runtime_input),
+                "--profile",
+                "live",
+                "--defense",
+                "none",
+                "--seed",
+                "0",
+                "--output-dir",
+                str(output),
+                "--max-response-bytes",
+                str(max_bytes),
+                "--timeout-seconds",
+                str(timeout_seconds),
+            ],
+            log=directory / f"stability-{index}.log",
+            check=False,
+        )
+        if result.returncode:
+            if result.stdout:
+                print(result.stdout, file=sys.stderr, end="")
+            raise SystemExit(result.returncode)
+        runs.append(json.loads((output / "run.json").read_text(encoding="utf-8")))
+    return response_stability_evidence(runs)
+
+
+def response_stability_evidence(runs: list[dict]) -> dict:
+    """Report resources whose complete response identity repeats exactly."""
+
+    if len(runs) < 2:
+        raise ValueError("response stability requires at least two runs")
+    signatures: list[dict[int, tuple]] = []
+    for run_data in runs:
+        if run_data.get("completion_status") != "complete":
+            signatures.append({})
+            continue
+        signatures.append(
+            {
+                int(response["resource_id"]): (
+                    response.get("status"),
+                    response.get("bytes"),
+                    response.get("body_sha256"),
+                    response.get("outcome"),
+                    response.get("complete"),
+                )
+                for response in run_data.get("responses", [])
+                if response.get("complete") is True
+                and response.get("outcome") == "succeeded"
+            }
+        )
+    all_ids = set().union(*(set(signature) for signature in signatures))
+    stable = [
+        resource_id
+        for resource_id in sorted(all_ids)
+        if all(
+            resource_id in signature
+            and signature[resource_id] == signatures[0].get(resource_id)
+            for signature in signatures
+        )
+    ]
+    return {"runs": len(runs), "stable_resource_ids": stable}
+
+
+def resolve_probe_output(
+    source: dict, resolved: dict, *, keep_unavailable: bool
+) -> dict:
+    """Merge independent probe results while preserving the source graph audit."""
+
+    unavailable = [
+        resource for resource in resolved["resources"] if not resource.get("known_valid")
+    ]
+    if not keep_unavailable:
         available = {
             resource["id"] for resource in resolved["resources"] if resource.get("known_valid")
         }
-        changed = True
-        while changed:
-            retained = {
-                resource["id"]
-                for resource in resolved["resources"]
-                if resource["id"] in available
-                and set(resource.get("depends_on", [])) <= available
-            }
-            changed = retained != available
-            available = retained
         resolved["resources"] = [
-            resource for resource in resolved["resources"] if resource["id"] in available
+            {
+                **resource,
+                "depends_on": [
+                    dependency
+                    for dependency in resource.get("depends_on", [])
+                    if dependency in available
+                ],
+            }
+            for resource in resolved["resources"]
+            if resource["id"] in available
         ]
         if not resolved["resources"]:
-            print("preflight left no directly fetchable HTTP/3 resources", file=sys.stderr)
-            raise SystemExit(1)
-    digest = write_frozen_manifest(args.output, resolved, force=args.force)
-    print(f"wrote {args.output} ({digest})")
+            raise ValueError("preflight left no directly fetchable HTTP/3 resources")
+    replay = source.get("replay")
+    if replay is not None:
+        resolved["replay"] = dict(replay)
+        resolved["replay"]["exclusions"] = [
+            *replay.get("exclusions", []),
+            *(
+                {"url": resource["url"], "reason": "HTTP/3 preflight unavailable"}
+                for resource in unavailable
+            ),
+        ]
+    validate_manifest(resolved)
+    return resolved
 
 
 if __name__ == "__main__":

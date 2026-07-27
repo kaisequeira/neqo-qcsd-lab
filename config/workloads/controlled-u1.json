@@ -1,0 +1,16 @@
+{
+  "header_policy": {"mode": "minimal", "allow_conditional": false, "allow_range": false},
+  "resources": [
+    {
+      "id": 0,
+      "url": "https://10.203.0.1:4433/12288",
+      "type": "Document",
+      "content_length": 12288,
+      "data_length": 12288,
+      "chaff_priority": true,
+      "known_valid": true,
+      "depends_on": [],
+      "headers": [["accept-encoding", "identity"]]
+    }
+  ]
+}

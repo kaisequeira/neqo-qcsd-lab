@@ -16,6 +16,18 @@ CONNECTION_SPECIFIC = {
     "transfer-encoding",
     "upgrade",
 }
+MANIFEST_KEYS = {"header_policy", "resources", "replay"}
+REPLAY_KEYS = {
+    "source_url",
+    "final_url",
+    "chromium_version",
+    "settle_ms",
+    "observed_request_count",
+    "observed_origins",
+    "reviewed_origins",
+    "exclusions",
+    "response_stability",
+}
 
 
 def safe_discovery_headers(headers: dict[str, str]) -> list[list[str]]:
@@ -34,8 +46,17 @@ def safe_discovery_headers(headers: dict[str, str]) -> list[list[str]]:
 
 
 def validate_manifest(manifest: dict[str, Any]) -> None:
-    if manifest.get("schema_version") not in (1, 2):
-        raise ValueError("manifest schema_version must be 1 or 2")
+    if not isinstance(manifest, dict):
+        raise ValueError("manifest must be a JSON object")
+    unknown = set(manifest) - MANIFEST_KEYS
+    if unknown:
+        names = ", ".join(sorted(unknown))
+        raise ValueError(f"manifest contains unsupported fields: {names}")
+    policy = manifest.get("header_policy", {})
+    if not isinstance(policy, dict):
+        raise ValueError("manifest header_policy must be an object")
+    if "replay" in manifest:
+        _validate_replay(manifest["replay"])
     resources = manifest.get("resources")
     if not isinstance(resources, list) or not resources:
         raise ValueError("manifest requires at least one resource")
@@ -44,6 +65,8 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         raise ValueError("resource IDs must be present and unique")
     graph: dict[int, list[int]] = {}
     for resource in resources:
+        if not isinstance(resource, dict):
+            raise ValueError("manifest resources must be objects")
         parts = urlsplit(resource.get("url", ""))
         if parts.scheme != "https" or not parts.netloc:
             raise ValueError(f"resource {resource.get('id')} is not absolute HTTPS")
@@ -80,6 +103,79 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         visit(resource_id)
 
 
+def _validate_replay(value: Any) -> None:
+    if not isinstance(value, dict):
+        raise ValueError("manifest replay metadata must be an object")
+    unknown = set(value) - REPLAY_KEYS
+    if unknown:
+        raise ValueError(
+            f"manifest replay metadata contains unsupported fields: {', '.join(sorted(unknown))}"
+        )
+    required = {
+        "source_url",
+        "final_url",
+        "chromium_version",
+        "settle_ms",
+        "observed_request_count",
+        "observed_origins",
+        "reviewed_origins",
+        "exclusions",
+    }
+    missing = required - set(value)
+    if missing:
+        raise ValueError(
+            f"manifest replay metadata is missing: {', '.join(sorted(missing))}"
+        )
+    for key in ("source_url", "final_url"):
+        parts = urlsplit(str(value[key]))
+        if parts.scheme != "https" or not parts.netloc:
+            raise ValueError(f"manifest replay {key} must be absolute HTTPS")
+    for key in ("observed_origins", "reviewed_origins"):
+        origins = value[key]
+        if not isinstance(origins, list) or len(origins) != len(set(origins)):
+            raise ValueError(f"manifest replay {key} must contain unique origins")
+        for origin in origins:
+            parts = urlsplit(str(origin))
+            if parts.scheme != "https" or not parts.netloc or parts.path not in {"", "/"}:
+                raise ValueError(f"manifest replay {key} contains an invalid HTTPS origin")
+    if not set(value["reviewed_origins"]) <= set(value["observed_origins"]):
+        raise ValueError("reviewed origins must be a subset of observed origins")
+    if int(value["settle_ms"]) < 0 or int(value["observed_request_count"]) < 1:
+        raise ValueError("manifest replay counts must be non-negative")
+    exclusions = value["exclusions"]
+    if not isinstance(exclusions, list) or any(
+        not isinstance(item, dict)
+        or set(item) != {"url", "reason"}
+        or not str(item["reason"]).strip()
+        for item in exclusions
+    ):
+        raise ValueError("manifest replay exclusions require url and reason")
+    stability = value.get("response_stability")
+    if stability is not None:
+        if not isinstance(stability, dict) or set(stability) != {
+            "runs",
+            "stable_resource_ids",
+        }:
+            raise ValueError(
+                "manifest replay response_stability requires runs and stable_resource_ids"
+            )
+        stable_ids = stability["stable_resource_ids"]
+        if (
+            int(stability["runs"]) < 2
+            or not isinstance(stable_ids, list)
+            or len(stable_ids) != len(set(stable_ids))
+            or any(not isinstance(resource_id, int) for resource_id in stable_ids)
+        ):
+            raise ValueError("manifest replay response_stability is invalid")
+
+
+def runtime_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
+    """Return only fields understood by the Neqo workload runner."""
+
+    validate_manifest(manifest)
+    return {key: value for key, value in manifest.items() if key != "replay"}
+
+
 def canonical_bytes(manifest: dict[str, Any]) -> bytes:
     return (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode()
 
@@ -92,5 +188,4 @@ def write_frozen_manifest(path: Path, manifest: dict[str, Any], *, force: bool =
         raise FileExistsError(f"{path} is immutable; choose a new version or pass --force")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(data)
-    path.with_suffix(path.suffix + ".sha256").write_text(f"{digest}  {path.name}\n", encoding="utf-8")
     return digest

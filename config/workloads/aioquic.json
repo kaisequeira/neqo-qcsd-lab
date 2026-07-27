@@ -1,0 +1,21 @@
+{
+  "header_policy": {
+    "mode": "fresh-browser",
+    "overrides": [],
+    "allow_conditional": false,
+    "allow_range": false
+  },
+  "resources": [
+    {
+      "id": 0,
+      "url": "https://quic.aiortc.org/",
+      "type": "Document",
+      "content_length": 1196,
+      "data_length": 1196,
+      "chaff_priority": true,
+      "known_valid": true,
+      "depends_on": [],
+      "headers": []
+    }
+  ]
+}

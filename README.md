@@ -1,122 +1,224 @@
 # neqo-qcsd-lab
 
-`neqo-qcsd-lab` is the Docker-only experiment parent for the modern
-[`neqo-qcsd`](https://github.com/kaisequeira/neqo-qcsd) client. It discovers
-public page request graphs, confirms direct HTTP/3 support, runs reproducible
-baseline/Static/FRONT/Tamaraw campaigns against unmodified servers, captures
-encrypted QUIC traffic as PCAPNG, and regenerates observer-view figures.
+`neqo-qcsd-lab` is the Docker-only collection and analysis environment for the
+QCSD fork of Mozilla Neqo. Campaign recipes select a workload replay scope;
+each recipe can be run in either of two capture modes:
 
-This repository follows the separation used by the authors'
-[`qcsd-experiments`](https://github.com/jpcsmith/qcsd-experiments) repository.
-It implements research tooling for Smith, Dolfi, Mittal, and Perrig,
-“[QCSD: A QUIC Client-Side Website-Fingerprinting Defence Framework](https://www.usenix.org/conference/usenixsecurity22/presentation/smith),”
-USENIX Security 2022. The lab is MIT licensed; the Neqo submodule retains its
-MIT/Apache-2.0 licensing and upstream attribution.
+- `direct` captures the exact QUIC flow at the container edge for defense-shape
+  diagnostics;
+- `wireguard` captures the encrypted client-to-gateway flow for
+  traffic-classification research, with optional inner-QUIC diagnostics.
 
-## Repository boundary
+Both modes use the same planner, sample state machine, collector, validation,
+analysis, report, projection, resumption, and checksum paths. Only WireGuard
+network provisioning differs. The research rationale is in
+[`METHODOLOGY.md`](METHODOLOGY.md).
 
-This is the parent repository. `third_party/neqo-qcsd/` is a Git submodule
-pinned to one exact migration commit. The root `qcsd-lab` file is only a Docker
-launcher: it validates the submodule, chooses the discovery or collection
-image, maps the current UID/GID and writable result directories, adds only
-`NET_RAW`/`NET_ADMIN`, and invokes the in-container Python CLI. It never builds
-or runs a second host-native Neqo.
+## Repository layout
 
-Clone and build the digest-pinned multi-architecture images:
-
-```sh
-git clone --recurse-submodules https://github.com/kaisequeira/neqo-qcsd-lab
-cd neqo-qcsd-lab
-./qcsd-lab image build
-./qcsd-lab doctor
+```text
+config/
+  campaigns/                small replay recipes and visit counts
+  workloads/                shared frozen page/request graphs
+docker/
+  collection-entrypoint     common collection-container setup
+  wireguard-client-up       tunnel and encrypted-DNS routing
+  wireguard-gateway-entrypoint
+docs/
+  diagrams/                 two standalone TikZ sources and shared styles
+  assets/                   matching transparent SVG and vector PDF figures
+neqo-qcsd/                  editable Neqo Git submodule
+src/qcsd_lab/               campaign, capture, dataset, plot, and report code
+tests/                      deterministic and opt-in acceptance gates
+results/                    ignored generated evidence
 ```
 
-The first collection build compiles Neqo and NSS 3.121 and can take several
-minutes. Later campaigns reuse the local image. There are deliberately no
-automatic GitHub Actions.
+The figures are rendered directly with `latexmk` and `dvisvgm`; diagram
+rendering is intentionally not a lab command.
 
-## Workflow
+## Campaign terminology and configuration
 
-Discover and freeze a public workload definition. Discovery records only
-public, non-secret GET request metadata; cookies and authorization are never
-stored:
+- **Workload:** one frozen page/request graph in `config/workloads/`.
+- **Planned visit:** one repetition number for a workload.
+- **Defense sample:** one actual page load under one defense.
+- **Paired visit:** all defense samples with the same workload and repetition.
+- **Split:** one train/test assignment shared by that entire paired visit.
 
-```sh
-./qcsd-lab discover --url https://example.test/ \
-  --output /lab/workloads/example-2026-07-v1.json
+The three recipes in [`config/campaigns/`](config/campaigns/) use the same
+campaign contract and shared workload directory:
+
+- `single-resource-pilot.yml` preserves the 24-visit, 72-sample engineering
+  recipe and replays each manifest as written;
+- `dconn-replay-pilot.yml` restricts each discovered page graph to its final
+  page origin, requiring at least two resources on one HTTP/3 connection;
+- `dmc-replay-pilot.yml` retains every explicitly reviewed origin, requiring at
+  least two HTTP/3 origins/connections.
+
+The Dconn and Dmc pilots use the same two page graphs, three visits per page,
+and three defenses: six paired visits and 18 defense samples before retries.
+The current pair is the Chromium QUIC page and Chromium Projects page. This is
+a deliberately small engineering pair from one stable site, not a diverse
+classifier corpus.
+Their paired visits receive identical train/test assignments, while scope is
+part of each `sample_id`, so Dconn and Dmc executions cannot be confused.
+Both replay recipes contain monitored engineering classes only. They deliberately
+omit an unmonitored population and are too small for an open-world classifier
+claim; current pilot evidence and limitations are recorded in the methodology.
+
+Optional `limits` may override timeout, response bytes, capture duration,
+capture size, retries, origin cooldown, inter-sample delay, and settle time.
+Every resolved default is sealed into `campaign.json`.
+
+Static is not part of the public research campaign. The former six-row CSV was
+only synthetic smoke data and has been deleted. Static remains available for a
+researcher-supplied schedule by using an explicit defense object with `kind:
+static`, `schedule`, and `mode`; tests create their own temporary fixture.
+
+## Images and preparation
+
+Build from the checked-out Neqo submodule:
+
+```shell
+./qcsd-lab image build all
+```
+
+For a dirty development checkout, use `--dev`; its commits, dirty state, patch
+hashes, and image digest are recorded so incompatible collection resumes are
+rejected.
+
+Browser discovery and Neqo HTTP/3 preflight are optional preparation steps for
+creating a new frozen workload:
+
+```shell
+./qcsd-lab discover --url https://example.com/ \
+  --allow-origin https://example.com \
+  --allow-origin https://static.example.com \
+  --output /lab/config/workloads/example-discovered.json
 ./qcsd-lab probe \
-  --input-manifest /lab/workloads/example-2026-07-v1.json \
-  --output /lab/workloads/example-2026-07-v1-probed.json
+  --input-manifest /lab/config/workloads/example-discovered.json \
+  --output /lab/config/workloads/example.json
 ```
 
-Review the immutable manifest and its SHA-256 sidecar, reference the probed
-file from a campaign YAML, then collect sequential samples:
+Chromium is used only before measurement to discover the page graph. The
+reviewer must explicitly allow each retained origin; discovery records unsafe,
+unreviewed, or non-GET exclusions. Probe then checks resources independently
+for HTTP/3 availability without letting one failed parent suppress an otherwise
+usable descendant. For replay graphs it also performs three complete undefended
+loads separated by 30-second origin cooldowns. A resource is qualified only if
+status, delivered bytes, and body hash repeat exactly; a changing page is
+rejected before campaign collection. Replay audit and qualification metadata
+are sealed as provenance but removed from the runtime manifest passed to Neqo.
+Live workloads permit only reviewed, credential-free HTTPS GET requests. Chaff
+uses the same frozen, same-origin request definition.
 
-```sh
-./qcsd-lab collect --campaign /lab/campaigns/example-live.yml
-./qcsd-lab plot \
-  /lab/results/example-live/example/rep-000/00-none \
-  /lab/results/example-live/example/rep-000/01-front \
-  /lab/results/example-live/example/rep-000/02-tamaraw \
-  --output /lab/results/example-live/figures
-./qcsd-lab report --results /lab/results/example-live \
-  --output /lab/results/example-live/report
+## One pipeline, campaign scope, and capture mode
+
+Run the Dconn-aligned replay through WireGuard:
+
+```shell
+./qcsd-lab collect \
+  --campaign /lab/config/campaigns/dconn-replay-pilot.yml \
+  --capture wireguard
 ```
 
-Defense order is deterministically shuffled, so numeric sample prefixes will
-vary. Pass the actual sample paths produced by the campaign. `qcsd-lab test`
-runs deterministic tooling tests. Add `--local-acceptance` to start the
-bundled unmodified Neqo HTTP/3 server and gate all four modes against its 1 MiB
-response. Add `--capture-acceptance` to gate the complete four-mode loopback
-PCAPNG collection/filtering/artifact path (it requires the launcher's capture
-capabilities).
+Run the Dmc-aligned replay through WireGuard:
 
-## Request policies
+```shell
+./qcsd-lab collect \
+  --campaign /lab/config/campaigns/dmc-replay-pilot.yml \
+  --capture wireguard
+```
 
-Application requests support three explicit policies:
+Any recipe can instead use `--capture direct` for container-edge mechanism
+diagnostics. There is no separate Dconn/Dmc runtime or model flag: the campaign
+scope resolves the shared source graph, and both scopes immediately enter the
+same planner, collector, state machine, analysis, and sealing code.
 
-- `fresh-browser` replays discovered non-secret end-to-end headers, including
-  content negotiation, language, referrer/origin, user agent, client hints,
-  fetch metadata, and site-specific fields. Conditional and range fields are
-  excluded from a fresh measurement.
-- `minimal` ignores discovered per-resource headers and sends only explicit
-  manifest overrides.
-- `custom` replays safe fields and can explicitly enable conditional and range
-  behavior.
+WireGuard mode captures outer tunnel traffic on container `eth0` and, by
+default, inner QUIC on `wg0`. Use `--outer-only` to omit the auxiliary inner
+view. `--network-condition <name>` records a named gateway/network condition
+in provenance and sample identities. Resume either mode with:
 
-HTTP pseudo-headers are regenerated from each URL. Connection-specific HTTP/3
-fields and persisted credentials are rejected, not silently altered. These
-rules do not narrow QCSD application behavior; they prevent invalid requests
-and accidental credential publication. Chaff remains stricter by design:
-same-origin GET, `Accept-Encoding: identity`, no credentials, range, cache
-conditions, or cross-origin redirect promotion.
+```shell
+./qcsd-lab collect \
+  --campaign /lab/config/campaigns/dmc-replay-pilot.yml \
+  --capture wireguard \
+  --resume /lab/results/<timestamp>
+```
 
-## Capture and artifacts
+Direct mode starts only the collector. WireGuard mode additionally creates an
+ephemeral gateway, configures `/dev/net/tun`, warms the tunnel, and routes DNS
+through it. Containers are not privileged.
 
-Collection runs as the host's non-root UID in an isolated Docker network with
-only raw-capture and interface-administration capabilities. A minimal root
-entrypoint uses `SETUID`/`SETGID` once, then the experiment process retains only
-`NET_RAW` and `NET_ADMIN` with no-new-privileges. GRO/GSO/TSO are disabled
-and recorded. `dumpcap` starts before Neqo and is bounded by time and filesize.
-The raw UDP capture is filtered using exact local/remote tuples from
-`run.json`; successful samples retain `traffic.pcapng` and discard the raw
-capture unless `keep_raw` is set. TLS keys are not exported.
+## Result contract
 
-Every sample includes the filtered capture, `traffic.csv`, Neqo's `run.json`,
-packet/event/schedule CSV files, qlog, logs, capture/offload metadata, commits,
-image ID, comparison eligibility, and checksums. PCAP `frame.len` drives the
-paper-style observer plots. Neqo UDP payload observations drive a separate
-target-exactness plot.
+```text
+results/<UTC timestamp>/
+  campaign.json             immutable visit plan and resolved provenance
+  samples.jsonl             canonical mutable defense-sample state
+  dataset.json              threat model and dataset card
+  splits.json               one paired-visit train/test assignment map
+  metrics.csv               capture, overhead, drift, and retry metrics
+  projection.json           measured and reference-scale costs by defense/view
+  resolved-workloads/       exact runtime graphs and hashes used by Neqo
+  dataset-summary.{pdf,svg} aggregate coverage/storage/health figure
+  report.html               compact campaign report and artifact links
+  SHA256SUMS                sealed integrity manifest
+  <class>/<workload>-visit-<number>/<defense>/
+    sample.json
+    captures/<valid-view>.pcapng
+    traces/<valid-view>.csv
+    neqo/
+    attempts/
+```
 
-Results and captures are ignored by Git. Frozen manifests and campaigns are
-source-controlled. See [capture design](docs/CAPTURE.md) and
-[schemas](docs/SCHEMAS.md) for operational detail.
+Normalized traces contain:
 
-## Responsible live use
+```text
+relative_time_ns,direction,length_bytes,signed_length_bytes
+```
 
-Use only public resources you are authorized to request. Keep repetitions,
-timeouts, defense schedules, and chaff manifests conservative. Campaigns are
-sequential and impose an inter-run delay; do not remove those safeguards for
-third-party services. Public endpoint failures and content drift are retained
-as release-gate evidence rather than treated as deterministic unit-test
-failures.
+Outgoing lengths are positive and incoming lengths negative. Outer WireGuard
+uses `udp.length`, matching the original QCSD classifier traces. Direct `eth0`
+uses Ethernet `frame.len`; inner `wg0` uses Raw-IP `frame.len`, so their lengths
+are deliberately declared rather than treated as interchangeable.
+
+An attempt is accepted when the runner succeeds and its primary capture
+validates. After all defenses for a visit run, each sample becomes eligible
+only if its response matches the undefended baseline. A paired visit is usable
+for classifier comparison only when all of its defense samples are eligible.
+Auxiliary capture failure is retained but does not invalidate valid primary
+evidence.
+
+## Validation and publication
+
+```shell
+./qcsd-lab dataset validate /lab/results/<timestamp>
+./qcsd-lab dataset package /lab/results/<timestamp> \
+  --pcaps primary --data-license CC-BY-4.0
+```
+
+Validation reproduces normalized traces from PCAPNG and checks IDs, hashes,
+link types, direction/length semantics, responses, paired completeness, split
+isolation, purpose, and checksums. A narrow read-only adapter validates sealed
+older `group_id` roots; they are never rewritten.
+
+Only a valid WireGuard classification root with an explicit license can be
+packaged. `--pcaps primary` includes the primary trace and PCAP, `all` includes
+every valid trace and PCAP, and `none` includes only the primary normalized
+trace. Packages exclude qlogs, events, schedules, response/endpoint details,
+resolved defense parameters, attempts, and keys.
+Source URLs, origin audits, discovery exclusions, and resolved workload graphs
+also remain private validation provenance and are omitted from packages.
+
+## Tests
+
+```shell
+./qcsd-lab test -q
+./qcsd-lab test --local-acceptance -q
+./qcsd-lab test --capture-acceptance -q
+```
+
+The last gate requires `/dev/net/tun` and exercises direct capture, WireGuard
+dual capture, outer-only capture, and auxiliary-view failure. No command starts
+a live pilot or full dataset implicitly.

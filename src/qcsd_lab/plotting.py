@@ -11,10 +11,14 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
+from matplotlib.lines import Line2D
 
-from .util import atomic_json, load_json
+from .capture import ObserverPacket, sample_trace
+from .util import load_json
+
+OUTGOING = "#1f77b4"
+INCOMING = "#ff7f0e"
+COMPLETION = "#4d4d4d"
 
 
 def _rows(path: Path) -> list[dict[str, str]]:
@@ -24,12 +28,7 @@ def _rows(path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(source))
 
 
-def _defense(sample: Path) -> str:
-    metadata = load_json(sample / "sample.json")
-    return str(metadata.get("defense", sample.name)).lower()
-
-
-def _completion_seconds(sample: Path) -> float | None:
+def _completion_seconds(sample: Path, trace: list[ObserverPacket]) -> float | None:
     run_json = sample / "neqo" / "run.json"
     if not run_json.exists():
         return None
@@ -37,11 +36,31 @@ def _completion_seconds(sample: Path) -> float | None:
     completion = run_data.get("application_completion_monotonic_ns")
     if completion is None:
         return None
-    traffic = _rows(sample / "traffic.csv")
-    if traffic:
+    if trace and run_data.get("time_anchor_unix_ns") is not None:
         completion_unix_ns = int(run_data["time_anchor_unix_ns"]) + int(completion)
-        return (completion_unix_ns - int(traffic[0]["timestamp_unix_ns"])) / 1e9
+        return (completion_unix_ns - trace[0].timestamp_unix_ns) / 1e9
     return float(completion) / 1e9
+
+
+def _target_times(sample: Path, direction: str, trace: list[ObserverPacket]) -> np.ndarray:
+    schedule = _rows(sample / "neqo" / "schedule.csv")
+    run_data = load_json(sample / "neqo" / "run.json")
+    start = run_data.get("defense_start_monotonic_ns")
+    offset = 0.0
+    if trace and start is not None and run_data.get("time_anchor_unix_ns") is not None:
+        offset = (
+            int(run_data["time_anchor_unix_ns"])
+            + int(start)
+            - trace[0].timestamp_unix_ns
+        ) / 1e9
+    return np.asarray(
+        [
+            offset + int(row["target_time_us"]) / 1e6
+            for row in schedule
+            if row.get("direction") == direction
+        ],
+        dtype=float,
+    )
 
 
 def _chaff_bytes(events: list[dict[str, str]]) -> int:
@@ -65,274 +84,367 @@ def _chaff_bytes(events: list[dict[str, str]]) -> int:
 
 
 def calculate_metrics(sample: Path) -> dict[str, Any]:
-    traffic = _rows(sample / "traffic.csv")
+    trace = sample_trace(sample)
+    metadata = load_json(sample / "sample.json")
+    primary = next(
+        (
+            observer
+            for observer in metadata.get("views", [])
+            if observer.get("primary") and observer.get("valid")
+        ),
+        None,
+    )
+    if primary is None:
+        raise ValueError(f"sample has no valid primary observer: {sample}")
+    primary_rows = _rows(sample / primary["trace_path"])
+    if not primary_rows:
+        raise ValueError(f"primary observer trace is empty: {sample}")
     packets = _rows(sample / "neqo" / "packets.csv")
     schedule = _rows(sample / "neqo" / "schedule.csv")
     events = _rows(sample / "neqo" / "events.csv")
     run_data = load_json(sample / "neqo" / "run.json")
-    wire_bytes = sum(int(row["frame_len"]) for row in traffic)
+    observed_bytes = sum(int(row["length_bytes"]) for row in primary_rows)
     udp_bytes = sum(int(row["observed_udp_length"]) for row in packets)
-    application_bytes = sum(int(response.get("bytes", 0)) for response in run_data.get("responses", []))
-    outgoing_targets = [row for row in schedule if row["direction"] == "outgoing"]
-    satisfied = [row for row in schedule if row["direction"] == "outgoing" and row["satisfaction"] == "satisfied"]
-    misses = [row for row in schedule if row["satisfaction"] == "missed"]
-    miss_reasons = Counter(row["miss_reason"] for row in misses if row["miss_reason"])
+    application_bytes = sum(
+        int(response.get("bytes", 0)) for response in run_data.get("responses", [])
+    )
+    outgoing_targets = [row for row in schedule if row.get("direction") == "outgoing"]
+    satisfied = [row for row in outgoing_targets if row.get("satisfaction") == "satisfied"]
+    exact = [
+        row
+        for row in satisfied
+        if row.get("observed_size") and int(row["observed_size"]) == int(row["size"])
+    ]
+    misses = [row for row in schedule if row.get("satisfaction") == "missed"]
+    miss_reasons = Counter(row["miss_reason"] for row in misses if row.get("miss_reason"))
     chaff_requests = sum("request_chaff" in row.get("details", "") for row in events)
     chaff_bytes = _chaff_bytes(events)
-    completion = _completion_seconds(sample)
+    completion = _completion_seconds(sample, trace)
     return {
-        "defense": _defense(sample),
-        "wire_bytes": wire_bytes,
+        "defense": str(metadata.get("defense", sample.name)).lower(),
+        "observed_bytes": observed_bytes,
         "udp_payload_bytes": udp_bytes,
-        "estimated_non_udp_bytes": max(0, wire_bytes - udp_bytes),
         "application_bytes": application_bytes,
-        "wire_overhead_bytes": max(0, wire_bytes - application_bytes),
-        "udp_overhead_bytes": max(0, udp_bytes - application_bytes),
-        "wire_overhead_ratio": (wire_bytes / application_bytes) if application_bytes else None,
-        "udp_overhead_ratio": (udp_bytes / application_bytes) if application_bytes else None,
+        "observed_overhead_bytes": max(0, observed_bytes - application_bytes),
+        "observed_overhead_ratio": (
+            observed_bytes / application_bytes if application_bytes else None
+        ),
         "application_completion_seconds": completion,
         "goodput_bytes_per_second": (application_bytes / completion) if completion else None,
         "outgoing_targets": len(outgoing_targets),
         "outgoing_targets_satisfied": len(satisfied),
-        "target_satisfaction_ratio": (len(satisfied) / len(outgoing_targets)) if outgoing_targets else None,
+        "target_satisfaction_ratio": (
+            len(satisfied) / len(outgoing_targets) if outgoing_targets else None
+        ),
+        "outgoing_targets_exact": len(exact),
+        "target_exactness_ratio": (len(exact) / len(satisfied)) if satisfied else None,
         "missed_slots": len(misses),
         "missed_slot_reasons": dict(miss_reasons),
         "chaff_requests": chaff_requests,
         "chaff_bytes": chaff_bytes,
-        "observer_packets": len(traffic),
+        "observer_packets": len(primary_rows),
+        "primary_observer": primary["id"],
+        "primary_length_basis": primary["length_basis"],
     }
 
 
-def plot_samples(samples: list[Path], output: Path, *, bin_ms: int = 50) -> None:
-    output.mkdir(parents=True, exist_ok=True)
-    valid = [sample for sample in samples if (sample / "traffic.csv").exists()]
-    if not valid:
-        raise ValueError("no sample contains traffic.csv")
-    metrics = []
-    for sample in valid:
-        sample_output = output / sample.name
-        sample_output.mkdir(parents=True, exist_ok=True)
-        _plot_single(sample, sample_output, filtered=False)
-        _plot_single(sample, sample_output, filtered=True)
-        _plot_rate(sample, sample_output, bin_ms)
-        _plot_exactness(sample, sample_output)
-        metric = calculate_metrics(sample)
-        metrics.append(metric)
-        atomic_json(sample_output / "metrics.json", metric)
-    _write_metrics(output / "metrics.csv", metrics)
-    _plot_comparison(valid, output)
+def _density(values: np.ndarray, grid: np.ndarray) -> np.ndarray:
+    """Small deterministic Gaussian KDE without another analysis dependency."""
+
+    if not len(values):
+        return np.zeros_like(grid)
+    if len(values) == 1:
+        bandwidth = max(0.01, (grid[-1] - grid[0]) / 100)
+    else:
+        standard_deviation = float(np.std(values, ddof=1))
+        bandwidth = 1.06 * max(standard_deviation, 1e-6) * len(values) ** (-0.2)
+        bandwidth = max(bandwidth, max(0.005, (grid[-1] - grid[0]) / 500))
+    distances = (grid[:, None] - values[None, :]) / bandwidth
+    return np.exp(-0.5 * distances**2).sum(axis=1) / (
+        len(values) * bandwidth * np.sqrt(2 * np.pi)
+    )
 
 
-def _observer_points(sample: Path, filtered: bool) -> tuple[np.ndarray, np.ndarray]:
-    traffic = _rows(sample / "traffic.csv")
-    threshold = 250 if "tamaraw" in _defense(sample) else 150
-    times = []
-    sizes = []
-    for row in traffic:
-        signed = int(row["signed_frame_len"])
-        if filtered and abs(signed) < threshold:
-            continue
-        times.append(int(row["relative_time_ns"]) / 1e9)
-        sizes.append(signed)
-    return np.asarray(times), np.asarray(sizes)
-
-
-def _plot_single(sample: Path, output: Path, *, filtered: bool) -> None:
-    times, sizes = _observer_points(sample, filtered)
-    figure, axis = plt.subplots(figsize=(10, 4.5), constrained_layout=True)
-    colors = np.where(sizes >= 0, "#d95f02", "#1b9e77")
-    axis.scatter(times, sizes, c=colors, s=9, alpha=0.72, linewidths=0)
-    completion = _completion_seconds(sample)
-    if completion is not None:
-        axis.axvline(completion, color="#7570b3", linestyle="--", label="application complete")
-        axis.legend(loc="upper right")
-    axis.axhline(0, color="black", linewidth=0.6)
-    axis.set(title=f"{_defense(sample)} observer trace", xlabel="Time (s)", ylabel="Signed frame length (bytes)")
-    suffix = "paper-filtered" if filtered else "unfiltered"
-    for extension in ("png", "svg", "pdf"):
-        figure.savefig(output / f"observer-{suffix}.{extension}", dpi=180)
-    plt.close(figure)
-
-    interactive = go.Figure()
-    interactive.add_scatter(x=times, y=sizes, mode="markers", marker={"size": 5}, name="packets")
-    if completion is not None:
-        interactive.add_vline(x=completion, line_dash="dash", annotation_text="application complete")
-    interactive.update_layout(xaxis_title="Time (s)", yaxis_title="Signed frame length (bytes)")
-    interactive.write_html(output / f"observer-{suffix}.html", include_plotlyjs="directory")
-
-
-def _plot_rate(sample: Path, output: Path, bin_ms: int) -> None:
-    times, sizes = _observer_points(sample, False)
-    if not len(times):
-        return
-    width = bin_ms / 1000
-    bins = np.arange(0, times.max() + width * 2, width)
-    outgoing, _ = np.histogram(times[sizes > 0], bins=bins, weights=sizes[sizes > 0])
-    incoming, _ = np.histogram(times[sizes < 0], bins=bins, weights=-sizes[sizes < 0])
-    figure, axis = plt.subplots(figsize=(10, 4), constrained_layout=True)
-    axis.step(bins[:-1], outgoing / width, where="post", label="outgoing")
-    axis.step(bins[:-1], incoming / width, where="post", label="incoming")
-    axis.set(xlabel="Time (s)", ylabel="Bytes/s", title=f"{bin_ms} ms transmission rate")
-    axis.legend()
-    for extension in ("png", "svg", "pdf"):
-        figure.savefig(output / f"rate-{bin_ms}ms.{extension}", dpi=180)
-    plt.close(figure)
-
-
-def _plot_exactness(sample: Path, output: Path) -> None:
-    schedule = [
-        row
-        for row in _rows(sample / "neqo" / "schedule.csv")
-        if row["direction"] == "outgoing" and row["observed_size"]
+def _mode_samples(group_path: Path, defense_order: list[str] | None = None) -> list[Path]:
+    samples = [
+        path.parent
+        for path in sorted(group_path.glob("*/sample.json"))
+        if load_json(path).get("state") == "captured"
     ]
-    if not schedule:
-        return
-    target = np.asarray([int(row["size"]) for row in schedule])
-    observed = np.asarray([int(row["observed_size"]) for row in schedule])
-    figure, axis = plt.subplots(figsize=(6, 5), constrained_layout=True)
-    axis.scatter(target, observed, s=12, alpha=0.7)
-    lower, upper = min(target.min(), observed.min()), max(target.max(), observed.max())
-    axis.plot([lower, upper], [lower, upper], linestyle="--", color="black")
-    axis.set(xlabel="Scheduled UDP payload (bytes)", ylabel="Observed UDP payload (bytes)", title="QCSD target exactness")
-    for extension in ("png", "svg", "pdf"):
-        figure.savefig(output / f"exactness.{extension}", dpi=180)
-    plt.close(figure)
+    order = defense_order or [str(load_json(sample / "sample.json").get("defense")) for sample in samples]
+    by_name = {str(load_json(sample / "sample.json").get("defense")): sample for sample in samples}
+    return [by_name[name] for name in order if name in by_name]
 
 
-def _plot_comparison(samples: list[Path], output: Path) -> None:
-    preferred = []
-    for mode in ("none", "baseline", "front", "tamaraw"):
-        match = next((sample for sample in samples if mode in _defense(sample)), None)
-        if match and match not in preferred:
-            preferred.append(match)
-    if len(preferred) < 2:
-        return
+def plot_group(group_path: Path, defense_order: list[str] | None = None) -> Path:
+    """Render the trace-comparison figure (PDF + embeddable SVG) for one paired visit."""
+
+    samples = _mode_samples(group_path, defense_order)
+    if not samples:
+        raise ValueError(f"no comparable samples under {group_path}")
+    outputs = []
+    for page, start in enumerate(range(0, len(samples), 4), start=1):
+        outputs.append(_plot_page(group_path, samples[start : start + 4], page))
+    return outputs[0]
+
+
+def _plot_page(group_path: Path, samples: list[Path], page: int) -> Path:
+    """Render at most four defense columns so figures remain paper-readable."""
+
+    traces = {sample: sample_trace(sample) for sample in samples}
+    maximum_time = max(
+        (
+            max((packet.relative_time_ns / 1e9 for packet in trace), default=0.0)
+            for trace in traces.values()
+        ),
+        default=1.0,
+    )
+    maximum_time = max(maximum_time, 0.1)
+    grid = np.linspace(0, maximum_time, 600)
     figure, axes = plt.subplots(
         2,
-        len(preferred),
-        figsize=(5 * len(preferred), 7.5),
-        squeeze=False,
-        constrained_layout=True,
+        len(samples),
+        figsize=(4.25 * len(samples), 5.7),
+        sharex=True,
+        sharey="row",
+        gridspec_kw={"height_ratios": [1, 2.3], "hspace": 0.06, "wspace": 0.08},
     )
-    subplot_titles = [_defense(sample) for sample in preferred] + [""] * len(preferred)
-    interactive = make_subplots(rows=2, cols=len(preferred), subplot_titles=subplot_titles)
-    for column, sample in enumerate(preferred):
-        times, sizes = _observer_points(sample, True)
-        completion = _completion_seconds(sample)
-        schedule = _rows(sample / "neqo" / "schedule.csv")
-        run_data = load_json(sample / "neqo" / "run.json")
-        traffic = _rows(sample / "traffic.csv")
-        defense_start = run_data.get("defense_start_monotonic_ns")
-        target_offset = 0.0
-        if traffic and defense_start is not None:
-            target_offset = (
-                int(run_data["time_anchor_unix_ns"])
-                + int(defense_start)
-                - int(traffic[0]["timestamp_unix_ns"])
-            ) / 1e9
-        for row_index, (direction, mask) in enumerate(
-            (("outgoing", sizes > 0), ("incoming", sizes < 0))
-        ):
-            observed_times = times[mask]
-            observed_sizes = np.abs(sizes[mask])
-            axes[row_index, column].scatter(
-                observed_times,
-                observed_sizes,
-                s=7,
-                alpha=0.7,
-                label="observed frame.len",
+    axes = np.asarray(axes).reshape(2, len(samples))
+    scatter_limit = max(
+        (packet.frame_len for trace in traces.values() for packet in trace),
+        default=0,
+    )
+    for column, sample in enumerate(samples):
+        trace = traces[sample]
+        observed = {
+            direction: np.asarray(
+                [
+                    packet.relative_time_ns / 1e9
+                    for packet in trace
+                    if packet.direction == direction
+                ]
             )
-            targets = [
-                row
-                for row in schedule
-                if row["direction"] == direction
-                and row["satisfaction"] in ({"satisfied", "missed"} if direction == "outgoing" else {"credit_released", "missed"})
-            ]
-            target_times = [
-                target_offset + int(row["target_time_us"]) / 1e6 for row in targets
-            ]
-            target_sizes = [int(row["size"]) for row in targets]
-            if targets:
-                axes[row_index, column].scatter(
-                    target_times,
-                    target_sizes,
-                    marker="x",
-                    s=14,
-                    alpha=0.65,
-                    label="scheduled UDP target",
-                )
-            if completion is not None:
-                axes[row_index, column].axvline(
-                    completion,
+            for direction in ("outgoing", "incoming")
+        }
+        targets = {
+            direction: _target_times(sample, direction, trace)
+            for direction in ("outgoing", "incoming")
+        }
+        density_axis = axes[0, column]
+        packet_axis = axes[1, column]
+        for direction, color in (("outgoing", OUTGOING), ("incoming", INCOMING)):
+            density_axis.plot(
+                grid,
+                _density(observed[direction], grid),
+                color=color,
+                linestyle="-",
+                linewidth=1.4,
+            )
+            if len(targets[direction]):
+                density_axis.plot(
+                    grid,
+                    _density(targets[direction], grid),
+                    color=color,
                     linestyle="--",
-                    color="#7570b3",
-                    label="application complete",
+                    linewidth=1.25,
                 )
-            interactive.add_scatter(
-                x=observed_times,
-                y=observed_sizes,
-                mode="markers",
-                name=f"{_defense(sample)} {direction} observed",
-                row=row_index + 1,
-                col=column + 1,
+        for packet in trace:
+            color = OUTGOING if packet.direction == "outgoing" else INCOMING
+            packet_axis.scatter(
+                packet.relative_time_ns / 1e9,
+                packet.signed_frame_len,
+                facecolors="none",
+                edgecolors=color,
+                marker="o",
+                s=15,
+                linewidths=0.7,
             )
-            if targets:
-                interactive.add_scatter(
-                    x=target_times,
-                    y=target_sizes,
-                    mode="markers",
-                    marker={"symbol": "x"},
-                    name=f"{_defense(sample)} {direction} target",
-                    row=row_index + 1,
-                    col=column + 1,
-                )
-            if completion is not None:
-                interactive.add_vline(
-                    x=completion,
-                    line_dash="dash",
-                    row=row_index + 1,
-                    col=column + 1,
-                )
-        axes[0, column].set_title(_defense(sample))
-        axes[1, column].set_xlabel("Time (s)")
-        axes[0, column].legend(loc="upper right", fontsize="x-small")
-    axes[0, 0].set_ylabel("Outgoing bytes")
-    axes[1, 0].set_ylabel("Incoming bytes")
-    for extension in ("png", "svg", "pdf"):
-        figure.savefig(output / f"figure-2-comparison.{extension}", dpi=180)
-    plt.close(figure)
-    interactive.update_layout(height=950, title="QCSD Figure-2-style comparison")
-    interactive.write_html(output / "figure-2-comparison.html", include_plotlyjs="directory")
-
-
-def _write_metrics(path: Path, metrics: list[dict[str, Any]]) -> None:
-    scalar_keys = [
-        "defense",
-        "wire_bytes",
-        "udp_payload_bytes",
-        "estimated_non_udp_bytes",
-        "application_bytes",
-        "wire_overhead_bytes",
-        "udp_overhead_bytes",
-        "wire_overhead_ratio",
-        "udp_overhead_ratio",
-        "application_completion_seconds",
-        "goodput_bytes_per_second",
-        "outgoing_targets",
-        "outgoing_targets_satisfied",
-        "target_satisfaction_ratio",
-        "missed_slots",
-        "missed_slot_reasons",
-        "chaff_requests",
-        "chaff_bytes",
-        "observer_packets",
+        completion = _completion_seconds(sample, trace)
+        if completion is not None:
+            density_axis.axvline(completion, color=COMPLETION, linestyle=":", linewidth=1)
+            packet_axis.axvline(completion, color=COMPLETION, linestyle=":", linewidth=1)
+        title = str(load_json(sample / "sample.json").get("defense", sample.name))
+        density_axis.set_title(title, fontsize=11)
+        density_axis.grid(alpha=0.18, linewidth=0.5)
+        packet_axis.grid(alpha=0.18, linewidth=0.5)
+        packet_axis.axhline(0, color="#777777", linewidth=0.6)
+        packet_axis.set_xlabel("Time (s)")
+        density_axis.set_xlim(0, maximum_time)
+        packet_axis.set_xlim(0, maximum_time)
+    axes[0, 0].set_ylabel("Packet-time\ndensity")
+    first_metadata = load_json(samples[0] / "sample.json")
+    plotted_observer = next(
+        (
+            observer
+            for observer in first_metadata.get("views", [])
+            if observer.get("kind") == "direct-quic" and observer.get("valid")
+        ),
+        next(
+            (
+                observer
+                for observer in first_metadata.get("views", [])
+                if observer.get("primary") and observer.get("valid")
+            ),
+            {},
+        ),
+    )
+    basis = plotted_observer.get("length_basis", "frame.len")
+    identifier = plotted_observer.get("id", "observer")
+    axes[1, 0].set_ylabel(f"Signed {identifier} {basis} (bytes)")
+    if scatter_limit:
+        axes[1, 0].set_ylim(-scatter_limit * 1.08, scatter_limit * 1.08)
+    legend = [
+        Line2D([], [], color=OUTGOING, linestyle="-", label="Outgoing observed"),
+        Line2D([], [], color=OUTGOING, linestyle="--", label="Outgoing target"),
+        Line2D([], [], color=INCOMING, linestyle="-", label="Incoming observed"),
+        Line2D([], [], color=INCOMING, linestyle="--", label="Incoming target"),
+        Line2D([], [], color=COMPLETION, linestyle=":", label="Application complete"),
+        Line2D(
+            [],
+            [],
+            color="#555555",
+            marker="o",
+            markerfacecolor="none",
+            linestyle="none",
+            label="Observed packet",
+        ),
     ]
-    with path.open("w", newline="", encoding="utf-8") as output:
-        writer = csv.DictWriter(output, fieldnames=scalar_keys)
-        writer.writeheader()
-        for metric in metrics:
-            row = {key: metric.get(key) for key in scalar_keys}
-            row["missed_slot_reasons"] = json.dumps(
-                metric.get("missed_slot_reasons", {}), sort_keys=True
-            )
-            writer.writerow(row)
+    figure.legend(
+        handles=legend,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 1.015),
+        ncol=3,
+        frameon=False,
+        fontsize=8,
+    )
+    figure.subplots_adjust(top=0.88, bottom=0.1, left=0.08, right=0.99)
+    suffix = "" if page == 1 else f"-{page}"
+    destination = group_path / f"trace-comparison{suffix}.pdf"
+    with plt.rc_context({"pdf.fonttype": 42, "ps.fonttype": 42}):
+        figure.savefig(
+            destination,
+            format="pdf",
+            metadata={
+                "Title": "QCSD trace comparison",
+                "Creator": "neqo-qcsd-lab",
+                "CreationDate": None,
+                "ModDate": None,
+            },
+        )
+    svg_destination = group_path / f"trace-comparison{suffix}.svg"
+    # Text as paths plus a fixed hashsalt keep the SVG rendering- and
+    # byte-deterministic so report.html can embed it reproducibly.
+    with plt.rc_context({"svg.fonttype": "path", "svg.hashsalt": "neqo-qcsd-lab"}):
+        figure.savefig(
+            svg_destination,
+            format="svg",
+            metadata={
+                "Title": "QCSD trace comparison",
+                "Creator": "neqo-qcsd-lab",
+                "Date": None,
+            },
+        )
+    plt.close(figure)
+    return destination
+
+
+def plot_run(root: Path, *, policy: str | None = None) -> list[Path]:
+    """Regenerate every workload/repetition trace-comparison figure in a campaign result."""
+
+    receipt = load_json(root / "campaign.json")
+    defense_order = [item["name"] for item in receipt.get("configuration", {}).get("defenses", [])]
+    groups = receipt.get("visits", [])
+    group_paths = [
+        root / group["path"]
+        for group in groups
+        if any((root / group["path"]).glob("*/sample.json"))
+    ]
+    selected_policy = policy or (
+        receipt.get("configuration", {}).get("outputs", {}).get("figures", "per-visit")
+    )
+    outputs = [plot_aggregate(root)]
+    if selected_policy == "aggregate-only":
+        return outputs
+    if not group_paths:
+        raise ValueError(f"no campaign samples under {root}")
+    for group_path in group_paths:
+        try:
+            outputs.append(plot_group(group_path, defense_order or None))
+        except (FileNotFoundError, KeyError, RuntimeError, ValueError):
+            # Incomplete paired visits remain clearly represented in campaign.json
+            # and report.html without making report finalization itself fail.
+            continue
+    return outputs
+
+
+def plot_aggregate(root: Path) -> Path:
+    """Render defense coverage, observer storage, and collection health."""
+
+    receipt = load_json(root / "campaign.json")
+    defense_order = [item["name"] for item in receipt.get("configuration", {}).get("defenses", [])]
+    samples = [
+        load_json(path)
+        for path in sorted(root.rglob("sample.json"))
+        if "attempts" not in path.parts
+    ]
+    if not defense_order:
+        defense_order = list(dict.fromkeys(str(sample.get("defense")) for sample in samples))
+    captured = [sum(sample.get("state") == "captured" for sample in samples if sample.get("defense") == defense) for defense in defense_order]
+    eligible = [
+        sum(
+            sample.get("eligible") is True
+            for sample in samples
+            if sample.get("defense") == defense
+        )
+        for defense in defense_order
+    ]
+    retries = [sum(max(0, int(sample.get("attempts", 1)) - 1) for sample in samples if sample.get("defense") == defense) for defense in defense_order]
+    observer_bytes: Counter[str] = Counter()
+    for sample in samples:
+        for observer in sample.get("views", []):
+            if observer.get("valid"):
+                observer_bytes[observer["id"]] += int(observer.get("pcapng_bytes", 0))
+
+    figure, axes = plt.subplots(1, 3, figsize=(12, 3.6))
+    positions = np.arange(len(defense_order))
+    width = 0.38
+    axes[0].bar(positions - width / 2, captured, width, label="Captured", color="#6baed6")
+    axes[0].bar(positions + width / 2, eligible, width, label="Eligible", color="#2171b5")
+    axes[0].set_xticks(positions, defense_order, rotation=30, ha="right")
+    axes[0].set_ylabel("Logical samples")
+    axes[0].set_title("Defense coverage")
+    axes[0].legend(frameon=False, fontsize=8)
+
+    observer_names = list(observer_bytes)
+    axes[1].bar(observer_names, [observer_bytes[name] / (1024 * 1024) for name in observer_names], color="#756bb1")
+    axes[1].tick_params(axis="x", rotation=30)
+    axes[1].set_ylabel("PCAPNG (MiB)")
+    axes[1].set_title("Storage by observer")
+
+    failures = [
+        sum(sample.get("state") != "captured" for sample in samples if sample.get("defense") == defense)
+        for defense in defense_order
+    ]
+    axes[2].bar(positions - width / 2, failures, width, label="Failures", color="#cb181d")
+    axes[2].bar(positions + width / 2, retries, width, label="Retries", color="#fdae6b")
+    axes[2].set_xticks(positions, defense_order, rotation=30, ha="right")
+    axes[2].set_ylabel("Count")
+    axes[2].set_title("Collection health")
+    axes[2].legend(frameon=False, fontsize=8)
+    for axis in axes:
+        axis.grid(axis="y", alpha=0.2, linewidth=0.5)
+    figure.tight_layout()
+    destination = root / "dataset-summary.pdf"
+    with plt.rc_context({"pdf.fonttype": 42, "ps.fonttype": 42}):
+        figure.savefig(
+            destination,
+            metadata={"Title": "QCSD dataset summary", "Creator": "neqo-qcsd-lab", "CreationDate": None, "ModDate": None},
+        )
+    with plt.rc_context({"svg.fonttype": "path", "svg.hashsalt": "neqo-qcsd-lab-summary"}):
+        figure.savefig(
+            root / "dataset-summary.svg",
+            format="svg",
+            metadata={"Title": "QCSD dataset summary", "Creator": "neqo-qcsd-lab", "Date": None},
+        )
+    plt.close(figure)
+    return destination

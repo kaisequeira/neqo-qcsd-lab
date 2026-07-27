@@ -1,0 +1,755 @@
+{
+  "header_policy": {
+    "allow_conditional": false,
+    "allow_range": false,
+    "mode": "fresh-browser",
+    "overrides": []
+  },
+  "replay": {
+    "chromium_version": "150.0.7871.124",
+    "exclusions": [
+      {
+        "reason": "unsafe method: POST",
+        "url": "https://www.google-analytics.com/g/collect?v=2&tid=G-24XP4PG02H&gtm=45je67h1v9128943846za200zd9128943846&_p=1784614759057&gcd=13l3l3l3l1l1&npa=0&dma=0&are=1&cid=840075971.1784614760&frm=0&ngs=1&pscdl=noapi&rcb=1&sr=1280x720&uaa=arm&uab=64&uafvl=Not%253BA%253DBrand%3B8.0.0.0%7CChromium%3B150.0.7871.124&uam=&uamb=0&uap=Linux&uapv=&uaw=0&ul=en-us&_s=1&tag_exp=115616986~115938466~115938469~118897920~118897930~119724320~119773332~119896803&sid=1784614759&sct=1&seg=0&dl=https%3A%2F%2Fwww.chromium.org%2Fchromium-projects%2F&dt=Home&en=page_view&_fv=1&_nsi=1&_ss=1&_ee=1&tfd=650"
+      },
+      {
+        "reason": "origin not reviewed",
+        "url": "https://www.googletagmanager.com/gtag/js?id=G-24XP4PG02H"
+      }
+    ],
+    "final_url": "https://www.chromium.org/chromium-projects/",
+    "observed_origins": [
+      "https://www.chromium.org",
+      "https://www.google-analytics.com",
+      "https://www.googletagmanager.com",
+      "https://www.gstatic.com"
+    ],
+    "observed_request_count": 12,
+    "response_stability": {
+      "runs": 3,
+      "stable_resource_ids": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ]
+    },
+    "reviewed_origins": [
+      "https://www.chromium.org",
+      "https://www.gstatic.com"
+    ],
+    "settle_ms": 3000,
+    "source_url": "https://www.chromium.org/chromium-projects/"
+  },
+  "resources": [
+    {
+      "chaff_priority": false,
+      "content_length": 1446,
+      "data_length": 0,
+      "depends_on": [],
+      "headers": [
+        [
+          "accept",
+          "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=0, i"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Not;A=Brand\";v=\"8\", \"Chromium\";v=\"150\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "document"
+        ],
+        [
+          "sec-fetch-mode",
+          "navigate"
+        ],
+        [
+          "sec-fetch-site",
+          "none"
+        ],
+        [
+          "sec-fetch-user",
+          "?1"
+        ],
+        [
+          "upgrade-insecure-requests",
+          "1"
+        ],
+        [
+          "upgrade-insecure-requests",
+          "1"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 0,
+      "known_valid": true,
+      "type": "Document",
+      "url": "https://www.chromium.org/chromium-projects/"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 2673,
+      "data_length": 0,
+      "depends_on": [
+        0
+      ],
+      "headers": [
+        [
+          "accept",
+          "text/css,*/*;q=0.1"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=0"
+        ],
+        [
+          "referer",
+          "https://www.chromium.org/chromium-projects/"
+        ],
+        [
+          "referer",
+          "https://www.chromium.org/chromium-projects/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Not;A=Brand\";v=\"8\", \"Chromium\";v=\"150\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "style"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 1,
+      "known_valid": true,
+      "type": "Stylesheet",
+      "url": "https://www.chromium.org/_stylesheets/@docsearch/style.css"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 1543,
+      "data_length": 0,
+      "depends_on": [
+        0
+      ],
+      "headers": [
+        [
+          "accept",
+          "text/css,*/*;q=0.1"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=0"
+        ],
+        [
+          "referer",
+          "https://www.chromium.org/chromium-projects/"
+        ],
+        [
+          "referer",
+          "https://www.chromium.org/chromium-projects/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Not;A=Brand\";v=\"8\", \"Chromium\";v=\"150\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "style"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 2,
+      "known_valid": true,
+      "type": "Stylesheet",
+      "url": "https://www.chromium.org/_stylesheets/default.css"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 480,
+      "data_length": 0,
+      "depends_on": [
+        0
+      ],
+      "headers": [
+        [
+          "accept",
+          "text/css,*/*;q=0.1"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=0"
+        ],
+        [
+          "referer",
+          "https://www.chromium.org/chromium-projects/"
+        ],
+        [
+          "referer",
+          "https://www.chromium.org/chromium-projects/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Not;A=Brand\";v=\"8\", \"Chromium\";v=\"150\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "style"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 3,
+      "known_valid": true,
+      "type": "Stylesheet",
+      "url": "https://www.chromium.org/_stylesheets/highlight.js/github.min.css"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 2802,
+      "data_length": 0,
+      "depends_on": [
+        0
+      ],
+      "headers": [
+        [
+          "accept",
+          "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "i"
+        ],
+        [
+          "referer",
+          "https://www.chromium.org/chromium-projects/"
+        ],
+        [
+          "referer",
+          "https://www.chromium.org/chromium-projects/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Not;A=Brand\";v=\"8\", \"Chromium\";v=\"150\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "image"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 4,
+      "known_valid": true,
+      "type": "Image",
+      "url": "https://www.chromium.org/_assets/icon-chromium-96.png"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 1640,
+      "data_length": 0,
+      "depends_on": [
+        0
+      ],
+      "headers": [
+        [
+          "accept",
+          "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=2, i"
+        ],
+        [
+          "referer",
+          "https://www.chromium.org/chromium-projects/"
+        ],
+        [
+          "referer",
+          "https://www.chromium.org/chromium-projects/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Not;A=Brand\";v=\"8\", \"Chromium\";v=\"150\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "image"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 5,
+      "known_valid": true,
+      "type": "Image",
+      "url": "https://www.chromium.org/chromium-projects/logo_chrome_color_1x_web_32dp.png"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 26380,
+      "data_length": 0,
+      "depends_on": [
+        0
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.chromium.org/chromium-projects/"
+        ],
+        [
+          "referer",
+          "https://www.chromium.org/chromium-projects/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Not;A=Brand\";v=\"8\", \"Chromium\";v=\"150\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 6,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://www.chromium.org/_scripts/@docsearch/index.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 11445,
+      "data_length": 0,
+      "depends_on": [
+        0
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.chromium.org/"
+        ],
+        [
+          "referer",
+          "https://www.chromium.org/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Not;A=Brand\";v=\"8\", \"Chromium\";v=\"150\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 7,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://www.gstatic.com/brandstudio/kato/cookie_choice_component/cookie_consent_bar.v3.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 143,
+      "data_length": 0,
+      "depends_on": [
+        0,
+        7
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "origin",
+          "https://www.chromium.org"
+        ],
+        [
+          "priority",
+          "u=1, i"
+        ],
+        [
+          "referer",
+          "https://www.chromium.org/"
+        ],
+        [
+          "referer",
+          "https://www.chromium.org/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Not;A=Brand\";v=\"8\", \"Chromium\";v=\"150\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "empty"
+        ],
+        [
+          "sec-fetch-mode",
+          "cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 8,
+      "known_valid": true,
+      "type": "XHR",
+      "url": "https://www.gstatic.com/brandstudio/kato/cookie_choice_component/config.json"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 745,
+      "data_length": 0,
+      "depends_on": [
+        0
+      ],
+      "headers": [
+        [
+          "accept",
+          "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=1, i"
+        ],
+        [
+          "referer",
+          "https://www.chromium.org/chromium-projects/"
+        ],
+        [
+          "referer",
+          "https://www.chromium.org/chromium-projects/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Not;A=Brand\";v=\"8\", \"Chromium\";v=\"150\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "image"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 9,
+      "known_valid": true,
+      "type": "Other",
+      "url": "https://www.chromium.org/favicon.ico"
+    }
+  ]
+}

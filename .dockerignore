@@ -1,5 +1,5 @@
-.git
-third_party/neqo-qcsd/.git
+# Git metadata is intentionally included so the source-metadata stage can
+# verify the parent gitlink and record clean/dirty source provenance.
 results
 .cache
 .venv
