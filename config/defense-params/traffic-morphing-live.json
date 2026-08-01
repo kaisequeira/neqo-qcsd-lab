@@ -1,0 +1,138 @@
+{
+  "adaptation": "qcsd-client-only",
+  "buckets": [64, 300, 600, 900, 1200],
+  "generated_by": "qcsd_lab.morphing 0.3.0",
+  "paper_equivalent": false,
+  "profiles": [
+    {
+      "incoming": {
+        "expected_added_bytes": 0.0,
+        "l1_distance": 0.0,
+        "realized_distribution": [0.0, 0.0, 0.0, 0.0, 1.0],
+        "rows": [
+          [1.0, 0.0, 0.0, 0.0, 0.0],
+          [0.0, 1.0, 0.0, 0.0, 0.0],
+          [0.0, 0.0, 1.0, 0.0, 0.0],
+          [0.0, 0.0, 0.0, 1.0, 0.0],
+          [0.0, 0.0, 0.0, 0.0, 1.0]
+        ],
+        "source_distribution": [0.0, 0.0, 0.0, 0.0, 1.0],
+        "target_distribution": [0.0, 0.0, 0.0, 0.0, 1.0]
+      },
+      "outgoing": {
+        "expected_added_bytes": 1136.0,
+        "l1_distance": 0.0,
+        "realized_distribution": [0.0, 0.0, 0.0, 0.0, 1.0],
+        "rows": [
+          [0.0, 0.0, 0.0, 0.0, 1.0],
+          [0.0, 1.0, 0.0, 0.0, 0.0],
+          [0.0, 0.0, 1.0, 0.0, 0.0],
+          [0.0, 0.0, 0.0, 1.0, 0.0],
+          [0.0, 0.0, 0.0, 0.0, 1.0]
+        ],
+        "source_distribution": [1.0, 0.0, 0.0, 0.0, 0.0],
+        "target_distribution": [0.0, 0.0, 0.0, 0.0, 1.0]
+      },
+      "source": "cloudflare-quiche",
+      "target": "acceptance-decoy-cloudflare"
+    },
+    {
+      "incoming": {
+        "expected_added_bytes": 0.0,
+        "l1_distance": 0.0,
+        "realized_distribution": [0.0, 0.0, 0.0, 0.0, 1.0],
+        "rows": [
+          [1.0, 0.0, 0.0, 0.0, 0.0],
+          [0.0, 1.0, 0.0, 0.0, 0.0],
+          [0.0, 0.0, 1.0, 0.0, 0.0],
+          [0.0, 0.0, 0.0, 1.0, 0.0],
+          [0.0, 0.0, 0.0, 0.0, 1.0]
+        ],
+        "source_distribution": [0.0, 0.0, 0.0, 0.0, 1.0],
+        "target_distribution": [0.0, 0.0, 0.0, 0.0, 1.0]
+      },
+      "outgoing": {
+        "expected_added_bytes": 1136.0,
+        "l1_distance": 0.0,
+        "realized_distribution": [0.0, 0.0, 0.0, 0.0, 1.0],
+        "rows": [
+          [0.0, 0.0, 0.0, 0.0, 1.0],
+          [0.0, 1.0, 0.0, 0.0, 0.0],
+          [0.0, 0.0, 1.0, 0.0, 0.0],
+          [0.0, 0.0, 0.0, 1.0, 0.0],
+          [0.0, 0.0, 0.0, 0.0, 1.0]
+        ],
+        "source_distribution": [1.0, 0.0, 0.0, 0.0, 0.0],
+        "target_distribution": [0.0, 0.0, 0.0, 0.0, 1.0]
+      },
+      "source": "chromium-quic-page",
+      "target": "acceptance-decoy-chromium"
+    },
+    {
+      "incoming": {
+        "expected_added_bytes": 0.0,
+        "l1_distance": 0.0,
+        "realized_distribution": [0.0, 0.0, 0.0, 0.0, 1.0],
+        "rows": [
+          [1.0, 0.0, 0.0, 0.0, 0.0],
+          [0.0, 1.0, 0.0, 0.0, 0.0],
+          [0.0, 0.0, 1.0, 0.0, 0.0],
+          [0.0, 0.0, 0.0, 1.0, 0.0],
+          [0.0, 0.0, 0.0, 0.0, 1.0]
+        ],
+        "source_distribution": [0.0, 0.0, 0.0, 0.0, 1.0],
+        "target_distribution": [0.0, 0.0, 0.0, 0.0, 1.0]
+      },
+      "outgoing": {
+        "expected_added_bytes": 1136.0,
+        "l1_distance": 0.0,
+        "realized_distribution": [0.0, 0.0, 0.0, 0.0, 1.0],
+        "rows": [
+          [0.0, 0.0, 0.0, 0.0, 1.0],
+          [0.0, 1.0, 0.0, 0.0, 0.0],
+          [0.0, 0.0, 1.0, 0.0, 0.0],
+          [0.0, 0.0, 0.0, 1.0, 0.0],
+          [0.0, 0.0, 0.0, 0.0, 1.0]
+        ],
+        "source_distribution": [1.0, 0.0, 0.0, 0.0, 0.0],
+        "target_distribution": [0.0, 0.0, 0.0, 0.0, 1.0]
+      },
+      "source": "simple",
+      "target": "acceptance-decoy-simple"
+    },
+    {
+      "incoming": {
+        "expected_added_bytes": 0.0,
+        "l1_distance": 0.0,
+        "realized_distribution": [0.0, 0.0, 0.0, 0.0, 1.0],
+        "rows": [
+          [1.0, 0.0, 0.0, 0.0, 0.0],
+          [0.0, 1.0, 0.0, 0.0, 0.0],
+          [0.0, 0.0, 1.0, 0.0, 0.0],
+          [0.0, 0.0, 0.0, 1.0, 0.0],
+          [0.0, 0.0, 0.0, 0.0, 1.0]
+        ],
+        "source_distribution": [0.0, 0.0, 0.0, 0.0, 1.0],
+        "target_distribution": [0.0, 0.0, 0.0, 0.0, 1.0]
+      },
+      "outgoing": {
+        "expected_added_bytes": 1136.0,
+        "l1_distance": 0.0,
+        "realized_distribution": [0.0, 0.0, 0.0, 0.0, 1.0],
+        "rows": [
+          [0.0, 0.0, 0.0, 0.0, 1.0],
+          [0.0, 1.0, 0.0, 0.0, 0.0],
+          [0.0, 0.0, 1.0, 0.0, 0.0],
+          [0.0, 0.0, 0.0, 1.0, 0.0],
+          [0.0, 0.0, 0.0, 0.0, 1.0]
+        ],
+        "source_distribution": [1.0, 0.0, 0.0, 0.0, 0.0],
+        "target_distribution": [0.0, 0.0, 0.0, 0.0, 1.0]
+      },
+      "source": "complex",
+      "target": "acceptance-decoy-complex"
+    }
+  ],
+  "schema_version": 2,
+  "udp_payload_ceiling": 1200
+}

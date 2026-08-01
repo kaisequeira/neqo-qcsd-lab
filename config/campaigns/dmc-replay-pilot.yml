@@ -1,10 +1,12 @@
 name: p3-dmc-replay-pilot
 seed: 20260720
+stage: acceptance
 qcsd_profile: live
 
 workloads:
   root: ../workloads
   scope: all-reviewed-origins
+  request_policy: as-defined
   source: live
   reviewed: true
   monitored:

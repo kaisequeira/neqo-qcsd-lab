@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 import tempfile
@@ -10,7 +9,7 @@ import time
 from pathlib import Path
 
 from .campaign import CampaignIncomplete, NEQO_CLIENT, collect_campaign
-from .dataset import DatasetValidationError, package_dataset, validate_dataset
+from .dataset import DatasetValidationError, validate_dataset
 from .discover import discover
 from .manifest import runtime_manifest, validate_manifest, write_frozen_manifest
 from .util import LAB_ROOT, run
@@ -50,28 +49,17 @@ def parser() -> argparse.ArgumentParser:
 
     collect = commands.add_parser("collect", help="run a sequential capture campaign")
     collect.add_argument("--campaign", type=Path, required=True)
-    collect.add_argument("--capture", choices=("direct", "wireguard"), required=True)
-    collect.add_argument(
-        "--outer-only",
-        action="store_true",
-        help="omit the optional inner-QUIC view from WireGuard collection",
-    )
     collect.add_argument("--network-condition")
     collect.add_argument("--results", type=Path, default=Path("/lab/results"))
     collect.add_argument("--resume", type=Path, help="resume an existing result root")
 
-    dataset = commands.add_parser("dataset", help="validate or package a classifier dataset")
+    dataset = commands.add_parser("dataset", help="validate a captured classifier dataset")
     dataset_commands = dataset.add_subparsers(dest="dataset_command", required=True)
-    validate = dataset_commands.add_parser("validate", help="validate dataset invariants and PCAP traces")
+    validate = dataset_commands.add_parser(
+        "validate", help="validate dataset invariants and PCAP traces"
+    )
     validate.add_argument("root", type=Path)
-    package = dataset_commands.add_parser("package", help="create an observer-only publication package")
-    package.add_argument("root", type=Path)
-    package.add_argument("--pcaps", choices=("primary", "all", "none"), default="primary")
-    package.add_argument("--output", type=Path)
-    package.add_argument("--data-license")
-
     test = commands.add_parser("test", help="run deterministic lab tests")
-    test.add_argument("--local-acceptance", action="store_true")
     test.add_argument("--capture-acceptance", action="store_true")
     return root
 
@@ -97,8 +85,6 @@ def main(argv: list[str] | None = None) -> None:
             root = collect_campaign(
                 args.campaign.resolve(),
                 args.results.resolve(),
-                capture=args.capture,
-                outer_only=args.outer_only,
                 network_condition=args.network_condition,
                 resume=args.resume.resolve() if args.resume else None,
             )
@@ -114,25 +100,10 @@ def main(argv: list[str] | None = None) -> None:
                 print(json.dumps({"valid": False, "errors": error.errors}, indent=2))
                 raise SystemExit(1) from None
             print(json.dumps(result, indent=2))
-        elif args.dataset_command == "package":
-            print(
-                package_dataset(
-                    args.root.resolve(),
-                    pcaps=args.pcaps,
-                    output=args.output.resolve() if args.output else None,
-                    data_license=args.data_license,
-                )
-            )
     elif args.command == "test":
-        environment = os.environ.copy()
-        if args.local_acceptance:
-            environment["QCSD_RUN_LOCAL_ACCEPTANCE"] = "1"
-        if args.capture_acceptance:
-            environment["QCSD_RUN_CAPTURE_ACCEPTANCE"] = "1"
         result = subprocess.run(
             [sys.executable, "-m", "pytest", "-p", "no:cacheprovider", *extra],
             cwd=LAB_ROOT,
-            env=environment,
             check=False,
         )
         raise SystemExit(result.returncode)
@@ -269,8 +240,7 @@ def response_stability_evidence(runs: list[dict]) -> dict:
                     response.get("complete"),
                 )
                 for response in run_data.get("responses", [])
-                if response.get("complete") is True
-                and response.get("outcome") == "succeeded"
+                if response.get("complete") is True and response.get("outcome") == "succeeded"
             }
         )
     all_ids = set().union(*(set(signature) for signature in signatures))
@@ -278,17 +248,14 @@ def response_stability_evidence(runs: list[dict]) -> dict:
         resource_id
         for resource_id in sorted(all_ids)
         if all(
-            resource_id in signature
-            and signature[resource_id] == signatures[0].get(resource_id)
+            resource_id in signature and signature[resource_id] == signatures[0].get(resource_id)
             for signature in signatures
         )
     ]
     return {"runs": len(runs), "stable_resource_ids": stable}
 
 
-def resolve_probe_output(
-    source: dict, resolved: dict, *, keep_unavailable: bool
-) -> dict:
+def resolve_probe_output(source: dict, resolved: dict, *, keep_unavailable: bool) -> dict:
     """Merge independent probe results while preserving the source graph audit."""
 
     unavailable = [

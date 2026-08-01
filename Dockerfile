@@ -105,33 +105,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /opt/qcsd-lab
 COPY pyproject.toml README.md ./
 COPY src/ ./src/
-RUN python3 -m pip install --break-system-packages '.[test]'
+RUN python3 -m pip install --break-system-packages .
 
 FROM lab-runtime AS collection
-ARG TARGETARCH
-ARG WIREGUARD_GO_VERSION=0.0.20220316-1+b4
-ARG WIREGUARD_GO_AMD64_SHA256=7be694f9c8d990ae1da554ec6640dd97216fce6c030b7c8caaf6f7914618d023
-ARG WIREGUARD_GO_ARM64_SHA256=b2321ad498293ca2264afde55ea9e5b063156a6e130a2da4766b320559c6d1f5
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl ethtool iproute2 iptables iputils-ping tshark util-linux \
-    wireguard-tools=1.0.20210914-1+b1 wireshark-common && \
-    case "${TARGETARCH}" in \
-      amd64) wireguard_sha256="${WIREGUARD_GO_AMD64_SHA256}" ;; \
-      arm64) wireguard_sha256="${WIREGUARD_GO_ARM64_SHA256}" ;; \
-      *) echo "unsupported userspace WireGuard architecture: ${TARGETARCH}" >&2; exit 1 ;; \
-    esac && \
-    curl --fail --location --retry 3 \
-      "https://deb.debian.org/debian/pool/main/w/wireguard-go/wireguard-go_${WIREGUARD_GO_VERSION}_${TARGETARCH}.deb" \
-      -o /tmp/wireguard-go.deb && \
-    echo "${wireguard_sha256}  /tmp/wireguard-go.deb" | sha256sum -c - && \
-    dpkg -i /tmp/wireguard-go.deb && \
-    rm /tmp/wireguard-go.deb && \
-    rm -rf /var/lib/apt/lists/*
+    ethtool tshark util-linux wireshark-common && \
+    rm -rf /var/lib/apt/lists/* && \
+    python3 -m pip install --break-system-packages '.[test]'
 COPY --from=neqo-builder /out/bin/ /usr/local/bin/
 COPY --from=neqo-builder /out/nss/ /opt/nss/
 COPY --from=source-metadata /source-metadata.json /usr/share/qcsd-lab/source.json
-COPY --chmod=0755 docker/collection-entrypoint docker/wireguard-client-up \
-    docker/wireguard-gateway-entrypoint /usr/local/bin/
+COPY --chmod=0755 docker/collection-entrypoint /usr/local/bin/
 ENV LD_LIBRARY_PATH=/opt/nss/lib \
     TEST_FIXTURE_DB=/opt/nss/test-db \
     QCSD_LAB_SOURCE_METADATA=/usr/share/qcsd-lab/source.json \

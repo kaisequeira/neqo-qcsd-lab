@@ -8,7 +8,14 @@ import tempfile
 from pathlib import Path
 from typing import Any, Iterable
 
-LAB_ROOT = Path(os.environ.get("QCSD_LAB_ROOT", "/lab")).resolve()
+_CONTAINER_LAB_ROOT = Path("/lab")
+_NATIVE_LAB_ROOT = Path(__file__).resolve().parents[2]
+LAB_ROOT = Path(
+    os.environ.get(
+        "QCSD_LAB_ROOT",
+        str(_CONTAINER_LAB_ROOT if _CONTAINER_LAB_ROOT.is_dir() else _NATIVE_LAB_ROOT),
+    )
+).resolve()
 DEFAULT_SOURCE_METADATA = Path("/usr/share/qcsd-lab/source.json")
 SOURCE_METADATA_KEYS = {
     "development_build",
@@ -74,7 +81,7 @@ def run(
 ) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(
         command,
-        cwd=cwd or LAB_ROOT,
+        cwd=cwd or (LAB_ROOT if LAB_ROOT.is_dir() else None),
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -145,4 +152,13 @@ def response_signature(sample: Path) -> list[tuple[Any, ...]] | None:
             response.get("outcome"),
         )
         for response in load_json(run_json).get("responses", [])
+    )
+
+
+def padding_event_guard_triggered(run_data: dict[str, Any]) -> bool:
+    """Return whether the runtime's bounded-padding safety guard fired."""
+
+    diagnostics = run_data.get("defense_diagnostics")
+    return (
+        isinstance(diagnostics, dict) and diagnostics.get("padding_event_guard_triggered") is True
     )

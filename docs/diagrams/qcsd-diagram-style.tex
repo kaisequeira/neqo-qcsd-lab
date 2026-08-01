@@ -64,27 +64,11 @@
       (-.30,-.30) -- (-.26,.00) arc[start angle=180,end angle=0,radius=.26]
       -- (.30,-.30) -- cycle;
   }},
-  pics/tunnel/.style={code={
-    \draw[qink,line width=1.1pt,rounded corners=2pt]
-      (-.32,-.28) -- (-.32,.04) arc[start angle=180,end angle=0,radius=.32] -- (.32,-.28);
-    \draw[qmid,line width=.6pt] (-.20,-.28) -- (-.20,.02)
-      arc[start angle=180,end angle=0,radius=.20] -- (.20,-.28);
-    \draw[qink,line width=.7pt] (-.36,-.28) -- (.36,-.28);
-  }},
   pics/observer/.style={code={
     \draw[qink,line width=.85pt]
       (-.38,0) .. controls (-.17,.25) and (.17,.25) .. (.38,0)
       .. controls (.17,-.25) and (-.17,-.25) .. cycle;
     \fill[qink] (0,0) circle (.09);
-  }},
-  pics/gateway/.style={code={
-    \path[draw=qink,fill=qpale,line width=.75pt,rounded corners=1.5pt]
-      (-.34,-.25) rectangle (.34,.25);
-    \draw[qink,line width=.65pt] (-.20,.03) -- (.20,.03);
-    \fill[qink] (-.20,-.12) circle (.025);
-    \fill[qink] (-.08,-.12) circle (.025);
-    \fill[qink] (.04,-.12) circle (.025);
-    \draw[qink,line width=.65pt] (.22,.25) -- (.22,.40);
   }},
   pics/server/.style={code={
     \path[draw=qink,fill=qpale,line width=.75pt]

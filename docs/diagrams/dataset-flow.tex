@@ -4,47 +4,78 @@
 \begin{document}
 \begin{tikzpicture}[x=1cm,y=1cm]
   \QCSDSvgMetadata
-    {Concrete paired visit and classifier split example}
-    {Workload A visit 3 expands into undefended, FRONT, and Tamaraw page loads. All three share one test assignment and feed separately trained classifiers when their outer traces validate. Any failure or content drift excludes the entire paired visit from comparison but remains in failure statistics.}
+    {One paired visit across all seven QCSD selections}
+    {A planned workload visit expands into seven independent direct-capture samples. Every sample has the same PCAP, trace, and fidelity contract. The assignment is owned by a source-manifest-and-repetition split group, so aliases and other derivatives cannot leak across partitions. A failed, drifting, or fidelity-ineligible sample excludes the paired visit from headline comparison while remaining in operational statistics.}
   \path[use as bounding box] (0,0) rectangle (15.5,7.15);
 
-  \node[caption,font=\bfseries] at (1.55,6.68) {one planned visit};
-  \path[draw=qink,fill=white,line width=.7pt,rounded corners=2pt]
-    (.55,5.22) rectangle (2.55,6.18);
-  \node[caption,font=\bfseries] at (1.55,5.87) {workload A};
-  \node[small note] at (1.55,5.52) {visit 3};
-  \path[draw=qink,fill=qpale,line width=.6pt,rounded corners=1.5pt]
-    (.92,4.45) rectangle (2.18,4.90);
-  \node[caption] at (1.55,4.67) {split: \textbf{TEST}};
-  \node[tiny note,align=center,text width=2.9cm] at (1.55,3.95)
-    {The assignment belongs to the visit,\\not to an individual defense.};
+  \node[
+    draw=qink,fill=white,line width=.7pt,rounded corners=2pt,
+    minimum width=2.25cm,minimum height=1.10cm,align=center
+  ] (visit) at (1.70,5.15) {
+    \textbf{workload A}\\[-1pt]
+    \scriptsize visit 3
+  };
+  \node[caption,font=\bfseries] at (1.70,6.12) {one planned visit};
+  \node[
+    draw=qink,fill=qpale,line width=.6pt,rounded corners=1.5pt,
+    minimum width=2.75cm,minimum height=.48cm,align=center
+  ] at (1.70,3.90) {\scriptsize split group: \textbf{70 / 15 / 15}};
+  \node[tiny note,align=center,text width=3.0cm] at (1.70,3.10)
+    {Keyed by manifest hash + repetition;\\never alias, policy, scope, or defence.};
 
-  \draw[plain flow] (2.72,5.70) -- (3.42,5.70);
-  \draw[plain flow] (3.42,2.72) -- (3.42,5.70);
+  \node[
+    draw=qink,fill=white,line width=.7pt,rounded corners=2pt,
+    minimum width=3.35cm,minimum height=4.55cm,
+    align=left,text width=2.95cm
+  ] (loads) at (5.12,4.05) {
+    \centering\textbf{seven independent loads}\\[5pt]
+    \scriptsize Undefended\\
+    Static\\
+    FRONT\\
+    Tamaraw\\
+    Traffic Morphing\\
+    WTF-PAD\\
+    Walkie-Talkie\\[6pt]
+    \centering\tiny one direct PCAP + trace each\\
+    same artifact paths for\\simple / complex
+  };
+  \draw[flow] (visit.east) -- (loads.west |- visit.east);
 
-  \foreach \y/\defense in {5.70/Undefended,4.21/FRONT,2.72/Tamaraw} {
-    \draw[flow] (3.42,\y) -- (4.05,\y);
-    \pic[scale=.92] at (4.42,\y) {client};
-    \node[caption,anchor=west] at (4.87,\y) {\defense};
-    \node[tiny note,anchor=west] at (4.87,{\y-.31}) {separate page load};
+  \node[
+    draw=qink,fill=white,line width=.7pt,rounded corners=2pt,
+    minimum width=2.20cm,minimum height=1.45cm,
+    align=center,text width=1.95cm
+  ] (validate) at (8.22,4.05) {
+    \textbf{validate}\\[3pt]
+    \scriptsize endpoint-tuple union\\
+    PCAP = trace\\
+    response complete\\
+    fidelity record
+  };
+  \draw[flow] (loads.east) -- (validate.west);
 
-    \draw[flow] (6.65,\y) -- (7.05,\y);
-    \pic[scale=.93] at (7.40,\y) {capture};
-    \node[small note,anchor=west] at (7.79,{\y+.11}) {outer trace};
-    \node[tiny note,anchor=west] at (7.79,{\y-.20}) {same TEST split};
+  \node[
+    draw=qink,fill=qpale,line width=.7pt,rounded corners=2pt,
+    minimum width=2.95cm,minimum height=2.35cm,
+    align=center,text width=2.60cm
+  ] (pair) at (11.28,4.05) {
+    \textbf{paired}\\[-1pt]\textbf{comparison}\\[4pt]
+    \scriptsize two classic plot pages\\
+    paired overhead\\table\\
+    classifier index view\\[4pt]
+    \tiny all seven must be eligible
+  };
+  \draw[flow] (validate.east) -- (pair.west);
 
-    \draw[flow] (9.30,\y) -- (10.30,\y);
-    \pic[scale=1.02] at (10.72,\y) {classifier};
-    \node[caption,anchor=west] at (11.20,\y) {\defense\ classifier};
-  }
+  \pic[scale=1.02] at (14.14,4.05) {classifier};
+  \node[small note,align=center] at (14.14,3.20)
+    {one attacker\\per defence};
+  \draw[flow] (pair.east) -- (13.58,4.05);
 
-  \node[small note,anchor=west,align=left] at (10.35,6.55)
-    {Each defense gets its own attacker;\\membership and split stay identical.};
-
-  \draw[failure] (7.40,2.35) -- (7.40,1.13) -- (8.20,1.13);
-  \node[caption,text=qred,anchor=west,align=left,text width=6.4cm] at (8.30,1.35)
-    {If any one load fails, drifts, or lacks a valid outer trace:};
-  \node[small note,anchor=west,align=left,text width=6.4cm] at (8.30,.78)
-    {exclude all three from classifier comparison; retain the event in failure statistics.};
+  \draw[failure] (8.22,3.22) -- (8.22,1.32) -- (9.08,1.32);
+  \node[caption,text=qred,anchor=west,align=left,text width=5.5cm] at (9.18,1.58)
+    {Any failure, content drift, or invalid direct trace:};
+  \node[small note,anchor=west,align=left,text width=5.5cm] at (9.18,.98)
+    {exclude the pair from headline comparison; retain the event in operational statistics.};
 \end{tikzpicture}
 \end{document}

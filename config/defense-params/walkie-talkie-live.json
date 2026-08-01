@@ -1,0 +1,313 @@
+{
+  "adaptation": "qcsd-client-only",
+  "burst_definition": "global-application-batch-direction-transitions",
+  "cell_byte_domain": "http3-request-stream-offset.bytes",
+  "generated_by": "qcsd_lab.walkietalkie 0.6.0",
+  "matching_algorithm": "minimum-cost-one-to-one",
+  "packet_size": 1200,
+  "paper_equivalent": false,
+  "profiles": [
+    {
+      "bursts": [
+        {
+          "incoming": 128,
+          "outgoing": 3
+        }
+      ],
+      "decoy": "acceptance-decoy-simple",
+      "matching_cost_packets": 24,
+      "real": "cloudflare-quiche",
+      "source_envelopes": {
+        "decoy": [
+          {
+            "incoming": 128,
+            "outgoing": 3
+          }
+        ],
+        "real": [
+          {
+            "incoming": 105,
+            "outgoing": 2
+          }
+        ]
+      },
+      "batch_ends": {
+        "decoy": [0],
+        "real": [0]
+      },
+      "molded_batch_ends": [0],
+      "total_scheduled_bytes": 157200,
+      "training_inputs": {
+        "decoy": [
+          "1e7bfc422d290415b6bbb61cabf6fe4fee90fd822da7c77e078db251f14b4a81"
+        ],
+        "real": [
+          "3d7b0469feb34d19f1544583cf0364709abf8a76c3e0a69f5cc6c88790df3d79"
+        ]
+      },
+      "variation": {
+        "decoy": {
+          "maximum_component_spread": 0,
+          "varying_components": 0,
+          "visit_count": 1
+        },
+        "real": {
+          "maximum_component_spread": 0,
+          "varying_components": 0,
+          "visit_count": 1
+        }
+      }
+    },
+    {
+      "bursts": [
+        {
+          "incoming": 128,
+          "outgoing": 2
+        },
+        {
+          "incoming": 32,
+          "outgoing": 8
+        },
+        {
+          "incoming": 32,
+          "outgoing": 8
+        },
+        {
+          "incoming": 32,
+          "outgoing": 4
+        },
+        {
+          "incoming": 32,
+          "outgoing": 4
+        },
+        {
+          "incoming": 128,
+          "outgoing": 0
+        },
+        {
+          "incoming": 32,
+          "outgoing": 2
+        }
+      ],
+      "decoy": "acceptance-decoy-complex",
+      "matching_cost_packets": 41,
+      "real": "chromium-quic-page",
+      "source_envelopes": {
+        "decoy": [
+          {
+            "incoming": 128,
+            "outgoing": 2
+          },
+          {
+            "incoming": 32,
+            "outgoing": 7
+          },
+          {
+            "incoming": 30,
+            "outgoing": 8
+          },
+          {
+            "incoming": 32,
+            "outgoing": 3
+          },
+          {
+            "incoming": 30,
+            "outgoing": 4
+          },
+          {
+            "incoming": 128,
+            "outgoing": 0
+          },
+          {
+            "incoming": 32,
+            "outgoing": 2
+          }
+        ],
+        "real": [
+          {
+            "incoming": 110,
+            "outgoing": 2
+          },
+          {
+            "incoming": 30,
+            "outgoing": 8
+          },
+          {
+            "incoming": 32,
+            "outgoing": 7
+          },
+          {
+            "incoming": 28,
+            "outgoing": 4
+          },
+          {
+            "incoming": 32,
+            "outgoing": 4
+          },
+          {
+            "incoming": 120,
+            "outgoing": 0
+          },
+          {
+            "incoming": 30,
+            "outgoing": 2
+          }
+        ]
+      },
+      "batch_ends": {
+        "decoy": [0, 5, 6],
+        "real": [0, 5, 6]
+      },
+      "molded_batch_ends": [0, 5, 6],
+      "total_scheduled_bytes": 532800,
+      "training_inputs": {
+        "decoy": [
+          "d2428656bc576afc334aa47cb7bde3a255a2ad7edea5fea83e5202e49ca76d54"
+        ],
+        "real": [
+          "821c1eb4892c1d125c6a465232fa65b9971c126888b4a3e4473968703aed7f4a"
+        ]
+      },
+      "variation": {
+        "decoy": {
+          "maximum_component_spread": 0,
+          "varying_components": 0,
+          "visit_count": 1
+        },
+        "real": {
+          "maximum_component_spread": 0,
+          "varying_components": 0,
+          "visit_count": 1
+        }
+      }
+    },
+    {
+      "bursts": [
+        {
+          "incoming": 128,
+          "outgoing": 3
+        }
+      ],
+      "decoy": "acceptance-decoy-local-simple",
+      "matching_cost_packets": 19,
+      "real": "simple",
+      "source_envelopes": {
+        "decoy": [
+          {
+            "incoming": 128,
+            "outgoing": 3
+          }
+        ],
+        "real": [
+          {
+            "incoming": 110,
+            "outgoing": 2
+          }
+        ]
+      },
+      "batch_ends": {
+        "decoy": [0],
+        "real": [0]
+      },
+      "molded_batch_ends": [0],
+      "total_scheduled_bytes": 157200,
+      "training_inputs": {
+        "decoy": [
+          "2b09843a77a7ba31408b46315659f1d7921279b505b448c3fe3dde43dad97af5"
+        ],
+        "real": [
+          "9a1d73bd8b7fd0a342aeba567dfdc822c0141c1f127f04a2515bf17ef8a16e1c"
+        ]
+      },
+      "variation": {
+        "decoy": {
+          "maximum_component_spread": 0,
+          "varying_components": 0,
+          "visit_count": 1
+        },
+        "real": {
+          "maximum_component_spread": 0,
+          "varying_components": 0,
+          "visit_count": 1
+        }
+      }
+    },
+    {
+      "bursts": [
+        {
+          "incoming": 128,
+          "outgoing": 4
+        },
+        {
+          "incoming": 32,
+          "outgoing": 3
+        },
+        {
+          "incoming": 32,
+          "outgoing": 3
+        }
+      ],
+      "decoy": "acceptance-decoy-local-complex",
+      "matching_cost_packets": 60,
+      "real": "complex",
+      "source_envelopes": {
+        "decoy": [
+          {
+            "incoming": 128,
+            "outgoing": 4
+          },
+          {
+            "incoming": 32,
+            "outgoing": 3
+          },
+          {
+            "incoming": 32,
+            "outgoing": 3
+          }
+        ],
+        "real": [
+          {
+            "incoming": 115,
+            "outgoing": 3
+          },
+          {
+            "incoming": 10,
+            "outgoing": 2
+          },
+          {
+            "incoming": 10,
+            "outgoing": 2
+          }
+        ]
+      },
+      "batch_ends": {
+        "decoy": [0, 1, 2],
+        "real": [0, 1, 2]
+      },
+      "molded_batch_ends": [0, 1, 2],
+      "total_scheduled_bytes": 242400,
+      "training_inputs": {
+        "decoy": [
+          "4192bd37043a1c88265778fc1cda626a02637bcc9712609203593df118b8d9c3"
+        ],
+        "real": [
+          "3a023a8fcff2fa7d1e6b3bec1f21488aad4385720f63804f310ac5caba7f5006"
+        ]
+      },
+      "variation": {
+        "decoy": {
+          "maximum_component_spread": 0,
+          "varying_components": 0,
+          "visit_count": 1
+        },
+        "real": {
+          "maximum_component_spread": 0,
+          "varying_components": 0,
+          "visit_count": 1
+        }
+      }
+    }
+  ],
+  "schema_version": 2,
+  "training_split": "reviewed-acceptance-fixture"
+}

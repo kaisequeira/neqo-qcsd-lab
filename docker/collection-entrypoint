@@ -4,10 +4,6 @@ set -eu
 uid="${QCSD_LAB_UID:?QCSD_LAB_UID is required}"
 gid="${QCSD_LAB_GID:?QCSD_LAB_GID is required}"
 
-if [ -n "${QCSD_WG_GATEWAY_ADDRESS:-}" ]; then
-  /usr/local/bin/wireguard-client-up
-fi
-
 exec setpriv \
   --reuid "${uid}" \
   --regid "${gid}" \

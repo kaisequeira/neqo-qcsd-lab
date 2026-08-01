@@ -1,10 +1,12 @@
 name: p3-single-resource-pilot
 seed: 20260720
+stage: acceptance
 qcsd_profile: live
 
 workloads:
   root: ../workloads
   scope: as-defined
+  request_policy: as-defined
   source: live
   reviewed: true
   monitored:

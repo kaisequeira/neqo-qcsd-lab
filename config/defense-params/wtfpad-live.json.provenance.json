@@ -1,0 +1,11 @@
+{
+  "generator": "reviewed-live-acceptance-fixture",
+  "input_policy": "reviewed-engineering-fixture",
+  "inputs": {},
+  "parameter_file": {
+    "path": "wtfpad-live.json",
+    "sha256": "70ec11646a6855686f8dc3ca751ddc46fe3835448324161ffe18720204f94108"
+  },
+  "schema_version": 1,
+  "unsealed_engineering_opt_in": true
+}

@@ -13,7 +13,10 @@ def test_public_cli_contains_only_workflow_boundaries():
     assert choices == {"discover", "probe", "collect", "dataset", "test"}
 
 
-@pytest.mark.parametrize("removed", ["doctor", "plot", "report", "export-pcap"])
+@pytest.mark.parametrize(
+    "removed",
+    ["doctor", "plot", "report", "export-pcap", "defense-params"],
+)
 def test_removed_convenience_commands_are_rejected(removed):
     with pytest.raises(SystemExit) as exit_status:
         cli.parser().parse_args([removed])
@@ -24,9 +27,12 @@ def test_launcher_routes_only_retained_commands():
     launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
     assert "{image build|dev|discover|probe|collect|dataset|test}" in launcher
     assert 'probe|collect|dataset|test) image="${COLLECTION_IMAGE}"' in launcher
-    for removed in ("doctor", "plot", "report", "export-pcap"):
-        command_token = rf"(?<![A-Za-z0-9_-]){re.escape(removed)}(?![A-Za-z0-9_-])"
-        assert re.search(command_token, launcher) is None
+    assert launcher.count("start_capture_acceptance_server") == 3
+    assert "ethtool -K eth0 gro off gso off tso off tx-udp-segmentation off" in launcher
+    assert "--cap-drop ALL --cap-add NET_ADMIN" in launcher
+    for removed in ("doctor", "plot", "report", "export-pcap", "defense-params"):
+        token = rf"(?<![A-Za-z0-9_-]){re.escape(removed)}(?![A-Za-z0-9_-])"
+        assert re.search(token, launcher) is None
 
 
 def test_incomplete_collection_exits_cleanly_with_one_result_path(monkeypatch, capsys):
@@ -37,23 +43,20 @@ def test_incomplete_collection_exits_cleanly_with_one_result_path(monkeypatch, c
 
     monkeypatch.setattr(cli, "collect_campaign", incomplete)
     with pytest.raises(SystemExit) as exit_status:
-        cli.main(["collect", "--campaign", "campaign.yml", "--capture", "direct"])
+        cli.main(["collect", "--campaign", "campaign.yml"])
     assert exit_status.value.code == 1
     assert capsys.readouterr().err == f"campaign incomplete; results retained at {root}\n"
 
 
-def test_collect_has_no_overwrite_or_ad_hoc_namespace_flags():
+def test_collect_has_only_direct_pipeline_options():
     collect = next(
         action
         for action in cli.parser()._subparsers._group_actions[0].choices.values()
         if action.prog.endswith(" collect")
     )
-    destinations = {action.dest for action in collect._actions}
-    assert destinations == {
+    assert {action.dest for action in collect._actions} == {
         "help",
         "campaign",
-        "capture",
-        "outer_only",
         "network_condition",
         "results",
         "resume",
@@ -119,6 +122,5 @@ def test_response_stability_evidence_identifies_dynamic_and_partial_resources():
         [run("stable", "first"), run("stable", "second"), run("stable", "third")]
     )
     assert evidence == {"runs": 3, "stable_resource_ids": [0]}
-
     partial = response_stability_evidence([run("x", "y"), run("x", "y", complete=False)])
     assert partial == {"runs": 2, "stable_resource_ids": []}

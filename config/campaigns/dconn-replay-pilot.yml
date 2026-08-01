@@ -1,10 +1,12 @@
 name: p3-dconn-replay-pilot
 seed: 20260720
+stage: acceptance
 qcsd_profile: live
 
 workloads:
   root: ../workloads
   scope: primary-origin
+  request_policy: as-defined
   source: live
   reviewed: true
   monitored:

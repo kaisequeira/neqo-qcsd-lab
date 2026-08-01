@@ -1,0 +1,134 @@
+{
+  "adaptation": "qcsd-client-only",
+  "fitted_from": "reviewed bounded acceptance fixture; not research evidence",
+  "fitting": {
+    "bandwidth_threshold_bytes_per_second": 100000.0,
+    "burst_threshold_method": "corpus-mean-bandwidth",
+    "candidate_models": [
+      "normal",
+      "lognormal"
+    ],
+    "fake_burst_probability": 0.9,
+    "finite_token_budget": 300,
+    "finite_domain_percentile": 99.5,
+    "histogram_bin_count": 20,
+    "histogram_scale": "exponential",
+    "infinity_token_formulas": {
+      "burst": "k_inf = p_inf / (1 - p_inf) * K",
+      "gap": "k_inf = (K - mean_burst_length + 1) / (mean_burst_length - 1)"
+    },
+    "instantaneous_bandwidth_window_packets": 2,
+    "tuning_applies_to": "burst-histogram-only",
+    "tuning_percentile": 0.5,
+    "tuning_transformation": "paper-gaussian-percentile-shift-v1"
+  },
+  "generated_by": "reviewed-live-acceptance-fixture",
+  "incoming": {
+    "burst": {
+      "edges_us": [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144],
+      "infinity_tokens": 34,
+      "tokens": [0, 0, 0, 0, 0, 0, 0, 0, 0, 5, 10, 20, 35, 50, 55, 50, 40, 25, 10]
+    },
+    "fit": {
+      "burst": {
+        "candidates": [
+          {
+            "ks_statistic": 0.08,
+            "name": "normal",
+            "parameters": [75000.0, 35000.0]
+          },
+          {
+            "ks_statistic": 0.04,
+            "name": "lognormal",
+            "parameters": [0.8, 0.0, 60000.0]
+          }
+        ],
+        "histogram_max_us": 262144,
+        "parameter_transformation": "paper-gaussian-percentile-shift-v1",
+        "runtime_parameters": [0.8, 0.0, 60000.0],
+        "sample_count": 2,
+        "selected_model": "lognormal"
+      },
+      "gap": {
+        "candidates": [
+          {
+            "ks_statistic": 0.05,
+            "name": "normal",
+            "parameters": [5000.0, 2500.0]
+          },
+          {
+            "ks_statistic": 0.09,
+            "name": "lognormal",
+            "parameters": [0.9, 0.0, 4000.0]
+          }
+        ],
+        "histogram_max_us": 262144,
+        "parameter_transformation": "identity",
+        "runtime_parameters": [5000.0, 2500.0],
+        "sample_count": 2,
+        "selected_model": "normal"
+      },
+      "mean_burst_length_packets": 4.0
+    },
+    "gap": {
+      "edges_us": [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144],
+      "infinity_tokens": 99,
+      "tokens": [1, 2, 4, 8, 16, 32, 48, 54, 50, 40, 25, 12, 5, 2, 1, 0, 0, 0, 0]
+    }
+  },
+  "outgoing": {
+    "burst": {
+      "edges_us": [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144],
+      "infinity_tokens": 34,
+      "tokens": [0, 0, 0, 0, 0, 0, 0, 0, 0, 5, 10, 20, 35, 50, 55, 50, 40, 25, 10]
+    },
+    "fit": {
+      "burst": {
+        "candidates": [
+          {
+            "ks_statistic": 0.07,
+            "name": "normal",
+            "parameters": [65000.0, 30000.0]
+          },
+          {
+            "ks_statistic": 0.03,
+            "name": "lognormal",
+            "parameters": [0.75, 0.0, 52000.0]
+          }
+        ],
+        "histogram_max_us": 262144,
+        "parameter_transformation": "paper-gaussian-percentile-shift-v1",
+        "runtime_parameters": [0.75, 0.0, 52000.0],
+        "sample_count": 2,
+        "selected_model": "lognormal"
+      },
+      "gap": {
+        "candidates": [
+          {
+            "ks_statistic": 0.04,
+            "name": "normal",
+            "parameters": [4500.0, 2000.0]
+          },
+          {
+            "ks_statistic": 0.08,
+            "name": "lognormal",
+            "parameters": [0.85, 0.0, 3500.0]
+          }
+        ],
+        "histogram_max_us": 262144,
+        "parameter_transformation": "identity",
+        "runtime_parameters": [4500.0, 2000.0],
+        "sample_count": 2,
+        "selected_model": "normal"
+      },
+      "mean_burst_length_packets": 4.0
+    },
+    "gap": {
+      "edges_us": [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144],
+      "infinity_tokens": 99,
+      "tokens": [1, 2, 4, 8, 16, 32, 48, 54, 50, 40, 25, 12, 5, 2, 1, 0, 0, 0, 0]
+    }
+  },
+  "paper_equivalent": false,
+  "schema_version": 2
+}

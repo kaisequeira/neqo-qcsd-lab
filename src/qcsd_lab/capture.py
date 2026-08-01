@@ -9,6 +9,25 @@ from typing import Any
 
 from .util import load_json, run
 
+REQUIRED_OFFLOAD_FEATURES = {
+    "gro": "generic-receive-offload",
+    "gso": "generic-segmentation-offload",
+    "tso": "tcp-segmentation-offload",
+    "uso": "tx-udp-segmentation",
+}
+OFFLOAD_DISABLED = {feature: "off" for feature in REQUIRED_OFFLOAD_FEATURES}
+OFFLOAD_EVIDENCE_FIELDS = {
+    "interface",
+    "requested",
+    "query_returncodes",
+    "change_returncodes",
+    "before_state",
+    "after_state",
+    "before_sha256",
+    "after_sha256",
+    "verified",
+}
+
 
 @dataclass(frozen=True)
 class ObserverPacket:
@@ -19,7 +38,7 @@ class ObserverPacket:
     direction: str
     frame_len: int
     signed_frame_len: int
-    connection: int
+    udp_payload_len: int | None = None
 
     @property
     def length_bytes(self) -> int:
@@ -38,6 +57,103 @@ def split_endpoint(value: str) -> tuple[str, int]:
         return address[1:], int(port)
     address, port = value.rsplit(":", 1)
     return address, int(port)
+
+
+def parse_offload_state(output: str) -> dict[str, str | None]:
+    """Parse the packet coalescing/segmentation features from ``ethtool -k``."""
+
+    values: dict[str, str] = {}
+    for line in output.splitlines():
+        key, separator, raw_value = line.strip().partition(":")
+        if not separator:
+            continue
+        fields = raw_value.strip().split(maxsplit=1)
+        if not fields:
+            continue
+        value = fields[0]
+        if value in {"on", "off"}:
+            values[key] = value
+    return {
+        short_name: values.get(feature) for short_name, feature in REQUIRED_OFFLOAD_FEATURES.items()
+    }
+
+
+def offload_state_is_safe(state: dict[str, str | None]) -> bool:
+    """Return whether capture packet units are protected from host coalescing."""
+
+    return set(state) == set(REQUIRED_OFFLOAD_FEATURES) and all(
+        value == "off" for value in state.values()
+    )
+
+
+def recompute_offload_verification(
+    evidence: dict[str, Any],
+    *,
+    interface: str | None = None,
+) -> bool:
+    """Recompute the packet-offload proof from its sealed command evidence."""
+
+    fields = set(evidence)
+    if fields != OFFLOAD_EVIDENCE_FIELDS and fields != (OFFLOAD_EVIDENCE_FIELDS - {"verified"}):
+        return False
+    recorded_interface = evidence.get("interface")
+    if (
+        not isinstance(recorded_interface, str)
+        or not recorded_interface
+        or (interface is not None and recorded_interface != interface)
+        or evidence.get("requested") != OFFLOAD_DISABLED
+        or not _successful_returncodes(
+            evidence.get("query_returncodes"),
+            {"before", "after"},
+        )
+        or not _successful_returncodes(
+            evidence.get("change_returncodes"),
+            set(REQUIRED_OFFLOAD_FEATURES),
+        )
+    ):
+        return False
+    before_state = evidence.get("before_state")
+    after_state = evidence.get("after_state")
+    if (
+        not isinstance(before_state, dict)
+        or set(before_state) != set(REQUIRED_OFFLOAD_FEATURES)
+        or any(value not in {"on", "off"} for value in before_state.values())
+        or not isinstance(after_state, dict)
+        or not offload_state_is_safe(after_state)
+    ):
+        return False
+    return all(_is_sha256(evidence.get(field)) for field in ("before_sha256", "after_sha256"))
+
+
+def offload_evidence_is_valid(
+    evidence: object,
+    *,
+    interface: str | None = None,
+) -> bool:
+    """Validate the exact stored proof and its recomputed ``verified`` value."""
+
+    return (
+        isinstance(evidence, dict)
+        and set(evidence) == OFFLOAD_EVIDENCE_FIELDS
+        and evidence.get("verified") is True
+        and recompute_offload_verification(evidence, interface=interface)
+    )
+
+
+def _successful_returncodes(value: object, expected_keys: set[str]) -> bool:
+    return (
+        isinstance(value, dict)
+        and set(value) == expected_keys
+        and all(type(returncode) is int and returncode == 0 for returncode in value.values())
+    )
+
+
+def _is_sha256(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
 
 
 def tuple_filter(endpoints: list[dict[str, Any]]) -> str:
@@ -64,19 +180,9 @@ def tuple_filter(endpoints: list[dict[str, Any]]) -> str:
 
 def extract_trace(
     capture: Path,
-    endpoints: list[dict[str, Any]] | None = None,
-    *,
-    kind: str = "direct-quic",
-    length_basis: str = "frame.len",
-    client_port: int | None = None,
+    endpoints: list[dict[str, Any]],
 ) -> list[ObserverPacket]:
-    """Derive a direction/size/time sequence from one declared observer."""
-
-    if kind not in {"direct-quic", "wireguard-outer"}:
-        raise ValueError(f"unknown observer kind {kind!r}")
-    if length_basis not in {"frame.len", "udp.length"}:
-        raise ValueError(f"unsupported length basis {length_basis!r}")
-    endpoints = endpoints or []
+    """Derive the canonical direct-PCAP direction/size/time sequence."""
 
     command = [
         "tshark",
@@ -91,7 +197,9 @@ def extract_trace(
         "-e",
         "frame.time_epoch",
         "-e",
-        length_basis,
+        "frame.len",
+        "-e",
+        "udp.length",
         "-e",
         "ip.src",
         "-e",
@@ -106,67 +214,75 @@ def extract_trace(
         "udp.dstport",
     ]
     rows = list(csv.reader(run(command).stdout.splitlines()))
-    local_ports: dict[int, int] = {}
-    endpoint_addresses: list[tuple[str, str, int]] = []
+    endpoint_tuples: set[tuple[str, int, str, int]] = set()
+    endpoint_addresses: list[tuple[str, str]] = []
     for endpoint in endpoints:
-        local_address, port = split_endpoint(endpoint["local_address"])
-        remote_address, _remote_port = split_endpoint(endpoint["remote_address"])
-        local_ports[port] = int(endpoint["id"])
-        endpoint_addresses.append((local_address, remote_address, int(endpoint["id"])))
-    valid_rows = [row for row in rows if len(row) >= 8 and row[0]]
+        local_address, local_port = split_endpoint(endpoint["local_address"])
+        remote_address, remote_port = split_endpoint(endpoint["remote_address"])
+        endpoint_tuples.add((local_address, local_port, remote_address, remote_port))
+        endpoint_addresses.append((local_address, remote_address))
+    valid_rows = [row for row in rows if len(row) >= 9 and row[0]]
     if not valid_rows:
         return []
     if any(not row[1] for row in valid_rows):
-        raise ValueError(f"{length_basis} is unavailable for an observer packet")
-    first_ns = int(Decimal(valid_rows[0][0]) * 1_000_000_000)
+        raise ValueError("frame.len is unavailable for an observer packet")
+    timestamped_rows = [
+        (int(Decimal(row[0]) * 1_000_000_000), record_order, row)
+        for record_order, row in enumerate(valid_rows)
+    ]
+    # Capture buffers can flush records a few microseconds out of timestamp
+    # order. The classifier contract is the chronological packet sequence;
+    # preserve PCAP record order only as the deterministic tie-breaker.
+    timestamped_rows.sort(key=lambda item: (item[0], item[1]))
+    first_ns = timestamped_rows[0][0]
     trace = []
-    for row in valid_rows:
-        timestamp = int(Decimal(row[0]) * 1_000_000_000)
+    for timestamp, _record_order, row in timestamped_rows:
         frame_len = int(row[1])
-        source_address = row[2] or row[3]
-        destination_address = row[4] or row[5]
-        source_port = int(row[6]) if row[6] else None
-        destination_port = int(row[7]) if row[7] else None
-        if kind == "wireguard-outer":
-            if client_port is None:
-                raise ValueError("wireguard-outer observer requires client_port")
-            if source_port == client_port:
+        udp_payload_len = int(row[2]) - 8 if row[2] else None
+        if udp_payload_len is not None and udp_payload_len < 0:
+            raise ValueError("udp.length is smaller than the UDP header")
+        source_address = row[3] or row[4]
+        destination_address = row[5] or row[6]
+        source_port = int(row[7]) if row[7] else None
+        destination_port = int(row[8]) if row[8] else None
+        if source_port is not None and destination_port is not None:
+            forward = (
+                source_address,
+                source_port,
+                destination_address,
+                destination_port,
+            )
+            reverse = (
+                destination_address,
+                destination_port,
+                source_address,
+                source_port,
+            )
+            if forward in endpoint_tuples:
                 outgoing = True
-            elif destination_port == client_port:
+            elif reverse in endpoint_tuples:
                 outgoing = False
             else:
-                raise ValueError("outer capture contains a packet outside the client tunnel flow")
-            connection = 0
+                raise ValueError("direct capture contains a packet outside Neqo endpoint tuples")
         else:
-            if source_port in local_ports:
+            # TShark associates every IP fragment with a reassembled UDP
+            # display filter but exposes ports only on the first fragment.
+            # The already tuple-filtered source/destination pair remains
+            # sufficient for client-relative direction.
+            forward = any(
+                source_address == local and destination_address == remote
+                for local, remote in endpoint_addresses
+            )
+            reverse = any(
+                source_address == remote and destination_address == local
+                for local, remote in endpoint_addresses
+            )
+            if forward:
                 outgoing = True
-            elif destination_port in local_ports:
+            elif reverse:
                 outgoing = False
             else:
-                # TShark associates every IP fragment with a reassembled UDP
-                # display filter but exposes ports only on the first fragment.
-                # The already tuple-filtered source/destination pair remains
-                # sufficient for client-relative direction.
-                forward = [
-                    endpoint_id
-                    for local, remote, endpoint_id in endpoint_addresses
-                    if source_address == local and destination_address == remote
-                ]
-                reverse = [
-                    endpoint_id
-                    for local, remote, endpoint_id in endpoint_addresses
-                    if source_address == remote and destination_address == local
-                ]
-                if forward:
-                    outgoing = True
-                    connection = forward[0] if len(set(forward)) == 1 else -1
-                elif reverse:
-                    outgoing = False
-                    connection = reverse[0] if len(set(reverse)) == 1 else -1
-                else:
-                    raise ValueError("direct capture contains a packet outside Neqo endpoint tuples")
-            if source_port is not None or destination_port is not None:
-                connection = local_ports.get(source_port, local_ports.get(destination_port, -1))
+                raise ValueError("direct capture contains a packet outside Neqo endpoint tuples")
         trace.append(
             ObserverPacket(
                 timestamp_unix_ns=timestamp,
@@ -174,10 +290,35 @@ def extract_trace(
                 direction="outgoing" if outgoing else "incoming",
                 frame_len=frame_len,
                 signed_frame_len=frame_len if outgoing else -frame_len,
-                connection=connection,
+                udp_payload_len=udp_payload_len,
             )
         )
     return trace
+
+
+def udp_ceiling_evidence(
+    trace: list[ObserverPacket],
+    expected_ceiling: int,
+) -> dict[str, int | bool | None]:
+    """Summarize whether direct packets satisfy one UDP-payload ceiling.
+
+    A missing UDP length normally means IP fragmentation.  Such a capture
+    cannot prove packet-unit integrity and therefore fails this evidence gate.
+    """
+
+    if not 1_200 <= expected_ceiling <= 65_527:
+        raise ValueError("expected UDP-payload ceiling is outside the QUIC range")
+    observed = [packet.udp_payload_len for packet in trace if packet.udp_payload_len is not None]
+    missing = len(trace) - len(observed)
+    oversized = sum(length > expected_ceiling for length in observed)
+    return {
+        "configured_udp_payload_ceiling": expected_ceiling,
+        "observed_udp_payload_max": max(observed, default=None),
+        "packets_with_udp_payload_length": len(observed),
+        "packets_without_udp_payload_length": missing,
+        "oversized_udp_payload_packets": oversized,
+        "valid": bool(trace) and missing == 0 and oversized == 0,
+    }
 
 
 def write_normalized_trace(path: Path, trace: list[ObserverPacket]) -> None:
@@ -186,9 +327,7 @@ def write_normalized_trace(path: Path, trace: list[ObserverPacket]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as destination:
         writer = csv.writer(destination, lineterminator="\n")
-        writer.writerow(
-            ["relative_time_ns", "direction", "length_bytes", "signed_length_bytes"]
-        )
+        writer.writerow(["relative_time_ns", "direction", "length_bytes", "signed_length_bytes"])
         for packet in trace:
             writer.writerow(
                 [
@@ -215,29 +354,22 @@ def read_normalized_trace(path: Path) -> list[dict[str, str]]:
     return rows
 
 
-def sample_trace(sample: Path, observer_id: str | None = None) -> list[ObserverPacket]:
-    """Reproduce one declared observer trace from its canonical PCAPNG."""
+def sample_trace(sample: Path) -> list[ObserverPacket]:
+    """Reproduce one sample's canonical direct trace from its PCAPNG."""
 
     metadata = load_json(sample / "sample.json")
-    observers = [
-        item
-        for item in metadata.get("views", [])
-        if item.get("valid")
-    ]
-    if observer_id is None:
-        observer = next(
-            (item for item in observers if item.get("kind") == "direct-quic"),
-            next((item for item in observers if item.get("primary")), None),
-        )
-    else:
-        observer = next((item for item in observers if item.get("id") == observer_id), None)
+    observer = next(
+        (
+            item
+            for item in metadata.get("views", [])
+            if item.get("id") == "direct-quic" and item.get("valid")
+        ),
+        None,
+    )
     if observer is None:
-        raise ValueError(f"sample has no valid observer {observer_id or 'view'}")
+        raise ValueError("sample has no valid direct-quic view")
     run_data = load_json(sample / "neqo" / "run.json")
     return extract_trace(
         sample / observer["capture_path"],
         run_data.get("endpoints", []),
-        kind=observer["kind"],
-        length_basis=observer["length_basis"],
-        client_port=observer.get("client_port"),
     )

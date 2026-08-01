@@ -142,7 +142,6 @@ container=(
 )
 
 sidecars=()
-wireguard_environment=()
 cleanup_sidecars() {
   local name
   for name in "${sidecars[@]}"; do
@@ -150,40 +149,18 @@ cleanup_sidecars() {
   done
 }
 
-start_wireguard_gateway() {
-  local name="$1"
-  local test_server_ports="${2:-}"
-  local gateway_private gateway_public client_private client_public
-  gateway_private="$(docker run --rm --entrypoint /usr/bin/wg "${image_id}" genkey)"
-  gateway_public="$(printf '%s\n' "${gateway_private}" | docker run --rm -i --entrypoint /usr/bin/wg "${image_id}" pubkey)"
-  client_private="$(docker run --rm --entrypoint /usr/bin/wg "${image_id}" genkey)"
-  client_public="$(printf '%s\n' "${client_private}" | docker run --rm -i --entrypoint /usr/bin/wg "${image_id}" pubkey)"
-  sidecars+=("${name}")
-  docker run --detach --name "${name}" \
+start_capture_acceptance_server() {
+  local server_name="$1"
+  local server_port="$2"
+  docker run --detach --name "${server_name}" \
     --network bridge \
-    --cap-drop ALL --cap-add NET_ADMIN --cap-add NET_RAW \
-    --device /dev/net/tun \
-    --sysctl net.ipv4.ip_forward=1 \
-    --env "QCSD_WG_GATEWAY_PRIVATE_KEY=${gateway_private}" \
-    --env "QCSD_WG_CLIENT_PUBLIC_KEY=${client_public}" \
-    --env "QCSD_WG_TEST_SERVER_PORTS=${test_server_ports}" \
-    --entrypoint /usr/local/bin/wireguard-gateway-entrypoint \
-    "${image_id}" >/dev/null
-  QCSD_GATEWAY_ADDRESS="$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${name}")"
-  QCSD_GATEWAY_PUBLIC_KEY="${gateway_public}"
-  QCSD_CLIENT_PRIVATE_KEY="${client_private}"
-  test -n "${QCSD_GATEWAY_ADDRESS}"
-  sleep 1
-}
-
-run_wireguard_client() {
-  "${container[@]}" \
-    --device /dev/net/tun \
-    --env "QCSD_WG_GATEWAY_ADDRESS=${QCSD_GATEWAY_ADDRESS}" \
-    --env "QCSD_WG_GATEWAY_PUBLIC_KEY=${QCSD_GATEWAY_PUBLIC_KEY}" \
-    --env "QCSD_WG_CLIENT_PRIVATE_KEY=${QCSD_CLIENT_PRIVATE_KEY}" \
-    "${wireguard_environment[@]}" \
-    "${image_id}" "$@"
+    --security-opt no-new-privileges \
+    --cap-drop ALL --cap-add NET_ADMIN \
+    --env "QCSD_ACCEPTANCE_SERVER_PORT=${server_port}" \
+    --entrypoint /bin/sh \
+    "${image_id}" -eu -c \
+    'ethtool -K eth0 gro off gso off tso off tx-udp-segmentation off
+exec /usr/local/bin/neqo-server "0.0.0.0:${QCSD_ACCEPTANCE_SERVER_PORT}"'
 }
 
 if [[ "${1:-}" == "test" ]]; then
@@ -194,96 +171,30 @@ if [[ "${1:-}" == "test" ]]; then
     fi
   done
   if (( capture_acceptance )); then
-    if [[ ! -c /dev/net/tun ]]; then
-      echo "capture acceptance requires /dev/net/tun for its WireGuard half" >&2
-      exit 1
-    fi
     trap cleanup_sidecars EXIT INT TERM
     test_port=4433
     second_test_port=4434
     direct_server="qcsd-direct-server-$$"
     second_direct_server="qcsd-direct-server-two-$$"
     sidecars+=("${direct_server}" "${second_direct_server}")
-    docker run --detach --name "${direct_server}" \
-      --network bridge \
-      --entrypoint /usr/local/bin/neqo-server \
-      "${image_id}" "0.0.0.0:${test_port}" >/dev/null
-    docker run --detach --name "${second_direct_server}" \
-      --network bridge \
-      --entrypoint /usr/local/bin/neqo-server \
-      "${image_id}" "0.0.0.0:${second_test_port}" >/dev/null
+    start_capture_acceptance_server "${direct_server}" "${test_port}" >/dev/null
+    start_capture_acceptance_server "${second_direct_server}" "${second_test_port}" >/dev/null
     direct_address="$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${direct_server}")"
     second_direct_address="$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${second_direct_server}")"
     test -n "${direct_address}" && test -n "${second_direct_address}"
     sleep 1
     set +e
     "${container[@]}" \
-      --env "QCSD_CAPTURE_ACCEPTANCE_PART=direct" \
+      --env "QCSD_RUN_CAPTURE_ACCEPTANCE=1" \
       --env "QCSD_CAPTURE_SERVER_ADDRESS=${direct_address}" \
       --env "QCSD_CAPTURE_SERVER_PORT=${test_port}" \
       --env "QCSD_CAPTURE_SERVER_TWO_ADDRESS=${second_direct_address}" \
       --env "QCSD_CAPTURE_SERVER_TWO_PORT=${second_test_port}" \
       "${image_id}" "$@"
-    direct_status=$?
+    status=$?
     set -e
-    docker rm -f "${direct_server}" >/dev/null 2>&1 || true
-    docker rm -f "${second_direct_server}" >/dev/null 2>&1 || true
-    if (( direct_status != 0 )); then
-      exit "${direct_status}"
-    fi
-
-    gateway_name="qcsd-wg-gateway-$$"
-    start_wireguard_gateway "${gateway_name}" "${test_port} ${second_test_port}"
-    wireguard_environment=(
-      --env "QCSD_CAPTURE_ACCEPTANCE_PART=wireguard"
-      --env "QCSD_CAPTURE_SERVER_ADDRESS=10.203.0.1"
-      --env "QCSD_CAPTURE_SERVER_PORT=${test_port}"
-      --env "QCSD_CAPTURE_SERVER_TWO_ADDRESS=10.203.0.1"
-      --env "QCSD_CAPTURE_SERVER_TWO_PORT=${second_test_port}"
-    )
-    set +e
-    run_wireguard_client "$@"
-    wireguard_status=$?
-    set -e
-    exit "${wireguard_status}"
+    exit "${status}"
   fi
-fi
-
-if [[ "${1:-}" == "collect" ]]; then
-  capture_mode=""
-  previous=""
-  for argument in "$@"; do
-    if [[ "${previous}" == "--capture" ]]; then
-      capture_mode="${argument}"
-    fi
-    case "${argument}" in
-      --capture=*) capture_mode="${argument#--capture=}" ;;
-    esac
-    previous="${argument}"
-  done
-  if [[ -z "${capture_mode}" ]]; then
-    echo "collect requires --capture direct or --capture wireguard" >&2
-    exit 2
-  fi
-  if [[ "${capture_mode}" == "direct" ]]; then
-    exec "${container[@]}" "${image_id}" "$@"
-  fi
-  if [[ "${capture_mode}" != "wireguard" ]]; then
-    echo "unsupported capture mode: ${capture_mode}" >&2
-    exit 2
-  fi
-  if [[ ! -c /dev/net/tun ]]; then
-    echo "WireGuard collection requires /dev/net/tun" >&2
-    exit 1
-  fi
-  gateway_name="qcsd-wg-gateway-$$"
-  trap cleanup_sidecars EXIT INT TERM
-  start_wireguard_gateway "${gateway_name}" "${QCSD_WG_TEST_SERVER_PORT:-}"
-  set +e
-  run_wireguard_client "$@"
-  status=$?
-  set -e
-  exit "${status}"
 fi
 
 exec "${container[@]}" "${image_id}" "$@"

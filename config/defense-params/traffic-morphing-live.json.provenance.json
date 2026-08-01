@@ -1,0 +1,43 @@
+{
+  "analysis": {
+    "traffic_morphing": {
+      "buckets": [
+        64,
+        300,
+        600,
+        900,
+        1200
+      ],
+      "byte_domain": "udp.payload",
+      "fixture_scope": "operational-acceptance-only",
+      "profiles": [
+        {
+          "source": "cloudflare-quiche",
+          "target": "acceptance-decoy-cloudflare"
+        },
+        {
+          "source": "chromium-quic-page",
+          "target": "acceptance-decoy-chromium"
+        },
+        {
+          "source": "simple",
+          "target": "acceptance-decoy-simple"
+        },
+        {
+          "source": "complex",
+          "target": "acceptance-decoy-complex"
+        }
+      ],
+      "target_selection": "explicit-reviewed-fixture"
+    }
+  },
+  "generator": "reviewed-live-acceptance-fixture",
+  "input_policy": "reviewed-engineering-fixture",
+  "inputs": {},
+  "parameter_file": {
+    "path": "traffic-morphing-live.json",
+    "sha256": "7010a465480fe2450fb97b987082108b0f3616c2f0287b92ef82e06837071d52"
+  },
+  "schema_version": 1,
+  "unsealed_engineering_opt_in": true
+}

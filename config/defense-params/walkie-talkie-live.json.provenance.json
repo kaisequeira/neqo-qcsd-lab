@@ -1,0 +1,11 @@
+{
+  "generator": "reviewed-live-acceptance-fixture",
+  "input_policy": "reviewed-engineering-fixture",
+  "inputs": {},
+  "parameter_file": {
+    "path": "walkie-talkie-live.json",
+    "sha256": "efe9cfb0608af18c3a63b64e5e759794a54f0bc6a228cb335560062534e0eacc"
+  },
+  "schema_version": 1,
+  "unsealed_engineering_opt_in": true
+}
