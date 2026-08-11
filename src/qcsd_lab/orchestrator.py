@@ -408,9 +408,15 @@ def _load_defenses(
                     expected_workloads=workload_ids,
                 )
             else:
-                artifact_dir = frozen_inputs / "defense-parameters" / name
-                parameters_path = (artifact_dir / "parameters.json").resolve()
-                provenance_path = (artifact_dir / "provenance.json").resolve()
+                original_name = Path(parameters).name
+                research_dir = frozen_inputs / "defense-parameters" / "research-1200"
+                if (research_dir / original_name).is_file():
+                    parameters_path = (research_dir / original_name).resolve()
+                    provenance_path = (research_dir / "provenance.json").resolve()
+                else:
+                    artifact_dir = frozen_inputs / "defense-parameters" / name
+                    parameters_path = (artifact_dir / "parameters.json").resolve()
+                    provenance_path = (artifact_dir / "provenance.json").resolve()
                 artifact = validate_frozen_parameter_artifact(
                     parameters_path,
                     provenance_path=provenance_path,
@@ -665,13 +671,28 @@ def _materialize_inputs(
                 schedule_sha256=sha256_file(destination),
             )
         if defense.parameters_path is not None:
-            destination_dir.mkdir(exist_ok=True)
-            destination = destination_dir / "parameters.json"
-            provenance = destination_dir / "provenance.json"
-            shutil.copy2(defense.parameters_path, destination)
             if defense.parameters_provenance_path is None:
                 raise ValueError(f"{defense.name} parameter provenance is missing")
-            shutil.copy2(defense.parameters_provenance_path, provenance)
+            if defense.parameters_input_policy == "sealed-fitting-result-v1":
+                from .fitting import verify_artifact_bundle
+
+                source_bundle = verify_artifact_bundle(defense.parameters_path.parent)
+                research_dir = parameters_dir / "research-1200"
+                if not research_dir.exists():
+                    shutil.copytree(source_bundle.root, research_dir)
+                frozen_bundle = verify_artifact_bundle(research_dir)
+                if source_bundle.artifact_hashes != frozen_bundle.artifact_hashes:
+                    raise ValueError("research parameter bundle changed during materialization")
+                if defense.parameters is None:
+                    raise ValueError(f"{defense.name} parameter source binding is missing")
+                destination = research_dir / Path(defense.parameters).name
+                provenance = research_dir / "provenance.json"
+            else:
+                destination_dir.mkdir(exist_ok=True)
+                destination = destination_dir / "parameters.json"
+                provenance = destination_dir / "provenance.json"
+                shutil.copy2(defense.parameters_path, destination)
+                shutil.copy2(defense.parameters_provenance_path, provenance)
             if (
                 sha256_file(destination) != defense.parameters_sha256
                 or sha256_file(provenance) != defense.parameters_provenance_sha256

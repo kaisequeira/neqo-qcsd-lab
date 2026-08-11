@@ -1,11 +1,4 @@
-"""Validation for immutable, externally supplied defence parameters.
-
-The consolidated lab consumes parameter files; it does not fit them.  During
-the overnight phase the only supported external artifacts are the three
-checked-in, explicitly non-production smoke fixtures.  A future ``fit``
-workflow can add a production receipt without reviving old campaign-index or
-training-domain concepts here.
-"""
+"""Validation for immutable smoke fixtures and sealed research parameters."""
 
 from __future__ import annotations
 
@@ -50,8 +43,15 @@ class ParameterArtifact:
 
 
 def parameter_provenance_path(parameter: Path) -> Path:
-    """Return the mandatory adjacent receipt path for ``parameter``."""
+    """Return a fitted bundle's common receipt or a smoke fixture's adjacent receipt."""
 
+    common = parameter.parent / "provenance.json"
+    if parameter.name in {
+        "traffic-morphing.json",
+        "wtf-pad.json",
+        "walkie-talkie.json",
+    } and common.is_file():
+        return common
     return parameter.with_suffix(parameter.suffix + ".provenance.json")
 
 
@@ -131,12 +131,15 @@ def _validate_parameter_artifact(
     receipt_parameter_name: str | None,
     require_checked_in_fixture: bool,
 ) -> ParameterArtifact:
-    parameter_path = parameter_path.resolve()
     receipt_path = (
-        provenance_path.resolve()
+        provenance_path
         if provenance_path is not None
         else parameter_provenance_path(parameter_path)
     )
+    if parameter_path.is_symlink() or receipt_path.is_symlink():
+        raise ValueError("defense parameter files must not be symbolic links")
+    parameter_path = parameter_path.resolve()
+    receipt_path = receipt_path.resolve()
     if not parameter_path.is_file():
         raise ValueError(f"defense parameter file does not exist: {parameter_path}")
     if not receipt_path.is_file():
@@ -146,6 +149,34 @@ def _validate_parameter_artifact(
 
     parameter = _mapping(load_json(parameter_path), "defense parameters")
     receipt = _mapping(load_json(receipt_path), "parameter provenance")
+    if receipt.get("artifact_type") == "qcsd-research-defense-bundle":
+        from .fitting import BUNDLE_FILES, research_parameter_record
+
+        expected_parameter_name = receipt_parameter_name or parameter_path.name
+        inferred = {
+            filename: kind for kind, filename in BUNDLE_FILES.items()
+        }.get(expected_parameter_name)
+        kind = expected_kind or inferred
+        if kind not in _PARAMETERIZED_KINDS:
+            raise ValueError("research parameter defense kind cannot be inferred")
+        if expected_qcsd_profile not in {None, "research-1200"}:
+            raise ValueError("research parameter QCSD profile does not match campaign")
+        if expected_udp_payload_ceiling not in {None, 1_200}:
+            raise ValueError("research parameter UDP ceiling does not match campaign")
+        parameter_sha256, provenance_sha256, input_policy = research_parameter_record(
+            parameter_path,
+            receipt_path,
+            expected_kind=kind,
+            expected_workloads=expected_workloads,
+            parameter_name=expected_parameter_name,
+        )
+        return ParameterArtifact(
+            path=parameter_path,
+            sha256=parameter_sha256,
+            provenance_path=receipt_path,
+            provenance_sha256=provenance_sha256,
+            input_policy=input_policy,
+        )
     _require_exact_keys(receipt, _PROVENANCE_KEYS, "parameter provenance")
     if receipt.get("schema_version") != PROVENANCE_SCHEMA_VERSION:
         raise ValueError(
@@ -383,7 +414,8 @@ def _validate_walkie_talkie(parameter: Mapping[str, Any], ceiling: int, receipt_
                 or outgoing + incoming < 1
             ):
                 raise ValueError(f"walkie_talkie burst is invalid: {receipt_path}")
-    if len(real_ids) != len(set(real_ids)) or len(decoy_ids) != len(set(decoy_ids)):
+    identities = [*real_ids, *decoy_ids]
+    if len(identities) != len(set(identities)):
         raise ValueError(f"walkie_talkie profiles are duplicated: {receipt_path}")
 
 
@@ -400,12 +432,20 @@ def _validate_workload_coverage(
         raise ValueError("expected workloads must contain non-empty workload IDs")
     profiles = parameter.get("profiles")
     assert isinstance(profiles, list)  # validated by the kind-specific parser
-    identity = "source" if kind == "traffic_morphing" else "real"
-    observed = {
-        str(profile[identity])
-        for profile in profiles
-        if isinstance(profile, Mapping) and isinstance(profile.get(identity), str)
-    }
+    if kind == "traffic_morphing":
+        observed = {
+            str(profile["source"])
+            for profile in profiles
+            if isinstance(profile, Mapping) and isinstance(profile.get("source"), str)
+        }
+    else:
+        observed = {
+            str(profile[identity])
+            for profile in profiles
+            if isinstance(profile, Mapping)
+            for identity in ("real", "decoy")
+            if isinstance(profile.get(identity), str)
+        }
     if not expected <= observed:
         raise ValueError(
             f"{kind} parameter profiles do not cover all campaign workloads: {receipt_path}"

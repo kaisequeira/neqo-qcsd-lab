@@ -162,6 +162,44 @@ def test_named_profiles_can_be_bound_to_campaign_workloads():
         )
 
 
+def test_smoke_walkie_talkie_allows_extra_fixture_only_identities():
+    artifact = validate_parameter_artifact(
+        FIXTURES / "walkie-talkie-live.json",
+        expected_kind="walkie_talkie",
+        allow_reviewed_fixture=True,
+        expected_qcsd_profile="live",
+        expected_udp_payload_ceiling=1200,
+        expected_workloads={"cloudflare-quiche", "chromium-quic-page"},
+    )
+    assert artifact.input_policy == REVIEWED_PARAMETER_INPUT_POLICY
+
+
+def test_walkie_talkie_rejects_cross_side_duplicate_identity(tmp_path, monkeypatch):
+    parameter, provenance = _copy_fixture(
+        tmp_path, monkeypatch, "walkie-talkie-live.json"
+    )
+    value = json.loads(parameter.read_text(encoding="utf-8"))
+    value["profiles"][0]["decoy"] = value["profiles"][1]["real"]
+    atomic_json(parameter, value)
+    receipt = json.loads(provenance.read_text(encoding="utf-8"))
+    receipt["parameter_file"]["sha256"] = sha256_file(parameter)
+    atomic_json(provenance, receipt)
+
+    with pytest.raises(ValueError, match="profiles are duplicated"):
+        validate_parameter_artifact(
+            parameter,
+            expected_kind="walkie_talkie",
+            allow_reviewed_fixture=True,
+        )
+
+
+def test_parameter_symlinks_are_rejected(tmp_path):
+    parameter = tmp_path / "walkie-talkie-live.json"
+    parameter.symlink_to(FIXTURES / "walkie-talkie-live.json")
+    with pytest.raises(ValueError, match="symbolic links"):
+        validate_parameter_artifact(parameter, allow_reviewed_fixture=True)
+
+
 def test_runner_parameter_receipt_binds_kind_hash_path_and_workload():
     path = Path("/results/sample/neqo/defense-parameters.json")
     run = {

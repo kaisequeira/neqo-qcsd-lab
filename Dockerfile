@@ -65,13 +65,19 @@ FROM neqo-toolchain AS neqo-builder
 ARG TARGETARCH
 WORKDIR /src
 COPY neqo-qcsd/ ./
+COPY --from=source-metadata /source-metadata.json /tmp/source-metadata.json
 RUN --mount=type=cache,id=qcsd-cargo-registry-${TARGETARCH},target=/usr/local/cargo/registry \
     --mount=type=cache,id=qcsd-cargo-git-${TARGETARCH},target=/usr/local/cargo/git \
     --mount=type=cache,id=qcsd-cargo-target-${TARGETARCH},target=/src/target \
-    cargo build --locked --release -p neqo-bin --features qcsd \
+    neqo_commit="$(python3 -c 'import json; print(json.load(open("/tmp/source-metadata.json"))["neqo_commit"])')"; \
+    case "${neqo_commit}" in (*[!0-9a-f]*|'') exit 1;; esac; \
+    test "${#neqo_commit}" -eq 40; \
+    cargo build --locked --release -p neqo-csdef --bin qcsd-validate-parameters && \
+    NEQO_QCSD_GIT_COMMIT="${neqo_commit}" cargo build --locked --release -p neqo-bin --features qcsd \
       --bin neqo-qcsd-client --bin neqo-server && \
     mkdir -p /out/bin /out/nss/lib /out/nss/test-db && \
-    cp target/release/neqo-qcsd-client target/release/neqo-server /out/bin/ && \
+    cp target/release/neqo-qcsd-client target/release/neqo-server \
+      target/release/qcsd-validate-parameters /out/bin/ && \
     find /opt/mozilla/dist/Release/lib -name '*.so*' -type f -exec cp -L {} /out/nss/lib/ \; && \
     fixture_db="$(find /usr/local/cargo/git/checkouts -path '*/test-fixture/db/cert9.db' -print -quit)" && \
     test -n "${fixture_db}" && cp -a "$(dirname "${fixture_db}")/." /out/nss/test-db/

@@ -1,5 +1,7 @@
 /results/*
 !/results/README.md
+/artifacts/*
+!/artifacts/README.md
 /.cache/
 /.pytest_cache/
 /.ruff_cache/

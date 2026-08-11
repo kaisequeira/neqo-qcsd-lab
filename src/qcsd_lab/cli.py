@@ -43,6 +43,9 @@ def parser() -> argparse.ArgumentParser:
     analyze = commands.add_parser("analyze", help="regenerate derived analysis from evidence")
     analyze.add_argument("result", type=Path)
 
+    fit = commands.add_parser("fit", help="fit the fixed research-1200 defense artifact bundle")
+    fit.add_argument("result", type=Path)
+
     test = commands.add_parser("test", help="run deterministic or controlled live tests")
     test.add_argument("suite", nargs="?", choices=("live",), default=None)
     return root
@@ -95,9 +98,14 @@ def main(argv: list[str] | None = None) -> None:
             if target.suffix.lower() in {".yml", ".yaml"}:
                 result = preflight_campaign(target)
             else:
-                from .verification import verify_result
+                from .fitting import is_artifact_bundle_candidate, verify_artifact_bundle
 
-                result = verify_result(target).as_dict()
+                if is_artifact_bundle_candidate(target):
+                    result = verify_artifact_bundle(target).as_dict()
+                else:
+                    from .verification import verify_result
+
+                    result = verify_result(target).as_dict()
         except (OSError, ValueError) as error:
             _fail(error)
         print(json.dumps(result, indent=2, sort_keys=True))
@@ -110,6 +118,31 @@ def main(argv: list[str] | None = None) -> None:
         except (OSError, ValueError) as error:
             _fail(error)
         print(json.dumps(outputs, indent=2, sort_keys=True))
+        return
+    if args.command == "fit":
+        from .fitting import fit_result
+
+        try:
+            output = fit_result(
+                args.result.resolve(),
+                artifacts_root=Path(
+                    os.environ.get("QCSD_ARTIFACTS_ROOT", str(LAB_ROOT / "artifacts"))
+                ),
+            )
+        except (OSError, ValueError) as error:
+            _fail(error)
+        from .util import sha256_file
+
+        print(
+            json.dumps(
+                {
+                    "root": str(output),
+                    "provenance_sha256": sha256_file(output / "provenance.json"),
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
         return
     if args.command == "test":
         environment = dict(os.environ)
