@@ -42,7 +42,7 @@ def test_schedule_metrics_report_exact_realization_errors(tmp_path):
         "action_time_us,direction,size,observed_size,satisfaction,miss_reason\n"
         "10,outgoing,1200,1200,satisfied,\n"
         "20,outgoing,1200,1199,satisfied,\n"
-        "30,incoming,1200,,credit_advertised,\n"
+        "30,incoming,1200,,satisfied,\n"
         "40,incoming,1200,,missed,deadline\n",
         encoding="utf-8",
     )
@@ -51,8 +51,7 @@ def test_schedule_metrics_report_exact_realization_errors(tmp_path):
         "scheduled_events": 4,
         "scheduled_outgoing_events": 2,
         "scheduled_incoming_events": 2,
-        "satisfied_events": 2,
-        "credit_advertised_events": 1,
+        "satisfied_events": 3,
         "missed_events": 1,
         "missed_event_reasons": {"deadline": 1},
         "outgoing_size_mismatch_events": 1,
@@ -72,6 +71,49 @@ def test_defended_sample_requires_exact_zero_miss_schedule_contract():
     assert not _eligible("traffic-morphing", diagnostics, missed_events=None)
     assert not _eligible("traffic-morphing", diagnostics, outgoing_size_mismatches=1)
     assert not _eligible("traffic-morphing", diagnostics, outgoing_size_mismatches=None)
+
+
+@pytest.mark.parametrize(
+    "defense",
+    ["static", "front", "tamaraw", "traffic-morphing", "wtf-pad", "walkie-talkie"],
+)
+def test_every_nonbaseline_defense_requires_exact_consumed_incoming_credit(defense):
+    if defense == "traffic-morphing":
+        diagnostics = _traffic_morphing_diagnostics()
+    elif defense == "wtf-pad":
+        diagnostics = _wtf_pad_diagnostics()
+    elif defense == "walkie-talkie":
+        diagnostics = _walkie_talkie_diagnostics()
+    else:
+        diagnostics = _scheduled_incoming_diagnostics()
+    assert _eligible(defense, diagnostics)
+
+    for key in tuple(diagnostics):
+        missing = deepcopy(diagnostics)
+        del missing[key]
+        assert not _eligible(defense, missing)
+
+    extra = deepcopy(diagnostics)
+    extra["scheduled_incoming_stale_bytes"] = 0
+    assert not _eligible(defense, extra)
+
+    wrong_type = deepcopy(diagnostics)
+    wrong_type["scheduled_incoming_requested_bytes"] = False
+    assert not _eligible(defense, wrong_type)
+
+    retired = deepcopy(diagnostics)
+    retired["scheduled_incoming_consumed_bytes"] = 80
+    retired["scheduled_incoming_retired_bytes"] = 20
+    assert not _eligible(defense, retired)
+
+    unresolved = deepcopy(diagnostics)
+    unresolved["scheduled_incoming_consumed_bytes"] = 80
+    unresolved["scheduled_incoming_unresolved_bytes"] = 20
+    assert not _eligible(defense, unresolved)
+
+    inconsistent = deepcopy(diagnostics)
+    inconsistent["scheduled_incoming_consumed_bytes"] = 99
+    assert not _eligible(defense, inconsistent)
 
 
 def test_wtf_pad_size_error_is_distinct_from_byte_shortfall():
@@ -181,6 +223,7 @@ def _eligible(
 
 def _traffic_morphing_diagnostics() -> dict:
     return {
+        **_scheduled_incoming_diagnostics(),
         "morphing_egress_packets": 2,
         "morphing_egress_source_bytes": 230,
         "morphing_egress_target_bytes": 400,
@@ -194,13 +237,14 @@ def _traffic_morphing_diagnostics() -> dict:
         "morphing_ingress_requested_bytes": 100,
         "morphing_ingress_received_bytes": 100,
         "morphing_ingress_shortfall_bytes": 0,
-        "morphing_ingress_target_l1_ppm": 0,
+        "morphing_ingress_wire_mixture_l1_ppm": 0,
         "suppressed_cover_feedback": 1,
     }
 
 
 def _wtf_pad_diagnostics() -> dict:
     return {
+        **_scheduled_incoming_diagnostics(),
         "padding_events": 2,
         "padding_event_guard_triggered": False,
         "wtf_pad_incoming_desired_bytes": 100,
@@ -221,6 +265,7 @@ def _wtf_pad_diagnostics() -> dict:
 
 def _walkie_talkie_diagnostics() -> dict:
     return {
+        **_scheduled_incoming_diagnostics(),
         "retried_outgoing_events": 0,
         "walkie_talkie_target_outgoing_cells": 2,
         "walkie_talkie_target_incoming_cells": 2,
@@ -254,6 +299,15 @@ def _walkie_talkie_diagnostics() -> dict:
                 "observed_incoming_cells": 2,
             }
         ],
+    }
+
+
+def _scheduled_incoming_diagnostics() -> dict:
+    return {
+        "scheduled_incoming_requested_bytes": 100,
+        "scheduled_incoming_consumed_bytes": 100,
+        "scheduled_incoming_retired_bytes": 0,
+        "scheduled_incoming_unresolved_bytes": 0,
     }
 
 

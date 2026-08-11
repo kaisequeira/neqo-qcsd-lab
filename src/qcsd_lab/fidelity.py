@@ -363,7 +363,6 @@ def _schedule_realization_metrics(sample: Path) -> dict[str, Any]:
         "scheduled_outgoing_events": directions.get("outgoing", 0),
         "scheduled_incoming_events": directions.get("incoming", 0),
         "satisfied_events": satisfactions.get("satisfied", 0),
-        "credit_advertised_events": satisfactions.get("credit_advertised", 0),
         "missed_events": satisfactions.get("missed", 0),
         "missed_event_reasons": dict(sorted(miss_reasons.items())),
         "outgoing_size_mismatch_events": outgoing_size_mismatches,
@@ -374,6 +373,12 @@ def _schedule_realization_metrics(sample: Path) -> dict[str, Any]:
 _INTEGER = "integer"
 _BOOLEAN = "boolean"
 _BURST_VECTOR = "burst-vector"
+_SCHEDULED_INCOMING_CONTRACT = {
+    "scheduled_incoming_requested_bytes": _INTEGER,
+    "scheduled_incoming_consumed_bytes": _INTEGER,
+    "scheduled_incoming_retired_bytes": _INTEGER,
+    "scheduled_incoming_unresolved_bytes": _INTEGER,
+}
 _DIAGNOSTIC_CONTRACTS: dict[str, dict[str, str]] = {
     "traffic-morphing": {
         **{
@@ -392,7 +397,7 @@ _DIAGNOSTIC_CONTRACTS: dict[str, dict[str, str]] = {
                 "morphing_ingress_requested_bytes",
                 "morphing_ingress_received_bytes",
                 "morphing_ingress_shortfall_bytes",
-                "morphing_ingress_target_l1_ppm",
+                "morphing_ingress_wire_mixture_l1_ppm",
                 "suppressed_cover_feedback",
             )
         },
@@ -487,6 +492,31 @@ def _diagnostics_match_contract(defense: str, diagnostics: dict[str, Any]) -> bo
     return all(_diagnostic_value_matches(kind, selected[key]) for key, kind in contract.items())
 
 
+def _scheduled_incoming_diagnostics_match(diagnostics: dict[str, Any]) -> bool:
+    selected = {
+        key: value
+        for key, value in diagnostics.items()
+        if key.startswith("scheduled_incoming_")
+    }
+    if set(selected) != set(_SCHEDULED_INCOMING_CONTRACT):
+        return False
+    if not all(
+        _diagnostic_value_matches(kind, selected[key])
+        for key, kind in _SCHEDULED_INCOMING_CONTRACT.items()
+    ):
+        return False
+    requested = selected["scheduled_incoming_requested_bytes"]
+    consumed = selected["scheduled_incoming_consumed_bytes"]
+    retired = selected["scheduled_incoming_retired_bytes"]
+    unresolved = selected["scheduled_incoming_unresolved_bytes"]
+    return (
+        requested == consumed + retired + unresolved
+        and requested == consumed
+        and retired == 0
+        and unresolved == 0
+    )
+
+
 def _diagnostic_value_matches(kind: str, value: Any) -> bool:
     if kind == _INTEGER:
         return type(value) is int and value >= 0
@@ -529,6 +559,12 @@ def fidelity_eligible(
             or type(outgoing_size_mismatches) is not int
             or outgoing_size_mismatches != 0
         )
+    ):
+        return False
+    if (
+        defense in DEFENSE_ADAPTATIONS
+        and defense != "undefended"
+        and not _scheduled_incoming_diagnostics_match(diagnostics)
     ):
         return False
     if not _diagnostics_match_contract(defense, diagnostics):

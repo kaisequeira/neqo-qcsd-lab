@@ -155,7 +155,16 @@ def _write_successful_attempt(
         "endpoint_count": 1,
         "endpoint_count_valid": True,
         "operationally_valid": True,
-        "defense_diagnostics": {},
+        "defense_diagnostics": (
+            {}
+            if defense_name == "undefended"
+            else {
+                "scheduled_incoming_requested_bytes": 0,
+                "scheduled_incoming_consumed_bytes": 0,
+                "scheduled_incoming_retired_bytes": 0,
+                "scheduled_incoming_unresolved_bytes": 0,
+            }
+        ),
     }
 
 
