@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from .manifest import safe_discovery_headers, write_frozen_manifest
+from .manifest import https_origin, safe_discovery_headers
 
 SETTLE_MS = 3_000
 
@@ -19,28 +18,40 @@ class DiscoveredRequest:
     initiator_urls: set[str] = field(default_factory=set)
 
 
+@dataclass
+class DiscoveryResult:
+    """Browser request graph and the evidence needed to audit its preparation."""
+
+    source_url: str
+    final_url: str
+    chromium_version: str
+    settle_ms: int
+    observed_request_count: int
+    observed_origins: list[str]
+    approved_origins: list[str]
+    exclusions: list[dict[str, str]]
+    resources: list[dict[str, Any]]
+
+
 def origin(url: str) -> str | None:
-    parts = urlsplit(url)
-    if parts.scheme != "https" or not parts.netloc:
-        return None
-    return f"https://{parts.netloc}"
+    return https_origin(url)
 
 
-def discover(
-    urls: list[str],
-    output: Path,
+def discover_page(
+    url: str,
     *,
     allow_origins: list[str],
     timeout_ms: int,
-    force: bool,
-) -> str:
-    """Discover one page graph and retain only explicitly reviewed origins."""
+) -> DiscoveryResult:
+    """Discover one page graph while retaining only explicitly approved origins."""
 
-    if len(urls) != 1:
-        raise ValueError("replay discovery requires exactly one final page URL")
-    reviewed = sorted({_normalize_origin(value) for value in allow_origins})
-    if not reviewed:
-        raise ValueError("replay discovery requires at least one --allow-origin")
+    if origin(url) is None:
+        raise ValueError(f"source URL is not absolute HTTPS: {url}")
+    if timeout_ms < 1:
+        raise ValueError("discovery timeout must be positive")
+    approved = sorted({_normalize_origin(value) for value in allow_origins})
+    if not approved:
+        raise ValueError("workload preparation requires at least one approved origin")
     try:
         from playwright.sync_api import sync_playwright
     except ImportError as error:
@@ -50,7 +61,7 @@ def discover(
     observed_origins: set[str] = set()
     exclusions: dict[tuple[str, str], dict[str, str]] = {}
     observed_request_count = 0
-    final_url = urls[0]
+    final_url = url
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(
             headless=True,
@@ -77,7 +88,7 @@ def discover(
             request_origin = origin(url)
             if request_origin:
                 observed_origins.add(request_origin)
-            reason = exclusion_reason(method, url, set(reviewed))
+            reason = exclusion_reason(method, url, set(approved))
             if reason:
                 exclude(url, reason)
                 return
@@ -110,9 +121,7 @@ def discover(
 
         def extra_headers_seen(event: dict[str, Any]) -> None:
             request_id = str(event.get("requestId", ""))
-            headers = {
-                str(name): str(value) for name, value in event.get("headers", {}).items()
-            }
+            headers = {str(name): str(value) for name, value in event.get("headers", {}).items()}
             if not request_id or not headers:
                 return
             url = request_urls.get(request_id)
@@ -123,46 +132,41 @@ def discover(
 
         session.on("Network.requestWillBeSent", request_seen)
         session.on("Network.requestWillBeSentExtraInfo", extra_headers_seen)
-        page.goto(urls[0], wait_until="load", timeout=timeout_ms)
+        page.goto(url, wait_until="load", timeout=timeout_ms)
         page.wait_for_timeout(SETTLE_MS)
         final_url = page.url
         page.close()
         browser.close()
 
-    missing = set(reviewed) - observed_origins
+    missing = set(approved) - observed_origins
     if missing:
-        raise ValueError(f"reviewed origins were not observed: {', '.join(sorted(missing))}")
+        raise ValueError(f"approved origins were not observed: {', '.join(sorted(missing))}")
+    if origin(final_url) not in approved:
+        raise ValueError("the final page origin was not explicitly approved")
     resources = build_resources(list(discovered.values()))
-    manifest = {
-        "header_policy": {
-            "mode": "fresh-browser",
-            "overrides": [],
-            "allow_conditional": False,
-            "allow_range": False,
-        },
-        "resources": resources,
-        "replay": {
-            "source_url": urls[0],
-            "final_url": final_url,
-            "chromium_version": chromium_version,
-            "settle_ms": SETTLE_MS,
-            "observed_request_count": observed_request_count,
-            "observed_origins": sorted(observed_origins),
-            "reviewed_origins": reviewed,
-            "exclusions": sorted(exclusions.values(), key=lambda item: (item["url"], item["reason"])),
-        },
-    }
-    return write_frozen_manifest(output, manifest, force=force)
+    if not resources:
+        raise ValueError("browser discovery left no approved HTTPS GET resources")
+    return DiscoveryResult(
+        source_url=url,
+        final_url=final_url,
+        chromium_version=chromium_version,
+        settle_ms=SETTLE_MS,
+        observed_request_count=observed_request_count,
+        observed_origins=sorted(observed_origins),
+        approved_origins=approved,
+        exclusions=sorted(exclusions.values(), key=lambda item: (item["url"], item["reason"])),
+        resources=resources,
+    )
 
 
-def exclusion_reason(method: str, url: str, reviewed: set[str]) -> str | None:
+def exclusion_reason(method: str, url: str, approved: set[str]) -> str | None:
     if method != "GET":
         return f"unsafe method: {method or 'unknown'}"
     request_origin = origin(url)
     if request_origin is None:
         return "not an absolute HTTPS request"
-    if request_origin not in reviewed:
-        return "origin not reviewed"
+    if request_origin not in approved:
+        return "origin not approved"
     return None
 
 
@@ -197,8 +201,8 @@ def build_resources(ordered: list[DiscoveredRequest]) -> list[dict[str, Any]]:
 def _normalize_origin(value: str) -> str:
     normalized = origin(value)
     if normalized is None:
-        raise ValueError(f"reviewed origin is not absolute HTTPS: {value}")
+        raise ValueError(f"approved origin is not absolute HTTPS: {value}")
     parts = urlsplit(value)
     if parts.path not in {"", "/"} or parts.query or parts.fragment:
-        raise ValueError(f"reviewed origin must not contain a path: {value}")
+        raise ValueError(f"approved origin must not contain a path: {value}")
     return normalized

@@ -1,254 +1,166 @@
+from __future__ import annotations
+
 import json
-from hashlib import sha256
 from pathlib import Path
 
 import pytest
 
-from qcsd_lab.parameters import validate_parameter_artifact
-from qcsd_lab.util import atomic_json, atomic_text, sha256_file, write_checksums
+import qcsd_lab.parameters as parameters
+from qcsd_lab.parameters import (
+    REVIEWED_PARAMETER_INPUT_POLICY,
+    parameter_provenance_path,
+    validate_parameter_artifact,
+    validate_run_parameter_binding,
+)
+from qcsd_lab.util import atomic_json, sha256_file
 
 
-def test_sealed_runtime_bundle_revalidates_source_campaigns(tmp_path):
-    evidence = _sealed_campaign(
-        tmp_path / "training",
-        [("source", "monitored", 0), ("target", "unmonitored", 0)],
-    )
-    parameter, provenance = _morphing_bundle(
-        tmp_path,
-        source=[evidence["source"][0]],
-        target=[evidence["target"][0]],
-    )
+FIXTURES = Path(__file__).parents[1] / "config/defense-params"
 
+
+@pytest.mark.parametrize(
+    ("name", "kind"),
+    [
+        ("traffic-morphing-live.json", "traffic_morphing"),
+        ("wtfpad-live.json", "wtf_pad"),
+        ("walkie-talkie-live.json", "walkie_talkie"),
+    ],
+)
+def test_checked_in_smoke_artifacts_bind_hash_kind_profile_and_ceiling(name, kind):
+    path = FIXTURES / name
     artifact = validate_parameter_artifact(
-        parameter,
-        provenance_path=provenance,
-        expected_kind="traffic_morphing",
+        path,
+        expected_kind=kind,
+        allow_reviewed_fixture=True,
         expected_qcsd_profile="live",
         expected_udp_payload_ceiling=1200,
     )
-    assert artifact.sha256 == sha256_file(parameter)
-    assert artifact.input_policy == "sealed-completed-campaigns"
 
-    trace = Path(evidence["source"][0]["path"])
-    trace.write_text(trace.read_text(encoding="utf-8") + "\n", encoding="utf-8")
-    with pytest.raises(ValueError, match="campaign cannot be verified"):
+    assert artifact.sha256 == sha256_file(path)
+    assert artifact.provenance_path == parameter_provenance_path(path).resolve()
+    assert artifact.provenance_sha256 == sha256_file(artifact.provenance_path)
+    assert artifact.input_policy == REVIEWED_PARAMETER_INPUT_POLICY
+
+
+def test_reviewed_fixture_requires_explicit_smoke_opt_in():
+    with pytest.raises(ValueError, match="only by smoke campaigns"):
+        validate_parameter_artifact(
+            FIXTURES / "wtfpad-live.json",
+            expected_kind="wtf_pad",
+        )
+
+
+@pytest.mark.parametrize(
+    ("keyword", "value", "message"),
+    [
+        ("expected_kind", "walkie_talkie", "kind does not match"),
+        ("expected_qcsd_profile", "published", "profile does not match"),
+        ("expected_udp_payload_ceiling", 1450, "ceiling does not match"),
+    ],
+)
+def test_receipt_must_match_campaign_contract(keyword, value, message):
+    options = {
+        "expected_kind": "traffic_morphing",
+        "allow_reviewed_fixture": True,
+        "expected_qcsd_profile": "live",
+        "expected_udp_payload_ceiling": 1200,
+    }
+    options[keyword] = value
+    with pytest.raises(ValueError, match=message):
+        validate_parameter_artifact(FIXTURES / "traffic-morphing-live.json", **options)
+
+
+def test_reviewed_fixture_cannot_be_supplied_from_an_arbitrary_path(tmp_path):
+    source = FIXTURES / "wtfpad-live.json"
+    parameter = tmp_path / source.name
+    parameter.write_bytes(source.read_bytes())
+    provenance = parameter_provenance_path(parameter)
+    provenance.write_bytes(parameter_provenance_path(source).read_bytes())
+
+    with pytest.raises(ValueError, match="must be checked in"):
+        validate_parameter_artifact(parameter, allow_reviewed_fixture=True)
+
+
+def test_parameter_tamper_breaks_receipt_hash(tmp_path, monkeypatch):
+    parameter, provenance = _copy_fixture(tmp_path, monkeypatch, "wtfpad-live.json")
+    value = json.loads(parameter.read_text(encoding="utf-8"))
+    value["incoming"]["burst"]["tokens"][0] += 1
+    atomic_json(parameter, value)
+
+    with pytest.raises(ValueError, match="SHA-256 mismatch"):
         validate_parameter_artifact(
             parameter,
-            expected_kind="traffic_morphing",
+            expected_kind="wtf_pad",
+            allow_reviewed_fixture=True,
             expected_qcsd_profile="live",
             expected_udp_payload_ceiling=1200,
         )
+    assert provenance.is_file()
 
 
-def test_sealed_runtime_bundle_rejects_duplicate_and_partial_population(tmp_path):
-    evidence = _sealed_campaign(
-        tmp_path / "training",
-        [
-            ("source", "monitored", 0),
-            ("source", "monitored", 1),
-            ("target", "unmonitored", 0),
-        ],
+def test_receipt_tamper_and_runtime_shape_are_rejected(tmp_path, monkeypatch):
+    parameter, provenance = _copy_fixture(tmp_path, monkeypatch, "walkie-talkie-live.json")
+    receipt = json.loads(provenance.read_text(encoding="utf-8"))
+    receipt["production_ready"] = True
+    atomic_json(provenance, receipt)
+    with pytest.raises(ValueError, match="non-production smoke fixture"):
+        validate_parameter_artifact(parameter, allow_reviewed_fixture=True)
+
+    receipt["production_ready"] = False
+    value = json.loads(parameter.read_text(encoding="utf-8"))
+    value["packet_size"] = 1199
+    atomic_json(parameter, value)
+    receipt["parameter_file"]["sha256"] = sha256_file(parameter)
+    atomic_json(provenance, receipt)
+    with pytest.raises(ValueError, match="runtime shape"):
+        validate_parameter_artifact(parameter, allow_reviewed_fixture=True)
+
+
+def test_named_profiles_can_be_bound_to_campaign_workloads():
+    validate_parameter_artifact(
+        FIXTURES / "traffic-morphing-live.json",
+        expected_kind="traffic_morphing",
+        allow_reviewed_fixture=True,
+        expected_workloads={"cloudflare-quiche", "chromium-quic-page", "simple", "complex"},
     )
-    parameter, provenance = _morphing_bundle(
-        tmp_path,
-        source=[evidence["source"][0]],
-        target=[evidence["target"][0]],
-    )
-    with pytest.raises(ValueError, match="complete eligible train population"):
-        validate_parameter_artifact(parameter, expected_kind="traffic_morphing")
-
-    value = json.loads(provenance.read_text(encoding="utf-8"))
-    value["inputs"]["source"] = [evidence["source"][0], evidence["source"][0]]
-    atomic_json(provenance, value)
-    with pytest.raises(ValueError, match="duplicate inputs"):
-        validate_parameter_artifact(parameter, expected_kind="traffic_morphing")
-
-
-def test_sealed_runtime_bundle_rejects_wrong_domain_and_generator(tmp_path):
-    evidence = _sealed_campaign(
-        tmp_path / "training",
-        [("source", "monitored", 0), ("target", "unmonitored", 0)],
-    )
-    parameter, provenance = _morphing_bundle(
-        tmp_path,
-        source=[evidence["source"][0]],
-        target=[evidence["target"][0]],
-    )
-    value = json.loads(provenance.read_text(encoding="utf-8"))
-    value["inputs"]["source"][0]["split"] = "test"
-    atomic_json(provenance, value)
-    with pytest.raises(ValueError, match="wrong evidence domain"):
-        validate_parameter_artifact(parameter, expected_kind="traffic_morphing")
-
-    value["inputs"]["source"][0]["split"] = "train"
-    value["generator"] = "wtfpad"
-    atomic_json(provenance, value)
-    with pytest.raises(ValueError, match="generator does not match"):
-        validate_parameter_artifact(parameter, expected_kind="traffic_morphing")
-
-
-def _sealed_campaign(
-    root: Path,
-    entries: list[tuple[str, str, int]],
-) -> dict[str, list[dict[str, object]]]:
-    root.mkdir()
-    records = []
-    rows: list[tuple[dict[str, object], Path, Path]] = []
-    population: dict[str, list[str]] = {}
-    for workload, role, repetition in entries:
-        visit_id = _digest(f"visit:{workload}:{repetition}")
-        population.setdefault(workload, []).append(visit_id)
-        sample_id = _digest(f"sample:{workload}:{repetition}")
-        relative = Path(workload) / f"visit-{repetition:05d}" / "undefended"
-        neqo = root / relative / "neqo"
-        neqo.mkdir(parents=True)
-        trace = neqo / "packets.csv"
-        trace.write_text(
-            "direction,monotonic_us,connection,observed_udp_length,"
-            "scheduled_target,satisfaction,slot_id\n"
-            "outgoing,1000,0,1200,,unshaped,\n",
-            encoding="utf-8",
+    with pytest.raises(ValueError, match="cover all"):
+        validate_parameter_artifact(
+            FIXTURES / "traffic-morphing-live.json",
+            expected_kind="traffic_morphing",
+            allow_reviewed_fixture=True,
+            expected_workloads={"not-in-the-fixture"},
         )
-        run = neqo / "run.json"
-        atomic_json(
-            run,
-            {
-                "completion_status": "complete",
-                "request_policy": "as-defined",
-                "defense_start_monotonic_ns": 1_000_000,
-                "application_completion_monotonic_ns": 2_000_000,
-                "resolved_configuration": {"defense": {"kind": "none"}},
-            },
-        )
-        source_digest = _digest(f"manifest:{workload}")
-        record = {
-            "path": relative.as_posix(),
-            "state": "captured",
-            "eligible": True,
-            "fidelity_eligible": True,
-            "visit_id": visit_id,
-            "split_group_id": _digest(f"group:{workload}:{repetition}"),
-            "sample_id": sample_id,
-            "workload_id": workload,
-            "source_manifest_sha256": source_digest,
-            "repetition": repetition,
-            "class_label": workload,
-            "role": role,
-            "split": "train",
-            "defense": "undefended",
-            "runtime_kind": "none",
-        }
-        records.append(record)
-        rows.append((record, trace, run))
 
-    atomic_text(
-        root / "samples.jsonl",
-        "".join(json.dumps(record, sort_keys=True) + "\n" for record in records),
-    )
-    atomic_json(
-        root / "campaign.json",
-        {
-            "campaign": {
-                "name": root.name,
-                "stage": "parameter-fitting",
-                "status": "complete",
-            },
-            "configuration": {
-                "stage": "parameter-fitting",
-                "study_id": _digest("study"),
-                "seed": 7,
-                "qcsd_profile": "live",
-                "capture": {"udp_payload_ceiling": 1200},
-                "workloads": {"request_policy": "as-defined"},
-            },
-            "summary": {"passed": True},
+
+def test_runner_parameter_receipt_binds_kind_hash_path_and_workload():
+    path = Path("/results/sample/neqo/defense-parameters.json")
+    run = {
+        "defense_parameters": {
+            "kind": "wtf_pad",
+            "sha256": "a" * 64,
+            "path": str(path),
         },
+        "resolved_configuration": {"defense": {"workload_id": "simple"}},
+    }
+    validate_run_parameter_binding(
+        run,
+        kind="wtf_pad",
+        sha256="a" * 64,
+        expected_path=path,
+        expected_workload_id="simple",
     )
-    write_checksums(
-        root,
-        [path for path in root.rglob("*") if path.is_file() and path.name != "SHA256SUMS"],
-    )
-
-    campaign_sha256 = sha256_file(root / "campaign.json")
-    seal_sha256 = sha256_file(root / "SHA256SUMS")
-    result: dict[str, list[dict[str, object]]] = {}
-    for record, trace, run in rows:
-        workload = str(record["workload_id"])
-        result.setdefault(workload, []).append(
-            {
-                "kind": "sealed-completed-campaign",
-                "path": str(trace),
-                "sha256": sha256_file(trace),
-                "campaign_root": str(root),
-                "campaign_name": root.name,
-                "campaign_sha256": campaign_sha256,
-                "seal_sha256": seal_sha256,
-                "campaign_stage": "parameter-fitting",
-                "study_id": _digest("study"),
-                "visit_id": record["visit_id"],
-                "split_group_id": record["split_group_id"],
-                "sample_id": record["sample_id"],
-                "sample_path": record["path"],
-                "workload_id": workload,
-                "source_manifest_sha256": record["source_manifest_sha256"],
-                "repetition": record["repetition"],
-                "class_label": workload,
-                "role": record["role"],
-                "split": "train",
-                "request_policy": "as-defined",
-                "qcsd_profile": "live",
-                "udp_payload_ceiling": 1200,
-                "split_seed": 7,
-                "eligible_train_visit_ids": sorted(population[workload]),
-                "defense": "undefended",
-                "runtime_kind": "none",
-                "view": "runner",
-                "trace_format": "runner-udp-payload",
-                "length_basis": "udp.payload",
-                "run_path": run.relative_to(root).as_posix(),
-                "run_sha256": sha256_file(run),
-                "application_window_us": [1000, 2000],
-            }
-        )
-    return result
+    run["defense_parameters"]["sha256"] = "b" * 64
+    with pytest.raises(ValueError, match="run binding mismatch"):
+        validate_run_parameter_binding(run, kind="wtf_pad", sha256="a" * 64)
 
 
-def _morphing_bundle(
-    root: Path,
-    *,
-    source: list[dict[str, object]],
-    target: list[dict[str, object]],
-) -> tuple[Path, Path]:
-    parameter = root / "traffic-morphing.json"
-    atomic_json(
-        parameter,
-        {
-            "schema_version": 2,
-            "adaptation": "qcsd-client-only",
-            "paper_equivalent": False,
-            "buckets": [1200],
-            "udp_payload_ceiling": 1200,
-            "profiles": [{"source": "source", "target": "target"}],
-        },
-    )
-    provenance = parameter.with_suffix(".json.provenance.json")
-    atomic_json(
-        provenance,
-        {
-            "schema_version": 1,
-            "generator": "morphing",
-            "input_policy": "sealed-completed-campaigns",
-            "unsealed_engineering_opt_in": False,
-            "parameter_file": {
-                "path": parameter.name,
-                "sha256": sha256_file(parameter),
-            },
-            "inputs": {"source": source, "target": target},
-            "analysis": {},
-        },
-    )
+def _copy_fixture(tmp_path, monkeypatch, name):
+    monkeypatch.setattr(parameters, "LAB_ROOT", tmp_path)
+    destination = tmp_path / "config/defense-params"
+    destination.mkdir(parents=True)
+    source = FIXTURES / name
+    parameter = destination / name
+    parameter.write_bytes(source.read_bytes())
+    provenance = parameter_provenance_path(parameter)
+    provenance.write_bytes(parameter_provenance_path(source).read_bytes())
     return parameter, provenance
-
-
-def _digest(value: str) -> str:
-    return sha256(value.encode()).hexdigest()

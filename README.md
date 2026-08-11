@@ -1,266 +1,363 @@
-# neqo-qcsd-lab
+# QCSD lab
 
-`neqo-qcsd-lab` is the Docker-only collection and analysis environment for the
-QCSD fork of Mozilla Neqo. It has one measurement path: direct Ethernet capture
-of the exact QUIC flows created by a Neqo/QCSD page load.
+This repository is the experiment orchestrator for the QCSD Neqo fork. It has
+one workflow: freeze a workload, expand a campaign into sequential samples,
+capture each Neqo run directly, seal the evidence, and derive plots and a
+report afterwards.
 
-Campaign recipes may describe a single resource, a same-origin page graph, or a
-reviewed multi-origin graph. That changes the requests Neqo makes, not the
-observer or the artifacts. Every sample produces one direct PCAPNG, one
-normalized trace, runner evidence, metrics, and the classic QCSD comparison
-figure. The research rationale and limitations are in
-[`METHODOLOGY.md`](METHODOLOGY.md).
+The lab does not maintain a second data-processing workflow. A workload is
+simply a frozen graph of HTTPS requests. A visit is one execution of that
+graph. A sample is one visit under one defence.
 
-## Repository layout
+Docker is required for every public command. The Neqo source is the
+`neqo-qcsd/` Git submodule.
 
-```text
-config/
-  campaigns/                replay and all-defence recipes
-  defense-params/           reviewed runtime parameter fixtures
-  workloads/                frozen page/request graphs
-docker/
-  collection-entrypoint     least-privilege collection-container setup
-docs/
-  diagrams/                 standalone TikZ sources and shared style
-  assets/                   matching transparent SVG and vector PDF figures
-neqo-qcsd/                  editable Neqo Git submodule
-src/qcsd_lab/               campaign, capture, dataset, plot, and report code
-tests/                      deterministic tests and the direct live gate
-results/                    ignored generated evidence
+## Commands
+
+The public surface is deliberately limited to these eight forms.
+
+### `build`
+
+```shell
+./qcsd-lab build
 ```
 
-The diagrams are rendered with `latexmk` and `dvisvgm`; rendering is not a lab
-command.
+Builds the collection image and the workload-preparation image from the current
+lab checkout and Neqo submodule. There is no development-mode flag. Source
+commits, dirty state, and patch hashes are embedded as provenance when the
+checkout is not clean.
 
-## Campaigns and workloads
+### `prepare`
 
-The research definitions for workloads, paired visits, split groups, and
-eligibility are maintained in
-[`METHODOLOGY.md`](METHODOLOGY.md#workloads-visits-and-splits). The
-operator-facing campaign recipes all use the same planner and collector:
+```shell
+./qcsd-lab prepare example https://example.com/ https://example.com
+```
 
-- `single-resource-pilot.yml` replays manifests as written;
-- `dconn-replay-pilot.yml` uses `primary-origin` to retain the final page
-  origin;
-- `dmc-replay-pilot.yml` uses `all-reviewed-origins`;
-- `defense-migration-pilot.yml` runs one simple and one complex workload across
-  Undefended, Static, FRONT, Tamaraw, Traffic Morphing, WTF-PAD, and
-  Walkie-Talkie.
+The arguments are a new workload ID, a page URL, and one or more explicitly
+approved HTTPS origins. Preparation:
 
-The supported workload scopes are `as-defined`, `primary-origin`, and
-`all-reviewed-origins`. Repetition counts remain explicit under
-`workloads.monitored` and `workloads.unmonitored`; a scope never introduces a
-second collection workflow or an implicit sample count.
+1. observes the page with Chromium;
+2. removes unsafe or unapproved requests, sensitive headers, and credentialed URLs;
+3. probes the retained requests with the same Neqo client used for capture;
+4. checks repeated status, byte count, and body identity;
+5. freezes the concrete request headers and dependency graph in
+   `config/workloads/<id>.json`.
 
-Optional `limits` bound response bytes, runner and capture duration, retained
-capture size, retries, origin cooldown, inter-sample delay, and the post-run
-settle interval. Every resolved value is written to `campaign.json`.
+Preparation refuses to overwrite an existing ID. Chromium is not used during
+measurement. There is no runtime header-policy switch: the exact safe headers
+stored on each resource are the request input.
 
-Static uses `kind: static`, a signed schedule, and a chaff-only or
-chaff-and-shape mode. The three new parameterized defences use the same
-campaign field:
+### `run`
+
+```shell
+./qcsd-lab run config/campaigns/smoke.yml
+```
+
+Validates and freezes the campaign inputs, executes its samples, and prints the
+new result directory. A run is successful only when every planned sample is
+accepted and eligible. A terminal incomplete run is still retained and sealed
+for diagnosis.
+
+The checked-in `smoke.yml` is a 14-sample integration campaign: two workloads,
+one visit, one request policy, and all seven current defence modes. Its three
+data-driven parameter files are reviewed engineering fixtures for smoke tests;
+they are not fitted research artifacts.
+
+### `resume`
+
+```shell
+./qcsd-lab resume results/<campaign>/<run-id>
+```
+
+Continues one exact interrupted or incomplete result. Resume first checks the
+frozen inputs, running source fingerprint, accepted sample hashes, and any
+existing seal. It re-derives the campaign identity, purpose, limits, workload
+records, defence bindings, seeds, and execution order from those frozen files;
+editing and re-hashing `experiment.json` cannot change the run contract. It
+never repeats accepted samples. If a successful attempt was
+validated but interrupted around its atomic promotion, resume completes that
+promotion from its recorded hashes without another network request. Otherwise
+it removes only the partial working directory of an interrupted, unpromoted
+attempt; completed failed attempts remain evidence.
+
+`max_attempts` is the automatic retry budget for each invocation. An explicit
+`resume` is a new operator-authorized retry epoch for still-incomplete samples;
+accepted samples remain immutable. To avoid bypassing timing controls across a
+process restart, every previously attempted origin waits one full configured
+cooldown before the first resumed request.
+
+### `verify`
+
+```shell
+./qcsd-lab verify config/campaigns/smoke.yml
+./qcsd-lab verify results/<campaign>/<run-id>
+```
+
+For YAML, `verify` is a non-executing preflight. It validates workload and
+parameter files and prints the sample count and exact seeded execution order.
+
+For a result directory, `verify` checks the evidence index, exact authoritative
+file set, every file hash, the experiment schema, frozen-input fingerprint,
+the configuration re-derived from `inputs/campaign.yml`, each accepted
+sample's artifact binding, and the external parameter receipts. Missing,
+changed, additional, rebound, or path-escaping authoritative files fail
+verification.
+
+### `analyze`
+
+```shell
+./qcsd-lab analyze results/<campaign>/<run-id>
+```
+
+Verifies the sealed evidence, builds a complete replacement in a temporary
+directory, and atomically replaces `derived/`. It creates:
+
+- `summary.csv` with per-sample and paired-baseline metrics;
+- deterministic SVG comparisons for every complete eligible paired visit;
+- aggregate application-latency and wire-overhead SVGs;
+- a self-contained `report.html` with its SVGs embedded.
+
+The trace comparison preserves the tested QCSD view: incoming/outgoing
+packet-time density, controller-action overlays, signed Ethernet-frame-size
+scatter, an application-completion marker, and a shaded defence tail. No PDF
+or qlog is produced. Deleting `derived/` and rerunning `analyze` reconstructs
+it from `capture.pcapng`, `run.json`, and `schedule.csv` without modifying or
+resealing evidence.
+
+### `test`
+
+```shell
+./qcsd-lab test
+```
+
+Runs the deterministic Python suite in the collection image. It does not use
+the public Internet or start a research campaign.
+
+### `test live`
+
+```shell
+./qcsd-lab test live
+```
+
+Starts two controlled local HTTP/3 servers and runs the direct-capture
+acceptance tests. This is the bounded networking gate for capture startup and
+tail coverage, exact endpoint filtering, interface-offload checks, UDP-payload
+ceiling enforcement, runner/PCAP reconciliation, and overlapping connections
+to distinct origins within one sample.
+
+## Campaigns
+
+A campaign has one schema:
 
 ```yaml
+schema: 1
+name: example
+purpose: smoke                 # smoke, fitting, or evaluation
+seed: 20260806
+profile: live                  # currently live or published
+
+workloads:                     # ID maps to visit count
+  cloudflare-quiche: 1
+  chromium-quic-page: 1
+
+request_policies:
+  - as-defined                 # or half-duplex
+
 defenses:
   - undefended
+  - front
+  - tamaraw
+  - name: static
+    kind: static
+    schedule: ../defense-params/static-migration.csv
+    mode: chaff-only
   - name: traffic-morphing
     kind: traffic_morphing
     parameters: ../defense-params/traffic-morphing-live.json
-    allow_reviewed_fixture: true
-  - name: wtf-pad
-    kind: wtf_pad
-    parameters: ../defense-params/wtfpad-live.json
-    allow_reviewed_fixture: true
-  - name: walkie-talkie
-    kind: walkie_talkie
-    parameters: ../defense-params/walkie-talkie-live.json
-    allow_reviewed_fixture: true
+
+limits:
+  timeout_seconds: 120
+  max_response_bytes: 1048576
+  capture_seconds: 180
+  capture_megabytes: 64
+  max_attempts: 3
+  per_origin_cooldown_seconds: 30
+  settle_seconds: 1
 ```
 
-Parameter paths resolve relative to the campaign. The JSON and adjacent
-`.provenance.json` sidecar are content-hashed, recorded in the campaign
-receipt, copied into each reactive sample, bound to the runner's
-`run.json.defense_parameters`, and covered by the result seal.
+Workload IDs resolve only through `config/workloads/<id>.json`. A workload
+contains concrete resources: URL, safe request headers, dependencies, and
+preparation provenance where available. It does not carry an evaluation role
+or an implicit repetition count.
 
-`allow_reviewed_fixture` is limited to checked-in, reviewed engineering
-fixtures used by the internal acceptance campaign. A normal generated
-parameter file must have sealed production provenance.
+Purpose is an evidence constraint, not another execution engine. `smoke`
+permits the checked-in reviewed fixtures, `fitting` is restricted to
+undefended samples, and `evaluation` requires research-grade external
+artifacts whenever a data-driven defence is selected. The consolidated
+overnight implementation deliberately rejects those evaluation selections
+until the next goal adds the fitted-artifact receipt.
 
-## Build and workload preparation
+`as-defined` starts every request whose declared dependencies are satisfied.
+That can create overlapping streams and connections. `half-duplex` additionally
+waits for the current application stream to finish before starting another.
+It is an execution policy, not a second workload format.
 
-Build from the checked-out Neqo submodule:
+Static consumes a signed schedule file. Traffic Morphing, WTF-PAD, and
+Walkie-Talkie consume a JSON parameter file with an adjacent
+`.provenance.json` receipt. Campaign loading validates these files, their
+defence/profile binding, and their hashes before a network run, then freezes
+copies under `inputs/`. Reviewed engineering fixtures are permitted only for a
+`smoke` campaign; an evaluation campaign requires sealed fitted artifacts.
+FRONT and Tamaraw are generated from the selected QCSD profile and therefore
+do not have external fitted files.
 
-```shell
-./qcsd-lab image build all
+Only fields shown by the schema are accepted. Campaigns do not carry unrelated
+data-processing or evaluation settings, and command behavior is not embedded
+inside the YAML. A campaign with several defences must include exactly one
+undefended baseline so response identity and overhead can be paired. A
+single-defence campaign is valid for capture mechanics, but cannot produce a
+paired comparison unless its prepared workload supplies the expected response
+identity.
+
+## Execution order and concurrency
+
+Expansion is deterministic:
+
+```text
+workload declaration order
+  -> request-policy list order
+    -> visit 0..N-1
+      -> seeded shuffle of the configured defences
 ```
 
-Use `--dev` for a dirty development checkout. The dirty state, patch hashes,
-source commits, and image digest are recorded so an incompatible result cannot
-be resumed.
+The sample count is:
 
-Browser discovery and Neqo HTTP/3 preflight create a new frozen workload:
-
-```shell
-./qcsd-lab discover \
-  --url https://example.com/ \
-  --allow-origin https://example.com \
-  --allow-origin https://static.example.com \
-  --output /lab/config/workloads/example-discovered.json
-
-./qcsd-lab probe \
-  --input-manifest /lab/config/workloads/example-discovered.json \
-  --output /lab/config/workloads/example.json
+```text
+sum(workload visit counts) * number of request policies * number of defences
 ```
 
-Chromium participates only during discovery. A reviewer explicitly allows each
-retained origin, and Neqo preflight checks HTTP/3 availability and repeated
-response stability. Measurement itself is performed only by Neqo/QCSD.
+Samples are executed one at a time. A sample is one Neqo page-load process and
+one PCAP. Inside that sample, Neqo owns one connection per distinct origin;
+connections and ready request streams can progress simultaneously. The
+orchestrator does not merge those origins into separate samples and does not
+run two samples concurrently. Per-origin cooldowns are applied between samples
+and conservatively restarted for previously attempted origins after `resume`.
 
-## Runtime defence parameters
-
-Parameter fitting is deliberately outside the lab. The collector accepts a
-prepared runtime JSON file and adjacent `.provenance.json` receipt, verifies
-its source-campaign seals and train-domain bindings, copies both files into the
-sample, and checks the hash reported by Neqo. The lab contains no SciPy,
-fitting CLI, matrix optimizer, histogram fitter, or burst-mould generator.
-
-Research campaigns accept only `sealed-completed-campaigns` provenance.
-Checked-in `reviewed-engineering-fixture` bundles are restricted to acceptance
-campaigns with `allow_reviewed_fixture: true`. Producing a fitted bundle is an
-offline thesis-analysis responsibility, not a collection command.
-
-## Collect
-
-Every campaign uses direct capture:
-
-```shell
-./qcsd-lab collect \
-  --campaign /lab/config/campaigns/defense-migration-pilot.yml
-```
-
-An optional network-condition label becomes provenance without changing
-capture:
-
-```shell
-./qcsd-lab collect \
-  --campaign /lab/config/campaigns/dmc-replay-pilot.yml \
-  --network-condition campus-wifi
-```
-
-Resume an interrupted result with the same inputs:
-
-```shell
-./qcsd-lab collect \
-  --campaign /lab/config/campaigns/dmc-replay-pilot.yml \
-  --resume /lab/results/<timestamp>
-```
-
-The collector starts `dumpcap` on container `eth0` before Neqo, captures UDP
-through the defence tail and settle interval, then post-filters the retained
-PCAP to the exact union of endpoint tuples recorded by the runner. Every
-sample must prove that GRO, GSO, TSO, and UDP segmentation offload (USO) are
-disabled and that every observed datagram respects the profile-wide
-UDP-payload ceiling (1200 bytes for the live profile). QCSD also disables
-per-socket Linux `UDP_GRO`, which is independent of interface offload state.
-Controlled acceptance origins disable their virtual-interface offloads too,
-so bridge capture preserves UDP datagram boundaries. The runner's resolved
-ceiling is bound to the same value in every packet-number space.
+The seed freezes defence order and per-sample defence randomness. It does not
+make independent live network responses identical. Eligibility instead checks
+that delivered response identity matches the undefended member of the same
+workload, policy, and visit.
 
 ## Result contract
 
+This working copy's `results/` directory may also contain two explicitly
+documented historical snapshots from the retired workflows. See
+`results/README.md`; they are preserved data, not supported result formats, and
+no active command writes them.
+
 ```text
-results/<UTC timestamp>/
-  campaign.json             immutable visit plan and resolved provenance
-  samples.jsonl             canonical defence-sample state
-  dataset.json              observer and dataset card
-  splits.json               source/repetition 70/15/15 assignments
-  classifier.json           leakage-safe model-input contract
-  classifier-samples.jsonl  full variable-length direct sequences
-  metrics.csv               capture, overhead, drift, and guard metrics
-  projection.json           measured/reference collection costs
-  resolved-workloads/       exact runtime graphs used by Neqo
-  report.html               figures and artifact links
-  SHA256SUMS                exact integrity seal
-  <class>/<workload>-visit-<number>/
-    trace-comparison.{pdf,svg}
-    trace-comparison-2.{pdf,svg}
-    <defence>/
-      sample.json
-      fidelity.yml
-      captures/direct-quic.pcapng
-      traces/direct-quic.csv
+results/<campaign>/<run-id>/
+  experiment.json
+  evidence.sha256
+  inputs/
+    campaign.yml
+    source.json
+    workloads/
+      <workload>.json
+    defense-parameters/
+      <defence>/
+        schedule.csv | parameters.json
+        provenance.json
+  samples/
+    <workload>/<policy>/visit-000/<defence>/
+      capture.pcapng
       neqo/
-      attempts/
+        run.json
+        packets.csv
+        events.csv
+        schedule.csv
+  failures/
+    <sample-id>/attempt-001/
+      ... diagnostic working evidence ...
+  derived/
+    summary.csv
+    plots/
+      aggregate-latency.svg
+      aggregate-overhead.svg
+      <workload>/<policy>/visit-000/trace-comparison*.svg
+    report.html
 ```
 
-Each `sample.json` uses this fixed artifact-view record:
+Every remaining file has one job:
+
+- `experiment.json` is the sole experiment receipt and state machine. It owns
+  provenance, frozen configuration, exact execution order, sample identity,
+  attempts, state, eligibility, failures, diagnostics, accepted artifact
+  hashes, and totals.
+- `evidence.sha256` is the terminal SHA-256 index. SHA-256 is a content
+  fingerprint: changing one covered byte changes the expected digest. The
+  index exactly covers `experiment.json`, `inputs/`, `samples/`, and
+  `failures/`; it deliberately does not cover itself or `derived/`.
+- `inputs/campaign.yml` is the exact campaign submitted to the run.
+- `inputs/source.json` records the exact collection-image ID, lab and Neqo
+  commits, and dirty/patch provenance used by resume.
+- `inputs/workloads/*.json` are the exact prepared graphs supplied to the
+  campaign. They are kept once, rather than copied beside every sample.
+- `inputs/defense-parameters/**` contains the exact external schedule or
+  parameter/provenance pair selected by the campaign. Directly configured
+  defences create no directory here.
+- `capture.pcapng` is the direct Ethernet evidence, filtered after collection
+  to the exact bidirectional endpoint tuples reported by Neqo.
+- `neqo/run.json` is the runner receipt: resolved configuration, endpoints,
+  response identity, completion, timing, and defence diagnostics.
+- `neqo/packets.csv` is Neqo's transport-datagram record used to reconcile the
+  runner with the independently captured PCAP.
+- `neqo/events.csv` records ordered runner, application, and controller events
+  needed to interpret completion and defence behavior.
+- `neqo/schedule.csv` records attempted controller actions and their observed
+  realization; it provides plot overlays and fidelity metrics.
+- `failures/<sample-id>/attempt-NNN/` retains logs, partial captures, runner
+  output, and other diagnostics produced by a completed failed attempt. The
+  exact contents depend on the failure stage; the structured current failure
+  is in `experiment.json`.
+- `derived/summary.csv` is the reproducible metrics table.
+- `derived/plots/**/*.svg` are reproducible vector figures.
+- `derived/report.html` is the reproducible, self-contained report and links
+  back to authoritative sample files.
+
+An accepted sample contains exactly the five listed files. There is no
+`sample.json`, fidelity sidecar, JSONL index, resolved-workload duplicate,
+normalized-trace copy, PDF, secondary index, or qlog.
+
+## Capture, acceptance, and recovery
+
+For every attempt the collector follows this boundary:
 
 ```text
-id=direct-quic
-interface=eth0
-link_type=Ethernet
-length_basis=frame.len
+start dumpcap -> start Neqo -> application completes -> defence tail
+  -> settle interval -> stop dumpcap -> filter to Neqo endpoint tuples
 ```
 
-The normalized trace contract is:
+An attempt is promoted only after direct-capture validation, endpoint-count
+validation, response completion, interface GRO/GSO/TSO/USO evidence,
+profile-wide UDP-payload-ceiling checks, and bounded runner/PCAP reconciliation.
+The paired visit then adds response-identity and defence-realization checks.
+Failed attempts stay under `failures/`; a successful attempt is moved once to
+the canonical sample path and is not duplicated.
 
-```text
-relative_time_ns,direction,length_bytes,signed_length_bytes
-```
+`experiment.json` is checkpointed atomically. Accepted files are independently
+bound by hashes before the terminal seal is written. A successful attempt's
+diagnostics and prospective artifact hashes are checkpointed before its exact
+five-file directory is atomically installed. Resume can therefore finish an
+interrupted promotion without recollection. Verified accepted work is reused;
+only a genuinely partial, unpromoted working attempt may be discarded.
 
-Outgoing lengths are positive and incoming lengths are negative. It contains
-no address or port fields and is reproduced exactly from the direct PCAP.
+See [METHODOLOGY.md](METHODOLOGY.md) for the scientific interpretation of the
+observer, pairing, fidelity, and derived metrics.
 
-The classic comparison figure has two rows: packet-time density and signed
-Ethernet frame-length scatter. Solid curves/points are observed direct-PCAP
-traffic. Dashed curves are densities of recorded controller schedule actions,
-including exact incoming receive-credit replacements; they are not logical
-target-cell counts. The dotted vertical line is application completion. Seven
-selections paginate four plus three. Each defence uses its own time and density
-range; both pages retain one common signed-size range. Panels contain no
-statistics box; application time, absolute duration, byte overhead, and tail
-cost remain in the adjacent report table.
+## Deliberately deferred
 
-The eligibility, bounded reconciliation, split, and classifier-feature rules
-for these artifacts are specified once in
-[`METHODOLOGY.md`](METHODOLOGY.md), alongside the observer and research
-semantics.
-
-## Validation and privacy boundary
-
-```shell
-./qcsd-lab dataset validate /lab/results/<timestamp>
-```
-
-Validation checks IDs, paired membership, splits, response equality, observer
-declarations, PCAP-to-trace reproduction, fidelity records, classifier
-sequences/eligibility, parameter bundles, runner bindings, operational guards,
-capture-offload state, the common UDP-payload ceiling, exact classifier
-schemas, split and sample-ID recomputation from campaign provenance, exact
-defence-plan binding, and a mandatory exact path-safe checksum seal. An
-unsealed root is not a valid dataset.
-
-Raw direct PCAPNG retains IP addresses, ports, QUIC Initial packets, and other
-passively observable metadata. It is internal validation and plotting evidence,
-not a sanitized or public artifact. This repository intentionally has no
-dataset-package command. An anonymizer/exporter must be designed and verified
-separately before a large corpus is released.
-
-## Tests
-
-```shell
-./qcsd-lab test -q
-./qcsd-lab test --capture-acceptance -q
-```
-
-The ordinary gate runs deterministic Python tests. The opt-in live gate starts
-two local HTTP/3 origins and runs one simple and one complex visit through all
-seven selections using the real campaign collector. It checks application
-integrity, parameter bindings, terminal slots, defence diagnostics, endpoint
-isolation, one PCAP/trace per sample, PCAP reproduction, identical core
-artifact surfaces, both classic figure pages, and report links.
-
-Exact stochastic/state-machine determinism belongs to pinned Rust defence and
-full-controller replay tests. The live gate checks each observed run against
-its own causal inputs; independent QUIC connections are not assumed to have
-identical packetization or ACK timing.
+There is no placeholder `fit` command. Deterministic fitters, sealed research
+artifacts, the `research-1200` profile, the 120-sample fitting campaign, and the
+42-sample pre-final rehearsal belong to the next goal. The final 126-sample
+capture remains on hold and must not be run from this consolidation.

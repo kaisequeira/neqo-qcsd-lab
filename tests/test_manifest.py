@@ -12,7 +12,6 @@ from qcsd_lab.manifest import (
 
 def manifest(resources):
     return {
-        "header_policy": {"mode": "fresh-browser"},
         "resources": resources,
     }
 
@@ -36,13 +35,17 @@ def test_safe_discovery_headers_preserve_behavior_but_remove_secrets():
             "Cookie": "secret",
             "Authorization": "secret",
             "Connection": "keep-alive",
+            "If-None-Match": '"stale-validator"',
+            "Range": "bytes=0-99",
         }
     )
     assert ["accept-encoding", "gzip, br"] in headers
     assert ["referer", "https://example.com/"] in headers
     assert ["sec-fetch-mode", "cors"] in headers
     assert ["x-site-negotiation", "v2"] in headers
-    assert not {"cookie", "authorization", "connection"} & {name for name, _ in headers}
+    assert not {"cookie", "authorization", "connection", "if-none-match", "range"} & {
+        name for name, _ in headers
+    }
 
 
 @pytest.mark.parametrize("name", ["cookie", "authorization", "connection", ":authority"])
@@ -57,9 +60,7 @@ def test_unknown_self_and_cyclic_dependencies_are_rejected():
     with pytest.raises(ValueError):
         validate_manifest(manifest([resource(0, dependencies=[0])]))
     with pytest.raises(ValueError, match="cycle"):
-        validate_manifest(
-            manifest([resource(0, dependencies=[1]), resource(1, dependencies=[0])])
-        )
+        validate_manifest(manifest([resource(0, dependencies=[1]), resource(1, dependencies=[0])]))
 
 
 def test_obsolete_manifest_version_marker_is_rejected():
@@ -67,6 +68,13 @@ def test_obsolete_manifest_version_marker_is_rejected():
     obsolete["schema_version"] = 1
     with pytest.raises(ValueError, match="unsupported fields: schema_version"):
         validate_manifest(obsolete)
+
+
+def test_credentialed_resource_urls_are_rejected():
+    value = resource(0)
+    value["url"] = "https://user:password@example.com/private"
+    with pytest.raises(ValueError, match="credential-free"):
+        validate_manifest(manifest([value]))
 
 
 def test_replay_metadata_is_validated_and_removed_from_runtime_manifest():

@@ -1,6 +1,7 @@
 # Git metadata is intentionally included so the source-metadata stage can
 # verify the parent gitlink and record clean/dirty source provenance.
-results
+results/*
+!results/README.md
 .cache
 .venv
 .pytest_cache

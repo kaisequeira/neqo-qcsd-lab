@@ -1,10 +1,4 @@
 {
-  "header_policy": {
-    "mode": "custom",
-    "overrides": [["accept", "application/octet-stream"], ["x-qcsd-test", "dependency-order"]],
-    "allow_conditional": false,
-    "allow_range": false
-  },
   "resources": [
     {
       "id": 0,

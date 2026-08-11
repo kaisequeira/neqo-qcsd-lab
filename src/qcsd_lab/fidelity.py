@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import csv
 import ipaddress
-import json
 import math
 from collections import defaultdict, deque
 from collections.abc import Mapping
@@ -12,16 +11,8 @@ from statistics import median_low
 from typing import Any
 
 from .capture import read_normalized_trace
-from .defenses import DEFENSE_ADAPTATIONS, defense_from_runtime_identity
-from .util import atomic_text, load_json, sha256_file
-
-REQUIRED_LIST_FIELDS = (
-    "preserved_invariants",
-    "exact_client_mechanisms",
-    "qcsd_approximations",
-    "unavailable_peer_properties",
-    "paper_references",
-)
+from .defenses import DEFENSE_ADAPTATIONS
+from .util import load_json, sha256_file
 
 RUNNER_PACKET_FIELDS = (
     "direction",
@@ -84,29 +75,6 @@ class _RunnerPacket:
     expected_frame_length: int
 
 
-def reconcile_direct_runner(
-    sample: Path,
-    *,
-    timestamp_tolerance_ns: int = DEFAULT_TIMESTAMP_TOLERANCE_NS,
-) -> DirectRunnerReconciliation:
-    """Bind runner-observed UDP datagrams to the normalized direct trace."""
-
-    sample = sample.resolve()
-    metadata = _object(load_json(sample / "sample.json"), "sample metadata")
-    view = _validate_direct_view(sample, metadata)
-    result = reconcile_direct_runner_artifacts(
-        sample / "neqo/run.json",
-        sample / "neqo/packets.csv",
-        sample / "traces/direct-quic.csv",
-        timestamp_tolerance_ns=timestamp_tolerance_ns,
-    )
-    return DirectRunnerReconciliation(
-        metrics={"direct_capture_sha256": view["capture_sha256"], **result.metrics},
-        limitations=result.limitations,
-        evidence_eligible=result.evidence_eligible,
-    )
-
-
 def reconcile_direct_runner_artifacts(
     run_path: Path,
     runner_packets_path: Path,
@@ -149,40 +117,6 @@ def reconcile_direct_runner_artifacts(
         limitations=RECONCILIATION_LIMITATIONS,
         evidence_eligible=len(matches) == len(runner_packets),
     )
-
-
-def _validate_direct_view(sample: Path, metadata: Mapping[str, Any]) -> Mapping[str, Any]:
-    views = metadata.get("views")
-    matches = (
-        [view for view in views if isinstance(view, Mapping) and view.get("id") == "direct-quic"]
-        if isinstance(views, list)
-        else []
-    )
-    if len(matches) != 1:
-        raise ValueError("sample must declare one direct-quic view")
-    view = matches[0]
-    if (
-        view.get("valid") is not True
-        or view.get("kind") != "direct-quic"
-        or view.get("interface") != "eth0"
-        or view.get("primary") is not True
-        or view.get("capture_active_through_settle") is not True
-        or view.get("capture_path") != "captures/direct-quic.pcapng"
-        or view.get("trace_path") != "traces/direct-quic.csv"
-        or view.get("length_basis") != "frame.len"
-        or view.get("link_type") != "Ethernet"
-    ):
-        raise ValueError("direct observer declaration is incompatible")
-    capture = sample / "captures/direct-quic.pcapng"
-    trace = sample / "traces/direct-quic.csv"
-    if (
-        not capture.is_file()
-        or not trace.is_file()
-        or view.get("capture_sha256") != sha256_file(capture)
-        or view.get("trace_sha256") != sha256_file(trace)
-    ):
-        raise ValueError("direct observer hashes do not match its artifacts")
-    return view
 
 
 def _endpoint_frame_overheads(run: Mapping[str, Any]) -> dict[int, int]:
@@ -395,179 +329,6 @@ def _positive(value: Any, label: str) -> int:
     return parsed
 
 
-def write_fidelity_record(
-    sample: Path,
-    *,
-    baseline_wire_bytes: int | None,
-) -> tuple[Path, bool]:
-    """Write one machine-readable client-only adaptation record."""
-
-    metadata = load_json(sample / "sample.json")
-    run_path = sample / "neqo" / "run.json"
-    run = load_json(run_path) if run_path.is_file() else {}
-    record = _fidelity_record(
-        sample,
-        metadata,
-        run,
-        baseline_wire_bytes=baseline_wire_bytes,
-    )
-    destination = sample / "fidelity.yml"
-    # JSON is valid YAML 1.2 while providing deterministic, dependency-free
-    # parsing for validators and downstream analysis.
-    atomic_text(destination, json.dumps(record, indent=2, sort_keys=True) + "\n")
-    return destination, bool(record["fidelity_eligible"])
-
-
-def validate_fidelity_record(
-    sample: Path,
-    indexed: dict[str, Any],
-    metadata: dict[str, Any],
-) -> dict[str, Any]:
-    """Validate one fidelity artifact against its sample and direct trace."""
-
-    if indexed.get("fidelity_path") != "fidelity.yml":
-        raise ValueError("sample fidelity path is invalid")
-    if metadata.get("fidelity_path") != "fidelity.yml":
-        raise ValueError("sample metadata fidelity path is invalid")
-    path = sample / "fidelity.yml"
-    if not path.is_file():
-        raise ValueError("sample fidelity record is missing")
-    record = load_json(path)
-    if indexed.get("defense") != metadata.get("defense") or indexed.get(
-        "runtime_kind"
-    ) != metadata.get("runtime_kind"):
-        raise ValueError("sample fidelity identity binding is invalid")
-    defense = defense_from_runtime_identity(
-        indexed.get("defense"),
-        indexed.get("runtime_kind"),
-    )
-    if (
-        record.get("schema_version") != 1
-        or record.get("defense") != defense
-        or record.get("adaptation") != ("none" if defense == "undefended" else "qcsd-client-only")
-        or not isinstance(record.get("realization_metrics"), dict)
-        or any(not isinstance(record.get(key), list) for key in REQUIRED_LIST_FIELDS)
-    ):
-        raise ValueError("sample fidelity record has an invalid contract")
-    run_path = sample / "neqo/run.json"
-    run = load_json(run_path) if run_path.is_file() else {}
-    expected_record = _fidelity_record(
-        sample,
-        metadata,
-        run,
-        baseline_wire_bytes=_paired_baseline_wire_bytes(sample, indexed),
-    )
-    sample_eligible = indexed.get("eligible") is True
-    expected = expected_record["fidelity_eligible"]
-    if (
-        record.get("sample_eligible") is not sample_eligible
-        or record.get("fidelity_eligible") is not expected
-        or metadata.get("fidelity_eligible") is not expected
-        or indexed.get("fidelity_eligible") is not expected
-    ):
-        raise ValueError("sample fidelity eligibility is incorrect")
-    if record["realization_metrics"].get("direct_wire_bytes") != expected_record[
-        "realization_metrics"
-    ].get("direct_wire_bytes"):
-        raise ValueError("sample fidelity direct-byte metric is incorrect")
-    comparable_record = record
-    # Results sealed before the lab/fitter boundary was simplified contain a
-    # redundant morphing-only reconstruction block.  The generic direct
-    # reconciliation and runtime diagnostics are still reproduced exactly;
-    # tolerate only additional legacy ``morphing_*`` metrics so historical
-    # captures remain independently valid without retaining that code path.
-    if defense == "traffic-morphing" and isinstance(record.get("realization_metrics"), dict):
-        expected_metrics = expected_record["realization_metrics"]
-        observed_metrics = record["realization_metrics"]
-        extras = set(observed_metrics) - set(expected_metrics)
-        if extras and all(key.startswith("morphing_") for key in extras):
-            comparable_record = {
-                **record,
-                "realization_metrics": {key: observed_metrics.get(key) for key in expected_metrics},
-            }
-    if comparable_record != expected_record:
-        raise ValueError("sample fidelity record does not reproduce from sealed evidence")
-    return record
-
-
-def _fidelity_record(
-    sample: Path,
-    metadata: dict[str, Any],
-    run: dict[str, Any],
-    *,
-    baseline_wire_bytes: int | None,
-) -> dict[str, Any]:
-    defense = defense_from_runtime_identity(
-        metadata.get("defense"),
-        metadata.get("runtime_kind"),
-    )
-    trace_path = sample / "traces/direct-quic.csv"
-    trace = read_normalized_trace(trace_path) if trace_path.is_file() else []
-    wire_bytes = sum(int(row["length_bytes"]) for row in trace)
-    diagnostics = run.get("defense_diagnostics", metadata.get("defense_diagnostics"))
-    if not isinstance(diagnostics, dict):
-        diagnostics = {}
-    schedule_metrics = _schedule_realization_metrics(sample)
-    realization_metrics = {
-        "direct_wire_bytes": wire_bytes if trace else None,
-        "direct_wire_byte_ratio_vs_undefended": (
-            wire_bytes / baseline_wire_bytes if baseline_wire_bytes else None
-        ),
-        "direct_wire_byte_overhead_ratio": (
-            wire_bytes / baseline_wire_bytes - 1.0 if baseline_wire_bytes else None
-        ),
-        "direct_added_wire_bytes_vs_undefended": (
-            wire_bytes - baseline_wire_bytes if baseline_wire_bytes is not None else None
-        ),
-        **schedule_metrics,
-        **{
-            key: value
-            for key, value in sorted(diagnostics.items())
-            if _is_realization_metric(defense, key)
-        },
-    }
-    direct_reconciliation = None
-    if (
-        trace
-        and (sample / "neqo/packets.csv").is_file()
-        and run.get("completion_status") == "complete"
-    ):
-        direct_reconciliation = reconcile_direct_runner(sample)
-        realization_metrics.update(direct_reconciliation.metrics)
-    eligible = fidelity_eligible(
-        defense,
-        diagnostics,
-        sample_eligible=metadata.get("eligible") is True,
-        missed_events=schedule_metrics.get("missed_events"),
-        outgoing_size_mismatches=schedule_metrics.get("outgoing_size_mismatch_events"),
-    )
-    if metadata.get("eligible") is True:
-        eligible = bool(
-            eligible
-            and direct_reconciliation is not None
-            and direct_reconciliation.evidence_eligible
-        )
-    adaptation = DEFENSE_ADAPTATIONS[defense]
-    record = {
-        "schema_version": 1,
-        "defense": defense,
-        "adaptation": "qcsd-client-only" if defense != "undefended" else "none",
-        "paper_equivalent": False if defense != "undefended" else None,
-        "preserved_invariants": list(adaptation.preserved_invariants),
-        "exact_client_mechanisms": list(adaptation.exact_client_mechanisms),
-        "qcsd_approximations": list(adaptation.qcsd_approximations),
-        "unavailable_peer_properties": list(adaptation.unavailable_peer_properties),
-        "realization_metrics": realization_metrics,
-        "paper_references": list(adaptation.paper_references),
-        "sample_eligible": metadata.get("eligible") is True,
-        "fidelity_eligible": eligible,
-    }
-    if direct_reconciliation is not None:
-        limitations = list(direct_reconciliation.limitations)
-        record["evidence_limitations"] = limitations
-    return record
-
-
 def _schedule_realization_metrics(sample: Path) -> dict[str, Any]:
     path = sample / "neqo/schedule.csv"
     if not path.is_file():
@@ -608,54 +369,6 @@ def _schedule_realization_metrics(sample: Path) -> dict[str, Any]:
         "outgoing_size_mismatch_events": outgoing_size_mismatches,
         "outgoing_size_absolute_error_bytes": outgoing_size_error_bytes,
     }
-
-
-def _paired_baseline_wire_bytes(
-    sample: Path,
-    indexed: dict[str, Any],
-) -> int | None:
-    root = sample.parents[2]
-    index_path = root / "samples.jsonl"
-    if not index_path.is_file():
-        return None
-    visit_id = indexed.get("visit_id")
-    with index_path.open(encoding="utf-8") as source:
-        members = [json.loads(line) for line in source if line.strip()]
-    for member in members:
-        if member.get("visit_id") != visit_id:
-            continue
-        member_path = root / str(member.get("path", ""))
-        metadata_path = member_path / "sample.json"
-        if not metadata_path.is_file() or load_json(metadata_path).get("baseline") is not True:
-            continue
-        trace_path = member_path / "traces/direct-quic.csv"
-        if not trace_path.is_file():
-            return None
-        rows = read_normalized_trace(trace_path)
-        return sum(int(row["length_bytes"]) for row in rows)
-    return None
-
-
-def _is_realization_metric(defense: str, key: str) -> bool:
-    prefix = {
-        "traffic-morphing": "morphing_",
-        "wtf-pad": "wtf_pad_",
-        "walkie-talkie": "walkie_talkie_",
-    }.get(defense)
-    return bool(
-        defense == "traffic-morphing"
-        and key == "suppressed_cover_feedback"
-        or defense == "wtf-pad"
-        and key
-        in {
-            "padding_events",
-            "padding_event_guard_triggered",
-            "suppressed_cover_feedback",
-        }
-        or defense == "walkie-talkie"
-        and key == "retried_outgoing_events"
-        or (prefix is not None and key.startswith(prefix))
-    )
 
 
 _INTEGER = "integer"

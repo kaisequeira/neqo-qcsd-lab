@@ -1,11 +1,13 @@
 {
-  "generator": "reviewed-live-acceptance-fixture",
-  "input_policy": "reviewed-engineering-fixture",
-  "inputs": {},
+  "artifact_type": "qcsd-defense-parameters",
+  "defense_kind": "wtf_pad",
   "parameter_file": {
     "path": "wtfpad-live.json",
     "sha256": "70ec11646a6855686f8dc3ca751ddc46fe3835448324161ffe18720204f94108"
   },
+  "production_ready": false,
+  "qcsd_profile": "live",
   "schema_version": 1,
-  "unsealed_engineering_opt_in": true
+  "status": "reviewed-smoke-fixture",
+  "udp_payload_ceiling": 1200
 }

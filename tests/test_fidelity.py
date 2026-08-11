@@ -5,57 +5,11 @@ from copy import deepcopy
 
 import pytest
 
-from qcsd_lab.defenses import defense_from_runtime_identity
 from qcsd_lab.fidelity import (
+    _schedule_realization_metrics,
     fidelity_eligible,
     reconcile_direct_runner_artifacts,
-    write_fidelity_record,
 )
-
-
-@pytest.mark.parametrize(
-    ("name", "runtime_kind", "expected"),
-    [
-        ("undefended", "none", "undefended"),
-        ("baseline", "none", "undefended"),
-        ("traffic-morphing", "traffic_morphing", "traffic-morphing"),
-        ("selected", "traffic_morphing", "traffic-morphing"),
-    ],
-)
-def test_fidelity_identity_is_runtime_derived(name, runtime_kind, expected):
-    assert defense_from_runtime_identity(name, runtime_kind) == expected
-
-
-def test_fidelity_identity_rejects_unknown_or_mismatched_runtime_bindings():
-    with pytest.raises(ValueError, match="unsupported defense runtime kind"):
-        defense_from_runtime_identity("selected", "opaque-runtime")
-    with pytest.raises(ValueError, match="not bound"):
-        defense_from_runtime_identity("undefended", "traffic_morphing")
-
-
-def test_failed_traffic_morphing_sample_records_failure_without_direct_reconciliation(
-    tmp_path,
-):
-    (tmp_path / "sample.json").write_text(
-        json.dumps(
-            {
-                "defense": "traffic-morphing",
-                "runtime_kind": "traffic_morphing",
-                "state": "failed",
-                "eligible": False,
-                "views": [],
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    path, eligible = write_fidelity_record(tmp_path, baseline_wire_bytes=None)
-
-    record = json.loads(path.read_text(encoding="utf-8"))
-    assert eligible is False
-    assert record["sample_eligible"] is False
-    assert record["fidelity_eligible"] is False
-    assert "direct_runner_reconciled" not in record["realization_metrics"]
 
 
 def test_direct_runner_reconciliation_preserves_packet_and_tail_evidence(tmp_path):
@@ -79,6 +33,35 @@ def test_direct_runner_reconciliation_rejects_unrecorded_outgoing_tail(tmp_path)
 
     with pytest.raises(ValueError, match="unrecorded outgoing tail"):
         reconcile_direct_runner_artifacts(run, packets, trace)
+
+
+def test_schedule_metrics_report_exact_realization_errors(tmp_path):
+    neqo = tmp_path / "neqo"
+    neqo.mkdir()
+    (neqo / "schedule.csv").write_text(
+        "action_time_us,direction,size,observed_size,satisfaction,miss_reason\n"
+        "10,outgoing,1200,1200,satisfied,\n"
+        "20,outgoing,1200,1199,satisfied,\n"
+        "30,incoming,1200,,credit_advertised,\n"
+        "40,incoming,1200,,missed,deadline\n",
+        encoding="utf-8",
+    )
+
+    assert _schedule_realization_metrics(tmp_path) == {
+        "scheduled_events": 4,
+        "scheduled_outgoing_events": 2,
+        "scheduled_incoming_events": 2,
+        "satisfied_events": 2,
+        "credit_advertised_events": 1,
+        "missed_events": 1,
+        "missed_event_reasons": {"deadline": 1},
+        "outgoing_size_mismatch_events": 1,
+        "outgoing_size_absolute_error_bytes": 1,
+    }
+
+
+def test_missing_schedule_has_no_realization_claim(tmp_path):
+    assert _schedule_realization_metrics(tmp_path) == {}
 
 
 def test_defended_sample_requires_exact_zero_miss_schedule_contract():

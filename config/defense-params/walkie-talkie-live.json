@@ -308,6 +308,5 @@
       }
     }
   ],
-  "schema_version": 2,
-  "training_split": "reviewed-acceptance-fixture"
+  "schema_version": 2
 }

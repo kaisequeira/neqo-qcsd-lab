@@ -6,7 +6,7 @@ import os
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 _CONTAINER_LAB_ROOT = Path("/lab")
 _NATIVE_LAB_ROOT = Path(__file__).resolve().parents[2]
@@ -17,8 +17,11 @@ LAB_ROOT = Path(
     )
 ).resolve()
 DEFAULT_SOURCE_METADATA = Path("/usr/share/qcsd-lab/source.json")
+NEQO_HOST_TIMEOUT_GRACE_SECONDS = 5.0
+PROCESS_TERMINATE_GRACE_SECONDS = 2.0
+ATOMIC_TEMP_MARKER = ".qcsd-tmp-"
 SOURCE_METADATA_KEYS = {
-    "development_build",
+    "image_digest",
     "lab_commit",
     "lab_dirty",
     "lab_patch_sha256",
@@ -29,27 +32,86 @@ SOURCE_METADATA_KEYS = {
 }
 
 
+class ProcessTimeoutError(TimeoutError):
+    """A child exceeded its host-enforced deadline and was reaped."""
+
+    def __init__(
+        self,
+        result: subprocess.CompletedProcess[str],
+        timeout_seconds: float,
+        *,
+        killed: bool,
+    ) -> None:
+        self.result = result
+        self.timeout_seconds = timeout_seconds
+        self.killed = killed
+        action = "killed after the terminate grace expired" if killed else "terminated"
+        super().__init__(
+            f"command exceeded the {timeout_seconds:g}s host timeout and was {action}: "
+            f"{' '.join(result.args)}"
+        )
+
+
 def atomic_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile("w", dir=path.parent, delete=False, encoding="utf-8") as out:
-        json.dump(value, out, indent=2, sort_keys=True)
-        out.write("\n")
-        out.flush()
-        os.fsync(out.fileno())
-        temporary = Path(out.name)
-    temporary.replace(path)
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            dir=path.parent,
+            prefix=f".{path.name}{ATOMIC_TEMP_MARKER}",
+            delete=False,
+            encoding="utf-8",
+        ) as out:
+            json.dump(value, out, indent=2, sort_keys=True)
+            out.write("\n")
+            out.flush()
+            os.fsync(out.fileno())
+            temporary = Path(out.name)
+        temporary.replace(path)
+    finally:
+        if temporary is not None and temporary.exists():
+            temporary.unlink()
 
 
 def atomic_text(path: Path, value: str) -> None:
     """Durably replace a UTF-8 text file without exposing partial checkpoints."""
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile("w", dir=path.parent, delete=False, encoding="utf-8") as out:
-        out.write(value)
-        out.flush()
-        os.fsync(out.fileno())
-        temporary = Path(out.name)
-    temporary.replace(path)
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            dir=path.parent,
+            prefix=f".{path.name}{ATOMIC_TEMP_MARKER}",
+            delete=False,
+            encoding="utf-8",
+        ) as out:
+            out.write(value)
+            out.flush()
+            os.fsync(out.fileno())
+            temporary = Path(out.name)
+        temporary.replace(path)
+    finally:
+        if temporary is not None and temporary.exists():
+            temporary.unlink()
+
+
+def discard_atomic_write_temps(root: Path) -> list[Path]:
+    """Remove only recognizable uncommitted atomic-write files before resume."""
+
+    root = root.resolve()
+    if not root.is_dir() or root.is_symlink():
+        raise ValueError(f"result root is not a regular directory: {root}")
+    discarded = []
+    for path in root.rglob("*"):
+        if ATOMIC_TEMP_MARKER not in path.name:
+            continue
+        if path.is_symlink() or not path.is_file():
+            raise ValueError(f"atomic-write temporary path is unsafe: {path}")
+        path.unlink()
+        discarded.append(path)
+    return discarded
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -64,21 +126,16 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def write_checksums(root: Path, paths: Iterable[Path]) -> None:
-    lines = []
-    for path in sorted(paths):
-        if path.is_file():
-            lines.append(f"{sha256_file(path)}  {path.relative_to(root)}")
-    atomic_text(root / "SHA256SUMS", "\n".join(lines) + "\n")
-
-
 def run(
     command: list[str],
     *,
     cwd: Path | None = None,
     log: Path | None = None,
     check: bool = True,
+    timeout: float | None = None,
 ) -> subprocess.CompletedProcess[str]:
+    if timeout is not None:
+        return _run_bounded(command, cwd=cwd, log=log, check=check, timeout=timeout)
     result = subprocess.run(
         command,
         cwd=cwd or (LAB_ROOT if LAB_ROOT.is_dir() else None),
@@ -95,6 +152,73 @@ def run(
             f"command failed ({result.returncode}): {' '.join(command)}\n{result.stdout}"
         )
     return result
+
+
+def neqo_host_timeout(configured_timeout_seconds: int | float) -> float:
+    """Leave Neqo a small shutdown/reporting grace beyond its own deadline."""
+
+    if (
+        not isinstance(configured_timeout_seconds, (int, float))
+        or isinstance(configured_timeout_seconds, bool)
+        or configured_timeout_seconds <= 0
+    ):
+        raise ValueError("configured Neqo timeout must be positive")
+    return float(configured_timeout_seconds) + NEQO_HOST_TIMEOUT_GRACE_SECONDS
+
+
+def _run_bounded(
+    command: list[str],
+    *,
+    cwd: Path | None,
+    log: Path | None,
+    check: bool,
+    timeout: float,
+) -> subprocess.CompletedProcess[str]:
+    if timeout <= 0:
+        raise ValueError("host timeout must be positive")
+    process = subprocess.Popen(
+        command,
+        cwd=cwd or (LAB_ROOT if LAB_ROOT.is_dir() else None),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    try:
+        stdout, _stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        process.terminate()
+        killed = False
+        try:
+            stdout, _stderr = process.communicate(timeout=PROCESS_TERMINATE_GRACE_SECONDS)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            killed = True
+            stdout, _stderr = process.communicate()
+        action = "killed after terminate grace" if killed else "terminated"
+        diagnostic = f"[qcsd-lab] outer host timeout after {timeout:g}s; process {action}\n"
+        separator = "" if not stdout or stdout.endswith("\n") else "\n"
+        stdout = f"{stdout or ''}{separator}{diagnostic}"
+        result = subprocess.CompletedProcess(
+            command,
+            process.returncode if process.returncode is not None else 124,
+            stdout,
+        )
+        _write_log(log, stdout)
+        raise ProcessTimeoutError(result, timeout, killed=killed) from None
+    result = subprocess.CompletedProcess(command, process.returncode, stdout)
+    _write_log(log, stdout)
+    if check and result.returncode:
+        raise RuntimeError(
+            f"command failed ({result.returncode}): {' '.join(command)}\n{result.stdout}"
+        )
+    return result
+
+
+def _write_log(log: Path | None, stdout: str) -> None:
+    if log is None:
+        return
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text(stdout, encoding="utf-8")
 
 
 def git_commit(path: Path) -> str:
@@ -119,7 +243,7 @@ def source_metadata() -> dict[str, Any]:
         lab_commit = git_commit(LAB_ROOT)
         neqo_commit = git_commit(LAB_ROOT / "neqo-qcsd")
         return {
-            "development_build": None,
+            "image_digest": os.environ.get("QCSD_LAB_IMAGE_DIGEST"),
             "lab_commit": lab_commit,
             "lab_dirty": None,
             "lab_patch_sha256": None,
@@ -129,6 +253,13 @@ def source_metadata() -> dict[str, Any]:
             "neqo_patch_sha256": None,
         }
     if not isinstance(value, dict) or set(value) != SOURCE_METADATA_KEYS:
+        raise ValueError(f"invalid source metadata in {path}")
+    value = dict(value)
+    runtime_image = os.environ.get("QCSD_LAB_IMAGE_DIGEST")
+    if runtime_image:
+        value["image_digest"] = runtime_image
+    image_digest = value["image_digest"]
+    if image_digest is not None and (not isinstance(image_digest, str) or not image_digest.strip()):
         raise ValueError(f"invalid source metadata in {path}")
     return value
 

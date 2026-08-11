@@ -5,7 +5,6 @@ ARG DEBIAN_IMAGE=docker.io/library/debian:bookworm-slim@sha256:7b140f374b289a7c2
 # Inspect the local parent checkout and submodule. This stage is also the
 # source of the immutable provenance copied into both runtime images.
 FROM ${DEBIAN_IMAGE} AS source-metadata
-ARG QCSD_ALLOW_DIRTY=0
 RUN apt-get update && apt-get install -y --no-install-recommends git && \
     rm -rf /var/lib/apt/lists/*
 WORKDIR /source
@@ -29,13 +28,7 @@ RUN set -eu; \
     cp "${neqo_index}" /tmp/neqo-index; \
     GIT_INDEX_FILE=/tmp/neqo-index git -C neqo-qcsd add -A; \
     neqo_patch_sha256="$(GIT_INDEX_FILE=/tmp/neqo-index git -C neqo-qcsd diff --cached --binary HEAD | sha256sum | cut -d ' ' -f 1)"; \
-    if [ "${QCSD_ALLOW_DIRTY}" != 1 ]; then \
-      test "${lab_dirty}" = false || { echo 'lab checkout is dirty; commit it or pass --dev' >&2; exit 1; }; \
-      test "${neqo_dirty}" = false || { echo 'neqo-qcsd is dirty; commit it or pass --dev' >&2; exit 1; }; \
-      test "${neqo_commit}" = "${neqo_pinned_commit}" || { echo 'neqo-qcsd HEAD does not match the parent gitlink; update the pin or pass --dev' >&2; exit 1; }; \
-    fi; \
-    printf '{"development_build":%s,"lab_commit":"%s","lab_dirty":%s,"lab_patch_sha256":"%s","neqo_commit":"%s","neqo_pinned_commit":"%s","neqo_dirty":%s,"neqo_patch_sha256":"%s"}\n' \
-      "$(if [ "${QCSD_ALLOW_DIRTY}" = 1 ]; then echo true; else echo false; fi)" \
+    printf '{"image_digest":null,"lab_commit":"%s","lab_dirty":%s,"lab_patch_sha256":"%s","neqo_commit":"%s","neqo_pinned_commit":"%s","neqo_dirty":%s,"neqo_patch_sha256":"%s"}\n' \
       "${lab_commit}" "${lab_dirty}" "${lab_patch_sha256}" \
       "${neqo_commit}" "${neqo_pinned_commit}" "${neqo_dirty}" "${neqo_patch_sha256}" \
       > /source-metadata.json
@@ -66,15 +59,6 @@ RUN set -eux; \
     if [ "${TARGETARCH}" = arm64 ]; then set -- "$@" --target=arm64; fi; \
     cd "${NSS_DIR}"; \
     bash ./build.sh "$@"
-
-# This target is intentionally source-free. The host launcher bind-mounts the
-# editable root-level submodule and persistent Cargo caches into it.
-FROM neqo-toolchain AS development
-ARG RUST_NIGHTLY=nightly-2026-07-17
-RUN rustup component add clippy && \
-    rustup toolchain install "${RUST_NIGHTLY}" --profile minimal --component rustfmt
-WORKDIR /workspace/neqo-qcsd-lab/neqo-qcsd
-CMD ["/bin/bash"]
 
 # Release artifacts are built only from the local submodule working tree.
 FROM neqo-toolchain AS neqo-builder
@@ -128,14 +112,14 @@ LABEL org.opencontainers.image.title="neqo-qcsd-lab collection" \
       org.opencontainers.image.nspr.version="4.38.2"
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/collection-entrypoint"]
 
-FROM lab-runtime AS discovery
+# Workload preparation is one public operation. This image contains both the
+# browser discovery stack and the exact Neqo binary used for HTTP/3 preflight.
+FROM collection AS prepare
 RUN apt-get update && apt-get install -y --no-install-recommends \
     chromium fonts-liberation && \
     rm -rf /var/lib/apt/lists/* && \
     python3 -m pip install --break-system-packages '.[discovery]'
-COPY --from=source-metadata /source-metadata.json /usr/share/qcsd-lab/source.json
-ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium \
-    QCSD_LAB_SOURCE_METADATA=/usr/share/qcsd-lab/source.json
-LABEL org.opencontainers.image.title="neqo-qcsd-lab discovery" \
+ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
+LABEL org.opencontainers.image.title="neqo-qcsd-lab prepare" \
       org.opencontainers.image.source="https://github.com/kaisequeira/neqo-qcsd-lab"
 ENTRYPOINT ["/usr/bin/tini", "--", "qcsd-lab-internal"]

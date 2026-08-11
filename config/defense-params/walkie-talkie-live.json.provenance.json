@@ -1,11 +1,13 @@
 {
-  "generator": "reviewed-live-acceptance-fixture",
-  "input_policy": "reviewed-engineering-fixture",
-  "inputs": {},
+  "artifact_type": "qcsd-defense-parameters",
+  "defense_kind": "walkie_talkie",
   "parameter_file": {
     "path": "walkie-talkie-live.json",
-    "sha256": "efe9cfb0608af18c3a63b64e5e759794a54f0bc6a228cb335560062534e0eacc"
+    "sha256": "14f2d7c2e2b6fd663ddca970d227412fcaf108f74269c3e943a1176e30e7a1a3"
   },
+  "production_ready": false,
+  "qcsd_profile": "live",
   "schema_version": 1,
-  "unsealed_engineering_opt_in": true
+  "status": "reviewed-smoke-fixture",
+  "udp_payload_ceiling": 1200
 }

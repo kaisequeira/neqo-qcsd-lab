@@ -1,10 +1,4 @@
 {
-  "header_policy": {
-    "allow_conditional": false,
-    "allow_range": false,
-    "mode": "fresh-browser",
-    "overrides": []
-  },
   "replay": {
     "chromium_version": "150.0.7871.124",
     "exclusions": [

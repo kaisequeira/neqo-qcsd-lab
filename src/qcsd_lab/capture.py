@@ -7,7 +7,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from .util import load_json, run
+from .util import run
 
 REQUIRED_OFFLOAD_FEATURES = {
     "gro": "generic-receive-offload",
@@ -231,8 +231,8 @@ def extract_trace(
         for record_order, row in enumerate(valid_rows)
     ]
     # Capture buffers can flush records a few microseconds out of timestamp
-    # order. The classifier contract is the chronological packet sequence;
-    # preserve PCAP record order only as the deterministic tie-breaker.
+    # order. The trace contract is the chronological packet sequence; preserve
+    # PCAP record order only as the deterministic tie-breaker.
     timestamped_rows.sort(key=lambda item: (item[0], item[1]))
     first_ns = timestamped_rows[0][0]
     trace = []
@@ -322,7 +322,7 @@ def udp_ceiling_evidence(
 
 
 def write_normalized_trace(path: Path, trace: list[ObserverPacket]) -> None:
-    """Write the classifier-facing, observer-only trace contract."""
+    """Write the temporary observer-only trace used for reconciliation."""
 
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as destination:
@@ -352,24 +352,3 @@ def read_normalized_trace(path: Path) -> list[dict[str, str]]:
     if reader.fieldnames != expected:
         raise ValueError(f"invalid normalized trace columns in {path}")
     return rows
-
-
-def sample_trace(sample: Path) -> list[ObserverPacket]:
-    """Reproduce one sample's canonical direct trace from its PCAPNG."""
-
-    metadata = load_json(sample / "sample.json")
-    observer = next(
-        (
-            item
-            for item in metadata.get("views", [])
-            if item.get("id") == "direct-quic" and item.get("valid")
-        ),
-        None,
-    )
-    if observer is None:
-        raise ValueError("sample has no valid direct-quic view")
-    run_data = load_json(sample / "neqo" / "run.json")
-    return extract_trace(
-        sample / observer["capture_path"],
-        run_data.get("endpoints", []),
-    )
