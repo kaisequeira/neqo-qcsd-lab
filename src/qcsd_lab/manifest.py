@@ -223,9 +223,7 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         _validate_preparation(manifest["preparation"], id_set)
 
 
-def validate_research_preparation(
-    manifest: dict[str, Any], *, workload_id: str
-) -> None:
+def validate_research_preparation(manifest: dict[str, Any], *, workload_id: str) -> None:
     """Require the exact clean preparation policy used by research campaigns.
 
     General manifest validation intentionally continues to accept the small
@@ -250,8 +248,7 @@ def validate_research_preparation(
     for field, expected in required_policy.items():
         if preparation[field] != expected:
             raise ValueError(
-                f"research workload {workload_id!r} preparation {field} must be "
-                f"{expected!r}"
+                f"research workload {workload_id!r} preparation {field} must be {expected!r}"
             )
 
     source = preparation["lab_source"]
@@ -290,10 +287,7 @@ def validate_research_preparation(
         "preparation.lab_source.image_digest": source["image_digest"],
     }
     for field, value in images.items():
-        if (
-            not isinstance(value, str)
-            or re.fullmatch(r"sha256:[0-9a-f]{64}", value) is None
-        ):
+        if not isinstance(value, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", value) is None:
             raise ValueError(
                 f"research workload {workload_id!r} {field} must be a concrete "
                 "sha256:<64 lowercase hex> image digest"

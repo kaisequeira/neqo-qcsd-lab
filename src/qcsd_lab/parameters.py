@@ -46,11 +46,15 @@ def parameter_provenance_path(parameter: Path) -> Path:
     """Return a fitted bundle's common receipt or a smoke fixture's adjacent receipt."""
 
     common = parameter.parent / "provenance.json"
-    if parameter.name in {
-        "traffic-morphing.json",
-        "wtf-pad.json",
-        "walkie-talkie.json",
-    } and common.is_file():
+    if (
+        parameter.name
+        in {
+            "traffic-morphing.json",
+            "wtf-pad.json",
+            "walkie-talkie.json",
+        }
+        and common.is_file()
+    ):
         return common
     return parameter.with_suffix(parameter.suffix + ".provenance.json")
 
@@ -153,9 +157,9 @@ def _validate_parameter_artifact(
         from .fitting import BUNDLE_FILES, research_parameter_record
 
         expected_parameter_name = receipt_parameter_name or parameter_path.name
-        inferred = {
-            filename: kind for kind, filename in BUNDLE_FILES.items()
-        }.get(expected_parameter_name)
+        inferred = {filename: kind for kind, filename in BUNDLE_FILES.items()}.get(
+            expected_parameter_name
+        )
         kind = expected_kind or inferred
         if kind not in _PARAMETERIZED_KINDS:
             raise ValueError("research parameter defense kind cannot be inferred")

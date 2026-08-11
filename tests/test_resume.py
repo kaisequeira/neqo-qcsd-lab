@@ -645,7 +645,7 @@ def test_resume_rejects_rebound_external_parameter_bindings(
     assert resumed.calls == []
 
 
-def test_frozen_reviewed_parameters_cannot_be_reclassified_for_evaluation(
+def test_frozen_smoke_inputs_cannot_be_reclassified_for_evaluation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root, experiment = _interrupted_smoke_result(tmp_path, monkeypatch)
@@ -659,7 +659,7 @@ def test_frozen_reviewed_parameters_cannot_be_reclassified_for_evaluation(
     experiment["configuration"]["campaign_sha256"] = orchestrator.sha256_file(frozen_campaign)
     _rebind_input_digest(root, experiment)
 
-    with pytest.raises(ValueError, match="accepted only by smoke campaigns"):
+    with pytest.raises(ValueError, match="research-grade provenance"):
         resume_campaign(root)
     assert not (root / "evidence.sha256").exists()
 

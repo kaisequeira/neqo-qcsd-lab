@@ -270,7 +270,7 @@ def _sealed_result(tmp_path: Path) -> Path:
     campaign_path.write_text(
         "schema: 1\n"
         "name: sealed\n"
-        "purpose: evaluation\n"
+        "purpose: smoke\n"
         "seed: 1\n"
         "profile: live\n"
         "workloads:\n  site: 1\n"
@@ -291,7 +291,7 @@ def _sealed_result(tmp_path: Path) -> Path:
     experiment = initialize_experiment(
         root,
         name="sealed",
-        purpose="evaluation",
+        purpose="smoke",
         run_id="run-001",
         source=source,
         configuration=configuration,

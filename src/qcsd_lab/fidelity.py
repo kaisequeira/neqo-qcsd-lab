@@ -494,9 +494,7 @@ def _diagnostics_match_contract(defense: str, diagnostics: dict[str, Any]) -> bo
 
 def _scheduled_incoming_diagnostics_match(diagnostics: dict[str, Any]) -> bool:
     selected = {
-        key: value
-        for key, value in diagnostics.items()
-        if key.startswith("scheduled_incoming_")
+        key: value for key, value in diagnostics.items() if key.startswith("scheduled_incoming_")
     }
     if set(selected) != set(_SCHEDULED_INCOMING_CONTRACT):
         return False

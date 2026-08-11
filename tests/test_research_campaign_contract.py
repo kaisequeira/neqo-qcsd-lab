@@ -47,11 +47,7 @@ def _write_static_control(base: Path) -> None:
     path = base / "config/defense-params/static-control-1200.csv"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        "# seconds,signed_size\n"
-        "0.000000,1200\n"
-        "0.005000,-1200\n"
-        "0.010000,1200\n"
-        "0.015000,-1200\n",
+        "# seconds,signed_size\n0.000000,1200\n0.005000,-1200\n0.010000,1200\n0.015000,-1200\n",
         encoding="utf-8",
     )
 
@@ -232,8 +228,7 @@ def test_exact_research_expansions_and_seeded_order_are_deterministic(
         for visit in range(10)
     ]
     assert [
-        (sample["workload_id"], sample["request_policy"], sample["visit"])
-        for sample in fitting
+        (sample["workload_id"], sample["request_policy"], sample["visit"]) for sample in fitting
     ] == fitting_groups
     for plan, visits in ((rehearsal, 1), (final, 3)):
         chunks = [plan[index : index + len(DEFENSES)] for index in range(0, len(plan), 7)]
@@ -249,11 +244,11 @@ def test_exact_research_expansions_and_seeded_order_are_deterministic(
 
     normalized_rehearsal = deepcopy(rehearsal_value)
     normalized_final = deepcopy(final_value)
-    assert {
-        key
-        for key in rehearsal_value
-        if rehearsal_value[key] != final_value[key]
-    } == {"name", "seed", "workloads"}
+    assert {key for key in rehearsal_value if rehearsal_value[key] != final_value[key]} == {
+        "name",
+        "seed",
+        "workloads",
+    }
     for value in (normalized_rehearsal, normalized_final):
         value.pop("name")
         value.pop("seed")

@@ -175,9 +175,7 @@ def test_smoke_walkie_talkie_allows_extra_fixture_only_identities():
 
 
 def test_walkie_talkie_rejects_cross_side_duplicate_identity(tmp_path, monkeypatch):
-    parameter, provenance = _copy_fixture(
-        tmp_path, monkeypatch, "walkie-talkie-live.json"
-    )
+    parameter, provenance = _copy_fixture(tmp_path, monkeypatch, "walkie-talkie-live.json")
     value = json.loads(parameter.read_text(encoding="utf-8"))
     value["profiles"][0]["decoy"] = value["profiles"][1]["real"]
     atomic_json(parameter, value)
