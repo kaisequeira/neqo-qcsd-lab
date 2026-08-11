@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -74,6 +75,11 @@ PREPARATION_KEYS = {
 EXPECTED_RESPONSE_KEYS = {"resource_id", "status", "bytes", "body_sha256"}
 U32_MAX = 2**32 - 1
 U64_MAX = 2**64 - 1
+EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+RESEARCH_MAX_RESPONSE_BYTES = 1_048_576
+RESEARCH_PREPARATION_REQUIRED = (
+    "requires a workload produced by ./qcsd-lab prepare with research-grade provenance"
+)
 
 
 def https_origin(value: str) -> str | None:
@@ -215,6 +221,88 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         visit(resource_id)
     if "preparation" in manifest:
         _validate_preparation(manifest["preparation"], id_set)
+
+
+def validate_research_preparation(
+    manifest: dict[str, Any], *, workload_id: str
+) -> None:
+    """Require the exact clean preparation policy used by research campaigns.
+
+    General manifest validation intentionally continues to accept the small
+    bare and legacy replay manifests used by smoke tests.  This additional
+    gate is for fitting and evaluation only: it first applies the complete
+    manifest schema (including expected-response coverage), then tightens the
+    preparation and build-provenance requirements.
+    """
+
+    validate_manifest(manifest)
+    preparation = manifest.get("preparation")
+    if not isinstance(preparation, dict):
+        raise ValueError(f"research workload {workload_id!r} {RESEARCH_PREPARATION_REQUIRED}")
+
+    required_policy = {
+        "stability_runs": 3,
+        "stability_profile": "live",
+        "stability_defense": "none",
+        "stability_seed": 0,
+        "max_response_bytes": RESEARCH_MAX_RESPONSE_BYTES,
+    }
+    for field, expected in required_policy.items():
+        if preparation[field] != expected:
+            raise ValueError(
+                f"research workload {workload_id!r} preparation {field} must be "
+                f"{expected!r}"
+            )
+
+    source = preparation["lab_source"]
+    if source["lab_dirty"] is not False or source["neqo_dirty"] is not False:
+        raise ValueError(
+            f"research workload {workload_id!r} requires clean lab and Neqo preparation sources"
+        )
+    for field in ("lab_patch_sha256", "neqo_patch_sha256"):
+        if source[field] != EMPTY_SHA256:
+            raise ValueError(
+                f"research workload {workload_id!r} preparation {field} must be the "
+                "SHA-256 of an empty patch"
+            )
+
+    commit_fields = {
+        "preparation.neqo_base_commit": preparation["neqo_base_commit"],
+        "preparation.published_qcsd_commit": preparation["published_qcsd_commit"],
+        "preparation.lab_source.lab_commit": source["lab_commit"],
+        "preparation.lab_source.neqo_commit": source["neqo_commit"],
+        "preparation.lab_source.neqo_pinned_commit": source["neqo_pinned_commit"],
+    }
+    for field, value in commit_fields.items():
+        if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{40}", value) is None:
+            raise ValueError(
+                f"research workload {workload_id!r} {field} must be a 40-character "
+                "lowercase hexadecimal commit"
+            )
+    if source["neqo_commit"] != source["neqo_pinned_commit"]:
+        raise ValueError(
+            f"research workload {workload_id!r} preparation Neqo commit must equal the "
+            "pinned submodule commit"
+        )
+
+    images = {
+        "preparation.prepare_image_digest": preparation["prepare_image_digest"],
+        "preparation.lab_source.image_digest": source["image_digest"],
+    }
+    for field, value in images.items():
+        if (
+            not isinstance(value, str)
+            or re.fullmatch(r"sha256:[0-9a-f]{64}", value) is None
+        ):
+            raise ValueError(
+                f"research workload {workload_id!r} {field} must be a concrete "
+                "sha256:<64 lowercase hex> image digest"
+            )
+    if preparation["prepare_image_digest"] != source["image_digest"]:
+        raise ValueError(
+            f"research workload {workload_id!r} preparation image digest does not match "
+            "its source provenance"
+        )
 
 
 def _validate_resource_fields(resource: dict[str, Any]) -> None:

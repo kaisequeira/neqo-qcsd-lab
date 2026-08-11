@@ -9,12 +9,16 @@ The lab does not maintain a second data-processing workflow. A workload is
 simply a frozen graph of HTTPS requests. A visit is one execution of that
 graph. A sample is one visit under one defence.
 
+The active specification has no dataset, classifier, monitored/unmonitored,
+open-world, split, or projection layer. Fitting and evaluation are separate
+campaigns over independent visits of the same frozen workload definitions.
+
 Docker is required for every public command. The Neqo source is the
 `neqo-qcsd/` Git submodule.
 
 ## Commands
 
-The public surface is deliberately limited to these eight forms.
+The public surface is deliberately limited to these nine forms.
 
 ### `build`
 
@@ -103,6 +107,13 @@ sample's artifact binding, and the external parameter receipts. Missing,
 changed, additional, rebound, or path-escaping authoritative files fail
 verification.
 
+For `artifacts/research-1200`, `verify` requires the exact four-file fitted
+bundle, checks the common provenance receipt and all artifact hashes, validates
+source-result identity and sample contributions, requires exact Traffic
+Morphing and Walkie-Talkie workload coverage, and runs the runtime-schema
+checks. A fitted bundle is not a campaign result and does not have its own
+`evidence.sha256`.
+
 ### `analyze`
 
 ```shell
@@ -123,6 +134,35 @@ scatter, an application-completion marker, and a shaded defence tail. No PDF
 or qlog is produced. Deleting `derived/` and rerunning `analyze` reconstructs
 it from `capture.pcapng`, `run.json`, and `schedule.csv` without modifying or
 resealing evidence.
+
+### `fit`
+
+```shell
+./qcsd-lab fit results/<fitting-campaign>/<run-id>
+./qcsd-lab verify artifacts/research-1200
+```
+
+`fit` first fully verifies a complete sealed fitting result with exactly six
+workloads, ten visits per workload, the `as-defined` and `half-duplex` request
+policies in that order, only the undefended baseline, and the
+`research-1200` profile. All 120 samples must be accepted and eligible.
+
+It then deterministically and atomically creates exactly:
+
+```text
+artifacts/research-1200/
+  traffic-morphing.json
+  wtf-pad.json
+  walkie-talkie.json
+  provenance.json
+```
+
+The common `provenance.json` receipt hashes the three runtime files and binds
+the source evidence, contributing samples, profile, ceiling, fitting decisions,
+and workload coverage. It contains no timestamp or absolute path. An identical
+rerun is idempotent; different content at the fixed destination is rejected.
+The fitting result is never modified. No fitted research bundle exists until
+this command succeeds against the real 120-sample result.
 
 ### `test`
 
@@ -145,6 +185,24 @@ tail coverage, exact endpoint filtering, interface-offload checks, UDP-payload
 ceiling enforcement, runner/PCAP reconciliation, and overlapping connections
 to distinct origins within one sample.
 
+## Profiles
+
+- `live` uses a 1200-byte ceiling and deliberately reduced FRONT, Tamaraw, and
+  event limits for bounded smoke tests.
+- `research-1200` copies every non-size value from the tagged published source
+  profile and changes only the common UDP ceiling and every defence packet-size
+  field from 1450 to 1200. FRONT remains 900/1200 packets over 0.1–2.5 seconds;
+  Tamaraw remains 5/20 ms with modulo 100; published data-driven budgets remain
+  unchanged. This is the study's explicit source-default 1200-byte adaptation,
+  not an implicit CLI default.
+- `published` retains the tagged source's 1450-byte settings for compatibility
+  and controlled source comparison. Modern Neqo, different workloads, and a
+  different network mean that selecting it is not an exact reproduction of the
+  paper experiment or its results.
+
+All campaign and parameter receipts use those exact spellings. A
+`research-1200` schedule or artifact containing a 1201-byte target is invalid.
+
 ## Campaigns
 
 A campaign has one schema:
@@ -152,13 +210,13 @@ A campaign has one schema:
 ```yaml
 schema: 1
 name: example
-purpose: smoke                 # smoke, fitting, or evaluation
+purpose: evaluation            # smoke, fitting, or evaluation
 seed: 20260806
-profile: live                  # currently live or published
+profile: research-1200         # live, research-1200, or published
 
 workloads:                     # ID maps to visit count
-  cloudflare-quiche: 1
-  chromium-quic-page: 1
+  prepared-site-a-r1: 1        # evaluation/fitting require preparation receipts
+  prepared-site-b-r1: 1
 
 request_policies:
   - as-defined                 # or half-duplex
@@ -167,13 +225,13 @@ defenses:
   - undefended
   - front
   - tamaraw
-  - name: static
+  - name: static-control
     kind: static
-    schedule: ../defense-params/static-migration.csv
+    schedule: ../defense-params/static-control-1200.csv
     mode: chaff-only
   - name: traffic-morphing
     kind: traffic_morphing
-    parameters: ../defense-params/traffic-morphing-live.json
+    parameters: ../../artifacts/research-1200/traffic-morphing.json
 
 limits:
   timeout_seconds: 120
@@ -192,32 +250,66 @@ or an implicit repetition count.
 
 Purpose is an evidence constraint, not another execution engine. `smoke`
 permits the checked-in reviewed fixtures, `fitting` is restricted to
-undefended samples, and `evaluation` requires research-grade external
-artifacts whenever a data-driven defence is selected. The consolidated
-overnight implementation deliberately rejects those evaluation selections
-until the next goal adds the fitted-artifact receipt.
+undefended samples, and `evaluation` requires the sealed research bundle
+whenever a data-driven defence is selected.
 
 `as-defined` starts every request whose declared dependencies are satisfied.
 That can create overlapping streams and connections. `half-duplex` additionally
 waits for the current application stream to finish before starting another.
 It is an execution policy, not a second workload format.
 
-Static consumes a signed schedule file. Traffic Morphing, WTF-PAD, and
+Static consumes a signed schedule file. The checked-in
+`static-control-1200.csv` is four alternating 1200-byte events at 0, 5, 10, and
+15 ms. It is a mechanical schedule-loading and direction control, not a fitted
+defence or effectiveness result. Traffic Morphing, WTF-PAD, and
 Walkie-Talkie consume a JSON parameter file with an adjacent
-`.provenance.json` receipt. Campaign loading validates these files, their
-defence/profile binding, and their hashes before a network run, then freezes
-copies under `inputs/`. Reviewed engineering fixtures are permitted only for a
-`smoke` campaign; an evaluation campaign requires sealed fitted artifacts.
+receipt: smoke fixtures use `.provenance.json` beside each file, while the
+research bundle uses one shared `provenance.json`. Campaign loading validates
+these files, their defence/profile binding, and their hashes before a network
+run, then freezes copies under `inputs/`. Reviewed engineering fixtures are
+permitted only for a `smoke` campaign; an evaluation campaign requires sealed
+fitted artifacts.
 FRONT and Tamaraw are generated from the selected QCSD profile and therefore
 do not have external fitted files.
 
-Only fields shown by the schema are accepted. Campaigns do not carry unrelated
-data-processing or evaluation settings, and command behavior is not embedded
-inside the YAML. A campaign with several defences must include exactly one
+Only fields shown by the schema are accepted. Campaigns do not carry dataset,
+classifier, monitored/unmonitored, open-world, split, projection, or runtime
+header-policy settings, and command behavior is not embedded inside the YAML.
+A campaign with several defences must include exactly one
 undefended baseline so response identity and overhead can be paired. A
 single-defence campaign is valid for capture mechanics, but cannot produce a
 paired comparison unless its prepared workload supplies the expected response
 identity.
+
+## Workload catalogue and research cohort
+
+The workspace-level [`results.zip`](../results.zip), SHA-256
+`103a82cb95eaa305e38b0084ba16744429b273146be80ab05c7653d52bf66b11`, is a
+catalogue of 17 Chromium-observed request graphs from the retired discovery
+workflow. It is not a lab result, fitting corpus, or accepted campaign input. Its historical
+`header_policy` and replay records describe how candidates were observed; they
+do not reintroduce runtime header policies into the consolidated lab.
+
+`prepare` promotes a catalogue candidate only after origin filtering and three
+stable undefended Neqo runs. Four intended research workloads currently pass:
+
+| Workload | Resources | Prepared-manifest SHA-256 |
+|---|---:|---|
+| `getbootstrap-home-r1` | 9 | `19e250c636c357cde159517922f073251a01650dac769ac641441b52cb3fdfac` |
+| `teamviewer-account-r1` | 17 | `df7dcbae3b46e4f453021c2065ec6e8fe40fac189f0d9f79c84891c843e08da4` |
+| `behance-home-r1` | 139 | `6bf77cc37a8c2d5ac6f0fe03eb6767d3d476d17167fb41822de94b77275e2b4c` |
+| `guardian-home-r1` | 63 | `3e24709d248539cf21d43fdfdde21ec101548d68375d33867bcbb09a466ab1c7` |
+
+Preparation rejected Nikkei (`0`, `78`, `80`), Notion (`0`, `81`, `104`),
+MyAnimeList (`0`), Temu (`0`, `3`, `8`, `10`), and 9GAG (`0`) at the listed
+unstable or failed resource IDs. Arena, Ahrefs, R10, and Tapbit showed broader
+instability across their reported resource lists.
+
+The cohort is blocked at four of six. Legacy engineering workloads are not
+substitutes for the two missing preparation passes. Once six are frozen, the
+fitting, rehearsal, and final definitions will reference the same exact
+workload files and hashes, but every campaign makes independent network visits.
+Fitting traces are never reused as evaluation visits.
 
 ## Execution order and concurrency
 
@@ -355,9 +447,30 @@ only a genuinely partial, unpromoted working attempt may be discarded.
 See [METHODOLOGY.md](METHODOLOGY.md) for the scientific interpretation of the
 observer, pairing, fidelity, and derived metrics.
 
-## Deliberately deferred
+## Research readiness and final hold
 
-There is no placeholder `fit` command. Deterministic fitters, sealed research
-artifacts, the `research-1200` profile, the 120-sample fitting campaign, and the
-42-sample pre-final rehearsal belong to the next goal. The final 126-sample
-capture remains on hold and must not be run from this consolidation.
+Only the 14-sample engineering smoke campaign is currently checked in. The
+research definitions and their expected expansions are:
+
+- fitting: six workloads × ten visits × two request policies × undefended =
+  120 samples;
+- pre-final rehearsal: six workloads × one visit × one request policy × seven
+  modes = 42 samples;
+- final: six workloads × three visits × one request policy × seven modes =
+  126 samples.
+
+The current Stages 1–5 goal implements and deterministically verifies the
+profiles, preparation policy, fitters, runtime realization, campaign
+contracts, and documentation. It does **not** execute the smoke, fitting,
+rehearsal, or final campaign. At the clean handoff, the next command is exactly:
+
+```shell
+./qcsd-lab run config/campaigns/smoke.yml
+```
+
+The longer capture sequence is future work. After smoke passes, two more
+workloads must pass preparation without legacy substitution; the six-workload
+fitting campaign can then collect 120 independent samples and produce the
+sealed bundle. Only after that may the independent 42-sample rehearsal run and
+be verified and analyzed. The eventual `config/campaigns/final.yml` must pass
+non-executing `verify`, but its 126-sample capture remains explicitly on hold.

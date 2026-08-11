@@ -1,0 +1,6052 @@
+{
+  "preparation": {
+    "approved_origins": [
+      "https://assets.guim.co.uk",
+      "https://www.theguardian.com"
+    ],
+    "chromium_version": "151.0.7922.108",
+    "exclusions": [
+      {
+        "reason": "not an absolute HTTPS request",
+        "url": "blob:https://www.theguardian.com/051084bc-f5c4-441f-a996-01af1b41facf"
+      },
+      {
+        "reason": "not an absolute HTTPS request",
+        "url": "blob:https://www.theguardian.com/1d08b621-3fb9-43b0-bee1-ccab0fbd4702"
+      },
+      {
+        "reason": "not an absolute HTTPS request",
+        "url": "blob:https://www.theguardian.com/e087d68c-5245-4c1f-8247-dadca3d04d6b"
+      },
+      {
+        "reason": "not an absolute HTTPS request",
+        "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACsAAAAWBAMAAACrl3iAAAAABlBMVEUAAAD+AciWmZzWAAAAAnRSTlMAApidrBQAAAB4SURBVBjTbZEJDoBACAPhB/z/tUamHK6LRCHM1opm93CCanWR07rX06Hysu6SiKQCmq7nmZuWdugU2nq3FysnFagu39Y8/u0DJ2/lBOxNnFMOJCvUjJeTY2cpGVTLt6+V7t3hWmdGuT/jskHlSf82GLIu7XHi838eRR8Fz5GmhAsAAAAASUVORK5CYII="
+      },
+      {
+        "reason": "not an absolute HTTPS request",
+        "url": "data:image/svg+xml;utf8,%3Csvg%20width%3D%2236%22%20height%3D%2236%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%3Cpath%20fill%3D%22%23fff%22%20fill-rule%3D%22evenodd%22%20clip-rule%3D%22evenodd%22%20d%3D%22M0%2018a18%2018%200%201136%200%2018%2018%200%2001-36%200zm27.04%201.81l1.84-.82v-.57H18.84v.51l1.96.7V31.4c2.54-.54%205.2-2.08%206.24-3.07v-8.52zM19.62%204.8h.05V4.2C13.43%203.8%204.9%208.45%205.02%2018.01c-.12%209.54%208.41%2014.2%2014.65%2013.78v-.59h-.05c-4.17%200-6.55-5.61-6.43-13.21-.12-7.58%202.26-13.2%206.43-13.2zm7.59%202.5c-1.05-1.14-3.84-2.74-6.28-3.11v.58l5.68%207.79h.6V7.3z%22%2F%3E%3C%2Fsvg%3E%0A"
+      },
+      {
+        "reason": "unsafe method: POST",
+        "url": "https://a.teads.tv/hb/bid-request"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://a64fe228160778f613a548d61c03841b.safeframe.googlesyndication.com/safeframe/1-0-45/html/container.html"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://accounts.google.com/gsi/fedcm.json"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://accounts.google.com/gsi/fedcm/listaccounts"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://ads.pubmatic.com/AdServer/js/google-esp.js"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://ads.pubmatic.com/AdServer/js/user_sync.html?kdntuid=1&p=157203"
+      },
+      {
+        "reason": "unsafe method: OPTIONS",
+        "url": "https://analytics.rlcdn.com/"
+      },
+      {
+        "reason": "unsafe method: POST",
+        "url": "https://analytics.rlcdn.com/"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://api.id5-sync.com/analytics/182/id5-api-js"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://api.intentiq.com/profiles_engine/ProfilesEngineServlet?at=39&mi=10&dpi=377078111&pt=17&dpn=1&iiqidtype=2&iiqpcid=0729135f-63b3-4d27-969b-f05f3b643fa0&iiqpciddate=1786473787176&gdpr=0&japs=false&jaesc=0&jafc=0&jaensc=0&jsver=0.33&testGroup=A&source=pbjs&ABTestingConfigurationSource=IIQServer&abtg=A&vrref=https%3A%2F%2Fwww.theguardian.com%2Fau&uh=%7B%220%22%3A%22%5C%22Chromium%5C%22%3Bv%3D%5C%22151%5C%22%2C%20%5C%22Not%3DA%3FBrand%5C%22%3Bv%3D%5C%2299%5C%22%22%2C%221%22%3A%22%3F0%22%2C%222%22%3A%22%5C%22Linux%5C%22%22%2C%223%22%3A%22%5C%22arm%5C%22%22%2C%224%22%3A%22%5C%2264%5C%22%22%2C%227%22%3A%22%3F0%22%2C%228%22%3A%22%5C%22Chromium%5C%22%3Bv%3D%5C%22151.0.7922.108%5C%22%2C%20%5C%22Not%3DA%3FBrand%5C%22%3Bv%3D%5C%2299.0.0.0%5C%22%22%7D"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://api.permutive.com/ctx/v1/state?url=https%3A%2F%2Fwww.theguardian.com%2Fau&k=359ba275-5edd-4756-84f8-21a24369ce0b"
+      },
+      {
+        "reason": "unsafe method: POST",
+        "url": "https://api.permutive.com/v2.0/batch/events?enrich=false&sdkp=true&k=359ba275-5edd-4756-84f8-21a24369ce0b"
+      },
+      {
+        "reason": "unsafe method: POST",
+        "url": "https://api.permutive.com/v2.0/identify?k=359ba275-5edd-4756-84f8-21a24369ce0b"
+      },
+      {
+        "reason": "unsafe method: POST",
+        "url": "https://api.permutive.com/v2.0/internal/metrics?k=359ba275-5edd-4756-84f8-21a24369ce0b"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://api.permutive.com/v2.0/px/sync?k=359ba275-5edd-4756-84f8-21a24369ce0b&u=d38ec525-47f9-4389-971a-a4521e632372&alias=2663a89e-fab0-41c2-9086-3eb59a3f0b80&type=viant"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://au-script.dotmetrics.net/Scripts/script.js?v=366"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://au-script.dotmetrics.net/SiteEvent.dotmetrics?r=1786473787758&v=eyJpZCI6NTgxMiwiZmwiOnRydWUsImRvbSI6Ind3dy50aGVndWFyZGlhbi5jb20iLCJsc28iOm51bGwsInVybCI6Imh0dHBzOi8vd3d3LnRoZWd1YXJkaWFuLmNvbS9hdSIsInJ1cmwiOiIiLCJlY2lkIjoiZWM4Y2FhOTItZGZiYy00ZjQzLWIxOWUtNmIwNjQwOTI5OTJlIiwiZGMiOiI3NmYwNTBkNy1iN2Y1LTQwNDEtYjhhNC05YTg1MjMyNTYxNzUiLCJ2ZXIiOjM2NiwiZGZwaCI6IiIsInR6T2Zmc2V0IjowLCJvc3MiOnRydWUsIm9zZXMiOnRydWV9"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://au-script.dotmetrics.net/door.js?d=www.theguardian.com&t=au"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://au-script.dotmetrics.net/hit.gif?id=5812&url=https%3A%2F%2Fwww.theguardian.com%2Fau&dom=www.theguardian.com&r=1786473787234&pvs=1&ecid=ec8caa92-dfbc-4f43-b19e-6b064092992e&dc=76f050d7-b7f5-4041-b8a4-9a8523256175&c=true&tzOffset=0&doorUrl=http%3a%2f%2fau-script.dotmetrics.net%2fdoor.js%3fd%3dwww.theguardian.com%26t%3dau&dfph=&ver=366"
+      },
+      {
+        "reason": "unsafe method: POST",
+        "url": "https://bcp.crwdcntrl.net/6/map?xcid=16589"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://c.amazon-adsystem.com/aax2/apstag.js"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://c.amazon-adsystem.com/bao-csm/aps-comm/aps_csm.js"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://cdn-gl.imrworldwide.com/conf/P505182AA-1D71-49D8-8287-AA222CD05424.js"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://cdn-gl.imrworldwide.com/novms/html/ls.html"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://cdn-gl.imrworldwide.com/novms/js/2/configs/glcfg510.js"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://cdn-gl.imrworldwide.com/novms/js/2/nlsSDK600.bundle.min.js"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://cdn-gl.imrworldwide.com/v60.js"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://cdn.adsafeprotected.com/iasPET.1.js"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://cdn.brandmetrics.com/scripts/bundle/65568.js?sid=10594ace-9a24-438d-a56e-8f8c488757a8&toploc=www.theguardian.com"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://cdn.brandmetrics.com/tag/c3330059-9ad5-4d32-8e7a-e9f6c7d74957/the_guardian_au.js"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://cdn.confiant-integrations.net/7oDgiTsq88US4rrBG0_Nxpafkrg/gpt_and_prebid/config.js"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://cdn.confiant-integrations.net/gptprebidnative/202607281755/wrap.js"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://cdn.id5-sync.com/api/1.0/esp.js"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://cdn.id5-sync.com/api/1.0/id5-api.js"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://cdn.id5-sync.com/api/1.0/id5PrebidModule.js"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://cdn.mgaru.dev/static/myGaruStandalone.js"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://cdn.permutive.com/d6691a17-6fdb-4d26-85d6-b3dd27f55f08-web.js"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://cdn.privacy-mgmt.com/global-cmp/consent/13348/default-consent"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://cdn.privacy-mgmt.com/global-cmp/vendor-list/categories?siteId=13348&consentLanguage=EN"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://cdn.privacy-mgmt.com/wrapper/v2/meta-data?accountId=1257&env=prod&metadata={%22gdpr%22:{},%22usnat%22:{},%22globalcmp%22:{}}&propertyId=9398"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.3.0/fonts/fontawesome-webfont.woff"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://check.analytics.rlcdn.com/check/14522"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://cm.g.doubleclick.net/partnerpixels?url=https%3A%2F%2Fwww.theguardian.com%2Fau"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://collector.brandmetrics.com/c.js?siteid=10594ace-9a24-438d-a56e-8f8c488757a8&toploc=www.theguardian.com&rnd=6050788"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://config.aps.amazon-adsystem.com/configs/3722"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://connectid.analytics.yahoo.com/connectId-gpt.js"
+      },
+      {
+        "reason": "unsafe method: OPTIONS",
+        "url": "https://contributions.guardianapis.com/banner"
+      },
+      {
+        "reason": "unsafe method: POST",
+        "url": "https://contributions.guardianapis.com/banner"
+      },
+      {
+        "reason": "unsafe method: OPTIONS",
+        "url": "https://contributions.guardianapis.com/header"
+      },
+      {
+        "reason": "unsafe method: POST",
+        "url": "https://contributions.guardianapis.com/header"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://d0.eu-3-id5-sync.com/"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://d0.eu-4-id5-sync.com/"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://d1.eu-3-id5-sync.com/"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://d1.eu-4-id5-sync.com/"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://d2.eu-3-id5-sync.com/"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://d2.eu-4-id5-sync.com/"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://d3.eu-3-id5-sync.com/"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://d3.eu-4-id5-sync.com/"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://d4.eu-3-id5-sync.com/"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://d4.eu-4-id5-sync.com/"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://d5.eu-3-id5-sync.com/"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://d5.eu-4-id5-sync.com/"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://d6.eu-3-id5-sync.com/"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://d6.eu-4-id5-sync.com/"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://d6691a17-6fdb-4d26-85d6-b3dd27f55f08.prmutv.co/v2.0/pxid?k=359ba275-5edd-4756-84f8-21a24369ce0b"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://d7.eu-3-id5-sync.com/"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://d7.eu-4-id5-sync.com/"
+      },
+      {
+        "reason": "unsafe method: POST",
+        "url": "https://direct.adsrvr.org/bid/bidder/theguardian"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://dmp.im-apps.net/secure-signal/provider.js"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://dpm.demdex.net/demconf.jpg?et:ibs%7cdata:dpid=903&dpuuid=00d30fe3-5b89-4f2c-83f9-29ad5aa1a618&gdpr=0&gdpr_consent=&redir=https%3A%2F%2Fmatch.adsrvr.org%2Ftrack%2Fcmf%2Fgeneric%3Fttd_pid%3Daam"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://dpm.demdex.net/ibs:dpid=903&dpuuid=00d30fe3-5b89-4f2c-83f9-29ad5aa1a618&gdpr=0&gdpr_consent=&redir=https%3A%2F%2Fmatch.adsrvr.org%2Ftrack%2Fcmf%2Fgeneric%3Fttd_pid%3Daam"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://dt.adsafeprotected.com/dt?anId=10249&asId=ade8a71b-7694-6350-23cd-2a82cbee735b&tv=%7Bc:l0DrFr,pingTime:-10,time:915,type:s,mvn:ZnNjPTEzLHNkPTMsbm89OCxhc3A9MQ--,sd:MTcuNi40djcyMHx8MTI4MHx8MXx8MXx8MjR8fDcyMHx8MHx8MHx8MXx8bGFuZHNjYXBlLXByaW1hcnl8fDI0fHwxNi85fHwxNi85fHwwfHwxMjgw,no:MTcuNi40dk1vemlsbGF8fE5ldHNjYXBlfHxufHxufHwwfHxufHxMaW51eCB4ODZfNjR8fEdlY2tvfHwyMDAzMDEwN3x8MHx8TW96aWxsYS81LjAgKFgxMTsgTGludXggeDg2XzY0KSBBcHBsZVdlYktpdC81MzcuMzYgKEtIVE1MLCBsaWtlIEdlY2tvKSBIZWFkbGVzc0Nocm9tZS8xNTEuMC4wLjAgU2FmYXJpLzUzNy4zNnx8MXx8MXx8R29vZ2xlIEluYy58fG4-,ch:n,fsc:17.6.4v222222220002222202222222220222222222202222222220222202000022000220222222220000222202002222202222222220222222220000020022222200022222220200000222200022220002022022022222202002220222022222022220000220200000022220222220222222222222202222222222222222222222222222222222222200000022022020020000002022202022022022222222000000000020222202022022222000000020000000000000000000022220202220000022200222202220022200200222022202220022220222200202222020002200002222022222202222000002002002222222202220022202200222002220222202,asp:1786473790620%7C%7C0a8345da6ac02fabadc9f1e0873e36ab%7C%7C06c7269cc465b286d1c82a0c108f23db%7C%7Cae190dd936d8eaeda147d3a580249c6c%7C%7C7097f0b3f8ef28187482b861edade560%7C%7C35f161d14eff82cc1a9ea52543b03554%7C%7C7814e2c0ae85d789391c2a1fac1da6b2%7C%7C497128f85a8c8c2e7719cd2700514006%7C%7C1715618633%7D"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://dt.adsafeprotected.com/dt?anId=10249&asId=ade8a71b-7694-6350-23cd-2a82cbee735b&tv=%7Bc:l0DrIh,pingTime:1,time:1091,type:p,clog:%5B%7Bpiv:100,vs:i,r:,w:970,h:250,t:73%7D%5D,es:0,sc:1,ha:1,fgad:1,fif:1,gmnp:0,for:1,b11:0,cnod:1,gm:1,slTimes:%7Bi:1091,o:0,n:0,pp:0,pm:0%7D,slEvents:%5B%7Bsl:i,t:73,wc:10.10.1280.720,ac:165.34.970.250,am:i,cc:165.34.970.250,piv:100,obst:0,th:0,reas:,bkn:%7Bpiv:%5B1032~100%5D,as:%5B1032~970.250%5D%7D%7D%5D,slEventCount:1,em:true,fr:true,e:,tt:jload,dtt:681,fm:vs0ZXEm+11%7C12%7C13%7C14%7C15%7C16%7C17%7C18%7C19%7C1a%7C1b%7C1c%7C1d%7C1e*.10249%7C1e1,idMap:1e*,rmeas:1,rend:1,renddet:IMG.qs,siq:74,msd:0,ph:21892,igt:1,sis:113%7D&br=c"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://dt.adsafeprotected.com/dt?anId=10249&asId=ade8a71b-7694-6350-23cd-2a82cbee735b&tv=%7Bc:l0DrIi,pingTime:1,time:1092,type:c,clog:%5B%7Bpiv:100,vs:i,r:,w:970,h:250,t:73%7D%5D,es:0,sc:1,ha:1,fgad:1,fif:1,gmnp:0,for:1,b11:0,cnod:1,gm:1,slTimes:%7Bi:1092,o:0,n:0,pp:0,pm:0%7D,slEvents:%5B%7Bsl:i,t:73,wc:10.10.1280.720,ac:165.34.970.250,am:i,cc:165.34.970.250,piv:100,obst:0,th:0,reas:,bkn:%7Bpiv:%5B1032~100%5D,as:%5B1032~970.250%5D%7D%7D%5D,slEventCount:1,em:true,fr:true,e:,tt:jload,dtt:681,fm:vs0ZXEm+11%7C12%7C13%7C14%7C15%7C16%7C17%7C18%7C19%7C1a%7C1b%7C1c%7C1d%7C1e*.10249%7C1e1,idMap:1e*,rmeas:1,rend:1,renddet:IMG.qs,siq:74,msd:0,ph:21892,igt:1,sis:113,metricId:grpm1,cmr:t%7D&br=c"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://dt.adsafeprotected.com/dt?anId=10249&asId=ade8a71b-7694-6350-23cd-2a82cbee735b&tv=%7Bc:l0DrIi,pingTime:1,time:1092,type:c,clog:%5B%7Bpiv:100,vs:i,r:,w:970,h:250,t:73%7D%5D,es:0,sc:1,ha:1,fgad:1,fif:1,gmnp:0,for:1,b11:0,cnod:1,gm:1,slTimes:%7Bi:1092,o:0,n:0,pp:0,pm:0%7D,slEvents:%5B%7Bsl:i,t:73,wc:10.10.1280.720,ac:165.34.970.250,am:i,cc:165.34.970.250,piv:100,obst:0,th:0,reas:,bkn:%7Bpiv:%5B1032~100%5D,as:%5B1032~970.250%5D%7D%7D%5D,slEventCount:1,em:true,fr:true,e:,tt:jload,dtt:681,fm:vs0ZXEm+11%7C12%7C13%7C14%7C15%7C16%7C17%7C18%7C19%7C1a%7C1b%7C1c%7C1d%7C1e*.10249%7C1e1,idMap:1e*,rmeas:1,rend:1,renddet:IMG.qs,siq:74,msd:0,ph:21892,igt:1,sis:113,metricId:publ1,cmr:t%7D&br=c"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://dt.adsafeprotected.com/dt?anId=10249&asId=ade8a71b-7694-6350-23cd-2a82cbee735b&tv=%7Bc:l0DrIi,pingTime:1,time:1092,type:pf,clog:%5B%7Bpiv:100,vs:i,r:,w:970,h:250,t:73%7D%5D,es:0,sc:1,ha:1,fgad:1,fif:1,gmnp:0,for:1,b11:0,cnod:1,gm:1,slTimes:%7Bi:1092,o:0,n:0,pp:0,pm:0%7D,slEvents:%5B%7Bsl:i,t:73,wc:10.10.1280.720,ac:165.34.970.250,am:i,cc:165.34.970.250,piv:100,obst:0,th:0,reas:,bkn:%7Bpiv:%5B1032~100%5D,as:%5B1032~970.250%5D%7D%7D%5D,slEventCount:1,em:true,fr:true,e:,tt:jload,dtt:681,fm:vs0ZXEm+11%7C12%7C13%7C14%7C15%7C16%7C17%7C18%7C19%7C1a%7C1b%7C1c%7C1d%7C1e*.10249%7C1e1,idMap:1e*,rmeas:1,rend:1,renddet:IMG.qs,siq:74,msd:0,ph:21892,igt:1,sis:113%7D&br=c"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://dt.adsafeprotected.com/dt?anId=10249&asId=ade8a71b-7694-6350-23cd-2a82cbee735b&tv=%7Bc:l0DrrT,pingTime:-8,time:75,type:l,es:0,sc:1,ha:1,fgad:1,fif:1,gmnp:0,for:1,b11:0,cnod:1,gm:1,slTimes:%7Bi:75,o:0,n:0,pp:0,pm:0%7D,slEvents:%5B%7Bsl:i,t:73,wc:10.10.1280.720,ac:165.34.970.250,am:i,cc:165.34.970.250,piv:100,obst:0,th:0,reas:,bkn:%7Bpiv:%5B15~100%5D,as:%5B15~970.250%5D%7D%7D%5D,slEventCount:1,em:true,fr:true,e:,tt:jload,dtt:0,fm:vs0ZXEm+11%7C12%7C13%7C14%7C15%7C16%7C17%7C18%7C19%7C1a%7C1b%7C1c%7C1d%7C1e*.10249%7C1e1,idMap:1e*,rmeas:1,rend:1,renddet:IMG.qs,siq:74%7D&br=c"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://dt.adsafeprotected.com/dt?anId=10249&asId=ade8a71b-7694-6350-23cd-2a82cbee735b&tv=%7Bc:l0Drs7,pingTime:0,time:89,type:pf,clog:%5B%7Bpiv:100,vs:i,r:,w:970,h:250,t:73%7D%5D,es:0,sc:1,ha:1,fgad:1,fif:1,gmnp:0,for:1,b11:0,cnod:1,gm:1,slTimes:%7Bi:89,o:0,n:0,pp:0,pm:0%7D,slEvents:%5B%7Bsl:i,t:73,wc:10.10.1280.720,ac:165.34.970.250,am:i,cc:165.34.970.250,piv:100,obst:0,th:0,reas:,bkn:%7Bpiv:%5B29~100%5D,as:%5B29~970.250%5D%7D%7D%5D,slEventCount:1,em:true,fr:true,e:,tt:jload,dtt:0,fm:vs0ZXEm+11%7C12%7C13%7C14%7C15%7C16%7C17%7C18%7C19%7C1a%7C1b%7C1c%7C1d%7C1e*.10249%7C1e1,idMap:1e*,rmeas:1,rend:1,renddet:IMG.qs,siq:74,msd:0,ph:21892%7D&br=c"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://dt.adsafeprotected.com/dt?anId=10249&asId=ade8a71b-7694-6350-23cd-2a82cbee735b&tv=%7Bc:l0Drsh,pingTime:-2,time:99,type:a,im:%7Bsf:0,pom:1,prf:%7BbeA:53,beZ:54,mfA:60,mfZ:73,cmA:110,inA:110,inZ:114,prA:114,prZ:120,si:126,poA:128,poZ:138,cmZ:138,loA:146,loZ:149,ltA:151,ltZ:151,rt:1,bc:n%7D%7D,sca:%7Bdfp:%7Bdf:4,sz:970.250,dom:body%7D,hbs:%7BcdcP:0,cdcA:0,cdcS:0,cyp:0,wd:1,uaHC:1,chHC:0%7D%7D,env:%7Bgca:false,cca:false,gca2:false%7D,clog:%5B%7Bpiv:100,vs:i,r:,w:970,h:250,t:73%7D%5D,es:0,sc:1,ha:1,fgad:1,fif:1,gmnp:0,for:1,b11:0,cnod:1,gm:1,slTimes:%7Bi:99,o:0,n:0,pp:0,pm:0%7D,slEvents:%5B%7Bsl:i,t:73,wc:10.10.1280.720,ac:165.34.970.250,am:i,cc:165.34.970.250,piv:100,obst:0,th:0,reas:,bkn:%7Bpiv:%5B39~100%5D,as:%5B39~970.250%5D%7D%7D%5D,slEventCount:1,em:true,fr:true,e:,tt:jload,dtt:0,fm:vs0ZXEm+11%7C12%7C13%7C14%7C15%7C16%7C17%7C18%7C19%7C1a%7C1b%7C1c%7C1d%7C1e*.10249%7C1e1,idMap:1e*,pd:CV8L.internal-pdf-viewer,rmeas:1,rend:1,renddet:IMG.qs,siq:74,slid:%5Bgoogle_ads_iframe_/59666047/theguardian.com/au/front/ng_0,google_ads_iframe_/59666047/theguardian.com/au/front/ng_0__container__,dfp-ad--top-above-nav,bannerandheader%5D,msd:0,ph:21892,igt:1,sinceFw:23,readyFired:true%7D&br=c"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://dt.adsafeprotected.com/dt?anId=10249&asId=ade8a71b-7694-6350-23cd-2a82cbee735b&tv=%7Bc:l0Drsz,time:117,type:e,env:%7Bar:self.0%7D,es:0,sc:1,ha:1,fgad:1,fif:1,gmnp:0,for:1,b11:0,cnod:1,gm:1,slTimes:%7Bi:117,o:0,n:0,pp:0,pm:0%7D,slEvents:%5B%7Bsl:i,t:73,wc:10.10.1280.720,ac:165.34.970.250,am:i,cc:165.34.970.250,piv:100,obst:0,th:0,reas:,bkn:%7Bpiv:%5B57~100%5D,as:%5B57~970.250%5D%7D%7D%5D,slEventCount:1,em:true,fr:true,e:,tt:jload,dtt:0,fm:vs0ZXEm+11%7C12%7C13%7C14%7C15%7C16%7C17%7C18%7C19%7C1a%7C1b%7C1c%7C1d%7C1e*.10249%7C1e1,idMap:1e*,rmeas:1,rend:1,renddet:IMG.qs,siq:74,msd:0,ph:21892,igt:1,sis:113%7D&br=c"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://dt.adsafeprotected.com/dt?anId=10249&asId=ade8a71b-7694-6350-23cd-2a82cbee735b&tv=%7Bc:l0DryU,time:510,type:e,sca:%7Beng:b,tss:%7Blts:2026-08-1118.43.10,tzo:0,tzn:UTC%7D,bdp:%7Bndp:1%7D,mob:%7Bori:0,ges:0,tch:0%7D,prp:%7Bnot:1,csi:1,msl:0,hdl:1,aps:0,hae:1,ito:1,sec:1,plr:1%7D,exr:%7Bexs:objectExternal%7D,ifr:%7Bact:1,eff:0%7D,dvw:%7Bwit:0,wot:0%7D,uai:%7Buad:brands~brand~Chromium~version~151/brand~NotABrand~version~99%7Cmobile~false%7Cplatform~Linux%7D,nit:%7Bpqr:prompt,ntr:default%7D,cdc:%5B2,2,2,2,0,0,0,0,0,2,0,2,0,0,2,2,2,2%5D%7D,es:0,sc:1,ha:1,fgad:1,fif:1,gmnp:0,for:1,b11:0,cnod:1,gm:1,slTimes:%7Bi:510,o:0,n:0,pp:0,pm:0%7D,slEvents:%5B%7Bsl:i,t:73,wc:10.10.1280.720,ac:165.34.970.250,am:i,cc:165.34.970.250,piv:100,obst:0,th:0,reas:,bkn:%7Bpiv:%5B450~100%5D,as:%5B450~970.250%5D%7D%7D%5D,slEventCount:1,em:true,fr:true,e:,tt:jload,dtt:0,fm:vs0ZXEm+11%7C12%7C13%7C14%7C15%7C16%7C17%7C18%7C19%7C1a%7C1b%7C1c%7C1d%7C1e*.10249%7C1e1,idMap:1e*,rmeas:1,rend:1,renddet:IMG.qs,siq:74,msd:0,ph:21892,igt:1,sis:113%7D&br=c"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://eb2.3lift.com/sync?"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://ep1.adtrafficquality.google/getconfig/sodar?sv=200&tid=gpt&tv=m202608050101&st=env&sjk=2582021919968231"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://ep1.adtrafficquality.google/pagead/sodar?id=sodar2&v=255&t=2&li=gpt_m202608050101&jk=2582021919968231&bg=!Hh2lHX_NAAYpRUYQCUU7AEcBe5WfOLCqfyxS6SeRmRr4vzGQjdNmW26oGHDe-of0G-szyhWc4nNbxBBVYBH7CE4OjiyBl5TwxgJxwG3iBm1Mq4kpTRx4rwIAAACAUgAAAAdoAQd-ADZa8MHa4zuT2n_V9eCzIHixVRu1OlsmUf6Endwo15MCq_HLgTktlBgL3cvdH2V0xRIIBs8neryZApMyECZsnDBm11DoH4JJ7OWmZKioCfRn3pcpS8lL2I-x2tPoGlFnZPZkG7xlT4l2BWAtgM3wgeKlfnm-kHJF8stDuKWJvaX29v6q2idXN9MREAUinflYdv6yZyJBHkFBfm91WLs1lDrZD_vo5YmS2GNvxs2FXarm3ufOalK4YyXsVyF9n1AoParpQEtMx61ILW3zR4ZiLuGvTH2-iZyvN10ZRVevXZwOy3XadXdiVfzpR6Uw4mmlbSXEKSVc3mmlVei3KiK81cvQYEsPqhHNNY9vrm4VQoH8OUaP3EVJk9sS-7xCnZkK-fPEP7BaqigQTRarzoeruXzGD4X0TjM9pWvxDzDtiw-50zFC46Uh_nBBHwiqkp2__TftWIGeZaJtvEhlN6ptNK9g3bsllLKvtIwf00rX9dC1WCHljt5P53_1A7jNK6BpilRZJRNG4apbUHAr_cCljgpvrRggzaWuXz4TXwl6xfRzMxRhc5QrQLhxBhIdhdg9gKu1ZX5qUc3eBO3U0q6dRitWXCKOpdUamGrk7xjXhQ15ZjsnoxIfbLRTvCmzG15BxEEQcUGNdmeaAxtT9TcR-h9w9ph2vZbu0AxfHUK5z-_b9clGLL8POyvyEcPq3Vqk9_nsiuUX1TK1XSNmYY0xMqHteNmdPutRrn0MahgMTq3WWEqimbosmbp9KYY8Ozn7TOIZ_E2HYFF8Dfp3voV6DtCDPAj5k4vyXjAxHrDuEA1shvqI8Wcah_p_RDu9qvMKsCC0ypi6pCLMgdPmLNwszpoU5csBJVewRvQQcUHY25j3lpLEpiyBQ-GE8jQp9qD9PCuF_WVQxD-uEyeJQGki6RHk_SC71ymkd3ujtUGU-MvvgftXjSU54jpl93IU0g"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://ep2.adtrafficquality.google/sodar/sodar2.js"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://ep2.adtrafficquality.google/sodar/sodar2/255/runner.html"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://eus.rubiconproject.com/usync.html"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://fastlane.rubiconproject.com/a/api/fastlane.json?account_id=26644&site_id=554256&zone_id=3471458&size_id=2&alt_size_ids=57&eid_pubcid.org=4282602c-0540-4655-beec-94e68d09d906%5E1%5E%5E%5E%5E%5E&rf=https%3A%2F%2Fwww.theguardian.com%2Fau&kw=Network%20Front%2Cp_standard%3D10000015%2Cp_standard%3D10000017%2Cp_standard%3D10000070%2Cp_standard%3D10000781%2Cp_standard_aud%3Dbhkl%2Cp_standard_aud%3Dbhky%2Cp_standard_aud%3Dbhlb%2Cp_standard_aud%3Dbhng%2Cp_standard_aud%3Dbhmr%2Cp_standard_aud%3Dbhgs%2Cp_standard_aud%3Dbhkw%2Cp_standard_aud%3Dbhig%2Cp_standard_aud%3Dbhmg%2Cp_standard_aud%3Dbhoa%2Cp_standard_aud%3Dbhmk%2Cp_standard_aud%3Dbhks%2Cp_standard_aud%3Dcur%2Cp_standard_aud%3Dehkp%2Cp_standard_aud%3Dehnd%2Cp_standard_aud%3Dbzyw%2Cp_standard_aud%3Dbzyg%2Cp_standard_aud%3Dbzyf%2Cp_standard_aud%3Dbzyx%2Cp_standard_aud%3Dbzyy%2Cp_standard_aud%3Dbzyz%2Cp_standard_aud%3Depdm%2Cpermutive%3D37316&tg_v.permutive=37316&tg_v.p_standard=10000015%2C10000017%2C10000070%2C10000781&tg_i.domain=theguardian.com&tg_i.page=https%3A%2F%2Fwww.theguardian.com%2Fau&tg_i.keywords=Network%20Front&tg_i.documentLang=en&tg_i.pbadslot=%2F59666047%2Fgu%2Fau%2FNetwork%20Front%2Ftop-above-nav&tk_flint=pbjs_lite_v10.23.0&l_pb_bid_id=3c049609-15fa-4bfc-9b9b-fa5a332b1b3b&p_screen_res=1280x720&rp_secure=1&rp_hard_floor=0.1&p_gpid=%2F59666047%2Fgu%2Fau%2FNetwork%20Front%2Ftop-above-nav&m_ch_ua=%22Chromium%22%7Cv%3D%22151%22%2C%22Not%3DA%3FBrand%22%7Cv%3D%2299%22&m_ch_mobile=%3F0&m_ch_platform=Linux&slots=1&rand=0.24565535546700634"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://google-bidout-d.openx.net/w/1.0/pd?cc=1&plm=5"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://google-bidout-d.openx.net/w/1.0/pd?plm=5"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://google.com/.well-known/web-identity"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://googleads.g.doubleclick.net/pagead/viewthroughconversion/971225648/?random=1786473787565&cv=9&fst=1786473787565&num=1&guid=ON&resp=GooglemKTybQhCsO&eid=466465926&u_h=720&u_w=1280&ig=1&frm=0&url=https%3A%2F%2Fwww.theguardian.com%2Fau&tiba=Latest%20news%2C%20sport%20and%20opinion%20from%20the%20Guardian&hn=www.googleadservices.com&uaa=arm&uab=64&uam=&uap=Linux&uapv=&uaw=0&uafvl=Chromium%3B151.0.7922.108%7CNot%253DA%253FBrand%3B99.0.0.0&async=1&rfmt=3&fmt=4"
+      },
+      {
+        "reason": "unsafe method: POST",
+        "url": "https://grid-bidder.criteo.com/openrtb_2_5/pbjs/auction/request?profileId=207&av=37&wv=10.23.0&cb=91564233167&lsavail=1&networkId=337&gzip=1"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://gum.criteo.com/syncframe?origin=criteoPrebidAdapter&topUrl=www.theguardian.com&gpp="
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://gum.criteo.com/syncframe?origin=publishertagids&topUrl=www.theguardian.com"
+      },
+      {
+        "reason": "unsafe method: POST",
+        "url": "https://hbopenbid.pubmatic.com/translator?source=prebid-client&gzip=1"
+      },
+      {
+        "reason": "unsafe method: POST",
+        "url": "https://htlb.casalemedia.com/openrtb/pbjs?s=208281"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://i.guim.co.uk/img/media/098272af4151003f975e659e2085868d1371f45a/193_0_4422_3538/master/4422.jpg?width=460&dpr=1&s=none&crop=5%3A4"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://i.guim.co.uk/img/media/123961f29862cfca4a8b15229837715e5948dd1a/516_0_1214_971/master/1214.jpg?width=98&dpr=1&s=none&crop=1%3A1"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://i.guim.co.uk/img/media/28edf41bc7f11a76c0a67c01e801cdaadfe09630/2123_0_4000_4000/master/4000.jpg?width=98&dpr=1&s=none&crop=1%3A1"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://i.guim.co.uk/img/media/2aed01df0b024f33b2da1ec413c411567d12df7c/0_64_2593_2073/master/2593.jpg?width=220&dpr=1&s=none&crop=5%3A4"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://i.guim.co.uk/img/media/348e1e6ff0677337eddd5f840a6a98efdbd38123/475_0_4750_3801/master/4750.jpg?width=98&dpr=1&s=none&crop=1%3A1"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://i.guim.co.uk/img/media/4849e3c0239addd4957f56213a568a591fa9c38b/2_0_1178_942/master/1178.jpg?width=98&dpr=1&s=none&crop=1%3A1"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://i.guim.co.uk/img/media/4b02fda331d9eaae722888f386e9b16603108bdd/131_126_5367_4295/master/5367.jpg?width=220&dpr=1&s=none&crop=5%3A4"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://i.guim.co.uk/img/media/5c661f553c5457ef30c7b7b2ce5bc706301ce760/1991_1402_3850_3083/master/3850.jpg?width=460&dpr=1&s=none&crop=5%3A4"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://i.guim.co.uk/img/media/5e2553ba05fa4a539ebe6dcbf014887ec750b120/346_0_4911_3929/master/4911.jpg?width=98&dpr=1&s=none&crop=1%3A1"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://i.guim.co.uk/img/media/61be4ba64b0ffa390e91a150366ad82f748bdc68/248_0_4855_3884/master/4855.jpg?width=220&dpr=1&s=none&crop=5%3A4"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://i.guim.co.uk/img/media/635e831247405e867a99d8c5fd24b481cd2021f5/408_0_1648_1648/master/1648.jpg?width=98&dpr=1&s=none&crop=1%3A1"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://i.guim.co.uk/img/media/7d6a5faafb985ca0caaa0c78c9f8ec066921f80c/260_0_1350_1080/1350.jpg?width=620&dpr=1&s=none&crop=4%3A5"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://i.guim.co.uk/img/media/8fe76c3bf1ff8f55e25ec3286bea2edd291ec49d/815_0_5791_4633/master/5791.jpg?width=620&dpr=1&s=none&crop=5%3A4"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://i.guim.co.uk/img/media/b08c2f80d5ee7504b93805cda932ee6594e25005/1206_1334_3932_3146/master/3932.jpg?width=220&dpr=1&s=none&crop=5%3A4"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://i.guim.co.uk/img/media/c3e0fa30e7718dbd8473ec1a840c2120c38e426a/609_439_3411_2729/master/3411.jpg?width=220&dpr=1&s=none&crop=5%3A4"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://i.guim.co.uk/img/media/dfaeec39b6c3460bd13df5201b7631ba7daa9228/921_0_6438_5153/master/6438.jpg?width=220&dpr=1&s=none&crop=5%3A4"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://i.guim.co.uk/img/uploads/2017/10/09/Zoe-Williams,-L.png?width=90&dpr=1&s=none&crop=1%3A1"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://i.guim.co.uk/img/uploads/2023/03/17/Ranjana_Srivastava.png?width=150&dpr=1&s=none&crop=1%3A1"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://i.guim.co.uk/img/uploads/2023/06/27/Alexander_Hurst_V2.png?width=90&dpr=1&s=none&crop=1%3A1"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://i.guim.co.uk/img/uploads/2026/08/10/Estelle_Warhurst.png?width=90&dpr=1&s=none&crop=1%3A1"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://ib.adnxs.com/getuidj?gdpr=0"
+      },
+      {
+        "reason": "unsafe method: POST",
+        "url": "https://ib.adnxs.com/ut/v3/prebid"
+      },
+      {
+        "reason": "unsafe method: POST",
+        "url": "https://id5-sync.com/api/config/prebid"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://id5-sync.com/api/esp/increment?counter=no-config"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://id5-sync.com/bounce"
+      },
+      {
+        "reason": "unsafe method: POST",
+        "url": "https://id5-sync.com/gm/v3"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://id5-sync.com/i/182/8.gif?o=api&id5id=ID5*AK_qkl0ANfbE4kM46xpXaa4OBiy6X0M46xpXaa4OBiz__2p7bT9aAQEBCmp7bT4A0ZX1RLm366lFNJFt2wOzuQ&gdpr_consent=undefined&gdpr=false"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://id5-sync.com/i/182/8.gif?o=api&id5id=ID5*mp-E8scwW5Ze0i1YcSo5CTQ-aEwgby1YcSo5CTQ-aEz__2p7bT5aAQEBCmp7bT4A0ZVGkdRnuWlKiWaZRtQi9w&gdpr_consent=undefined&gdpr=false"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://ident.mygaru.com/v2/id"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://image6.pubmatic.com/AdServer/UCookieSetPug?gdpr=0&rd=https%3A%2F%2Faud.pubmatic.com%2FAdServer%2FArtemis%3Fuidtype%3D0%26dpid%3D1643%26segid%3D137631%2C37316"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://image6.pubmatic.com/AdServer/UCookieSetPug?gdpr=0&rd=https%3A%2F%2Faud.pubmatic.com%2FAdServer%2FArtemis%3Fuidtype%3D0%26dpid%3D1643%26segid%3D137631%2C37316&rdf=1"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://interactive.guim.co.uk/fonts/garnett/GTGuardianTitlepiece-Bold.woff2"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://interactive.guim.co.uk/fonts/guss-webfonts/GuardianTextSansWeb/GuardianTextSansWeb-Bold.woff2"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://interactive.guim.co.uk/fonts/guss-webfonts/GuardianTextSansWeb/GuardianTextSansWeb-Regular.woff2"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://invstatic101.creativecdn.com/encrypted-signals/encrypted-tag-g.js"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://js-sec.indexww.com/um/ixmatch.html"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://jsconfig.adsafeprotected.com/jsconfig/jload/10249?cbName=__IntegralAS_ade8a71b7694635023cd2a82cbee735b_3662&anId=10249&campId=970x250&pubId=5954443396&chanId=61698807&placementId=7355959672&pubCreative=138568947332&pubOrder=4117672986&custom=network-front&custom2=top-above-nav&custom3=au&custom4=desktop&custom5=au&adsafe_par=&impId=7eb970d7-95b4-11f1-8755-8e2512f3d25f"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://jsconfig.adsafeprotected.com/mon?cbName=__IntegralAS_ade8a71b7694635023cd2a82cbee735b_3662&anId=10249&campId=970x250&pubId=5954443396&chanId=61698807&placementId=7355959672&pubCreative=138568947332&pubOrder=4117672986&custom=network-front&custom2=top-above-nav&custom3=au&custom4=desktop&custom5=au&adsafe_par=&impId=7eb970d7-95b4-11f1-8755-8e2512f3d25f&adsafe_url=https%3A%2F%2Fwww.theguardian.com%2Fau&adsafe_type=abcedfq&adsafe_jsinfo=,id:ade8a71b-7694-6350-23cd-2a82cbee735b,c:l0DrrR,sl:inView,em:true,fr:true,thd:1,mn:postbid-edge-primary-86cd8448b4-bm47w,rg:va,pt:1-5-15,wc:10.10.1280.720,ac:165.34.970.250,am:i,cc:165.34.970.250,piv:100,obst:0,th:0,reas:,mu:10000,br:c,bru:c,an:n,oam:0,scm:publ1.grpm1,mtim:7,mot:0,app:0,maw:0,tdt:s,fm:vs0ZXEm+11%7C12%7C13%7C14%7C15%7C16%7C17%7C18%7C19%7C1a%7C1b%7C1c%7C1d%7C1e*.10249%7C1e1,idMap:1e*,pl:CV8L.CV8L.CV8L.CV8L.CV8L,rmeas:1,rend:1,renddet:IMG.qs,es:0,sc:1,ha:1,fgad:1,fif:1,gmnp:0,for:1,b11:0,cnod:1,gm:1,tt:jload,et:74,oid:7feb3986-95b4-11f1-9b1f-d29c652d8b99,v:19.8.704,sp:0,st:1,fwm:0,wr:1280.720,sr:1280.720,ov:0"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://lb.eu-1-id5-sync.com/lb/v1"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://lbs.eu-1-id5-sync.com/lbs/v1"
+      },
+      {
+        "reason": "unsafe method: HEAD",
+        "url": "https://marketingplatform.google.com/about/enterprise/"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://match.adsrvr.org/track/usersync?us_privacy=&gdpr=0&gdpr_consent=undefined&ust=image"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://oa.openxcdn.net/esp.js"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://ophan.theguardian.com/img/1?v=17&platform=next-gen&url=https%3A%2F%2Fwww.theguardian.com%2Fau&ref=&visibilityState=visible&tz=0&navigationType=navigate&contentType=network%20front&viewId=msp0d7v50l08vs7j2kdl"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://ophan.theguardian.com/img/2?viewId=msp0d7v50l08vs7j2kdl&abTestRegister=%7B%22growth-auxia-banner%22%3A%7B%22variantName%22%3A%22variant%22%2C%22complete%22%3Afalse%7D%7D"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://ophan.theguardian.com/img/2?viewId=msp0d7v50l08vs7j2kdl&adUnitWasHidden=false"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://ophan.theguardian.com/img/2?viewId=msp0d7v50l08vs7j2kdl&attentionMs=0"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://ophan.theguardian.com/img/2?viewId=msp0d7v50l08vs7j2kdl&componentEvent=%7B%22action%22%3A%22DETECT%22%2C%22component%22%3A%7B%22componentType%22%3A%22SIGN_IN_GOOGLE_ONE_TAP%22%7D%2C%22value%22%3A%22SUPPORTED%22%7D"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://ophan.theguardian.com/img/2?viewId=msp0d7v50l08vs7j2kdl&componentEvent=%7B%22component%22%3A%7B%22componentType%22%3A%22ACQUISITIONS_HEADER%22%2C%22id%22%3A%22header_support_2026-08-10_EVERGREEN_HEADER__AU_NZ_CONTROL%22%2C%22campaignCode%22%3A%22header_support_2026-08-10_EVERGREEN_HEADER__AU_NZ_CONTROL%22%7D%2C%22action%22%3A%22INSERT%22%2C%22abTest%22%3A%7B%22name%22%3A%222026-08-10_EVERGREEN_HEADER__AU_NZ%22%2C%22variant%22%3A%22CONTROL%22%7D%7D"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://ophan.theguardian.com/img/2?viewId=msp0d7v50l08vs7j2kdl&componentEvent=%7B%22component%22%3A%7B%22componentType%22%3A%22ACQUISITIONS_HEADER%22%2C%22id%22%3A%22header_support_2026-08-10_EVERGREEN_HEADER__AU_NZ_CONTROL%22%2C%22campaignCode%22%3A%22header_support_2026-08-10_EVERGREEN_HEADER__AU_NZ_CONTROL%22%7D%2C%22action%22%3A%22VIEW%22%2C%22abTest%22%3A%7B%22name%22%3A%222026-08-10_EVERGREEN_HEADER__AU_NZ%22%2C%22variant%22%3A%22CONTROL%22%7D%7D"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://ophan.theguardian.com/img/2?viewId=msp0d7v50l08vs7j2kdl&componentEvent=%7B%22component%22%3A%7B%22componentType%22%3A%22CONSENT%22%2C%22id%22%3A%22ACCEPT_REJECT-1418584%22%7D%2C%22action%22%3A%22VIEW%22%7D"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://ophan.theguardian.com/img/2?viewId=msp0d7v50l08vs7j2kdl&consentJurisdiction=AUS&consentUUID=&consent=true"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://ophan.theguardian.com/img/2?viewId=msp0d7v50l08vs7j2kdl&edition=AU"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://ophan.theguardian.com/img/2?viewId=msp0d7v50l08vs7j2kdl&experiences=dotcom-rendering"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://ophan.theguardian.com/img/2?viewId=msp0d7v50l08vs7j2kdl&inPrivateBrowsingMode=false"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://ophan.theguardian.com/img/2?viewId=msp0d7v50l08vs7j2kdl&performance=%7B%22dns%22%3A0%2C%22connection%22%3A0%2C%22firstByte%22%3A27%2C%22lastByte%22%3A15%2C%22domContentLoadedEvent%22%3A243%2C%22loadEvent%22%3A2812%2C%22navType%22%3A0%2C%22redirectCount%22%3A1%7D"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://ophan.theguardian.com/img/2?viewId=msp0d7v50l08vs7j2kdl&performance=%7B%22dns%22%3A0%2C%22connection%22%3A0%2C%22firstByte%22%3A27%2C%22lastByte%22%3A15%2C%22domContentLoadedEvent%22%3A243%2C%22loadEvent%22%3A2812%2C%22navType%22%3A0%2C%22redirectCount%22%3A1%7D&renderedComponents=%5B%22header%22%2C%22topbar%22%2C%22highlights%22%2C%22sub-nav%22%2C%22news%22%2C%22in-focus%22%2C%22special-report%22%2C%22features%22%2C%22more-features%22%2C%22opinion%22%2C%22more-opinion%22%2C%22cartoon%22%2C%22sport%22%2C%22more-sport%22%2C%22us-update%22%2C%22more-news%22%2C%22new-south-wales%22%2C%22guardian-labs%22%2C%22labs-logo%20%7C%20front-card-bank-australia%22%2C%22labs-logo%20%7C%20front-card-lord-of%20the%20rings%20in%20concer%E2%80%A6%22%2C%22labs-logo%20%7C%20front-card-flinders-university%22%2C%22labs-logo%20%7C%20front-card-volkswagen%22%2C%22explainers-%26-analysis%22%2C%22more-australia-news%22%2C%22more-world-news%22%2C%22secure-messaging%22%2C%22culture%22%2C%22what-to-watch%22%2C%22what-to-listen-to%22%2C%22what-to-read%22%2C%22what-to-play%22%2C%22more-culture%22%2C%22lifestyle%22%2C%22food%22%2C%22wellbeing%22%2C%22advice%22%2C%22fashion-%26-beauty%22%2C%22travel%22%2C%22relationships%22%2C%22you-may-have-missed%22%2C%22youtube-atom%22%2C%22newsletters%22%2C%22the-big-picture%22%2C%22most-popular%22%2C%22trending-topics%22%2C%22footer%22%5D"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://pagead2.googlesyndication.com/pagead/gen_204?id=av-js&type=colleague-executed&name=4"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://pagead2.googlesyndication.com/pagead/gen_204?id=av-js&type=fle-fetch-start2"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://pagead2.googlesyndication.com/pagead/gen_204?id=av-js&type=reach&proto=CAlgAWACaAM%3D"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://pagead2.googlesyndication.com/pagead/managed/js/activeview/current/ufs_web_display.js"
+      },
+      {
+        "reason": "unsafe method: POST",
+        "url": "https://pagead2.googlesyndication.com/pagead/ping?e=1"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://pagead2.googlesyndication.com/pcs/activeview?xai=AKAOjsvipNPnANz-NBq_XU1e3Fo-gfnQxh4ua8iiloMhX3okXlzmemGYR5mqdBmXIbfn59KzlXygYOUu_P5CyCNzGsBgLMSkOlUnR5OFyN5HDtrslwu6CEzvxDDDGlL9EjHJ3rAdZ_f7bD_-iL-_PTwLlrwLn2Xk98fGDCfIJ9pTAosR_kR3l0r3ORBPbx0caSY&sig=Cg0ArKJSzGg7x2hfFNx3EAE&id=lidar2&mcvt=1006&p=24,155,274,1125&tm=1042.5&tu=36.39999997615814&mtos=1006,1006,1006,1006,1006&tos=1006,0,0,0,0&v=20260722&bin=7&avms=nio&bs=1280,720&mc=1&vu=1&app=0&itpl=0&adk=2138430754&rs=4&la=1&cr=0&uach=WyJMaW51eCIsIiIsImFybSIsIiIsIjE1MS4wLjc5MjIuMTA4IixudWxsLDAsbnVsbCwiNjQiLFtbIkNocm9taXVtIiwiMTUxLjAuNzkyMi4xMDgiXSxbIk5vdD1BP0JyYW5kIiwiOTkuMC4wLjAiXV0sMF0%3D&vs=4&r=v&co=8240658900&rst=1786473789425&rpt=244&isd=0&lsd=0&met=mue&wmsd=0&pbe=0&fle=0&vae=0&spb=0&sfl=0&ffslot=0&reach=8&io2=0"
+      },
+      {
+        "reason": "unsafe method: OPTIONS",
+        "url": "https://performance-events.guardianapis.com/header-bidding"
+      },
+      {
+        "reason": "unsafe method: POST",
+        "url": "https://performance-events.guardianapis.com/header-bidding"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://pixel.adsafeprotected.com/jload?anId=10249&campId=970x250&pubId=5954443396&chanId=61698807&placementId=7355959672&pubCreative=138568947332&pubOrder=4117672986&custom=network-front&custom2=top-above-nav&custom3=au&custom4=desktop&custom5=au&adsafe_par&impId=7eb970d7-95b4-11f1-8755-8e2512f3d25f"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://pixel.adsafeprotected.com/jsdiagnostic?code:pet_profile&anid:10249&sessionId:20b2b815-2a3c-32ea-5a1c-22bd9ccd4125&err:responsetime%3A88%26probability%3A10"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://pixel.adsafeprotected.com/services/pub?anId=10249&slot=%7Bid:dfp-ad--fronts-banner-1,ss:%5B1.1,2.2,970.250,88.87,728.90%5D,p:/59666047/theguardian.com/au/front/ng,t:display%7D&wr=1280.720&sr=1280.720&sessionId=20b2b815-2a3c-32ea-5a1c-22bd9ccd4125&url=https%253A%252F%252Fwww.theguardian.com%252Fau"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://pixel.adsafeprotected.com/services/pub?anId=10249&slot=%7Bid:dfp-ad--fronts-banner-2,ss:%5B1.1,2.2,970.250,88.87,728.90%5D,p:/59666047/theguardian.com/au/front/ng,t:display%7D&wr=1280.720&sr=1280.720&sessionId=20b2b815-2a3c-32ea-5a1c-22bd9ccd4125&url=https%253A%252F%252Fwww.theguardian.com%252Fau"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://pixel.adsafeprotected.com/services/pub?anId=10249&slot=%7Bid:dfp-ad--fronts-banner-3,ss:%5B1.1,2.2,970.250,88.87,728.90%5D,p:/59666047/theguardian.com/au/front/ng,t:display%7D&wr=1280.720&sr=1280.720&sessionId=20b2b815-2a3c-32ea-5a1c-22bd9ccd4125&url=https%253A%252F%252Fwww.theguardian.com%252Fau"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://pixel.adsafeprotected.com/services/pub?anId=10249&slot=%7Bid:dfp-ad--fronts-banner-4,ss:%5B1.1,2.2,970.250,88.87,728.90%5D,p:/59666047/theguardian.com/au/front/ng,t:display%7D&wr=1280.720&sr=1280.720&sessionId=20b2b815-2a3c-32ea-5a1c-22bd9ccd4125&url=https%253A%252F%252Fwww.theguardian.com%252Fau"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://pixel.adsafeprotected.com/services/pub?anId=10249&slot=%7Bid:dfp-ad--fronts-banner-5,ss:%5B1.1,2.2,970.250,88.87,728.90%5D,p:/59666047/theguardian.com/au/front/ng,t:display%7D&wr=1280.720&sr=1280.720&sessionId=20b2b815-2a3c-32ea-5a1c-22bd9ccd4125&url=https%253A%252F%252Fwww.theguardian.com%252Fau"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://pixel.adsafeprotected.com/services/pub?anId=10249&slot=%7Bid:dfp-ad--fronts-banner-6,ss:%5B1.1,2.2,970.250,88.87,728.90%5D,p:/59666047/theguardian.com/au/front/ng,t:display%7D&wr=1280.720&sr=1280.720&sessionId=20b2b815-2a3c-32ea-5a1c-22bd9ccd4125&url=https%253A%252F%252Fwww.theguardian.com%252Fau"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://pixel.adsafeprotected.com/services/pub?anId=10249&slot=%7Bid:dfp-ad--fronts-banner-7,ss:%5B1.1,2.2,970.250,88.87,728.90%5D,p:/59666047/theguardian.com/au/front/ng,t:display%7D&wr=1280.720&sr=1280.720&sessionId=20b2b815-2a3c-32ea-5a1c-22bd9ccd4125&url=https%253A%252F%252Fwww.theguardian.com%252Fau"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://pixel.adsafeprotected.com/services/pub?anId=10249&slot=%7Bid:dfp-ad--fronts-banner-8,ss:%5B1.1,2.2,970.250,88.87,728.90%5D,p:/59666047/theguardian.com/au/front/ng,t:display%7D&wr=1280.720&sr=1280.720&sessionId=20b2b815-2a3c-32ea-5a1c-22bd9ccd4125&url=https%253A%252F%252Fwww.theguardian.com%252Fau"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://pixel.adsafeprotected.com/services/pub?anId=10249&slot=%7Bid:dfp-ad--merchandising,ss:%5B1.1,2.2,88.88,970.250,300.250%5D,p:/59666047/theguardian.com/au/front/ng,t:display%7D&wr=1280.720&sr=1280.720&sessionId=20b2b815-2a3c-32ea-5a1c-22bd9ccd4125&url=https%253A%252F%252Fwww.theguardian.com%252Fau"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://pixel.adsafeprotected.com/services/pub?anId=10249&slot=%7Bid:dfp-ad--merchandising-high,ss:%5B1.1,2.2,88.87,970.250,300.250%5D,p:/59666047/theguardian.com/au/front/ng,t:display%7D&wr=1280.720&sr=1280.720&sessionId=20b2b815-2a3c-32ea-5a1c-22bd9ccd4125&url=https%253A%252F%252Fwww.theguardian.com%252Fau"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://pixel.adsafeprotected.com/services/pub?anId=10249&slot=%7Bid:dfp-ad--mostpop,ss:%5B1.1,2.2,300.250,300.274,300.600,300.197%5D,p:/59666047/theguardian.com/au/front/ng,t:display%7D&wr=1280.720&sr=1280.720&sessionId=20b2b815-2a3c-32ea-5a1c-22bd9ccd4125&url=https%253A%252F%252Fwww.theguardian.com%252Fau"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://pixel.adsafeprotected.com/services/pub?anId=10249&slot=%7Bid:dfp-ad--top-above-nav,ss:%5B1.1,2.2,728.90,940.230,900.250,970.250,88.71,300.197,300.250%5D,p:/59666047/theguardian.com/au/front/ng,t:display%7D&wr=1280.720&sr=1280.720&sessionId=20b2b815-2a3c-32ea-5a1c-22bd9ccd4125&url=https%253A%252F%252Fwww.theguardian.com%252Fau"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://pubads.g.doubleclick.net/activity;dc_iu=/59666047/DFPAudiencePixel;ord=1;dc_seg=895181798;permutive=23527?"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://rm-script.dotmetrics.net/hit.gif?id=5812&url=https%3A%2F%2Fwww.theguardian.com%2Fau&dom=www.theguardian.com&r=1786473787234&pvs=1&pvid=ec8caa92-dfbc-4f43-b19e-6b064092992e&c=true&tzOffset=0"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://rtb.openx.net/esp?url=https%3A%2F%2Fwww.theguardian.com%2Fau&rid=esp"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://rtb.openx.net/esp?url=https%3A%2F%2Fwww.theguardian.com%2Fau&rid=esp&cc=1"
+      },
+      {
+        "reason": "unsafe method: POST",
+        "url": "https://rtb.openx.net/openrtbb/prebidjs"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://s.amazon-adsystem.com/iu3?cm3ppd=1&d=dtb-pub&csif=t&dl=n-MediaNet_n-vmg_rbd_smrt_an-db5_n-Seedtag_n-blis_rx_gg_pm-db5_n-index_ox-db5_n-Ogury_3lift"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://s.amazon-adsystem.com/iu3?cm3ppd=1&d=dtb-pub&csif=t&dl=n-MediaNet_n-vmg_rbd_smrt_an-db5_n-Seedtag_n-blis_rx_gg_pm-db5_n-index_ox-db5_n-Ogury_3lift&dcc=t"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://sb.scorecardresearch.com/b2?c1=2&c2=6035250&cs_fpcu=8226af29a4ed439aae2996daa7e55a1b&cs_it=b1&cv=4.13.1%2B2508250908&ns__t=1786473787536&ns_c=UTF-8&cs_cfg=1101110&cs_ucfr=1&c7=https%3A%2F%2Fwww.theguardian.com%2Fau&c8=Latest%20news%2C%20sport%20and%20opinion%20from%20the%20Guardian&c9="
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://sb.scorecardresearch.com/b?c1=2&c2=6035250&cs_fpcu=8226af29a4ed439aae2996daa7e55a1b&cs_it=b1&cv=4.13.1%2B2508250908&ns__t=1786473787536&ns_c=UTF-8&cs_cfg=1101110&cs_ucfr=1&c7=https%3A%2F%2Fwww.theguardian.com%2Fau&c8=Latest%20news%2C%20sport%20and%20opinion%20from%20the%20Guardian&c9="
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://sb.scorecardresearch.com/cs/6035250/beacon.js"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://sb.scorecardresearch.com/internal-cs/default/beacon.js"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://secure-au.imrworldwide.com/v60.js"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://secure-dcr.imrworldwide.com/cgi-bin/gn?prd=dcr&ci=au-107857&ch=au-107857_c25_au_S&asn=au&fp_id=ecuvikdbf0rauxpupv8zobqwek8wj1786473787&fp_cr_tm=1786473787861&fp_acc_tm=1786473787861&fp_emm_tm=1786473787861&ve_id=&sessionId=22vqrf85tvgzblmed2ayobej9tgis1786473787&prv=1&c6=vc,c25&ca=NA&c13=asid,P505182AA-1D71-49D8-8287-AA222CD05424&c32=segA,NA&c33=segB,NA&c34=segC,NA&c15=apn,theguardian&sup=1&segment2=&segment1=&forward=0&plugv=&playerv=&ad=0&cr=V&c9=devid,&enc=true&c1=nuid,999&at=view&rt=text&c16=sdkv,bj.6.0.0&c27=cln,0&crs=&lat=&lon=&c29=plid,17864737878582112&c30=bldv,6.0.0.748&st=dcr&c7=osgrp,&c8=devgrp,&c10=plt,&c40=adbid,&c14=osver,NA&c26=dmap,1&dd=&hrd=&wkd=&c35=adrsid,&c36=cref1,&c37=cref2,&c11=agg,1&c12=apv,&c51=adl,0&c52=noad,0&pc=NA&c53=fef,n&c54=oad,&c55=cref3,&c57=adldf,2&ai=au&c3=st,c&c64=starttm,1786473789&adid=au&c58=isLive,false&c59=sesid,&c61=createtm,1786473789&c63=pipMode,&uoo=&c68=bndlid,&nodeTM=&logTM=&c73=phtype,&c74=dvcnm,&c76=adbsnid,&c44=progen,&davty=0&si=https%3A%2F%2Fwww.theguardian.com%2Fau&c66=mediaurl,&sdd=&c62=sendTime,1786473789&rnd=394996"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://secure-dcr.imrworldwide.com/novms/js/2/ggcmb510.js"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://secure-gl.imrworldwide.com/storageframe.html"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://secure.cdn.fastclick.net/js/pubcid/latest/pubcid.min.js"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://securepubads.g.doubleclick.net/gampad/ads?pvsid=2582021919968231&correlator=1760657153072984&eid=122880329%2C122880268&output=ldjh&gdfp_req=1&vrg=202608050101&ptt=17&impl=fif&iu_parts=59666047%2Ctheguardian.com%2Cau%2Cfront%2Cng&enc_prev_ius=%2F0%2F1%2F2%2F3%2F4&prev_iu_szs=320x50%7C1x1%7C2x2%7C728x90%7C940x230%7C900x250%7C970x250%7C88x71&fluid=height&ifi=1&didk=1168867225&dids=dfp-ad--top-above-nav&adfs=2664771441&sfv=1-0-45&fsbs=1&sc=1&cookie_enabled=1&abxe=1&dt=1786473789170&lmt=1786473789&adxs=639&adys=0&biw=1280&bih=720&scr_x=0&scr_y=0&btvi=0&ucis=1&oid=2&u_his=2&u_h=720&u_w=1280&u_ah=720&u_aw=1280&u_cd=24&u_sd=1&dmc=16&bc=31&nvt=1&uach=WyJMaW51eCIsIiIsImFybSIsIiIsIjE1MS4wLjc5MjIuMTA4IixudWxsLDAsbnVsbCwiNjQiLFtbIkNocm9taXVtIiwiMTUxLjAuNzkyMi4xMDgiXSxbIk5vdD1BP0JyYW5kIiwiOTkuMC4wLjAiXV0sMF0.&uas=3&url=https%3A%2F%2Fwww.theguardian.com%2Fau&vis=1&psz=1280x294&msz=2x0&fws=516&ohw=1280&a3p=EjQKCnB1YmNpZC5vcmcSJDQyODI2MDJjLTA1NDAtNDY1NS1iZWVjLTk0ZTY4ZDA5ZDkwNlgBEloKDWNyd2RjbnRybC5uZXQSQDZhYzU2MDg1NGNkNTMwZmQ1YjY1Njk5MTlhZWIxODVjYTAyY2Q1OTZiZDU0MTgxNjRhYzViNDQzMWEzMDM2NDMYiumKkf8zSAASHQoOZXNwLmNyaXRlby5jb20YsOKKkf8zSABSAghkEjEKEmludGltYXRlbWVyZ2VyLmNvbRISYi5jM2ViYTRhNTEzNmNhOTQ2GOrlipH_M0gAEhgKCXlhaG9vLmNvbRi-44qR_zNIAFICCG8SeQoIbXlnYXJ1SUQSZG9UZmg5bmN4djVxeWl1UUlLSzRYYVhhdVl3TENORjF1aDdTYTFpak1OK3VIcjVqQTMwUFdLNG10Tkx2T0VjejNGazBvUG1TUmNNdkdkS1lOeEdNeFZmem5iTEFJTU1aTDBBPT0Y5-uKkf8zSAASHwoQZXNwLnB1Ym1hdGljLmNvbRiv4oqR_zNIAFICCGQSGwoMaWQ1LXN5bmMuY29tGPXqipH_M0gAUgIIahLRAQoXcGVybXV0aXZlLXNlY3VyZS1zaWduYWwSrAFZMnJqNGF1SjFoNXdQeFYyaWVDak1WOGZ0WDVMYWRncHJkb3ZDd0xpTmhtYS9uZVlMNGx3SXZXa2t3WVVEd1FVNVphSW11dktBSlJXalZLYmNFSlhGWVZJV2lVLy8zNmVWNVM3WnhITXVjRkJtTWRrR0d5ZkZzdFlSdkRkdis5aldwUnpaOHN2Smw2Wm00UFA4eTdHTTVYeXV2QjhVTWZRc1BTWC9KanVrWTQ9GLTiipH_M0gA&cbidsp=CrQCCAESFwoGY3JpdGVvEP0GIAI4AVIGY3JpdGVvEg8KAml4EKsBIAI4AVICaXgSDwoCaXgQqwEgAjgBUgJpeBIfCgp0cmlwbGVsaWZ0EOsFIAI4AVIKdHJpcGxlbGlmdBIZCgdydWJpY29uEPYGIAI4AVIHcnViaWNvbhIRCgN0dGQQhwMgAjgBUgN0dGQSGAoDb3hkEIsBIAI4AVIFb3BlbnhSA294ZBIVCgV0ZWFkcxC1ASACOAFSBXRlYWRzEhsKA2FuZBCgASACOAFSCGFwcG5leHVzUgNhbmQSGwoIcHVibWF0aWMQhQQgAjgBUghwdWJtYXRpYxgCIiRhZDliZjc3Yi1mNzJkLTQxNzUtYWY1ZC1lMDY5YTJlMTE5MjUqBAgDIAAyCHYxMC4yMy4wQNwLSgA.&dlt=1786473786614&idt=967&prev_scp=slot-fabric%3Dfabric1%26slot%3Dtop-above-nav%26testgroup%3D71%26gpid%3D%252F59666047%252Fgu%252Fau%252FNetwork%2520Front%252Ftop-above-nav%26amznbid%3D2%26amznp%3D2%26id%3D7eb970d7-95b4-11f1-8755-8e2512f3d25f%26vw%3D40%2C50%2C60%26teadsEligible%3Dfalse&cust_params=amtgrp%3D12%26fr%3D1%26consent_tcfv2%3Dna%26rdp%3Dna%26pa%3Dt%26ct%3Dnetwork-front%26url%3D%252Fau%26edition%3Dau%26p%3Dng%26k%3Dau%26dcre%3Dt%26rc%3D7%26rp%3Ddotcom-rendering%26s%3Dau%26sens%3Df%26urlkw%3Dau%26allkw%3Dau%26ab%3Dgrowth-auxia-banner-variant%26cc%3DAU%26lh%3D18%26pv%3Dmsp0d7v50l08vs7j2kdl%26si%3Df%26idp%3DsharedId%252Cid5Id%252CintentIqId%26bp%3Ddesktop%26skinsize%3Ds%26inskin%3Df%26intent_iq_group%3DA%26permutive%3D137631%252C151037%252C155919%252C23527%252C270188%252C37316%252Cadv%252Crts%26prmtvsdk%3Dweb%26prmtvctx%3Drts%26puid%3Dd38ec525-47f9-4389-971a-a4521e632372%26prmtvvid%3D9f78cbde-9c21-4bd5-a679-a597517e8e45%26prmtvsid%3D38cd1b0f-3859-4e9d-8d49-d872d05f8068%26prmtvwid%3Dd6691a17-6fdb-4d26-85d6-b3dd27f55f08%263pc%3Df%26adt%3DveryLow%26alc%3DveryLow%26dlm%3DveryLow%26drg%3DveryLow%26hat%3DveryLow%26off%3DveryLow%26vio%3Dlow%26fra%3Dfalse%26ias-kw%3DIAS_1509996_PG%252CIAS_1539692_PG%252CIAS_1539688_PG%252CIAS_1526082_PG%252CIAS_1508963_PG%252CIAS_1508986_PG%252CIAS_3030473_PG%252CIAS_1500903_PG%252CIAS_1507654_PG%252CIAS_1508970_PG%252CIAS_1500085_PG%252CIAS_1512460_PG%252CIAS_1509972_PG%252CIAS_1506123_PG%252CIAS_1526083_PG%252CIAS_1507655_PG%252CIAS_1539290_PG%252CIAS_1539691_PG%252CIAS_3030361_PG%252CIAS_1507080_PG%252CIAS_1529393_PG%252CIAS_1508967_PG%252CIAS_3030517_PG%252CIAS_1512447_PG%252CIAS_1540235_PG%252CIAS_SET%252CIAS_1525969_PG%252CIAS_1509981_PG%252CIAS_1538770_PG%252CIAS_1500692_PG%252CIAS_1509978_PG%252CIAS_3030337_PG%252CIAS_1500902_PG%252CIAS_1507653_PG%252CIAS_1524991_PG&adks=2138430754&frm=20&eoidce=1&gblpids=%2F59666047%2Fgu%2Fau%2FNetwork%20Front%2Ftop-above-nav&pb_szs=970x250%7C728x90"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://securepubads.g.doubleclick.net/pagead/managed/dict/m202608110101/gpt"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://securepubads.g.doubleclick.net/pagead/managed/js/gpt/m202608050101/pubads_impl.js?cb=122880268"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://securepubads.g.doubleclick.net/pcs/view?xai=AKAOjsuYsPo05746mkZMcDJOYR0G7yU0XQLZ8qHYGQcOpu781aH2Gg1JUivvK62nL0bFVjJyCid0xLYCDarduheAl6wsalIJYDmKQoSkyFNTQFfcdlOrxxFKYeDaobTJ_UAGRndZ-Nhy9VIWrLXAVlF7VL_skhxFYtZKbiYSppnF71IgSB7Od-OfMBbYPmbL6g5FlkFqKCgsvMFU5ycBa14Dw5qyFVIgNOTqx3vBq2USWt4o5tSo9I7dnPMmft8uoQSRx8Ov8_BjQDlAEdDjWkfFVB9FS4h01kN5uktn1mxO9kA-zD_3WlpjGT9OnXnCPFPUG01JGzOAwxK06exSVTsFO8oVF6Lhot5FmeqtCtdosdhD6atLOf5RBv1YJZ26NRTy4i8gpl-WccnMPMs0ZcO-0YHYeDl6NF0EJCGYY4gkSll_hFg7p5U&sai=AMfl-YT0f81-Dx5KZnH16P32iUrORA4QUrn8Qw8ZWgiJDNfJdqclESaQjOjBI4ljMdXYL4yrFnVBeEWqCjhvTk-MEa8xuBuYuXm9Ula9xU_L1IooaMKhq4OvHW3FnsYNU75A3PLO7tMt8SvYdJbWVph-CvJgVeTMxi-1XiV_nh_ruBwXQAQmMGmHfZ-cnmLA6V6_vB94lXG6gvTDCBp50bRup51LoOEKCLQau4CBOUz8On6n7hMeNn6JUtJM6fOkblvSVIgi41ZG5zCbmXdsE01ozVc_TSuv1ZtgJMu4Z0J1WoWQfqKcbLoy6f_5hSa8V1hEpioP_pbp9ahnUYi8BCi6fLMwGGwEHMhj1dW4Gc-6yqKoyyus2gVpwq1Xmde1mu7hRqGb0YEYxyHGi7lk&sig=Cg0ArKJSzCwZ678NWkclEAE&uach_m=%5BUACH%5D&dett=3&adurl="
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://securepubads.g.doubleclick.net/pcs/view?xai=AKAOjsvtMmzX7h821vqJ9KHH6AHlomWNfKOKukarY4ij1HlCYu0MJHtkPxpIq7HVoWnaThaqb2tEc67hRNVsOQlkjYN71FYMpXtQ_7HSCNWZBvb-blLdWM6-uhygF84nv5FM-cGl9z30u90WF_rOuGPEnmatNdJK1NvVGMMhtXZoCB1rWUZI5IScgHpDbEy-QsZBThSin2b8xuuNcfDeHO9QlAz0yfIlFsMsVv6mgl7e-VwjfZCcBXoz_e27f--v2rW_GxdwzYTd11XSZrYZlcXLdF8To6ywXHUi03A4FXsYH1rlRrcLLdUGqlNnFPQRIXG3BJwP8AMh1rM2M0YgApzGktJ_-safGhW9vmHBU3h0Yic_l16eb8J1UJqcevhJXf3_CgCpYenROv3mVTuBOPGEwVLv-6t0H7MEsN_D9-QyBZNrMHGi&sai=AMfl-YSN0BrHC10GyBJTalfVh3iD-yO4dNwm45V7u0QEX14QaD34R0q1GvoO9l06hNc7Niwjxx6cV0yXnMoAR0nO4DDgB8kH9mjixFehubZUOoC5jQTsMWaYtfnOurCgsx32Mug5aTdjGIawjj6e6BihTcGXqI91oHDof-p9jqn190BsWjPBr1yB5EOlX_qwjgVLT8NOzphKBLA_t-5MW5lHN5oYT730xvBabduzXSELfvnPXNbFHtHc2Gg25tYOX8_eF4SAF9EJZ5eIQBBlr-r0uqwMFbvCWQ1DxiEZDD2qGGcSqrKSc2yAokjnVHhgJB4nVSDm2uINtwnjJ-zGuWJDinvhMMutSdiFRe5kkNu7TyJzHd_znY3OeJrO2BXrclM2ePrNcPxSu6ed2IdK&sig=Cg0ArKJSzGbXInVfeQNwEAE&uach_m=%5BUACH%5D&adurl="
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://securepubads.g.doubleclick.net/tag/js/gpt.js"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://sourcepoint.theguardian.com/PrivacyManagerUS.6a027.js"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://sourcepoint.theguardian.com/PrivacyManagerUS.b9d1f.css"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://sourcepoint.theguardian.com/mms/v2/message?message_id=1418584"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://sourcepoint.theguardian.com/polyfills.01516.js"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://sourcepoint.theguardian.com/unified/4.40.2/globalcmp.62ed6e1264397cbd012e.bundle.js"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://sourcepoint.theguardian.com/unified/wrapperMessagingWithoutDetection.js"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://sourcepoint.theguardian.com/us_pm/index.html?hasCsp=true&usNatOrigin=https%3A%2F%2Fsourcepoint.theguardian.com%2Fglobal-cmp&uuid=null&message_id=1418584&site_id=13348&mms_origin=https%3A%2F%2Fsourcepoint.theguardian.com%2Fmms%2Fv2&is_global_cmp=true&is_global_cmp_notice=true&version=v1"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://sourcepoint.theguardian.com/wrapper/v2/messages?hasCsp=true&env=prod&body=%7B%22accountId%22%3A1257%2C%22campaignEnv%22%3A%22prod%22%2C%22campaigns%22%3A%7B%22globalcmp%22%3A%7B%22consentStatus%22%3A%7B%7D%2C%22hasLocalData%22%3Afalse%2C%22targetingParams%22%3A%7B%22framework%22%3A%22aus%22%7D%7D%7D%2C%22clientMMSOrigin%22%3A%22https%3A%2F%2Fsourcepoint.theguardian.com%22%2C%22hasCSP%22%3Atrue%2C%22includeData%22%3A%7B%22localState%22%3A%7B%22type%22%3A%22string%22%7D%2C%22actions%22%3A%7B%22type%22%3A%22RecordString%22%7D%2C%22cookies%22%3A%7B%22type%22%3A%22RecordString%22%7D%7D%2C%22propertyHref%22%3A%22https%3A%2F%2Fau.theguardian.com%2Fau%22%2C%22propertyId%22%3A13348%7D&localState=null&metadata=%7B%22globalcmp%22%3A%7B%22applies%22%3Atrue%7D%7D&nonKeyedLocalState=null&ch=506773044479b&scriptVersion=4.40.2&scriptType=unified"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://sourcepoint.theguardian.com/wrapper/v2/meta-data?accountId=1257&env=prod&metadata={%22gdpr%22:{},%22usnat%22:{},%22globalcmp%22:{}}&propertyId=9398"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://sourcepoint.theguardian.com/wrapper/v2/meta-data?hasCsp=true&accountId=1257&env=prod&metadata=%7B%22globalcmp%22%3A%7B%7D%7D&propertyId=13348&scriptVersion=4.40.2&scriptType=unified"
+      },
+      {
+        "reason": "unsafe method: OPTIONS",
+        "url": "https://sourcepoint.theguardian.com/wrapper/v2/pv-data?hasCsp=true&env=prod&ch=506773044479b&scriptVersion=4.40.2&scriptType=unified"
+      },
+      {
+        "reason": "unsafe method: POST",
+        "url": "https://sourcepoint.theguardian.com/wrapper/v2/pv-data?hasCsp=true&env=prod&ch=506773044479b&scriptVersion=4.40.2&scriptType=unified"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://static.adsafeprotected.com/sca.17.6.4.js"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://static.criteo.net/js/ld/publishertag.ids.js"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://static.guim.co.uk/images/favicon-32x32.ico"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://static.theguardian.com/commercial/sponsor/10/Jul/2026/fa804334-97ff-48d7-981e-8e9fef6144d8-VW%20logo.png"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://static.theguardian.com/commercial/sponsor/21/Jul/2026/1bf45072-e83b-4c2c-954d-00de174fbdab-Flinders%20logo%20Template.png"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://static.theguardian.com/commercial/sponsor/29/Jul/2026/b18799e1-4cba-4c2e-96a7-c2be73ff3597-Bank-Australia-Logo---Low-Res.png"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://static.theguardian.com/commercial/sponsor/31/Jul/2026/e2d88421-67a8-4dcf-a236-6954ad6d781b-Logo_Template%20LOTR.png"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://sync.ipredictive.com/d/sync/cookie/generic?partner=permutive&redirect=https%3A%2F%2Fapi.permutive.com%2Fv2.0%2Fpx%2Fsync%3Fk%3D359ba275-5edd-4756-84f8-21a24369ce0b%26u%3Dd38ec525-47f9-4389-971a-a4521e632372%26alias%3D%24%7BADELPHIC_CUID%7D%26type%3Dviant&gdpr=0"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://sync6.im-apps.net/9001/pid?ref=null&page=https://www.theguardian.com/au"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://tags.crwdcntrl.net/lt/c/16589/sync.min.js"
+      },
+      {
+        "reason": "unsafe method: POST",
+        "url": "https://tlx.3lift.com/header/auction?lib=prebid&v=10.23.0&referrer=https%3A%2F%2Fwww.theguardian.com%2Fau&tmax=1500"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://tpc.googlesyndication.com/pagead/js/r20260811/r20110914/abg_lite.js"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://tpc.googlesyndication.com/pagead/js/r20260811/r20110914/client/window_focus.js"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://tpc.googlesyndication.com/simgad/17716947477993000062"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://ups.analytics.yahoo.com/ups/58813/fed?gpp_sid=-1&v=1&url=https%3A%2F%2Fwww.theguardian.com%2Fau"
+      },
+      {
+        "reason": "unsafe method: OPTIONS",
+        "url": "https://web-banner.ads.aps.amazon-adsystem.com/e/dtb/bid"
+      },
+      {
+        "reason": "unsafe method: POST",
+        "url": "https://web-banner.ads.aps.amazon-adsystem.com/e/dtb/bid"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://www.google.com.au/pagead/1p-user-list/971225648/?random=1786473787565&cv=9&fst=1786471200000&num=1&guid=ON&resp=GooglemKTybQhCsO&eid=466465926&u_h=720&u_w=1280&ig=1&frm=0&url=https%3A%2F%2Fwww.theguardian.com%2Fau&tiba=Latest%20news%2C%20sport%20and%20opinion%20from%20the%20Guardian&hn=www.googleadservices.com&uaa=arm&uab=64&uam=&uap=Linux&uapv=&uaw=0&uafvl=Chromium%3B151.0.7922.108%7CNot%253DA%253FBrand%3B99.0.0.0&async=1&rfmt=3&fmt=3&is_vtc=1&cid=CAQS0wEAEQoqgbwdr-B6YYi6M-s13sMPOb_Kn3Z27X7X5_d6F_ERMyTl_IJoXhJTK0jReCzgQzkruJI4WdKJzZhi3r-aDFLU55Z5kupHGRBjPgqjqpYuqq4dlNprzo0tqmFNlE1B_IeixHTI8Qb5cdZvwdcILE3Z5iY5Va0idJLSvNuOygjEHDuqJZNOx9gosOF_bShurtyEfLNpctDV-eCQWx0UfuBh862jgUbVN1YmHHdYBFLGh3MzkDVF8akkMe_hu57sVSLDPZ_EC9JAkjnNdzbTnun0&random=183900717&resp=GooglemKTybQhCsO&rmt_tld=1&ipr=y"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://www.google.com/pagead/1p-user-list/971225648/?random=1786473787565&cv=9&fst=1786471200000&num=1&guid=ON&resp=GooglemKTybQhCsO&eid=466465926&u_h=720&u_w=1280&ig=1&frm=0&url=https%3A%2F%2Fwww.theguardian.com%2Fau&tiba=Latest%20news%2C%20sport%20and%20opinion%20from%20the%20Guardian&hn=www.googleadservices.com&uaa=arm&uab=64&uam=&uap=Linux&uapv=&uaw=0&uafvl=Chromium%3B151.0.7922.108%7CNot%253DA%253FBrand%3B99.0.0.0&async=1&rfmt=3&fmt=3&is_vtc=1&cid=CAQS0wEAEQoqgbwdr-B6YYi6M-s13sMPOb_Kn3Z27X7X5_d6F_ERMyTl_IJoXhJTK0jReCzgQzkruJI4WdKJzZhi3r-aDFLU55Z5kupHGRBjPgqjqpYuqq4dlNprzo0tqmFNlE1B_IeixHTI8Qb5cdZvwdcILE3Z5iY5Va0idJLSvNuOygjEHDuqJZNOx9gosOF_bShurtyEfLNpctDV-eCQWx0UfuBh862jgUbVN1YmHHdYBFLGh3MzkDVF8akkMe_hu57sVSLDPZ_EC9JAkjnNdzbTnun0&random=183900717&resp=GooglemKTybQhCsO&rmt_tld=0&ipr=y"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://www.google.com/recaptcha/api2/aframe"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://www.googleadservices.com/pagead/conversion_async.js"
+      },
+      {
+        "reason": "HTTP/3 preflight unavailable",
+        "url": "https://www.theguardian.com/"
+      },
+      {
+        "reason": "unsafe method: HEAD",
+        "url": "https://www.theguardian.com/"
+      },
+      {
+        "reason": "unsafe method: HEAD",
+        "url": "https://www.theguardian.com/au"
+      },
+      {
+        "reason": "unsafe method: HEAD",
+        "url": "https://www3.doubleclick.net/"
+      }
+    ],
+    "expected_responses": [
+      {
+        "body_sha256": "7205a4e0bdcac35e35f9df793f069daa55dbd1a5a198f3afbd8ac861f9a34bc3",
+        "bytes": 150829,
+        "resource_id": 1,
+        "status": 200
+      },
+      {
+        "body_sha256": "4b630b7ef07c3d523e5a639881339e108e7574fd29913aa1c65eaf78f3c446b1",
+        "bytes": 108,
+        "resource_id": 2,
+        "status": 200
+      },
+      {
+        "body_sha256": "e63bfe412036e88da622ebb666d05b680e5be1a7126637c934ca847f72e52480",
+        "bytes": 19878,
+        "resource_id": 3,
+        "status": 200
+      },
+      {
+        "body_sha256": "62ab1c0975c8b749b3ebf4f9c1e4e703372bb593d09d71ecbec16de07eb14833",
+        "bytes": 47748,
+        "resource_id": 4,
+        "status": 200
+      },
+      {
+        "body_sha256": "4499a1e05eada18c67c51d6a48d78fe7579800ddfed503d3d9425581cbc03a41",
+        "bytes": 17172,
+        "resource_id": 5,
+        "status": 200
+      },
+      {
+        "body_sha256": "4fa602e0d446ee3148b06f2014cb08518660f936406251a05bbbcc6ea870cc9a",
+        "bytes": 16492,
+        "resource_id": 6,
+        "status": 200
+      },
+      {
+        "body_sha256": "fa364c5f0844c7c1fe4c96d14495d45d65c07b2a635b44800382e266e1a67d2e",
+        "bytes": 16792,
+        "resource_id": 7,
+        "status": 200
+      },
+      {
+        "body_sha256": "33bfd834b40d79992a438f93d4400070b3b30cd97bbf0a5082753eef9b243f25",
+        "bytes": 61,
+        "resource_id": 8,
+        "status": 200
+      },
+      {
+        "body_sha256": "bf672dbc2fe3d05096cb045691ec7a9dc00e3470458665d42d0b7aabd07bb990",
+        "bytes": 15416,
+        "resource_id": 9,
+        "status": 200
+      },
+      {
+        "body_sha256": "46e089c7d79ff80fef01582ba8261d42728b78c345fdbe8d52199907498d280e",
+        "bytes": 17376,
+        "resource_id": 10,
+        "status": 200
+      },
+      {
+        "body_sha256": "87e9036ce8b1ba1645d519285aaf31491d87a3e16273835fe134aa38993d6f6b",
+        "bytes": 16612,
+        "resource_id": 11,
+        "status": 200
+      },
+      {
+        "body_sha256": "14989c92bc5c788a6aff8d2a2469b4d959fd5bbf365c1e95ad30a47eb6e31fa2",
+        "bytes": 444,
+        "resource_id": 12,
+        "status": 200
+      },
+      {
+        "body_sha256": "186c887dd32f094b3fa07c86f62fbb32b5147dbbabc45712876652664e7cdd39",
+        "bytes": 451,
+        "resource_id": 13,
+        "status": 200
+      },
+      {
+        "body_sha256": "ea8ecb2e63d13b86afe25742885abada23d8de4784bb9a34b21e14b264cbeadf",
+        "bytes": 541,
+        "resource_id": 14,
+        "status": 200
+      },
+      {
+        "body_sha256": "50652cd6f6416636b3adae021e6e4eef3d0c1835c60b15f4bd293b67524cdc8f",
+        "bytes": 384,
+        "resource_id": 15,
+        "status": 200
+      },
+      {
+        "body_sha256": "e4f567472a78fb7a35d91af8bf43d7ca0df950c6a6d9a49416054bb673d51102",
+        "bytes": 3382,
+        "resource_id": 16,
+        "status": 200
+      },
+      {
+        "body_sha256": "5ad5e16228d113b89ac8f0e3749f866b2fc6627575943bf550dfb24eb24a2a25",
+        "bytes": 1924,
+        "resource_id": 17,
+        "status": 200
+      },
+      {
+        "body_sha256": "e5d0614bbd251f81525ef2dbf5207afbed20c0df335912d0d6cc657ebdee5d16",
+        "bytes": 436,
+        "resource_id": 18,
+        "status": 200
+      },
+      {
+        "body_sha256": "6ba379fdd7b98938fb7f1e4eed1a962920c055f792028aa6aa4b99414ede81fc",
+        "bytes": 6378,
+        "resource_id": 19,
+        "status": 200
+      },
+      {
+        "body_sha256": "a4fbf21a21e5aab1021faf33a6f8ce9f65845684929d85b3981363b90c5be9b7",
+        "bytes": 7303,
+        "resource_id": 20,
+        "status": 200
+      },
+      {
+        "body_sha256": "516ea497a5675bdfb54e9c6a4a3d106168e8f55215ca86555776870245dea612",
+        "bytes": 3472,
+        "resource_id": 21,
+        "status": 200
+      },
+      {
+        "body_sha256": "d67338729b20ef94f7de06437affda13987e29cb0b1588e22cc561b682feff33",
+        "bytes": 2675,
+        "resource_id": 22,
+        "status": 200
+      },
+      {
+        "body_sha256": "94b61e1d240d09d9ebf3c33835491c31ca5d4c8e80162d9984aed6500489102c",
+        "bytes": 3721,
+        "resource_id": 23,
+        "status": 200
+      },
+      {
+        "body_sha256": "80b1b3da034a87f085fd58efc559d5144d70d9356232953b36334168ced75e4e",
+        "bytes": 3066,
+        "resource_id": 24,
+        "status": 200
+      },
+      {
+        "body_sha256": "963d5c2fea75e596f31a016cb51b17e37b71cb9ff34c907269e782b55f4eb33a",
+        "bytes": 7218,
+        "resource_id": 25,
+        "status": 200
+      },
+      {
+        "body_sha256": "63c197e16a341f3b3e150c4fe06b334d9e9de39f744ff06e63ead7d20f9b9070",
+        "bytes": 9805,
+        "resource_id": 26,
+        "status": 200
+      },
+      {
+        "body_sha256": "b7ac019233afa4ed8f8cfa1037e40132ac53975b8ffcefa1679974a4691f201c",
+        "bytes": 45154,
+        "resource_id": 27,
+        "status": 200
+      },
+      {
+        "body_sha256": "104f652b6a2e3e38c5bd03499ab752f66fee46d02b3319795b2d50bbac80ae98",
+        "bytes": 6025,
+        "resource_id": 28,
+        "status": 200
+      },
+      {
+        "body_sha256": "006ddb60821c53beaf34b44f8502fb377432af6ae653e35e6c000be25dd8c17a",
+        "bytes": 572,
+        "resource_id": 29,
+        "status": 200
+      },
+      {
+        "body_sha256": "3aa2f25c8fd1bc541f94d02519f1937038a30081177218b893e3b41f313824df",
+        "bytes": 3198,
+        "resource_id": 30,
+        "status": 200
+      },
+      {
+        "body_sha256": "9af655aecb68d17238d54667f99dc5f12c1eddfd3b5cd38956aaebacef1b77e8",
+        "bytes": 4481,
+        "resource_id": 31,
+        "status": 200
+      },
+      {
+        "body_sha256": "fad191eb98c0dee4778a8b50174abbfc25d664d251b665c55e38952a788c2a8a",
+        "bytes": 3629,
+        "resource_id": 32,
+        "status": 200
+      },
+      {
+        "body_sha256": "24c5bf4cae00c7c685644ef14aa48bc266fa319f4823ad259be5b3d7cb7ad7b8",
+        "bytes": 2355,
+        "resource_id": 33,
+        "status": 200
+      },
+      {
+        "body_sha256": "2942ab4dd1ba5d57550616e60794132ce03af725cf9b048ff31c122b4a039b4d",
+        "bytes": 2720,
+        "resource_id": 34,
+        "status": 200
+      },
+      {
+        "body_sha256": "32f2a97f230c126ca4b3e0a0fcccce6d8858d4f0838fd9b8ce426cf6ca301d28",
+        "bytes": 12566,
+        "resource_id": 35,
+        "status": 200
+      },
+      {
+        "body_sha256": "d31a397353d838a705789a39620fbd056254367fcde3295279a98f19db6d23f8",
+        "bytes": 3857,
+        "resource_id": 36,
+        "status": 200
+      },
+      {
+        "body_sha256": "c6780506b59657e49479536e7678fabddacf2469ca8790492d66eca829ede24b",
+        "bytes": 6347,
+        "resource_id": 37,
+        "status": 200
+      },
+      {
+        "body_sha256": "dcfc3ed54e331e635e45f8678add301df37aff2c819ad7bcaed5dbce7fb72740",
+        "bytes": 8143,
+        "resource_id": 38,
+        "status": 200
+      },
+      {
+        "body_sha256": "01787294b99e7a4faa6c410fb09608c2a826dc37bc5237eb0a0ac309f5c5ff93",
+        "bytes": 4058,
+        "resource_id": 39,
+        "status": 200
+      },
+      {
+        "body_sha256": "07848e41b067adb10ccb34f344d69b8f4419edc817791c384e1e693ee85b3400",
+        "bytes": 3158,
+        "resource_id": 40,
+        "status": 200
+      },
+      {
+        "body_sha256": "373f834cb3944b7bac7eb91cd2be4347a50c09c96438a84daf5a5d5a79d7975d",
+        "bytes": 7749,
+        "resource_id": 41,
+        "status": 200
+      },
+      {
+        "body_sha256": "60f61f4e6033b7f5d314b2f0f2cc5f0c61007514a95beeebe6f78235681489a0",
+        "bytes": 12907,
+        "resource_id": 42,
+        "status": 200
+      },
+      {
+        "body_sha256": "de142d27ea5c66578ab48a11eab9b1cc183686f778b4bc1a85ef7b8794495cdb",
+        "bytes": 3359,
+        "resource_id": 43,
+        "status": 200
+      },
+      {
+        "body_sha256": "52e472a8a586985bce648f721f92094b3ce35d2d74fc51f28d622d06abad0b31",
+        "bytes": 14501,
+        "resource_id": 44,
+        "status": 200
+      },
+      {
+        "body_sha256": "6262f9718f8a6236dab13537c28a513ed907361593b871c71734c7182ea40298",
+        "bytes": 28811,
+        "resource_id": 45,
+        "status": 200
+      },
+      {
+        "body_sha256": "0a06d0401b3defc63a1c42f4cb59772b7b58fad334e685f75f5e598181a5f1bc",
+        "bytes": 137997,
+        "resource_id": 46,
+        "status": 200
+      },
+      {
+        "body_sha256": "220b1bb57a0fb29a8d4d09cd722810e59f6033b3e34c5f431aa7383f24bb054c",
+        "bytes": 2913,
+        "resource_id": 47,
+        "status": 200
+      },
+      {
+        "body_sha256": "4343250b524f88f63c33a7cf70a028d031d5e142f8850693b525ed7bbb05c8c1",
+        "bytes": 373,
+        "resource_id": 48,
+        "status": 200
+      },
+      {
+        "body_sha256": "fa4a04a14b877c4f2fa306e23774f9ad16a413324abda472068ef91fefa08875",
+        "bytes": 1941,
+        "resource_id": 49,
+        "status": 200
+      },
+      {
+        "body_sha256": "d7b0246185b2ab783fe3335e42fd6f692876a039b5c7a7e767e3a6887d936502",
+        "bytes": 546,
+        "resource_id": 50,
+        "status": 200
+      },
+      {
+        "body_sha256": "f36efd2beb07086fbea16c5717b0106ea9ac6b8dc9e271f1491178cf3faf67b6",
+        "bytes": 767,
+        "resource_id": 51,
+        "status": 200
+      },
+      {
+        "body_sha256": "22f060088e198ab8efb89762568b4f55b96795afc64714b6532c1eeb062e9c96",
+        "bytes": 323,
+        "resource_id": 52,
+        "status": 200
+      },
+      {
+        "body_sha256": "2f2f46972048547bde997db760a3ebb619d7c470634adc8ce4bef921f1c31b49",
+        "bytes": 424,
+        "resource_id": 53,
+        "status": 200
+      },
+      {
+        "body_sha256": "cb706e1778fa3ab133f0611699e9940990ffaef0c9868b18e96dd65e45a2015f",
+        "bytes": 1989,
+        "resource_id": 54,
+        "status": 200
+      },
+      {
+        "body_sha256": "d8a5a4a62d23e8a9d3cd9b07a6a9fb251d2f730c2f4bc76b7bce255c26760eb8",
+        "bytes": 4057,
+        "resource_id": 55,
+        "status": 200
+      },
+      {
+        "body_sha256": "aca06b2fb0feb6ef09898c756d44e275fd6bc1c9dd5515990be944d870cb7c8a",
+        "bytes": 26264,
+        "resource_id": 56,
+        "status": 200
+      },
+      {
+        "body_sha256": "1c14addd3658eec2a2448917f659b21a59ef43a47fbcbeb1575f663354ab2bf9",
+        "bytes": 11021,
+        "resource_id": 57,
+        "status": 200
+      },
+      {
+        "body_sha256": "a8bf0477154997a695214837df790a420b36259bb11cecd8d0c5a05036a6a1ed",
+        "bytes": 5992,
+        "resource_id": 58,
+        "status": 200
+      },
+      {
+        "body_sha256": "b2449820546f565723c2c1c93093a29a10ba5769a99852085a693ce002a401bc",
+        "bytes": 155,
+        "resource_id": 59,
+        "status": 200
+      },
+      {
+        "body_sha256": "de056a76aebc0ebbb083ed636710acf9c148b945a10ad6a6e2b1e22be6371a5f",
+        "bytes": 2805,
+        "resource_id": 60,
+        "status": 200
+      },
+      {
+        "body_sha256": "e71dbf463180f369cc2810db2eedcd7342cf9458371eba238f347c32d29803ad",
+        "bytes": 2523,
+        "resource_id": 61,
+        "status": 200
+      },
+      {
+        "body_sha256": "54dbf2d2fde46326a5b1f27f6f328ce0262882d087e7ef500df383b4b905e3b7",
+        "bytes": 867,
+        "resource_id": 62,
+        "status": 200
+      },
+      {
+        "body_sha256": "ca329d8246e4ce360078d9f03deea8f115d2c8eb6b5cd12e6985e0c86bab7b11",
+        "bytes": 5417,
+        "resource_id": 63,
+        "status": 200
+      }
+    ],
+    "final_url": "https://www.theguardian.com/au",
+    "lab_source": {
+      "image_digest": "sha256:74db82e649141ec6addf7f5f6bf79e52c865c1c5967e5dad0ccfd94b61992a30",
+      "lab_commit": "8f7e7acd00c51e5d9b330d0aea39c9e427229939",
+      "lab_dirty": false,
+      "lab_patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "neqo_commit": "dfc6127228357c6d8d94797cd4eff854b3353712",
+      "neqo_dirty": false,
+      "neqo_patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "neqo_pinned_commit": "dfc6127228357c6d8d94797cd4eff854b3353712"
+    },
+    "max_response_bytes": 1048576,
+    "migration_commit": "unknown",
+    "neqo_base_commit": "8a04d065c2d35c8e8fd804f91c7081ab6bb60b89",
+    "neqo_version": "0.30.0",
+    "observed_origins": [
+      "https://a.teads.tv",
+      "https://a64fe228160778f613a548d61c03841b.safeframe.googlesyndication.com",
+      "https://accounts.google.com",
+      "https://ads.pubmatic.com",
+      "https://analytics.rlcdn.com",
+      "https://api.id5-sync.com",
+      "https://api.intentiq.com",
+      "https://api.permutive.com",
+      "https://assets.guim.co.uk",
+      "https://au-script.dotmetrics.net",
+      "https://bcp.crwdcntrl.net",
+      "https://c.amazon-adsystem.com",
+      "https://cdn-gl.imrworldwide.com",
+      "https://cdn.adsafeprotected.com",
+      "https://cdn.brandmetrics.com",
+      "https://cdn.confiant-integrations.net",
+      "https://cdn.id5-sync.com",
+      "https://cdn.mgaru.dev",
+      "https://cdn.permutive.com",
+      "https://cdn.privacy-mgmt.com",
+      "https://cdnjs.cloudflare.com",
+      "https://check.analytics.rlcdn.com",
+      "https://cm.g.doubleclick.net",
+      "https://collector.brandmetrics.com",
+      "https://config.aps.amazon-adsystem.com",
+      "https://connectid.analytics.yahoo.com",
+      "https://contributions.guardianapis.com",
+      "https://d0.eu-3-id5-sync.com",
+      "https://d0.eu-4-id5-sync.com",
+      "https://d1.eu-3-id5-sync.com",
+      "https://d1.eu-4-id5-sync.com",
+      "https://d2.eu-3-id5-sync.com",
+      "https://d2.eu-4-id5-sync.com",
+      "https://d3.eu-3-id5-sync.com",
+      "https://d3.eu-4-id5-sync.com",
+      "https://d4.eu-3-id5-sync.com",
+      "https://d4.eu-4-id5-sync.com",
+      "https://d5.eu-3-id5-sync.com",
+      "https://d5.eu-4-id5-sync.com",
+      "https://d6.eu-3-id5-sync.com",
+      "https://d6.eu-4-id5-sync.com",
+      "https://d6691a17-6fdb-4d26-85d6-b3dd27f55f08.prmutv.co",
+      "https://d7.eu-3-id5-sync.com",
+      "https://d7.eu-4-id5-sync.com",
+      "https://direct.adsrvr.org",
+      "https://dmp.im-apps.net",
+      "https://dpm.demdex.net",
+      "https://dt.adsafeprotected.com",
+      "https://eb2.3lift.com",
+      "https://ep1.adtrafficquality.google",
+      "https://ep2.adtrafficquality.google",
+      "https://eus.rubiconproject.com",
+      "https://fastlane.rubiconproject.com",
+      "https://google-bidout-d.openx.net",
+      "https://google.com",
+      "https://googleads.g.doubleclick.net",
+      "https://grid-bidder.criteo.com",
+      "https://gum.criteo.com",
+      "https://hbopenbid.pubmatic.com",
+      "https://htlb.casalemedia.com",
+      "https://i.guim.co.uk",
+      "https://ib.adnxs.com",
+      "https://id5-sync.com",
+      "https://ident.mygaru.com",
+      "https://image6.pubmatic.com",
+      "https://interactive.guim.co.uk",
+      "https://invstatic101.creativecdn.com",
+      "https://js-sec.indexww.com",
+      "https://jsconfig.adsafeprotected.com",
+      "https://lb.eu-1-id5-sync.com",
+      "https://lbs.eu-1-id5-sync.com",
+      "https://marketingplatform.google.com",
+      "https://match.adsrvr.org",
+      "https://oa.openxcdn.net",
+      "https://ophan.theguardian.com",
+      "https://pagead2.googlesyndication.com",
+      "https://performance-events.guardianapis.com",
+      "https://pixel.adsafeprotected.com",
+      "https://pubads.g.doubleclick.net",
+      "https://rm-script.dotmetrics.net",
+      "https://rtb.openx.net",
+      "https://s.amazon-adsystem.com",
+      "https://sb.scorecardresearch.com",
+      "https://secure-au.imrworldwide.com",
+      "https://secure-dcr.imrworldwide.com",
+      "https://secure-gl.imrworldwide.com",
+      "https://secure.cdn.fastclick.net",
+      "https://securepubads.g.doubleclick.net",
+      "https://sourcepoint.theguardian.com",
+      "https://static.adsafeprotected.com",
+      "https://static.criteo.net",
+      "https://static.guim.co.uk",
+      "https://static.theguardian.com",
+      "https://sync.ipredictive.com",
+      "https://sync6.im-apps.net",
+      "https://tags.crwdcntrl.net",
+      "https://tlx.3lift.com",
+      "https://tpc.googlesyndication.com",
+      "https://ups.analytics.yahoo.com",
+      "https://web-banner.ads.aps.amazon-adsystem.com",
+      "https://www.google.com",
+      "https://www.google.com.au",
+      "https://www.googleadservices.com",
+      "https://www.theguardian.com",
+      "https://www3.doubleclick.net"
+    ],
+    "observed_request_count": 333,
+    "prepare_image_digest": "sha256:74db82e649141ec6addf7f5f6bf79e52c865c1c5967e5dad0ccfd94b61992a30",
+    "published_qcsd_commit": "39e293fb384dd341156eedd1e4b833d24904b1f6",
+    "settle_ms": 3000,
+    "source_url": "https://www.theguardian.com/",
+    "stability_defense": "none",
+    "stability_profile": "live",
+    "stability_runs": 3,
+    "stability_seed": 0,
+    "timeout_seconds": 30
+  },
+  "resources": [
+    {
+      "chaff_priority": false,
+      "content_length": 150829,
+      "data_length": 0,
+      "depends_on": [],
+      "headers": [
+        [
+          "accept",
+          "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=0, i"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "document"
+        ],
+        [
+          "sec-fetch-mode",
+          "navigate"
+        ],
+        [
+          "sec-fetch-site",
+          "none"
+        ],
+        [
+          "sec-fetch-user",
+          "?1"
+        ],
+        [
+          "upgrade-insecure-requests",
+          "1"
+        ],
+        [
+          "upgrade-insecure-requests",
+          "1"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 1,
+      "known_valid": true,
+      "type": "Document",
+      "url": "https://www.theguardian.com/au"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 108,
+      "data_length": 0,
+      "depends_on": [
+        1
+      ],
+      "headers": [
+        [
+          "accept",
+          "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=4, i"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "empty"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "sec-purpose",
+          "prefetch"
+        ],
+        [
+          "sec-purpose",
+          "prefetch"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 2,
+      "known_valid": true,
+      "type": "Other",
+      "url": "https://assets.guim.co.uk/polyfill.io/v3/polyfill.min.js?rum=0&features=es6%2Ces7%2Ces2017%2Ces2018%2Ces2019%2Cdefault-3.6%2CHTMLPictureElement%2CIntersectionObserver%2CIntersectionObserverEntry%2CURLSearchParams%2Cfetch%2CNodeList.prototype.forEach%2Cnavigator.sendBeacon%2Cperformance.now%2CPromise.allSettled&flags=gated&callback=guardianPolyfilled&unknown=polyfill&cacheClear=1"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 19878,
+      "data_length": 0,
+      "depends_on": [
+        1
+      ],
+      "headers": [
+        [
+          "accept",
+          "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=4, i"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "empty"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "sec-purpose",
+          "prefetch"
+        ],
+        [
+          "sec-purpose",
+          "prefetch"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 3,
+      "known_valid": true,
+      "type": "Other",
+      "url": "https://assets.guim.co.uk/assets/frameworks.client.web.6b19980dfdb962b2f0d0.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 47748,
+      "data_length": 0,
+      "depends_on": [
+        1
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "origin",
+          "https://www.theguardian.com"
+        ],
+        [
+          "priority",
+          "u=1"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-purpose",
+          "prefetch"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 4,
+      "known_valid": true,
+      "type": "Other",
+      "url": "https://assets.guim.co.uk/assets/index.client.web.ce1a0fc1352f92a4283f.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 17172,
+      "data_length": 0,
+      "depends_on": [
+        1
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "sec-purpose",
+          "prefetch"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 5,
+      "known_valid": true,
+      "type": "Other",
+      "url": "https://assets.guim.co.uk/commercial/e35caa9e5f12223ce34e/graun.standalone.commercial.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 16492,
+      "data_length": 0,
+      "depends_on": [
+        1
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "origin",
+          "https://www.theguardian.com"
+        ],
+        [
+          "origin",
+          "https://www.theguardian.com"
+        ],
+        [
+          "priority",
+          "u=1"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "font"
+        ],
+        [
+          "sec-fetch-mode",
+          "cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 6,
+      "known_valid": true,
+      "type": "Font",
+      "url": "https://assets.guim.co.uk/static/frontend/fonts/guardian-headline/noalts-not-hinted/GHGuardianHeadline-Bold.woff2"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 16792,
+      "data_length": 0,
+      "depends_on": [
+        1
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "origin",
+          "https://www.theguardian.com"
+        ],
+        [
+          "origin",
+          "https://www.theguardian.com"
+        ],
+        [
+          "priority",
+          "u=1"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "font"
+        ],
+        [
+          "sec-fetch-mode",
+          "cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 7,
+      "known_valid": true,
+      "type": "Font",
+      "url": "https://assets.guim.co.uk/static/frontend/fonts/guardian-textegyptian/noalts-not-hinted/GuardianTextEgyptian-Regular.woff2"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 61,
+      "data_length": 0,
+      "depends_on": [
+        1
+      ],
+      "headers": [
+        [
+          "accept",
+          "text/css,*/*;q=0.1"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=4"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "style"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 8,
+      "known_valid": true,
+      "type": "Stylesheet",
+      "url": "https://assets.guim.co.uk/static/frontend/css/print.css"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 15416,
+      "data_length": 0,
+      "depends_on": [
+        1
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "origin",
+          "https://www.theguardian.com"
+        ],
+        [
+          "origin",
+          "https://www.theguardian.com"
+        ],
+        [
+          "priority",
+          "u=0"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "font"
+        ],
+        [
+          "sec-fetch-mode",
+          "cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 9,
+      "known_valid": true,
+      "type": "Font",
+      "url": "https://assets.guim.co.uk/static/frontend/fonts/guardian-textsans/noalts-not-hinted/GuardianTextSans-Regular.woff2"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 17376,
+      "data_length": 0,
+      "depends_on": [
+        1
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "origin",
+          "https://www.theguardian.com"
+        ],
+        [
+          "origin",
+          "https://www.theguardian.com"
+        ],
+        [
+          "priority",
+          "u=0"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "font"
+        ],
+        [
+          "sec-fetch-mode",
+          "cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 10,
+      "known_valid": true,
+      "type": "Font",
+      "url": "https://assets.guim.co.uk/static/frontend/fonts/guardian-textsans/noalts-not-hinted/GuardianTextSans-Bold.woff2"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 16612,
+      "data_length": 0,
+      "depends_on": [
+        1
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "origin",
+          "https://www.theguardian.com"
+        ],
+        [
+          "origin",
+          "https://www.theguardian.com"
+        ],
+        [
+          "priority",
+          "u=0"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "font"
+        ],
+        [
+          "sec-fetch-mode",
+          "cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 11,
+      "known_valid": true,
+      "type": "Font",
+      "url": "https://assets.guim.co.uk/static/frontend/fonts/guardian-headline/noalts-not-hinted/GHGuardianHeadline-Medium.woff2"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 444,
+      "data_length": 0,
+      "depends_on": [
+        1,
+        4
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 12,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://assets.guim.co.uk/assets/5748.client.web.46fcd3ef2b81768ef12b.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 451,
+      "data_length": 0,
+      "depends_on": [
+        1,
+        4
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 13,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://assets.guim.co.uk/assets/384.client.web.c5ed0ae616db5e3964c4.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 541,
+      "data_length": 0,
+      "depends_on": [
+        1,
+        4
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 14,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://assets.guim.co.uk/assets/909.client.web.1ea2413d407cc62f31df.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 384,
+      "data_length": 0,
+      "depends_on": [
+        1,
+        4
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 15,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://assets.guim.co.uk/assets/9281.client.web.a416da1ced63f137f6de.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 3382,
+      "data_length": 0,
+      "depends_on": [
+        1,
+        4
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 16,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://assets.guim.co.uk/assets/Metrics-island.client.web.054cc57e9b6f2acc4212.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 1924,
+      "data_length": 0,
+      "depends_on": [
+        1,
+        4
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 17,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://assets.guim.co.uk/assets/SetABTests-island.client.web.13bee59d349e15382b1c.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 436,
+      "data_length": 0,
+      "depends_on": [
+        1,
+        4
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 18,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://assets.guim.co.uk/assets/SetAdTargeting-island.client.web.24b2c6bf0b7aaaf7d1bd.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 6378,
+      "data_length": 0,
+      "depends_on": [
+        1,
+        4
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 19,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://assets.guim.co.uk/assets/4906.client.web.5b857f11afb782d19c7d.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 7303,
+      "data_length": 0,
+      "depends_on": [
+        1,
+        4
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 20,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://assets.guim.co.uk/assets/8928.client.web.ad563fba1feb08501f9a.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 3472,
+      "data_length": 0,
+      "depends_on": [
+        1,
+        4
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 21,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://assets.guim.co.uk/assets/6813.client.web.cea44e79f030db5e6b11.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 2675,
+      "data_length": 0,
+      "depends_on": [
+        1,
+        4
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 22,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://assets.guim.co.uk/assets/9266.client.web.05c622cee5349f5eb18c.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 3721,
+      "data_length": 0,
+      "depends_on": [
+        1,
+        4
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 23,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://assets.guim.co.uk/assets/TopBar-island.client.web.b419ee6381797136c438.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 3066,
+      "data_length": 0,
+      "depends_on": [
+        1,
+        4
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 24,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://assets.guim.co.uk/assets/5036.client.web.856fdbcb7ce0e30d4622.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 7218,
+      "data_length": 0,
+      "depends_on": [
+        1,
+        4
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 25,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://assets.guim.co.uk/assets/3786.client.web.16c4c80d0aae3ddda937.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 9805,
+      "data_length": 0,
+      "depends_on": [
+        1,
+        4
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 26,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://assets.guim.co.uk/assets/Titlepiece-island.client.web.5700ff6b133d6e103a76.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 45154,
+      "data_length": 0,
+      "depends_on": [
+        1,
+        4
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 27,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://assets.guim.co.uk/assets/9468.client.web.934edc10e2375f7184f5.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 6025,
+      "data_length": 0,
+      "depends_on": [
+        1,
+        4
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 28,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://assets.guim.co.uk/assets/4497.client.web.c7c8aa1da94a1f65dfc6.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 572,
+      "data_length": 0,
+      "depends_on": [
+        1,
+        4
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 29,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://assets.guim.co.uk/assets/DirectoryPageNav-island.client.web.3a0592844f9b2044590a.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 3198,
+      "data_length": 0,
+      "depends_on": [
+        1,
+        4
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 30,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://assets.guim.co.uk/assets/3750.client.web.5c0bf59b3c03a96e85ed.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 4481,
+      "data_length": 0,
+      "depends_on": [
+        1,
+        4
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 31,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://assets.guim.co.uk/assets/8242.client.web.cbd53d14ca6cd5980ab1.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 3629,
+      "data_length": 0,
+      "depends_on": [
+        1,
+        4
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 32,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://assets.guim.co.uk/assets/9682.client.web.ca27d77dfe9d0709c861.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 2355,
+      "data_length": 0,
+      "depends_on": [
+        1,
+        4
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 33,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://assets.guim.co.uk/assets/5064.client.web.32ab55c69e3f317dfad4.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 2720,
+      "data_length": 0,
+      "depends_on": [
+        1,
+        4
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 34,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://assets.guim.co.uk/assets/5708.client.web.b25c19f429fad170b62e.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 12566,
+      "data_length": 0,
+      "depends_on": [
+        1,
+        4
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 35,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://assets.guim.co.uk/assets/3126.client.web.8e00345c3190ff7a0fbb.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 3857,
+      "data_length": 0,
+      "depends_on": [
+        1,
+        4
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 36,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://assets.guim.co.uk/assets/3649.client.web.6e4e8fc5d31f3f7385b7.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 6347,
+      "data_length": 0,
+      "depends_on": [
+        1,
+        4
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 37,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://assets.guim.co.uk/assets/3601.client.web.46100d9619eea067f00d.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 8143,
+      "data_length": 0,
+      "depends_on": [
+        1,
+        4
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 38,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://assets.guim.co.uk/assets/ScrollableHighlights-island.client.web.81282f544bf5d73bc3be.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 4058,
+      "data_length": 0,
+      "depends_on": [
+        1,
+        3,
+        4,
+        16
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 39,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://assets.guim.co.uk/assets/4501.client.web.709ee77324103df52901.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 3158,
+      "data_length": 0,
+      "depends_on": [
+        1,
+        5
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 40,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://assets.guim.co.uk/commercial/8b018006e40a52e4093f/graun.756.commercial.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 7749,
+      "data_length": 0,
+      "depends_on": [
+        1,
+        5
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 41,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://assets.guim.co.uk/commercial/5511edb2a0191c4777e3/graun.42.commercial.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 12907,
+      "data_length": 0,
+      "depends_on": [
+        1,
+        5
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 42,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://assets.guim.co.uk/commercial/b494ab9b554733457a1e/graun.708.commercial.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 3359,
+      "data_length": 0,
+      "depends_on": [
+        1,
+        5
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 43,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://assets.guim.co.uk/commercial/f630c118ef71e82965d9/graun.783.commercial.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 14501,
+      "data_length": 0,
+      "depends_on": [
+        1,
+        5
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 44,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://assets.guim.co.uk/commercial/148113137e187f951439/graun.326.commercial.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 28811,
+      "data_length": 0,
+      "depends_on": [
+        1,
+        5
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 45,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://assets.guim.co.uk/commercial/4c82410584e7af830462/graun.consented-advertising.commercial.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 137997,
+      "data_length": 0,
+      "depends_on": [
+        1,
+        5,
+        45
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 46,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://assets.guim.co.uk/commercial/d10717f4465a03c0db36/graun.760.commercial.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 2913,
+      "data_length": 0,
+      "depends_on": [
+        1,
+        5,
+        45
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 47,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://assets.guim.co.uk/commercial/b0197b5509958952cc9b/graun.Prebid.js.commercial.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 373,
+      "data_length": 0,
+      "depends_on": [
+        1,
+        4
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 48,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://assets.guim.co.uk/assets/AlreadyVisited-island.client.web.625c08602868be33b08d.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 1941,
+      "data_length": 0,
+      "depends_on": [
+        1,
+        4
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 49,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://assets.guim.co.uk/assets/AdmiralScript-island.client.web.8a267e5af8f64484663d.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 546,
+      "data_length": 0,
+      "depends_on": [
+        1,
+        4
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 50,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://assets.guim.co.uk/assets/FocusStyles-island.client.web.4de9802c60a5120d211b.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 767,
+      "data_length": 0,
+      "depends_on": [
+        1,
+        4
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 51,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://assets.guim.co.uk/assets/ShowHideContainers-island.client.web.9fc02046478cafd0ad64.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 323,
+      "data_length": 0,
+      "depends_on": [
+        1,
+        4
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 52,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://assets.guim.co.uk/assets/BrazeMessaging-island.client.web.d080e1c4ca5b535eb817.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 424,
+      "data_length": 0,
+      "depends_on": [
+        1,
+        4
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 53,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://assets.guim.co.uk/assets/ReaderRevenueDev-island.client.web.4e8447bdff8bd2a4fbc6.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 1989,
+      "data_length": 0,
+      "depends_on": [
+        1,
+        4
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 54,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://assets.guim.co.uk/assets/GoogleOneTap-island.client.web.50e8eda30e1f62c38e4a.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 4057,
+      "data_length": 0,
+      "depends_on": [
+        1,
+        4
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 55,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://assets.guim.co.uk/assets/EditionSwitcherBanner-island.client.web.5a50bf25a41d7785ac54.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 26264,
+      "data_length": 0,
+      "depends_on": [
+        1,
+        4
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 56,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://assets.guim.co.uk/assets/3615.client.web.302ef0a1e5b3c669cd94.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 11021,
+      "data_length": 0,
+      "depends_on": [
+        1,
+        4
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 57,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://assets.guim.co.uk/assets/1117.client.web.c9111bc79025df5a58f5.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 5992,
+      "data_length": 0,
+      "depends_on": [
+        1,
+        4
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 58,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://assets.guim.co.uk/assets/StickyBottomBanner-island.client.web.ab0a4113b2a07ca9cdb8.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 155,
+      "data_length": 0,
+      "depends_on": [
+        45
+      ],
+      "headers": [
+        [
+          "accept",
+          "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=0, i"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "iframe"
+        ],
+        [
+          "sec-fetch-mode",
+          "navigate"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "sec-fetch-user",
+          "?1"
+        ],
+        [
+          "upgrade-insecure-requests",
+          "1"
+        ],
+        [
+          "upgrade-insecure-requests",
+          "1"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 59,
+      "known_valid": true,
+      "type": "Document",
+      "url": "https://assets.guim.co.uk/commercial/tpc-test/v2/index.html"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 2805,
+      "data_length": 0,
+      "depends_on": [
+        1,
+        4,
+        22
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 60,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://assets.guim.co.uk/assets/3677.client.web.887a30ead1c2a1c46220.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 2523,
+      "data_length": 0,
+      "depends_on": [
+        1,
+        4,
+        22
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 61,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://assets.guim.co.uk/assets/2774.client.web.801176862622da3cee3a.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 867,
+      "data_length": 0,
+      "depends_on": [
+        1,
+        4,
+        22
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 62,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://assets.guim.co.uk/assets/206.client.web.28658e0b7c2dbb1c5bd4.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 5417,
+      "data_length": 0,
+      "depends_on": [
+        1,
+        40,
+        45
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=1, i"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "referer",
+          "https://www.theguardian.com/au"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "empty"
+        ],
+        [
+          "sec-fetch-mode",
+          "cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 63,
+      "known_valid": true,
+      "type": "Fetch",
+      "url": "https://www.theguardian.com/commercial/non-refreshable-line-items.json"
+    }
+  ]
+}

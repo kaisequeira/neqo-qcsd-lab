@@ -15,9 +15,9 @@ request_policies:
 
 defenses:
   - undefended
-  - name: static
+  - name: static-control
     kind: static
-    schedule: ../defense-params/static-migration.csv
+    schedule: ../defense-params/static-control-1200.csv
     mode: chaff-only
   - front
   - tamaraw

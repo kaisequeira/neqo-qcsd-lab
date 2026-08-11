@@ -23,7 +23,12 @@ from .experiment import (
     validate_planned_sample_identity,
 )
 from .fidelity import _schedule_realization_metrics, fidelity_eligible
-from .manifest import canonical_bytes, runtime_manifest, validate_manifest
+from .manifest import (
+    canonical_bytes,
+    runtime_manifest,
+    validate_manifest,
+    validate_research_preparation,
+)
 from .parameters import (
     parameter_provenance_path,
     validate_frozen_parameter_artifact,
@@ -190,7 +195,12 @@ def _load_campaign(path: Path, *, frozen_inputs: Path | None) -> Campaign:
         or any(policy not in REQUEST_POLICIES for policy in policies)
     ):
         raise ValueError("request_policies must contain unique as-defined/half-duplex values")
-    workloads = _load_workloads(path, value["workloads"], frozen_inputs=frozen_inputs)
+    workloads = _load_workloads(
+        path,
+        value["workloads"],
+        purpose=purpose,
+        frozen_inputs=frozen_inputs,
+    )
     defenses = _load_defenses(
         path.parent,
         value["defenses"],
@@ -226,7 +236,11 @@ def _workload_root(campaign_path: Path) -> Path:
 
 
 def _load_workloads(
-    path: Path, raw: Any, *, frozen_inputs: Path | None = None
+    path: Path,
+    raw: Any,
+    *,
+    purpose: str,
+    frozen_inputs: Path | None = None,
 ) -> tuple[Workload, ...]:
     value = _object(raw, "workloads")
     if not value:
@@ -252,6 +266,8 @@ def _load_workloads(
         except UnicodeError as error:
             raise ValueError(f"workload manifest is not valid UTF-8: {manifest_path}") from error
         validate_manifest(manifest)
+        if purpose in {"fitting", "evaluation"}:
+            validate_research_preparation(manifest, workload_id=workload_id)
         runtime = runtime_manifest(manifest)
         origins = capture_engine._manifest_origins(runtime)
         result.append(
@@ -332,6 +348,7 @@ def _load_defenses(
         raise ValueError("defenses must be a non-empty list")
     defenses: list[capture_engine.Defense] = []
     names: set[str] = set()
+    evaluation_bundle_root: Path | None = None
     for item in raw:
         if not isinstance(item, (str, dict)):
             raise ValueError("each defense must be a name or object")
@@ -395,9 +412,51 @@ def _load_defenses(
             parameters = value.get("parameters")
             if not isinstance(parameters, str) or not parameters:
                 raise ValueError(f"{kind} requires a parameter file")
+            original_name = Path(parameters).name
             if frozen_inputs is None:
                 parameters_path = (base / str(parameters)).resolve()
                 provenance_path = parameter_provenance_path(parameters_path)
+            else:
+                research_dir = frozen_inputs / "defense-parameters" / "research-1200"
+                if purpose == "evaluation" or (research_dir / original_name).is_file():
+                    parameters_path = (research_dir / original_name).resolve()
+                    provenance_path = (research_dir / "provenance.json").resolve()
+                else:
+                    artifact_dir = frozen_inputs / "defense-parameters" / name
+                    parameters_path = (artifact_dir / "parameters.json").resolve()
+                    provenance_path = (artifact_dir / "provenance.json").resolve()
+
+            if purpose == "evaluation":
+                from .fitting import BUNDLE_FILES, verify_artifact_bundle
+
+                bundle_root = parameters_path.parent
+                if evaluation_bundle_root is not None and bundle_root != evaluation_bundle_root:
+                    raise ValueError(
+                        "evaluation data-driven defenses must reference one common sealed "
+                        "research bundle"
+                    )
+                if evaluation_bundle_root is None:
+                    if not bundle_root.is_dir() or bundle_root.is_symlink():
+                        raise ValueError(
+                            f"evaluation campaign requires a sealed research bundle at "
+                            f"{bundle_root}; run ./qcsd-lab fit <fitting-result> first"
+                        )
+                    try:
+                        verify_artifact_bundle(bundle_root)
+                    except (OSError, TypeError, ValueError) as error:
+                        raise ValueError(
+                            f"evaluation campaign research bundle is invalid at "
+                            f"{bundle_root}: {error}"
+                        ) from error
+                    evaluation_bundle_root = bundle_root
+                expected_name = BUNDLE_FILES[kind]
+                if original_name != expected_name or parameters_path.name != expected_name:
+                    raise ValueError(
+                        f"evaluation {kind} must reference {expected_name} from the common "
+                        "sealed research bundle"
+                    )
+
+            if frozen_inputs is None:
                 artifact = validate_parameter_artifact(
                     parameters_path,
                     provenance_path=provenance_path,
@@ -408,15 +467,6 @@ def _load_defenses(
                     expected_workloads=workload_ids,
                 )
             else:
-                original_name = Path(parameters).name
-                research_dir = frozen_inputs / "defense-parameters" / "research-1200"
-                if (research_dir / original_name).is_file():
-                    parameters_path = (research_dir / original_name).resolve()
-                    provenance_path = (research_dir / "provenance.json").resolve()
-                else:
-                    artifact_dir = frozen_inputs / "defense-parameters" / name
-                    parameters_path = (artifact_dir / "parameters.json").resolve()
-                    provenance_path = (artifact_dir / "provenance.json").resolve()
                 artifact = validate_frozen_parameter_artifact(
                     parameters_path,
                     provenance_path=provenance_path,
