@@ -12,6 +12,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+import numpy as np
+
+from . import fitting_morphing, fitting_walkie_talkie, fitting_wtfpad
 from .experiment import resolved_sample_directory
 from .fitting_morphing import fit_traffic_morphing
 from .fitting_trace import FittingTrace, load_fitting_trace
@@ -29,7 +32,7 @@ from .util import (
 from .verification import VerifiedResult, verify_result
 
 
-BUNDLE_SCHEMA_VERSION = 1
+BUNDLE_SCHEMA_VERSION = 2
 BUNDLE_DIRECTORY = "research-1200"
 BUNDLE_FILES = {
     "traffic_morphing": "traffic-morphing.json",
@@ -40,12 +43,12 @@ PROVENANCE_FILE = "provenance.json"
 EXACT_BUNDLE_FILES = frozenset((*BUNDLE_FILES.values(), PROVENANCE_FILE))
 RESEARCH_PARAMETER_INPUT_POLICY = "sealed-fitting-result-v1"
 RESEARCH_ARTIFACT_STATUS = "fitted-research-artifact"
-FITTER_VERSION = "qcsd_lab.fitting 1.0.0"
+FITTER_VERSION = "qcsd_lab.fitting 2.0.0"
 EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 ALGORITHM_GENERATORS = {
-    "traffic_morphing": "qcsd_lab.fitting_morphing 1.0.0",
-    "wtf_pad": "qcsd_lab.fitting_wtfpad 1.0.0",
-    "walkie_talkie": "qcsd_lab.fitting_walkie_talkie 1.0.0",
+    "traffic_morphing": "qcsd_lab.fitting_morphing 2.0.0",
+    "wtf_pad": "qcsd_lab.fitting_wtfpad 2.0.0",
+    "walkie_talkie": "qcsd_lab.fitting_walkie_talkie 2.0.0",
 }
 
 
@@ -91,6 +94,7 @@ def fit_result(
 ) -> Path:
     """Fit all three artifacts and atomically create the fixed four-file bundle."""
 
+    _require_scipy_version()
     fitting = validate_fitting_result(result_root)
     experiment = fitting.verified.experiment
     source_result = {
@@ -383,6 +387,27 @@ def _consumed_corpus_digest(
     )
 
 
+def _training_input_digest(
+    *,
+    sample_id: str,
+    workload_id: str,
+    request_policy: str,
+    visit: int,
+    consumed_evidence: Mapping[str, object],
+) -> str:
+    identity = {
+        "consumed_evidence": dict(consumed_evidence),
+        "request_policy": request_policy,
+        "sample_id": sample_id,
+        "visit": visit,
+        "workload_id": workload_id,
+    }
+    return sha256_bytes(
+        b"qcsd-fitting-trace-v1\0"
+        + json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+    )
+
+
 def _validate_provenance(value: object) -> None:
     expected = {
         "schema_version",
@@ -439,7 +464,7 @@ def _validate_provenance(value: object) -> None:
     }:
         raise ValueError("research fitting contract receipt is invalid")
     if (
-        contract["contract_version"] != 1
+        contract["contract_version"] != 2
         or contract["fitter_version"] != FITTER_VERSION
         or contract["parameter_schema_version"] != 2
         or contract["profile"] != "research-1200"
@@ -453,6 +478,7 @@ def _validate_provenance(value: object) -> None:
         raise ValueError("research fitting contract values are invalid")
     if dict(contract) != _fitting_contract(contract["workload_order"]):
         raise ValueError("research fitting contract constants are invalid")
+    _require_scipy_version()
     contributions = value["sample_contributions"]
     if not isinstance(contributions, list) or len(contributions) != 6:
         raise ValueError("research provenance requires six workload contributions")
@@ -502,6 +528,17 @@ def _validate_provenance(value: object) -> None:
                     or any(not _digest(digest) for digest in consumed.values())
                 ):
                     raise ValueError("research sample consumed-evidence binding is invalid")
+                expected_training_input = _training_input_digest(
+                    sample_id=sample["sample_id"],
+                    workload_id=workload,
+                    request_policy=str(policy),
+                    visit=sample["visit"],
+                    consumed_evidence=consumed,
+                )
+                if sample["training_input_sha256"] != expected_training_input:
+                    raise ValueError(
+                        "research sample training-input digest does not match its identity"
+                    )
                 visits.append(sample["visit"])
                 sample_id = sample["sample_id"]
                 training_input = sample["training_input_sha256"]
@@ -552,7 +589,12 @@ def _validate_algorithm_receipts(
 def _validate_traffic_morphing_receipt(value: object, workload_order: Sequence[str]) -> None:
     receipt = _exact_mapping(
         value,
-        {"algorithm", "candidate_costs", "selected_mapping"},
+        {
+            "algorithm",
+            "candidate_costs",
+            "corpus_bucket_counts",
+            "selected_mapping",
+        },
         "Traffic Morphing algorithm receipt",
     )
     if receipt["algorithm"] != "all-directed-padding-only-lp-then-minimum-cost-derangement":
@@ -563,6 +605,26 @@ def _validate_traffic_morphing_receipt(value: object, workload_order: Sequence[s
         for target in workload_order
         if source != target
     ]
+    corpus = receipt["corpus_bucket_counts"]
+    if not isinstance(corpus, list) or len(corpus) != len(workload_order):
+        raise ValueError("Traffic Morphing corpus bucket counts are invalid")
+    for workload, value in zip(workload_order, corpus, strict=True):
+        record = _exact_mapping(
+            value,
+            {"workload_id", "outgoing", "incoming"},
+            "Traffic Morphing corpus bucket counts",
+        )
+        if record["workload_id"] != workload:
+            raise ValueError("Traffic Morphing corpus workload order is invalid")
+        for direction in ("outgoing", "incoming"):
+            counts = record[direction]
+            if (
+                not isinstance(counts, list)
+                or len(counts) != len(fitting_morphing.DEFAULT_BUCKETS)
+                or any(type(count) is not int or count < 0 for count in counts)
+                or sum(counts) <= 0
+            ):
+                raise ValueError("Traffic Morphing corpus bucket counts are invalid")
     candidates = _cost_records(
         receipt["candidate_costs"],
         identity_fields=("source", "target"),
@@ -611,7 +673,12 @@ def _validate_traffic_morphing_receipt(value: object, workload_order: Sequence[s
 def _validate_wtf_pad_receipt(value: object) -> None:
     receipt = _exact_mapping(
         value,
-        {"algorithm", "global_bandwidth_threshold_bytes_per_second", "populations"},
+        {
+            "algorithm",
+            "global_bandwidth_threshold_bytes_per_second",
+            "populations",
+            "training_samples",
+        },
         "WTF-PAD algorithm receipt",
     )
     if receipt["algorithm"] != "corpus-mean-bandwidth-mle-ks-histograms" or not _positive_number(
@@ -621,6 +688,64 @@ def _validate_wtf_pad_receipt(value: object) -> None:
     populations = _exact_mapping(
         receipt["populations"], {"outgoing", "incoming"}, "WTF-PAD populations"
     )
+    training_samples = receipt["training_samples"]
+    if not isinstance(training_samples, list) or len(training_samples) != 60:
+        raise ValueError("WTF-PAD receipt requires exactly 60 training samples")
+    observed_hashes: set[str] = set()
+    aggregate: dict[str, dict[str, list[int]]] = {
+        direction: {"intra": [], "between": [], "lengths": []}
+        for direction in ("outgoing", "incoming")
+    }
+    total_bytes = 0
+    total_duration_ns = 0
+    for sample in training_samples:
+        record = _exact_mapping(
+            sample,
+            {
+                "training_input_sha256",
+                "total_bytes",
+                "active_duration_ns",
+                "directions",
+            },
+            "WTF-PAD training sample",
+        )
+        training_hash = record["training_input_sha256"]
+        if not _digest(training_hash) or training_hash in observed_hashes:
+            raise ValueError("WTF-PAD training sample hashes are invalid")
+        observed_hashes.add(training_hash)
+        if (
+            type(record["total_bytes"]) is not int
+            or record["total_bytes"] <= 0
+            or type(record["active_duration_ns"]) is not int
+            or record["active_duration_ns"] <= 0
+        ):
+            raise ValueError("WTF-PAD training bandwidth sample is invalid")
+        total_bytes += record["total_bytes"]
+        total_duration_ns += record["active_duration_ns"]
+        directions = _exact_mapping(
+            record["directions"], {"outgoing", "incoming"}, "WTF-PAD directions"
+        )
+        for direction in ("outgoing", "incoming"):
+            values = _exact_mapping(
+                directions[direction],
+                {
+                    "intra_burst_delays_us",
+                    "between_burst_delays_us",
+                    "burst_lengths_packets",
+                },
+                f"WTF-PAD {direction} training population",
+            )
+            intra = _positive_integer_list(values["intra_burst_delays_us"])
+            between = _positive_integer_list(values["between_burst_delays_us"])
+            lengths = _positive_integer_list(values["burst_lengths_packets"])
+            if len(lengths) != len(between) + 1 or sum(lengths) != len(intra) + len(between) + 1:
+                raise ValueError(f"WTF-PAD {direction} per-sample burst population is inconsistent")
+            aggregate[direction]["intra"].extend(intra)
+            aggregate[direction]["between"].extend(between)
+            aggregate[direction]["lengths"].extend(lengths)
+    expected_threshold = fitting_wtfpad._float(total_bytes * 1_000_000_000.0 / total_duration_ns)
+    if receipt["global_bandwidth_threshold_bytes_per_second"] != expected_threshold:
+        raise ValueError("WTF-PAD global bandwidth threshold is inconsistent")
     for direction in ("outgoing", "incoming"):
         population = _exact_mapping(
             populations[direction],
@@ -632,6 +757,9 @@ def _validate_wtf_pad_receipt(value: object) -> None:
                 type(population[field]) is not int or population[field] <= 0
                 for field in ("between_burst_delays", "intra_burst_delays", "bursts")
             )
+            or population["between_burst_delays"] != len(aggregate[direction]["between"])
+            or population["intra_burst_delays"] != len(aggregate[direction]["intra"])
+            or population["bursts"] != len(aggregate[direction]["lengths"])
             or population["bursts"] != population["between_burst_delays"] + 60
         ):
             raise ValueError(f"WTF-PAD {direction} population receipt is invalid")
@@ -640,7 +768,7 @@ def _validate_wtf_pad_receipt(value: object) -> None:
 def _validate_walkie_talkie_receipt(value: object, workload_order: Sequence[str]) -> None:
     receipt = _exact_mapping(
         value,
-        {"algorithm", "candidate_pair_costs", "selected_pairs"},
+        {"algorithm", "candidate_pair_costs", "selected_pairs", "training_visits"},
         "Walkie-Talkie algorithm receipt",
     )
     if receipt["algorithm"] != "full-cohort-minimum-weight-perfect-matching":
@@ -649,6 +777,39 @@ def _validate_walkie_talkie_receipt(value: object, workload_order: Sequence[str]
     expected_pairs = [
         (left, right) for index, left in enumerate(lexical) for right in lexical[index + 1 :]
     ]
+    training_visits = receipt["training_visits"]
+    if not isinstance(training_visits, list) or len(training_visits) != len(workload_order):
+        raise ValueError("Walkie-Talkie training visits are invalid")
+    observed_training_hashes: set[str] = set()
+    for workload, value in zip(workload_order, training_visits, strict=True):
+        record = _exact_mapping(
+            value,
+            {"workload_id", "visits"},
+            "Walkie-Talkie workload training visits",
+        )
+        if record["workload_id"] != workload or not isinstance(record["visits"], list):
+            raise ValueError("Walkie-Talkie training workload order is invalid")
+        if len(record["visits"]) != 10:
+            raise ValueError("Walkie-Talkie requires ten training visits per workload")
+        for visit, visit_value in enumerate(record["visits"]):
+            visit_record = _exact_mapping(
+                visit_value,
+                {"visit", "training_input_sha256", "bursts", "batch_ends"},
+                "Walkie-Talkie training visit",
+            )
+            training_hash = visit_record["training_input_sha256"]
+            if (
+                visit_record["visit"] != visit
+                or not _digest(training_hash)
+                or training_hash in observed_training_hashes
+            ):
+                raise ValueError("Walkie-Talkie training visit identity is invalid")
+            observed_training_hashes.add(training_hash)
+            _parse_burst_sequence(
+                visit_record["bursts"],
+                visit_record["batch_ends"],
+                "Walkie-Talkie training visit",
+            )
     candidates = _cost_records(
         receipt["candidate_pair_costs"],
         identity_fields=("left", "right"),
@@ -708,8 +869,7 @@ def _validate_algorithm_artifact_binding(
     provenance: Mapping[str, object], kind: str, parameter: Mapping[str, Any]
 ) -> None:
     algorithms = provenance["algorithms"]
-    contract = provenance["fitting_contract"]
-    assert isinstance(algorithms, Mapping) and isinstance(contract, Mapping)
+    assert isinstance(algorithms, Mapping)
     receipt = algorithms[kind]
     expected_generator = (
         f"{ALGORITHM_GENERATORS[kind]}; algorithm_receipt_sha256="
@@ -717,142 +877,641 @@ def _validate_algorithm_artifact_binding(
     )
     if parameter.get("generated_by") != expected_generator:
         raise ValueError(f"{kind} artifact does not bind its algorithm receipt")
-    constants = contract["constants"]
-    assert isinstance(constants, Mapping)
     if kind == "traffic_morphing":
-        algorithm = _exact_mapping(
-            receipt,
-            {"algorithm", "candidate_costs", "selected_mapping"},
-            "Traffic Morphing algorithm receipt",
-        )
-        profiles = parameter.get("profiles")
-        selected = algorithm["selected_mapping"]
-        if not isinstance(profiles, list) or not isinstance(selected, list):
-            raise ValueError("Traffic Morphing artifact/receipt binding is invalid")
-        identities = [
-            (profile.get("source"), profile.get("target"))
-            for profile in profiles
-            if isinstance(profile, Mapping)
-        ]
-        selected_identities = [
-            (item.get("source"), item.get("target"))
-            for item in selected
-            if isinstance(item, Mapping)
-        ]
-        if (
-            identities != selected_identities
-            or parameter.get("buckets") != constants["traffic_morphing"]["buckets"]
-        ):
-            raise ValueError("Traffic Morphing artifact disagrees with its algorithm receipt")
-        for profile, item in zip(profiles, selected, strict=True):
-            assert isinstance(profile, Mapping) and isinstance(item, Mapping)
-            outgoing = profile.get("outgoing")
-            incoming = profile.get("incoming")
-            if (
-                not isinstance(outgoing, Mapping)
-                or not isinstance(incoming, Mapping)
-                or item["l1_cost"]
-                != outgoing.get("l1_distance", -1) + incoming.get("l1_distance", -1)
-            ):
-                raise ValueError("Traffic Morphing selected fidelity cost is inconsistent")
-            for direction in (outgoing, incoming):
-                rows = direction.get("rows")
-                if not isinstance(rows, list) or any(
-                    any(float(weight) != 0.0 for weight in row[:index])
-                    for index, row in enumerate(rows)
-                    if isinstance(row, list)
-                ):
-                    raise ValueError("Traffic Morphing artifact permits downward morphing")
+        _validate_traffic_morphing_artifact(provenance, parameter)
         return
     if kind == "wtf_pad":
-        algorithm = _exact_mapping(
-            receipt,
-            {"algorithm", "global_bandwidth_threshold_bytes_per_second", "populations"},
-            "WTF-PAD algorithm receipt",
-        )
-        fitting = parameter.get("fitting")
-        if not isinstance(fitting, Mapping):
-            raise ValueError("WTF-PAD fitting metadata is invalid")
-        wtf_constants = constants["wtf_pad"]
-        assert isinstance(wtf_constants, Mapping)
-        expected_constants = {
-            "instantaneous_bandwidth_window_packets": wtf_constants["bandwidth_window_packets"],
-            "burst_threshold_method": wtf_constants["burst_threshold_method"],
-            "candidate_models": wtf_constants["candidate_models"],
-            "tuning_percentile": wtf_constants["tuning_percentile"],
-            "tuning_applies_to": wtf_constants["tuning_applies_to"],
-            "finite_domain_percentile": wtf_constants["finite_domain_percentile"],
-            "histogram_bin_count": wtf_constants["histogram_bin_count"],
-            "histogram_scale": wtf_constants["histogram_scale"],
-            "finite_token_budget": wtf_constants["finite_token_budget"],
-            "fake_burst_probability": wtf_constants["fake_burst_probability"],
-            "infinity_token_formulas": wtf_constants["infinity_token_formulas"],
-            "tuning_transformation": wtf_constants["tuning_transformation"],
-        }
-        if any(fitting.get(key) != expected for key, expected in expected_constants.items()) or (
-            fitting.get("bandwidth_threshold_bytes_per_second")
-            != algorithm["global_bandwidth_threshold_bytes_per_second"]
-        ):
-            raise ValueError("WTF-PAD artifact disagrees with its algorithm receipt")
-        populations = algorithm["populations"]
-        assert isinstance(populations, Mapping)
-        for direction in ("outgoing", "incoming"):
-            direction_fit = parameter.get(direction)
-            population = populations[direction]
-            if not isinstance(direction_fit, Mapping) or not isinstance(population, Mapping):
-                raise ValueError("WTF-PAD population binding is invalid")
-            fit = direction_fit.get("fit")
-            if not isinstance(fit, Mapping):
-                raise ValueError("WTF-PAD direction fit is invalid")
-            burst = fit.get("burst")
-            gap = fit.get("gap")
-            if (
-                not isinstance(burst, Mapping)
-                or not isinstance(gap, Mapping)
-                or burst.get("sample_count") != population["between_burst_delays"]
-                or gap.get("sample_count") != population["intra_burst_delays"]
-                or burst.get("parameter_transformation") != wtf_constants["tuning_transformation"]
-                or gap.get("parameter_transformation") != wtf_constants["gap_transformation"]
-            ):
-                raise ValueError("WTF-PAD population counts disagree with its artifact")
-            for state in ("burst", "gap"):
-                histogram = direction_fit.get(state)
-                if (
-                    not isinstance(histogram, Mapping)
-                    or len(histogram.get("edges_us", [])) != wtf_constants["finite_bins"]
-                ):
-                    raise ValueError("WTF-PAD finite histogram domain is inconsistent")
+        _validate_wtf_pad_artifact(provenance, parameter)
         return
     if kind == "walkie_talkie":
-        algorithm = _exact_mapping(
-            receipt,
-            {"algorithm", "candidate_pair_costs", "selected_pairs"},
-            "Walkie-Talkie algorithm receipt",
-        )
-        profiles = parameter.get("profiles")
-        selected = algorithm["selected_pairs"]
-        wt_constants = constants["walkie_talkie"]
-        assert isinstance(wt_constants, Mapping)
-        if (
-            not isinstance(profiles, list)
-            or not isinstance(selected, list)
-            or parameter.get("packet_size") != wt_constants["packet_size"]
-            or parameter.get("cell_byte_domain") != wt_constants["cell_byte_domain"]
-        ):
-            raise ValueError("Walkie-Talkie artifact/receipt binding is invalid")
-        artifact_selection = [
-            {
-                "real": profile.get("real"),
-                "decoy": profile.get("decoy"),
-                "matching_cost_packets": profile.get("matching_cost_packets"),
-            }
-            for profile in profiles
-            if isinstance(profile, Mapping)
-        ]
-        if artifact_selection != selected:
-            raise ValueError("Walkie-Talkie artifact disagrees with its selected-pair receipt")
+        _validate_walkie_talkie_artifact(provenance, parameter)
         return
     raise ValueError(f"unsupported research parameter kind: {kind}")
+
+
+def _validate_traffic_morphing_artifact(
+    provenance: Mapping[str, object], parameter: Mapping[str, Any]
+) -> None:
+    _require_exact_keys(
+        parameter,
+        {
+            "adaptation",
+            "buckets",
+            "generated_by",
+            "paper_equivalent",
+            "profiles",
+            "schema_version",
+            "udp_payload_ceiling",
+        },
+        "Traffic Morphing artifact",
+    )
+    constants = provenance["fitting_contract"]["constants"]["traffic_morphing"]
+    algorithm = provenance["algorithms"]["traffic_morphing"]
+    assert isinstance(constants, Mapping) and isinstance(algorithm, Mapping)
+    buckets = constants["buckets"]
+    if (
+        parameter["adaptation"] != "qcsd-client-only"
+        or parameter["paper_equivalent"] is not False
+        or parameter["schema_version"] != 2
+        or parameter["udp_payload_ceiling"] != 1_200
+        or parameter["buckets"] != buckets
+        or not isinstance(buckets, list)
+    ):
+        raise ValueError("Traffic Morphing artifact constants are invalid")
+    corpus: dict[str, dict[str, tuple[list[float], int, list[int]]]] = {}
+    for record in algorithm["corpus_bucket_counts"]:
+        workload = record["workload_id"]
+        corpus[workload] = {}
+        for direction in ("outgoing", "incoming"):
+            counts = record[direction]
+            total = sum(counts)
+            distribution = [fitting_morphing._canonical_float(count / total) for count in counts]
+            corpus[workload][direction] = (distribution, total, counts)
+    recomputed_edges: dict[tuple[str, str], fitting_morphing.DirectedFit] = {}
+    workload_order = tuple(corpus)
+    for source in workload_order:
+        for target in workload_order:
+            if source == target:
+                continue
+            outgoing = fitting_morphing.morphing_matrix(
+                np.asarray(corpus[source]["outgoing"][2], dtype=float)
+                / corpus[source]["outgoing"][1],
+                np.asarray(corpus[target]["outgoing"][2], dtype=float)
+                / corpus[target]["outgoing"][1],
+                buckets,
+            )
+            incoming = fitting_morphing.morphing_matrix(
+                np.asarray(corpus[source]["incoming"][2], dtype=float)
+                / corpus[source]["incoming"][1],
+                np.asarray(corpus[target]["incoming"][2], dtype=float)
+                / corpus[target]["incoming"][1],
+                buckets,
+            )
+            recomputed_edges[(source, target)] = fitting_morphing.DirectedFit(
+                source=source,
+                target=target,
+                outgoing=outgoing,
+                incoming=incoming,
+                source_outgoing_packets=corpus[source]["outgoing"][1],
+                source_incoming_packets=corpus[source]["incoming"][1],
+            )
+    expected_candidates = [
+        {
+            "source": source,
+            "target": target,
+            "l1_cost": recomputed_edges[(source, target)].fidelity_cost,
+            "estimated_added_bytes": recomputed_edges[(source, target)].byte_cost,
+        }
+        for source in workload_order
+        for target in workload_order
+        if source != target
+    ]
+    recomputed_selection = fitting_morphing.minimum_cost_derangement(
+        workload_order, recomputed_edges
+    )
+    expected_selected = [
+        {
+            "source": source,
+            "target": target,
+            "l1_cost": recomputed_edges[(source, target)].fidelity_cost,
+            "estimated_added_bytes": recomputed_edges[(source, target)].byte_cost,
+        }
+        for source, target in recomputed_selection
+    ]
+    if (
+        algorithm["candidate_costs"] != expected_candidates
+        or algorithm["selected_mapping"] != expected_selected
+    ):
+        raise ValueError("Traffic Morphing candidate costs or optimum are inconsistent")
+    profiles = parameter["profiles"]
+    selected = algorithm["selected_mapping"]
+    if not isinstance(profiles, list) or len(profiles) != len(selected):
+        raise ValueError("Traffic Morphing profile count is invalid")
+    for profile, selection in zip(profiles, selected, strict=True):
+        profile_record = _exact_mapping(
+            profile,
+            {"incoming", "outgoing", "source", "target"},
+            "Traffic Morphing profile",
+        )
+        source = profile_record["source"]
+        target = profile_record["target"]
+        if (source, target) != (selection["source"], selection["target"]):
+            raise ValueError("Traffic Morphing profile selection is inconsistent")
+        direction_values: dict[str, tuple[float, float]] = {}
+        for direction in ("outgoing", "incoming"):
+            source_distribution = corpus[source][direction][0]
+            target_distribution = corpus[target][direction][0]
+            direction_values[direction] = _validate_morphing_direction_derivations(
+                profile_record[direction],
+                buckets,
+                source_distribution,
+                target_distribution,
+                f"Traffic Morphing {source}->{target} {direction}",
+            )
+        expected_l1 = direction_values["outgoing"][0] + direction_values["incoming"][0]
+        expected_bytes = (
+            corpus[source]["outgoing"][1] * direction_values["outgoing"][1]
+            + corpus[source]["incoming"][1] * direction_values["incoming"][1]
+        )
+        if (
+            selection["l1_cost"] != expected_l1
+            or selection["estimated_added_bytes"] != expected_bytes
+        ):
+            raise ValueError("Traffic Morphing selected aggregate costs are inconsistent")
+    expected_profiles = [
+        fitting_morphing._profile_json(recomputed_edges[(source, target)])
+        for source, target in recomputed_selection
+    ]
+    if profiles != expected_profiles:
+        raise ValueError("Traffic Morphing profiles do not match canonical LP solutions")
+
+
+def _validate_morphing_direction_derivations(
+    value: object,
+    buckets: Sequence[int],
+    expected_source: list[float],
+    expected_target: list[float],
+    label: str,
+) -> tuple[float, float]:
+    direction = _exact_mapping(
+        value,
+        {
+            "expected_added_bytes",
+            "l1_distance",
+            "realized_distribution",
+            "rows",
+            "source_distribution",
+            "target_distribution",
+        },
+        label,
+    )
+    width = len(buckets)
+    source = _finite_probability_vector(direction["source_distribution"], width, label)
+    target = _finite_probability_vector(direction["target_distribution"], width, label)
+    if source != expected_source or target != expected_target:
+        raise ValueError(f"{label} source/target distributions do not match the corpus")
+    rows_value = direction["rows"]
+    if not isinstance(rows_value, list) or len(rows_value) != width:
+        raise ValueError(f"{label} matrix has an invalid shape")
+    rows: list[list[float]] = []
+    for row_index, row_value in enumerate(rows_value):
+        row = _finite_probability_vector(row_value, width, label)
+        if any(weight != 0.0 for weight in row[:row_index]):
+            raise ValueError(f"{label} matrix permits downward morphing")
+        if source[row_index] == 0.0 and row != [
+            1.0 if column == row_index else 0.0 for column in range(width)
+        ]:
+            raise ValueError(f"{label} unsupported source row must be identity")
+        rows.append(row)
+    realized = [
+        fitting_morphing._canonical_float(
+            math.fsum(source[row] * rows[row][column] for row in range(width))
+        )
+        for column in range(width)
+    ]
+    claimed_realized = _finite_probability_vector(direction["realized_distribution"], width, label)
+    if claimed_realized != realized:
+        raise ValueError(f"{label} realized distribution is inconsistent")
+    l1 = fitting_morphing._canonical_float(
+        math.fsum(abs(actual - expected) for actual, expected in zip(realized, target, strict=True))
+    )
+    added = fitting_morphing._canonical_float(
+        math.fsum(
+            source[row] * rows[row][column] * (buckets[column] - buckets[row])
+            for row in range(width)
+            for column in range(row, width)
+        )
+    )
+    if direction["l1_distance"] != l1 or direction["expected_added_bytes"] != added:
+        raise ValueError(f"{label} derived costs are inconsistent")
+    return l1, added
+
+
+def _validate_wtf_pad_artifact(
+    provenance: Mapping[str, object], parameter: Mapping[str, Any]
+) -> None:
+    _require_scipy_version()
+    _require_exact_keys(
+        parameter,
+        {
+            "schema_version",
+            "adaptation",
+            "paper_equivalent",
+            "fitted_from",
+            "generated_by",
+            "fitting",
+            "outgoing",
+            "incoming",
+        },
+        "WTF-PAD artifact",
+    )
+    constants = provenance["fitting_contract"]["constants"]["wtf_pad"]
+    algorithm = provenance["algorithms"]["wtf_pad"]
+    assert isinstance(constants, Mapping) and isinstance(algorithm, Mapping)
+    expected_fitting = {
+        "instantaneous_bandwidth_window_packets": constants["bandwidth_window_packets"],
+        "burst_threshold_method": constants["burst_threshold_method"],
+        "bandwidth_threshold_bytes_per_second": algorithm[
+            "global_bandwidth_threshold_bytes_per_second"
+        ],
+        "candidate_models": constants["candidate_models"],
+        "tuning_percentile": constants["tuning_percentile"],
+        "tuning_applies_to": constants["tuning_applies_to"],
+        "tuning_transformation": constants["tuning_transformation"],
+        "finite_domain_percentile": constants["finite_domain_percentile"],
+        "histogram_bin_count": constants["histogram_bin_count"],
+        "histogram_scale": constants["histogram_scale"],
+        "finite_token_budget": constants["finite_token_budget"],
+        "fake_burst_probability": constants["fake_burst_probability"],
+        "infinity_token_formulas": constants["infinity_token_formulas"],
+    }
+    if (
+        parameter["schema_version"] != 2
+        or parameter["adaptation"] != "qcsd-client-only"
+        or parameter["paper_equivalent"] is not False
+        or parameter["fitting"] != expected_fitting
+        or parameter["fitted_from"] != _provenance_corpus_digest(provenance, "as-defined")
+    ):
+        raise ValueError("WTF-PAD artifact constants or fitted_from binding are invalid")
+    expected_hashes = _provenance_training_hashes(provenance, "as-defined")
+    training_samples = algorithm["training_samples"]
+    if [sample["training_input_sha256"] for sample in training_samples] != expected_hashes:
+        raise ValueError("WTF-PAD training samples do not match as-defined contributions")
+    for direction in ("outgoing", "incoming"):
+        intra: list[int] = []
+        between: list[int] = []
+        lengths: list[int] = []
+        for sample in training_samples:
+            values = sample["directions"][direction]
+            intra.extend(values["intra_burst_delays_us"])
+            between.extend(values["between_burst_delays_us"])
+            lengths.extend(values["burst_lengths_packets"])
+        mean_length = fitting_wtfpad._float(float(np.mean(np.asarray(lengths, dtype=np.int64))))
+        if mean_length <= 1.0:
+            raise ValueError(f"WTF-PAD {direction} mean burst length is invalid")
+        burst_infinity = fitting_wtfpad._rounded_positive_tokens(
+            ((1.0 - constants["fake_burst_probability"]) / constants["fake_burst_probability"])
+            * constants["finite_token_budget"],
+            f"{direction} H_B",
+        )
+        gap_infinity = fitting_wtfpad._rounded_positive_tokens(
+            (constants["finite_token_budget"] - mean_length + 1.0) / (mean_length - 1.0),
+            f"{direction} H_G",
+        )
+        expected_burst_histogram, expected_burst_fit = fitting_wtfpad._fit_population(
+            np.asarray(between, dtype=np.int64),
+            infinity_tokens=burst_infinity,
+            label=f"{direction} between-burst verification",
+            tuning_percentile=constants["tuning_percentile"],
+        )
+        expected_gap_histogram, expected_gap_fit = fitting_wtfpad._fit_population(
+            np.asarray(intra, dtype=np.int64),
+            infinity_tokens=gap_infinity,
+            label=f"{direction} intra-burst verification",
+            tuning_percentile=None,
+        )
+        direction_value = _validate_wtf_direction_schema(parameter[direction], direction)
+        expected_direction = {
+            "burst": expected_burst_histogram,
+            "gap": expected_gap_histogram,
+            "fit": {
+                "mean_burst_length_packets": mean_length,
+                "burst": expected_burst_fit,
+                "gap": expected_gap_fit,
+            },
+        }
+        if direction_value != expected_direction:
+            raise ValueError(f"WTF-PAD {direction} histogram derivations are inconsistent")
+        if (
+            sum(direction_value["burst"]["tokens"]) != constants["finite_token_budget"]
+            or sum(direction_value["gap"]["tokens"]) != constants["finite_token_budget"]
+        ):
+            raise ValueError(f"WTF-PAD {direction} finite token total is inconsistent")
+
+
+def _validate_wtf_direction_schema(value: object, direction: str) -> Mapping[str, Any]:
+    record = _exact_mapping(value, {"burst", "gap", "fit"}, f"WTF-PAD {direction}")
+    for state in ("burst", "gap"):
+        histogram = _exact_mapping(
+            record[state], {"edges_us", "tokens", "infinity_tokens"}, f"WTF-PAD {state}"
+        )
+        edges = _positive_integer_list(histogram["edges_us"])
+        tokens = histogram["tokens"]
+        if (
+            len(edges) != fitting_wtfpad.FINITE_BINS
+            or not isinstance(tokens, list)
+            or len(tokens) != len(edges)
+            or any(type(token) is not int or token < 0 for token in tokens)
+            or type(histogram["infinity_tokens"]) is not int
+            or histogram["infinity_tokens"] <= 0
+        ):
+            raise ValueError(f"WTF-PAD {direction} {state} histogram schema is invalid")
+    fit = _exact_mapping(
+        record["fit"],
+        {"mean_burst_length_packets", "burst", "gap"},
+        f"WTF-PAD {direction} fit",
+    )
+    if not _positive_number(fit["mean_burst_length_packets"]):
+        raise ValueError(f"WTF-PAD {direction} mean burst length is invalid")
+    for state in ("burst", "gap"):
+        population = _exact_mapping(
+            fit[state],
+            {
+                "sample_count",
+                "selected_model",
+                "histogram_max_us",
+                "runtime_parameters",
+                "parameter_transformation",
+                "candidates",
+            },
+            f"WTF-PAD {direction} {state} fit",
+        )
+        if (
+            type(population["sample_count"]) is not int
+            or population["sample_count"] <= 0
+            or type(population["histogram_max_us"]) is not int
+            or population["histogram_max_us"] <= 0
+            or not isinstance(population["selected_model"], str)
+            or not isinstance(population["parameter_transformation"], str)
+            or not _finite_number_list(population["runtime_parameters"])
+            or not isinstance(population["candidates"], list)
+            or len(population["candidates"]) != 2
+        ):
+            raise ValueError(f"WTF-PAD {direction} {state} fit schema is invalid")
+        for candidate in population["candidates"]:
+            candidate_record = _exact_mapping(
+                candidate,
+                {"name", "parameters", "ks_statistic"},
+                f"WTF-PAD {direction} {state} candidate",
+            )
+            if (
+                not isinstance(candidate_record["name"], str)
+                or not _finite_number_list(candidate_record["parameters"])
+                or not _nonnegative_number(candidate_record["ks_statistic"])
+                or candidate_record["ks_statistic"] > 1
+            ):
+                raise ValueError(f"WTF-PAD {direction} {state} candidate is invalid")
+    return record
+
+
+def _validate_walkie_talkie_artifact(
+    provenance: Mapping[str, object], parameter: Mapping[str, Any]
+) -> None:
+    _require_exact_keys(
+        parameter,
+        {
+            "adaptation",
+            "burst_definition",
+            "cell_byte_domain",
+            "schema_version",
+            "generated_by",
+            "matching_algorithm",
+            "paper_equivalent",
+            "packet_size",
+            "profiles",
+        },
+        "Walkie-Talkie artifact",
+    )
+    constants = provenance["fitting_contract"]["constants"]["walkie_talkie"]
+    algorithm = provenance["algorithms"]["walkie_talkie"]
+    assert isinstance(constants, Mapping) and isinstance(algorithm, Mapping)
+    if (
+        parameter["adaptation"] != "qcsd-client-only"
+        or parameter["burst_definition"] != constants["burst_definition"]
+        or parameter["cell_byte_domain"] != constants["cell_byte_domain"]
+        or parameter["schema_version"] != 2
+        or parameter["matching_algorithm"] != constants["runtime_matching_algorithm"]
+        or parameter["paper_equivalent"] is not False
+        or parameter["packet_size"] != constants["packet_size"]
+    ):
+        raise ValueError("Walkie-Talkie artifact constants are invalid")
+    expected_hashes = _provenance_training_hashes(provenance, "half-duplex")
+    training_visits = algorithm["training_visits"]
+    flattened_receipt_hashes = [
+        visit["training_input_sha256"]
+        for workload in training_visits
+        for visit in workload["visits"]
+    ]
+    if flattened_receipt_hashes != expected_hashes:
+        raise ValueError("Walkie-Talkie training visits do not match half-duplex contributions")
+    envelopes: dict[str, fitting_walkie_talkie.ProfileEnvelope] = {}
+    training_by_workload: dict[str, list[str]] = {}
+    for workload in training_visits:
+        sequences = [
+            _parse_burst_sequence(
+                visit["bursts"], visit["batch_ends"], "Walkie-Talkie training visit"
+            )
+            for visit in workload["visits"]
+        ]
+        identity = workload["workload_id"]
+        envelopes[identity] = fitting_walkie_talkie.componentwise_envelope(sequences)
+        training_by_workload[identity] = [
+            visit["training_input_sha256"] for visit in workload["visits"]
+        ]
+    lexical = tuple(sorted(envelopes))
+    expected_candidates = [
+        {
+            "left": left,
+            "right": right,
+            "matching_cost_packets": fitting_walkie_talkie.mold_padding_cost(
+                envelopes[left].bursts, envelopes[right].bursts
+            ),
+        }
+        for index, left in enumerate(lexical)
+        for right in lexical[index + 1 :]
+    ]
+    pairs = fitting_walkie_talkie.minimum_weight_perfect_matching(envelopes)
+    expected_selected = [
+        {"real": real, "decoy": decoy, "matching_cost_packets": cost} for real, decoy, cost in pairs
+    ]
+    if (
+        algorithm["candidate_pair_costs"] != expected_candidates
+        or algorithm["selected_pairs"] != expected_selected
+    ):
+        raise ValueError("Walkie-Talkie matching receipt is inconsistent with its envelopes")
+    expected_profiles: list[dict[str, object]] = []
+    for real, decoy, cost in pairs:
+        real_envelope = envelopes[real]
+        decoy_envelope = envelopes[decoy]
+        molded = tuple(fitting_walkie_talkie.mold(real_envelope.bursts, decoy_envelope.bursts))
+        expected_profiles.append(
+            {
+                "real": real,
+                "decoy": decoy,
+                "matching_cost_packets": cost,
+                "training_inputs": {
+                    "real": training_by_workload[real],
+                    "decoy": training_by_workload[decoy],
+                },
+                "variation": {
+                    "real": fitting_walkie_talkie._variation_json(real_envelope),
+                    "decoy": fitting_walkie_talkie._variation_json(decoy_envelope),
+                },
+                "source_envelopes": {
+                    "real": fitting_walkie_talkie._bursts_json(real_envelope.bursts),
+                    "decoy": fitting_walkie_talkie._bursts_json(decoy_envelope.bursts),
+                },
+                "batch_ends": {
+                    "real": fitting_walkie_talkie._batch_ends(real_envelope.bursts),
+                    "decoy": fitting_walkie_talkie._batch_ends(decoy_envelope.bursts),
+                },
+                "molded_batch_ends": fitting_walkie_talkie._batch_ends(molded),
+                "total_scheduled_bytes": fitting_walkie_talkie._total_packets(molded)
+                * constants["packet_size"],
+                "bursts": fitting_walkie_talkie._bursts_json(molded),
+            }
+        )
+    profiles = parameter["profiles"]
+    if not isinstance(profiles, list) or len(profiles) != len(expected_profiles):
+        raise ValueError("Walkie-Talkie artifact profile count is invalid")
+    for profile in profiles:
+        _validate_walkie_profile_schema(profile)
+    if profiles != expected_profiles:
+        raise ValueError("Walkie-Talkie artifact profiles are not derived from training visits")
+
+
+def _validate_walkie_profile_schema(value: object) -> None:
+    profile = _exact_mapping(
+        value,
+        {
+            "real",
+            "decoy",
+            "matching_cost_packets",
+            "training_inputs",
+            "variation",
+            "source_envelopes",
+            "batch_ends",
+            "molded_batch_ends",
+            "total_scheduled_bytes",
+            "bursts",
+        },
+        "Walkie-Talkie profile",
+    )
+    if (
+        not isinstance(profile["real"], str)
+        or not profile["real"]
+        or not isinstance(profile["decoy"], str)
+        or not profile["decoy"]
+        or type(profile["matching_cost_packets"]) is not int
+        or profile["matching_cost_packets"] < 0
+        or type(profile["total_scheduled_bytes"]) is not int
+        or profile["total_scheduled_bytes"] <= 0
+    ):
+        raise ValueError("Walkie-Talkie profile scalar fields are invalid")
+    training = _exact_mapping(
+        profile["training_inputs"], {"real", "decoy"}, "Walkie-Talkie training inputs"
+    )
+    variation = _exact_mapping(profile["variation"], {"real", "decoy"}, "Walkie-Talkie variation")
+    envelopes = _exact_mapping(
+        profile["source_envelopes"], {"real", "decoy"}, "Walkie-Talkie envelopes"
+    )
+    batch_ends = _exact_mapping(
+        profile["batch_ends"], {"real", "decoy"}, "Walkie-Talkie batch ends"
+    )
+    for side in ("real", "decoy"):
+        if not isinstance(training[side], list) or any(
+            not _digest(value) for value in training[side]
+        ):
+            raise ValueError("Walkie-Talkie training hashes are invalid")
+        stats = _exact_mapping(
+            variation[side],
+            {"visit_count", "varying_components", "maximum_component_spread"},
+            "Walkie-Talkie variation statistics",
+        )
+        if any(type(stats[field]) is not int or stats[field] < 0 for field in stats):
+            raise ValueError("Walkie-Talkie variation statistics are invalid")
+        _parse_burst_sequence(envelopes[side], batch_ends[side], "Walkie-Talkie source envelope")
+    _parse_burst_sequence(profile["bursts"], profile["molded_batch_ends"], "Walkie-Talkie mold")
+
+
+def _parse_burst_sequence(
+    bursts_value: object, batch_ends_value: object, label: str
+) -> tuple[fitting_walkie_talkie.BurstPair, ...]:
+    if not isinstance(bursts_value, list) or not bursts_value:
+        raise ValueError(f"{label} bursts are invalid")
+    if (
+        not isinstance(batch_ends_value, list)
+        or not batch_ends_value
+        or any(type(index) is not int or index < 0 for index in batch_ends_value)
+        or batch_ends_value != sorted(set(batch_ends_value))
+        or batch_ends_value[-1] != len(bursts_value) - 1
+    ):
+        raise ValueError(f"{label} batch ends are invalid")
+    ends = set(batch_ends_value)
+    result: list[fitting_walkie_talkie.BurstPair] = []
+    for index, value in enumerate(bursts_value):
+        record = _exact_mapping(value, {"outgoing", "incoming"}, f"{label} burst")
+        outgoing = record["outgoing"]
+        incoming = record["incoming"]
+        if (
+            type(outgoing) is not int
+            or type(incoming) is not int
+            or not 0 <= outgoing <= fitting_walkie_talkie.MAX_U32
+            or not 0 <= incoming <= fitting_walkie_talkie.MAX_U32
+            or outgoing + incoming == 0
+        ):
+            raise ValueError(f"{label} burst counts are invalid")
+        result.append(fitting_walkie_talkie.BurstPair(outgoing, incoming, index in ends))
+    return tuple(result)
+
+
+def _provenance_training_hashes(provenance: Mapping[str, object], policy: str) -> list[str]:
+    contributions = provenance["sample_contributions"]
+    return [
+        sample["training_input_sha256"]
+        for workload in contributions
+        for sample in workload["policies"][policy]
+    ]
+
+
+def _provenance_corpus_digest(provenance: Mapping[str, object], policy: str) -> str:
+    identity = [
+        {
+            "workload_id": workload["workload_id"],
+            "samples": [sample["training_input_sha256"] for sample in workload["policies"][policy]],
+        }
+        for workload in provenance["sample_contributions"]
+    ]
+    return sha256_bytes(
+        b"qcsd-consumed-fitting-corpus-v1\0"
+        + json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+    )
+
+
+def _finite_probability_vector(value: object, width: int, label: str) -> list[float]:
+    if not isinstance(value, list) or len(value) != width or not _finite_number_list(value):
+        raise ValueError(f"{label} probability vector is invalid")
+    result = [float(item) for item in value]
+    if any(item < 0.0 or item > 1.0 for item in result) or not math.isclose(
+        math.fsum(result), 1.0, abs_tol=1e-12
+    ):
+        raise ValueError(f"{label} probability vector is invalid")
+    return result
+
+
+def _finite_number_list(value: object) -> bool:
+    return isinstance(value, list) and all(
+        not isinstance(item, bool) and isinstance(item, (int, float)) and math.isfinite(float(item))
+        for item in value
+    )
+
+
+def _positive_integer_list(value: object) -> list[int]:
+    if not isinstance(value, list) or any(type(item) is not int or item <= 0 for item in value):
+        raise ValueError("fitting population must contain positive integers")
+    return value
+
+
+def _require_exact_keys(value: Mapping[str, Any], fields: set[str], label: str) -> None:
+    if set(value) != fields:
+        raise ValueError(f"{label} has an invalid schema")
+
+
+def _require_scipy_version() -> None:
+    import scipy
+
+    if scipy.__version__ != "1.17.1" or np.__version__ != "2.2.6":
+        raise ValueError("research fitting requires NumPy 2.2.6 and SciPy 1.17.1")
 
 
 def _cost_records(
@@ -941,7 +1600,7 @@ def _validate_runtime_parameter(value: object, kind: str) -> None:
 
 def _fitting_contract(workload_order: Sequence[str]) -> dict[str, object]:
     return {
-        "contract_version": 1,
+        "contract_version": 2,
         "fitter_version": FITTER_VERSION,
         "parameter_schema_version": 2,
         "profile": "research-1200",
@@ -949,10 +1608,47 @@ def _fitting_contract(workload_order: Sequence[str]) -> dict[str, object]:
         "visits_per_policy": 10,
         "workload_order": list(workload_order),
         "constants": {
+            "dependencies": {
+                "numpy": "2.2.6",
+                "scipy": "1.17.1",
+            },
+            "extractor": {
+                "authoritative_files": ["neqo/events.csv", "neqo/run.json"],
+                "events_columns": [
+                    "monotonic_us",
+                    "connection",
+                    "event",
+                    "outcome",
+                    "details",
+                ],
+                "typed_record_filter": {
+                    "event": "observation",
+                    "outcome": "recorded",
+                },
+                "production_sequence": "contiguous-zero-based-file-order",
+                "production_time_order": "nondecreasing-nanoseconds",
+                "csv_time_binding": "monotonic_us=floor(production_monotonic_ns/1000)",
+                "window": {
+                    "start_field": "defense_start_monotonic_ns",
+                    "end_field": "application_completion_monotonic_ns",
+                    "inclusive": True,
+                },
+                "datagram_event": "classified_datagram",
+                "validated_datagram_classes": ["natural", "defense_cover"],
+                "consumed_datagram_class": "natural",
+                "directions": ["outgoing", "incoming"],
+                "udp_payload_range_inclusive": [1, 1_200],
+                "cross_visit_state": "forbidden",
+                "training_input_domain_separator": "qcsd-fitting-trace-v1\\0",
+                "consumed_corpus_domain_separator": "qcsd-consumed-fitting-corpus-v1\\0",
+            },
             "traffic_morphing": {
                 "buckets": [64, 150, 300, 500, 700, 900, 1_100, 1_200],
+                "bucket_assignment": "smallest-bucket-greater-than-or-equal-searchsorted-left",
+                "distribution_aggregation": "pooled-packet-counts-per-workload-direction",
                 "solver": {
                     "implementation": "scipy.optimize.linprog",
+                    "scipy_version": "1.17.1",
                     "method": "highs",
                     "options": {
                         "dual_feasibility_tolerance": 1e-9,
@@ -961,15 +1657,59 @@ def _fitting_contract(workload_order: Sequence[str]) -> dict[str, object]:
                         "primal_feasibility_tolerance": 1e-9,
                     },
                 },
-                "objectives": ["l1", "expected-added-bytes", "row-major-lexicographic-minimum"],
+                "matrix_constraints": {
+                    "row_sum": "sum_j(M[i,j])=1",
+                    "padding_only": "M[i,j]=0 when j<i",
+                    "unsupported_source_row": "identity",
+                    "bounds": "0<=M[i,j]<=1",
+                },
+                "realized_distribution_formula": "r[j]=fsum_i(p_source[i]*M[i,j])",
+                "l1_formula": "fsum_j(abs(r[j]-p_target[j]))",
+                "expected_added_bytes_formula": "fsum_i,j(p_source[i]*M[i,j]*(bucket[j]-bucket[i]))",
+                "lp_stages": [
+                    "minimize-l1-slack",
+                    "fix-l1-optimum-then-minimize-expected-added-bytes",
+                    "fix-l1-and-byte-optima-then-minimize-each-row-major-cell",
+                ],
+                "canonicalization": {
+                    "cell_order": "row-major",
+                    "cell_objective": "minimum",
+                    "fixed_cell_constraint": "equality",
+                    "matrix_zero_threshold": 1e-8,
+                    "solver_snap_threshold": 1e-10,
+                    "serialized_decimal_places": 15,
+                    "row_renormalization": True,
+                },
                 "conditional_flow_tie_break": "lexicographically-minimum-row-major",
+                "edge_cost": {
+                    "primary": "l1_outgoing+l1_incoming",
+                    "secondary": "n_outgoing*Eadd_outgoing+n_incoming*Eadd_incoming",
+                    "summation": "math.fsum-no-rounding",
+                },
+                "assignment": {
+                    "constraint": "one-to-one-directed-derangement",
+                    "source_order": "frozen-campaign-order",
+                    "self_edges": "excluded",
+                },
                 "assignment_tie_break": "lexical-target-vector",
                 "mapping_constraint": "padding-only-upward-buckets",
             },
             "wtf_pad": {
                 "bandwidth_window_packets": 2,
                 "burst_threshold_method": "corpus-mean-bandwidth",
+                "global_bandwidth_formula": "1e9*sum(trace_bytes)/sum(trace_last_ns-trace_first_ns)",
+                "instantaneous_bandwidth_formula": "1e9*(left_bytes+right_bytes)/delta_ns",
+                "burst_comparison": "instantaneous_bandwidth>=global_threshold",
+                "interarrival_conversion": "ceil(delta_ns/1000)-microseconds",
+                "cross_visit_interarrivals": "forbidden",
                 "candidate_models": ["normal", "lognormal"],
+                "maximum_likelihood": {
+                    "normal": "scipy.stats.norm.fit",
+                    "lognormal": "scipy.stats.lognorm.fit(floc=0)",
+                },
+                "ks_test": "scipy.stats.kstest-full-precision",
+                "model_selection": "minimum-KS-normal-first-exact-tie",
+                "minimum_distinct_delays": 2,
                 "fake_burst_probability": 0.9,
                 "finite_bins": 19,
                 "infinity_bins": 1,
@@ -979,23 +1719,52 @@ def _fitting_contract(workload_order: Sequence[str]) -> dict[str, object]:
                 "histogram_scale": "exponential",
                 "infinity_token_rounding": "ceil",
                 "infinity_token_formulas": {
-                    "burst": "k_inf = p_inf / (1 - p_inf) * K",
+                    "burst": "k_inf = (1 - p_fake) / p_fake * K",
                     "gap": "k_inf = (K - mean_burst_length + 1) / (mean_burst_length - 1)",
                 },
                 "minimum_state_population": 20,
                 "token_allocation": "largest-remainder-leftmost-tie",
+                "finite_edge_formula": "ceil(max_us*(2^(i+1)-1)/(2^19-1))-strictly-increasing-clamp",
+                "finite_probability_formula": "max(0,CDF(edge_i)-CDF(edge_(i-1)))",
+                "finite_probability_lower_origin_us": 0,
                 "gap_transformation": "identity",
                 "tuning_percentile": 0.5,
                 "tuning_applies_to": "burst-histogram-only",
                 "tuning_transformation": "paper-gaussian-percentile-shift-v1",
+                "tuning_formula": {
+                    "z": "scipy.stats.norm.ppf(tuning_percentile)",
+                    "scale_multiplier": "exp(z^2/2)",
+                    "normal": "location'=location+scale*z;scale'=scale*multiplier",
+                    "lognormal": "shape'=shape*multiplier;loc'=0;scale'=scale*exp(shape*z)",
+                },
+                "finite_cutoff": "ceil(selected-runtime-model-ppf(0.995))",
             },
             "walkie_talkie": {
+                "burst_definition": "global-application-batch-direction-transitions",
                 "cell_byte_domain": "http3-request-stream-offset.bytes",
+                "included_stream_role": "application",
+                "excluded_stream_roles": ["chaff", "control"],
+                "outgoing_retransmission_rule": "union-stream-offset-ranges-per-batch",
+                "incoming_rule": "sum-raw-BytesRead-per-batch",
+                "direction_segmentation": "coalesce-adjacent-equal-directions",
+                "batch_direction_rule": "outgoing-first-and-at-least-one-incoming",
+                "cell_count_formula": "ceil(unique_or_read_bytes/packet_size)",
+                "cross_visit_state": "forbidden",
+                "visit_stability": {
+                    "batch_count": "exactly-equal",
+                    "per_batch_direction_structure": "exactly-equal",
+                    "visit_order": "0-through-9",
+                },
                 "envelope": "componentwise-max-corresponding-structure",
+                "mold": "batch-aware-componentwise-max-with-zero-for-missing-pair",
+                "matching_cost_formula": "2*total_packets(mold)-total_packets(real)-total_packets(decoy)",
                 "matching_tie_break": "lexical-pair-vector",
                 "packet_size": 1_200,
                 "pairing": "full-cohort-minimum-weight-perfect-matching",
                 "pair_orientation": "lexical",
+                "runtime_matching_algorithm": "minimum-cost-one-to-one",
+                "total_scheduled_bytes_formula": "total_packets(mold)*packet_size",
+                "training_hash_order": "visit-order",
             },
         },
     }

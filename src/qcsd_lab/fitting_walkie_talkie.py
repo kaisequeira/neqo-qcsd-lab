@@ -8,7 +8,7 @@ from typing import Mapping, Sequence
 from .fitting_trace import FittingTrace
 
 
-GENERATED_BY = "qcsd_lab.fitting_walkie_talkie 1.0.0"
+GENERATED_BY = "qcsd_lab.fitting_walkie_talkie 2.0.0"
 PACKET_SIZE = 1_200
 MAX_U32 = 2**32 - 1
 MAX_U64 = 2**64 - 1
@@ -41,17 +41,33 @@ def fit_walkie_talkie(
         raise ValueError("Walkie-Talkie fitting requires a positive even workload count")
     envelopes: dict[str, ProfileEnvelope] = {}
     training_inputs: dict[str, tuple[str, ...]] = {}
+    training_visits: list[dict[str, object]] = []
     for name in names:
         visits = tuple(sorted(traces[name], key=lambda trace: (trace.visit, trace.sample_id)))
         if not visits:
             raise ValueError(f"Walkie-Talkie workload {name!r} has no fitting visits")
         if len({trace.visit for trace in visits}) != len(visits):
             raise ValueError(f"Walkie-Talkie workload {name!r} has duplicate visits")
-        envelopes[name] = componentwise_envelope([burst_sequence(trace) for trace in visits])
+        sequences = tuple(burst_sequence(trace) for trace in visits)
+        envelopes[name] = componentwise_envelope(sequences)
         inputs = tuple(trace.training_input_sha256 for trace in visits)
         if len(inputs) != len(set(inputs)):
             raise ValueError(f"Walkie-Talkie workload {name!r} repeats a training input")
         training_inputs[name] = inputs
+        training_visits.append(
+            {
+                "workload_id": name,
+                "visits": [
+                    {
+                        "visit": trace.visit,
+                        "training_input_sha256": trace.training_input_sha256,
+                        "bursts": _bursts_json(sequence),
+                        "batch_ends": _batch_ends(sequence),
+                    }
+                    for trace, sequence in zip(visits, sequences, strict=True)
+                ],
+            }
+        )
 
     pairs = minimum_weight_perfect_matching(envelopes)
     lexical_names = tuple(sorted(names))
@@ -121,6 +137,7 @@ def fit_walkie_talkie(
         "algorithm": "full-cohort-minimum-weight-perfect-matching",
         "candidate_pair_costs": candidate_costs,
         "selected_pairs": pair_receipt,
+        "training_visits": training_visits,
     }
     return artifact, diagnostics
 

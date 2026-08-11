@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import itertools
+import math
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -21,12 +22,16 @@ from qcsd_lab.fitting_walkie_talkie import (
     BurstPair,
     burst_sequence,
     componentwise_envelope,
+    fit_walkie_talkie,
     minimum_weight_perfect_matching,
 )
 from qcsd_lab.fitting_wtfpad import (
     ModelCandidate,
+    _apportion_tokens,
+    _direction_populations,
     _fit_population,
     _select_candidate,
+    corpus_mean_bandwidth,
     fit_wtf_pad,
 )
 
@@ -112,6 +117,30 @@ def test_traffic_morphing_row_major_tie_stage_canonicalizes_conditional_flow() -
     assert first.rows[1] == pytest.approx((0.0, 1.0, 0.0), abs=1e-7)
 
 
+def test_traffic_morphing_unsupported_source_rows_are_exact_identity() -> None:
+    result = morphing_matrix(
+        np.asarray([1.0, 0.0, 0.0]),
+        np.asarray([0.0, 0.0, 1.0]),
+        (64, 150, 1_200),
+    )
+    assert result.rows[1] == (0.0, 1.0, 0.0)
+    assert result.rows[2] == (0.0, 0.0, 1.0)
+
+
+def test_traffic_morphing_second_objective_minimizes_bytes_at_fixed_l1() -> None:
+    # Moving row zero to the middle bucket and leaving it in place have the
+    # same irreducible L1 distance because the high source mass cannot move
+    # down.  The second objective must retain the lower-byte identity flow.
+    result = morphing_matrix(
+        np.asarray([0.5, 0.0, 0.5]),
+        np.asarray([0.5, 0.5, 0.0]),
+        (64, 150, 1_200),
+    )
+    assert result.l1_distance == pytest.approx(1.0)
+    assert result.expected_added_bytes == 0.0
+    assert result.rows[0] == (1.0, 0.0, 0.0)
+
+
 def test_traffic_morphing_assignment_tie_uses_lexical_target_vector() -> None:
     traces = {name: (_trace(name, 0),) for name in ("zulu", "alpha", "mike")}
     artifact, _receipt = fit_traffic_morphing(traces)
@@ -131,6 +160,25 @@ def test_traffic_morphing_assignment_preserves_near_cost_ordering() -> None:
         if source != target
     }
     candidates[("alpha", "bravo")] = SimpleNamespace(fidelity_cost=4e-16, byte_cost=0.0)
+    assert minimum_cost_derangement(names, candidates) == (
+        ("alpha", "charlie"),
+        ("bravo", "alpha"),
+        ("charlie", "bravo"),
+    )
+
+
+def test_traffic_morphing_assignment_preserves_near_byte_cost_ordering() -> None:
+    names = ("alpha", "bravo", "charlie")
+    candidates = {
+        (source, target): SimpleNamespace(fidelity_cost=0.0, byte_cost=0.0)
+        for source in names
+        for target in names
+        if source != target
+    }
+    candidates[("alpha", "bravo")] = SimpleNamespace(
+        fidelity_cost=0.0,
+        byte_cost=4e-16,
+    )
     assert minimum_cost_derangement(names, candidates) == (
         ("alpha", "charlie"),
         ("bravo", "alpha"),
@@ -195,6 +243,86 @@ def test_wtf_pad_rejects_degenerate_delay_populations() -> None:
         fit_wtf_pad((trace,), fitted_from="a" * 64)
 
 
+def test_wtf_pad_rejects_sparse_and_nonpositive_state_populations() -> None:
+    with pytest.raises(ValueError, match="at least 20"):
+        _fit_population(
+            np.arange(1, 20, dtype=np.int64),
+            infinity_tokens=1,
+            label="sparse",
+            tuning_percentile=None,
+        )
+    with pytest.raises(ValueError, match="positive delays"):
+        _fit_population(
+            np.asarray([*range(1, 20), 0], dtype=np.int64),
+            infinity_tokens=1,
+            label="nonpositive",
+            tuning_percentile=None,
+        )
+
+
+def test_wtf_pad_never_constructs_an_interarrival_across_visits() -> None:
+    traces = tuple(
+        FittingTrace(
+            sample_id=f"sample-{visit}",
+            workload_id="alpha",
+            request_policy="as-defined",
+            visit=visit,
+            root=Path("alpha"),
+            packets=(
+                PacketObservation("outgoing", 100, 1, 100 + visit),
+                PacketObservation("incoming", 150, 1, 200 + visit),
+                PacketObservation("outgoing", 300, 1, 300 + visit),
+                PacketObservation("incoming", 350, 1, 400 + visit),
+            ),
+            observations=(),
+            training_input_sha256=f"{visit + 1:064x}",
+        )
+        for visit in range(2)
+    )
+    intra, between, lengths = _direction_populations(
+        traces,
+        "outgoing",
+        threshold=1e30,
+    )
+    assert len(intra) == 0
+    assert len(between) == 2
+    assert len(lengths) == 4
+
+
+def test_wtf_pad_corpus_threshold_uses_sum_of_per_trace_active_durations() -> None:
+    traces = (
+        FittingTrace(
+            "one",
+            "alpha",
+            "as-defined",
+            0,
+            Path("alpha"),
+            (
+                PacketObservation("outgoing", 100, 1, 100),
+                PacketObservation("incoming", 300, 1, 200),
+            ),
+            (),
+            "a" * 64,
+        ),
+        FittingTrace(
+            "two",
+            "alpha",
+            "as-defined",
+            1,
+            Path("alpha"),
+            (
+                PacketObservation("outgoing", 1_000, 1, 300),
+                PacketObservation("incoming", 1_400, 1, 400),
+            ),
+            (),
+            "b" * 64,
+        ),
+    )
+    assert corpus_mean_bandwidth(traces) == pytest.approx(
+        1_000_000_000 * (100 + 200 + 300 + 400) / ((300 - 100) + (1_400 - 1_000))
+    )
+
+
 def test_wtf_pad_normal_wins_an_exact_ks_tie() -> None:
     candidates = (
         ModelCandidate("normal", (100.0, 10.0), 0.25),
@@ -209,6 +337,32 @@ def test_wtf_pad_selects_a_full_precision_near_tie() -> None:
         ModelCandidate("lognormal", (1.0, 0.0, 100.0), 0.1),
     )
     assert _select_candidate(candidates).name == "lognormal"
+
+
+def test_wtf_pad_largest_remainder_uses_the_lower_bin_on_an_exact_tie() -> None:
+    tokens = _apportion_tokens(np.ones(19, dtype=float), 20)
+    assert tokens == (2, *([1] * 18))
+
+
+def test_wtf_pad_infinity_tokens_match_the_runtime_formulas() -> None:
+    artifact, _receipt = fit_wtf_pad(
+        tuple(_trace("alpha", visit, shift=visit) for visit in range(10)),
+        fitted_from="a" * 64,
+    )
+    assert artifact["fitting"]["infinity_token_formulas"] == {
+        "burst": "k_inf = (1 - p_fake) / p_fake * K",
+        "gap": "k_inf = (K - mean_burst_length + 1) / (mean_burst_length - 1)",
+    }
+    expected_burst = math.ceil((1.0 - 0.9) / 0.9 * 10_000)
+    for direction in ("outgoing", "incoming"):
+        mean = artifact[direction]["fit"]["mean_burst_length_packets"]
+        expected_gap = math.ceil((10_000 - mean + 1) / (mean - 1))
+        assert artifact[direction]["burst"]["infinity_tokens"] == expected_burst
+        assert artifact[direction]["gap"]["infinity_tokens"] == expected_gap
+        for state in ("burst", "gap"):
+            lognormal = artifact[direction]["fit"][state]["candidates"][1]
+            assert lognormal["name"] == "lognormal"
+            assert lognormal["parameters"][1] == 0.0
 
 
 def test_wtf_pad_cutoff_is_model_percentile_not_observed_maximum(monkeypatch) -> None:
@@ -278,6 +432,84 @@ def test_walkie_talkie_uses_typed_batches_and_deduplicates_stream_ranges() -> No
     assert burst_sequence(trace) == (BurstPair(outgoing=2, incoming=2, batch_end=True),)
 
 
+def test_walkie_talkie_cell_conversion_uses_ceiling_division() -> None:
+    observations = (
+        _observation(0, "stream_opened", endpoint=1, stream=4, role="application"),
+        _observation(1, "application_batch_started"),
+        _observation(
+            2,
+            "stream_data_transmitted",
+            endpoint=1,
+            stream=4,
+            role="application",
+            offset=0,
+            bytes=1_201,
+        ),
+        _observation(3, "bytes_read", endpoint=1, stream=4, bytes=1),
+        _observation(4, "application_batch_completed"),
+        _observation(5, "application_complete"),
+    )
+    trace = FittingTrace(
+        "ceil",
+        "alpha",
+        "half-duplex",
+        0,
+        Path("alpha"),
+        _packets(),
+        observations,
+        "a" * 64,
+    )
+    assert burst_sequence(trace) == (BurstPair(2, 1, True),)
+
+
+def test_walkie_talkie_excludes_chaff_and_transport_control_events() -> None:
+    observations = (
+        _observation(0, "stream_opened", endpoint=1, stream=4, role="application"),
+        _observation(
+            1,
+            "stream_opened",
+            endpoint=1,
+            stream=8,
+            role={"chaff": {"resource_id": 9}},
+        ),
+        _observation(2, "application_batch_started"),
+        _observation(3, "header_progress", endpoint=1, stream=4, min_remaining=99),
+        _observation(
+            4,
+            "stream_data_transmitted",
+            endpoint=1,
+            stream=8,
+            role={"chaff": {"resource_id": 9}},
+            offset=0,
+            bytes=9_999,
+        ),
+        _observation(
+            5,
+            "stream_data_transmitted",
+            endpoint=1,
+            stream=4,
+            role="application",
+            offset=0,
+            bytes=1_200,
+        ),
+        _observation(6, "bytes_read", endpoint=1, stream=8, bytes=9_999),
+        _observation(7, "bytes_read", endpoint=1, stream=4, bytes=1_200),
+        _observation(8, "application_batch_completed"),
+        _observation(9, "application_complete"),
+    )
+    trace = FittingTrace(
+        "control",
+        "alpha",
+        "half-duplex",
+        0,
+        Path("alpha"),
+        _packets(),
+        observations,
+        "a" * 64,
+    )
+    assert burst_sequence(trace) == (BurstPair(1, 1, True),)
+
+
 def test_walkie_talkie_matching_is_full_cohort_and_lexically_tied() -> None:
     envelope = componentwise_envelope(((BurstPair(2, 3, True),),))
     selected = minimum_weight_perfect_matching(
@@ -298,21 +530,46 @@ def test_walkie_talkie_matching_ignores_nonlexical_input_order() -> None:
 
 def test_walkie_talkie_receipt_rejects_a_nonminimum_lexical_matching() -> None:
     names = ("delta", "alpha", "charlie", "bravo")
-    lexical = tuple(sorted(names))
-    receipt = {
-        "algorithm": "full-cohort-minimum-weight-perfect-matching",
-        "candidate_pair_costs": [
-            {"left": left, "right": right, "matching_cost_packets": 0}
-            for index, left in enumerate(lexical)
-            for right in lexical[index + 1 :]
-        ],
-        "selected_pairs": [
-            {"real": "alpha", "decoy": "charlie", "matching_cost_packets": 0},
-            {"real": "bravo", "decoy": "delta", "matching_cost_packets": 0},
-        ],
+    observations = (
+        _observation(0, "stream_opened", endpoint=1, stream=4, role="application"),
+        _observation(1, "application_batch_started"),
+        _observation(
+            2,
+            "stream_data_transmitted",
+            endpoint=1,
+            stream=4,
+            role="application",
+            offset=0,
+            bytes=1_200,
+        ),
+        _observation(3, "bytes_read", endpoint=1, stream=4, bytes=1_200),
+        _observation(4, "application_batch_completed"),
+        _observation(5, "application_complete"),
+    )
+    traces = {
+        name: tuple(
+            FittingTrace(
+                f"{name}-{visit}",
+                name,
+                "half-duplex",
+                visit,
+                Path(name),
+                _packets(),
+                observations,
+                f"{index * 10 + visit + 1:064x}",
+            )
+            for visit in range(10)
+        )
+        for index, name in enumerate(names)
     }
+    _artifact, receipt = fit_walkie_talkie(traces)
+    tampered = copy.deepcopy(receipt)
+    tampered["selected_pairs"] = [
+        {"real": "alpha", "decoy": "charlie", "matching_cost_packets": 0},
+        {"real": "bravo", "decoy": "delta", "matching_cost_packets": 0},
+    ]
     with pytest.raises(ValueError, match="not the recorded optimum"):
-        _validate_walkie_talkie_receipt(receipt, names)
+        _validate_walkie_talkie_receipt(tampered, names)
 
 
 def test_walkie_talkie_rejects_visit_direction_structure_changes() -> None:
@@ -323,3 +580,83 @@ def test_walkie_talkie_rejects_visit_direction_structure_changes() -> None:
                 (BurstPair(2, 0, True),),
             )
         )
+
+
+def test_walkie_talkie_rejects_visit_batch_count_changes() -> None:
+    with pytest.raises(ValueError, match="same application-batch count"):
+        componentwise_envelope(
+            (
+                (BurstPair(2, 2, True),),
+                (BurstPair(2, 2, True), BurstPair(1, 1, True)),
+            )
+        )
+
+
+def test_walkie_talkie_rejects_duplicate_training_inputs() -> None:
+    observations = (
+        _observation(0, "stream_opened", endpoint=1, stream=4, role="application"),
+        _observation(1, "application_batch_started"),
+        _observation(
+            2,
+            "stream_data_transmitted",
+            endpoint=1,
+            stream=4,
+            role="application",
+            offset=0,
+            bytes=1_200,
+        ),
+        _observation(3, "bytes_read", endpoint=1, stream=4, bytes=1_200),
+        _observation(4, "application_batch_completed"),
+        _observation(5, "application_complete"),
+    )
+    repeated = tuple(
+        FittingTrace(
+            f"alpha-{visit}",
+            "alpha",
+            "half-duplex",
+            visit,
+            Path("alpha"),
+            _packets(),
+            observations,
+            "a" * 64,
+        )
+        for visit in range(2)
+    )
+    with pytest.raises(ValueError, match="repeats a training input"):
+        fit_walkie_talkie({"alpha": repeated, "bravo": (repeated[0],)})
+
+
+def test_walkie_talkie_rejects_stream_range_overflow() -> None:
+    observations = (
+        _observation(0, "stream_opened", endpoint=1, stream=4, role="application"),
+        _observation(1, "application_batch_started"),
+        _observation(
+            2,
+            "stream_data_transmitted",
+            endpoint=1,
+            stream=4,
+            role="application",
+            offset=2**64 - 1,
+            bytes=1,
+        ),
+        _observation(3, "bytes_read", endpoint=1, stream=4, bytes=1),
+        _observation(4, "application_batch_completed"),
+        _observation(5, "application_complete"),
+    )
+    trace = FittingTrace(
+        "overflow",
+        "alpha",
+        "half-duplex",
+        0,
+        Path("alpha"),
+        _packets(),
+        observations,
+        "a" * 64,
+    )
+    with pytest.raises(ValueError, match="range exceeds u64"):
+        burst_sequence(trace)
+
+
+def test_walkie_talkie_rejects_cell_count_overflow() -> None:
+    with pytest.raises(ValueError, match="training burst"):
+        componentwise_envelope(((BurstPair(2**32, 1, True),),))

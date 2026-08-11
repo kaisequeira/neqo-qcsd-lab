@@ -236,7 +236,7 @@ in both directions.
   optimal L1 value. Equivalent solutions are made canonical by minimizing each
   row-major cell in order under the first two bounds. The final no-self
   permutation minimizes total bidirectional L1 cost, then estimated added
-  bytes, then declared-workload-order rank.
+  bytes, then the lexical target-ID vector.
 - **WTF-PAD:** all as-defined traces share one bandwidth threshold, calculated
   in nanoseconds as total Natural bytes multiplied by `1e9` and divided by the
   sum of each trace's first-to-last Natural-packet duration. Adjacent
@@ -260,7 +260,7 @@ in both directions.
   their component-wise maximum is that workload's envelope. Duplicate visits
   or training-input hashes are rejected. The fitter evaluates every workload
   pair and performs a full-cohort minimum-weight perfect matching by mould
-  padding cost, with declared workload order resolving an exact tie; each
+  padding cost, with the lexical pair vector resolving an exact tie; each
   selected mould is the component-wise maximum of its two envelopes.
 
 These are deterministic, client-only QCSD adaptations, and every artifact says

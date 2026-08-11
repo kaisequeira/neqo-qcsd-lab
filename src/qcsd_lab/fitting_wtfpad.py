@@ -11,7 +11,7 @@ import numpy as np
 from .fitting_trace import FittingTrace
 
 
-GENERATED_BY = "qcsd_lab.fitting_wtfpad 1.0.0"
+GENERATED_BY = "qcsd_lab.fitting_wtfpad 2.0.0"
 WINDOW_PACKETS = 2
 TOTAL_BINS = 20
 FINITE_BINS = 19
@@ -22,7 +22,7 @@ MIN_STATE_POPULATION = 20
 FAKE_BURST_PROBABILITY = 0.9
 MAX_U32 = 2**32 - 1
 MAX_U64 = 2**64 - 1
-BURST_INFINITY_FORMULA = "k_inf = p_inf / (1 - p_inf) * K"
+BURST_INFINITY_FORMULA = "k_inf = (1 - p_fake) / p_fake * K"
 GAP_INFINITY_FORMULA = "k_inf = (K - mean_burst_length + 1) / (mean_burst_length - 1)"
 BURST_TRANSFORMATION = "paper-gaussian-percentile-shift-v1"
 IDENTITY_TRANSFORMATION = "identity"
@@ -45,12 +45,40 @@ def fit_wtf_pad(
     if not fitted_from.strip():
         raise ValueError("WTF-PAD fitted_from identity must not be empty")
     threshold = corpus_mean_bandwidth(traces)
+    training_samples: list[dict[str, object]] = []
+    populations: dict[str, dict[str, list[int]]] = {
+        direction: {"intra": [], "between": [], "burst_lengths": []}
+        for direction in ("outgoing", "incoming")
+    }
+    for trace in traces:
+        total_bytes, active_duration_ns = _trace_bandwidth_values(trace)
+        directions: dict[str, object] = {}
+        for direction in ("outgoing", "incoming"):
+            intra, between, burst_lengths = _trace_direction_populations(
+                trace, direction, threshold=threshold
+            )
+            populations[direction]["intra"].extend(intra)
+            populations[direction]["between"].extend(between)
+            populations[direction]["burst_lengths"].extend(burst_lengths)
+            directions[direction] = {
+                "intra_burst_delays_us": intra,
+                "between_burst_delays_us": between,
+                "burst_lengths_packets": burst_lengths,
+            }
+        training_samples.append(
+            {
+                "training_input_sha256": trace.training_input_sha256,
+                "total_bytes": total_bytes,
+                "active_duration_ns": active_duration_ns,
+                "directions": directions,
+            }
+        )
     directions: dict[str, object] = {}
     population_receipt: dict[str, object] = {}
     for direction in ("outgoing", "incoming"):
-        intra, between, burst_lengths = _direction_populations(
-            traces, direction, threshold=threshold
-        )
+        intra = np.asarray(populations[direction]["intra"], dtype=np.int64)
+        between = np.asarray(populations[direction]["between"], dtype=np.int64)
+        burst_lengths = np.asarray(populations[direction]["burst_lengths"], dtype=np.int64)
         if not len(burst_lengths):
             raise ValueError(f"WTF-PAD cannot estimate {direction} mean burst length")
         mean_length = _float(float(np.mean(burst_lengths)))
@@ -123,6 +151,7 @@ def fit_wtf_pad(
         "algorithm": "corpus-mean-bandwidth-mle-ks-histograms",
         "global_bandwidth_threshold_bytes_per_second": _float(threshold),
         "populations": population_receipt,
+        "training_samples": training_samples,
     }
     return artifact, diagnostics
 
@@ -131,19 +160,22 @@ def corpus_mean_bandwidth(traces: Sequence[FittingTrace]) -> float:
     total_bytes = 0
     total_duration_ns = 0
     for trace in traces:
-        packets = trace.packets
-        if len(packets) < WINDOW_PACKETS:
-            raise ValueError(
-                f"WTF-PAD trace {trace.sample_id} has fewer than two natural datagrams"
-            )
-        duration = packets[-1].monotonic_ns - packets[0].monotonic_ns
-        if duration <= 0:
-            raise ValueError(f"WTF-PAD trace {trace.sample_id} has no positive active duration")
-        total_bytes += sum(packet.length_bytes for packet in packets)
-        total_duration_ns += duration
+        trace_bytes, trace_duration_ns = _trace_bandwidth_values(trace)
+        total_bytes += trace_bytes
+        total_duration_ns += trace_duration_ns
     if total_duration_ns <= 0 or total_bytes <= 0:
         raise ValueError("WTF-PAD corpus has no positive-duration packet trace")
     return total_bytes * 1_000_000_000.0 / total_duration_ns
+
+
+def _trace_bandwidth_values(trace: FittingTrace) -> tuple[int, int]:
+    packets = trace.packets
+    if len(packets) < WINDOW_PACKETS:
+        raise ValueError(f"WTF-PAD trace {trace.sample_id} has fewer than two natural datagrams")
+    duration_ns = packets[-1].monotonic_ns - packets[0].monotonic_ns
+    if duration_ns <= 0:
+        raise ValueError(f"WTF-PAD trace {trace.sample_id} has no positive active duration")
+    return sum(packet.length_bytes for packet in packets), duration_ns
 
 
 def _direction_populations(
@@ -153,33 +185,48 @@ def _direction_populations(
     between: list[int] = []
     lengths: list[int] = []
     for trace in traces:
-        packets = [packet for packet in trace.packets if packet.direction == direction]
-        if len(packets) < WINDOW_PACKETS:
-            raise ValueError(
-                f"WTF-PAD {direction} trace {trace.sample_id} has fewer than two datagrams"
-            )
-        burst_length = 1
-        for left, right in zip(packets, packets[1:]):
-            delay_ns = right.monotonic_ns - left.monotonic_ns
-            if delay_ns <= 0:
-                raise ValueError(
-                    f"WTF-PAD {direction} trace {trace.sample_id} has a nonpositive inter-arrival"
-                )
-            delay_us = (delay_ns + 999) // 1_000
-            instantaneous = (left.length_bytes + right.length_bytes) * 1_000_000_000.0 / delay_ns
-            if instantaneous >= threshold:
-                intra.append(delay_us)
-                burst_length += 1
-            else:
-                between.append(delay_us)
-                lengths.append(burst_length)
-                burst_length = 1
-        lengths.append(burst_length)
+        trace_intra, trace_between, trace_lengths = _trace_direction_populations(
+            trace, direction, threshold=threshold
+        )
+        intra.extend(trace_intra)
+        between.extend(trace_between)
+        lengths.extend(trace_lengths)
     return (
         np.asarray(intra, dtype=np.int64),
         np.asarray(between, dtype=np.int64),
         np.asarray(lengths, dtype=np.int64),
     )
+
+
+def _trace_direction_populations(
+    trace: FittingTrace, direction: str, *, threshold: float
+) -> tuple[list[int], list[int], list[int]]:
+    packets = [packet for packet in trace.packets if packet.direction == direction]
+    if len(packets) < WINDOW_PACKETS:
+        raise ValueError(
+            f"WTF-PAD {direction} trace {trace.sample_id} has fewer than two datagrams"
+        )
+    intra: list[int] = []
+    between: list[int] = []
+    lengths: list[int] = []
+    burst_length = 1
+    for left, right in zip(packets, packets[1:]):
+        delay_ns = right.monotonic_ns - left.monotonic_ns
+        if delay_ns <= 0:
+            raise ValueError(
+                f"WTF-PAD {direction} trace {trace.sample_id} has a nonpositive inter-arrival"
+            )
+        delay_us = (delay_ns + 999) // 1_000
+        instantaneous = (left.length_bytes + right.length_bytes) * 1_000_000_000.0 / delay_ns
+        if instantaneous >= threshold:
+            intra.append(delay_us)
+            burst_length += 1
+        else:
+            between.append(delay_us)
+            lengths.append(burst_length)
+            burst_length = 1
+    lengths.append(burst_length)
+    return intra, between, lengths
 
 
 def _fit_population(

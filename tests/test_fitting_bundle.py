@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import copy
 import csv
 import io
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+import qcsd_lab.fitting as fitting_module
 import qcsd_lab.orchestrator as orchestrator
 from qcsd_lab.experiment import (
     accept_sample,
@@ -28,6 +31,81 @@ from qcsd_lab.verification import seal_result, verify_result
 
 WORKLOADS = ("alpha", "bravo", "charlie", "delta", "echo", "foxtrot")
 EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+
+def _leaf_paths(value: object, path: tuple[str | int, ...] = ()):
+    """Yield one path for every JSON leaf, including empty containers."""
+
+    if isinstance(value, dict):
+        if not value:
+            yield path, value
+            return
+        for key in sorted(value):
+            yield from _leaf_paths(value[key], (*path, key))
+        return
+    if isinstance(value, list):
+        if not value:
+            yield path, value
+            return
+        for index, item in enumerate(value):
+            yield from _leaf_paths(item, (*path, index))
+        return
+    yield path, value
+
+
+def _representative_leaf_paths(value: object) -> list[tuple[tuple[str | int, ...], object]]:
+    """Collapse homogeneous array elements while retaining every schema leaf."""
+
+    representatives: dict[tuple[str, ...], tuple[tuple[str | int, ...], object]] = {}
+    for path, leaf in _leaf_paths(value):
+        normalized = tuple("[]" if isinstance(part, int) else part for part in path)
+        representatives.setdefault(normalized, (path, leaf))
+    return list(representatives.values())
+
+
+def _alternate_leaf(value: object) -> object:
+    """Return a different, finite, same-domain JSON primitive where possible."""
+
+    if isinstance(value, bool):
+        return not value
+    if type(value) is int:
+        return value - 1 if value == 2**64 - 1 else value + 1
+    if isinstance(value, float):
+        return value + 0.125
+    if isinstance(value, str):
+        if value.startswith("sha256:") and len(value) == 71:
+            replacement = "b" if value[7] != "b" else "a"
+            return f"sha256:{replacement}{value[8:]}"
+        if len(value) in {40, 64} and all(character in "0123456789abcdef" for character in value):
+            replacement = "b" if value[0] != "b" else "a"
+            return replacement + value[1:]
+        return value + "-tampered"
+    if value == []:
+        return ["tampered"]
+    if value == {}:
+        return {"tampered": True}
+    if value is None:
+        return "tampered"
+    raise AssertionError(f"unsupported JSON leaf in tamper test: {value!r}")
+
+
+def _replace_leaf(
+    value: object,
+    path: tuple[str | int, ...],
+    replacement: object,
+) -> object:
+    changed = copy.deepcopy(value)
+    if not path:
+        return replacement
+    cursor: Any = changed
+    for part in path[:-1]:
+        cursor = cursor[part]
+    cursor[path[-1]] = replacement
+    return changed
+
+
+def _display_path(path: tuple[str | int, ...]) -> str:
+    return ".".join(f"[{part}]" if isinstance(part, int) else part for part in path)
 
 
 def _source(marker: str) -> dict[str, object]:
@@ -315,6 +393,15 @@ def _event_csv(workload_index: int, visit: int, *, half_duplex: bool) -> str:
     return output.getvalue()
 
 
+@pytest.fixture(scope="module")
+def fitted_bundle(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Build one immutable synthetic bundle for exhaustive read/restore checks."""
+
+    base = tmp_path_factory.mktemp("fitting-leaf-tamper")
+    result = _make_fitting_result(base / "source")
+    return fit_result(result, artifacts_root=base / "artifacts")
+
+
 def test_fit_builds_exact_deterministic_bundle_without_mutating_source(tmp_path: Path) -> None:
     result = _make_fitting_result(tmp_path / "source")
     before_experiment = (result / "experiment.json").read_bytes()
@@ -375,6 +462,153 @@ def test_fit_builds_exact_deterministic_bundle_without_mutating_source(tmp_path:
     verify_result(result)
 
 
+def test_every_artifact_schema_leaf_is_bound_by_the_common_receipt(
+    fitted_bundle: Path,
+) -> None:
+    """One representative of every recursive JSON field must break its file hash."""
+
+    for filename in ("traffic-morphing.json", "wtf-pad.json", "walkie-talkie.json"):
+        path = fitted_bundle / filename
+        original = json.loads(path.read_text(encoding="utf-8"))
+        cases = _representative_leaf_paths(original)
+        assert cases, filename
+        try:
+            for leaf_path, leaf in cases:
+                atomic_json(path, _replace_leaf(original, leaf_path, _alternate_leaf(leaf)))
+                with pytest.raises(ValueError, match="hash mismatch") as rejected:
+                    verify_artifact_bundle(fitted_bundle)
+                assert filename in str(rejected.value), _display_path(leaf_path)
+        finally:
+            atomic_json(path, original)
+    verify_artifact_bundle(fitted_bundle)
+
+
+def test_every_internally_bound_provenance_leaf_rejects_single_field_tampering(
+    fitted_bundle: Path,
+) -> None:
+    """Exercise every receipt field except claims sealed by its external SHA only."""
+
+    provenance_path = fitted_bundle / "provenance.json"
+    original = json.loads(provenance_path.read_text(encoding="utf-8"))
+    # These identify the source result.  No self-hashing JSON receipt can
+    # authenticate them; callers preserve the printed provenance SHA-256 as the
+    # external seal.  Relational/fixed source fields remain in the rejection set.
+    externally_sealed = {
+        ("source_result", "campaign"),
+        ("source_result", "campaign_sha256"),
+        ("source_result", "evidence_sha256"),
+        ("source_result", "experiment_sha256"),
+        ("source_result", "input_digest"),
+        ("source_result", "source_fingerprints", "image_digest"),
+        ("source_result", "source_fingerprints", "lab_commit"),
+    }
+    cases = [
+        (leaf_path, leaf)
+        for leaf_path, leaf in _representative_leaf_paths(original)
+        if leaf_path not in externally_sealed
+    ]
+    assert cases
+    try:
+        for leaf_path, leaf in cases:
+            atomic_json(
+                provenance_path,
+                _replace_leaf(original, leaf_path, _alternate_leaf(leaf)),
+            )
+            with pytest.raises(ValueError):
+                verify_artifact_bundle(fitted_bundle)
+    finally:
+        atomic_json(provenance_path, original)
+    verify_artifact_bundle(fitted_bundle)
+
+
+def test_external_source_claim_tampering_changes_the_recordable_receipt_hash(
+    fitted_bundle: Path,
+) -> None:
+    provenance_path = fitted_bundle / "provenance.json"
+    original_bytes = provenance_path.read_bytes()
+    original = json.loads(original_bytes)
+    original_sha256 = sha256_file(provenance_path)
+    try:
+        for leaf_path in (
+            ("source_result", "campaign"),
+            ("source_result", "campaign_sha256"),
+            ("source_result", "evidence_sha256"),
+            ("source_result", "experiment_sha256"),
+            ("source_result", "input_digest"),
+            ("source_result", "source_fingerprints", "image_digest"),
+            ("source_result", "source_fingerprints", "lab_commit"),
+        ):
+            cursor: Any = original
+            for part in leaf_path:
+                cursor = cursor[part]
+            atomic_json(
+                provenance_path,
+                _replace_leaf(original, leaf_path, _alternate_leaf(cursor)),
+            )
+            assert sha256_file(provenance_path) != original_sha256
+    finally:
+        provenance_path.write_bytes(original_bytes)
+    assert sha256_file(provenance_path) == original_sha256
+
+
+@pytest.mark.parametrize(
+    ("filename", "leaf_path"),
+    [
+        (
+            "traffic-morphing.json",
+            ("profiles", 0, "outgoing", "expected_added_bytes"),
+        ),
+        ("wtf-pad.json", ("outgoing", "burst", "infinity_tokens")),
+        ("wtf-pad.json", ("fitted_from",)),
+        ("walkie-talkie.json", ("profiles", 0, "total_scheduled_bytes")),
+        (
+            "walkie-talkie.json",
+            ("profiles", 0, "training_inputs", "real", 0),
+        ),
+    ],
+)
+def test_python_verification_recomputes_derived_artifact_values_before_rust(
+    fitted_bundle: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    filename: str,
+    leaf_path: tuple[str | int, ...],
+) -> None:
+    """Coherent file/receipt rehashing must still fail the independent Python oracle."""
+
+    artifact_path = fitted_bundle / filename
+    provenance_path = fitted_bundle / "provenance.json"
+    original_artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+    original_provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+    cursor: Any = original_artifact
+    for part in leaf_path:
+        cursor = cursor[part]
+    changed = _replace_leaf(original_artifact, leaf_path, _alternate_leaf(cursor))
+    atomic_json(artifact_path, changed)
+    provenance = copy.deepcopy(original_provenance)
+    kind = {
+        "traffic-morphing.json": "traffic_morphing",
+        "wtf-pad.json": "wtf_pad",
+        "walkie-talkie.json": "walkie_talkie",
+    }[filename]
+    provenance["artifacts"][kind]["sha256"] = sha256_file(artifact_path)
+    atomic_json(provenance_path, provenance)
+
+    def unexpected_rust_call(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("Python accepted a derived-value tamper and delegated it to Rust")
+
+    monkeypatch.setattr(
+        fitting_module,
+        "_run_rust_parameter_validator",
+        unexpected_rust_call,
+    )
+    try:
+        with pytest.raises(ValueError):
+            verify_artifact_bundle(fitted_bundle)
+    finally:
+        atomic_json(artifact_path, original_artifact)
+        atomic_json(provenance_path, original_provenance)
+
+
 def test_bundle_tamper_and_extra_file_are_rejected(tmp_path: Path) -> None:
     result = _make_fitting_result(tmp_path / "source")
     bundle = fit_result(result, artifacts_root=tmp_path / "artifacts")
@@ -420,7 +654,7 @@ def test_bundle_tamper_and_extra_file_are_rejected(tmp_path: Path) -> None:
         "as-defined"
     ][0]["sample_id"]
     atomic_json(provenance_path, provenance)
-    with pytest.raises(ValueError, match="globally unique"):
+    with pytest.raises(ValueError, match="training-input digest|globally unique"):
         verify_artifact_bundle(bundle)
 
     provenance_path.write_bytes(pristine_provenance)

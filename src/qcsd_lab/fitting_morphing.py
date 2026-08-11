@@ -12,7 +12,7 @@ import numpy as np
 from .fitting_trace import FittingTrace
 
 
-GENERATED_BY = "qcsd_lab.fitting_morphing 1.0.0"
+GENERATED_BY = "qcsd_lab.fitting_morphing 2.0.0"
 DEFAULT_BUCKETS = (64, 150, 300, 500, 700, 900, 1_100, 1_200)
 HIGHS_OPTIONS = {
     "presolve": True,
@@ -68,9 +68,16 @@ def fit_traffic_morphing(
         raise ValueError("Traffic Morphing workloads require at least one training trace")
     edges = _validated_buckets(buckets)
     distributions: dict[tuple[str, str], tuple[np.ndarray, int]] = {}
+    corpus_bucket_counts: list[dict[str, object]] = []
     for name in names:
+        workload_counts: dict[str, object] = {"workload_id": name}
         for direction in ("outgoing", "incoming"):
-            distributions[(name, direction)] = size_distribution(traces[name], direction, edges)
+            distribution, total, counts = _size_distribution_with_counts(
+                traces[name], direction, edges
+            )
+            distributions[(name, direction)] = (distribution, total)
+            workload_counts[direction] = [int(value) for value in counts]
+        corpus_bucket_counts.append(workload_counts)
 
     candidates: dict[tuple[str, str], DirectedFit] = {}
     for source in names:
@@ -103,6 +110,7 @@ def fit_traffic_morphing(
     }
     diagnostics: dict[str, object] = {
         "algorithm": "all-directed-padding-only-lp-then-minimum-cost-derangement",
+        "corpus_bucket_counts": corpus_bucket_counts,
         "candidate_costs": [
             {
                 "source": source,
@@ -130,6 +138,13 @@ def fit_traffic_morphing(
 def size_distribution(
     traces: Sequence[FittingTrace], direction: str, buckets: Sequence[int]
 ) -> tuple[np.ndarray, int]:
+    distribution, total, _counts = _size_distribution_with_counts(traces, direction, buckets)
+    return distribution, total
+
+
+def _size_distribution_with_counts(
+    traces: Sequence[FittingTrace], direction: str, buckets: Sequence[int]
+) -> tuple[np.ndarray, int, np.ndarray]:
     if direction not in {"outgoing", "incoming"}:
         raise ValueError("direction must be outgoing or incoming")
     edges = _validated_buckets(buckets)
@@ -145,7 +160,7 @@ def size_distribution(
     total = int(counts.sum())
     if total == 0:
         raise ValueError(f"fitting traces contain no {direction} packets")
-    return counts.astype(float) / total, total
+    return counts.astype(float) / total, total, counts
 
 
 def morphing_matrix(source: np.ndarray, target: np.ndarray, buckets: Sequence[int]) -> MorphResult:
@@ -305,14 +320,36 @@ def morphing_matrix(source: np.ndarray, target: np.ndarray, buckets: Sequence[in
         added = 0.0
     if abs(added - float(second.fun)) > 1e-7:
         raise ValueError("Traffic Morphing canonicalization changed the byte optimum")
+    serialized_rows = tuple(tuple(_canonical_float(value) for value in row) for row in matrix)
+    serialized_source = tuple(_canonical_float(value) for value in source_distribution)
+    serialized_target = tuple(_canonical_float(value) for value in target_distribution)
+    serialized_realized = tuple(
+        _canonical_float(
+            math.fsum(serialized_source[row] * serialized_rows[row][column] for row in range(count))
+        )
+        for column in range(count)
+    )
+    serialized_l1 = _canonical_float(
+        math.fsum(
+            abs(actual - target)
+            for actual, target in zip(serialized_realized, serialized_target, strict=True)
+        )
+    )
+    serialized_added = _canonical_float(
+        math.fsum(
+            serialized_source[row] * serialized_rows[row][column] * (edges[column] - edges[row])
+            for row in range(count)
+            for column in range(row, count)
+        )
+    )
     return MorphResult(
         buckets=edges,
-        rows=tuple(tuple(_canonical_float(value) for value in row) for row in matrix),
-        source_distribution=tuple(_canonical_float(value) for value in source_distribution),
-        target_distribution=tuple(_canonical_float(value) for value in target_distribution),
-        realized_distribution=tuple(_canonical_float(value) for value in realized),
-        l1_distance=_canonical_float(l1),
-        expected_added_bytes=_canonical_float(added),
+        rows=serialized_rows,
+        source_distribution=serialized_source,
+        target_distribution=serialized_target,
+        realized_distribution=serialized_realized,
+        l1_distance=serialized_l1,
+        expected_added_bytes=serialized_added,
     )
 
 
