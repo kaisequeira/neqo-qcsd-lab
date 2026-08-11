@@ -29,6 +29,10 @@ _PROVENANCE_KEYS = {
 }
 _PARAMETER_FILE_KEYS = {"path", "sha256"}
 _PARAMETERIZED_KINDS = {"traffic_morphing", "wtf_pad", "walkie_talkie"}
+_WTF_PAD_INFINITY_TOKEN_FORMULAS = {
+    "burst": "k_inf = (1 - p_fake) / p_fake * K",
+    "gap": "k_inf = (K - mean_burst_length + 1) / (mean_burst_length - 1)",
+}
 
 
 @dataclass(frozen=True)
@@ -351,8 +355,12 @@ def _validate_morphing_direction(value: Any, width: int, receipt_path: Path) -> 
 
 
 def _validate_wtf_pad(parameter: Mapping[str, Any], receipt_path: Path) -> None:
-    if not isinstance(parameter.get("fitting"), Mapping):
-        raise ValueError(f"wtf_pad fitting metadata is missing: {receipt_path}")
+    fitting = parameter.get("fitting")
+    if (
+        not isinstance(fitting, Mapping)
+        or fitting.get("infinity_token_formulas") != _WTF_PAD_INFINITY_TOKEN_FORMULAS
+    ):
+        raise ValueError(f"wtf_pad fitting metadata is invalid: {receipt_path}")
     for direction_name in ("outgoing", "incoming"):
         direction = _mapping(parameter.get(direction_name), f"wtf_pad {direction_name}")
         for state in ("burst", "gap"):

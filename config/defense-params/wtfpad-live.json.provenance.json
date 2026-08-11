@@ -3,7 +3,7 @@
   "defense_kind": "wtf_pad",
   "parameter_file": {
     "path": "wtfpad-live.json",
-    "sha256": "70ec11646a6855686f8dc3ca751ddc46fe3835448324161ffe18720204f94108"
+    "sha256": "e86aeaabd08c72977697943b1903f3258a884ec363c73d035ae6bd646c136e43"
   },
   "production_ready": false,
   "qcsd_profile": "live",

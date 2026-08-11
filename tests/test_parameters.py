@@ -99,6 +99,25 @@ def test_parameter_tamper_breaks_receipt_hash(tmp_path, monkeypatch):
     assert provenance.is_file()
 
 
+def test_wtf_pad_smoke_fixture_requires_the_runtime_infinity_formula(tmp_path, monkeypatch):
+    parameter, provenance = _copy_fixture(tmp_path, monkeypatch, "wtfpad-live.json")
+    value = json.loads(parameter.read_text(encoding="utf-8"))
+    value["fitting"]["infinity_token_formulas"]["burst"] = "k_inf = p_inf / (1 - p_inf) * K"
+    atomic_json(parameter, value)
+    receipt = json.loads(provenance.read_text(encoding="utf-8"))
+    receipt["parameter_file"]["sha256"] = sha256_file(parameter)
+    atomic_json(provenance, receipt)
+
+    with pytest.raises(ValueError, match="fitting metadata is invalid"):
+        validate_parameter_artifact(
+            parameter,
+            expected_kind="wtf_pad",
+            allow_reviewed_fixture=True,
+            expected_qcsd_profile="live",
+            expected_udp_payload_ceiling=1200,
+        )
+
+
 def test_receipt_tamper_and_runtime_shape_are_rejected(tmp_path, monkeypatch):
     parameter, provenance = _copy_fixture(tmp_path, monkeypatch, "walkie-talkie-live.json")
     receipt = json.loads(provenance.read_text(encoding="utf-8"))
