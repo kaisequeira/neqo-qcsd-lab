@@ -4,6 +4,7 @@ from __future__ import annotations
 UDP_PAYLOAD_CEILING_BY_PROFILE = {
     "live": 1_200,
     "published": 1_450,
+    "research-1200": 1_200,
 }
 
 

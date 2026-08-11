@@ -55,6 +55,7 @@ def test_reviewed_fixture_requires_explicit_smoke_opt_in():
     [
         ("expected_kind", "walkie_talkie", "kind does not match"),
         ("expected_qcsd_profile", "published", "profile does not match"),
+        ("expected_qcsd_profile", "research-1200", "profile does not match"),
         ("expected_udp_payload_ceiling", 1450, "ceiling does not match"),
     ],
 )
@@ -114,6 +115,35 @@ def test_receipt_tamper_and_runtime_shape_are_rejected(tmp_path, monkeypatch):
     atomic_json(provenance, receipt)
     with pytest.raises(ValueError, match="runtime shape"):
         validate_parameter_artifact(parameter, allow_reviewed_fixture=True)
+
+
+def test_research_1200_receipt_rejects_a_1201_byte_parameter_artifact(tmp_path, monkeypatch):
+    parameter, provenance = _copy_fixture(tmp_path, monkeypatch, "walkie-talkie-live.json")
+    receipt = json.loads(provenance.read_text(encoding="utf-8"))
+    receipt["qcsd_profile"] = "research-1200"
+    atomic_json(provenance, receipt)
+
+    validate_parameter_artifact(
+        parameter,
+        expected_kind="walkie_talkie",
+        allow_reviewed_fixture=True,
+        expected_qcsd_profile="research-1200",
+        expected_udp_payload_ceiling=1200,
+    )
+
+    value = json.loads(parameter.read_text(encoding="utf-8"))
+    value["packet_size"] = 1201
+    atomic_json(parameter, value)
+    receipt["parameter_file"]["sha256"] = sha256_file(parameter)
+    atomic_json(provenance, receipt)
+    with pytest.raises(ValueError, match="runtime shape"):
+        validate_parameter_artifact(
+            parameter,
+            expected_kind="walkie_talkie",
+            allow_reviewed_fixture=True,
+            expected_qcsd_profile="research-1200",
+            expected_udp_payload_ceiling=1200,
+        )
 
 
 def test_named_profiles_can_be_bound_to_campaign_workloads():

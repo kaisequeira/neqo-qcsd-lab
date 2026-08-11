@@ -50,6 +50,7 @@ def _configuration(
     policies: list[str] | None = None,
     defenses: list[str | dict[str, Any]] | None = None,
     max_attempts: int = 2,
+    profile: str = "live",
 ) -> Path:
     config = tmp_path / "config"
     campaign_dir = config / "campaigns"
@@ -74,7 +75,7 @@ def _configuration(
         "name": "contract-test",
         "purpose": "smoke",
         "seed": 7_331,
-        "profile": "live",
+        "profile": profile,
         "workloads": visits,
         "request_policies": policies or ["as-defined"],
         "defenses": defenses or ["undefended", "front"],
@@ -361,6 +362,22 @@ def test_resume_epoch_restarts_cooldown_for_previously_attempted_origins(tmp_pat
 
     assert history.keys() == {"https://alpha.test"}
     assert all(value > 0 for value in history.values())
+
+
+def test_campaign_accepts_only_the_exact_research_1200_profile_token(tmp_path: Path) -> None:
+    path = _configuration(tmp_path, profile="research-1200")
+
+    campaign = load_campaign(path)
+    assert campaign.profile == "research-1200"
+    assert campaign.udp_payload_ceiling == 1_200
+    assert preflight_campaign(path)["valid"] is True
+
+    value = yaml.safe_load(path.read_text(encoding="utf-8"))
+    for invalid in ("research_1200", "research1200", "Research-1200"):
+        value["profile"] = invalid
+        path.write_text(yaml.safe_dump(value, sort_keys=False), encoding="utf-8")
+        with pytest.raises(ValueError, match="campaign profile must be one of"):
+            load_campaign(path)
 
 
 @pytest.mark.parametrize(
