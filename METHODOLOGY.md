@@ -247,13 +247,17 @@ batch observations.
 
 All three fitters read accepted `neqo/events.csv` typed observations and the
 application-window bounds in `run.json`; they do not infer training packets
-from PCAP or `packets.csv`. Production sequence numbers must be unique and
-contiguous and production timestamps monotonic. A fitting packet is a
+from PCAP or `packets.csv`. Production sequence numbers must form the unique
+contiguous set starting at zero, and serialized observations must be ordered by
+production nanoseconds with sequence as the same-tick tie-break. A fitting packet is a
 `classified_datagram` whose serialized class is `natural`, whose size is at
 most 1200 bytes, and whose production time lies in the inclusive interval from
 defence start through application completion. `defense_cover` packets and the
 post-completion tail are excluded, and every trace must contain Natural packets
-in both directions.
+in both directions. Half-duplex lifecycle extraction additionally requires the
+unique causal `application_complete` marker that the runner records at or
+immediately after the numeric completion instant; no observation may intervene between the
+boundary and that closure marker, and later tail observations remain excluded.
 
 - **Traffic Morphing:** as-defined Natural packet sizes are assigned to the
   fixed upper-edge buckets `64, 150, 300, 500, 700, 900, 1100, 1200` separately
@@ -281,8 +285,10 @@ in both directions.
 - **Walkie-Talkie:** only half-duplex traces are used. Global application-batch
   markers and application-stream observations define direction transitions;
   retransmitted outgoing STREAM offset ranges are deduplicated, incoming
-  `bytes_read` values are counted once as recorded, adjacent equal directions
-  are coalesced, and byte totals are rounded up to 1200-byte cells. The ten
+  positive `bytes_read` values are counted once as recorded, while valid
+  zero-byte no-progress reads contribute no bytes or direction transition.
+  Adjacent equal directions are coalesced, and byte totals are rounded up to
+  1200-byte cells. The ten
   visits for a workload must have the same batch count and direction structure;
   their component-wise maximum is that workload's envelope. Duplicate visits
   or training-input hashes are rejected. The fitter evaluates every workload

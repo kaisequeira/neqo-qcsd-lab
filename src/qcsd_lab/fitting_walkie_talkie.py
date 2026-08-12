@@ -8,7 +8,7 @@ from typing import Mapping, Sequence
 from .fitting_trace import FittingTrace
 
 
-GENERATED_BY = "qcsd_lab.fitting_walkie_talkie 2.0.0"
+GENERATED_BY = "qcsd_lab.fitting_walkie_talkie 2.0.1"
 PACKET_SIZE = 1_200
 MAX_U32 = 2**32 - 1
 MAX_U64 = 2**64 - 1
@@ -232,6 +232,9 @@ def burst_sequence(trace: FittingTrace, *, packet_size: int = PACKET_SIZE) -> tu
                 )
             if role != "application":
                 continue
+            count = _uint(details.get("bytes"), "bytes", trace.sample_id)
+            if count == 0:
+                continue
             if active_ranges is None or active_segments is None:
                 raise ValueError(
                     f"Walkie-Talkie incoming STREAM data lies outside a batch: {trace.sample_id}"
@@ -239,7 +242,7 @@ def burst_sequence(trace: FittingTrace, *, packet_size: int = PACKET_SIZE) -> tu
             _append_segment(
                 active_segments,
                 "incoming",
-                _positive_uint(details.get("bytes"), "bytes", trace.sample_id),
+                count,
                 trace.sample_id,
             )
     if active_ranges is not None:

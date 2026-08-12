@@ -25,7 +25,7 @@ from qcsd_lab.fitting import (
     validate_fitting_result,
     verify_artifact_bundle,
 )
-from qcsd_lab.fitting_trace import _read_observations
+from qcsd_lab.fitting_trace import _read_observations, load_fitting_trace
 from qcsd_lab.parameters import validate_parameter_artifact
 from qcsd_lab.util import atomic_json, atomic_text, sha256_file
 from qcsd_lab.verification import seal_result, verify_result
@@ -373,7 +373,7 @@ def _event_csv(workload_index: int, visit: int, *, half_duplex: bool) -> str:
                     {"endpoint": 1, "stream": 4, "bytes": 700 + workload_index},
                 ),
                 (73_000_000, "application_batch_completed", {}),
-                (74_000_000, "application_complete", {}),
+                (75_000_798, "application_complete", {}),
                 (76_000_000, "application_batch_started", {}),
                 (77_000_000, "application_batch_completed", {}),
             ]
@@ -502,6 +502,174 @@ def test_typed_event_reader_rejects_invalid_causal_metadata(
         _read_observations(events)
 
 
+def _write_fitting_trace(
+    root: Path,
+    observations: list[tuple[int, str, dict[str, object]]],
+    *,
+    completion_ns: int = 200_000,
+) -> None:
+    neqo = root / "neqo"
+    atomic_json(
+        neqo / "run.json",
+        {
+            "completion_status": "complete",
+            "defense_start_monotonic_ns": 100_000,
+            "application_completion_monotonic_ns": completion_ns,
+        },
+    )
+    output = io.StringIO(newline="")
+    writer = csv.writer(output, lineterminator="\n")
+    writer.writerow(["monotonic_us", "connection", "event", "outcome", "details"])
+    for sequence, (production_ns, kind, fields) in enumerate(observations):
+        details = {
+            "type": kind,
+            "production_monotonic_ns": production_ns,
+            "production_sequence": sequence,
+            **fields,
+        }
+        writer.writerow(
+            [
+                production_ns // 1_000,
+                fields.get("endpoint", ""),
+                "observation",
+                "recorded",
+                json.dumps(details, sort_keys=True, separators=(",", ":")),
+            ]
+        )
+    atomic_text(neqo / "events.csv", output.getvalue())
+
+
+def test_fitting_trace_retains_unique_causal_closure_but_bounds_packets(tmp_path: Path) -> None:
+    sample = tmp_path / "sample"
+    _write_fitting_trace(
+        sample,
+        [
+            (110_000, "application_batch_started", {}),
+            (
+                150_000,
+                "classified_datagram",
+                {"endpoint": 1, "direction": "outgoing", "length": 100, "class": "natural"},
+            ),
+            (
+                160_000,
+                "classified_datagram",
+                {"endpoint": 1, "direction": "incoming", "length": 200, "class": "natural"},
+            ),
+            (190_000, "application_batch_completed", {}),
+            (200_798, "application_complete", {}),
+            (
+                201_000,
+                "classified_datagram",
+                {"endpoint": 1, "direction": "incoming", "length": 300, "class": "natural"},
+            ),
+            (202_000, "application_batch_started", {}),
+        ],
+    )
+
+    trace = load_fitting_trace(
+        sample,
+        sample_id="sample",
+        workload_id="alpha",
+        request_policy="half-duplex",
+        visit=0,
+        require_observations=True,
+    )
+    assert [packet.length_bytes for packet in trace.packets] == [100, 200]
+    assert [observation.kind for observation in trace.observations] == [
+        "application_batch_started",
+        "classified_datagram",
+        "classified_datagram",
+        "application_batch_completed",
+        "application_complete",
+    ]
+
+
+def test_fitting_trace_excludes_same_timestamp_tail_after_closure(tmp_path: Path) -> None:
+    sample = tmp_path / "sample"
+    _write_fitting_trace(
+        sample,
+        [
+            (
+                150_000,
+                "classified_datagram",
+                {"endpoint": 1, "direction": "outgoing", "length": 100, "class": "natural"},
+            ),
+            (
+                160_000,
+                "classified_datagram",
+                {"endpoint": 1, "direction": "incoming", "length": 200, "class": "natural"},
+            ),
+            (200_000, "application_complete", {}),
+            (200_000, "application_batch_started", {}),
+        ],
+    )
+
+    trace = load_fitting_trace(
+        sample,
+        sample_id="sample",
+        workload_id="alpha",
+        request_policy="half-duplex",
+        visit=0,
+        require_observations=True,
+    )
+    assert [observation.kind for observation in trace.observations] == [
+        "classified_datagram",
+        "classified_datagram",
+        "application_complete",
+    ]
+
+
+@pytest.mark.parametrize(
+    "marker_rows, message",
+    [
+        ([], "exactly one application_complete"),
+        (
+            [(200_798, "application_complete", {}), (200_900, "application_complete", {})],
+            "exactly one application_complete",
+        ),
+        ([(199_999, "application_complete", {})], "precedes the numeric completion boundary"),
+        (
+            [
+                (200_100, "bytes_read", {"endpoint": 1, "stream": 4, "bytes": 1}),
+                (200_798, "application_complete", {}),
+            ],
+            "intervenes between completion boundary and marker",
+        ),
+    ],
+)
+def test_fitting_trace_rejects_invalid_causal_closure(
+    tmp_path: Path,
+    marker_rows: list[tuple[int, str, dict[str, object]]],
+    message: str,
+) -> None:
+    sample = tmp_path / "sample"
+    _write_fitting_trace(
+        sample,
+        [
+            (
+                150_000,
+                "classified_datagram",
+                {"endpoint": 1, "direction": "outgoing", "length": 100, "class": "natural"},
+            ),
+            (
+                160_000,
+                "classified_datagram",
+                {"endpoint": 1, "direction": "incoming", "length": 200, "class": "natural"},
+            ),
+            *marker_rows,
+        ],
+    )
+    with pytest.raises(ValueError, match=message):
+        load_fitting_trace(
+            sample,
+            sample_id="sample",
+            workload_id="alpha",
+            request_policy="half-duplex",
+            visit=0,
+            require_observations=True,
+        )
+
+
 @pytest.fixture(scope="module")
 def fitted_bundle(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """Build one immutable synthetic bundle for exhaustive read/restore checks."""
@@ -534,12 +702,30 @@ def test_fit_builds_exact_deterministic_bundle_without_mutating_source(tmp_path:
     receipt_text = (first / "provenance.json").read_text(encoding="utf-8")
     receipt = json.loads(receipt_text)
     assert receipt["fitting_contract"]["workload_order"] == list(WORKLOADS)
-    assert receipt["fitting_contract"]["fitter_version"] == "qcsd_lab.fitting 2.0.1"
+    assert receipt["fitting_contract"]["fitter_version"] == "qcsd_lab.fitting 2.0.2"
     assert receipt["fitting_contract"]["constants"]["extractor"]["production_sequence"] == (
         "unique-contiguous-zero-based-set"
     )
     assert receipt["fitting_contract"]["constants"]["extractor"]["production_event_order"] == (
         "nondecreasing-(nanoseconds,sequence)-file-order"
+    )
+    assert receipt["fitting_contract"]["constants"]["extractor"]["typed_lifecycle_closure"] == {
+        "applies_to": "half-duplex",
+        "event": "application_complete",
+        "full_trace_cardinality": 1,
+        "post_end_observations_before_marker": "forbidden",
+        "production_relation": "marker-nanoseconds>=end-field",
+        "retention": "numeric-window-plus-unique-causal-closure-marker",
+    }
+    assert receipt["fitting_contract"]["constants"]["walkie_talkie"]["zero_bytes_read"] == (
+        "validated-unsigned-no-op-excluded-from-direction-segmentation"
+    )
+    assert receipt["fitting_contract"]["constants"]["walkie_talkie"]["incoming_rule"] == (
+        "sum-positive-raw-BytesRead-per-batch"
+    )
+    walkie = json.loads((first / "walkie-talkie.json").read_text(encoding="utf-8"))
+    assert walkie["generated_by"].startswith(
+        "qcsd_lab.fitting_walkie_talkie 2.0.1; algorithm_receipt_sha256="
     )
     assert str(tmp_path) not in receipt_text
     assert "timestamp" not in receipt_text

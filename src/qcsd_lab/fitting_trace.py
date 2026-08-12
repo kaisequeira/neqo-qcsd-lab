@@ -98,10 +98,11 @@ def load_fitting_trace(
         path=events_path,
     )
     retained_observations = (
-        tuple(
-            observation
-            for observation in observations
-            if start_ns <= observation.production_monotonic_ns <= completion_ns
+        _application_observations(
+            observations,
+            start_ns=start_ns,
+            completion_ns=completion_ns,
+            path=events_path,
         )
         if require_observations
         else ()
@@ -182,6 +183,42 @@ def _natural_datagrams(
     if directions != {"outgoing", "incoming"}:
         raise ValueError(f"fitting trace requires natural datagrams in both directions: {path}")
     return tuple(rows)
+
+
+def _application_observations(
+    observations: tuple[TypedObservation, ...],
+    *,
+    start_ns: int,
+    completion_ns: int,
+    path: Path,
+) -> tuple[TypedObservation, ...]:
+    """Retain the numeric application window plus its unique causal closure marker."""
+
+    markers = [
+        (index, observation)
+        for index, observation in enumerate(observations)
+        if observation.kind == "application_complete"
+    ]
+    if len(markers) != 1:
+        raise ValueError(f"fitting trace requires exactly one application_complete: {path}")
+    marker_index, marker = markers[0]
+    if marker.production_monotonic_ns < completion_ns:
+        raise ValueError(f"application_complete precedes the numeric completion boundary: {path}")
+    if any(
+        observation.production_monotonic_ns > completion_ns
+        for observation in observations[:marker_index]
+    ):
+        raise ValueError(
+            f"typed observation intervenes between completion boundary and marker: {path}"
+        )
+    retained = tuple(
+        observation
+        for observation in observations[: marker_index + 1]
+        if start_ns <= observation.production_monotonic_ns <= completion_ns
+    )
+    if marker.production_monotonic_ns > completion_ns:
+        retained = (*retained, marker)
+    return retained
 
 
 def _read_observations(path: Path) -> tuple[TypedObservation, ...]:

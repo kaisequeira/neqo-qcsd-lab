@@ -462,6 +462,124 @@ def test_walkie_talkie_cell_conversion_uses_ceiling_division() -> None:
     assert burst_sequence(trace) == (BurstPair(2, 1, True),)
 
 
+def test_walkie_talkie_ignores_valid_zero_byte_reads_without_direction_changes() -> None:
+    observations = (
+        _observation(0, "stream_opened", endpoint=1, stream=4, role="application"),
+        _observation(1, "bytes_read", endpoint=1, stream=4, bytes=0),
+        _observation(2, "application_batch_started"),
+        _observation(
+            3,
+            "stream_data_transmitted",
+            endpoint=1,
+            stream=4,
+            role="application",
+            offset=0,
+            bytes=1_200,
+        ),
+        _observation(4, "bytes_read", endpoint=1, stream=4, bytes=0),
+        _observation(5, "bytes_read", endpoint=1, stream=4, bytes=1_200),
+        _observation(6, "bytes_read", endpoint=1, stream=4, bytes=0),
+        _observation(7, "application_batch_completed"),
+        _observation(8, "bytes_read", endpoint=1, stream=4, bytes=0),
+        _observation(9, "application_complete"),
+    )
+    trace = FittingTrace(
+        "zero-no-op",
+        "alpha",
+        "half-duplex",
+        0,
+        Path("alpha"),
+        _packets(),
+        observations,
+        "a" * 64,
+    )
+    assert burst_sequence(trace) == (BurstPair(1, 1, True),)
+
+
+def test_walkie_talkie_zero_only_reads_do_not_satisfy_incoming_batch() -> None:
+    observations = (
+        _observation(0, "stream_opened", endpoint=1, stream=4, role="application"),
+        _observation(1, "application_batch_started"),
+        _observation(
+            2,
+            "stream_data_transmitted",
+            endpoint=1,
+            stream=4,
+            role="application",
+            offset=0,
+            bytes=1_200,
+        ),
+        _observation(3, "bytes_read", endpoint=1, stream=4, bytes=0),
+        _observation(4, "application_batch_completed"),
+        _observation(5, "application_complete"),
+    )
+    trace = FittingTrace(
+        "zero-only",
+        "alpha",
+        "half-duplex",
+        0,
+        Path("alpha"),
+        _packets(),
+        observations,
+        "a" * 64,
+    )
+    with pytest.raises(ValueError, match="requires outgoing then incoming"):
+        burst_sequence(trace)
+
+
+@pytest.mark.parametrize("invalid", [-1, 1.5, 2**64])
+def test_walkie_talkie_rejects_invalid_zero_domain_reads(invalid: object) -> None:
+    observations = (
+        _observation(0, "stream_opened", endpoint=1, stream=4, role="application"),
+        _observation(1, "application_batch_started"),
+        _observation(
+            2,
+            "stream_data_transmitted",
+            endpoint=1,
+            stream=4,
+            role="application",
+            offset=0,
+            bytes=1_200,
+        ),
+        _observation(3, "bytes_read", endpoint=1, stream=4, bytes=invalid),
+        _observation(4, "application_batch_completed"),
+        _observation(5, "application_complete"),
+    )
+    trace = FittingTrace(
+        "invalid-read",
+        "alpha",
+        "half-duplex",
+        0,
+        Path("alpha"),
+        _packets(),
+        observations,
+        "a" * 64,
+    )
+    with pytest.raises(ValueError, match="bytes is not an unsigned integer"):
+        burst_sequence(trace)
+
+
+def test_walkie_talkie_zero_read_still_requires_stream_binding() -> None:
+    observations = (
+        _observation(0, "application_batch_started"),
+        _observation(1, "bytes_read", endpoint=1, stream=4, bytes=0),
+        _observation(2, "application_batch_completed"),
+        _observation(3, "application_complete"),
+    )
+    trace = FittingTrace(
+        "unbound-zero",
+        "alpha",
+        "half-duplex",
+        0,
+        Path("alpha"),
+        _packets(),
+        observations,
+        "a" * 64,
+    )
+    with pytest.raises(ValueError, match="no stream-open evidence"):
+        burst_sequence(trace)
+
+
 def test_walkie_talkie_excludes_chaff_and_transport_control_events() -> None:
     observations = (
         _observation(0, "stream_opened", endpoint=1, stream=4, role="application"),

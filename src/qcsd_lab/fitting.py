@@ -43,12 +43,12 @@ PROVENANCE_FILE = "provenance.json"
 EXACT_BUNDLE_FILES = frozenset((*BUNDLE_FILES.values(), PROVENANCE_FILE))
 RESEARCH_PARAMETER_INPUT_POLICY = "sealed-fitting-result-v1"
 RESEARCH_ARTIFACT_STATUS = "fitted-research-artifact"
-FITTER_VERSION = "qcsd_lab.fitting 2.0.1"
+FITTER_VERSION = "qcsd_lab.fitting 2.0.2"
 EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 ALGORITHM_GENERATORS = {
     "traffic_morphing": "qcsd_lab.fitting_morphing 2.0.0",
     "wtf_pad": "qcsd_lab.fitting_wtfpad 2.0.0",
-    "walkie_talkie": "qcsd_lab.fitting_walkie_talkie 2.0.0",
+    "walkie_talkie": "qcsd_lab.fitting_walkie_talkie 2.0.1",
 }
 
 
@@ -1636,10 +1636,18 @@ def _fitting_contract(workload_order: Sequence[str]) -> dict[str, object]:
                 "production_sequence": "unique-contiguous-zero-based-set",
                 "production_event_order": "nondecreasing-(nanoseconds,sequence)-file-order",
                 "csv_time_binding": "monotonic_us=floor(production_monotonic_ns/1000)",
-                "window": {
+                "traffic_window": {
                     "start_field": "defense_start_monotonic_ns",
                     "end_field": "application_completion_monotonic_ns",
                     "inclusive": True,
+                },
+                "typed_lifecycle_closure": {
+                    "applies_to": "half-duplex",
+                    "event": "application_complete",
+                    "full_trace_cardinality": 1,
+                    "production_relation": "marker-nanoseconds>=end-field",
+                    "retention": "numeric-window-plus-unique-causal-closure-marker",
+                    "post_end_observations_before_marker": "forbidden",
                 },
                 "datagram_event": "classified_datagram",
                 "validated_datagram_classes": ["natural", "defense_cover"],
@@ -1753,7 +1761,8 @@ def _fitting_contract(workload_order: Sequence[str]) -> dict[str, object]:
                 "included_stream_role": "application",
                 "excluded_stream_roles": ["chaff", "control"],
                 "outgoing_retransmission_rule": "union-stream-offset-ranges-per-batch",
-                "incoming_rule": "sum-raw-BytesRead-per-batch",
+                "incoming_rule": "sum-positive-raw-BytesRead-per-batch",
+                "zero_bytes_read": "validated-unsigned-no-op-excluded-from-direction-segmentation",
                 "direction_segmentation": "coalesce-adjacent-equal-directions",
                 "batch_direction_rule": "outgoing-first-and-at-least-one-incoming",
                 "cell_count_formula": "ceil(unique_or_read_bytes/packet_size)",
