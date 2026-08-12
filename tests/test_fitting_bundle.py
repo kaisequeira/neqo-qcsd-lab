@@ -148,6 +148,32 @@ def _make_fitting_result(
             "stability_profile": "live",
             "stability_defense": "none",
             "stability_seed": 0,
+            "udp_payload_qualification": {
+                "schema_version": 1,
+                "configured_udp_payload_ceiling": 1_200,
+                "runs": [
+                    {
+                        "run_index": index,
+                        "packets_sha256": str(index + 1) * 64,
+                        "total": {
+                            "packet_count": 2,
+                            "observed_udp_payload_max": 1_200,
+                            "oversized_packet_count": 0,
+                        },
+                        "incoming": {
+                            "packet_count": 1,
+                            "observed_udp_payload_max": 1_200,
+                            "oversized_packet_count": 0,
+                        },
+                        "outgoing": {
+                            "packet_count": 1,
+                            "observed_udp_payload_max": 1_200,
+                            "oversized_packet_count": 0,
+                        },
+                    }
+                    for index in range(3)
+                ],
+            },
             "neqo_version": "synthetic",
             "neqo_base_commit": "b" * 40,
             "published_qcsd_commit": "d" * 40,

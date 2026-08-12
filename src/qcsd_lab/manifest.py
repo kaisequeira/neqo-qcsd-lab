@@ -71,8 +71,21 @@ PREPARATION_KEYS = {
     "expected_responses",
     "lab_source",
     "prepare_image_digest",
+    "udp_payload_qualification",
 }
+LEGACY_OPTIONAL_PREPARATION_KEYS = {"udp_payload_qualification"}
 EXPECTED_RESPONSE_KEYS = {"resource_id", "status", "bytes", "body_sha256"}
+UDP_PAYLOAD_QUALIFICATION_KEYS = {
+    "schema_version",
+    "configured_udp_payload_ceiling",
+    "runs",
+}
+UDP_PAYLOAD_RUN_KEYS = {"run_index", "packets_sha256", "total", "incoming", "outgoing"}
+UDP_PAYLOAD_STATISTIC_KEYS = {
+    "packet_count",
+    "observed_udp_payload_max",
+    "oversized_packet_count",
+}
 U32_MAX = 2**32 - 1
 U64_MAX = 2**64 - 1
 EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
@@ -269,6 +282,12 @@ def validate_research_preparation(manifest: dict[str, Any], *, workload_id: str)
                 f"research workload {workload_id!r} preparation {field} must be {expected!r}"
             )
 
+    if "udp_payload_qualification" not in preparation:
+        raise ValueError(
+            f"research workload {workload_id!r} preparation requires the exact "
+            "absolute-1200 UDP-payload qualification receipt"
+        )
+
     source = preparation["lab_source"]
     if source["lab_dirty"] is not False or source["neqo_dirty"] is not False:
         raise ValueError(
@@ -370,7 +389,7 @@ def _validate_preparation(
             "manifest preparation metadata contains unsupported fields: "
             + ", ".join(sorted(unknown))
         )
-    missing = PREPARATION_KEYS - set(value)
+    missing = PREPARATION_KEYS - LEGACY_OPTIONAL_PREPARATION_KEYS - set(value)
     if missing:
         raise ValueError(f"manifest preparation metadata is missing: {', '.join(sorted(missing))}")
     for key in ("source_url", "final_url"):
@@ -420,6 +439,11 @@ def _validate_preparation(
         raise ValueError("manifest preparation counts are invalid")
     if value["stability_runs"] < 2:
         raise ValueError("manifest preparation requires at least two stability runs")
+    if "udp_payload_qualification" in value:
+        _validate_udp_payload_qualification(
+            value["udp_payload_qualification"],
+            stability_runs=value["stability_runs"],
+        )
     for key in (
         "chromium_version",
         "prepare_image_digest",
@@ -494,6 +518,73 @@ def _validate_preparation(
         response_ids.add(resource_id)
     if response_ids != resource_ids or len(response_ids) != len(responses):
         raise ValueError("manifest preparation expected response IDs must match resources")
+
+
+def _validate_udp_payload_qualification(value: Any, *, stability_runs: int) -> None:
+    if not isinstance(value, dict) or set(value) != UDP_PAYLOAD_QUALIFICATION_KEYS:
+        raise ValueError(
+            "manifest preparation UDP-payload qualification requires exact schema, ceiling, "
+            "and runs fields"
+        )
+    if value["schema_version"] != 1 or isinstance(value["schema_version"], bool):
+        raise ValueError("manifest preparation UDP-payload qualification schema is invalid")
+    ceiling = value["configured_udp_payload_ceiling"]
+    if not isinstance(ceiling, int) or isinstance(ceiling, bool) or ceiling != 1_200:
+        raise ValueError(
+            "manifest preparation UDP-payload qualification ceiling must be exactly 1200"
+        )
+    runs = value["runs"]
+    if not isinstance(runs, list) or len(runs) != stability_runs:
+        raise ValueError(
+            "manifest preparation UDP-payload qualification must cover every stability run"
+        )
+    for expected_index, run in enumerate(runs):
+        if not isinstance(run, dict) or set(run) != UDP_PAYLOAD_RUN_KEYS:
+            raise ValueError(
+                "manifest preparation UDP-payload qualification run receipt is invalid"
+            )
+        if run["run_index"] != expected_index or isinstance(run["run_index"], bool):
+            raise ValueError("manifest preparation UDP-payload qualification runs must be ordered")
+        digest = run["packets_sha256"]
+        if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+            raise ValueError(
+                "manifest preparation UDP-payload qualification packets hash is invalid"
+            )
+        statistics: dict[str, dict[str, int]] = {}
+        for direction in ("total", "incoming", "outgoing"):
+            statistic = run[direction]
+            if not isinstance(statistic, dict) or set(statistic) != UDP_PAYLOAD_STATISTIC_KEYS:
+                raise ValueError(
+                    "manifest preparation UDP-payload qualification statistics are invalid"
+                )
+            if any(
+                not isinstance(statistic[field], int)
+                or isinstance(statistic[field], bool)
+                or statistic[field] < (1 if field != "oversized_packet_count" else 0)
+                for field in UDP_PAYLOAD_STATISTIC_KEYS
+            ):
+                raise ValueError(
+                    "manifest preparation UDP-payload qualification statistics are invalid"
+                )
+            if (
+                statistic["oversized_packet_count"] != 0
+                or statistic["observed_udp_payload_max"] > ceiling
+            ):
+                raise ValueError(
+                    "manifest preparation UDP-payload qualification recorded an oversized packet"
+                )
+            statistics[direction] = statistic
+        if statistics["total"]["packet_count"] != (
+            statistics["incoming"]["packet_count"] + statistics["outgoing"]["packet_count"]
+        ):
+            raise ValueError(
+                "manifest preparation UDP-payload qualification packet counts disagree"
+            )
+        if statistics["total"]["observed_udp_payload_max"] != max(
+            statistics["incoming"]["observed_udp_payload_max"],
+            statistics["outgoing"]["observed_udp_payload_max"],
+        ):
+            raise ValueError("manifest preparation UDP-payload qualification maxima disagree")
 
 
 def _validate_replay(value: Any) -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 import os
 import re
@@ -24,6 +25,7 @@ from .util import (
     load_json,
     neqo_host_timeout,
     run,
+    sha256_file,
     source_metadata,
 )
 
@@ -36,6 +38,9 @@ DEFAULT_STABILITY_INTERVAL_SECONDS = 30
 STABILITY_PROFILE = "live"
 STABILITY_DEFENSE = "none"
 STABILITY_SEED = 0
+STABILITY_UDP_PAYLOAD_CEILING = 1_200
+UDP_PAYLOAD_QUALIFICATION_SCHEMA_VERSION = 1
+PACKET_REQUIRED_COLUMNS = frozenset({"direction", "connection", "observed_udp_length"})
 WORKLOAD_ID = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 NEQO_PROVENANCE_KEYS = (
     "neqo_version",
@@ -109,7 +114,7 @@ def prepare_workload(
         )
         resources, exclusions = resolve_probe_output(discovery, probe_output)
         resolved = {"resources": resources}
-        evidence, runs = _probe_response_stability(
+        evidence, runs, udp_payload_qualification = _probe_response_stability(
             resolved,
             directory,
             max_response_bytes=max_response_bytes,
@@ -145,6 +150,7 @@ def prepare_workload(
             "stability_profile": STABILITY_PROFILE,
             "stability_defense": STABILITY_DEFENSE,
             "stability_seed": STABILITY_SEED,
+            "udp_payload_qualification": udp_payload_qualification,
             **provenance,
             "expected_responses": evidence["expected_responses"],
         },
@@ -314,10 +320,11 @@ def _probe_response_stability(
     timeout_seconds: int,
     stability_runs: int,
     stability_interval_seconds: int,
-) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
     runtime_input = directory / "stability-input.json"
     runtime_input.write_bytes(canonical_bytes(runtime_manifest(manifest)))
     runs: list[dict[str, Any]] = []
+    packet_runs: list[dict[str, Any]] = []
     for index in range(stability_runs):
         if index:
             time.sleep(stability_interval_seconds)
@@ -351,12 +358,144 @@ def _probe_response_stability(
                 f"Neqo stability run {index + 1} failed ({result.returncode}): {detail}"
             )
         try:
-            runs.append(load_json(output / "run.json"))
+            run_data = load_json(output / "run.json")
         except (OSError, ValueError, json.JSONDecodeError) as error:
             raise PreparationError(
                 f"Neqo stability run {index + 1} produced invalid evidence: {error}"
             ) from error
-    return response_stability_evidence(runs), runs
+        packet_runs.append(
+            _qualify_udp_payloads(
+                run_data,
+                output / "packets.csv",
+                run_index=index,
+                expected_ceiling=STABILITY_UDP_PAYLOAD_CEILING,
+            )
+        )
+        runs.append(run_data)
+    return (
+        response_stability_evidence(runs),
+        runs,
+        {
+            "schema_version": UDP_PAYLOAD_QUALIFICATION_SCHEMA_VERSION,
+            "configured_udp_payload_ceiling": STABILITY_UDP_PAYLOAD_CEILING,
+            "runs": packet_runs,
+        },
+    )
+
+
+def _qualify_udp_payloads(
+    run_data: dict[str, Any],
+    packets_path: Path,
+    *,
+    run_index: int,
+    expected_ceiling: int,
+) -> dict[str, Any]:
+    """Prove one preparation run respected the absolute UDP-payload ceiling."""
+
+    resolved = run_data.get("resolved_configuration")
+    resolved_ceiling = resolved.get("max_udp_payload_size") if isinstance(resolved, dict) else None
+    if (
+        not isinstance(resolved_ceiling, int)
+        or isinstance(resolved_ceiling, bool)
+        or resolved_ceiling != expected_ceiling
+    ):
+        raise PreparationError(
+            f"Neqo stability run {run_index + 1} did not resolve the "
+            f"{expected_ceiling}-byte UDP-payload ceiling"
+        )
+
+    try:
+        with packets_path.open(newline="", encoding="utf-8") as source:
+            reader = csv.DictReader(source)
+            fieldnames = reader.fieldnames
+            if fieldnames is None:
+                raise PreparationError(
+                    f"Neqo stability run {run_index + 1} packets.csv has no header"
+                )
+            if len(fieldnames) != len(set(fieldnames)):
+                raise PreparationError(
+                    f"Neqo stability run {run_index + 1} packets.csv has duplicate columns"
+                )
+            missing = PACKET_REQUIRED_COLUMNS - set(fieldnames)
+            if missing:
+                raise PreparationError(
+                    f"Neqo stability run {run_index + 1} packets.csv is missing required "
+                    f"columns: {', '.join(sorted(missing))}"
+                )
+            rows = list(reader)
+    except PreparationError:
+        raise
+    except (OSError, UnicodeError, csv.Error) as error:
+        raise PreparationError(
+            f"Neqo stability run {run_index + 1} packets.csv is unreadable: {error}"
+        ) from error
+
+    lengths: dict[str, list[int]] = {"incoming": [], "outgoing": []}
+    for line_number, row in enumerate(rows, start=2):
+        direction = row.get("direction")
+        connection = row.get("connection")
+        observed_length = row.get("observed_udp_length")
+        if direction not in lengths:
+            raise PreparationError(
+                f"Neqo stability run {run_index + 1} packets.csv line {line_number} "
+                "has an invalid direction"
+            )
+        if (
+            not isinstance(connection, str)
+            or not connection.isascii()
+            or not connection.isdigit()
+            or int(connection) > 2**64 - 1
+        ):
+            raise PreparationError(
+                f"Neqo stability run {run_index + 1} packets.csv line {line_number} "
+                "has an invalid connection"
+            )
+        if (
+            not isinstance(observed_length, str)
+            or not observed_length.isascii()
+            or not observed_length.isdigit()
+            or int(observed_length) < 1
+        ):
+            raise PreparationError(
+                f"Neqo stability run {run_index + 1} packets.csv line {line_number} "
+                "has an invalid observed_udp_length"
+            )
+        lengths[direction].append(int(observed_length))
+
+    missing_directions = [direction for direction, values in lengths.items() if not values]
+    if missing_directions:
+        raise PreparationError(
+            f"Neqo stability run {run_index + 1} packets.csv contains no "
+            f"{', '.join(missing_directions)} packets"
+        )
+
+    def statistics(values: list[int]) -> dict[str, int]:
+        return {
+            "packet_count": len(values),
+            "observed_udp_payload_max": max(values),
+            "oversized_packet_count": sum(value > expected_ceiling for value in values),
+        }
+
+    incoming = statistics(lengths["incoming"])
+    outgoing = statistics(lengths["outgoing"])
+    total_values = lengths["incoming"] + lengths["outgoing"]
+    total = statistics(total_values)
+    if total["oversized_packet_count"]:
+        raise PreparationError(
+            f"Neqo stability run {run_index + 1} observed "
+            f"{total['oversized_packet_count']} UDP payload(s) above the "
+            f"{expected_ceiling}-byte ceiling (incoming "
+            f"{incoming['oversized_packet_count']}, outgoing "
+            f"{outgoing['oversized_packet_count']}, maximum "
+            f"{total['observed_udp_payload_max']})"
+        )
+    return {
+        "run_index": run_index,
+        "packets_sha256": sha256_file(packets_path),
+        "total": total,
+        "incoming": incoming,
+        "outgoing": outgoing,
+    }
 
 
 def _run_neqo(

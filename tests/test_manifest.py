@@ -58,6 +58,32 @@ def prepared_manifest():
             "stability_profile": "live",
             "stability_defense": "none",
             "stability_seed": 0,
+            "udp_payload_qualification": {
+                "schema_version": 1,
+                "configured_udp_payload_ceiling": 1_200,
+                "runs": [
+                    {
+                        "run_index": index,
+                        "packets_sha256": str(index + 1) * 64,
+                        "total": {
+                            "packet_count": 3,
+                            "observed_udp_payload_max": 1_200,
+                            "oversized_packet_count": 0,
+                        },
+                        "incoming": {
+                            "packet_count": 2,
+                            "observed_udp_payload_max": 1_200,
+                            "oversized_packet_count": 0,
+                        },
+                        "outgoing": {
+                            "packet_count": 1,
+                            "observed_udp_payload_max": 1_199,
+                            "oversized_packet_count": 0,
+                        },
+                    }
+                    for index in range(3)
+                ],
+            },
             "neqo_version": "test-neqo",
             "neqo_base_commit": "4" * 40,
             "published_qcsd_commit": "5" * 40,
@@ -216,11 +242,15 @@ def test_research_preparation_rejects_an_orphan_promoted_to_a_root():
         "chromium-projects-page-r2",
     ],
 )
-def test_checked_in_r2_research_workloads_retain_the_navigation_root(workload_id):
+def test_checked_in_r2_workloads_are_navigation_valid_but_predate_ceiling_qualification(
+    workload_id,
+):
     root = Path(__file__).parents[1]
     value = json.loads((root / f"config/workloads/{workload_id}.json").read_text())
 
-    validate_research_preparation(value, workload_id=workload_id)
+    validate_manifest(value)
+    with pytest.raises(ValueError, match="absolute-1200 UDP-payload qualification"):
+        validate_research_preparation(value, workload_id=workload_id)
 
 
 def test_checked_in_teamviewer_r2_is_rejected_as_an_orphaned_asset_fragment():
@@ -313,10 +343,61 @@ def test_research_preparation_rejects_nonprepared_manifests_actionably(kind):
 def test_research_preparation_rejects_policy_tampering(field, replacement):
     value = prepared_manifest()
     value["preparation"][field] = replacement
+    if field == "stability_runs":
+        value["preparation"]["udp_payload_qualification"]["runs"] = value["preparation"][
+            "udp_payload_qualification"
+        ]["runs"][:replacement]
 
     validate_manifest(value)
     with pytest.raises(ValueError, match=field):
         validate_research_preparation(value, workload_id="prepared-site")
+
+
+def test_research_preparation_rejects_a_legacy_unqualified_receipt():
+    value = prepared_manifest()
+    del value["preparation"]["udp_payload_qualification"]
+
+    # General validation retains historical preparation evidence. Research use does not.
+    validate_manifest(value)
+    with pytest.raises(ValueError, match="absolute-1200 UDP-payload qualification"):
+        validate_research_preparation(value, workload_id="prepared-site")
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("extra-field", "exact schema"),
+        ("wrong-ceiling", "ceiling must be exactly 1200"),
+        ("missing-run", "cover every stability run"),
+        ("unordered-run", "runs must be ordered"),
+        ("invalid-hash", "packets hash is invalid"),
+        ("oversized", "recorded an oversized packet"),
+        ("count-mismatch", "packet counts disagree"),
+        ("max-mismatch", "maxima disagree"),
+    ],
+)
+def test_udp_payload_qualification_receipt_is_exact_and_tamper_evident(mutation, message):
+    value = prepared_manifest()
+    receipt = value["preparation"]["udp_payload_qualification"]
+    if mutation == "extra-field":
+        receipt["unexpected"] = True
+    elif mutation == "wrong-ceiling":
+        receipt["configured_udp_payload_ceiling"] = 1_201
+    elif mutation == "missing-run":
+        receipt["runs"].pop()
+    elif mutation == "unordered-run":
+        receipt["runs"][1]["run_index"] = 0
+    elif mutation == "invalid-hash":
+        receipt["runs"][0]["packets_sha256"] = "not-a-hash"
+    elif mutation == "oversized":
+        receipt["runs"][0]["incoming"]["oversized_packet_count"] = 1
+    elif mutation == "count-mismatch":
+        receipt["runs"][0]["total"]["packet_count"] = 4
+    else:
+        receipt["runs"][0]["total"]["observed_udp_payload_max"] = 1_199
+
+    with pytest.raises(ValueError, match=message):
+        validate_manifest(value)
 
 
 @pytest.mark.parametrize("field", ["lab_dirty", "neqo_dirty"])

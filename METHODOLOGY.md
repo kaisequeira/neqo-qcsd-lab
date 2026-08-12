@@ -24,7 +24,13 @@ page requests only during preparation. A human-provided origin allowlist
 defines the permitted graph. Secret-bearing, unsafe, and unapproved requests
 are excluded. Neqo then probes the retained graph and repeats undefended loads
 to confirm status, delivered bytes, and body hashes before the manifest is
-frozen.
+frozen. Every one of the three runs must also resolve the exact 1200-byte
+UDP-payload ceiling and produce a valid runner packet ledger with incoming and
+outgoing traffic. The absolute ceiling applies to the whole ledger, including
+the QUIC handshake rather than only application or defence packets. Each run's
+packet-ledger SHA-256, directional and total counts, maxima, and oversized
+counts are sealed into the preparation receipt. Research validation rejects a
+missing or malformed qualification receipt.
 
 Each retained resource contains its concrete safe request headers and explicit
 dependencies. The measurement runner receives those values directly. It does

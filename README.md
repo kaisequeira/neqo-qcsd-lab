@@ -291,7 +291,15 @@ workflow. It is not a lab result, fitting corpus, or accepted campaign input. It
 do not reintroduce runtime header policies into the consolidated lab.
 
 `prepare` promotes a candidate only after origin filtering and three stable
-undefended Neqo runs. A case-insensitive Chromium-header merge correction made
+undefended Neqo runs. Each run must resolve the exact 1200-byte UDP-payload
+ceiling, produce valid runner packet evidence in both directions, and contain
+no UDP payload above 1200 bytes, including handshake traffic. The frozen
+preparation receipt records the packet-file SHA-256 plus incoming, outgoing,
+and total packet counts, maxima, and oversized counts for every run. Research
+validation requires that exact receipt; older manifests remain readable but
+are not research inputs.
+
+A case-insensitive Chromium-header merge correction made
 the earlier `-r1` manifests ineligible for research because they contained
 duplicate header names. They remain historical preparation evidence only.
 

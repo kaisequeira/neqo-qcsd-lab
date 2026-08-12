@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 from copy import deepcopy
@@ -56,6 +57,8 @@ def install_fake_preparation(
     monkeypatch: pytest.MonkeyPatch,
     *,
     changing_resource: int | None = None,
+    packet_rows: list[tuple[str, str, str]] | None = None,
+    resolved_ceiling: object = 1_200,
 ) -> list[list[str]]:
     discovery = discovered()
     monkeypatch.setattr(prepare, "discover_page", lambda *_args, **_kwargs: discovery)
@@ -124,11 +127,27 @@ def install_fake_preparation(
                         "published_qcsd_commit": "published",
                         "migration_commit": "migration",
                         "completion_status": "complete",
+                        "resolved_configuration": {
+                            "max_udp_payload_size": resolved_ceiling,
+                        },
                         "responses": responses,
                     }
                 ),
                 encoding="utf-8",
             )
+            rows = packet_rows or [
+                ("outgoing", "0", "1200"),
+                ("incoming", "0", "1199"),
+            ]
+            packet_text = (
+                "direction,monotonic_us,connection,observed_udp_length,"
+                "scheduled_target,satisfaction,slot_id\n"
+                + "".join(
+                    f"{direction},1,{connection},{length},,unshaped,\n"
+                    for direction, connection, length in rows
+                )
+            )
+            (output / "packets.csv").write_text(packet_text, encoding="utf-8")
         else:  # pragma: no cover - protects the mock contract
             raise AssertionError(command)
         return subprocess.CompletedProcess(command, 0, "")
@@ -165,6 +184,40 @@ def test_prepare_writes_one_policy_free_frozen_workload(tmp_path, monkeypatch):
     assert value["preparation"]["stability_profile"] == "live"
     assert value["preparation"]["stability_defense"] == "none"
     assert value["preparation"]["timeout_seconds"] == 120
+    qualification = value["preparation"]["udp_payload_qualification"]
+    assert qualification == {
+        "schema_version": 1,
+        "configured_udp_payload_ceiling": 1_200,
+        "runs": [
+            {
+                "run_index": index,
+                "packets_sha256": hashlib.sha256(
+                    (
+                        "direction,monotonic_us,connection,observed_udp_length,"
+                        "scheduled_target,satisfaction,slot_id\n"
+                        "outgoing,1,0,1200,,unshaped,\n"
+                        "incoming,1,0,1199,,unshaped,\n"
+                    ).encode()
+                ).hexdigest(),
+                "total": {
+                    "packet_count": 2,
+                    "observed_udp_payload_max": 1_200,
+                    "oversized_packet_count": 0,
+                },
+                "incoming": {
+                    "packet_count": 1,
+                    "observed_udp_payload_max": 1_199,
+                    "oversized_packet_count": 0,
+                },
+                "outgoing": {
+                    "packet_count": 1,
+                    "observed_udp_payload_max": 1_200,
+                    "oversized_packet_count": 0,
+                },
+            }
+            for index in range(3)
+        ],
+    }
     assert [response["resource_id"] for response in value["preparation"]["expected_responses"]] == [
         0,
         1,
@@ -210,6 +263,93 @@ def test_prepare_rejects_changing_response_identity_without_output(tmp_path, mon
         )
 
     assert not (tmp_path / "changing.json").exists()
+
+
+@pytest.mark.parametrize("direction", ["incoming", "outgoing"])
+def test_prepare_rejects_any_absolute_udp_ceiling_violation(direction, tmp_path, monkeypatch):
+    other = "outgoing" if direction == "incoming" else "incoming"
+    install_fake_preparation(
+        monkeypatch,
+        packet_rows=[(direction, "0", "1280"), (other, "1", "1200")],
+    )
+
+    with pytest.raises(
+        prepare.PreparationError,
+        match=r"stability run 1 observed 1 UDP payload.*above the 1200-byte ceiling",
+    ):
+        prepare.prepare_workload(
+            "oversized",
+            "https://page.test/",
+            ["https://page.test", "https://cdn.test"],
+            output_root=tmp_path,
+            stability_interval_seconds=0,
+        )
+
+    assert not (tmp_path / "oversized.json").exists()
+
+
+def test_prepare_rejects_a_runner_ceiling_mismatch(tmp_path, monkeypatch):
+    install_fake_preparation(monkeypatch, resolved_ceiling=1_201)
+
+    with pytest.raises(prepare.PreparationError, match="did not resolve the 1200-byte"):
+        prepare.prepare_workload(
+            "wrong-ceiling",
+            "https://page.test/",
+            ["https://page.test", "https://cdn.test"],
+            output_root=tmp_path,
+            stability_interval_seconds=0,
+        )
+
+
+@pytest.mark.parametrize(
+    ("row", "message"),
+    [
+        (("sideways", "0", "1200"), "invalid direction"),
+        (("incoming", "connection-zero", "1200"), "invalid connection"),
+        (("incoming", "0", "0"), "invalid observed_udp_length"),
+        (("incoming", "0", ""), "invalid observed_udp_length"),
+    ],
+)
+def test_udp_qualification_rejects_malformed_semantic_packet_fields(row, message, tmp_path):
+    path = tmp_path / "packets.csv"
+    rows = [row, ("outgoing", "1", "1200")]
+    path.write_text(
+        "direction,connection,observed_udp_length,future_column\n"
+        + "".join(",".join((*item, "future")) + "\n" for item in rows),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(prepare.PreparationError, match=message):
+        prepare._qualify_udp_payloads(
+            {"resolved_configuration": {"max_udp_payload_size": 1_200}},
+            path,
+            run_index=0,
+            expected_ceiling=1_200,
+        )
+
+
+def test_udp_qualification_requires_both_directions_and_required_columns(tmp_path):
+    path = tmp_path / "packets.csv"
+    path.write_text(
+        "direction,connection,observed_udp_length\noutgoing,0,1200\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(prepare.PreparationError, match="no incoming packets"):
+        prepare._qualify_udp_payloads(
+            {"resolved_configuration": {"max_udp_payload_size": 1_200}},
+            path,
+            run_index=0,
+            expected_ceiling=1_200,
+        )
+
+    path.write_text("direction,connection\nincoming,0\n", encoding="utf-8")
+    with pytest.raises(prepare.PreparationError, match="missing required columns"):
+        prepare._qualify_udp_payloads(
+            {"resolved_configuration": {"max_udp_payload_size": 1_200}},
+            path,
+            run_index=0,
+            expected_ceiling=1_200,
+        )
 
 
 @pytest.mark.parametrize("incomplete_status", ["partial", "error"])
