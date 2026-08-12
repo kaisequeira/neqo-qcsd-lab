@@ -220,7 +220,7 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
     for resource_id in graph:
         visit(resource_id)
     if "preparation" in manifest:
-        _validate_preparation(manifest["preparation"], id_set)
+        _validate_preparation(manifest["preparation"], resources, id_set)
 
 
 def validate_research_preparation(manifest: dict[str, Any], *, workload_id: str) -> None:
@@ -322,7 +322,11 @@ def _validate_resource_fields(resource: dict[str, Any]) -> None:
         raise ValueError(f"resource {resource['id']} type must be a string")
 
 
-def _validate_preparation(value: Any, resource_ids: set[int]) -> None:
+def _validate_preparation(
+    value: Any,
+    resources: list[dict[str, Any]],
+    resource_ids: set[int],
+) -> None:
     if not isinstance(value, dict):
         raise ValueError("manifest preparation metadata must be an object")
     unknown = set(value) - PREPARATION_KEYS
@@ -357,8 +361,16 @@ def _validate_preparation(value: Any, resource_ids: set[int]) -> None:
                 or parts.fragment
             ):
                 raise ValueError(f"manifest preparation {key} contains an invalid HTTPS origin")
-    if not set(value["approved_origins"]) <= set(value["observed_origins"]):
-        raise ValueError("approved origins must be a subset of observed origins")
+    # Approved origins are an allow-list, not an assertion that every optional
+    # content origin appeared in one Chromium load.  The final page origin and
+    # every frozen resource remain constrained to this list below.
+    approved = set(value["approved_origins"])
+    if https_origin(value["source_url"]) not in approved:
+        raise ValueError("manifest preparation source URL origin must be approved")
+    if https_origin(value["final_url"]) not in approved:
+        raise ValueError("manifest preparation final URL origin must be approved")
+    if any(https_origin(resource["url"]) not in approved for resource in resources):
+        raise ValueError("manifest preparation resources must use approved origins")
     positive = ("max_response_bytes", "timeout_seconds", "stability_runs")
     non_negative = ("settle_ms", "observed_request_count", "stability_seed")
     if any(

@@ -176,6 +176,33 @@ def test_research_preparation_accepts_the_exact_clean_policy():
     assert runtime_manifest(value) == {"resources": value["resources"]}
 
 
+def test_preparation_approved_origins_are_an_allow_list():
+    value = prepared_manifest()
+    value["preparation"]["approved_origins"].append("https://optional.test")
+
+    validate_manifest(value)
+    validate_research_preparation(value, workload_id="prepared-site")
+
+
+@pytest.mark.parametrize("location", ["source_url", "final_url"])
+def test_preparation_page_origins_must_be_approved(location):
+    value = prepared_manifest()
+    value["preparation"][location] = "https://unapproved.test/page"
+
+    with pytest.raises(
+        ValueError, match=f"{location.removesuffix('_url').replace('_', ' ')}.*approved"
+    ):
+        validate_manifest(value)
+
+
+def test_preparation_resource_origins_must_be_approved():
+    value = prepared_manifest()
+    value["resources"][0]["url"] = "https://unapproved.test/resource"
+
+    with pytest.raises(ValueError, match="resources must use approved origins"):
+        validate_manifest(value)
+
+
 @pytest.mark.parametrize(
     "headers",
     [

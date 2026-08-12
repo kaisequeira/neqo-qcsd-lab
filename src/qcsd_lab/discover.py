@@ -145,9 +145,6 @@ def discover_page(
         page.close()
         browser.close()
 
-    missing = set(approved) - observed_origins
-    if missing:
-        raise ValueError(f"approved origins were not observed: {', '.join(sorted(missing))}")
     if origin(final_url) not in approved:
         raise ValueError("the final page origin was not explicitly approved")
     resources = build_resources(list(discovered.values()))

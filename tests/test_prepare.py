@@ -164,6 +164,7 @@ def test_prepare_writes_one_policy_free_frozen_workload(tmp_path, monkeypatch):
     assert value["preparation"]["stability_runs"] == 3
     assert value["preparation"]["stability_profile"] == "live"
     assert value["preparation"]["stability_defense"] == "none"
+    assert value["preparation"]["timeout_seconds"] == 120
     assert [response["resource_id"] for response in value["preparation"]["expected_responses"]] == [
         0,
         1,
