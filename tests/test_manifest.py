@@ -1,5 +1,6 @@
 import json
 from copy import deepcopy
+from pathlib import Path
 
 import pytest
 
@@ -39,6 +40,8 @@ def prepared_manifest():
         "neqo_dirty": False,
         "neqo_patch_sha256": EMPTY_SHA256,
     }
+    root = resource(0)
+    root.update({"url": "https://example.com/", "type": "Document"})
     return {
         "preparation": {
             "source_url": "https://example.com/",
@@ -76,7 +79,7 @@ def prepared_manifest():
             "lab_source": source,
             "prepare_image_digest": source["image_digest"],
         },
-        "resources": [resource(0), resource(1, dependencies=[0])],
+        "resources": [root, resource(1, dependencies=[0])],
     }
 
 
@@ -174,6 +177,58 @@ def test_research_preparation_accepts_the_exact_clean_policy():
 
     validate_research_preparation(value, workload_id="prepared-site")
     assert runtime_manifest(value) == {"resources": value["resources"]}
+
+
+@pytest.mark.parametrize("mutation", ["missing-document", "wrong-url", "dependent-document"])
+def test_research_preparation_requires_a_navigation_root_document(mutation):
+    value = prepared_manifest()
+    root = value["resources"][0]
+    if mutation == "missing-document":
+        root["type"] = "Script"
+    elif mutation == "wrong-url":
+        root["url"] = "https://example.com/not-the-navigation"
+    else:
+        root["depends_on"] = [1]
+        value["resources"][1]["depends_on"] = []
+
+    validate_manifest(value)
+    with pytest.raises(ValueError, match="dependency-root Document.*source/final navigation"):
+        validate_research_preparation(value, workload_id="prepared-site")
+
+
+def test_research_preparation_rejects_an_orphan_promoted_to_a_root():
+    value = prepared_manifest()
+    value["resources"][1]["depends_on"] = []
+
+    validate_manifest(value)
+    with pytest.raises(ValueError, match="non-navigation resources.*invalid root IDs: 1"):
+        validate_research_preparation(value, workload_id="prepared-site")
+
+
+@pytest.mark.parametrize(
+    "workload_id",
+    [
+        "getbootstrap-home-r2",
+        "behance-home-r2",
+        "cloudflare-quiche-r2",
+        "nghttp2-ngtcp2-r2",
+        "chromium-quic-page-r2",
+    ],
+)
+def test_checked_in_r2_research_workloads_retain_the_navigation_root(workload_id):
+    root = Path(__file__).parents[1]
+    value = json.loads((root / f"config/workloads/{workload_id}.json").read_text())
+
+    validate_research_preparation(value, workload_id=workload_id)
+
+
+def test_checked_in_teamviewer_r2_is_rejected_as_an_orphaned_asset_fragment():
+    root = Path(__file__).parents[1]
+    workload_id = "teamviewer-account-r2"
+    value = json.loads((root / f"config/workloads/{workload_id}.json").read_text())
+
+    with pytest.raises(ValueError, match="dependency-root Document.*source/final navigation"):
+        validate_research_preparation(value, workload_id=workload_id)
 
 
 def test_preparation_approved_origins_are_an_allow_list():

@@ -238,6 +238,15 @@ def validate_research_preparation(manifest: dict[str, Any], *, workload_id: str)
     if not isinstance(preparation, dict):
         raise ValueError(f"research workload {workload_id!r} {RESEARCH_PREPARATION_REQUIRED}")
 
+    try:
+        validate_prepared_navigation_graph(
+            manifest["resources"],
+            source_url=preparation["source_url"],
+            final_url=preparation["final_url"],
+        )
+    except ValueError as error:
+        raise ValueError(f"research workload {workload_id!r} {error}") from error
+
     for resource in manifest["resources"]:
         names = [header[0].lower() for header in resource.get("headers", [])]
         duplicates = sorted({name for name in names if names.count(name) > 1})
@@ -305,6 +314,32 @@ def validate_research_preparation(manifest: dict[str, Any], *, workload_id: str)
         raise ValueError(
             f"research workload {workload_id!r} preparation image digest does not match "
             "its source provenance"
+        )
+
+
+def validate_prepared_navigation_graph(
+    resources: list[dict[str, Any]],
+    *,
+    source_url: str,
+    final_url: str,
+) -> None:
+    """Require every dependency root to represent the observed page navigation."""
+
+    navigation_urls = {source_url, final_url}
+    roots = [resource for resource in resources if not resource.get("depends_on", [])]
+    navigation_roots = [
+        resource
+        for resource in roots
+        if resource.get("type") == "Document" and resource.get("url") in navigation_urls
+    ]
+    if not navigation_roots:
+        raise ValueError("must retain a dependency-root Document for its source/final navigation")
+    invalid_roots = [resource["id"] for resource in roots if resource not in navigation_roots]
+    if invalid_roots:
+        identifiers = ", ".join(map(str, sorted(invalid_roots)))
+        raise ValueError(
+            "must not promote non-navigation resources to dependency roots; "
+            f"invalid root IDs: {identifiers}"
         )
 
 

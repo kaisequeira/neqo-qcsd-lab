@@ -246,24 +246,51 @@ def test_response_stability_preserves_successes_from_incomplete_runs(incomplete_
     assert [item["resource_id"] for item in evidence["expected_responses"]] == [0]
 
 
-def test_probe_filter_retains_descendant_and_records_exclusion():
+def test_probe_filter_prunes_unavailable_dependency_closure_without_rewriting_edges():
     discovery = discovered()
+    discovery.resources.append(
+        {
+            "id": 2,
+            "url": "https://cdn.test/image.png",
+            "type": "Image",
+            "content_length": None,
+            "data_length": 0,
+            "chaff_priority": False,
+            "known_valid": False,
+            "depends_on": [1],
+            "headers": [["accept", "image/png"]],
+        }
+    )
     resolved = {"resources": deepcopy(discovery.resources)}
-    resolved["resources"][0].update(
-        {"known_valid": False, "content_length": None, "data_length": 0}
-    )
-    resolved["resources"][1].update(
-        {"known_valid": True, "content_length": 101, "data_length": 101}
-    )
+    resolved["resources"][0].update({"known_valid": True, "content_length": 100})
+    resolved["resources"][1].update({"known_valid": False, "content_length": None})
+    resolved["resources"][2].update({"known_valid": True, "content_length": 102})
 
     resources, exclusions = prepare.resolve_probe_output(discovery, resolved)
 
-    assert [resource["id"] for resource in resources] == [1]
+    assert [resource["id"] for resource in resources] == [0]
     assert resources[0]["depends_on"] == []
     assert {
-        "url": "https://page.test/",
+        "url": "https://cdn.test/app.js",
         "reason": "HTTP/3 preflight unavailable",
     } in exclusions
+    assert {
+        "url": "https://cdn.test/image.png",
+        "reason": "HTTP/3 dependency unavailable",
+    } in exclusions
+
+
+def test_probe_filter_rejects_an_unavailable_navigation_document():
+    discovery = discovered()
+    resolved = {"resources": deepcopy(discovery.resources)}
+    resolved["resources"][0].update({"known_valid": False, "content_length": None})
+    resolved["resources"][1].update({"known_valid": True, "content_length": 101})
+
+    with pytest.raises(
+        prepare.PreparationError,
+        match="dependency-root Document.*source/final navigation",
+    ):
+        prepare.resolve_probe_output(discovery, resolved)
 
 
 @pytest.mark.parametrize("workload_id", ["Upper", "two--hyphens", "../escape", "trailing-"])

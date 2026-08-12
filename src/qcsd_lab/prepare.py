@@ -11,7 +11,13 @@ from pathlib import Path
 from typing import Any
 
 from .discover import DiscoveryResult, discover_page, origin
-from .manifest import canonical_bytes, runtime_manifest, validate_manifest, write_frozen_manifest
+from .manifest import (
+    canonical_bytes,
+    runtime_manifest,
+    validate_manifest,
+    validate_prepared_navigation_graph,
+    write_frozen_manifest,
+)
 from .util import (
     LAB_ROOT,
     ProcessTimeoutError,
@@ -234,7 +240,7 @@ def resolve_probe_output(
     discovery: DiscoveryResult,
     resolved: dict[str, Any],
 ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
-    """Retain independently fetchable resources without rewriting their graph."""
+    """Retain the fetchable dependency closure without rewriting graph edges."""
 
     source_by_id = {resource["id"]: resource for resource in discovery.resources}
     resolved_by_id = {resource["id"]: resource for resource in resolved["resources"]}
@@ -251,28 +257,44 @@ def resolve_probe_output(
     unavailable = [
         resource for resource in resolved["resources"] if resource.get("known_valid") is not True
     ]
-    available_ids = {
+    retained_ids = {
         resource["id"] for resource in resolved["resources"] if resource.get("known_valid") is True
     }
-    resources = [
-        {
-            **resource,
-            "depends_on": [
-                dependency
-                for dependency in resource.get("depends_on", [])
-                if dependency in available_ids
-            ],
+    while True:
+        orphaned = {
+            resource["id"]
+            for resource in resolved["resources"]
+            if resource["id"] in retained_ids
+            and any(dependency not in retained_ids for dependency in resource.get("depends_on", []))
         }
-        for resource in resolved["resources"]
-        if resource["id"] in available_ids
+        if not orphaned:
+            break
+        retained_ids -= orphaned
+    resources = [
+        dict(resource) for resource in resolved["resources"] if resource["id"] in retained_ids
     ]
-    if not resources:
-        raise PreparationError("Neqo preflight left no directly fetchable HTTP/3 resources")
+    dependency_unavailable = [
+        resource
+        for resource in resolved["resources"]
+        if resource.get("known_valid") is True and resource["id"] not in retained_ids
+    ]
+    try:
+        validate_prepared_navigation_graph(
+            resources,
+            source_url=discovery.source_url,
+            final_url=discovery.final_url,
+        )
+    except ValueError as error:
+        raise PreparationError(f"Neqo preflight {error}") from error
     exclusions = [
         *discovery.exclusions,
         *(
             {"url": resource["url"], "reason": "HTTP/3 preflight unavailable"}
             for resource in unavailable
+        ),
+        *(
+            {"url": resource["url"], "reason": "HTTP/3 dependency unavailable"}
+            for resource in dependency_unavailable
         ),
     ]
     exclusions = sorted(
