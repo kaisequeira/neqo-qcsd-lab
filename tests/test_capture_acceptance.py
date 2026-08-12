@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import json
 import os
+import shutil
 import subprocess
 from collections import defaultdict
 from pathlib import Path
@@ -11,6 +12,7 @@ from typing import Any
 import pytest
 import yaml
 
+import qcsd_lab.parameters as parameters
 from qcsd_lab.analysis import analyze_result
 from qcsd_lab.capture import extract_trace
 from qcsd_lab.orchestrator import run_campaign
@@ -47,7 +49,9 @@ CANONICAL_SAMPLE_FILES = {
     not CAPTURE_GATE,
     reason="direct container-edge capture acceptance is launcher-provisioned",
 )
-def test_controlled_local_capture_uses_the_canonical_sealed_workflow(tmp_path: Path) -> None:
+def test_controlled_local_capture_uses_the_canonical_sealed_workflow(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     address = os.environ["QCSD_CAPTURE_SERVER_ADDRESS"]
     port = int(os.environ["QCSD_CAPTURE_SERVER_PORT"])
     second_address = os.environ["QCSD_CAPTURE_SERVER_TWO_ADDRESS"]
@@ -58,6 +62,7 @@ def test_controlled_local_capture_uses_the_canonical_sealed_workflow(tmp_path: P
         port,
         second_address,
         second_port,
+        monkeypatch,
     )
 
     result = run_campaign(campaign_path, tmp_path / "results")
@@ -154,6 +159,7 @@ def _configuration(
     port: int,
     second_address: str,
     second_port: int,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> Path:
     campaign_dir = directory / "config/campaigns"
     workload_dir = directory / "config/workloads"
@@ -200,6 +206,32 @@ def _configuration(
         ),
         encoding="utf-8",
     )
+    parameter_dir = directory / "config/defense-params"
+    parameter_dir.mkdir()
+    controlled_parameters: dict[str, Path] = {}
+    for defense, source in PARAMETER_FILES.items():
+        destination = parameter_dir / source.name
+        shutil.copy2(source, destination)
+        controlled_parameters[defense] = destination
+        if defense != "static":
+            receipt_source = source.with_suffix(source.suffix + ".provenance.json")
+            shutil.copy2(
+                receipt_source,
+                destination.with_suffix(destination.suffix + ".provenance.json"),
+            )
+    walkie_receipt_path = controlled_parameters["walkie-talkie"].with_suffix(
+        ".json.provenance.json"
+    )
+    walkie_receipt = json.loads(walkie_receipt_path.read_text(encoding="utf-8"))
+    walkie_receipt["workload_sha256"] = {
+        workload_id: sha256_file(workload_dir / f"{workload_id}.json")
+        for workload_id in ("simple", "complex")
+    }
+    walkie_receipt_path.write_text(
+        json.dumps(walkie_receipt, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(parameters, "LAB_ROOT", directory)
     campaign = {
         "schema": 1,
         "name": "direct-capture-acceptance",
@@ -222,7 +254,7 @@ def _configuration(
             {
                 "name": "static",
                 "kind": "static",
-                "schedule": str(PARAMETER_FILES["static"]),
+                "schedule": str(controlled_parameters["static"]),
                 "mode": "chaff-only",
             },
             "front",
@@ -230,17 +262,17 @@ def _configuration(
             {
                 "name": "traffic-morphing",
                 "kind": "traffic_morphing",
-                "parameters": str(PARAMETER_FILES["traffic-morphing"]),
+                "parameters": str(controlled_parameters["traffic-morphing"]),
             },
             {
                 "name": "wtf-pad",
                 "kind": "wtf_pad",
-                "parameters": str(PARAMETER_FILES["wtf-pad"]),
+                "parameters": str(controlled_parameters["wtf-pad"]),
             },
             {
                 "name": "walkie-talkie",
                 "kind": "walkie_talkie",
-                "parameters": str(PARAMETER_FILES["walkie-talkie"]),
+                "parameters": str(controlled_parameters["walkie-talkie"]),
             },
         ],
     }

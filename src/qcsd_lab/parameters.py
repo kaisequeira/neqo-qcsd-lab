@@ -27,6 +27,7 @@ _PROVENANCE_KEYS = {
     "udp_payload_ceiling",
     "parameter_file",
 }
+_WALKIE_TALKIE_PROVENANCE_KEYS = _PROVENANCE_KEYS | {"workload_sha256"}
 _PARAMETER_FILE_KEYS = {"path", "sha256"}
 _PARAMETERIZED_KINDS = {"traffic_morphing", "wtf_pad", "walkie_talkie"}
 _WTF_PAD_INFINITY_TOKEN_FORMULAS = {
@@ -185,7 +186,16 @@ def _validate_parameter_artifact(
             provenance_sha256=provenance_sha256,
             input_policy=input_policy,
         )
-    _require_exact_keys(receipt, _PROVENANCE_KEYS, "parameter provenance")
+    reviewed_kind = receipt.get("defense_kind")
+    if reviewed_kind == "walkie_talkie" and "workload_sha256" not in receipt:
+        raise ValueError(
+            "obsolete walkie_talkie smoke fixture is not bound to workload SHA-256 values; "
+            "use a sealed fitted bundle or a controlled workload-bound fixture"
+        )
+    receipt_keys = (
+        _WALKIE_TALKIE_PROVENANCE_KEYS if reviewed_kind == "walkie_talkie" else _PROVENANCE_KEYS
+    )
+    _require_exact_keys(receipt, receipt_keys, "parameter provenance")
     if receipt.get("schema_version") != PROVENANCE_SCHEMA_VERSION:
         raise ValueError(
             f"unsupported parameter provenance schema_version in {receipt_path}; "
@@ -239,6 +249,7 @@ def _validate_parameter_artifact(
     ):
         raise ValueError("expected QCSD profile and UDP ceiling disagree")
 
+    _validate_reviewed_workload_binding(receipt, str(kind), expected_workloads, receipt_path)
     _validate_runtime_shape(parameter, str(kind), int(ceiling), receipt_path)
     _validate_workload_coverage(parameter, str(kind), expected_workloads, receipt_path)
     return ParameterArtifact(
@@ -247,6 +258,58 @@ def _validate_parameter_artifact(
         provenance_path=receipt_path,
         provenance_sha256=sha256_file(receipt_path),
     )
+
+
+def _validate_reviewed_workload_binding(
+    receipt: Mapping[str, Any],
+    kind: str,
+    expected_workloads: Mapping[str, object] | Collection[str] | None,
+    receipt_path: Path,
+) -> None:
+    if kind != "walkie_talkie":
+        return
+    bindings = receipt.get("workload_sha256")
+    if (
+        not isinstance(bindings, Mapping)
+        or not bindings
+        or any(
+            not isinstance(workload_id, str)
+            or not workload_id
+            or not isinstance(digest, str)
+            or not _lower_hex_digest(digest)
+            for workload_id, digest in bindings.items()
+        )
+    ):
+        raise ValueError(
+            f"walkie_talkie smoke provenance requires workload SHA-256 bindings: {receipt_path}"
+        )
+    if expected_workloads is None:
+        return
+    if not isinstance(expected_workloads, Mapping):
+        raise ValueError(
+            "reviewed walkie_talkie fixtures require campaign workload SHA-256 bindings"
+        )
+    expected = dict(expected_workloads)
+    if not expected or any(
+        not isinstance(workload_id, str)
+        or not workload_id
+        or not isinstance(digest, str)
+        or not _lower_hex_digest(digest)
+        for workload_id, digest in expected.items()
+    ):
+        raise ValueError(
+            "expected walkie_talkie workloads must map non-empty IDs to SHA-256 digests"
+        )
+    mismatched = sorted(
+        workload_id
+        for workload_id, digest in expected.items()
+        if bindings.get(workload_id) != digest
+    )
+    if mismatched:
+        raise ValueError(
+            "walkie_talkie smoke provenance does not bind the exact campaign workload "
+            f"SHA-256 for: {', '.join(mismatched)}"
+        )
 
 
 def validate_run_parameter_binding(
@@ -475,6 +538,10 @@ def _probability_row(value: Any, width: int) -> bool:
 
 def _finite_number(value: Any) -> bool:
     return not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(value)
+
+
+def _lower_hex_digest(value: str) -> bool:
+    return len(value) == 64 and all(character in "0123456789abcdef" for character in value)
 
 
 def _mapping(value: Any, label: str) -> dict[str, Any]:

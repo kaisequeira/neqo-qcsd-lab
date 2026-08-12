@@ -23,7 +23,6 @@ FIXTURES = Path(__file__).parents[1] / "config/defense-params"
     [
         ("traffic-morphing-live.json", "traffic_morphing"),
         ("wtfpad-live.json", "wtf_pad"),
-        ("walkie-talkie-live.json", "walkie_talkie"),
     ],
 )
 def test_checked_in_smoke_artifacts_bind_hash_kind_profile_and_ceiling(name, kind):
@@ -40,6 +39,17 @@ def test_checked_in_smoke_artifacts_bind_hash_kind_profile_and_ceiling(name, kin
     assert artifact.provenance_path == parameter_provenance_path(path).resolve()
     assert artifact.provenance_sha256 == sha256_file(artifact.provenance_path)
     assert artifact.input_policy == REVIEWED_PARAMETER_INPUT_POLICY
+
+
+def test_obsolete_checked_in_walkie_talkie_fixture_fails_before_execution():
+    with pytest.raises(ValueError, match="not bound to workload SHA-256"):
+        validate_parameter_artifact(
+            FIXTURES / "walkie-talkie-live.json",
+            expected_kind="walkie_talkie",
+            allow_reviewed_fixture=True,
+            expected_qcsd_profile="live",
+            expected_udp_payload_ceiling=1200,
+        )
 
 
 def test_reviewed_fixture_requires_explicit_smoke_opt_in():
@@ -181,16 +191,42 @@ def test_named_profiles_can_be_bound_to_campaign_workloads():
         )
 
 
-def test_smoke_walkie_talkie_allows_extra_fixture_only_identities():
+def test_smoke_walkie_talkie_binds_exact_workload_hashes_and_allows_extra_identities(
+    tmp_path, monkeypatch
+):
+    parameter, provenance = _copy_fixture(tmp_path, monkeypatch, "walkie-talkie-live.json")
+    bindings = _controlled_workload_bindings(tmp_path, ["cloudflare-quiche", "chromium-quic-page"])
+    receipt = json.loads(provenance.read_text(encoding="utf-8"))
+    receipt["workload_sha256"] = bindings
+    atomic_json(provenance, receipt)
     artifact = validate_parameter_artifact(
-        FIXTURES / "walkie-talkie-live.json",
+        parameter,
         expected_kind="walkie_talkie",
         allow_reviewed_fixture=True,
         expected_qcsd_profile="live",
         expected_udp_payload_ceiling=1200,
-        expected_workloads={"cloudflare-quiche", "chromium-quic-page"},
+        expected_workloads=bindings,
     )
     assert artifact.input_policy == REVIEWED_PARAMETER_INPUT_POLICY
+
+    mismatched = {**bindings, "chromium-quic-page": "f" * 64}
+    with pytest.raises(ValueError, match="exact campaign workload SHA-256"):
+        validate_parameter_artifact(
+            parameter,
+            expected_kind="walkie_talkie",
+            allow_reviewed_fixture=True,
+            expected_qcsd_profile="live",
+            expected_udp_payload_ceiling=1200,
+            expected_workloads=mismatched,
+        )
+
+    with pytest.raises(ValueError, match="require campaign workload SHA-256 bindings"):
+        validate_parameter_artifact(
+            parameter,
+            expected_kind="walkie_talkie",
+            allow_reviewed_fixture=True,
+            expected_workloads=set(bindings),
+        )
 
 
 def test_walkie_talkie_rejects_cross_side_duplicate_identity(tmp_path, monkeypatch):
@@ -248,4 +284,22 @@ def _copy_fixture(tmp_path, monkeypatch, name):
     parameter.write_bytes(source.read_bytes())
     provenance = parameter_provenance_path(parameter)
     provenance.write_bytes(parameter_provenance_path(source).read_bytes())
+    if name == "walkie-talkie-live.json":
+        receipt = json.loads(provenance.read_text(encoding="utf-8"))
+        receipt["workload_sha256"] = _controlled_workload_bindings(tmp_path, ["unit-test-workload"])
+        atomic_json(provenance, receipt)
     return parameter, provenance
+
+
+def _controlled_workload_bindings(tmp_path: Path, workload_ids: list[str]) -> dict[str, str]:
+    workload_dir = tmp_path / "config/workloads"
+    workload_dir.mkdir(parents=True, exist_ok=True)
+    bindings = {}
+    for index, workload_id in enumerate(workload_ids):
+        workload = workload_dir / f"{workload_id}.json"
+        workload.write_text(
+            json.dumps({"resources": [], "test_identity": index}, sort_keys=True),
+            encoding="utf-8",
+        )
+        bindings[workload_id] = sha256_file(workload)
+    return bindings

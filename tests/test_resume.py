@@ -12,7 +12,7 @@ from qcsd_lab.orchestrator import resume_campaign, run_campaign
 from qcsd_lab.util import atomic_json, load_json
 from qcsd_lab.verification import verify_result
 
-from .test_campaign import _configuration, _write_successful_attempt
+from .test_campaign import _configuration, _resource, _write_successful_attempt
 
 
 class _InterruptAfterOneAccepted:
@@ -92,7 +92,24 @@ def _interrupted_result(
 def _interrupted_smoke_result(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> tuple[Path, dict[str, Any]]:
-    campaign = Path(__file__).parents[1] / "config/campaigns/smoke.yml"
+    fixture = Path(__file__).parents[1] / "config/defense-params/traffic-morphing-live.json"
+    campaign = _configuration(
+        tmp_path,
+        workloads={
+            "cloudflare-quiche": (
+                1,
+                [_resource(0, "https://cloudflare-quiche.test/")],
+            )
+        },
+        defenses=[
+            "undefended",
+            {
+                "name": "traffic-morphing",
+                "kind": "traffic_morphing",
+                "parameters": str(fixture),
+            },
+        ],
+    )
     monkeypatch.setattr(
         orchestrator.capture_engine,
         "_respect_origin_cooldown",
@@ -105,7 +122,7 @@ def _interrupted_smoke_result(
     )
     with pytest.raises(KeyboardInterrupt, match="controlled interruption"):
         run_campaign(campaign, tmp_path / "results")
-    [root] = (tmp_path / "results" / "consolidated-smoke").iterdir()
+    [root] = (tmp_path / "results" / "contract-test").iterdir()
     return root, load_experiment(root)
 
 

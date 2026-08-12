@@ -631,7 +631,38 @@ def test_materialization_rejects_artifact_copy_races_before_initialization(
     artifact: str,
     message: str,
 ) -> None:
-    campaign = load_campaign(Path(__file__).parents[1] / "config/campaigns/smoke.yml")
+    fixture_root = Path(__file__).parents[1] / "config/defense-params"
+    if artifact == "schedule":
+        defenses: list[str | dict[str, Any]] = [
+            "undefended",
+            {
+                "name": "static-control",
+                "kind": "static",
+                "schedule": str(fixture_root / "static-control-1200.csv"),
+                "mode": "chaff-only",
+            },
+        ]
+    else:
+        defenses = [
+            "undefended",
+            {
+                "name": "traffic-morphing",
+                "kind": "traffic_morphing",
+                "parameters": str(fixture_root / "traffic-morphing-live.json"),
+            },
+        ]
+    campaign = load_campaign(
+        _configuration(
+            tmp_path / "source",
+            workloads={
+                "cloudflare-quiche": (
+                    1,
+                    [_resource(0, "https://cloudflare-quiche.test/")],
+                )
+            },
+            defenses=defenses,
+        )
+    )
     if artifact == "schedule":
         defense = next(item for item in campaign.defenses if item.kind == "static")
         target = defense.schedule_path

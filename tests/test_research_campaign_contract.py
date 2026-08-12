@@ -210,15 +210,20 @@ def test_research_preparation_rejects_legacy_but_smoke_still_accepts(tmp_path: P
             orchestrator.load_campaign(path)
 
 
-def test_checked_in_smoke_names_the_mechanical_control_and_remains_14_samples() -> None:
+def test_checked_in_smoke_is_14_samples_but_rejects_its_obsolete_walkie_fixture() -> None:
     path = Path(__file__).parents[1] / "config/campaigns/smoke.yml"
-    campaign = orchestrator.load_campaign(path)
-    static = next(defense for defense in campaign.defenses if defense.kind == "static")
+    value = yaml.safe_load(path.read_text(encoding="utf-8"))
+    static = next(
+        defense
+        for defense in value["defenses"]
+        if isinstance(defense, dict) and defense.get("kind") == "static"
+    )
 
-    assert len(orchestrator.plan_campaign(campaign)) == 14
-    assert static.name == "static-control"
-    assert static.schedule_path is not None
-    assert static.schedule_path.name == "static-control-1200.csv"
+    assert len(value["workloads"]) * len(value["request_policies"]) * len(value["defenses"]) == 14
+    assert static["name"] == "static-control"
+    assert Path(static["schedule"]).name == "static-control-1200.csv"
+    with pytest.raises(ValueError, match="not bound to workload SHA-256"):
+        orchestrator.load_campaign(path)
 
 
 def test_checked_in_fitting_campaign_freezes_six_prepared_workloads_and_120_samples() -> None:

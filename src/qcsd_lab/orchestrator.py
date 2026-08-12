@@ -7,6 +7,7 @@ import re
 import shutil
 import tempfile
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -217,7 +218,7 @@ def _load_campaign(path: Path, *, frozen_inputs: Path | None) -> Campaign:
         value["defenses"],
         purpose,
         profile,
-        {workload.id for workload in workloads},
+        {workload.id: workload.sha256 for workload in workloads},
         frozen_inputs=frozen_inputs,
     )
     raw_limits = value.get("limits", {})
@@ -418,7 +419,7 @@ def _load_defenses(
     raw: Any,
     purpose: str,
     profile: str,
-    workload_ids: set[str],
+    workloads: Mapping[str, str],
     *,
     frozen_inputs: Path | None = None,
 ) -> tuple[capture_engine.Defense, ...]:
@@ -542,7 +543,7 @@ def _load_defenses(
                     allow_reviewed_fixture=purpose == "smoke",
                     expected_qcsd_profile=profile,
                     expected_udp_payload_ceiling=UDP_PAYLOAD_CEILING_BY_PROFILE[profile],
-                    expected_workloads=workload_ids,
+                    expected_workloads=workloads,
                 )
             else:
                 artifact = validate_frozen_parameter_artifact(
@@ -553,7 +554,7 @@ def _load_defenses(
                     allow_reviewed_fixture=purpose == "smoke",
                     expected_qcsd_profile=profile,
                     expected_udp_payload_ceiling=UDP_PAYLOAD_CEILING_BY_PROFILE[profile],
-                    expected_workloads=workload_ids,
+                    expected_workloads=workloads,
                 )
             defenses.append(
                 capture_engine.Defense(
@@ -842,7 +843,9 @@ def _materialize_inputs(
                 allow_reviewed_fixture=campaign.purpose == "smoke",
                 expected_qcsd_profile=campaign.profile,
                 expected_udp_payload_ceiling=campaign.udp_payload_ceiling,
-                expected_workloads={workload.id for workload in campaign.workloads},
+                expected_workloads={
+                    workload.id: workload.sha256 for workload in campaign.workloads
+                },
             )
             if (
                 frozen_artifact.sha256 != defense.parameters_sha256
