@@ -43,7 +43,7 @@ PROVENANCE_FILE = "provenance.json"
 EXACT_BUNDLE_FILES = frozenset((*BUNDLE_FILES.values(), PROVENANCE_FILE))
 RESEARCH_PARAMETER_INPUT_POLICY = "sealed-fitting-result-v1"
 RESEARCH_ARTIFACT_STATUS = "fitted-research-artifact"
-FITTER_VERSION = "qcsd_lab.fitting 2.0.0"
+FITTER_VERSION = "qcsd_lab.fitting 2.0.1"
 EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 ALGORITHM_GENERATORS = {
     "traffic_morphing": "qcsd_lab.fitting_morphing 2.0.0",
@@ -1633,8 +1633,8 @@ def _fitting_contract(workload_order: Sequence[str]) -> dict[str, object]:
                     "event": "observation",
                     "outcome": "recorded",
                 },
-                "production_sequence": "contiguous-zero-based-file-order",
-                "production_time_order": "nondecreasing-nanoseconds",
+                "production_sequence": "unique-contiguous-zero-based-set",
+                "production_event_order": "nondecreasing-(nanoseconds,sequence)-file-order",
                 "csv_time_binding": "monotonic_us=floor(production_monotonic_ns/1000)",
                 "window": {
                     "start_field": "defense_start_monotonic_ns",

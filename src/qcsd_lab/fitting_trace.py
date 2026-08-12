@@ -221,11 +221,11 @@ def _read_observations(path: Path) -> tuple[TypedObservation, ...]:
     if not observations:
         raise ValueError(f"trace contains no causal typed observations: {path}")
     sequences = [item.sequence for item in observations]
-    if sequences != list(range(len(observations))):
+    if sorted(sequences) != list(range(len(observations))):
         raise ValueError(f"production sequences must be unique and contiguous from zero: {path}")
-    times = [item.production_monotonic_ns for item in observations]
-    if times != sorted(times):
-        raise ValueError(f"causal production timestamps are not monotonic: {path}")
+    causal_keys = [(item.production_monotonic_ns, item.sequence) for item in observations]
+    if causal_keys != sorted(causal_keys):
+        raise ValueError(f"causal production order is not monotonic: {path}")
     return tuple(observations)
 
 

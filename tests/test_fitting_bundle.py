@@ -25,6 +25,7 @@ from qcsd_lab.fitting import (
     validate_fitting_result,
     verify_artifact_bundle,
 )
+from qcsd_lab.fitting_trace import _read_observations
 from qcsd_lab.parameters import validate_parameter_artifact
 from qcsd_lab.util import atomic_json, atomic_text, sha256_file
 from qcsd_lab.verification import seal_result, verify_result
@@ -428,6 +429,79 @@ def _event_csv(workload_index: int, visit: int, *, half_duplex: bool) -> str:
     return output.getvalue()
 
 
+def test_typed_event_reader_uses_production_time_with_sequence_as_tie_break(
+    tmp_path: Path,
+) -> None:
+    events = tmp_path / "events.csv"
+    output = io.StringIO(newline="")
+    writer = csv.writer(output, lineterminator="\n")
+    writer.writerow(["monotonic_us", "connection", "event", "outcome", "details"])
+    for production_ns, sequence in ((1_000, 0), (2_000, 2), (3_000, 1)):
+        writer.writerow(
+            [
+                production_ns // 1_000,
+                0,
+                "observation",
+                "recorded",
+                json.dumps(
+                    {
+                        "type": "application_complete",
+                        "production_monotonic_ns": production_ns,
+                        "production_sequence": sequence,
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+            ]
+        )
+    events.write_text(output.getvalue(), encoding="utf-8")
+
+    observations = _read_observations(events)
+    assert [item.production_monotonic_ns for item in observations] == [1_000, 2_000, 3_000]
+    assert [item.sequence for item in observations] == [0, 2, 1]
+
+
+@pytest.mark.parametrize(
+    "rows, message",
+    [
+        (((1_000, 0), (2_000, 2), (3_000, 2)), "unique and contiguous"),
+        (((2_000, 0), (1_000, 1)), "causal production order"),
+        (((1_000, 1), (1_000, 0)), "causal production order"),
+    ],
+)
+def test_typed_event_reader_rejects_invalid_causal_metadata(
+    tmp_path: Path,
+    rows: tuple[tuple[int, int], ...],
+    message: str,
+) -> None:
+    events = tmp_path / "events.csv"
+    output = io.StringIO(newline="")
+    writer = csv.writer(output, lineterminator="\n")
+    writer.writerow(["monotonic_us", "connection", "event", "outcome", "details"])
+    for production_ns, sequence in rows:
+        writer.writerow(
+            [
+                production_ns // 1_000,
+                0,
+                "observation",
+                "recorded",
+                json.dumps(
+                    {
+                        "type": "application_complete",
+                        "production_monotonic_ns": production_ns,
+                        "production_sequence": sequence,
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+            ]
+        )
+    events.write_text(output.getvalue(), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=message):
+        _read_observations(events)
+
+
 @pytest.fixture(scope="module")
 def fitted_bundle(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """Build one immutable synthetic bundle for exhaustive read/restore checks."""
@@ -460,6 +534,13 @@ def test_fit_builds_exact_deterministic_bundle_without_mutating_source(tmp_path:
     receipt_text = (first / "provenance.json").read_text(encoding="utf-8")
     receipt = json.loads(receipt_text)
     assert receipt["fitting_contract"]["workload_order"] == list(WORKLOADS)
+    assert receipt["fitting_contract"]["fitter_version"] == "qcsd_lab.fitting 2.0.1"
+    assert receipt["fitting_contract"]["constants"]["extractor"]["production_sequence"] == (
+        "unique-contiguous-zero-based-set"
+    )
+    assert receipt["fitting_contract"]["constants"]["extractor"]["production_event_order"] == (
+        "nondecreasing-(nanoseconds,sequence)-file-order"
+    )
     assert str(tmp_path) not in receipt_text
     assert "timestamp" not in receipt_text
     for kind, filename in (
