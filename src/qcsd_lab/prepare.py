@@ -365,21 +365,25 @@ def response_stability_evidence(runs: list[dict[str, Any]]) -> dict[str, Any]:
     first_responses: dict[int, dict[str, Any]] = {}
     for run_data in runs:
         current: dict[int, tuple[Any, ...]] = {}
-        if run_data.get("completion_status") == "complete":
-            for response in run_data.get("responses", []):
-                if response.get("complete") is not True or response.get("outcome") != "succeeded":
-                    continue
-                resource_id = response.get("resource_id")
-                if not isinstance(resource_id, int) or isinstance(resource_id, bool):
-                    continue
-                signature = (
-                    response.get("status"),
-                    response.get("bytes"),
-                    response.get("body_sha256"),
-                    tuple(tuple(header) for header in response.get("request_headers", [])),
-                )
-                current[resource_id] = signature
-                first_responses.setdefault(resource_id, response)
+        # A partial/error run can still contain completed responses for other
+        # independent resources.  Preserve those identities so the caller can
+        # report only the resources that actually failed or changed.  A failed
+        # or missing required resource is still absent here and therefore
+        # cannot pass the all-runs comparison below.
+        for response in run_data.get("responses", []):
+            if response.get("complete") is not True or response.get("outcome") != "succeeded":
+                continue
+            resource_id = response.get("resource_id")
+            if not isinstance(resource_id, int) or isinstance(resource_id, bool):
+                continue
+            signature = (
+                response.get("status"),
+                response.get("bytes"),
+                response.get("body_sha256"),
+                tuple(tuple(header) for header in response.get("request_headers", [])),
+            )
+            current[resource_id] = signature
+            first_responses.setdefault(resource_id, response)
         signatures.append(current)
     all_ids = set().union(*(set(signature) for signature in signatures))
     stable_ids = [

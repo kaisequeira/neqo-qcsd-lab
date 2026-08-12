@@ -1,4 +1,9 @@
-from qcsd_lab.discover import DiscoveredRequest, build_resources, exclusion_reason
+from qcsd_lab.discover import (
+    DiscoveredRequest,
+    build_resources,
+    exclusion_reason,
+    merge_request_headers,
+)
 
 
 def test_dependency_extraction_keeps_all_resolvable_initiators():
@@ -31,3 +36,18 @@ def test_discovery_excludes_unsafe_and_unreviewed_requests():
         "origin not approved"
     )
     assert exclusion_reason("GET", "https://page.test/app.js", reviewed) is None
+
+
+def test_cdp_header_merge_is_case_insensitive_and_extra_info_wins():
+    headers: dict[str, str] = {}
+
+    merge_request_headers(
+        headers,
+        {"User-Agent": "request-will-be-sent", "ACCEPT": "*/*"},
+    )
+    merge_request_headers(
+        headers,
+        {"user-agent": "extra-info", "Accept": "text/html"},
+    )
+
+    assert headers == {"user-agent": "extra-info", "accept": "text/html"}

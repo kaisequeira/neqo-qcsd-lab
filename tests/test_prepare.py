@@ -211,6 +211,40 @@ def test_prepare_rejects_changing_response_identity_without_output(tmp_path, mon
     assert not (tmp_path / "changing.json").exists()
 
 
+@pytest.mark.parametrize("incomplete_status", ["partial", "error"])
+def test_response_stability_preserves_successes_from_incomplete_runs(incomplete_status):
+    def response(resource_id: int, *, succeeded: bool = True) -> dict[str, object]:
+        return {
+            "resource_id": resource_id,
+            "status": 200,
+            "bytes": 100 + resource_id,
+            "body_sha256": str(resource_id) * 64,
+            "request_headers": [["accept", "*/*"]],
+            "complete": succeeded,
+            "outcome": "succeeded" if succeeded else "failed",
+        }
+
+    runs = [
+        {
+            "completion_status": "complete",
+            "responses": [response(0), response(1)],
+        },
+        {
+            "completion_status": incomplete_status,
+            "responses": [response(0), response(1, succeeded=False)],
+        },
+        {
+            "completion_status": "complete",
+            "responses": [response(0), response(1)],
+        },
+    ]
+
+    evidence = prepare.response_stability_evidence(runs)
+
+    assert evidence["stable_resource_ids"] == [0]
+    assert [item["resource_id"] for item in evidence["expected_responses"]] == [0]
+
+
 def test_probe_filter_retains_descendant_and_records_exclusion():
     discovery = discovered()
     resolved = {"resources": deepcopy(discovery.resources)}

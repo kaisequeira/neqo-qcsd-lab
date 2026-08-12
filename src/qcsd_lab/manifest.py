@@ -238,6 +238,15 @@ def validate_research_preparation(manifest: dict[str, Any], *, workload_id: str)
     if not isinstance(preparation, dict):
         raise ValueError(f"research workload {workload_id!r} {RESEARCH_PREPARATION_REQUIRED}")
 
+    for resource in manifest["resources"]:
+        names = [header[0].lower() for header in resource.get("headers", [])]
+        duplicates = sorted({name for name in names if names.count(name) > 1})
+        if duplicates:
+            raise ValueError(
+                f"research workload {workload_id!r} resource {resource['id']} contains "
+                "duplicate request header names: " + ", ".join(duplicates)
+            )
+
     required_policy = {
         "stability_runs": 3,
         "stability_profile": "live",

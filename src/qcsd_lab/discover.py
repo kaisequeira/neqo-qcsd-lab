@@ -110,25 +110,32 @@ def discover_page(
                 DiscoveredRequest(
                     url=url,
                     resource_type=str(event.get("type", "Other")),
-                    headers={str(k): str(v) for k, v in request.get("headers", {}).items()},
+                    headers={},
                 ),
             )
+            merge_request_headers(entry.headers, request.get("headers", {}))
             entry.initiator_urls.update(initiators)
             request_id = str(event.get("requestId", ""))
             if request_id:
                 request_urls[request_id] = url
-                entry.headers.update(pending_extra_headers.pop(request_id, {}))
+                merge_request_headers(
+                    entry.headers,
+                    pending_extra_headers.pop(request_id, {}),
+                )
 
         def extra_headers_seen(event: dict[str, Any]) -> None:
             request_id = str(event.get("requestId", ""))
-            headers = {str(name): str(value) for name, value in event.get("headers", {}).items()}
+            headers = event.get("headers", {})
             if not request_id or not headers:
                 return
             url = request_urls.get(request_id)
             if url is None:
-                pending_extra_headers[request_id] = headers
+                pending = pending_extra_headers.setdefault(request_id, {})
+                merge_request_headers(pending, headers)
             elif url in discovered:
-                discovered[url].headers.update(headers)
+                # ExtraInfo contains Chromium's final wire request headers, so
+                # it deliberately wins over requestWillBeSent.
+                merge_request_headers(discovered[url].headers, headers)
 
         session.on("Network.requestWillBeSent", request_seen)
         session.on("Network.requestWillBeSentExtraInfo", extra_headers_seen)
@@ -168,6 +175,13 @@ def exclusion_reason(method: str, url: str, approved: set[str]) -> str | None:
     if request_origin not in approved:
         return "origin not approved"
     return None
+
+
+def merge_request_headers(target: dict[str, str], headers: dict[str, Any]) -> None:
+    """Merge HTTP headers case-insensitively, with the new observation winning."""
+
+    for raw_name, raw_value in headers.items():
+        target[str(raw_name).lower()] = str(raw_value)
 
 
 def build_resources(ordered: list[DiscoveredRequest]) -> list[dict[str, Any]]:

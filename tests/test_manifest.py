@@ -176,6 +176,23 @@ def test_research_preparation_accepts_the_exact_clean_policy():
     assert runtime_manifest(value) == {"resources": value["resources"]}
 
 
+@pytest.mark.parametrize(
+    "headers",
+    [
+        [["accept", "*/*"], ["accept", "text/html"]],
+        [["User-Agent", "browser"], ["user-agent", "browser"]],
+    ],
+)
+def test_research_preparation_rejects_duplicate_header_names_case_insensitively(headers):
+    value = prepared_manifest()
+    value["resources"][0]["headers"] = headers
+
+    # General smoke and legacy manifests retain their existing compatibility.
+    validate_manifest(value)
+    with pytest.raises(ValueError, match="duplicate request header names"):
+        validate_research_preparation(value, workload_id="prepared-site")
+
+
 @pytest.mark.parametrize("kind", ["bare", "legacy-replay"])
 def test_research_preparation_rejects_nonprepared_manifests_actionably(kind):
     value = manifest([resource(0)])
