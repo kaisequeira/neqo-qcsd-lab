@@ -236,12 +236,12 @@ def test_checked_in_fitting_campaign_freezes_six_prepared_workloads_and_120_samp
     assert campaign.profile == "research-1200"
     assert campaign.request_policies == ("as-defined", "half-duplex")
     assert [workload.id for workload in campaign.workloads] == [
-        "getbootstrap-home-r2",
-        "chromium-projects-page-r2",
-        "behance-home-r2",
-        "cloudflare-quiche-r2",
-        "nghttp2-ngtcp2-r2",
-        "chromium-quic-page-r2",
+        "getbootstrap-home-r3",
+        "bootstrap-introduction-r3",
+        "apache-traffic-server-docs-r3",
+        "nginx-quic-r3",
+        "cloudflare-quiche-r3",
+        "nghttp2-ngtcp2-r3",
     ]
     assert all(workload.visits == 10 for workload in campaign.workloads)
     assert len(orchestrator.plan_campaign(campaign)) == 120

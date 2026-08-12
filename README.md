@@ -299,36 +299,46 @@ and total packet counts, maxima, and oversized counts for every run. Research
 validation requires that exact receipt; older manifests remain readable but
 are not research inputs.
 
-A case-insensitive Chromium-header merge correction made
-the earlier `-r1` manifests ineligible for research because they contained
-duplicate header names. They remain historical preparation evidence only.
+A case-insensitive Chromium-header merge correction made the earlier `-r1`
+manifests ineligible for research because they contained duplicate header
+names. The `-r2` manifests then predated absolute whole-run UDP qualification:
+their application traffic used a 1200-byte configuration, but their receipts
+did not prove that every handshake and application datagram respected that
+ceiling. Both generations remain historical preparation evidence only.
 
-The frozen research adaptation cohort was therefore prepared again from the
-clean corrected image as six new `-r2` workloads:
+The frozen research adaptation cohort was therefore prepared from the clean,
+corrected image as six new `-r3` workloads. Each preparation passed three
+stable undefended Neqo runs and recorded zero datagrams above 1200 bytes over
+the complete packet ledger:
 
 | Workload | Resources | Prepared-manifest SHA-256 |
 |---|---:|---|
-| `getbootstrap-home-r2` | 9 | `325b33909bc083320dbb63a97d18c6ddd417c52f0faf66108209f4faf39d7ee5` |
-| `chromium-projects-page-r2` | 10 | `a472b743319ac9affffdbc7bf0cca9b05d1a60d8549478e6e6c89db3936fb13e` |
-| `behance-home-r2` | 137 | `837e1a20722a4d72c27720b12d52a434b33daae5b10af6104b2fde601c9ec1c4` |
-| `cloudflare-quiche-r2` | 1 | `75809b54410bd8896ccda29865db255f83ce162a24a60238555575d013ac1422` |
-| `nghttp2-ngtcp2-r2` | 8 | `f8d4fc7be5905f2637424e509b530964a12781408ae29d9e617b04226a3b3bc5` |
-| `chromium-quic-page-r2` | 9 | `ea4b26eb4a7a03e0e5664eb13a2c330eeeab550da9f03ba33a9a96f5f3c01099` |
+| `getbootstrap-home-r3` | 9 | `863638bb6bf7a27c2a4e9184dcb9c3db8d748af1e0da1b875d24a21233b92ca2` |
+| `bootstrap-introduction-r3` | 9 | `e228029e7c987c63f8218e5471375e62e6d4557825bc6c4c0cb4bbfa0be6c16b` |
+| `apache-traffic-server-docs-r3` | 18 | `8f4fa9b10c4488ff99d30e7ac8b2b784867416c84635afe96b9c4ef45ab71ecd` |
+| `nginx-quic-r3` | 11 | `56ddd2eee52affc59d0062c83b49e2fd435d0fe9ca40f4f0b30e65c156e7ef09` |
+| `cloudflare-quiche-r3` | 1 | `e608366c95d6902234b4a705043435b3868f9572bcb8e103feb71db3110cbacc` |
+| `nghttp2-ngtcp2-r3` | 8 | `a871e1d783b52a79fb1f72761ea2771fced38ba408fbed0896a3c280d20927f1` |
 
-The corrected pass rejected Nikkei (`0`, `77`, `79`), Notion (`0`, `104`),
-Ahrefs (`0`, `109`–`118`), R10 (`3`), MyAnimeList (`0`), Guardian (`1`),
-Temu (`0`, `3`, `8`, `10`), and 9GAG (`0`). Arena and Tapbit failed broadly
-across their retained resource lists. TeamViewer's retained graph lacked the
-dependency-root Document required to bind it to the prepared source/final
-navigation, so `teamviewer-account-r2` remains rejected historical evidence.
-No rejected or legacy input was used.
+The final preparation pass rejected these candidates without weakening the
+qualification gates:
 
-Because the fixed commercial catalogue produced only two valid passes, the
-four deterministic protocol/project pages above were freshly prepared under
-the same strict contract. Chromium Projects retained 10 resources across two
-approved origins with 50,541 expected response bytes. This is a reproducible
-six-workload adaptation cohort, not a claim that it represents the rejected
-commercial population. Fitting and later evaluation reference the same frozen
+| Candidate | Rejection |
+|---|---|
+| Behance | Whole-capture UDP payload maximum was 1452 bytes. |
+| Chromium project pages | A pre-handshake Initial datagram was 1280 bytes. |
+| aioquic | The endpoint refused the preparation connection. |
+| Guardian | Whole-capture UDP payload maximum was 1280 bytes. |
+| R10 | Exact response identity was unstable across the three runs. |
+| TeamViewer | The retained assets were orphaned from the source/final navigation root. |
+
+NGINX QUIC and Bootstrap Introduction passed after those rejections and were
+promoted. The cohort contains six unique request graphs over five distinct
+origins: the two Bootstrap graphs share an origin and many static assets. That
+correlation can make their fitted distance or mould-padding cost smaller than
+for independent sites, so this is explicitly a reproducible QCSD adaptation
+cohort, not six independent websites or a representative sample of the
+rejected population. Fitting and later evaluation reference the same frozen
 files and hashes but execute independent network visits; fitting traces are
 never reused for evaluation.
 

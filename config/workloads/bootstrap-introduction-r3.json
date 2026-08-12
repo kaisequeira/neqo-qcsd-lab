@@ -1,0 +1,762 @@
+{
+  "preparation": {
+    "approved_origins": [
+      "https://getbootstrap.com"
+    ],
+    "chromium_version": "151.0.7922.108",
+    "exclusions": [
+      {
+        "reason": "origin not approved",
+        "url": "https://cdn.carbonads.com/carbon.js?serve=CKYIKKJL&placement=getbootstrapcom&format=responsive"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://cdn.usefathom.com/?h=https%3A%2F%2Fgetbootstrap.com&p=%2Fdocs%2F5.3%2Fgetting-started%2Fintroduction%2F&r=&sid=ITUSEYJG&qs=%7B%7D&cid=96136022"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://cdn.usefathom.com/script.js"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://srv.carbonads.net/ads/CKYIKKJL.json?segment=placement:getbootstrapcom&v=true"
+      },
+      {
+        "reason": "unsafe method: OPTIONS",
+        "url": "https://srv.carbonads.net/ads/CKYIKKJL.json?segment=placement:getbootstrapcom&v=true"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://srv.carbonads.net/ads/viewable/x/GTND427YCYBI6KJECKA4YKQUFTSD4KQJCA7D4Z3JCAADKKJJFTBD527KCK7ICKQEFTBI62JNCKSI52JUCEYIPK3KC6SIE2JMCK7DVK3EHJSCL7ZUKHJCY7V?segment=placement:getbootstrapcom"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://srv.carbonads.net/static/30242/42f17fba9bff0688cd1ae9827cca39fa132386ab"
+      }
+    ],
+    "expected_responses": [
+      {
+        "body_sha256": "56a51d0b42c4b9ca424bda9663df9f51ba24db324c46483b3ed59106c4abb14e",
+        "bytes": 17109,
+        "resource_id": 0,
+        "status": 200
+      },
+      {
+        "body_sha256": "4f310d1f5a2a895a6b0f89e5f2c0839100117db7122ed0e7c7a6cadc7f6bc8c3",
+        "bytes": 865,
+        "resource_id": 1,
+        "status": 200
+      },
+      {
+        "body_sha256": "80b2e02b1bcada2b8806f6ec617960fb480a8ac8aa82440c24c1f1aac5cf9825",
+        "bytes": 31841,
+        "resource_id": 2,
+        "status": 200
+      },
+      {
+        "body_sha256": "2ad060ec6d6782e86f79c42979494dc41ac251bc1e75a621b3dfc6704a76cb54",
+        "bytes": 11766,
+        "resource_id": 3,
+        "status": 200
+      },
+      {
+        "body_sha256": "80457bbe71525953ebab729ef000ed19c003ada258429382cb9e2277506effa4",
+        "bytes": 3891,
+        "resource_id": 4,
+        "status": 200
+      },
+      {
+        "body_sha256": "ba92445ce8920e99fe55dcb0783003c5d9ac395de729537e9e476b9107c67270",
+        "bytes": 24011,
+        "resource_id": 5,
+        "status": 200
+      },
+      {
+        "body_sha256": "1935f356f140a3821426af8fcbf9e43e896a15c46ace7184449fa59bfa2b9964",
+        "bytes": 38376,
+        "resource_id": 6,
+        "status": 200
+      },
+      {
+        "body_sha256": "2a6080727562d2e3c0c12c558b63c54ee7189a568beb18dc41e885429fa364e8",
+        "bytes": 5360,
+        "resource_id": 7,
+        "status": 200
+      },
+      {
+        "body_sha256": "0d494176f5e659a37675f9e8f06c08b8817d9530e63d58edadd170cbf9c8565d",
+        "bytes": 4604,
+        "resource_id": 8,
+        "status": 200
+      }
+    ],
+    "final_url": "https://getbootstrap.com/docs/5.3/getting-started/introduction/",
+    "lab_source": {
+      "image_digest": "sha256:7effbcade8e8f762f980438c32312ca9efff7290a0e8ef98135a507d71c59622",
+      "lab_commit": "ba9e0043d560bd10b804647ae503258523c058f9",
+      "lab_dirty": false,
+      "lab_patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "neqo_commit": "51e5415eef1a7cf0821650c0444ec443c6abbe04",
+      "neqo_dirty": false,
+      "neqo_patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "neqo_pinned_commit": "51e5415eef1a7cf0821650c0444ec443c6abbe04"
+    },
+    "max_response_bytes": 1048576,
+    "migration_commit": "51e5415eef1a7cf0821650c0444ec443c6abbe04",
+    "neqo_base_commit": "8a04d065c2d35c8e8fd804f91c7081ab6bb60b89",
+    "neqo_version": "0.30.0",
+    "observed_origins": [
+      "https://cdn.carbonads.com",
+      "https://cdn.usefathom.com",
+      "https://getbootstrap.com",
+      "https://srv.carbonads.net"
+    ],
+    "observed_request_count": 16,
+    "prepare_image_digest": "sha256:7effbcade8e8f762f980438c32312ca9efff7290a0e8ef98135a507d71c59622",
+    "published_qcsd_commit": "39e293fb384dd341156eedd1e4b833d24904b1f6",
+    "settle_ms": 3000,
+    "source_url": "https://getbootstrap.com/docs/5.3/getting-started/introduction/",
+    "stability_defense": "none",
+    "stability_profile": "live",
+    "stability_runs": 3,
+    "stability_seed": 0,
+    "timeout_seconds": 120,
+    "udp_payload_qualification": {
+      "configured_udp_payload_ceiling": 1200,
+      "runs": [
+        {
+          "incoming": {
+            "observed_udp_payload_max": 1200,
+            "oversized_packet_count": 0,
+            "packet_count": 144
+          },
+          "outgoing": {
+            "observed_udp_payload_max": 1200,
+            "oversized_packet_count": 0,
+            "packet_count": 47
+          },
+          "packets_sha256": "f6f2036ea7055f7742d8e5d47a005468086c265720d0f5b2ed94418fc291b24a",
+          "run_index": 0,
+          "total": {
+            "observed_udp_payload_max": 1200,
+            "oversized_packet_count": 0,
+            "packet_count": 191
+          }
+        },
+        {
+          "incoming": {
+            "observed_udp_payload_max": 1200,
+            "oversized_packet_count": 0,
+            "packet_count": 147
+          },
+          "outgoing": {
+            "observed_udp_payload_max": 1200,
+            "oversized_packet_count": 0,
+            "packet_count": 36
+          },
+          "packets_sha256": "e11e61900dab784792de94ef45b00f3738126ca0d0549503cb168187f8827d4f",
+          "run_index": 1,
+          "total": {
+            "observed_udp_payload_max": 1200,
+            "oversized_packet_count": 0,
+            "packet_count": 183
+          }
+        },
+        {
+          "incoming": {
+            "observed_udp_payload_max": 1200,
+            "oversized_packet_count": 0,
+            "packet_count": 142
+          },
+          "outgoing": {
+            "observed_udp_payload_max": 1200,
+            "oversized_packet_count": 0,
+            "packet_count": 39
+          },
+          "packets_sha256": "cc08c9c2616eb4eed55c401c03286dfb6b0d7ccc6d1729321958dd26c8feff46",
+          "run_index": 2,
+          "total": {
+            "observed_udp_payload_max": 1200,
+            "oversized_packet_count": 0,
+            "packet_count": 181
+          }
+        }
+      ],
+      "schema_version": 1
+    }
+  },
+  "resources": [
+    {
+      "chaff_priority": false,
+      "content_length": 17109,
+      "data_length": 0,
+      "depends_on": [],
+      "headers": [
+        [
+          "accept",
+          "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=0, i"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "document"
+        ],
+        [
+          "sec-fetch-mode",
+          "navigate"
+        ],
+        [
+          "sec-fetch-site",
+          "none"
+        ],
+        [
+          "sec-fetch-user",
+          "?1"
+        ],
+        [
+          "upgrade-insecure-requests",
+          "1"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 0,
+      "known_valid": true,
+      "type": "Document",
+      "url": "https://getbootstrap.com/docs/5.3/getting-started/introduction/"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 865,
+      "data_length": 0,
+      "depends_on": [
+        0
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=1"
+        ],
+        [
+          "referer",
+          "https://getbootstrap.com/docs/5.3/getting-started/introduction/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 1,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://getbootstrap.com/docs/5.3/assets/js/color-modes.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 31841,
+      "data_length": 0,
+      "depends_on": [
+        0
+      ],
+      "headers": [
+        [
+          "accept",
+          "text/css,*/*;q=0.1"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=0"
+        ],
+        [
+          "referer",
+          "https://getbootstrap.com/docs/5.3/getting-started/introduction/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "style"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 2,
+      "known_valid": true,
+      "type": "Stylesheet",
+      "url": "https://getbootstrap.com/docs/5.3/dist/css/bootstrap.min.css"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 11766,
+      "data_length": 0,
+      "depends_on": [
+        0
+      ],
+      "headers": [
+        [
+          "accept",
+          "text/css,*/*;q=0.1"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=0"
+        ],
+        [
+          "referer",
+          "https://getbootstrap.com/docs/5.3/getting-started/introduction/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "style"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 3,
+      "known_valid": true,
+      "type": "Stylesheet",
+      "url": "https://getbootstrap.com/docs/5.3/assets/_slug_.CJzlHdSW.css"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 3891,
+      "data_length": 0,
+      "depends_on": [
+        0
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "origin",
+          "https://getbootstrap.com"
+        ],
+        [
+          "priority",
+          "u=1"
+        ],
+        [
+          "referer",
+          "https://getbootstrap.com/docs/5.3/getting-started/introduction/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 4,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://getbootstrap.com/docs/5.3/assets/Code.astro_astro_type_script_index_0_lang.jwvOqc1M.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 24011,
+      "data_length": 0,
+      "depends_on": [
+        0
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=1"
+        ],
+        [
+          "referer",
+          "https://getbootstrap.com/docs/5.3/getting-started/introduction/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 5,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://getbootstrap.com/docs/5.3/dist/js/bootstrap.bundle.min.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 38376,
+      "data_length": 0,
+      "depends_on": [
+        0
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "origin",
+          "https://getbootstrap.com"
+        ],
+        [
+          "priority",
+          "u=1"
+        ],
+        [
+          "referer",
+          "https://getbootstrap.com/docs/5.3/getting-started/introduction/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 6,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://getbootstrap.com/docs/5.3/assets/Scripts.astro_astro_type_script_index_0_lang.B072HICR.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 5360,
+      "data_length": 0,
+      "depends_on": [
+        0
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "origin",
+          "https://getbootstrap.com"
+        ],
+        [
+          "priority",
+          "u=1"
+        ],
+        [
+          "referer",
+          "https://getbootstrap.com/docs/5.3/getting-started/introduction/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 7,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://getbootstrap.com/docs/5.3/assets/DocsScripts.astro_astro_type_script_index_0_lang.Y79Pi1OG.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 4604,
+      "data_length": 0,
+      "depends_on": [
+        0
+      ],
+      "headers": [
+        [
+          "accept",
+          "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=1, i"
+        ],
+        [
+          "referer",
+          "https://getbootstrap.com/docs/5.3/getting-started/introduction/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "image"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 8,
+      "known_valid": true,
+      "type": "Other",
+      "url": "https://getbootstrap.com/docs/5.3/assets/img/favicons/favicon.ico"
+    }
+  ]
+}

@@ -4,16 +4,16 @@ purpose: fitting
 seed: 2026081201
 profile: research-1200
 
-# Six independently prepared, immutable workload definitions. Each workload
-# is visited ten times under both policies; only natural undefended traffic is
-# collected for fitting.
+# Six independently prepared, immutable request graphs over five origins. Each
+# workload is visited ten times under both policies; only natural undefended
+# traffic is collected for fitting.
 workloads:
-  getbootstrap-home-r2: 10
-  chromium-projects-page-r2: 10
-  behance-home-r2: 10
-  cloudflare-quiche-r2: 10
-  nghttp2-ngtcp2-r2: 10
-  chromium-quic-page-r2: 10
+  getbootstrap-home-r3: 10
+  bootstrap-introduction-r3: 10
+  apache-traffic-server-docs-r3: 10
+  nginx-quic-r3: 10
+  cloudflare-quiche-r3: 10
+  nghttp2-ngtcp2-r3: 10
 
 request_policies:
   - as-defined

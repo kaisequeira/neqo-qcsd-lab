@@ -51,16 +51,27 @@ a workload only after `prepare` passes and writes the consolidated manifest.
 The earlier prepared manifests were retired from research use after discovery
 was found to merge Chromium header names case-sensitively. The corrected
 pipeline canonicalizes that merge and research validation rejects duplicate
-header names. Fresh three-run preparation produced Bootstrap, the two-origin
-Chromium Projects page, Behance, Cloudflare QUIC, nghttp2/ngtcp2, and the
-two-origin Chromium QUIC page. Bootstrap and Behance are successful commercial
-candidates; the other four are deterministic protocol/project pages
-substituted only after the remaining commercial candidates failed the
-unchanged stability gate. Chromium Projects retained 10 resources and 50,541
-expected response bytes. TeamViewer remained historical rejection evidence
-because its retained graph lacked the dependency-root Document required to
-bind it to the prepared source/final navigation. This is a reproducible
-adaptation cohort, not a representativeness claim.
+header names. A subsequent generation was also retired because it predated
+the receipt that qualifies the complete packet ledger, including handshake
+traffic, against the absolute 1200-byte ceiling.
+
+Fresh three-run preparation produced six unique request graphs in fixed order:
+Bootstrap Home, Bootstrap Introduction, Apache Traffic Server documentation,
+NGINX QUIC, Cloudflare QUIC, and nghttp2/ngtcp2. They span five distinct
+origins. Every one of the 18 preparation runs was response-stable and recorded
+zero UDP payloads above 1200 bytes. Behance was rejected at a whole-capture
+maximum of 1452 bytes; Chromium project pages emitted a 1280-byte
+pre-handshake Initial; aioquic refused the connection; Guardian reached 1280
+bytes; R10 was response-unstable; and TeamViewer's retained assets did not
+contain the source/final navigation root. NGINX QUIC and Bootstrap Introduction
+passed the unchanged gate and completed the cohort.
+
+The two Bootstrap workloads share an origin and many static dependencies.
+They are distinct frozen request graphs, which is the lab's unit of
+measurement, but the shared delivery path creates correlation that can reduce
+their fitted distance or mould-padding cost. The cohort is therefore a
+reproducible adaptation cohort, not six independent websites or a
+representativeness claim.
 
 The fitting and evaluation campaigns will reference the same six frozen
 manifest definitions and hashes. They perform independent visits: fitting
