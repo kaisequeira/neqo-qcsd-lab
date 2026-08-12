@@ -36,6 +36,7 @@ from .parameters import (
 )
 from .profiles import UDP_PAYLOAD_CEILING_BY_PROFILE
 from .util import (
+    SOURCE_METADATA_KEYS,
     atomic_json,
     discard_atomic_write_temps,
     load_json,
@@ -69,6 +70,16 @@ LIMIT_KEYS = {
     "settle_seconds",
 }
 DEFENSE_KEYS = {"name", "kind", "schedule", "mode", "parameters"}
+EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+FITTING_LIMITS = capture_engine.Limits(
+    timeout_seconds=120,
+    max_response_bytes=1024 * 1024,
+    capture_seconds=180,
+    capture_megabytes=64,
+    max_attempts=3,
+    per_origin_cooldown_seconds=30.0,
+    settle_seconds=1.0,
+)
 
 
 class CampaignIncomplete(RuntimeError):
@@ -209,13 +220,12 @@ def _load_campaign(path: Path, *, frozen_inputs: Path | None) -> Campaign:
         {workload.id for workload in workloads},
         frozen_inputs=frozen_inputs,
     )
-    limits = _load_limits(value.get("limits", {}))
-    if purpose == "fitting" and any(not defense.baseline for defense in defenses):
-        raise ValueError("fitting campaigns may collect only an undefended baseline")
+    raw_limits = value.get("limits", {})
+    limits = _load_limits(raw_limits)
     name = value["name"]
     if not isinstance(name, str) or _slug(name) != name:
         raise ValueError("campaign name must be a filesystem-safe identifier")
-    return Campaign(
+    campaign = Campaign(
         path=path,
         source_bytes=source_bytes,
         name=name,
@@ -226,6 +236,74 @@ def _load_campaign(path: Path, *, frozen_inputs: Path | None) -> Campaign:
         request_policies=tuple(policies),
         defenses=defenses,
         limits=limits,
+    )
+    if purpose == "fitting":
+        _validate_fitting_campaign(campaign, raw_limits=raw_limits)
+    return campaign
+
+
+def _validate_fitting_campaign(campaign: Campaign, *, raw_limits: Any) -> None:
+    """Reject an underspecified fitting capture before any traffic can run."""
+
+    prefix = "research fitting campaigns require"
+    if campaign.name != "research-fitting-1200":
+        raise ValueError(f"{prefix} the exact name research-fitting-1200")
+    if campaign.seed != 2_026_081_201:
+        raise ValueError(f"{prefix} the fixed seed 2026081201")
+    if campaign.profile != "research-1200":
+        raise ValueError(f"{prefix} profile research-1200")
+    if len(campaign.workloads) != 6:
+        raise ValueError(f"{prefix} exactly six unique workloads")
+    if any(workload.visits != 10 for workload in campaign.workloads):
+        raise ValueError(f"{prefix} exactly ten visits per workload")
+    if campaign.request_policies != ("as-defined", "half-duplex"):
+        raise ValueError(f"{prefix} request policies in exact order: as-defined, then half-duplex")
+    if len(campaign.defenses) != 1:
+        raise ValueError(f"{prefix} exactly one undefended baseline")
+    defense = campaign.defenses[0]
+    if defense.name != "undefended" or defense.kind != "none" or defense.baseline is not True:
+        raise ValueError(f"{prefix} the canonical undefended baseline with runtime kind none")
+    if not isinstance(raw_limits, dict) or set(raw_limits) != LIMIT_KEYS:
+        raise ValueError(f"{prefix} every explicit capture, retry, cooldown, and settle limit")
+    if campaign.limits != FITTING_LIMITS:
+        raise ValueError(
+            f"{prefix} the fixed 120-second/1-MiB/180-second/64-MiB/"
+            "3-attempt/30-second/1-second limits"
+        )
+
+
+def _validate_fitting_capture_source(source: object) -> None:
+    """Require concrete, clean and submodule-pinned runtime image provenance."""
+
+    prefix = "research fitting capture requires"
+    if not isinstance(source, dict) or set(source) != SOURCE_METADATA_KEYS:
+        raise ValueError(f"{prefix} complete source/image provenance")
+    image = source.get("image_digest")
+    if not (
+        isinstance(image, str)
+        and image.startswith("sha256:")
+        and _lower_hex_digest(image.removeprefix("sha256:"), length=64)
+    ):
+        raise ValueError(f"{prefix} a concrete image SHA-256 digest")
+    if source.get("lab_dirty") is not False or source.get("neqo_dirty") is not False:
+        raise ValueError(f"{prefix} clean lab and Neqo sources")
+    if (
+        source.get("lab_patch_sha256") != EMPTY_SHA256
+        or source.get("neqo_patch_sha256") != EMPTY_SHA256
+    ):
+        raise ValueError(f"{prefix} empty source patch hashes")
+    for key in ("lab_commit", "neqo_commit", "neqo_pinned_commit"):
+        if not _lower_hex_digest(source.get(key), length=40):
+            raise ValueError(f"{prefix} a valid {key}")
+    if source["neqo_commit"] != source["neqo_pinned_commit"]:
+        raise ValueError(f"{prefix} a runtime Neqo commit equal to the pinned submodule")
+
+
+def _lower_hex_digest(value: object, *, length: int) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == length
+        and all(character in "0123456789abcdef" for character in value)
     )
 
 
@@ -611,6 +689,8 @@ def plan_campaign(campaign: Campaign) -> list[dict[str, Any]]:
 
 def preflight_campaign(path: Path) -> dict[str, Any]:
     campaign = load_campaign(path)
+    if campaign.purpose == "fitting":
+        _validate_fitting_capture_source(source_metadata())
     samples = plan_campaign(campaign)
     return {
         "valid": True,
@@ -652,11 +732,13 @@ def run_campaign(path: Path, results_root: Path = Path("/lab/results")) -> Path:
     from .experiment import initialize_experiment, result_path
 
     campaign = load_campaign(path)
+    source = source_metadata()
+    if campaign.purpose == "fitting":
+        _validate_fitting_capture_source(source)
     started = datetime.now(timezone.utc)
     run_id = started.strftime("%Y%m%dT%H%M%S.%fZ")
     root = result_path(results_root, campaign.name, run_id)
     root.mkdir(parents=True, exist_ok=False)
-    source = source_metadata()
     runtime_campaign, configuration = _materialize_inputs(root, campaign, source)
     samples = plan_campaign(runtime_campaign)
     experiment = initialize_experiment(

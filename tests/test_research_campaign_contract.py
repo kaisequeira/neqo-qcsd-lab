@@ -27,6 +27,20 @@ DEFENSES = (
     "wtf-pad",
     "walkie-talkie",
 )
+EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+
+def _clean_runtime_source() -> dict[str, Any]:
+    return {
+        "image_digest": "sha256:" + "a" * 64,
+        "lab_commit": "b" * 40,
+        "lab_dirty": False,
+        "lab_patch_sha256": EMPTY_SHA256,
+        "neqo_commit": "c" * 40,
+        "neqo_pinned_commit": "c" * 40,
+        "neqo_dirty": False,
+        "neqo_patch_sha256": EMPTY_SHA256,
+    }
 
 
 @pytest.fixture(scope="module")
@@ -209,8 +223,10 @@ def test_checked_in_smoke_names_the_mechanical_control_and_remains_14_samples() 
 
 def test_exact_research_expansions_and_seeded_order_are_deterministic(
     research_workspace: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     base, _bundle = research_workspace
+    monkeypatch.setattr(orchestrator, "source_metadata", _clean_runtime_source)
     fitting_path = base / "config/campaigns/fitting.yml"
     rehearsal_value = _evaluation_campaign(name="research-rehearsal", seed=4_242, visits=1)
     final_value = _evaluation_campaign(name="research-final", seed=9_999, visits=3)
@@ -264,6 +280,92 @@ def test_exact_research_expansions_and_seeded_order_are_deterministic(
         assert [(workload.id, workload.sha256) for workload in campaign.workloads] == (
             expected_workloads
         )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "name",
+        "seed",
+        "profile",
+        "workload-count",
+        "visit-count",
+        "policy-order",
+        "defense-count",
+        "defense-alias",
+        "missing-limit",
+        "changed-limit",
+    ],
+)
+def test_fitting_campaign_load_rejects_every_contract_deviation(
+    tmp_path: Path,
+    research_workspace: tuple[Path, Path],
+    mutation: str,
+) -> None:
+    source, _bundle = research_workspace
+    _copy_prepared_inputs(source, tmp_path)
+    value = yaml.safe_load((source / "config/campaigns/fitting.yml").read_text(encoding="utf-8"))
+    if mutation == "name":
+        value["name"] = "alternate-fitting-name"
+    elif mutation == "seed":
+        value["seed"] += 1
+    elif mutation == "profile":
+        value["profile"] = "published"
+    elif mutation == "workload-count":
+        value["workloads"].pop(next(iter(value["workloads"])))
+    elif mutation == "visit-count":
+        value["workloads"][next(iter(value["workloads"]))] = 9
+    elif mutation == "policy-order":
+        value["request_policies"].reverse()
+    elif mutation == "defense-count":
+        value["defenses"].append("front")
+    elif mutation == "defense-alias":
+        value["defenses"] = [{"name": "fitting-baseline", "kind": "none"}]
+    elif mutation == "missing-limit":
+        value["limits"].pop("capture_megabytes")
+    else:
+        value["limits"]["capture_seconds"] = 181
+    path = _write_campaign(tmp_path, "invalid-fitting.yml", value)
+
+    with pytest.raises(ValueError, match="research fitting campaigns require"):
+        orchestrator.load_campaign(path)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["missing-field", "image", "dirty", "patch", "commit", "unpinned"],
+)
+def test_fitting_preflight_and_run_reject_invalid_runtime_provenance_before_result_creation(
+    tmp_path: Path,
+    research_workspace: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    source, _bundle = research_workspace
+    _copy_prepared_inputs(source, tmp_path)
+    value = yaml.safe_load((source / "config/campaigns/fitting.yml").read_text(encoding="utf-8"))
+    path = _write_campaign(tmp_path, "fitting.yml", value)
+    provenance = _clean_runtime_source()
+    if mutation == "missing-field":
+        provenance.pop("image_digest")
+    elif mutation == "image":
+        provenance["image_digest"] = None
+    elif mutation == "dirty":
+        provenance["lab_dirty"] = True
+    elif mutation == "patch":
+        provenance["neqo_patch_sha256"] = "d" * 64
+    elif mutation == "commit":
+        provenance["lab_commit"] = "not-a-commit"
+    else:
+        provenance["neqo_pinned_commit"] = "d" * 40
+    monkeypatch.setattr(orchestrator, "source_metadata", lambda: provenance)
+
+    with pytest.raises(ValueError, match="research fitting capture requires"):
+        orchestrator.preflight_campaign(path)
+    results = tmp_path / "results"
+    with pytest.raises(ValueError, match="research fitting capture requires"):
+        orchestrator.run_campaign(path, results)
+    assert not results.exists()
 
 
 def test_evaluation_missing_bundle_error_is_stable_and_actionable(

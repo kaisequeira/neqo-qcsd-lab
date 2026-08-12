@@ -178,9 +178,9 @@ def _make_fitting_result(
     atomic_text(
         campaign_path,
         "schema: 1\n"
-        "name: fitting-research\n"
+        "name: research-fitting-1200\n"
         "purpose: fitting\n"
-        "seed: 1200\n"
+        "seed: 2026081201\n"
         "profile: research-1200\n"
         "workloads:\n"
         + "".join(f"  {workload}: 10\n" for workload in workloads)
@@ -188,9 +188,17 @@ def _make_fitting_result(
         "  - as-defined\n"
         "  - half-duplex\n"
         "defenses:\n"
-        "  - undefended\n",
+        "  - undefended\n"
+        "limits:\n"
+        "  timeout_seconds: 120\n"
+        "  max_response_bytes: 1048576\n"
+        "  capture_seconds: 180\n"
+        "  capture_megabytes: 64\n"
+        "  max_attempts: 3\n"
+        "  per_origin_cooldown_seconds: 30\n"
+        "  settle_seconds: 1\n",
     )
-    root = base / "results/fitting-research/run-001"
+    root = base / "results/research-fitting-1200/run-001"
     campaign = orchestrator.load_campaign(campaign_path)
     runtime, configuration = orchestrator._materialize_inputs(root, campaign, source)
     planned = orchestrator.plan_campaign(runtime)
@@ -708,7 +716,6 @@ def test_existing_different_valid_bundle_is_a_collision(tmp_path: Path) -> None:
         fit_result(second_result, artifacts_root=artifacts)
 
 
-def test_fitting_result_rejects_the_wrong_workload_cardinality(tmp_path: Path) -> None:
-    result = _make_fitting_result(tmp_path / "source", workloads=WORKLOADS[:-1])
-    with pytest.raises(ValueError, match="exactly six workloads"):
-        validate_fitting_result(result)
+def test_fitting_campaign_rejects_the_wrong_workload_cardinality(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="exactly six unique workloads"):
+        _make_fitting_result(tmp_path / "source", workloads=WORKLOADS[:-1])
