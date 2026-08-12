@@ -40,6 +40,12 @@ CHECKED_IN_SMOKE_WORKLOADS = (
     "apache-traffic-server-docs-r3",
 )
 EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+STATIC_CONTROL_ROWS = (
+    ("0.025000", 1200),
+    ("0.030000", -1200),
+    ("0.035000", 1200),
+    ("0.040000", -1200),
+)
 
 
 def _clean_runtime_source() -> dict[str, Any]:
@@ -73,9 +79,26 @@ def _write_static_control(base: Path) -> None:
     path = base / "config/defense-params/static-control-1200.csv"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        "# seconds,signed_size\n0.000000,1200\n0.005000,-1200\n0.010000,1200\n0.015000,-1200\n",
+        "# seconds,signed_size\n"
+        + "".join(f"{seconds},{size}\n" for seconds, size in STATIC_CONTROL_ROWS),
         encoding="utf-8",
     )
+
+
+def test_static_control_has_startup_lead_and_exact_alternating_sequence() -> None:
+    root = Path(__file__).parents[1]
+    for name in ("static-control-1200.csv", "static-migration.csv"):
+        rows = tuple(
+            (seconds, int(signed_size))
+            for seconds, signed_size in (
+                line.split(",")
+                for line in (root / "config/defense-params" / name)
+                .read_text(encoding="utf-8")
+                .splitlines()
+                if line and not line.startswith("#")
+            )
+        )
+        assert rows == STATIC_CONTROL_ROWS
 
 
 def _evaluation_campaign(

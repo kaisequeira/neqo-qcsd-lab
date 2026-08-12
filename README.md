@@ -268,16 +268,17 @@ waits for the current application stream to finish before starting another.
 It is an execution policy, not a second workload format.
 
 Static consumes a signed schedule file. The checked-in
-`static-control-1200.csv` is four alternating 1200-byte events at 0, 5, 10, and
-15 ms. It is a mechanical schedule-loading and direction control, not a fitted
-defence or effectiveness result. Traffic Morphing, WTF-PAD, and
-Walkie-Talkie consume a JSON parameter file with an adjacent
-receipt: smoke fixtures use `.provenance.json` beside each file, while the
-research bundle uses one shared `provenance.json`. Campaign loading validates
-these files, their defence/profile binding, and their hashes before a network
-run, then freezes copies under `inputs/`. Reviewed engineering fixtures are
-permitted only for a `smoke` campaign; an evaluation campaign requires sealed
-fitted artifacts.
+`static-control-1200.csv` is four alternating 1200-byte events at 25, 30, 35,
+and 40 ms. The 25 ms startup lead lets the asynchronous client provision its
+chaff stream before the first exact slot. It is a mechanical schedule-loading
+and direction control, not a fitted defence or effectiveness result. Traffic
+Morphing, WTF-PAD, and Walkie-Talkie consume a JSON parameter file with an
+adjacent receipt: smoke fixtures use `.provenance.json` beside each file,
+while the research bundle uses one shared `provenance.json`. Campaign loading
+validates these files, their defence/profile binding, and their hashes before
+a network run, then freezes copies under `inputs/`. Reviewed engineering
+fixtures are permitted only for a `smoke` campaign; an evaluation campaign
+requires sealed fitted artifacts.
 FRONT and Tamaraw are generated from the selected QCSD profile and therefore
 do not have external fitted files.
 

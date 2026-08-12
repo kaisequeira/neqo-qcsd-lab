@@ -211,9 +211,11 @@ The profile names identify distinct evidence contracts:
   paper experiment.
 
 Static has no fitted model. The research mechanical control is four alternating
-signed 1200-byte events at 0, 5, 10, and 15 ms. It checks CSV loading,
-direction, action realization, and ceiling enforcement; it is not an
-effectiveness baseline inferred from training data.
+signed 1200-byte events at 25, 30, 35, and 40 ms. The 25 ms startup lead lets
+the asynchronous client provision its chaff stream before the first exact
+slot. The control checks CSV loading, direction, action realization, and
+ceiling enforcement; it is not an effectiveness baseline inferred from
+training data.
 
 The primary QCSD reference is Smith et al.,
 [“QCSD: A QUIC Client-Side Website-Fingerprinting Defence Framework”](https://www.usenix.org/system/files/sec22-smith.pdf).
