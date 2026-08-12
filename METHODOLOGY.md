@@ -287,8 +287,9 @@ schemas. An identical rerun is idempotent; a different existing bundle is a
 collision. Fitting does not mutate or reseal its source result.
 
 This describes the implemented evidence boundary, not a completed experiment.
-No real 120-sample fitting result or fitted research bundle exists until the
-six-workload cohort is frozen and those commands succeed.
+The six-workload cohort and fitting campaign are frozen, but no real
+120-sample fitting result or fitted research bundle exists until the capture,
+verification, and fitting commands succeed.
 
 ## Evidence, sealing, and recovery
 

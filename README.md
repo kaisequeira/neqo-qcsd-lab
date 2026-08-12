@@ -462,8 +462,9 @@ observer, pairing, fidelity, and derived metrics.
 
 ## Research readiness and final hold
 
-Only the 14-sample engineering smoke campaign is currently checked in. The
-research definitions and their expected expansions are:
+The 14-sample engineering smoke campaign and the 120-sample fitting campaign
+are checked in. The six-workload fitting cohort is frozen. The research
+definitions and their expected expansions are:
 
 - fitting: six workloads × ten visits × two request policies × undefended =
   120 samples;
@@ -472,18 +473,18 @@ research definitions and their expected expansions are:
 - final: six workloads × three visits × one request policy × seven modes =
   126 samples.
 
-The current Stages 1–5 goal implements and deterministically verifies the
-profiles, preparation policy, fitters, runtime realization, campaign
-contracts, and documentation. It does **not** execute the smoke, fitting,
-rehearsal, or final campaign. At the clean handoff, the next command is exactly:
+The implementation goal established the profiles, preparation policy,
+fitters, runtime realization, campaign contracts, and documentation. The
+active capture goal runs smoke and then fitting to generate the sealed research
+bundle. It does **not** execute the rehearsal or final campaign. The first
+production-traffic command is:
 
 ```shell
 ./qcsd-lab run config/campaigns/smoke.yml
 ```
 
-The longer capture sequence is future work. After smoke passes, two more
-workloads must pass preparation without legacy substitution; the six-workload
-fitting campaign can then collect 120 independent samples and produce the
-sealed bundle. Only after that may the independent 42-sample rehearsal run and
-be verified and analyzed. The eventual `config/campaigns/final.yml` must pass
-non-executing `verify`, but its 126-sample capture remains explicitly on hold.
+After smoke passes, the frozen six-workload fitting campaign collects 120
+independent samples and produces the sealed bundle. Only after that may a
+separately authorized 42-sample rehearsal be defined, run, verified, and
+analyzed. The eventual `config/campaigns/final.yml` must pass non-executing
+`verify`, but its 126-sample capture remains explicitly on hold.
