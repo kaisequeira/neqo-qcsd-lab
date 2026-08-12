@@ -9,7 +9,7 @@ profile: research-1200
 # collected for fitting.
 workloads:
   getbootstrap-home-r2: 10
-  teamviewer-account-r2: 10
+  chromium-projects-page-r2: 10
   behance-home-r2: 10
   cloudflare-quiche-r2: 10
   nghttp2-ngtcp2-r2: 10

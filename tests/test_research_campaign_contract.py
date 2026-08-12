@@ -232,7 +232,7 @@ def test_checked_in_fitting_campaign_freezes_six_prepared_workloads_and_120_samp
     assert campaign.request_policies == ("as-defined", "half-duplex")
     assert [workload.id for workload in campaign.workloads] == [
         "getbootstrap-home-r2",
-        "teamviewer-account-r2",
+        "chromium-projects-page-r2",
         "behance-home-r2",
         "cloudflare-quiche-r2",
         "nghttp2-ngtcp2-r2",

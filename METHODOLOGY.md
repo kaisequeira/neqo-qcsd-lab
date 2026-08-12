@@ -45,12 +45,16 @@ a workload only after `prepare` passes and writes the consolidated manifest.
 The earlier prepared manifests were retired from research use after discovery
 was found to merge Chromium header names case-sensitively. The corrected
 pipeline canonicalizes that merge and research validation rejects duplicate
-header names. Fresh three-run preparation produced Bootstrap, TeamViewer,
-Behance, Cloudflare QUIC, nghttp2/ngtcp2, and the two-origin Chromium QUIC page.
-The first three are successful commercial candidates; the latter three are
-deterministic protocol/project pages substituted only after the remaining
-commercial candidates failed the unchanged stability gate. This is a
-reproducible adaptation cohort, not a representativeness claim.
+header names. Fresh three-run preparation produced Bootstrap, the two-origin
+Chromium Projects page, Behance, Cloudflare QUIC, nghttp2/ngtcp2, and the
+two-origin Chromium QUIC page. Bootstrap and Behance are successful commercial
+candidates; the other four are deterministic protocol/project pages
+substituted only after the remaining commercial candidates failed the
+unchanged stability gate. Chromium Projects retained 10 resources and 50,541
+expected response bytes. TeamViewer remained historical rejection evidence
+because its retained graph lacked the dependency-root Document required to
+bind it to the prepared source/final navigation. This is a reproducible
+adaptation cohort, not a representativeness claim.
 
 The fitting and evaluation campaigns will reference the same six frozen
 manifest definitions and hashes. They perform independent visits: fitting

@@ -213,6 +213,7 @@ def test_research_preparation_rejects_an_orphan_promoted_to_a_root():
         "cloudflare-quiche-r2",
         "nghttp2-ngtcp2-r2",
         "chromium-quic-page-r2",
+        "chromium-projects-page-r2",
     ],
 )
 def test_checked_in_r2_research_workloads_retain_the_navigation_root(workload_id):

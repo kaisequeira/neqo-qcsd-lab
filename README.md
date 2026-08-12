@@ -301,7 +301,7 @@ clean corrected image as six new `-r2` workloads:
 | Workload | Resources | Prepared-manifest SHA-256 |
 |---|---:|---|
 | `getbootstrap-home-r2` | 9 | `325b33909bc083320dbb63a97d18c6ddd417c52f0faf66108209f4faf39d7ee5` |
-| `teamviewer-account-r2` | 17 | `00fd3adc4ff3284fa7474595c16dae9ea9e95ca811786e715ff45ad2cff90f00` |
+| `chromium-projects-page-r2` | 10 | `a472b743319ac9affffdbc7bf0cca9b05d1a60d8549478e6e6c89db3936fb13e` |
 | `behance-home-r2` | 137 | `837e1a20722a4d72c27720b12d52a434b33daae5b10af6104b2fde601c9ec1c4` |
 | `cloudflare-quiche-r2` | 1 | `75809b54410bd8896ccda29865db255f83ce162a24a60238555575d013ac1422` |
 | `nghttp2-ngtcp2-r2` | 8 | `f8d4fc7be5905f2637424e509b530964a12781408ae29d9e617b04226a3b3bc5` |
@@ -310,14 +310,19 @@ clean corrected image as six new `-r2` workloads:
 The corrected pass rejected Nikkei (`0`, `77`, `79`), Notion (`0`, `104`),
 Ahrefs (`0`, `109`–`118`), R10 (`3`), MyAnimeList (`0`), Guardian (`1`),
 Temu (`0`, `3`, `8`, `10`), and 9GAG (`0`). Arena and Tapbit failed broadly
-across their retained resource lists. No rejected or legacy input was used.
+across their retained resource lists. TeamViewer's retained graph lacked the
+dependency-root Document required to bind it to the prepared source/final
+navigation, so `teamviewer-account-r2` remains rejected historical evidence.
+No rejected or legacy input was used.
 
-Because the fixed commercial catalogue still produced only three passes, the
-three deterministic QUIC-project pages above were freshly prepared under the
-same strict contract. This is a reproducible six-workload adaptation cohort,
-not a claim that it represents the rejected commercial population. Fitting
-and later evaluation reference the same frozen files and hashes but execute
-independent network visits; fitting traces are never reused for evaluation.
+Because the fixed commercial catalogue produced only two valid passes, the
+four deterministic protocol/project pages above were freshly prepared under
+the same strict contract. Chromium Projects retained 10 resources across two
+approved origins with 50,541 expected response bytes. This is a reproducible
+six-workload adaptation cohort, not a claim that it represents the rejected
+commercial population. Fitting and later evaluation reference the same frozen
+files and hashes but execute independent network visits; fitting traces are
+never reused for evaluation.
 
 ## Execution order and concurrency
 
