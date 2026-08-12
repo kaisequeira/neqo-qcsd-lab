@@ -27,6 +27,18 @@ DEFENSES = (
     "wtf-pad",
     "walkie-talkie",
 )
+FROZEN_RESEARCH_WORKLOADS = (
+    "getbootstrap-home-r3",
+    "bootstrap-introduction-r3",
+    "apache-traffic-server-docs-r3",
+    "nginx-quic-r3",
+    "cloudflare-quiche-r3",
+    "nghttp2-ngtcp2-r3",
+)
+CHECKED_IN_SMOKE_WORKLOADS = (
+    "cloudflare-quiche-r3",
+    "apache-traffic-server-docs-r3",
+)
 EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
 
@@ -129,6 +141,27 @@ def _copy_prepared_inputs(source: Path, destination: Path) -> None:
     _write_static_control(destination)
 
 
+def _copy_checked_in_smoke_inputs(destination: Path) -> Path:
+    source = Path(__file__).parents[1]
+    campaigns = destination / "config/campaigns"
+    workloads = destination / "config/workloads"
+    parameters = destination / "config/defense-params"
+    campaigns.mkdir(parents=True)
+    workloads.mkdir()
+    parameters.mkdir()
+    shutil.copy2(source / "config/campaigns/smoke.yml", campaigns / "smoke.yml")
+    shutil.copy2(
+        source / "config/defense-params/static-control-1200.csv",
+        parameters / "static-control-1200.csv",
+    )
+    for workload_id in CHECKED_IN_SMOKE_WORKLOADS:
+        shutil.copy2(
+            source / f"config/workloads/{workload_id}.json",
+            workloads / f"{workload_id}.json",
+        )
+    return campaigns / "smoke.yml"
+
+
 def _stable_digest(*parts: object) -> str:
     digest = hashlib.sha256()
     for part in parts:
@@ -210,20 +243,69 @@ def test_research_preparation_rejects_legacy_but_smoke_still_accepts(tmp_path: P
             orchestrator.load_campaign(path)
 
 
-def test_checked_in_smoke_is_14_samples_but_rejects_its_obsolete_walkie_fixture() -> None:
-    path = Path(__file__).parents[1] / "config/campaigns/smoke.yml"
-    value = yaml.safe_load(path.read_text(encoding="utf-8"))
+def test_checked_in_smoke_is_post_fit_evaluation_and_requires_the_sealed_bundle(
+    tmp_path: Path,
+) -> None:
+    checked_in = Path(__file__).parents[1] / "config/campaigns/smoke.yml"
+    value = yaml.safe_load(checked_in.read_text(encoding="utf-8"))
     static = next(
         defense
         for defense in value["defenses"]
         if isinstance(defense, dict) and defense.get("kind") == "static"
     )
+    parameter_paths = {
+        defense["name"]: defense["parameters"]
+        for defense in value["defenses"]
+        if isinstance(defense, dict) and "parameters" in defense
+    }
 
+    assert value["name"] == "research-smoke-1200"
+    assert value["purpose"] == "evaluation"
+    assert value["seed"] == 2_026_081_204
+    assert value["profile"] == "research-1200"
+    assert list(value["workloads"]) == list(CHECKED_IN_SMOKE_WORKLOADS)
+    assert value["request_policies"] == ["as-defined"]
     assert len(value["workloads"]) * len(value["request_policies"]) * len(value["defenses"]) == 14
     assert static["name"] == "static-control"
     assert Path(static["schedule"]).name == "static-control-1200.csv"
-    with pytest.raises(ValueError, match="not bound to workload SHA-256"):
+    assert parameter_paths == {
+        "traffic-morphing": "../../artifacts/research-1200/traffic-morphing.json",
+        "wtf-pad": "../../artifacts/research-1200/wtf-pad.json",
+        "walkie-talkie": "../../artifacts/research-1200/walkie-talkie.json",
+    }
+    assert value["limits"]["capture_megabytes"] == 64
+
+    path = _copy_checked_in_smoke_inputs(tmp_path)
+    with pytest.raises(
+        ValueError,
+        match=r"evaluation campaign requires a sealed research bundle at .*"
+        r"run \./qcsd-lab fit <fitting-result> first",
+    ):
         orchestrator.load_campaign(path)
+
+
+def test_checked_in_smoke_loads_with_a_temporary_production_bundle(tmp_path: Path) -> None:
+    fitting_result = _make_fitting_result(
+        tmp_path / "fitting-source",
+        workloads=FROZEN_RESEARCH_WORKLOADS,
+    )
+    bundle = fit_result(fitting_result, artifacts_root=tmp_path / "fitted-artifacts")
+    campaign_root = tmp_path / "campaign"
+    path = _copy_checked_in_smoke_inputs(campaign_root)
+    shutil.copytree(bundle, campaign_root / "artifacts/research-1200")
+
+    campaign = orchestrator.load_campaign(path)
+    plan = orchestrator.plan_campaign(campaign)
+    assert campaign.name == "research-smoke-1200"
+    assert campaign.purpose == "evaluation"
+    assert campaign.seed == 2_026_081_204
+    assert campaign.profile == "research-1200"
+    assert [workload.id for workload in campaign.workloads] == list(CHECKED_IN_SMOKE_WORKLOADS)
+    assert len(plan) == 14
+    assert {sample["defense"] for sample in plan} == set(DEFENSES)
+    assert {
+        (sample["workload_id"], sample["request_policy"], sample["visit"]) for sample in plan
+    } == {(workload_id, "as-defined", 0) for workload_id in CHECKED_IN_SMOKE_WORKLOADS}
 
 
 def test_checked_in_fitting_campaign_freezes_six_prepared_workloads_and_120_samples() -> None:
@@ -235,14 +317,7 @@ def test_checked_in_fitting_campaign_freezes_six_prepared_workloads_and_120_samp
     assert campaign.seed == 2_026_081_201
     assert campaign.profile == "research-1200"
     assert campaign.request_policies == ("as-defined", "half-duplex")
-    assert [workload.id for workload in campaign.workloads] == [
-        "getbootstrap-home-r3",
-        "bootstrap-introduction-r3",
-        "apache-traffic-server-docs-r3",
-        "nginx-quic-r3",
-        "cloudflare-quiche-r3",
-        "nghttp2-ngtcp2-r3",
-    ]
+    assert [workload.id for workload in campaign.workloads] == list(FROZEN_RESEARCH_WORKLOADS)
     assert all(workload.visits == 10 for workload in campaign.workloads)
     assert len(orchestrator.plan_campaign(campaign)) == 120
     for workload in campaign.workloads:

@@ -4,6 +4,7 @@ import copy
 import csv
 import io
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -476,14 +477,33 @@ def test_fit_builds_exact_deterministic_bundle_without_mutating_source(tmp_path:
         )
         assert artifact.input_policy == "sealed-fitting-result-v1"
 
-    with pytest.raises(ValueError, match="exactly match campaign workloads"):
+    subset = set(WORKLOADS[:-1])
+    for kind, filename in (
+        ("traffic_morphing", "traffic-morphing.json"),
+        ("wtf_pad", "wtf-pad.json"),
+        ("walkie_talkie", "walkie-talkie.json"),
+    ):
+        artifact = validate_parameter_artifact(
+            first / filename,
+            provenance_path=first / "provenance.json",
+            expected_kind=kind,
+            expected_qcsd_profile="research-1200",
+            expected_udp_payload_ceiling=1_200,
+            expected_workloads=subset,
+        )
+        assert artifact.input_policy == "sealed-fitting-result-v1"
+
+    with pytest.raises(
+        ValueError,
+        match="campaign workloads are absent from the sealed fitting cohort: unknown-site",
+    ):
         validate_parameter_artifact(
             first / "walkie-talkie.json",
             provenance_path=first / "provenance.json",
             expected_kind="walkie_talkie",
             expected_qcsd_profile="research-1200",
             expected_udp_payload_ceiling=1_200,
-            expected_workloads=set(WORKLOADS[:-1]),
+            expected_workloads={*WORKLOADS, "unknown-site"},
         )
 
     bundle_link = tmp_path / "research-bundle-link"
@@ -494,6 +514,31 @@ def test_fit_builds_exact_deterministic_bundle_without_mutating_source(tmp_path:
     assert (result / "experiment.json").read_bytes() == before_experiment
     assert (result / "evidence.sha256").read_bytes() == before_evidence
     verify_result(result)
+
+
+def test_subset_campaign_does_not_permit_partial_bundle_coverage(
+    tmp_path: Path, fitted_bundle: Path
+) -> None:
+    bundle = tmp_path / "research-1200"
+    shutil.copytree(fitted_bundle, bundle)
+    traffic_path = bundle / "traffic-morphing.json"
+    provenance_path = bundle / "provenance.json"
+    traffic = json.loads(traffic_path.read_text(encoding="utf-8"))
+    traffic["profiles"].pop()
+    atomic_json(traffic_path, traffic)
+    provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+    provenance["artifacts"]["traffic_morphing"]["sha256"] = sha256_file(traffic_path)
+    atomic_json(provenance_path, provenance)
+
+    with pytest.raises(ValueError):
+        validate_parameter_artifact(
+            traffic_path,
+            provenance_path=provenance_path,
+            expected_kind="traffic_morphing",
+            expected_qcsd_profile="research-1200",
+            expected_udp_payload_ceiling=1_200,
+            expected_workloads=set(WORKLOADS[:-1]),
+        )
 
 
 def test_every_artifact_schema_leaf_is_bound_by_the_common_receipt(

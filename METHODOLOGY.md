@@ -308,6 +308,17 @@ The six-workload cohort and fitting campaign are frozen, but no real
 120-sample fitting result or fitted research bundle exists until the capture,
 verification, and fitting commands succeed.
 
+The operational order preserves that boundary. `./qcsd-lab test live` first
+exercises all defended modes against controlled local HTTP/3 servers and is
+the bounded pre-fit networking gate. The six-workload fitting campaign then
+collects 120 undefended public-Internet samples; its verified result is fitted
+and the four-file bundle is verified. Only then can the checked-in
+`research-smoke-1200` campaign (seed `2026081204`) pass preflight. That smoke
+uses Cloudflare QUIC and Apache Traffic Server documentation for one new
+`as-defined` visit each under all seven modes, producing 14 independent
+post-fit evaluation samples. It never reuses a fitting visit. Rehearsal and
+final remain separate and explicitly on hold.
+
 ## Evidence, sealing, and recovery
 
 `experiment.json` is the single state record. It binds:
@@ -382,7 +393,9 @@ deterministic, and the report embeds those SVGs so it is self-contained.
   network vantage point.
 - A direct PCAP contains endpoint and encrypted-protocol metadata and is not a
   ready-made public release.
-- Smoke fixtures validate mechanics, not fitted-defence effectiveness.
+- Controlled local smoke fixtures validate mechanics before fitting; the
+  checked-in external smoke instead requires the sealed fitted bundle and
+  evaluates independent post-fit visits.
 - The final 126-sample capture is explicitly on hold. It must follow a sealed
   120-sample fitting result, fitted-bundle verification, and the independent
   42-sample pre-final rehearsal.

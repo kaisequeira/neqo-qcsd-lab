@@ -1,14 +1,14 @@
 schema: 1
-name: consolidated-smoke
-purpose: smoke
-seed: 20260806
-profile: live
+name: research-smoke-1200
+purpose: evaluation
+seed: 2026081204
+profile: research-1200
 
-# One simple origin and one prepared multi-resource graph exercise the same
-# collection path. Each workload expands to one visit under all seven modes.
+# One small graph and one larger documentation graph exercise independent
+# post-fitting Internet visits. Each expands to one visit under all seven modes.
 workloads:
-  cloudflare-quiche: 1
-  chromium-quic-page: 1
+  cloudflare-quiche-r3: 1
+  apache-traffic-server-docs-r3: 1
 
 request_policies:
   - as-defined
@@ -23,13 +23,13 @@ defenses:
   - tamaraw
   - name: traffic-morphing
     kind: traffic_morphing
-    parameters: ../defense-params/traffic-morphing-live.json
+    parameters: ../../artifacts/research-1200/traffic-morphing.json
   - name: wtf-pad
     kind: wtf_pad
-    parameters: ../defense-params/wtfpad-live.json
+    parameters: ../../artifacts/research-1200/wtf-pad.json
   - name: walkie-talkie
     kind: walkie_talkie
-    parameters: ../defense-params/walkie-talkie-live.json
+    parameters: ../../artifacts/research-1200/walkie-talkie.json
 
 limits:
   timeout_seconds: 120

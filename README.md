@@ -54,7 +54,7 @@ stored on each resource are the request input.
 ### `run`
 
 ```shell
-./qcsd-lab run config/campaigns/smoke.yml
+./qcsd-lab run <campaign.yml>
 ```
 
 Validates and freezes the campaign inputs, executes its samples, and prints the
@@ -62,10 +62,14 @@ new result directory. A run is successful only when every planned sample is
 accepted and eligible. A terminal incomplete run is still retained and sealed
 for diagnosis.
 
-The checked-in `smoke.yml` is a 14-sample integration campaign: two workloads,
-one visit, one request policy, and all seven current defence modes. Its three
-data-driven parameter files are reviewed engineering fixtures for smoke tests;
-they are not fitted research artifacts.
+The checked-in `smoke.yml` is a post-fit, 14-sample external evaluation:
+Cloudflare QUIC and Apache Traffic Server documentation, one independent visit
+each, the `as-defined` request policy, and all seven current defence modes. It
+uses `research-1200`, the fixed seed `2026081204`, the mechanical
+`static-control-1200.csv`, and the one sealed production bundle under
+`artifacts/research-1200/`. It intentionally fails preflight with the stable
+missing-sealed-bundle error until the 120-sample fitting capture has been
+verified and fitted.
 
 ### `resume`
 
@@ -93,12 +97,15 @@ cooldown before the first resumed request.
 ### `verify`
 
 ```shell
-./qcsd-lab verify config/campaigns/smoke.yml
+./qcsd-lab verify <campaign.yml>
 ./qcsd-lab verify results/<campaign>/<run-id>
 ```
 
 For YAML, `verify` is a non-executing preflight. It validates workload and
 parameter files and prints the sample count and exact seeded execution order.
+Before production fitting, verifying the checked-in `smoke.yml` fails because
+its required sealed research bundle does not yet exist; that is its expected
+pre-fit state, not permission to substitute the reviewed live fixtures.
 
 For a result directory, `verify` checks the evidence index, exact authoritative
 file set, every file hash, the experiment schema, frozen-input fingerprint,
@@ -183,7 +190,9 @@ Starts two controlled local HTTP/3 servers and runs the direct-capture
 acceptance tests. This is the bounded networking gate for capture startup and
 tail coverage, exact endpoint filtering, interface-offload checks, UDP-payload
 ceiling enforcement, runner/PCAP reconciliation, and overlapping connections
-to distinct origins within one sample.
+to distinct origins within one sample. It exercises all defended runtime modes
+with controlled workload-bound fixtures and is the defended **pre-fit** gate;
+it does not consume public fitting visits or create research artifacts.
 
 ## Profiles
 
@@ -480,12 +489,14 @@ observer, pairing, fidelity, and derived metrics.
 
 ## Research readiness and final hold
 
-The 14-sample engineering smoke campaign and the 120-sample fitting campaign
-are checked in. The six-workload fitting cohort is frozen. The research
-definitions and their expected expansions are:
+The post-fit 14-sample evaluation smoke and the 120-sample fitting campaign are
+checked in. The six-workload fitting cohort is frozen. The research definitions
+and their expected expansions are:
 
 - fitting: six workloads × ten visits × two request policies × undefended =
   120 samples;
+- post-fit smoke: two workloads × one visit × one request policy × seven modes
+  = 14 samples;
 - pre-final rehearsal: six workloads × one visit × one request policy × seven
   modes = 42 samples;
 - final: six workloads × three visits × one request policy × seven modes =
@@ -493,16 +504,24 @@ definitions and their expected expansions are:
 
 The implementation goal established the profiles, preparation policy,
 fitters, runtime realization, campaign contracts, and documentation. The
-active capture goal runs smoke and then fitting to generate the sealed research
-bundle. It does **not** execute the rehearsal or final campaign. The first
-production-traffic command is:
+active sequence is:
 
 ```shell
+./qcsd-lab test live
+./qcsd-lab run config/campaigns/fitting.yml
+./qcsd-lab verify results/research-fitting-1200/<run-id>
+./qcsd-lab fit results/research-fitting-1200/<run-id>
+./qcsd-lab verify artifacts/research-1200
+./qcsd-lab verify config/campaigns/smoke.yml
 ./qcsd-lab run config/campaigns/smoke.yml
+./qcsd-lab verify results/research-smoke-1200/<run-id>
+./qcsd-lab analyze results/research-smoke-1200/<run-id>
 ```
 
-After smoke passes, the frozen six-workload fitting campaign collects 120
-independent samples and produces the sealed bundle. Only after that may a
-separately authorized 42-sample rehearsal be defined, run, verified, and
-analyzed. The eventual `config/campaigns/final.yml` must pass non-executing
-`verify`, but its 126-sample capture remains explicitly on hold.
+`test live` is the bounded defended local gate. The first public-Internet
+research capture is fitting, not smoke. The checked-in smoke then evaluates
+the fitted defenses on new Internet visits and is verified and analyzed as an
+independent post-fit result. This goal does **not** execute the separately
+authorized 42-sample rehearsal or final campaign. The eventual
+`config/campaigns/final.yml` must pass non-executing `verify`, but its
+126-sample capture remains explicitly on hold.

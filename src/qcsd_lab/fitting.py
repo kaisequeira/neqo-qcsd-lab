@@ -343,10 +343,18 @@ def research_parameter_record(
     _validate_runtime_parameter(parameter, expected_kind)
     assert isinstance(parameter, Mapping)
     _validate_algorithm_artifact_binding(provenance, expected_kind, parameter)
+    sealed_order = tuple(provenance["fitting_contract"]["workload_order"])
+    sealed_workloads = set(sealed_order)
     expected = set(expected_workloads or ())
-    if expected and expected_kind != "wtf_pad":
-        _validate_exact_parameter_coverage(parameter, expected_kind, expected)
-    _run_rust_parameter_validator(expected_kind, parameter_path, tuple(sorted(expected)))
+    unknown = sorted(expected - sealed_workloads)
+    if unknown:
+        raise ValueError(
+            "research parameter campaign workloads are absent from the sealed fitting "
+            f"cohort: {', '.join(unknown)}"
+        )
+    if expected_kind != "wtf_pad":
+        _validate_exact_parameter_coverage(parameter, expected_kind, sealed_workloads)
+    _run_rust_parameter_validator(expected_kind, parameter_path, sealed_order)
     return record["sha256"], sha256_file(provenance_path), RESEARCH_PARAMETER_INPUT_POLICY
 
 
