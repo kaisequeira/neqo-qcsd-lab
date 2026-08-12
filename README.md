@@ -447,8 +447,11 @@ Every remaining file has one job:
   runner with the independently captured PCAP.
 - `neqo/events.csv` records ordered runner, application, and controller events
   needed to interpret completion and defence behavior.
-- `neqo/schedule.csv` records attempted controller actions and their observed
-  realization; it provides plot overlays and fidelity metrics.
+- `neqo/schedule.csv` records one terminal row per scheduled slot and its
+  observed realization. `target_time_us` is the defence's requested time;
+  `action_time_us` is the first adapter action issued for that slot, including
+  an owned parser-liveness lease, while the terminal event remains available
+  in `events.csv`. It provides plot overlays and fidelity metrics.
 - `failures/<sample-id>/attempt-NNN/` retains logs, partial captures, runner
   output, and other diagnostics produced by a completed failed attempt. The
   exact contents depend on the failure stage; the structured current failure

@@ -77,6 +77,10 @@ def test_controlled_local_capture_uses_the_canonical_sealed_workflow(
         "passed": True,
     }
     assert len(experiment["samples"]) == 2 * len(DEFENSES)
+    source = experiment["source"]
+    assert source["lab_dirty"] is False
+    assert source["neqo_dirty"] is False
+    assert source["neqo_commit"] == source["neqo_pinned_commit"]
     assert not list(result.rglob("sample.json"))
     assert not list(result.rglob("fidelity.yml"))
     assert not list(result.rglob("*.jsonl"))
@@ -111,6 +115,7 @@ def test_controlled_local_capture_uses_the_canonical_sealed_workflow(
         assert actual_files == CANONICAL_SAMPLE_FILES
         run = load_json(sample_path / "neqo/run.json")
         assert run["completion_status"] == "complete"
+        assert run["migration_commit"] == source["neqo_commit"]
         assert len(run["endpoints"]) == expected_endpoints[workload]
         assert len(run["responses"]) == len(expected_resource_ids[workload])
         assert {response["resource_id"] for response in run["responses"]} == (
