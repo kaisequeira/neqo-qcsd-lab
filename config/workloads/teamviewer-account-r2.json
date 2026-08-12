@@ -1,0 +1,1293 @@
+{
+  "preparation": {
+    "approved_origins": [
+      "https://account.teamviewer.com"
+    ],
+    "chromium_version": "151.0.7922.108",
+    "exclusions": [
+      {
+        "reason": "HTTP/3 preflight unavailable",
+        "url": "https://account.teamviewer.com/"
+      },
+      {
+        "reason": "HTTP/3 preflight unavailable",
+        "url": "https://account.teamviewer.com/?redirect_uri=https://web.teamviewer.com/authenticate/withtoken"
+      },
+      {
+        "reason": "HTTP/3 preflight unavailable",
+        "url": "https://account.teamviewer.com/Frontend/static/js/main.3c7500e2.js"
+      },
+      {
+        "reason": "unsafe method: POST",
+        "url": "https://account.teamviewer.com/config/getinitialconfig"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://assets.adobedtm.com/439d99b3b8f0/eec744300fc5/4f425a478d23/RC3a76c8b87ef040d88b98d5caf0f18dc7-source.min.js"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://assets.adobedtm.com/439d99b3b8f0/eec744300fc5/4f425a478d23/RC778a8cff007f41c79b09d8a915146e5c-source.min.js"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://assets.adobedtm.com/439d99b3b8f0/eec744300fc5/4f425a478d23/RCac64c34110bb4c49b2c490d75257bdc8-source.min.js"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://assets.adobedtm.com/439d99b3b8f0/eec744300fc5/launch-7638b87287c1.min.js"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://cdn.cookielaw.org/consent/9c53b460-d634-4756-b40e-d03f1508a38f/018e3c4f-dc98-7174-90c1-64651d3dd297/en.json"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://cdn.cookielaw.org/consent/9c53b460-d634-4756-b40e-d03f1508a38f/9c53b460-d634-4756-b40e-d03f1508a38f.json"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://cdn.cookielaw.org/logos/85e1ad48-4dab-432a-a40c-db59df19b96b/a908a94c-f6ad-4ae0-b5b9-9077c4ef332c/68693706-f63e-4701-a60c-9f288c9383b8/TeamViewer_Logo_CarbonBlue_RGB.png"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://cdn.cookielaw.org/logos/static/ot_guard_logo.svg"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://cdn.cookielaw.org/logos/static/powered_by_logo.svg"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://cdn.cookielaw.org/scripttemplates/202605.1.0/assets/otCenterRounded.json"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://cdn.cookielaw.org/scripttemplates/202605.1.0/assets/otCommonStyles.css"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://cdn.cookielaw.org/scripttemplates/202605.1.0/assets/v2/otPcCenter.json"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://cdn.cookielaw.org/scripttemplates/202605.1.0/otBannerSdk.js"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://cdn.cookielaw.org/scripttemplates/otSDKStub.js"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://geolocation.onetrust.com/cookieconsentpub/v1/geo/location"
+      },
+      {
+        "reason": "unsafe method: POST",
+        "url": "https://metrics.teamviewer.com/ee/aus3/v1/interact?configId=91b112dc-db5e-4af9-99db-43dde4a541de&requestId=efdccb77-0b69-4ede-8eff-4cce29fee8dd"
+      },
+      {
+        "reason": "unsafe method: POST",
+        "url": "https://metrics.teamviewer.com/ee/v1/interact?configId=91b112dc-db5e-4af9-99db-43dde4a541de&requestId=8d525164-3597-49d6-baa1-439be568226a"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://www.googletagmanager.com/gtm.js?id=GTM-K2HRX4K&gtm_auth=&gtm_preview=&gtm_cookies_win=x"
+      }
+    ],
+    "expected_responses": [
+      {
+        "body_sha256": "19347b7154d0f28752156fa0022a66419201939562b800e69f5e44be6d9010ee",
+        "bytes": 3849,
+        "resource_id": 3,
+        "status": 200
+      },
+      {
+        "body_sha256": "9d75223766bdfbb150199cbae2e45f1adda6610939141206be6f57ce73911358",
+        "bytes": 965,
+        "resource_id": 4,
+        "status": 200
+      },
+      {
+        "body_sha256": "1f7b889cfa2aeed281370d60eb03e2c6ddca8af7f9f64a15ba376009da90f268",
+        "bytes": 581,
+        "resource_id": 5,
+        "status": 200
+      },
+      {
+        "body_sha256": "8b46621bf9d590e46ec2b8929307dc74c5a934d3c1ff94127006a87f6eb56188",
+        "bytes": 2375,
+        "resource_id": 6,
+        "status": 200
+      },
+      {
+        "body_sha256": "a29e68e8db403cf883f41a13944501ce1a8e77b6d7a6e835968bdb6d02b61e71",
+        "bytes": 1832,
+        "resource_id": 7,
+        "status": 200
+      },
+      {
+        "body_sha256": "bcb0559d364471ae98bb0d6c5ccbafde127bf9f5ae9bb91af6cb0092ab4ccb68",
+        "bytes": 23636,
+        "resource_id": 8,
+        "status": 200
+      },
+      {
+        "body_sha256": "a9134b68d99058bf050cb4239eb5b3c8a915400127c230ef643a8a477452eb07",
+        "bytes": 4892,
+        "resource_id": 9,
+        "status": 200
+      },
+      {
+        "body_sha256": "3c0b6c70600a59777d131b94ad2b93e8d931cd29774b847fd0f190800f1deb43",
+        "bytes": 23432,
+        "resource_id": 10,
+        "status": 200
+      },
+      {
+        "body_sha256": "1971b59b332e6e0b4301d6723adb565839eacdbe28fa40111411be7d14d0dcf6",
+        "bytes": 2545,
+        "resource_id": 11,
+        "status": 200
+      },
+      {
+        "body_sha256": "bdc7fe935277c136dc5c8729b8235c5539541b60bea01a95fcc63071505df517",
+        "bytes": 2309,
+        "resource_id": 12,
+        "status": 200
+      },
+      {
+        "body_sha256": "62f9d053923990a515ecdb8aa5d24cefaa5b219e6a71d4359793dd1095560110",
+        "bytes": 631,
+        "resource_id": 13,
+        "status": 200
+      },
+      {
+        "body_sha256": "414139199ad6bd56d84bcd760e0658bf787580259be56f6a8afad71f5b3bc786",
+        "bytes": 1049,
+        "resource_id": 14,
+        "status": 200
+      },
+      {
+        "body_sha256": "d4bab7951e605cc9954407520c5c95e43b28b66cb1bb07ccef6c775d5e8ab7f2",
+        "bytes": 119,
+        "resource_id": 15,
+        "status": 200
+      },
+      {
+        "body_sha256": "6c3ab6775367414f88f05736f7d9039fdcb094f2e9398baf71ceac0fceb7c024",
+        "bytes": 890,
+        "resource_id": 16,
+        "status": 200
+      },
+      {
+        "body_sha256": "85b1524b343ff019eeb272e064793f07d3a6bacea08567a21d4f43f0e1fb3120",
+        "bytes": 23328,
+        "resource_id": 17,
+        "status": 200
+      },
+      {
+        "body_sha256": "a8e3f229111fb55aab4a3876f5e5e5e60308241a9f6e2c631290d60e10ab4551",
+        "bytes": 24432,
+        "resource_id": 18,
+        "status": 200
+      },
+      {
+        "body_sha256": "36ce6b4dfa2526828e0c881ddb48239b81b6d08ef7c3a641748aa4945f2e17dd",
+        "bytes": 24528,
+        "resource_id": 19,
+        "status": 200
+      }
+    ],
+    "final_url": "https://account.teamviewer.com/?redirect_uri=https://web.teamviewer.com/authenticate/withtoken",
+    "lab_source": {
+      "image_digest": "sha256:c48241c13d7a17b17b2c216a9a61a11bf41041a316e60a5c944705e883955ab5",
+      "lab_commit": "ab80f11f3df12eff5dafc99753af93f139975cf4",
+      "lab_dirty": false,
+      "lab_patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "neqo_commit": "94b2253b7ccde9a9219254e241ba4dd2e09d937d",
+      "neqo_dirty": false,
+      "neqo_patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "neqo_pinned_commit": "94b2253b7ccde9a9219254e241ba4dd2e09d937d"
+    },
+    "max_response_bytes": 1048576,
+    "migration_commit": "94b2253b7ccde9a9219254e241ba4dd2e09d937d",
+    "neqo_base_commit": "8a04d065c2d35c8e8fd804f91c7081ab6bb60b89",
+    "neqo_version": "0.30.0",
+    "observed_origins": [
+      "https://account.teamviewer.com",
+      "https://assets.adobedtm.com",
+      "https://cdn.cookielaw.org",
+      "https://geolocation.onetrust.com",
+      "https://metrics.teamviewer.com",
+      "https://www.googletagmanager.com"
+    ],
+    "observed_request_count": 39,
+    "prepare_image_digest": "sha256:c48241c13d7a17b17b2c216a9a61a11bf41041a316e60a5c944705e883955ab5",
+    "published_qcsd_commit": "39e293fb384dd341156eedd1e4b833d24904b1f6",
+    "settle_ms": 3000,
+    "source_url": "https://account.teamviewer.com/",
+    "stability_defense": "none",
+    "stability_profile": "live",
+    "stability_runs": 3,
+    "stability_seed": 0,
+    "timeout_seconds": 120
+  },
+  "resources": [
+    {
+      "chaff_priority": false,
+      "content_length": 3849,
+      "data_length": 3849,
+      "depends_on": [],
+      "headers": [
+        [
+          "accept",
+          "text/css,*/*;q=0.1"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=0"
+        ],
+        [
+          "referer",
+          "https://account.teamviewer.com/?redirect_uri=https://web.teamviewer.com/authenticate/withtoken"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "style"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 3,
+      "known_valid": true,
+      "type": "Stylesheet",
+      "url": "https://account.teamviewer.com/Frontend/static/css/main.35f0050a.css"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 965,
+      "data_length": 965,
+      "depends_on": [],
+      "headers": [
+        [
+          "accept",
+          "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=1, i"
+        ],
+        [
+          "referer",
+          "https://account.teamviewer.com/?redirect_uri=https://web.teamviewer.com/authenticate/withtoken"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "image"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 4,
+      "known_valid": true,
+      "type": "Other",
+      "url": "https://account.teamviewer.com/Frontend/favicon-32x32.png"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 581,
+      "data_length": 581,
+      "depends_on": [],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=1, i"
+        ],
+        [
+          "referer",
+          "https://account.teamviewer.com/?redirect_uri=https://web.teamviewer.com/authenticate/withtoken"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "empty"
+        ],
+        [
+          "sec-fetch-mode",
+          "cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 5,
+      "known_valid": true,
+      "type": "Fetch",
+      "url": "https://account.teamviewer.com/locales/en/offline_screen.json?v=2607131042"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 2375,
+      "data_length": 2375,
+      "depends_on": [],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=1, i"
+        ],
+        [
+          "referer",
+          "https://account.teamviewer.com/?redirect_uri=https://web.teamviewer.com/authenticate/withtoken"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "empty"
+        ],
+        [
+          "sec-fetch-mode",
+          "cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 6,
+      "known_valid": true,
+      "type": "Fetch",
+      "url": "https://account.teamviewer.com/locales/en/common.json?v=2607131042"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 1832,
+      "data_length": 1832,
+      "depends_on": [],
+      "headers": [
+        [
+          "accept",
+          "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "i"
+        ],
+        [
+          "referer",
+          "https://account.teamviewer.com/?redirect_uri=https://web.teamviewer.com/authenticate/withtoken"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "image"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 7,
+      "known_valid": true,
+      "type": "Image",
+      "url": "https://account.teamviewer.com/assets/tv-logo.svg"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 23636,
+      "data_length": 23636,
+      "depends_on": [
+        3
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "origin",
+          "https://account.teamviewer.com"
+        ],
+        [
+          "priority",
+          "u=0"
+        ],
+        [
+          "referer",
+          "https://account.teamviewer.com/Frontend/static/css/main.35f0050a.css"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "font"
+        ],
+        [
+          "sec-fetch-mode",
+          "cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 8,
+      "known_valid": true,
+      "type": "Font",
+      "url": "https://account.teamviewer.com/Frontend/static/media/dm-sans-v10-latin-ext_latin-regular.99b8e0b20a45ca4d73bf.woff2"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 4892,
+      "data_length": 4892,
+      "depends_on": [
+        3
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "origin",
+          "https://account.teamviewer.com"
+        ],
+        [
+          "priority",
+          "u=0"
+        ],
+        [
+          "referer",
+          "https://account.teamviewer.com/Frontend/static/css/main.35f0050a.css"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "font"
+        ],
+        [
+          "sec-fetch-mode",
+          "cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 9,
+      "known_valid": true,
+      "type": "Font",
+      "url": "https://account.teamviewer.com/Frontend/static/media/fluent-ui-replacement-icons.3561b65a96b1b29b76fa.ttf"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 23432,
+      "data_length": 23432,
+      "depends_on": [
+        3
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "origin",
+          "https://account.teamviewer.com"
+        ],
+        [
+          "priority",
+          "u=0"
+        ],
+        [
+          "referer",
+          "https://account.teamviewer.com/Frontend/static/css/main.35f0050a.css"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "font"
+        ],
+        [
+          "sec-fetch-mode",
+          "cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 10,
+      "known_valid": true,
+      "type": "Font",
+      "url": "https://account.teamviewer.com/Frontend/static/media/dm-sans-v10-latin-ext_latin-500.5bf97d4ae553ce402215.woff2"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 2545,
+      "data_length": 2545,
+      "depends_on": [],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=1, i"
+        ],
+        [
+          "referer",
+          "https://account.teamviewer.com/?redirect_uri=https://web.teamviewer.com/authenticate/withtoken"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "empty"
+        ],
+        [
+          "sec-fetch-mode",
+          "cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 11,
+      "known_valid": true,
+      "type": "Fetch",
+      "url": "https://account.teamviewer.com/locales/en/error.json?v=2607131042"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 2309,
+      "data_length": 2309,
+      "depends_on": [],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=1, i"
+        ],
+        [
+          "referer",
+          "https://account.teamviewer.com/?redirect_uri=https://web.teamviewer.com/authenticate/withtoken"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "empty"
+        ],
+        [
+          "sec-fetch-mode",
+          "cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 12,
+      "known_valid": true,
+      "type": "Fetch",
+      "url": "https://account.teamviewer.com/locales/en/backendResponse.json?v=2607131042"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 631,
+      "data_length": 631,
+      "depends_on": [],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=1, i"
+        ],
+        [
+          "referer",
+          "https://account.teamviewer.com/?redirect_uri=https://web.teamviewer.com/authenticate/withtoken"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "empty"
+        ],
+        [
+          "sec-fetch-mode",
+          "cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 13,
+      "known_valid": true,
+      "type": "Fetch",
+      "url": "https://account.teamviewer.com/locales/en/login.json?v=2607131042"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 1049,
+      "data_length": 1049,
+      "depends_on": [],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=1, i"
+        ],
+        [
+          "referer",
+          "https://account.teamviewer.com/?redirect_uri=https://web.teamviewer.com/authenticate/withtoken"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "empty"
+        ],
+        [
+          "sec-fetch-mode",
+          "cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 14,
+      "known_valid": true,
+      "type": "Fetch",
+      "url": "https://account.teamviewer.com/locales/en/validation.json?v=2607131042"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 119,
+      "data_length": 119,
+      "depends_on": [],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=1, i"
+        ],
+        [
+          "referer",
+          "https://account.teamviewer.com/?redirect_uri=https://web.teamviewer.com/authenticate/withtoken"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "empty"
+        ],
+        [
+          "sec-fetch-mode",
+          "cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 15,
+      "known_valid": true,
+      "type": "Fetch",
+      "url": "https://account.teamviewer.com/locales/en/staytuned.json?v=2607131042"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 890,
+      "data_length": 890,
+      "depends_on": [],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=1, i"
+        ],
+        [
+          "referer",
+          "https://account.teamviewer.com/?redirect_uri=https://web.teamviewer.com/authenticate/withtoken"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "empty"
+        ],
+        [
+          "sec-fetch-mode",
+          "cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 16,
+      "known_valid": true,
+      "type": "Fetch",
+      "url": "https://account.teamviewer.com/locales/en/sociallogin.json?v=2607131042"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 23328,
+      "data_length": 23328,
+      "depends_on": [
+        3
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "origin",
+          "https://account.teamviewer.com"
+        ],
+        [
+          "priority",
+          "u=0"
+        ],
+        [
+          "referer",
+          "https://account.teamviewer.com/Frontend/static/css/main.35f0050a.css"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "font"
+        ],
+        [
+          "sec-fetch-mode",
+          "cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 17,
+      "known_valid": true,
+      "type": "Font",
+      "url": "https://account.teamviewer.com/Frontend/static/media/dm-sans-v10-latin-ext_latin-700.d5ac740f6f0cf65a6193.woff2"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 24432,
+      "data_length": 24432,
+      "depends_on": [
+        3
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "origin",
+          "https://account.teamviewer.com"
+        ],
+        [
+          "priority",
+          "u=0"
+        ],
+        [
+          "referer",
+          "https://account.teamviewer.com/Frontend/static/css/main.35f0050a.css"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "font"
+        ],
+        [
+          "sec-fetch-mode",
+          "cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 18,
+      "known_valid": true,
+      "type": "Font",
+      "url": "https://account.teamviewer.com/Frontend/static/media/dm-sans-v10-latin-ext_latin-500italic.8a9578c8dab342e50443.woff2"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 24528,
+      "data_length": 24528,
+      "depends_on": [
+        3
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "origin",
+          "https://account.teamviewer.com"
+        ],
+        [
+          "priority",
+          "u=0"
+        ],
+        [
+          "referer",
+          "https://account.teamviewer.com/Frontend/static/css/main.35f0050a.css"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "font"
+        ],
+        [
+          "sec-fetch-mode",
+          "cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 19,
+      "known_valid": true,
+      "type": "Font",
+      "url": "https://account.teamviewer.com/Frontend/static/media/dm-sans-v10-latin-ext_latin-italic.66199c1bc6f1177ee643.woff2"
+    }
+  ]
+}

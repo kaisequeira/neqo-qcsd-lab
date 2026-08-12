@@ -221,6 +221,29 @@ def test_checked_in_smoke_names_the_mechanical_control_and_remains_14_samples() 
     assert static.schedule_path.name == "static-control-1200.csv"
 
 
+def test_checked_in_fitting_campaign_freezes_six_prepared_workloads_and_120_samples() -> None:
+    root = Path(__file__).parents[1]
+    path = root / "config/campaigns/fitting.yml"
+    campaign = orchestrator.load_campaign(path)
+
+    assert campaign.name == "research-fitting-1200"
+    assert campaign.seed == 2_026_081_201
+    assert campaign.profile == "research-1200"
+    assert campaign.request_policies == ("as-defined", "half-duplex")
+    assert [workload.id for workload in campaign.workloads] == [
+        "getbootstrap-home-r2",
+        "teamviewer-account-r2",
+        "behance-home-r2",
+        "cloudflare-quiche-r2",
+        "nghttp2-ngtcp2-r2",
+        "chromium-quic-page-r2",
+    ]
+    assert all(workload.visits == 10 for workload in campaign.workloads)
+    assert len(orchestrator.plan_campaign(campaign)) == 120
+    for workload in campaign.workloads:
+        validate_research_preparation(workload.data, workload_id=workload.id)
+
+
 def test_exact_research_expansions_and_seeded_order_are_deterministic(
     research_workspace: tuple[Path, Path],
     monkeypatch: pytest.MonkeyPatch,

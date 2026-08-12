@@ -1,0 +1,173 @@
+{
+  "preparation": {
+    "approved_origins": [
+      "https://cloudflare-quic.com"
+    ],
+    "chromium_version": "151.0.7922.108",
+    "exclusions": [
+      {
+        "reason": "origin not approved",
+        "url": "https://blog-cloudflare-com-assets.storage.googleapis.com/2019/07/http3-toggle-1.png"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://blog-cloudflare-com-assets.storage.googleapis.com/2019/09/http3-tube@2x.png"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://blog-cloudflare-com-assets.storage.googleapis.com/2020/05/image6-2.png"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://blog.cloudflare.com/content/images/2018/07/http-request-over-quic@2x.png"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://blog.cloudflare.com/content/images/2019/01/quiche-1.png"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://quicwg.org/asset/badge.png"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://web.archive.org/web/20230424015350im_/https://www.cloudflare.com/img//nav/globe-lang-select-dark.svg"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://web.archive.org/web/20230424015351im_/https://www.cloudflare.com/img//nav/globe-lang-select-dark.svg"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://www.cloudflare.com/favicon-16x16.png"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://www.cloudflare.com/favicon-32x32.png"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://www.cloudflare.com/favicon-96x96.png"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://www.cloudflare.com/favicon.ico"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://www.cloudflare.com/img/logo-cloudflare-dark.svg"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://www.cloudflare.com/img/logo-cloudflare.svg"
+      }
+    ],
+    "expected_responses": [
+      {
+        "body_sha256": "1a9fb48550bbec3ce4274debd326f0c23c57a5f1eae6ef83eecc7b6c8e51ef69",
+        "bytes": 13390,
+        "resource_id": 0,
+        "status": 200
+      }
+    ],
+    "final_url": "https://cloudflare-quic.com/",
+    "lab_source": {
+      "image_digest": "sha256:c48241c13d7a17b17b2c216a9a61a11bf41041a316e60a5c944705e883955ab5",
+      "lab_commit": "ab80f11f3df12eff5dafc99753af93f139975cf4",
+      "lab_dirty": false,
+      "lab_patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "neqo_commit": "94b2253b7ccde9a9219254e241ba4dd2e09d937d",
+      "neqo_dirty": false,
+      "neqo_patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "neqo_pinned_commit": "94b2253b7ccde9a9219254e241ba4dd2e09d937d"
+    },
+    "max_response_bytes": 1048576,
+    "migration_commit": "94b2253b7ccde9a9219254e241ba4dd2e09d937d",
+    "neqo_base_commit": "8a04d065c2d35c8e8fd804f91c7081ab6bb60b89",
+    "neqo_version": "0.30.0",
+    "observed_origins": [
+      "https://blog-cloudflare-com-assets.storage.googleapis.com",
+      "https://blog.cloudflare.com",
+      "https://cloudflare-quic.com",
+      "https://quicwg.org",
+      "https://web.archive.org",
+      "https://www.cloudflare.com"
+    ],
+    "observed_request_count": 15,
+    "prepare_image_digest": "sha256:c48241c13d7a17b17b2c216a9a61a11bf41041a316e60a5c944705e883955ab5",
+    "published_qcsd_commit": "39e293fb384dd341156eedd1e4b833d24904b1f6",
+    "settle_ms": 3000,
+    "source_url": "https://cloudflare-quic.com/",
+    "stability_defense": "none",
+    "stability_profile": "live",
+    "stability_runs": 3,
+    "stability_seed": 0,
+    "timeout_seconds": 120
+  },
+  "resources": [
+    {
+      "chaff_priority": false,
+      "content_length": 13390,
+      "data_length": 13390,
+      "depends_on": [],
+      "headers": [
+        [
+          "accept",
+          "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=0, i"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "document"
+        ],
+        [
+          "sec-fetch-mode",
+          "navigate"
+        ],
+        [
+          "sec-fetch-site",
+          "none"
+        ],
+        [
+          "sec-fetch-user",
+          "?1"
+        ],
+        [
+          "upgrade-insecure-requests",
+          "1"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 0,
+      "known_valid": true,
+      "type": "Document",
+      "url": "https://cloudflare-quic.com/"
+    }
+  ]
+}

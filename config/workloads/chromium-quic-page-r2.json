@@ -1,0 +1,669 @@
+{
+  "preparation": {
+    "approved_origins": [
+      "https://www.chromium.org",
+      "https://www.gstatic.com"
+    ],
+    "chromium_version": "151.0.7922.108",
+    "exclusions": [
+      {
+        "reason": "unsafe method: POST",
+        "url": "https://www.google-analytics.com/g/collect?v=2&tid=G-24XP4PG02H&gtm=45je68a1v9128943846za200zd9128943846&_p=1786516630540&gcd=13l3l3l3l1l1&npa=0&dma=0&are=1&cid=974591538.1786516631&frm=0&ngs=1&pscdl=noapi&rcb=10&sr=1280x720&uaa=arm&uab=64&uafvl=Chromium%3B151.0.7922.108%7CNot%253DA%253FBrand%3B99.0.0.0&uam=&uamb=0&uap=Linux&uapv=&uaw=0&ul=en-us&_s=1&tag_exp=115938465~115938468~118897920~118897930~119367802~119367810~119527020~119896803~120315583&sid=1786516631&sct=1&seg=0&dl=https%3A%2F%2Fwww.chromium.org%2Fquic%2F&dt=QUIC%2C%20a%20multiplexed%20transport%20over%20UDP&en=page_view&_fv=1&_nsi=1&_ss=1&_ee=1&tfd=635"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://www.googletagmanager.com/gtag/js?id=G-24XP4PG02H"
+      }
+    ],
+    "expected_responses": [
+      {
+        "body_sha256": "1cc01f4930c0d9996a31bb1ea6e1e5f5d7e0496b402e1df37bddc1aa760b450c",
+        "bytes": 3569,
+        "resource_id": 0,
+        "status": 200
+      },
+      {
+        "body_sha256": "c308c5f1778c0dc8c154a0da6a196a327b9bed49e85c8e177a17375bb9c2c224",
+        "bytes": 2673,
+        "resource_id": 1,
+        "status": 200
+      },
+      {
+        "body_sha256": "c3bf5779d672265554b110c33c7ea9609d166d4f77610549ab47ed103b33c242",
+        "bytes": 2259,
+        "resource_id": 2,
+        "status": 200
+      },
+      {
+        "body_sha256": "3097d02f2af1da9876407933868c655c2ab8e94ff6a97238c17a62cbc83d6293",
+        "bytes": 480,
+        "resource_id": 3,
+        "status": 200
+      },
+      {
+        "body_sha256": "d619a23cab9cb0d2a6d887716bde949acd3af071523f3f2b7c71369aceec8192",
+        "bytes": 2802,
+        "resource_id": 4,
+        "status": 200
+      },
+      {
+        "body_sha256": "bba788b14bf559f07c5f5c25f215cf3c31dceabc596f5cfe1722e7e4c978b8ae",
+        "bytes": 26380,
+        "resource_id": 5,
+        "status": 200
+      },
+      {
+        "body_sha256": "82669359bfb6f7336c28ff88ca4033a4214ad1ba9956f48802ef634c1d56d5b4",
+        "bytes": 11445,
+        "resource_id": 6,
+        "status": 200
+      },
+      {
+        "body_sha256": "988133c9c87ef8d7a1d3a64a6bce5cceb4cf9b8403a3c23b5bf7a6725e898c78",
+        "bytes": 143,
+        "resource_id": 7,
+        "status": 200
+      },
+      {
+        "body_sha256": "6352820177b66ac1cbbd6f3f8deca242f838c98d37bbec6b88aa1964045fdcf7",
+        "bytes": 745,
+        "resource_id": 8,
+        "status": 200
+      }
+    ],
+    "final_url": "https://www.chromium.org/quic/",
+    "lab_source": {
+      "image_digest": "sha256:c48241c13d7a17b17b2c216a9a61a11bf41041a316e60a5c944705e883955ab5",
+      "lab_commit": "ab80f11f3df12eff5dafc99753af93f139975cf4",
+      "lab_dirty": false,
+      "lab_patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "neqo_commit": "94b2253b7ccde9a9219254e241ba4dd2e09d937d",
+      "neqo_dirty": false,
+      "neqo_patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "neqo_pinned_commit": "94b2253b7ccde9a9219254e241ba4dd2e09d937d"
+    },
+    "max_response_bytes": 1048576,
+    "migration_commit": "94b2253b7ccde9a9219254e241ba4dd2e09d937d",
+    "neqo_base_commit": "8a04d065c2d35c8e8fd804f91c7081ab6bb60b89",
+    "neqo_version": "0.30.0",
+    "observed_origins": [
+      "https://www.chromium.org",
+      "https://www.google-analytics.com",
+      "https://www.googletagmanager.com",
+      "https://www.gstatic.com"
+    ],
+    "observed_request_count": 11,
+    "prepare_image_digest": "sha256:c48241c13d7a17b17b2c216a9a61a11bf41041a316e60a5c944705e883955ab5",
+    "published_qcsd_commit": "39e293fb384dd341156eedd1e4b833d24904b1f6",
+    "settle_ms": 3000,
+    "source_url": "https://www.chromium.org/quic/",
+    "stability_defense": "none",
+    "stability_profile": "live",
+    "stability_runs": 3,
+    "stability_seed": 0,
+    "timeout_seconds": 120
+  },
+  "resources": [
+    {
+      "chaff_priority": false,
+      "content_length": 3569,
+      "data_length": 0,
+      "depends_on": [],
+      "headers": [
+        [
+          "accept",
+          "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=0, i"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "document"
+        ],
+        [
+          "sec-fetch-mode",
+          "navigate"
+        ],
+        [
+          "sec-fetch-site",
+          "none"
+        ],
+        [
+          "sec-fetch-user",
+          "?1"
+        ],
+        [
+          "upgrade-insecure-requests",
+          "1"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 0,
+      "known_valid": true,
+      "type": "Document",
+      "url": "https://www.chromium.org/quic/"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 2673,
+      "data_length": 0,
+      "depends_on": [
+        0
+      ],
+      "headers": [
+        [
+          "accept",
+          "text/css,*/*;q=0.1"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=0"
+        ],
+        [
+          "referer",
+          "https://www.chromium.org/quic/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "style"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 1,
+      "known_valid": true,
+      "type": "Stylesheet",
+      "url": "https://www.chromium.org/_stylesheets/@docsearch/style.css"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 2259,
+      "data_length": 0,
+      "depends_on": [
+        0
+      ],
+      "headers": [
+        [
+          "accept",
+          "text/css,*/*;q=0.1"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=0"
+        ],
+        [
+          "referer",
+          "https://www.chromium.org/quic/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "style"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 2,
+      "known_valid": true,
+      "type": "Stylesheet",
+      "url": "https://www.chromium.org/_stylesheets/default.css"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 480,
+      "data_length": 0,
+      "depends_on": [
+        0
+      ],
+      "headers": [
+        [
+          "accept",
+          "text/css,*/*;q=0.1"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=0"
+        ],
+        [
+          "referer",
+          "https://www.chromium.org/quic/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "style"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 3,
+      "known_valid": true,
+      "type": "Stylesheet",
+      "url": "https://www.chromium.org/_stylesheets/highlight.js/github.min.css"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 2802,
+      "data_length": 0,
+      "depends_on": [
+        0
+      ],
+      "headers": [
+        [
+          "accept",
+          "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "i"
+        ],
+        [
+          "referer",
+          "https://www.chromium.org/quic/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "image"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 4,
+      "known_valid": true,
+      "type": "Image",
+      "url": "https://www.chromium.org/_assets/icon-chromium-96.png"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 26380,
+      "data_length": 0,
+      "depends_on": [
+        0
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.chromium.org/quic/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 5,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://www.chromium.org/_scripts/@docsearch/index.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 11445,
+      "data_length": 0,
+      "depends_on": [
+        0
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "referer",
+          "https://www.chromium.org/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "sec-fetch-storage-access",
+          "none"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 6,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://www.gstatic.com/brandstudio/kato/cookie_choice_component/cookie_consent_bar.v3.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 143,
+      "data_length": 0,
+      "depends_on": [
+        0,
+        6
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "origin",
+          "https://www.chromium.org"
+        ],
+        [
+          "priority",
+          "u=1, i"
+        ],
+        [
+          "referer",
+          "https://www.chromium.org/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "empty"
+        ],
+        [
+          "sec-fetch-mode",
+          "cors"
+        ],
+        [
+          "sec-fetch-site",
+          "cross-site"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 7,
+      "known_valid": true,
+      "type": "XHR",
+      "url": "https://www.gstatic.com/brandstudio/kato/cookie_choice_component/config.json"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 745,
+      "data_length": 0,
+      "depends_on": [
+        0
+      ],
+      "headers": [
+        [
+          "accept",
+          "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=1, i"
+        ],
+        [
+          "referer",
+          "https://www.chromium.org/quic/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "image"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 8,
+      "known_valid": true,
+      "type": "Other",
+      "url": "https://www.chromium.org/favicon.ico"
+    }
+  ]
+}

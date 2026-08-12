@@ -42,11 +42,15 @@ The workspace-level `results.zip` (SHA-256
 `103a82cb95eaa305e38b0084ba16744429b273146be80ab05c7653d52bf66b11`) is only a
 catalogue of 17 browser-observed request graphs from the retired discovery workflow. A catalogue record becomes
 a workload only after `prepare` passes and writes the consolidated manifest.
-Bootstrap, TeamViewer, Behance, and Guardian have passed; Nikkei, Notion,
-Arena, Ahrefs, R10, MyAnimeList, Tapbit, Temu, and 9GAG failed repeated-response
-stability at either specific recorded IDs or broadly across their retained
-graphs. The research cohort is blocked at four of six, and legacy workloads are
-not substituted for the two missing passes.
+The earlier prepared manifests were retired from research use after discovery
+was found to merge Chromium header names case-sensitively. The corrected
+pipeline canonicalizes that merge and research validation rejects duplicate
+header names. Fresh three-run preparation produced Bootstrap, TeamViewer,
+Behance, Cloudflare QUIC, nghttp2/ngtcp2, and the two-origin Chromium QUIC page.
+The first three are successful commercial candidates; the latter three are
+deterministic protocol/project pages substituted only after the remaining
+commercial candidates failed the unchanged stability gate. This is a
+reproducible adaptation cohort, not a representativeness claim.
 
 The fitting and evaluation campaigns will reference the same six frozen
 manifest definitions and hashes. They perform independent visits: fitting

@@ -290,26 +290,34 @@ workflow. It is not a lab result, fitting corpus, or accepted campaign input. It
 `header_policy` and replay records describe how candidates were observed; they
 do not reintroduce runtime header policies into the consolidated lab.
 
-`prepare` promotes a catalogue candidate only after origin filtering and three
-stable undefended Neqo runs. Four intended research workloads currently pass:
+`prepare` promotes a candidate only after origin filtering and three stable
+undefended Neqo runs. A case-insensitive Chromium-header merge correction made
+the earlier `-r1` manifests ineligible for research because they contained
+duplicate header names. They remain historical preparation evidence only.
+
+The frozen research adaptation cohort was therefore prepared again from the
+clean corrected image as six new `-r2` workloads:
 
 | Workload | Resources | Prepared-manifest SHA-256 |
 |---|---:|---|
-| `getbootstrap-home-r1` | 9 | `19e250c636c357cde159517922f073251a01650dac769ac641441b52cb3fdfac` |
-| `teamviewer-account-r1` | 17 | `df7dcbae3b46e4f453021c2065ec6e8fe40fac189f0d9f79c84891c843e08da4` |
-| `behance-home-r1` | 139 | `6bf77cc37a8c2d5ac6f0fe03eb6767d3d476d17167fb41822de94b77275e2b4c` |
-| `guardian-home-r1` | 63 | `3e24709d248539cf21d43fdfdde21ec101548d68375d33867bcbb09a466ab1c7` |
+| `getbootstrap-home-r2` | 9 | `325b33909bc083320dbb63a97d18c6ddd417c52f0faf66108209f4faf39d7ee5` |
+| `teamviewer-account-r2` | 17 | `00fd3adc4ff3284fa7474595c16dae9ea9e95ca811786e715ff45ad2cff90f00` |
+| `behance-home-r2` | 137 | `837e1a20722a4d72c27720b12d52a434b33daae5b10af6104b2fde601c9ec1c4` |
+| `cloudflare-quiche-r2` | 1 | `75809b54410bd8896ccda29865db255f83ce162a24a60238555575d013ac1422` |
+| `nghttp2-ngtcp2-r2` | 8 | `f8d4fc7be5905f2637424e509b530964a12781408ae29d9e617b04226a3b3bc5` |
+| `chromium-quic-page-r2` | 9 | `ea4b26eb4a7a03e0e5664eb13a2c330eeeab550da9f03ba33a9a96f5f3c01099` |
 
-Preparation rejected Nikkei (`0`, `78`, `80`), Notion (`0`, `81`, `104`),
-MyAnimeList (`0`), Temu (`0`, `3`, `8`, `10`), and 9GAG (`0`) at the listed
-unstable or failed resource IDs. Arena, Ahrefs, R10, and Tapbit showed broader
-instability across their reported resource lists.
+The corrected pass rejected Nikkei (`0`, `77`, `79`), Notion (`0`, `104`),
+Ahrefs (`0`, `109`–`118`), R10 (`3`), MyAnimeList (`0`), Guardian (`1`),
+Temu (`0`, `3`, `8`, `10`), and 9GAG (`0`). Arena and Tapbit failed broadly
+across their retained resource lists. No rejected or legacy input was used.
 
-The cohort is blocked at four of six. Legacy engineering workloads are not
-substitutes for the two missing preparation passes. Once six are frozen, the
-fitting, rehearsal, and final definitions will reference the same exact
-workload files and hashes, but every campaign makes independent network visits.
-Fitting traces are never reused as evaluation visits.
+Because the fixed commercial catalogue still produced only three passes, the
+three deterministic QUIC-project pages above were freshly prepared under the
+same strict contract. This is a reproducible six-workload adaptation cohort,
+not a claim that it represents the rejected commercial population. Fitting
+and later evaluation reference the same frozen files and hashes but execute
+independent network visits; fitting traces are never reused for evaluation.
 
 ## Execution order and concurrency
 

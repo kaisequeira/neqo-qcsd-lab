@@ -1,0 +1,648 @@
+{
+  "preparation": {
+    "approved_origins": [
+      "https://nghttp2.org"
+    ],
+    "chromium_version": "151.0.7922.108",
+    "exclusions": [
+      {
+        "reason": "not an absolute HTTPS request",
+        "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAABCAYAAACsXeyTAAAACXBIWXMAAAsTAAALEwEAmpwYAAAAFUlEQVQIHWNIS0sr/v//PwMMDzY+ADqMahlW4J91AAAAAElFTkSuQmCC"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://ajax.googleapis.com/ajax/libs/jquery/1.9.1/jquery.min.js"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://fonts.googleapis.com/css?family=PT+Sans:regular,italic,bold,bolditalic"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://fonts.googleapis.com/css?family=PT+Serif:regular,italic,bold,bolditalic"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://fonts.gstatic.com/s/ptsans/v18/jizaRExUiTo99u79D0KExQ.woff2"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://fonts.gstatic.com/s/ptserif/v19/EJRSQgYoZZY2vCFuvAnt66qSVys.woff2"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://fonts.gstatic.com/s/ptserif/v19/EJRVQgYoZZY2vCFuvAFWzr8.woff2"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://platform.twitter.com/js/button.2276a045429f6681b56da5eb1dcfa53c.js"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://platform.twitter.com/widgets.js"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://platform.twitter.com/widgets/tweet_button.1227a5674072e080ffb1ba14ac0c1079.en.html"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://platform.twitter.com/widgets/widget_iframe.1227a5674072e080ffb1ba14ac0c1079.html?origin=https%3A%2F%2Fnghttp2.org"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://syndication.twitter.com/i/jot/embeds?l=%7B%22widget_origin%22%3A%22https%3A%2F%2Fnghttp2.org%2F%22%2C%22widget_frame%22%3Afalse%2C%22language%22%3A%22en%22%2C%22message%22%3A%22m%3Anocount%3A%22%2C%22_category_%22%3A%22tfw_client_event%22%2C%22triggered_on%22%3A1786516545214%2C%22dnt%22%3Afalse%2C%22client_version%22%3A%226a3ad42b224df%3A1778106238597%22%2C%22format_version%22%3A1%2C%22event_namespace%22%3A%7B%22client%22%3A%22tfw%22%2C%22page%22%3A%22button%22%2C%22section%22%3A%22share%22%2C%22action%22%3A%22impression%22%7D%7D&session_id=d53a32ed528723e2478784b324a5d3b3176fce14"
+      }
+    ],
+    "expected_responses": [
+      {
+        "body_sha256": "2557d495b586391c3e0692a0edc6078699b2b7a1c24a664c273b675b123b392a",
+        "bytes": 6324,
+        "resource_id": 0,
+        "status": 200
+      },
+      {
+        "body_sha256": "80d4404b834c034238ac2e3caeb3a6f24dd093432fd13c5f0e64da9b0d9334bb",
+        "bytes": 39082,
+        "resource_id": 1,
+        "status": 200
+      },
+      {
+        "body_sha256": "424fe2d7003c5f5a37b3552fbfbc64a6f3a42442a63085b1dd29f8a48aaf15b5",
+        "bytes": 7020,
+        "resource_id": 2,
+        "status": 200
+      },
+      {
+        "body_sha256": "6eb9058dd09da6a21782d0daf73cf6a24df35bc9038f8440115096585e453cff",
+        "bytes": 8357,
+        "resource_id": 3,
+        "status": 200
+      },
+      {
+        "body_sha256": "800e5f6d9be9d67dec3206a7106ed7be09257c24240bda8ebfcc84681ba74290",
+        "bytes": 636,
+        "resource_id": 4,
+        "status": 200
+      },
+      {
+        "body_sha256": "4ed23eedcffab565677aac0e6a13aa69b5a86b9bbb154a2be0018f2d23a308df",
+        "bytes": 17742,
+        "resource_id": 5,
+        "status": 200
+      },
+      {
+        "body_sha256": "2d0fd9132cd69b98f37a92525d0151e1dab2144886e0aea942adb8ede4b39ff8",
+        "bytes": 490,
+        "resource_id": 6,
+        "status": 200
+      },
+      {
+        "body_sha256": "5744080a1cb671b9d3118fb32a9581fc19fc3b964b7fc14b93024b9bd192b029",
+        "bytes": 400,
+        "resource_id": 7,
+        "status": 200
+      }
+    ],
+    "final_url": "https://nghttp2.org/",
+    "lab_source": {
+      "image_digest": "sha256:c48241c13d7a17b17b2c216a9a61a11bf41041a316e60a5c944705e883955ab5",
+      "lab_commit": "ab80f11f3df12eff5dafc99753af93f139975cf4",
+      "lab_dirty": false,
+      "lab_patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "neqo_commit": "94b2253b7ccde9a9219254e241ba4dd2e09d937d",
+      "neqo_dirty": false,
+      "neqo_patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "neqo_pinned_commit": "94b2253b7ccde9a9219254e241ba4dd2e09d937d"
+    },
+    "max_response_bytes": 1048576,
+    "migration_commit": "94b2253b7ccde9a9219254e241ba4dd2e09d937d",
+    "neqo_base_commit": "8a04d065c2d35c8e8fd804f91c7081ab6bb60b89",
+    "neqo_version": "0.30.0",
+    "observed_origins": [
+      "https://ajax.googleapis.com",
+      "https://fonts.googleapis.com",
+      "https://fonts.gstatic.com",
+      "https://nghttp2.org",
+      "https://platform.twitter.com",
+      "https://syndication.twitter.com"
+    ],
+    "observed_request_count": 20,
+    "prepare_image_digest": "sha256:c48241c13d7a17b17b2c216a9a61a11bf41041a316e60a5c944705e883955ab5",
+    "published_qcsd_commit": "39e293fb384dd341156eedd1e4b833d24904b1f6",
+    "settle_ms": 3000,
+    "source_url": "https://nghttp2.org/",
+    "stability_defense": "none",
+    "stability_profile": "live",
+    "stability_runs": 3,
+    "stability_seed": 0,
+    "timeout_seconds": 120
+  },
+  "resources": [
+    {
+      "chaff_priority": false,
+      "content_length": 6324,
+      "data_length": 0,
+      "depends_on": [],
+      "headers": [
+        [
+          "accept",
+          "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=0, i"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "document"
+        ],
+        [
+          "sec-fetch-mode",
+          "navigate"
+        ],
+        [
+          "sec-fetch-site",
+          "none"
+        ],
+        [
+          "sec-fetch-user",
+          "?1"
+        ],
+        [
+          "upgrade-insecure-requests",
+          "1"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 0,
+      "known_valid": true,
+      "type": "Document",
+      "url": "https://nghttp2.org/"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 39082,
+      "data_length": 0,
+      "depends_on": [
+        0
+      ],
+      "headers": [
+        [
+          "accept",
+          "text/css,*/*;q=0.1"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=0"
+        ],
+        [
+          "referer",
+          "https://nghttp2.org/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "style"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 1,
+      "known_valid": true,
+      "type": "Stylesheet",
+      "url": "https://nghttp2.org/stylesheets/screen.css"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 7020,
+      "data_length": 0,
+      "depends_on": [
+        0
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=1"
+        ],
+        [
+          "referer",
+          "https://nghttp2.org/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 2,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://nghttp2.org/javascripts/modernizr-2.0.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 8357,
+      "data_length": 0,
+      "depends_on": [
+        0
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=1"
+        ],
+        [
+          "referer",
+          "https://nghttp2.org/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 3,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://nghttp2.org/javascripts/octopress.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 636,
+      "data_length": 0,
+      "depends_on": [
+        0,
+        1
+      ],
+      "headers": [
+        [
+          "accept",
+          "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "i"
+        ],
+        [
+          "referer",
+          "https://nghttp2.org/stylesheets/screen.css"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "image"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 4,
+      "known_valid": true,
+      "type": "Image",
+      "url": "https://nghttp2.org/images/line-tile.png?1413623488"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 17742,
+      "data_length": 0,
+      "depends_on": [
+        0,
+        1
+      ],
+      "headers": [
+        [
+          "accept",
+          "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "i"
+        ],
+        [
+          "referer",
+          "https://nghttp2.org/stylesheets/screen.css"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "image"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 5,
+      "known_valid": true,
+      "type": "Image",
+      "url": "https://nghttp2.org/images/noise.png?1413623488"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 490,
+      "data_length": 0,
+      "depends_on": [
+        0,
+        1
+      ],
+      "headers": [
+        [
+          "accept",
+          "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "origin",
+          "https://nghttp2.org"
+        ],
+        [
+          "priority",
+          "i"
+        ],
+        [
+          "referer",
+          "https://nghttp2.org/stylesheets/screen.css"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "image"
+        ],
+        [
+          "sec-fetch-mode",
+          "cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 6,
+      "known_valid": true,
+      "type": "Image",
+      "url": "https://nghttp2.org/images/rss.png?1413623488"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 400,
+      "data_length": 0,
+      "depends_on": [
+        0
+      ],
+      "headers": [
+        [
+          "accept",
+          "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=1, i"
+        ],
+        [
+          "referer",
+          "https://nghttp2.org/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "image"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 7,
+      "known_valid": true,
+      "type": "Other",
+      "url": "https://nghttp2.org/favicon.png"
+    }
+  ]
+}
