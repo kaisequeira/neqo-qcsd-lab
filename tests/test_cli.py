@@ -72,6 +72,9 @@ def test_collection_image_builds_offline_validator_with_exact_neqo_commit():
     assert 'NEQO_QCSD_GIT_COMMIT="${neqo_commit}" cargo build --locked --release' in dockerfile
     assert "--bin qcsd-validate-parameters" in dockerfile
     assert "target/release/qcsd-validate-parameters /out/bin/" in dockerfile
+    # A persistent target cache can reuse a feature-specific dependency artifact
+    # after its source changes, producing two binaries from different revisions.
+    assert "qcsd-cargo-target" not in dockerfile
     dockerignore = (root / ".dockerignore").read_text(encoding="utf-8")
     assert "artifacts/*" in dockerignore
 

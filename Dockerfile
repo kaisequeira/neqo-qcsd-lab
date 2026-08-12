@@ -68,7 +68,6 @@ COPY neqo-qcsd/ ./
 COPY --from=source-metadata /source-metadata.json /tmp/source-metadata.json
 RUN --mount=type=cache,id=qcsd-cargo-registry-${TARGETARCH},target=/usr/local/cargo/registry \
     --mount=type=cache,id=qcsd-cargo-git-${TARGETARCH},target=/usr/local/cargo/git \
-    --mount=type=cache,id=qcsd-cargo-target-${TARGETARCH},target=/src/target \
     neqo_commit="$(python3 -c 'import json; print(json.load(open("/tmp/source-metadata.json"))["neqo_commit"])')"; \
     case "${neqo_commit}" in (*[!0-9a-f]*|'') exit 1;; esac; \
     test "${#neqo_commit}" -eq 40; \
