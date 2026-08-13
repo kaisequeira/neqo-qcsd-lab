@@ -286,11 +286,64 @@ provides more headroom than the configured 1000-byte parser allowance. The
 final cell is held causally: it is released only after every base event has
 been requested by the controller and every corresponding request signal has
 been observed. At a moulded batch end, release also waits for
-application-batch completion. The complete 1200-byte cell is then assigned to
-one pristine header-phase controlled chaff stream; it is neither split across
-streams nor assigned to an active application stream.
+application-batch completion. Before due moulded outgoing actions, the client
+fills its configured chaff-stream limit. A chaff response stream becomes a
+continuation candidate only when its request used a zero-required-insert-count,
+nonblocking QPACK header block and has a positive final size whose complete,
+gap-free request-stream range `[0, final-size)` plus FIN was peer-acknowledged
+under those outgoing cells. Retransmitted and acknowledged offsets are
+union-deduplicated and do not create extra activation. Before the first base
+allocation for a nonzero incoming component, peer-acknowledged nonblocking
+survivors must cover the current reserve horizon plus one, and the controller reserves
+deterministic acknowledged pristine candidates for the current zero-outgoing
+continuation horizon. That horizon includes consecutive incoming components
+that have no intervening positive outgoing action and may not exceed the
+configured chaff-stream limit minus one: the configured maximum must hold the
+maximum reserve horizon plus one nonreserved candidate. The first moulded
+component must contain positive outgoing cells so requests can acquire peer
+acknowledgements before any incoming allocation is due. In addition, every
+required preprovisioned chaff request's STREAM frames through FIN must fit in
+the residual Normal-priority STREAM-data budget after higher-priority due
+application frames at the positive outgoing component that starts its horizon.
+The current fitting inputs do not expose HTTP/3/QPACK request-prefix sizes or
+transport STREAM-frame budgets, so this request-prefix fit is a prepared
+precondition rather than a condition proved by the fitter or Lab campaign
+preflight. Reserved candidates are excluded from ordinary base
+allocation, and their exact capacity is subtracted from ordinary base capacity
+availability, until their corresponding continuation is released or the
+session or endpoint ends. If a reserve is lost first, an equivalent
+acknowledged pristine replacement is required before further base allocation;
+otherwise the realization fails closed. The complete 1200-byte cell is neither
+split across streams nor assigned to an active application stream.
 
-Both candidate branches require a controlled chaff stream in
+Because every nonzero incoming component has a reserve horizon, the initial
+priority-aware, largest-eligible chaff selection must yield a known-valid,
+dependency-free, same-origin resource with effective length of at least 1200
+bytes. Campaign loading binds the prepared workload manifest and its hash and
+mirrors that selector, while the runtime rechecks endpoint-relative
+same-origin eligibility after connection readiness and fails closed if no such
+resource is available.
+
+If too few peer-acknowledged survivors remain after the positive outgoing
+targets resolve, base and continuation allocation stay held. The contract does
+not promise targetless chaff-request retransmission or generic liveness after
+such loss.
+
+Each continuation allocation discharges exactly the oldest reserve once,
+including when positive live base debt makes the actual cell extend a separate
+nonreserved stream. Reserve refresh is limited to a defense-pending
+continuation or a tagged continuation still queued for allocation. If a
+retryable unadvertised allocation rolls back or is requeued, its corresponding
+horizon reserve is reconstituted before further base allocation. A terminal
+drop-mode close does not claim reconstitution.
+
+Ordinary base receive allocation exhausts application streams before it may
+use peer-acknowledged, nonreserved controlled chaff streams. Within either
+class it uses exact capacity before bounded provisional framing claims. Thus an
+opened but unacknowledged chaff request cannot satisfy or advertise ordinary
+Walkie-Talkie base capacity.
+
+Both candidate branches require a peer-acknowledged controlled chaff stream in
 `ReceivingHeaders`, with zero bytes consumed, requested equal to advertised,
 and no more than the parser ceiling. It must have no terminal status, framing
 bytes, parser-lease use, or prior/pending parser boundary; its reservation must
@@ -300,19 +353,21 @@ retry recomputes live unconsumed base bytes from the prior credit ledger,
 excluding the held continuation slot, and requires that value to be no greater
 than 1000. If it is positive, the candidate is a header-blocked stream with
 requested and advertised greater than zero, and all live outstanding must be
-coalesced there: its advertised-minus-consumed amount must exactly equal the
-live ledger value. The cell extends that stream. If the live value has drained
-to zero, the candidate is instead an untouched header-phase stream with
-requested, advertised, and consumed all equal to zero. A split or
+coalesced on one nonreserved acknowledged candidate: its
+advertised-minus-consumed amount must exactly equal the live ledger value. The
+cell extends that stream. If the live value has drained to zero, the cell uses
+the corresponding retained acknowledged reserve, which is still untouched
+with requested, advertised, and consumed all equal to zero. A split or
 ledger-inconsistent positive base tail is not eligible.
 
 This liveness contract is conditional on the prepared stream having at least
 1200 exact additional available bytes and its first `prior_requested + 1200`
 raw response bytes being consumable. The fitting inputs contain
-application-stream observations and do not observe runtime-created chaff
-prefixes, so they cannot prove that precondition or a general HTTP/3 property.
-It is explicitly scoped to the frozen prepared cohort and reviewed live
-fixture, and a runtime violation is fail-closed and fidelity-ineligible.
+application-stream observations; they do not observe chaff preprovisioning,
+peer acknowledgement, reservation, or runtime-created response prefixes, so
+they cannot prove those runtime conditions or a general HTTP/3 property. It
+is explicitly scoped to the frozen prepared cohort and reviewed live fixture,
+and a runtime violation is fail-closed and fidelity-ineligible.
 Source-envelope overflow likewise fails the strict fidelity gate. No
 FIN-residual reallocation or fragment-coalescence claim is part of this
 contract. Reported runtime padding cost and scheduled bytes still include the

@@ -12,6 +12,7 @@ import pytest
 
 import qcsd_lab.fitting as fitting_module
 import qcsd_lab.orchestrator as orchestrator
+from qcsd_lab.capture_session import Defense
 from qcsd_lab.experiment import (
     accept_sample,
     checkpoint_experiment,
@@ -31,7 +32,7 @@ from qcsd_lab.parameters import (
     validate_parameter_artifact,
 )
 from qcsd_lab.util import atomic_json, atomic_text, sha256_file
-from qcsd_lab.verification import seal_result, verify_result
+from qcsd_lab.verification import authoritative_files, prepare_resume, seal_result, verify_result
 
 
 WORKLOADS = ("alpha", "bravo", "charlie", "delta", "echo", "foxtrot")
@@ -184,7 +185,7 @@ def _make_fitting_result(
             "published_qcsd_commit": "d" * 40,
             "migration_commit": "e" * 40,
             "expected_responses": [
-                {"resource_id": 0, "status": 200, "bytes": 64, "body_sha256": "f" * 64}
+                {"resource_id": 0, "status": 200, "bytes": 1_200, "body_sha256": "f" * 64}
             ],
             "lab_source": source,
             "prepare_image_digest": source["image_digest"],
@@ -194,8 +195,8 @@ def _make_fitting_result(
                 "id": 0,
                 "url": "https://site.test/",
                 "type": "Document",
-                "content_length": 64,
-                "data_length": 64,
+                "content_length": 1_200,
+                "data_length": 1_200,
                 "chaff_priority": True,
                 "known_valid": True,
                 "depends_on": [],
@@ -760,12 +761,12 @@ def test_fit_builds_exact_deterministic_bundle_without_mutating_source(tmp_path:
     }
     receipt_text = (first / "provenance.json").read_text(encoding="utf-8")
     receipt = json.loads(receipt_text)
-    assert receipt["fitting_contract"]["contract_version"] == 4
+    assert receipt["fitting_contract"]["contract_version"] == 5
     assert receipt["fitting_contract"]["workload_order"] == list(WORKLOADS)
-    assert receipt["fitting_contract"]["fitter_version"] == "qcsd_lab.fitting 2.1.1"
+    assert receipt["fitting_contract"]["fitter_version"] == "qcsd_lab.fitting 2.1.2"
     assert receipt["fitting_contract"]["parameter_schema_versions"] == {
         "traffic_morphing": 2,
-        "walkie_talkie": 4,
+        "walkie_talkie": 5,
         "wtf_pad": 2,
     }
     assert receipt["fitting_contract"]["constants"]["extractor"]["production_sequence"] == (
@@ -789,51 +790,114 @@ def test_fit_builds_exact_deterministic_bundle_without_mutating_source(tmp_path:
         "sum-positive-raw-BytesRead-per-batch"
     )
     walkie = json.loads((first / "walkie-talkie.json").read_text(encoding="utf-8"))
-    assert walkie["schema_version"] == 4
+    assert walkie["schema_version"] == 5
     assert walkie["matching_algorithm"] == "minimum-base-symmetric-mold-padding-cost-one-to-one"
     assert walkie["receiver_continuation"] == {
-        "allocation_policy": "single-pristine-header-phase-controlled-chaff-stream-whole-cell",
+        "allocation_policy": (
+            "single-peer-acknowledged-pristine-header-phase-controlled-chaff-stream-whole-cell"
+        ),
         "application_order": "after-symmetric-elementwise-mold",
         "batch_end_release_policy": (
             "at-molded-batch-end-after-application-batch-complete-otherwise-no-batch-gate"
         ),
+        "base_allocation_policy": (
+            "application-streams-before-peer-acknowledged-nonreserved-controlled-chaff-streams;"
+            "exact-capacity-before-bounded-framing-claims"
+        ),
+        "causal_capacity_precondition": (
+            "first-molded-component-outgoing>0;max_chaff_streams>=maximum-receiver-continuation-"
+            "reserve-horizon+1;required-preprovisioned-chaff-request-stream-frames-through-fin-"
+            "fit-within-residual-normal-priority-stream-data-budget-after-higher-priority-due-"
+            "application-stream-frames-at-each-positive-outgoing-horizon-start"
+        ),
         "cells_per_nonzero_incoming_component": 1,
         "formula": "adapted_incoming=symmetric_incoming+1-if-symmetric_incoming>0-else-0",
         "parser_allowance_ceiling_bytes": 1_000,
+        "post_outgoing_loss_liveness_limitation": (
+            "insufficient-peer-acknowledged-survivors-after-positive-outgoing-targets-resolve-"
+            "hold-base-and-continuation-allocation;no-targetless-chaff-stream-retransmission-or-"
+            "generic-loss-liveness-guarantee"
+        ),
         "prefix_consumability_precondition": (
             "prepared-selected-pristine-first-prior-requested-plus-raw-headroom-bytes-are-"
             "consumable"
         ),
+        "provisioning_policy": (
+            "fill-configured-chaff-stream-limit-before-due-molded-outgoing-actions"
+        ),
         "raw_headroom_bytes_per_nonzero_incoming_component": 1_200,
         "release_policy": (
-            "after-all-base-events-controller-requested-and-request-signals-observed;recompute-"
-            "live-unconsumed-base-each-retry;extend-single-coalesced-positive-outstanding-header-"
-            "blocked-stream-else-fresh-stream;outstanding-at-or-below-parser-ceiling"
+            "after-all-base-events-controller-requested-and-request-signals-observed;reserve-"
+            "deterministic-peer-acknowledged-pristine-candidates-for-current-zero-outgoing-"
+            "continuation-horizon-before-first-base-allocation-and-retain-each-until-"
+            "corresponding-continuation-release-or-session-end;recompute-live-unconsumed-base-"
+            "each-retry;extend-single-coalesced-positive-outstanding-header-blocked-stream-else-"
+            "reserved-peer-acknowledged-stream;outstanding-at-or-below-parser-ceiling"
+        ),
+        "request_activation_policy": (
+            "zero-required-insert-count-nonblocking-qpack-chaff-header-block;positive-final-size-"
+            "with-contiguous-unique-request-stream-offsets-[0,final-size)-and-fin-peer-"
+            "acknowledged-under-molded-outgoing-cells"
+        ),
+        "request_prefix_delivery_precondition": (
+            "before-each-incoming-component-first-base-allocation-peer-acknowledged-nonblocking-"
+            "chaff-request-survivors>=current-receiver-continuation-reserve-horizon+1"
+        ),
+        "resource_precondition": (
+            "initial-chaff-selection-yields-known-valid-dependency-free-same-origin-resource-"
+            "with-effective-length>=raw-headroom-bytes-per-nonzero-incoming-component"
+        ),
+        "reserve_policy": (
+            "reserve-deterministic-acknowledged-pristine-candidates-for-current-zero-outgoing-"
+            "continuation-horizon-before-first-base-allocation-of-each-nonzero-incoming-component"
+        ),
+        "reserve_lifecycle_policy": (
+            "remove-exactly-first-reserve-once-at-corresponding-continuation-controller-"
+            "allocation-even-when-positive-live-debt-releases-on-nonreserved-stream;refresh-only-"
+            "for-defense-pending-continuation-or-tagged-continuation-still-queued-for-allocation;"
+            "retryable-unadvertised-continuation-allocation-rollback-or-requeue-reconstitutes-"
+            "corresponding-horizon-reserve-before-further-base-allocation"
         ),
     }
     continuation_invariant = receipt["fitting_contract"]["constants"]["walkie_talkie"][
         "prepared_receiver_continuation_invariant"
     ]
     assert continuation_invariant == {
+        "action_ordering": (
+            "provision-to-configured-chaff-stream-limit;encode-zero-required-insert-count-"
+            "nonblocking-qpack-chaff-header-blocks;transmit-positive-final-size-contiguous-[0,"
+            "final-size)-plus-fin-under-due-molded-outgoing-actions;peer-acknowledge-contiguous-"
+            "[0,final-size)-plus-fin;require-current-receiver-continuation-reserve-horizon-plus-"
+            "one-survivors-before-first-base-allocation;reserve-current-receiver-continuation-"
+            "horizon;release-continuation-after-base-release"
+        ),
         "adapted_target_formula": "sealed_symmetric_envelope_cells*packet_size+packet_size",
         "allocation_policy": (
-            "one-whole-packet_size-cell-to-one-pristine-header-phase-controlled-chaff-stream"
+            "one-whole-packet_size-cell-to-one-peer-acknowledged-pristine-header-phase-"
+            "controlled-chaff-stream"
         ),
         "base_release_condition": (
             "all-base-events-controller-requested-and-request-signals-observed"
+        ),
+        "base_capacity_policy": (
+            "protected-reserve-exact-capacity-excluded-from-ordinary-base-allocation-and-"
+            "capacity-availability"
         ),
         "batch_end_release_condition": (
             "application-batch-complete-at-molded-batch-end;otherwise-no-batch-completion-gate"
         ),
         "chaff_capacity_requirement": (
-            "selected-pristine-header-phase-controlled-chaff-exact-available-bytes>=packet_size"
+            "selected-peer-acknowledged-pristine-header-phase-controlled-chaff-exact-available-"
+            "bytes>=packet_size"
         ),
         "claim_policy": "provisional-framing-claims-are-ineligible",
         "common_header_phase_candidate_definition": (
             "role=chaff;status=none;receive_state=ReceivingHeaders;consumed_bytes=0;"
             "requested_bytes=advertised_bytes<=parser_allowance_ceiling_bytes;"
             "reservation_available=reservation_capacity;framing_bytes=0;parser_lease_used=0;"
-            "last_parser_lease_boundary=none;pending_parser_boundary=none"
+            "last_parser_lease_boundary=none;pending_parser_boundary=none;"
+            "qpack_required_insert_count=0;request_final_size>0;"
+            "wire_activation=contiguous-[0,final_size)-plus-fin-peer-acknowledged"
         ),
         "exact_capacity_requirement": (
             "known_limit>=packet_size;known_limit-requested_bytes>=packet_size"
@@ -841,14 +905,15 @@ def test_fit_builds_exact_deterministic_bundle_without_mutating_source(tmp_path:
         "failure_policy": (
             "source-envelope-overflow-or-continuation-precondition-failure-is-fidelity-ineligible"
         ),
-        "fitting_input_support": ("runtime-created-chaff-prefix-is-not-observed-by-fitting-inputs"),
+        "fitting_input_support": "sealed-envelope-and-matching-statistics-only",
         "live_component_bound": ("source_raw_bytes<=sealed_symmetric_envelope_cells*packet_size"),
         "outstanding_release_condition": (
             "live-unconsumed-base-bytes<=parser_allowance_ceiling_bytes"
         ),
         "positive_outstanding_selection": (
-            "require-all-live-unconsumed-base-bytes-coalesced-on-one-pristine-header-phase-chaff-"
-            "whose-advertised-minus-consumed-exactly-equals-live"
+            "require-all-live-unconsumed-base-bytes-coalesced-on-one-peer-acknowledged-"
+            "nonreserved-pristine-header-phase-chaff-whose-advertised-minus-consumed-exactly-"
+            "equals-live"
         ),
         "prefix_consumability_precondition": (
             "selected-stream-first-(prior_requested_bytes+packet_size)-raw-response-bytes-are-"
@@ -858,18 +923,83 @@ def test_fit_builds_exact_deterministic_bundle_without_mutating_source(tmp_path:
             "recompute-live-unconsumed-base-bytes-from-prior-credit-ledger-on-every-retry-"
             "excluding-continuation-slot"
         ),
+        "request_retransmission_deduplication": (
+            "union-peer-acknowledged-request-stream-offset-ranges;duplicate-acknowledged-offsets-"
+            "do-not-advance-activation"
+        ),
+        "reserve_horizon_capacity_requirement": (
+            "maximum_reserve_horizon+1<=configured_chaff_stream_limit"
+        ),
+        "request_prefix_fit_requirement": (
+            "required-preprovisioned-chaff-request-stream-frames-through-fin-fit-within-residual-"
+            "normal-priority-stream-data-budget-after-higher-priority-due-application-stream-"
+            "frames-at-each-positive-outgoing-horizon-start"
+        ),
+        "request_activation_policy": (
+            "zero-required-insert-count-nonblocking-qpack-chaff-header-block;positive-final-size-"
+            "with-contiguous-unique-request-stream-offsets-[0,final-size)-and-fin-peer-"
+            "acknowledged-under-molded-outgoing-cells"
+        ),
+        "causal_capacity_precondition": (
+            "first-molded-component-outgoing>0;max_chaff_streams>=maximum-receiver-continuation-"
+            "reserve-horizon+1;required-preprovisioned-chaff-request-stream-frames-through-fin-"
+            "fit-within-residual-normal-priority-stream-data-budget-after-higher-priority-due-"
+            "application-stream-frames-at-each-positive-outgoing-horizon-start"
+        ),
+        "request_prefix_delivery_precondition": (
+            "before-each-incoming-component-first-base-allocation-peer-acknowledged-nonblocking-"
+            "chaff-request-survivors>=current-receiver-continuation-reserve-horizon+1"
+        ),
+        "post_outgoing_loss_liveness_limitation": (
+            "insufficient-peer-acknowledged-survivors-after-positive-outgoing-targets-resolve-"
+            "hold-base-and-continuation-allocation;no-targetless-chaff-stream-retransmission-or-"
+            "generic-loss-liveness-guarantee"
+        ),
+        "reserve_horizon_count_formula": "count-nonzero-incoming-components-in-reserve-horizon",
+        "reserve_horizon_definition": (
+            "current-nonzero-incoming-component-plus-consecutive-nonzero-incoming-components-"
+            "before-next-positive-outgoing-component"
+        ),
+        "reserve_lifetime": (
+            "exclude-each-reserved-candidate-from-base-allocation-until-corresponding-"
+            "continuation-release-or-session-or-endpoint-end"
+        ),
+        "reserve_discharge_policy": (
+            "remove-exactly-first-reserve-once-at-corresponding-continuation-controller-"
+            "allocation-even-when-positive-live-debt-releases-on-nonreserved-stream"
+        ),
+        "reserve_loss_policy": (
+            "endpoint-or-stream-loss-before-release-requires-equivalent-acknowledged-pristine-"
+            "replacement-before-further-base-allocation-or-fails-closed"
+        ),
+        "reserve_refresh_policy": (
+            "refresh-only-for-defense-pending-continuation-or-tagged-continuation-still-queued-"
+            "for-allocation"
+        ),
+        "reserve_rollback_policy": (
+            "retryable-unadvertised-continuation-allocation-rollback-or-requeue-reconstitutes-"
+            "corresponding-horizon-reserve-before-further-base-allocation"
+        ),
+        "runtime_not_fitting_observed": (
+            "provisioning-peer-acknowledgement-reservation-and-runtime-created-chaff-prefix"
+        ),
+        "resource_precondition": (
+            "initial-chaff-selection-yields-known-valid-dependency-free-same-origin-resource-"
+            "with-effective-length>=raw-headroom-bytes-per-nonzero-incoming-component"
+        ),
+        "initial_mold_causal_requirement": "first-molded-component-outgoing>0",
         "scope": (
             "prepared-frozen-research-cohort-and-reviewed-live-fixture-under-listed-preconditions"
         ),
         "zero_outstanding_selection": (
-            "when-live-unconsumed-base-is-zero-require-untouched-pristine-header-phase-chaff-"
-            "with-requested_bytes=0"
+            "when-live-unconsumed-base-is-zero-use-corresponding-retained-peer-acknowledged-"
+            "reserved-pristine-header-phase-chaff-with-requested_bytes=0"
         ),
     }
     assert "residual_reallocation" not in continuation_invariant
     assert "residual_coalescence" not in continuation_invariant
     assert walkie["generated_by"].startswith(
-        "qcsd_lab.fitting_walkie_talkie 2.1.1; algorithm_receipt_sha256="
+        "qcsd_lab.fitting_walkie_talkie 2.1.2; algorithm_receipt_sha256="
     )
     assert str(tmp_path) not in receipt_text
     assert "timestamp" not in receipt_text
@@ -935,7 +1065,7 @@ def test_legacy_v2_bundle_is_strictly_readable_only_as_historical_evidence(
     legacy = _legacy_bundle_from_current(fitted_bundle, tmp_path / "research-1200")
 
     def unexpected_rust_call(*_args: object, **_kwargs: object) -> None:
-        raise AssertionError("the v4 Rust parser must not adjudicate a legacy v2 bundle")
+        raise AssertionError("the v5 Rust parser must not adjudicate a legacy v2 bundle")
 
     monkeypatch.setattr(
         fitting_module,
@@ -984,6 +1114,113 @@ def test_legacy_v2_bundle_is_strictly_readable_only_as_historical_evidence(
         verify_artifact_bundle(legacy)
 
 
+def test_historical_schema_two_walkie_talkie_skips_schema_five_resource_preflight(
+    tmp_path: Path,
+    fitted_bundle: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    legacy = _legacy_bundle_from_current(fitted_bundle, tmp_path / "research-1200")
+    parameter = legacy / "walkie-talkie.json"
+    provenance = legacy / "provenance.json"
+
+    def unexpected_preflight(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("historical schema two must not acquire schema-five prerequisites")
+
+    monkeypatch.setattr(
+        orchestrator,
+        "_validate_walkie_talkie_resource_preconditions",
+        unexpected_preflight,
+    )
+    artifact = validate_frozen_parameter_artifact(
+        parameter,
+        provenance_path=provenance,
+        original_parameter_name="walkie-talkie.json",
+        expected_kind="walkie_talkie",
+        allow_reviewed_fixture=False,
+        expected_qcsd_profile="research-1200",
+        expected_udp_payload_ceiling=1_200,
+        expected_workloads=set(WORKLOADS),
+        allow_historical_research_bundle=True,
+    )
+    defense = Defense(
+        "walkie-talkie",
+        "walkie_talkie",
+        False,
+        parameters_path=artifact.path,
+    )
+    assert not orchestrator._uses_schema_five_walkie_talkie(defense)
+
+
+def test_sealed_historical_schema_two_result_verifies_but_cannot_resume(
+    tmp_path: Path,
+    fitted_bundle: Path,
+) -> None:
+    root = tmp_path / "historical-result"
+    inputs = root / "inputs"
+    workloads = inputs / "workloads"
+    workloads.mkdir(parents=True)
+    source_workloads = fitted_bundle.parents[1] / "source/config/workloads"
+    for workload in WORKLOADS:
+        shutil.copy2(source_workloads / f"{workload}.json", workloads / f"{workload}.json")
+    _legacy_bundle_from_current(
+        fitted_bundle,
+        inputs / "defense-parameters/research-1200",
+    )
+    atomic_text(
+        inputs / "campaign.yml",
+        "schema: 1\n"
+        "name: historical-evaluation\n"
+        "purpose: evaluation\n"
+        "seed: 2\n"
+        "profile: research-1200\n"
+        "workloads:\n"
+        + "".join(f"  {workload}: 1\n" for workload in WORKLOADS)
+        + "request_policies:\n"
+        "  - as-defined\n"
+        "defenses:\n"
+        "  - name: walkie-talkie\n"
+        "    kind: walkie_talkie\n"
+        "    parameters: ../../artifacts/research-1200/walkie-talkie.json\n",
+    )
+    campaign = orchestrator._load_campaign(
+        inputs / "campaign.yml",
+        frozen_inputs=inputs,
+        allow_historical_research_bundle=True,
+    )
+    source = _source("a")
+    configuration = orchestrator._frozen_configuration(root, campaign)
+    experiment = initialize_experiment(
+        root,
+        name=campaign.name,
+        purpose=campaign.purpose,
+        run_id="historical-result",
+        source=source,
+        configuration=configuration,
+        samples=orchestrator.plan_campaign(campaign),
+        started_at="2026-08-12T00:00:00+00:00",
+    )
+    finalize_experiment(
+        root,
+        experiment,
+        status="incomplete",
+        completed_at="2026-08-12T00:01:00+00:00",
+    )
+    checksums = {
+        relative: sha256_file(path) for relative, path in authoritative_files(root).items()
+    }
+    atomic_text(
+        root / "evidence.sha256",
+        "".join(f"{checksums[path]}  {path}\n" for path in sorted(checksums)),
+    )
+
+    verified = verify_result(root)
+    assert verified.experiment["status"] == "incomplete"
+    before = (root / "evidence.sha256").read_bytes()
+    with pytest.raises(ValueError, match="frozen historical evidence"):
+        prepare_resume(root)
+    assert (root / "evidence.sha256").read_bytes() == before
+
+
 @pytest.mark.parametrize("legacy_contract", [False, True])
 def test_bundle_contract_rejects_mixed_walkie_talkie_schema_versions(
     tmp_path: Path,
@@ -1010,15 +1247,17 @@ def test_bundle_contract_rejects_mixed_walkie_talkie_schema_versions(
         verify_artifact_bundle(bundle)
 
 
-def test_superseded_contract_three_is_not_historical_evidence(
+@pytest.mark.parametrize("contract_version", [3, 4])
+def test_superseded_contract_is_not_historical_evidence(
     tmp_path: Path,
     fitted_bundle: Path,
+    contract_version: int,
 ) -> None:
-    bundle = tmp_path / "superseded-contract-three"
+    bundle = tmp_path / f"superseded-contract-{contract_version}"
     shutil.copytree(fitted_bundle, bundle)
     provenance_path = bundle / "provenance.json"
     provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
-    provenance["fitting_contract"]["contract_version"] = 3
+    provenance["fitting_contract"]["contract_version"] = contract_version
     atomic_json(provenance_path, provenance)
 
     with pytest.raises(ValueError, match="fitting contract receipt is invalid"):

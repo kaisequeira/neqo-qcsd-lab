@@ -19,7 +19,7 @@ from qcsd_lab.orchestrator import (
     preflight_campaign,
     run_campaign,
 )
-from qcsd_lab.util import load_json, sha256_file
+from qcsd_lab.util import atomic_json, load_json, sha256_file
 from qcsd_lab.verification import verify_result
 
 
@@ -92,6 +92,96 @@ def _configuration(
     path = campaign_dir / "campaign.yml"
     path.write_text(yaml.safe_dump(campaign, sort_keys=False), encoding="utf-8")
     return path
+
+
+def test_walkie_talkie_resource_preflight_accepts_one_initial_same_origin_candidate() -> None:
+    resource = _resource(0, "https://alpha.test/")
+    resource["content_length"] = 1_200
+    resource["data_length"] = 1_200
+
+    orchestrator._validate_walkie_talkie_resource_precondition(
+        {"resources": [resource]},
+        workload_id="alpha",
+        endpoint_origins={"https://alpha.test"},
+    )
+
+
+def test_walkie_talkie_resource_preflight_applies_only_to_current_schema(tmp_path: Path) -> None:
+    schema_two = tmp_path / "schema-two.json"
+    schema_five = tmp_path / "schema-five.json"
+    atomic_json(schema_two, {"schema_version": 2})
+    atomic_json(schema_five, {"schema_version": 5})
+
+    assert not orchestrator._uses_schema_five_walkie_talkie(
+        Defense("historical", "walkie_talkie", False, parameters_path=schema_two)
+    )
+    assert orchestrator._uses_schema_five_walkie_talkie(
+        Defense("current", "walkie_talkie", False, parameters_path=schema_five)
+    )
+    assert not orchestrator._uses_schema_five_walkie_talkie(Defense("front", "front", False))
+
+
+@pytest.mark.parametrize("failure", ["unknown", "dependent", "empty", "origin-mismatch"])
+def test_walkie_talkie_resource_preflight_rejects_ineligible_or_wrong_origin_candidate(
+    failure: str,
+) -> None:
+    resource = _resource(0, "https://alpha.test/")
+    endpoint_origins = {"https://alpha.test"}
+    if failure == "unknown":
+        resource["known_valid"] = False
+    elif failure == "dependent":
+        resource["depends_on"] = [1]
+    elif failure == "empty":
+        resource["content_length"] = 0
+        resource["data_length"] = 0
+    else:
+        endpoint_origins = {"https://other.test"}
+
+    with pytest.raises(ValueError, match="matching a request endpoint origin"):
+        orchestrator._validate_walkie_talkie_resource_precondition(
+            {"resources": [resource]},
+            workload_id="alpha",
+            endpoint_origins=endpoint_origins,
+        )
+
+
+@pytest.mark.parametrize("effective_length, accepted", [(1_199, False), (1_200, True)])
+def test_walkie_talkie_resource_preflight_enforces_raw_headroom_boundary(
+    effective_length: int,
+    accepted: bool,
+) -> None:
+    resource = _resource(0, "https://alpha.test/")
+    resource["content_length"] = effective_length
+    resource["data_length"] = effective_length
+
+    def validate() -> None:
+        orchestrator._validate_walkie_talkie_resource_precondition(
+            {"resources": [resource]},
+            workload_id="alpha",
+            endpoint_origins={"https://alpha.test"},
+        )
+
+    if accepted:
+        validate()
+    else:
+        with pytest.raises(ValueError, match="effective length at least 1200 bytes"):
+            validate()
+
+
+def test_walkie_talkie_resource_preflight_mirrors_priority_before_largest_selection() -> None:
+    short_priority = _resource(0, "https://alpha.test/priority")
+    short_priority["content_length"] = 1_199
+    short_priority["data_length"] = 1_199
+    large_nonpriority = _resource(1, "https://alpha.test/large")
+    large_nonpriority["content_length"] = 2_400
+    large_nonpriority["data_length"] = 2_400
+
+    with pytest.raises(ValueError, match="effective length at least 1200 bytes"):
+        orchestrator._validate_walkie_talkie_resource_precondition(
+            {"resources": [large_nonpriority, short_priority]},
+            workload_id="alpha",
+            endpoint_origins={"https://alpha.test"},
+        )
 
 
 def _write_successful_attempt(

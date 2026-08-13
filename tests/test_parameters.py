@@ -146,17 +146,38 @@ def test_receipt_tamper_and_runtime_shape_are_rejected(tmp_path, monkeypatch):
         validate_parameter_artifact(parameter, allow_reviewed_fixture=True)
 
 
-def test_walkie_talkie_schema_four_requires_exact_receiver_continuation() -> None:
+def test_walkie_talkie_schema_five_requires_exact_receiver_continuation() -> None:
     value = json.loads((FIXTURES / "walkie-talkie-live.json").read_text(encoding="utf-8"))
     parameters._validate_runtime_shape(
         value,
         "walkie_talkie",
         1_200,
         Path("walkie-talkie.json"),
-        expected_schema_version=4,
+        expected_schema_version=5,
     )
 
-    for mutation in ("missing", "changed", "missing-policy", "changed-policy"):
+    for mutation in (
+        "missing",
+        "changed",
+        "missing-policy",
+        "changed-policy",
+        "changed-activation",
+        "changed-provisioning",
+        "changed-reserve",
+        "missing-base-allocation",
+        "changed-base-allocation",
+        "missing-reserve-lifecycle",
+        "changed-reserve-lifecycle",
+        "missing-resource-precondition",
+        "changed-resource-precondition",
+        "missing-causal-capacity",
+        "changed-causal-capacity",
+        "missing-prefix-delivery",
+        "changed-prefix-delivery",
+        "missing-loss-limitation",
+        "changed-loss-limitation",
+        "unknown-field",
+    ):
         changed = json.loads(json.dumps(value))
         if mutation == "missing":
             del changed["receiver_continuation"]
@@ -164,16 +185,59 @@ def test_walkie_talkie_schema_four_requires_exact_receiver_continuation() -> Non
             changed["receiver_continuation"]["cells_per_nonzero_incoming_component"] = 2
         elif mutation == "missing-policy":
             del changed["receiver_continuation"]["allocation_policy"]
-        else:
+        elif mutation == "changed-policy":
             changed["receiver_continuation"]["release_policy"] = "eager"
+        elif mutation == "changed-activation":
+            changed["receiver_continuation"]["request_activation_policy"] = "created-locally"
+        elif mutation == "changed-provisioning":
+            changed["receiver_continuation"]["provisioning_policy"] = "on-demand"
+        elif mutation == "changed-reserve":
+            changed["receiver_continuation"]["reserve_policy"] = "none"
+        elif mutation == "missing-base-allocation":
+            del changed["receiver_continuation"]["base_allocation_policy"]
+        elif mutation == "changed-base-allocation":
+            changed["receiver_continuation"]["base_allocation_policy"] = "any-stream"
+        elif mutation == "missing-reserve-lifecycle":
+            del changed["receiver_continuation"]["reserve_lifecycle_policy"]
+        elif mutation == "changed-reserve-lifecycle":
+            changed["receiver_continuation"]["reserve_lifecycle_policy"] = "refill-always"
+        elif mutation == "missing-resource-precondition":
+            del changed["receiver_continuation"]["resource_precondition"]
+        elif mutation == "changed-resource-precondition":
+            changed["receiver_continuation"]["resource_precondition"] = "any-resource"
+        elif mutation == "missing-causal-capacity":
+            del changed["receiver_continuation"]["causal_capacity_precondition"]
+        elif mutation == "changed-causal-capacity":
+            changed["receiver_continuation"]["causal_capacity_precondition"] = "one-stream"
+        elif mutation == "missing-prefix-delivery":
+            del changed["receiver_continuation"]["request_prefix_delivery_precondition"]
+        elif mutation == "changed-prefix-delivery":
+            changed["receiver_continuation"]["request_prefix_delivery_precondition"] = "any-one"
+        elif mutation == "missing-loss-limitation":
+            del changed["receiver_continuation"]["post_outgoing_loss_liveness_limitation"]
+        elif mutation == "changed-loss-limitation":
+            changed["receiver_continuation"]["post_outgoing_loss_liveness_limitation"] = "always"
+        else:
+            changed["receiver_continuation"]["unknown"] = True
         with pytest.raises(ValueError, match="runtime shape"):
             parameters._validate_runtime_shape(
                 changed,
                 "walkie_talkie",
                 1_200,
                 Path("walkie-talkie.json"),
-                expected_schema_version=4,
+                expected_schema_version=5,
             )
+
+    no_causal_prefix = json.loads(json.dumps(value))
+    no_causal_prefix["profiles"][0]["bursts"][0]["outgoing"] = 0
+    with pytest.raises(ValueError, match="first molded component must contain outgoing cells"):
+        parameters._validate_runtime_shape(
+            no_causal_prefix,
+            "walkie_talkie",
+            1_200,
+            Path("walkie-talkie.json"),
+            expected_schema_version=5,
+        )
 
     legacy = json.loads((FIXTURES / "walkie-talkie-live.json").read_text(encoding="utf-8"))
     legacy["schema_version"] = 2
@@ -187,16 +251,17 @@ def test_walkie_talkie_schema_four_requires_exact_receiver_continuation() -> Non
             expected_schema_version=2,
         )
 
-    superseded = json.loads((FIXTURES / "walkie-talkie-live.json").read_text(encoding="utf-8"))
-    superseded["schema_version"] = 3
-    with pytest.raises(ValueError, match="versioned client-only runtime contract"):
-        parameters._validate_runtime_shape(
-            superseded,
-            "walkie_talkie",
-            1_200,
-            Path("walkie-talkie-live.json"),
-            expected_schema_version=4,
-        )
+    for superseded_schema in (3, 4):
+        superseded = json.loads((FIXTURES / "walkie-talkie-live.json").read_text(encoding="utf-8"))
+        superseded["schema_version"] = superseded_schema
+        with pytest.raises(ValueError, match="versioned client-only runtime contract"):
+            parameters._validate_runtime_shape(
+                superseded,
+                "walkie_talkie",
+                1_200,
+                Path("walkie-talkie-live.json"),
+                expected_schema_version=5,
+            )
 
 
 def test_walkie_talkie_live_fixture_has_exact_receiver_continuation_derivation() -> None:
@@ -208,7 +273,8 @@ def test_walkie_talkie_live_fixture_has_exact_receiver_continuation_derivation()
         ([(4, 129), (3, 33), (3, 33)], 66, 246_000),
     ]
 
-    assert value["schema_version"] == 4
+    assert value["schema_version"] == 5
+    assert value["generated_by"] == "qcsd_lab.walkietalkie 0.7.2"
     assert value["receiver_continuation"] == parameters._WALKIE_TALKIE_RECEIVER_CONTINUATION
     for profile, (bursts, cost, scheduled_bytes) in zip(value["profiles"], expected, strict=True):
         assert [(burst["outgoing"], burst["incoming"]) for burst in profile["bursts"]] == bursts

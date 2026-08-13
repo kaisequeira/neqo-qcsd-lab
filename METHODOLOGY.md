@@ -302,32 +302,81 @@ boundary and that closure marker, and later tail observations remain excluded.
   held causal event, not ordinary eager receive credit. It becomes eligible
   only after all base incoming events have been controller-requested and their
   request signals observed. Eligibility at a moulded batch end additionally
-  requires application-batch completion. The allocator must place the whole
-  1200-byte cell on one pristine header-phase controlled chaff stream with at
-  least 1200 exact additional available bytes; allocation to an active
+  requires application-batch completion. Before due moulded outgoing actions,
+  the client fills the configured chaff-stream limit. A response stream is
+  eligible only when its request used a zero-required-insert-count, nonblocking
+  QPACK header block and the peer acknowledged a positive final size, every
+  unique request-stream offset in `[0, final-size)`, and FIN under those
+  outgoing cells. Retransmitted and acknowledged offsets are union-deduplicated
+  and do not advance activation twice. Before the first base allocation for
+  each nonzero incoming component, acknowledged nonblocking survivors must
+  cover the current reserve horizon plus one; deterministic acknowledged pristine
+  candidates are reserved for the current zero-outgoing continuation horizon.
+  The protected horizon includes consecutive incoming components before the
+  next positive outgoing action. The configured chaff-stream maximum must be
+  at least the maximum horizon plus one, preserving a nonreserved candidate;
+  the first moulded component must have positive outgoing cells so activation
+  can precede incoming allocation. Every required preprovisioned chaff
+  request's STREAM frames through FIN must also fit in the residual
+  Normal-priority STREAM-data budget after higher-priority due application
+  frames at the positive outgoing component that starts its horizon. Fitting
+  traces do not expose HTTP/3/QPACK request-prefix lengths or transport
+  STREAM-frame budgets, so this prefix fit remains an explicit prepared
+  precondition rather than a fitting or campaign-preflight observation. Each reserve is excluded from ordinary base allocation, and its
+  exact capacity is subtracted from ordinary base capacity availability, until
+  its corresponding continuation is released or the session or endpoint ends.
+  Loss before release requires an equivalent acknowledged pristine replacement
+  before further base allocation or fails closed. Allocation to an active
   application stream or fragmentation across streams is forbidden.
 
-  Both candidate branches require controlled chaff in `ReceivingHeaders`, zero
-  bytes consumed, requested equal to advertised, and no more than the parser
-  ceiling. It must have no terminal status, framing bytes, parser-lease use, or
-  prior/pending parser boundary; its reservation must be wholly available, and
-  its exact known capacity after requested bytes must be at least one cell.
-  Provisional framing claims are ineligible. Every allocation retry recomputes
-  live unconsumed base bytes from prior credit-ledger slots, excluding the
-  continuation slot, and requires the result to be at most 1000. For a positive
-  live value, requested and advertised must be positive and all live
-  outstanding must be coalesced on that one header-blocked stream:
-  advertised-minus-consumed must exactly match the live ledger value. The
-  continuation extends that stream. A zero live value instead requires an
-  untouched stream with requested, advertised, and consumed all zero. Split or
+  The initial priority-aware, largest-eligible chaff selection must yield a
+  known-valid, dependency-free resource of at least 1200 effective bytes whose
+  origin matches a ready request endpoint. The Lab binds the prepared manifest
+  and workload hash and mirrors the initial selector before execution.
+  Same-origin eligibility is ultimately endpoint-relative, so the runtime
+  validates it after connection readiness and fails closed when no qualifying
+  chaff resource exists. If too few acknowledged survivors remain after the
+  positive outgoing targets resolve, base and continuation allocation remain
+  held; no targetless chaff-request retransmission or generic post-loss
+  liveness guarantee is claimed.
+
+  A continuation allocation discharges exactly the oldest reserve once, even
+  if positive live base debt causes the whole cell to extend a different,
+  nonreserved stream. Reserves refresh only for a defense-pending continuation
+  or a tagged continuation still queued for allocation. A retryable
+  unadvertised rollback or requeue reconstitutes the corresponding horizon
+  reserve before further base allocation; a terminal drop-mode close does not
+  claim reconstitution.
+
+  Ordinary base receive allocation exhausts application streams before
+  peer-acknowledged, nonreserved controlled chaff streams; within each class,
+  exact capacity precedes bounded provisional framing claims. Opened but
+  unacknowledged chaff therefore cannot satisfy or advertise ordinary
+  Walkie-Talkie base capacity.
+
+  Both candidate branches require peer-acknowledged controlled chaff in
+  `ReceivingHeaders`, zero bytes consumed, requested equal to advertised, and
+  no more than the parser ceiling. It must have no terminal status, framing
+  bytes, parser-lease use, or prior/pending parser boundary; its reservation
+  must be wholly available, and its exact known capacity after requested bytes
+  must be at least one cell. Provisional framing claims are ineligible. Every
+  allocation retry recomputes live unconsumed base bytes from prior
+  credit-ledger slots, excluding the continuation slot, and requires the result
+  to be at most 1000. For a positive live value, requested and advertised must
+  be positive and all live outstanding must be coalesced on one acknowledged,
+  nonreserved header-blocked stream: advertised-minus-consumed must exactly
+  match the live ledger value. The continuation extends that stream. A zero
+  live value instead uses the corresponding retained acknowledged reserve,
+  still untouched with requested, advertised, and consumed all zero. Split or
   ledger-inconsistent positive outstanding is ineligible.
 
   The first `prior_requested + 1200` raw response bytes on that selected stream
   must be consumable. This is a prepared frozen-cohort and
   reviewed-live-fixture precondition, not a theorem derived by the fitter:
   half-duplex fitting traces observe application streams and do not observe
-  runtime-created chaff prefixes. A violated continuation precondition, like
-  source-envelope overflow, is fail-closed and strictly fidelity-ineligible.
+  chaff preprovisioning, peer acknowledgement, reservation, or runtime-created
+  chaff prefixes. A violated continuation precondition, like source-envelope
+  overflow, is fail-closed and strictly fidelity-ineligible.
   The contract does not rely on application FIN residuals being requeued or
   coalesced. Receipts record both the base pairing cost and the adapted runtime
   padding cost; scheduled bytes are computed from the unchanged numeric adapted

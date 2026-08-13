@@ -43,13 +43,13 @@ PROVENANCE_FILE = "provenance.json"
 EXACT_BUNDLE_FILES = frozenset((*BUNDLE_FILES.values(), PROVENANCE_FILE))
 RESEARCH_PARAMETER_INPUT_POLICY = "sealed-fitting-result-v1"
 RESEARCH_ARTIFACT_STATUS = "fitted-research-artifact"
-FITTER_VERSION = "qcsd_lab.fitting 2.1.1"
+FITTER_VERSION = "qcsd_lab.fitting 2.1.2"
 LEGACY_FITTER_VERSION = "qcsd_lab.fitting 2.0.2"
 EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 ALGORITHM_GENERATORS = {
     "traffic_morphing": "qcsd_lab.fitting_morphing 2.0.0",
     "wtf_pad": "qcsd_lab.fitting_wtfpad 2.0.0",
-    "walkie_talkie": "qcsd_lab.fitting_walkie_talkie 2.1.1",
+    "walkie_talkie": "qcsd_lab.fitting_walkie_talkie 2.1.2",
 }
 LEGACY_ALGORITHM_GENERATORS = {
     **ALGORITHM_GENERATORS,
@@ -316,7 +316,7 @@ def verify_artifact_bundle(root: Path) -> VerifiedArtifactBundle:
         )
     expected_workloads = {record["workload_id"] for record in provenance["sample_contributions"]}
     _validate_artifact_coverage(root, expected_workloads)
-    if contract_version == 4:
+    if contract_version == 5:
         _run_rust_parameter_validator(
             "bundle", root, tuple(provenance["fitting_contract"]["workload_order"])
         )
@@ -369,7 +369,7 @@ def research_parameter_record(
         )
     if expected_kind != "wtf_pad":
         _validate_exact_parameter_coverage(parameter, expected_kind, sealed_workloads)
-    if contract_version == 4:
+    if contract_version == 5:
         _run_rust_parameter_validator(expected_kind, parameter_path, sealed_order)
     return record["sha256"], sha256_file(provenance_path), RESEARCH_PARAMETER_INPUT_POLICY
 
@@ -493,7 +493,7 @@ def _validate_provenance(value: object) -> int:
         expected_fitter = LEGACY_FITTER_VERSION
         expected_schema: object = 2
         observed_schema = contract.get("parameter_schema_version")
-    elif contract_version == 4:
+    elif contract_version == 5:
         contract_keys = {
             "contract_version",
             "fitter_version",
@@ -505,7 +505,7 @@ def _validate_provenance(value: object) -> int:
             "constants",
         }
         expected_fitter = FITTER_VERSION
-        expected_schema = {"traffic_morphing": 2, "walkie_talkie": 4, "wtf_pad": 2}
+        expected_schema = {"traffic_morphing": 2, "walkie_talkie": 5, "wtf_pad": 2}
         observed_schema = contract.get("parameter_schema_versions")
     else:
         raise ValueError("research fitting contract receipt is invalid")
@@ -834,12 +834,12 @@ def _validate_walkie_talkie_receipt(
     value: object,
     workload_order: Sequence[str],
     *,
-    contract_version: int = 4,
+    contract_version: int = 5,
 ) -> None:
     if contract_version == 2:
         _validate_legacy_walkie_talkie_receipt(value, workload_order)
         return
-    if contract_version != 4:
+    if contract_version != 5:
         raise ValueError("unsupported research fitting contract version")
     _validate_current_walkie_talkie_receipt(value, workload_order)
 
@@ -1480,7 +1480,7 @@ def _validate_walkie_talkie_artifact(
     if contract_version == 2:
         _validate_legacy_walkie_talkie_artifact(provenance, parameter)
         return
-    if contract_version != 4:
+    if contract_version != 5:
         raise ValueError("unsupported research fitting contract version")
     _validate_current_walkie_talkie_artifact(provenance, parameter)
 
@@ -1629,7 +1629,7 @@ def _validate_current_walkie_talkie_artifact(
         parameter["adaptation"] != "qcsd-client-only"
         or parameter["burst_definition"] != constants["burst_definition"]
         or parameter["cell_byte_domain"] != constants["cell_byte_domain"]
-        or parameter["schema_version"] != 4
+        or parameter["schema_version"] != 5
         or parameter["matching_algorithm"] != constants["pairing_algorithm"]
         or parameter["paper_equivalent"] is not False
         or parameter["packet_size"] != constants["packet_size"]
@@ -1940,9 +1940,9 @@ def _algorithm_receipt_digest(value: object) -> str:
 def _validate_runtime_parameter(value: object, kind: str, *, contract_version: int) -> None:
     if not isinstance(value, Mapping):
         raise ValueError(f"{kind} parameter artifact must be a JSON object")
-    if contract_version not in {2, 4}:
+    if contract_version not in {2, 5}:
         raise ValueError("unsupported research fitting contract version")
-    expected_schema_version = 4 if kind == "walkie_talkie" and contract_version == 4 else 2
+    expected_schema_version = 5 if kind == "walkie_talkie" and contract_version == 5 else 2
     if (
         value.get("schema_version") != expected_schema_version
         or value.get("adaptation") != "qcsd-client-only"
@@ -1977,11 +1977,11 @@ def _validate_runtime_parameter(value: object, kind: str, *, contract_version: i
 
 def _fitting_contract(workload_order: Sequence[str]) -> dict[str, object]:
     return {
-        "contract_version": 4,
+        "contract_version": 5,
         "fitter_version": FITTER_VERSION,
         "parameter_schema_versions": {
             "traffic_morphing": 2,
-            "walkie_talkie": 4,
+            "walkie_talkie": 5,
             "wtf_pad": 2,
         },
         "profile": "research-1200",
@@ -2149,23 +2149,36 @@ def _fitting_contract(workload_order: Sequence[str]) -> dict[str, object]:
                 "symmetric_mold": "batch-aware-componentwise-max-with-zero-for-missing-pair",
                 "receiver_continuation": (fitting_walkie_talkie.receiver_continuation_contract()),
                 "prepared_receiver_continuation_invariant": {
+                    "action_ordering": (
+                        "provision-to-configured-chaff-stream-limit;encode-zero-required-insert-"
+                        "count-nonblocking-qpack-chaff-header-blocks;transmit-positive-final-size-"
+                        "contiguous-[0,final-size)-plus-fin-under-due-molded-outgoing-actions;peer-"
+                        "acknowledge-contiguous-[0,final-size)-plus-fin;require-current-receiver-"
+                        "continuation-reserve-horizon-plus-one-survivors-before-first-base-"
+                        "allocation;reserve-current-receiver-continuation-horizon;release-"
+                        "continuation-after-base-release"
+                    ),
                     "adapted_target_formula": (
                         "sealed_symmetric_envelope_cells*packet_size+packet_size"
                     ),
                     "allocation_policy": (
-                        "one-whole-packet_size-cell-to-one-pristine-header-phase-controlled-"
-                        "chaff-stream"
+                        "one-whole-packet_size-cell-to-one-peer-acknowledged-pristine-header-"
+                        "phase-controlled-chaff-stream"
                     ),
                     "base_release_condition": (
                         "all-base-events-controller-requested-and-request-signals-observed"
+                    ),
+                    "base_capacity_policy": (
+                        "protected-reserve-exact-capacity-excluded-from-ordinary-base-allocation-"
+                        "and-capacity-availability"
                     ),
                     "batch_end_release_condition": (
                         "application-batch-complete-at-molded-batch-end;otherwise-no-batch-"
                         "completion-gate"
                     ),
                     "chaff_capacity_requirement": (
-                        "selected-pristine-header-phase-controlled-chaff-exact-available-bytes"
-                        ">=packet_size"
+                        "selected-peer-acknowledged-pristine-header-phase-controlled-chaff-exact-"
+                        "available-bytes>=packet_size"
                     ),
                     "claim_policy": "provisional-framing-claims-are-ineligible",
                     "common_header_phase_candidate_definition": (
@@ -2173,15 +2186,15 @@ def _fitting_contract(workload_order: Sequence[str]) -> dict[str, object]:
                         "requested_bytes=advertised_bytes<=parser_allowance_ceiling_bytes;"
                         "reservation_available=reservation_capacity;framing_bytes=0;"
                         "parser_lease_used=0;last_parser_lease_boundary=none;"
-                        "pending_parser_boundary=none"
+                        "pending_parser_boundary=none;qpack_required_insert_count=0;request_final_"
+                        "size>0;wire_activation=contiguous-[0,final_size)-plus-fin-peer-"
+                        "acknowledged"
                     ),
                     "failure_policy": (
                         "source-envelope-overflow-or-continuation-precondition-failure-is-"
                         "fidelity-ineligible"
                     ),
-                    "fitting_input_support": (
-                        "runtime-created-chaff-prefix-is-not-observed-by-fitting-inputs"
-                    ),
+                    "fitting_input_support": "sealed-envelope-and-matching-statistics-only",
                     "live_component_bound": (
                         "source_raw_bytes<=sealed_symmetric_envelope_cells*packet_size"
                     ),
@@ -2189,8 +2202,9 @@ def _fitting_contract(workload_order: Sequence[str]) -> dict[str, object]:
                         "live-unconsumed-base-bytes<=parser_allowance_ceiling_bytes"
                     ),
                     "positive_outstanding_selection": (
-                        "require-all-live-unconsumed-base-bytes-coalesced-on-one-pristine-header-"
-                        "phase-chaff-whose-advertised-minus-consumed-exactly-equals-live"
+                        "require-all-live-unconsumed-base-bytes-coalesced-on-one-peer-"
+                        "acknowledged-nonreserved-pristine-header-phase-chaff-whose-advertised-"
+                        "minus-consumed-exactly-equals-live"
                     ),
                     "prefix_consumability_precondition": (
                         "selected-stream-first-(prior_requested_bytes+packet_size)-raw-response-"
@@ -2203,13 +2217,86 @@ def _fitting_contract(workload_order: Sequence[str]) -> dict[str, object]:
                         "recompute-live-unconsumed-base-bytes-from-prior-credit-ledger-on-every-"
                         "retry-excluding-continuation-slot"
                     ),
+                    "request_retransmission_deduplication": (
+                        "union-peer-acknowledged-request-stream-offset-ranges;duplicate-"
+                        "acknowledged-offsets-do-not-advance-activation"
+                    ),
+                    "reserve_horizon_capacity_requirement": (
+                        "maximum_reserve_horizon+1<=configured_chaff_stream_limit"
+                    ),
+                    "request_prefix_fit_requirement": (
+                        "required-preprovisioned-chaff-request-stream-frames-through-fin-fit-"
+                        "within-residual-normal-priority-stream-data-budget-after-higher-priority-"
+                        "due-application-stream-frames-at-each-positive-outgoing-horizon-start"
+                    ),
+                    "request_activation_policy": (
+                        "zero-required-insert-count-nonblocking-qpack-chaff-header-block;positive-"
+                        "final-size-with-contiguous-unique-request-stream-offsets-[0,final-size)-"
+                        "and-fin-peer-acknowledged-under-molded-outgoing-cells"
+                    ),
+                    "causal_capacity_precondition": (
+                        "first-molded-component-outgoing>0;max_chaff_streams>=maximum-receiver-"
+                        "continuation-reserve-horizon+1;required-preprovisioned-chaff-request-"
+                        "stream-frames-through-fin-fit-within-residual-normal-priority-stream-data-"
+                        "budget-after-higher-priority-due-application-stream-frames-at-each-"
+                        "positive-outgoing-horizon-start"
+                    ),
+                    "request_prefix_delivery_precondition": (
+                        "before-each-incoming-component-first-base-allocation-peer-acknowledged-"
+                        "nonblocking-chaff-request-survivors>=current-receiver-continuation-"
+                        "reserve-horizon+1"
+                    ),
+                    "post_outgoing_loss_liveness_limitation": (
+                        "insufficient-peer-acknowledged-survivors-after-positive-outgoing-targets-"
+                        "resolve-hold-base-and-continuation-allocation;no-targetless-chaff-stream-"
+                        "retransmission-or-generic-loss-liveness-guarantee"
+                    ),
+                    "reserve_horizon_count_formula": (
+                        "count-nonzero-incoming-components-in-reserve-horizon"
+                    ),
+                    "reserve_horizon_definition": (
+                        "current-nonzero-incoming-component-plus-consecutive-nonzero-incoming-"
+                        "components-before-next-positive-outgoing-component"
+                    ),
+                    "reserve_lifetime": (
+                        "exclude-each-reserved-candidate-from-base-allocation-until-corresponding-"
+                        "continuation-release-or-session-or-endpoint-end"
+                    ),
+                    "reserve_discharge_policy": (
+                        "remove-exactly-first-reserve-once-at-corresponding-continuation-"
+                        "controller-allocation-even-when-positive-live-debt-releases-on-"
+                        "nonreserved-stream"
+                    ),
+                    "reserve_loss_policy": (
+                        "endpoint-or-stream-loss-before-release-requires-equivalent-acknowledged-"
+                        "pristine-replacement-before-further-base-allocation-or-fails-closed"
+                    ),
+                    "reserve_refresh_policy": (
+                        "refresh-only-for-defense-pending-continuation-or-tagged-continuation-"
+                        "still-queued-for-allocation"
+                    ),
+                    "reserve_rollback_policy": (
+                        "retryable-unadvertised-continuation-allocation-rollback-or-requeue-"
+                        "reconstitutes-corresponding-horizon-reserve-before-further-base-"
+                        "allocation"
+                    ),
+                    "runtime_not_fitting_observed": (
+                        "provisioning-peer-acknowledgement-reservation-and-runtime-created-chaff-"
+                        "prefix"
+                    ),
+                    "resource_precondition": (
+                        "initial-chaff-selection-yields-known-valid-dependency-free-same-origin-"
+                        "resource-with-effective-length>=raw-headroom-bytes-per-nonzero-incoming-"
+                        "component"
+                    ),
+                    "initial_mold_causal_requirement": ("first-molded-component-outgoing>0"),
                     "scope": (
                         "prepared-frozen-research-cohort-and-reviewed-live-fixture-under-listed-"
                         "preconditions"
                     ),
                     "zero_outstanding_selection": (
-                        "when-live-unconsumed-base-is-zero-require-untouched-pristine-header-"
-                        "phase-chaff-with-requested_bytes=0"
+                        "when-live-unconsumed-base-is-zero-use-corresponding-retained-peer-"
+                        "acknowledged-reserved-pristine-header-phase-chaff-with-requested_bytes=0"
                     ),
                 },
                 "runtime_mold": ("receiver-continuation-adaptation(symmetric-mold(real,decoy))"),

@@ -26,6 +26,7 @@ from .experiment import (
 from .fidelity import _schedule_realization_metrics, fidelity_eligible
 from .manifest import (
     canonical_bytes,
+    https_origin,
     runtime_manifest,
     validate_manifest,
     validate_research_preparation,
@@ -72,6 +73,7 @@ LIMIT_KEYS = {
 }
 DEFENSE_KEYS = {"name", "kind", "schedule", "mode", "parameters"}
 EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+WALKIE_TALKIE_RECEIVER_RAW_HEADROOM_BYTES = 1_200
 FITTING_LIMITS = capture_engine.Limits(
     timeout_seconds=120,
     max_response_bytes=1024 * 1024,
@@ -231,6 +233,8 @@ def _load_campaign(
         frozen_inputs=frozen_inputs,
         allow_historical_research_bundle=allow_historical_research_bundle,
     )
+    if any(_uses_schema_five_walkie_talkie(defense) for defense in defenses):
+        _validate_walkie_talkie_resource_preconditions(workloads)
     raw_limits = value.get("limits", {})
     limits = _load_limits(raw_limits)
     name = value["name"]
@@ -251,6 +255,101 @@ def _load_campaign(
     if purpose == "fitting":
         _validate_fitting_campaign(campaign, raw_limits=raw_limits)
     return campaign
+
+
+def _uses_schema_five_walkie_talkie(defense: capture_engine.Defense) -> bool:
+    """Limit new runtime prerequisites to the current, runnable WT contract."""
+
+    if defense.kind != "walkie_talkie":
+        return False
+    if defense.parameters_path is None:
+        raise ValueError("walkie_talkie defense has no resolved parameter artifact")
+    parameter = load_json(defense.parameters_path)
+    return isinstance(parameter, Mapping) and parameter.get("schema_version") == 5
+
+
+def _validate_walkie_talkie_resource_preconditions(
+    workloads: tuple[Workload, ...],
+) -> None:
+    """Reject manifests that cannot provision the schema-five reserve horizon."""
+
+    for workload in workloads:
+        manifest = runtime_manifest(workload.data)
+        _validate_walkie_talkie_resource_precondition(
+            manifest,
+            workload_id=workload.id,
+            endpoint_origins=set(capture_engine._manifest_origins(manifest)),
+        )
+
+
+def _validate_walkie_talkie_resource_precondition(
+    manifest: Mapping[str, Any],
+    *,
+    workload_id: str,
+    endpoint_origins: set[str],
+) -> None:
+    """Mirror the initial chaff selector and require one full continuation cell."""
+
+    resources = manifest.get("resources")
+    eligible: list[Mapping[str, Any]] = (
+        [
+            resource
+            for resource in resources
+            if isinstance(resource, Mapping)
+            and resource.get("known_valid") is True
+            and resource.get("depends_on", []) == []
+            and _manifest_resource_effective_length(resource) > 0
+            and https_origin(str(resource.get("url", ""))) in endpoint_origins
+        ]
+        if isinstance(resources, list)
+        else []
+    )
+    priority_only = any(resource.get("chaff_priority") is True for resource in eligible)
+    candidates = [
+        resource
+        for resource in eligible
+        if not priority_only or resource.get("chaff_priority") is True
+    ]
+    selected = (
+        max(
+            candidates,
+            key=lambda resource: (
+                _manifest_resource_effective_length(resource),
+                _manifest_resource_type_rank(resource),
+                int(resource.get("id", 0)),
+            ),
+        )
+        if candidates
+        else None
+    )
+    if (
+        selected is None
+        or _manifest_resource_effective_length(selected) < WALKIE_TALKIE_RECEIVER_RAW_HEADROOM_BYTES
+    ):
+        raise ValueError(
+            f"walkie_talkie workload {workload_id!r} initial chaff selection must yield a "
+            "known-valid, dependency-free resource matching a request endpoint origin with "
+            f"effective length at least {WALKIE_TALKIE_RECEIVER_RAW_HEADROOM_BYTES} bytes"
+        )
+
+
+def _manifest_resource_effective_length(resource: Mapping[str, Any]) -> int:
+    """Mirror Neqo's Resource::effective_length for a validated manifest resource."""
+
+    content_length = resource.get("content_length")
+    content = 1 if content_length is None else int(content_length)
+    return max(content, int(resource.get("data_length", 0)))
+
+
+def _manifest_resource_type_rank(resource: Mapping[str, Any]) -> int:
+    """Mirror Neqo's final deterministic tie-break after effective length."""
+
+    kind = resource.get("type")
+    if kind == "Image":
+        return 4
+    if kind in {"Font", "Stylesheet", "Script"}:
+        return 3
+    return 2 if kind == "Document" else 1
 
 
 def _validate_fitting_campaign(campaign: Campaign, *, raw_limits: Any) -> None:

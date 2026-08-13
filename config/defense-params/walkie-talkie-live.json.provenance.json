@@ -3,7 +3,7 @@
   "defense_kind": "walkie_talkie",
   "parameter_file": {
     "path": "walkie-talkie-live.json",
-    "sha256": "37f8d368af173268afd063df894c8cd9b7949a6c68e54a86a07eff3ea6c8845b"
+    "sha256": "dbb050654ae87f2006fcdc39409dc41ca3f4988d6089bb4c3623119adecfc6c4"
   },
   "production_ready": false,
   "qcsd_profile": "live",

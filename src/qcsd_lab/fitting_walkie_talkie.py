@@ -8,7 +8,7 @@ from typing import Mapping, Sequence
 from .fitting_trace import FittingTrace
 
 
-GENERATED_BY = "qcsd_lab.fitting_walkie_talkie 2.1.1"
+GENERATED_BY = "qcsd_lab.fitting_walkie_talkie 2.1.2"
 PACKET_SIZE = 1_200
 PARSER_ALLOWANCE_CEILING_BYTES = 1_000
 RECEIVER_CONTINUATION_CELLS = 1
@@ -141,7 +141,7 @@ def fit_walkie_talkie(
         "adaptation": "qcsd-client-only",
         "burst_definition": BURST_DEFINITION,
         "cell_byte_domain": CELL_BYTE_DOMAIN,
-        "schema_version": 4,
+        "schema_version": 5,
         "generated_by": GENERATED_BY,
         "matching_algorithm": "minimum-base-symmetric-mold-padding-cost-one-to-one",
         "paper_equivalent": False,
@@ -378,23 +378,70 @@ def receiver_continuation_contract() -> dict[str, object]:
     if raw_headroom <= PARSER_ALLOWANCE_CEILING_BYTES:
         raise AssertionError("Walkie-Talkie continuation must exceed the parser allowance")
     return {
-        "allocation_policy": "single-pristine-header-phase-controlled-chaff-stream-whole-cell",
+        "allocation_policy": (
+            "single-peer-acknowledged-pristine-header-phase-controlled-chaff-stream-whole-cell"
+        ),
         "application_order": "after-symmetric-elementwise-mold",
         "batch_end_release_policy": (
             "at-molded-batch-end-after-application-batch-complete-otherwise-no-batch-gate"
         ),
+        "base_allocation_policy": (
+            "application-streams-before-peer-acknowledged-nonreserved-controlled-chaff-streams;"
+            "exact-capacity-before-bounded-framing-claims"
+        ),
+        "causal_capacity_precondition": (
+            "first-molded-component-outgoing>0;max_chaff_streams>=maximum-receiver-continuation-"
+            "reserve-horizon+1;required-preprovisioned-chaff-request-stream-frames-through-fin-"
+            "fit-within-residual-normal-priority-stream-data-budget-after-higher-priority-due-"
+            "application-stream-frames-at-each-positive-outgoing-horizon-start"
+        ),
         "cells_per_nonzero_incoming_component": RECEIVER_CONTINUATION_CELLS,
         "formula": ("adapted_incoming=symmetric_incoming+1-if-symmetric_incoming>0-else-0"),
         "parser_allowance_ceiling_bytes": PARSER_ALLOWANCE_CEILING_BYTES,
+        "post_outgoing_loss_liveness_limitation": (
+            "insufficient-peer-acknowledged-survivors-after-positive-outgoing-targets-resolve-"
+            "hold-base-and-continuation-allocation;no-targetless-chaff-stream-retransmission-or-"
+            "generic-loss-liveness-guarantee"
+        ),
         "prefix_consumability_precondition": (
             "prepared-selected-pristine-first-prior-requested-plus-raw-headroom-bytes-are-"
             "consumable"
         ),
+        "provisioning_policy": (
+            "fill-configured-chaff-stream-limit-before-due-molded-outgoing-actions"
+        ),
         "raw_headroom_bytes_per_nonzero_incoming_component": raw_headroom,
         "release_policy": (
-            "after-all-base-events-controller-requested-and-request-signals-observed;recompute-"
-            "live-unconsumed-base-each-retry;extend-single-coalesced-positive-outstanding-header-"
-            "blocked-stream-else-fresh-stream;outstanding-at-or-below-parser-ceiling"
+            "after-all-base-events-controller-requested-and-request-signals-observed;reserve-"
+            "deterministic-peer-acknowledged-pristine-candidates-for-current-zero-outgoing-"
+            "continuation-horizon-before-first-base-allocation-and-retain-each-until-"
+            "corresponding-continuation-release-or-session-end;recompute-live-unconsumed-base-"
+            "each-retry;extend-single-coalesced-positive-outstanding-header-blocked-stream-else-"
+            "reserved-peer-acknowledged-stream;outstanding-at-or-below-parser-ceiling"
+        ),
+        "request_activation_policy": (
+            "zero-required-insert-count-nonblocking-qpack-chaff-header-block;positive-final-size-"
+            "with-contiguous-unique-request-stream-offsets-[0,final-size)-and-fin-peer-"
+            "acknowledged-under-molded-outgoing-cells"
+        ),
+        "request_prefix_delivery_precondition": (
+            "before-each-incoming-component-first-base-allocation-peer-acknowledged-nonblocking-"
+            "chaff-request-survivors>=current-receiver-continuation-reserve-horizon+1"
+        ),
+        "resource_precondition": (
+            "initial-chaff-selection-yields-known-valid-dependency-free-same-origin-resource-"
+            "with-effective-length>=raw-headroom-bytes-per-nonzero-incoming-component"
+        ),
+        "reserve_policy": (
+            "reserve-deterministic-acknowledged-pristine-candidates-for-current-zero-outgoing-"
+            "continuation-horizon-before-first-base-allocation-of-each-nonzero-incoming-component"
+        ),
+        "reserve_lifecycle_policy": (
+            "remove-exactly-first-reserve-once-at-corresponding-continuation-controller-"
+            "allocation-even-when-positive-live-debt-releases-on-nonreserved-stream;refresh-only-"
+            "for-defense-pending-continuation-or-tagged-continuation-still-queued-for-allocation;"
+            "retryable-unadvertised-continuation-allocation-rollback-or-requeue-reconstitutes-"
+            "corresponding-horizon-reserve-before-further-base-allocation"
         ),
     }
 
