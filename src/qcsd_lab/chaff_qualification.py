@@ -230,7 +230,10 @@ PREFIX_RECEIPT_KEYS = {
     "packet_log_sha256",
     "packets",
     "post_slot_pending_stream_send",
-    "post_slot_pending_required_stream_send",
+    "post_slot_pending_required_prefix_stream_send",
+    "qpack_decoder_stream_id",
+    "qpack_decoder_handler_pending",
+    "qpack_decoder_transport_pending",
     "allowed_pending_late_chaff_request_orders",
     "allowed_pending_late_chaff_stream_ids",
     "targetless_stream_bytes",
@@ -1695,6 +1698,7 @@ def _validate_prefix_receipt(
                 "connection_count",
                 "packet_cutoff_sequence",
                 "requests_opened_before_first_target",
+                "qpack_decoder_stream_id",
                 "targetless_stream_bytes",
                 "started_unix_ns",
                 "ended_unix_ns",
@@ -1706,7 +1710,14 @@ def _validate_prefix_receipt(
         or receipt["warmup_stream_output_drained"] is not True
         or receipt["requests_opened_before_first_target"] != 6
         or type(receipt["post_slot_pending_stream_send"]) is not bool
-        or receipt["post_slot_pending_required_stream_send"] is not False
+        or receipt["post_slot_pending_required_prefix_stream_send"] is not False
+        or receipt["qpack_decoder_stream_id"] != 10
+        or type(receipt["qpack_decoder_handler_pending"]) is not bool
+        or type(receipt["qpack_decoder_transport_pending"]) is not bool
+        or (
+            (receipt["qpack_decoder_handler_pending"] or receipt["qpack_decoder_transport_pending"])
+            and receipt["post_slot_pending_stream_send"] is not True
+        )
         or receipt["targetless_stream_bytes"] != 0
         or receipt["completion_status"] != "complete"
         or receipt["error"] is not None

@@ -27,8 +27,11 @@ production request-stream size. Three independent production prefix-pack runs
 then prove the first 1200-byte cell can carry the full application request and
 the required continuation-horizon-plus-one compact chaff requests through FIN,
 with the required chaff requests peer-acknowledged and no targetless STREAM
-bytes. Runtime complete
-responses must match the qualified identity; contradictions fail closed.
+bytes. The post-target completion predicate still gates required request,
+HTTP/3-control, and QPACK-encoder output; it records and excludes only
+post-warmup client QPACK-decoder stream output because that fixed critical-
+stream role is outside request-prefix causality. Runtime complete responses
+must match the qualified identity; contradictions fail closed.
 
 The bundle that occupied the canonical directory before schema 6 is archived
 at `artifacts/research-1200-superseded-schema5-0a141768/`. This frozen

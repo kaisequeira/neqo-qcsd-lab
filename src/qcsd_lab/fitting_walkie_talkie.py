@@ -395,8 +395,10 @@ def receiver_continuation_contract() -> dict[str, object]:
             "compact-chaff-requests-before-exactly-one-1200-byte-molded-packet-target;all-post-"
             "cutoff-stream-transmissions-owned-by-sole-target;application-and-maximum-receiver-"
             "continuation-reserve-horizon+1-chaff-request-streams-contiguous-through-fin;required-"
-            "chaff-peer-acknowledged-through-fin;no-pending-application-required-chaff-or-h3-qpack-"
-            "stream-output;zero-targetless-stream-bytes"
+            "chaff-peer-acknowledged-through-fin;no-pending-application-or-required-chaff-request-"
+            "stream-output;no-pending-request-causal-h3-control-or-qpack-encoder-stream-output;"
+            "post-warmup-qpack-decoder-stream-output-recorded-and-excluded;zero-targetless-stream-"
+            "bytes"
         ),
         "qualification_binding_policy": (
             "raw-sha256-per-workload-binds-chaff-qualification-sidecar-prefix-pack-spec-and-"

@@ -267,7 +267,10 @@ def _prefix_receipt(
         "packet_log_sha256": _packet_log(observations),
         "packets": _statistics(observations),
         "post_slot_pending_stream_send": True,
-        "post_slot_pending_required_stream_send": False,
+        "post_slot_pending_required_prefix_stream_send": False,
+        "qpack_decoder_stream_id": 10,
+        "qpack_decoder_handler_pending": False,
+        "qpack_decoder_transport_pending": True,
         "allowed_pending_late_chaff_request_orders": list(range(required + 1, 6)),
         "allowed_pending_late_chaff_stream_ids": [order * 4 for order in range(required + 1, 6)],
         "targetless_stream_bytes": 0,
@@ -1087,6 +1090,10 @@ def test_batch_qualification_rechecks_all_inputs_before_publication(
         (
             lambda receipt: receipt["stream_transmissions"][0].update({"slot": None}),
             "targetless STREAM",
+        ),
+        (
+            lambda receipt: receipt.update({"qpack_decoder_stream_id": 6}),
+            "receipt binding",
         ),
     ],
 )

@@ -82,6 +82,13 @@ atomic rename can leave a complete canonical directory that requires explicit
 audit. It requires the exact clean Lab/Neqo checkout and executable
 embedded in the preparation image and does not use fitting or campaign samples.
 
+The prefix proof broadly drains HTTP/3/QPACK output before its transcript
+cutoff. After the sole shaped target, application and required-chaff request
+output, HTTP/3 control output, and QPACK encoder output must all be empty.
+Post-warmup client QPACK decoder-stream output is recorded but excluded from
+that completion predicate because this fixed critical-stream role is not a
+dependency of the already transmitted request prefix.
+
 ### `run`
 
 ```shell

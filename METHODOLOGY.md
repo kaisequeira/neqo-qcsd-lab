@@ -325,9 +325,16 @@ boundary and that closure marker, and later tail observations remain excluded.
   independent production prefix-pack transcripts that prove the outgoing
   application/request-control fit and required compact chaff requests through
   FIN and chaff peer acknowledgement for the exact mould and reserve horizon;
-  those qualification bytes are excluded from fitting. Each reserve is
-  excluded from ordinary base allocation, and its
-  exact capacity is subtracted from ordinary base capacity availability, until
+  those qualification bytes are excluded from fitting.
+
+  The prefix transcript starts only after a broad HTTP/3/QPACK warmup drain.
+  Its completion gate continues to reject pending application, required-chaff,
+  HTTP/3-control, or QPACK-encoder output. It separately records and excludes
+  only post-warmup client QPACK-decoder stream output; this fixed critical-
+  stream role is outside request-prefix causality.
+
+  Each reserve is excluded from ordinary base allocation, and its exact
+  capacity is subtracted from ordinary base capacity availability, until
   its corresponding continuation is released or the session or endpoint ends.
   Loss before release requires an equivalent acknowledged pristine replacement
   before further base allocation or fails closed. Allocation to an active
