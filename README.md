@@ -278,6 +278,23 @@ validates these files, their defence/profile binding, and their hashes before
 a network run, then freezes copies under `inputs/`. Reviewed engineering
 fixtures are permitted only for a `smoke` campaign; an evaluation campaign
 requires sealed fitted artifacts.
+The fitted Walkie-Talkie source envelopes remain in the raw HTTP/3
+request-stream cell domain. Pairing minimizes the base symmetric
+element-wise-mould padding cost; the runtime mould then adds one 1200-byte
+incoming cell to every nonzero incoming component. That explicit adaptation
+provides more headroom than the configured 1000-byte parser allowance. If a
+live raw component remains within its sealed envelope, at least one full cell
+remains after all application streams contributing to that component finish;
+their cumulative FIN-returned residual requeues within the same incoming turn.
+For the prepared cohort, the liveness argument additionally
+assumes each active application's raw request-stream bytes are no greater
+than its projected stable body bytes plus `max_stream_data_excess`, an
+eligible chaff response has at least one cell of projected stable body
+capacity, and pristine HEADERS do not exceed the parser ceiling. Stable
+app-first allocation then coalesces FIN-returned slot fragments as contiguous
+receive credit on the first eligible chaff stream. Source-envelope overflow
+fails the strict fidelity gate. Both reported runtime padding cost and
+scheduled bytes include the added receiver-continuation cells.
 FRONT and Tamaraw are generated from the selected QCSD profile and therefore
 do not have external fitted files.
 

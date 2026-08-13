@@ -146,6 +146,49 @@ def test_receipt_tamper_and_runtime_shape_are_rejected(tmp_path, monkeypatch):
         validate_parameter_artifact(parameter, allow_reviewed_fixture=True)
 
 
+def test_walkie_talkie_schema_three_requires_exact_receiver_continuation() -> None:
+    value = json.loads((FIXTURES / "walkie-talkie-live.json").read_text(encoding="utf-8"))
+    value.update(
+        {
+            "schema_version": 3,
+            "matching_algorithm": "minimum-base-symmetric-mold-padding-cost-one-to-one",
+            "receiver_continuation": dict(parameters._WALKIE_TALKIE_RECEIVER_CONTINUATION),
+        }
+    )
+    parameters._validate_runtime_shape(
+        value,
+        "walkie_talkie",
+        1_200,
+        Path("walkie-talkie.json"),
+        expected_schema_version=3,
+    )
+
+    for mutation in ("missing", "changed"):
+        changed = json.loads(json.dumps(value))
+        if mutation == "missing":
+            del changed["receiver_continuation"]
+        else:
+            changed["receiver_continuation"]["cells_per_nonzero_incoming_component"] = 2
+        with pytest.raises(ValueError, match="runtime shape"):
+            parameters._validate_runtime_shape(
+                changed,
+                "walkie_talkie",
+                1_200,
+                Path("walkie-talkie.json"),
+                expected_schema_version=3,
+            )
+
+    legacy = json.loads((FIXTURES / "walkie-talkie-live.json").read_text(encoding="utf-8"))
+    legacy["receiver_continuation"] = dict(parameters._WALKIE_TALKIE_RECEIVER_CONTINUATION)
+    with pytest.raises(ValueError, match="runtime shape"):
+        parameters._validate_runtime_shape(
+            legacy,
+            "walkie_talkie",
+            1_200,
+            Path("walkie-talkie-live.json"),
+        )
+
+
 def test_research_1200_receipt_rejects_a_1201_byte_parameter_artifact(tmp_path, monkeypatch):
     parameter, provenance = _copy_fixture(tmp_path, monkeypatch, "walkie-talkie-live.json")
     receipt = json.loads(provenance.read_text(encoding="utf-8"))

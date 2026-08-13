@@ -293,8 +293,30 @@ boundary and that closure marker, and later tail observations remain excluded.
   their component-wise maximum is that workload's envelope. Duplicate visits
   or training-input hashes are rejected. The fitter evaluates every workload
   pair and performs a full-cohort minimum-weight perfect matching by mould
-  padding cost, with the lexical pair vector resolving an exact tie; each
-  selected mould is the component-wise maximum of its two envelopes.
+  padding cost, with the lexical pair vector resolving an exact tie. That
+  pairing objective is the base symmetric mould: the component-wise maximum of
+  the two observed envelopes. The runtime mould then adds exactly one incoming
+  1200-byte receiver-continuation cell to every nonzero incoming component.
+  This leaves the raw request-stream source envelopes unchanged while providing
+  1200 bytes of headroom beyond each incoming envelope component for the
+  configured parser allowance, whose maximum is 1000 bytes. More precisely, if
+  a live component's raw extent `R` remains within its sealed symmetric
+  envelope of `E` cells, the adapted target `T = E*1200 + 1200` leaves
+  `T - R >= 1200` scheduled raw bytes after all application streams
+  contributing to the component finish. Their cumulative FIN-returned residual
+  requeues within the same incoming turn even if the initial allocation went
+  wholly to application streams. Under the prepared-cohort
+  assumptions that each active application's raw request-stream bytes are at
+  most its projected stable body bytes plus `max_stream_data_excess`, the
+  selected chaff response has at least one cell of projected stable body
+  capacity, and its pristine HEADERS bootstrap is at most the 1000-byte parser
+  ceiling, deterministic stable app-first allocation coalesces FIN-returned
+  slot fragments as contiguous receive credit on the first eligible chaff
+  stream. Source-envelope overflow remains strictly fidelity-ineligible. This
+  is a conditional prepared-cohort invariant, not a claim about arbitrary
+  unprepared resources. Receipts record both the base pairing cost and the
+  adapted runtime padding cost; scheduled bytes are computed from the adapted
+  mould.
 
 These are deterministic, client-only QCSD adaptations, and every artifact says
 `paper_equivalent: false`. Traffic Morphing cannot move mass to a smaller

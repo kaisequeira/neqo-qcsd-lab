@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 import qcsd_lab.orchestrator as orchestrator
+import qcsd_lab.verification as verification
 from qcsd_lab.experiment import (
     accept_sample,
     checkpoint_experiment,
@@ -164,6 +165,37 @@ def test_bad_resume_fingerprint_preserves_verified_seal(tmp_path):
     assert verify_result(root).experiment == experiment
 
 
+def test_historical_read_only_contract_rejection_preserves_verified_seal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, experiment = _make_result(tmp_path)
+    seal_result(root)
+    before_seal = (root / "evidence.sha256").read_bytes()
+    before_experiment = (root / "experiment.json").read_bytes()
+    original = verification._validate_frozen_contract
+
+    def historical_only(
+        candidate_root: Path,
+        candidate_experiment: dict,
+        *,
+        allow_historical_research_bundle: bool,
+    ) -> None:
+        if not allow_historical_research_bundle:
+            raise ValueError("legacy bundle is frozen historical evidence only")
+        original(
+            candidate_root,
+            candidate_experiment,
+            allow_historical_research_bundle=True,
+        )
+
+    monkeypatch.setattr(verification, "_validate_frozen_contract", historical_only)
+    assert verify_result(root).experiment == experiment
+    with pytest.raises(ValueError, match="frozen historical evidence"):
+        prepare_resume(root)
+    assert (root / "evidence.sha256").read_bytes() == before_seal
+    assert (root / "experiment.json").read_bytes() == before_experiment
+
+
 def test_incomplete_seal_can_be_retired_resumed_and_resealed(tmp_path):
     root, experiment = _make_result(tmp_path)
     original_artifacts = dict(experiment["samples"][0]["artifacts"])
@@ -240,28 +272,28 @@ def test_verify_rejects_consistently_resealed_mutable_configuration(tmp_path: Pa
 def test_unsealed_resume_marks_stale_attempt_interrupted(tmp_path):
     root = tmp_path / "results/smoke/run-001"
     inputs = root / "inputs"
-    inputs.mkdir(parents=True)
+    (inputs / "workloads").mkdir(parents=True)
+    atomic_text(
+        inputs / "workloads/site.json",
+        '{"resources":[{"id":0,"url":"https://site.test/","type":"Document",'
+        '"content_length":64,"data_length":64,"chaff_priority":true,'
+        '"known_valid":true,"depends_on":[],"headers":[]}]}\n',
+    )
     campaign = inputs / "campaign.yml"
-    atomic_text(campaign, "schema: 1\n")
-    configuration = {
-        "campaign_sha256": sha256_file(campaign),
-        "profile": "live",
-        "request_policies": ["as-defined"],
-        "workloads": [{"id": "site"}],
-        "defenses": [{"name": "undefended"}],
-        "limits": {"max_attempts": 3},
-    }
-    sample = {
-        "sample_id": "site-as-defined-000-undefended",
-        "workload_id": "site",
-        "request_policy": "as-defined",
-        "visit": 0,
-        "defense": "undefended",
-        "runtime_kind": "none",
-        "baseline": True,
-        "seed": 1,
-        "path": "samples/site/as-defined/visit-000/undefended",
-    }
+    atomic_text(
+        campaign,
+        "schema: 1\n"
+        "name: smoke\n"
+        "purpose: smoke\n"
+        "seed: 41\n"
+        "profile: live\n"
+        "workloads:\n  site: 1\n"
+        "request_policies:\n  - as-defined\n"
+        "defenses:\n  - undefended\n",
+    )
+    frozen_campaign = orchestrator._campaign_from_frozen_inputs(root)
+    configuration = orchestrator._frozen_configuration(root, frozen_campaign)
+    [sample] = orchestrator.plan_campaign(frozen_campaign)
     experiment = initialize_experiment(
         root,
         name="smoke",

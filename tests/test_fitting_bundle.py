@@ -26,7 +26,10 @@ from qcsd_lab.fitting import (
     verify_artifact_bundle,
 )
 from qcsd_lab.fitting_trace import _read_observations, load_fitting_trace
-from qcsd_lab.parameters import validate_parameter_artifact
+from qcsd_lab.parameters import (
+    validate_frozen_parameter_artifact,
+    validate_parameter_artifact,
+)
 from qcsd_lab.util import atomic_json, atomic_text, sha256_file
 from qcsd_lab.verification import seal_result, verify_result
 
@@ -679,6 +682,62 @@ def fitted_bundle(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return fit_result(result, artifacts_root=base / "artifacts")
 
 
+def _legacy_bundle_from_current(source: Path, destination: Path) -> Path:
+    """Re-encode a fitted synthetic cohort using the exact frozen v2 contract."""
+
+    shutil.copytree(source, destination)
+    provenance_path = destination / "provenance.json"
+    walkie_path = destination / "walkie-talkie.json"
+    provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+    walkie = json.loads(walkie_path.read_text(encoding="utf-8"))
+    current_algorithm = provenance["algorithms"]["walkie_talkie"]
+    legacy_algorithm = {
+        "algorithm": current_algorithm["algorithm"],
+        "candidate_pair_costs": [
+            {
+                "left": item["left"],
+                "right": item["right"],
+                "matching_cost_packets": item["base_matching_cost_packets"],
+            }
+            for item in current_algorithm["candidate_pair_costs"]
+        ],
+        "selected_pairs": [
+            {
+                "real": item["real"],
+                "decoy": item["decoy"],
+                "matching_cost_packets": item["base_matching_cost_packets"],
+            }
+            for item in current_algorithm["selected_pairs"]
+        ],
+        "training_visits": current_algorithm["training_visits"],
+    }
+    selected_cost = {
+        (item["real"], item["decoy"]): item["matching_cost_packets"]
+        for item in legacy_algorithm["selected_pairs"]
+    }
+    for profile in walkie["profiles"]:
+        for burst in profile["bursts"]:
+            if burst["incoming"] > 0:
+                burst["incoming"] -= 1
+        profile["matching_cost_packets"] = selected_cost[(profile["real"], profile["decoy"])]
+        profile["total_scheduled_bytes"] = 1_200 * sum(
+            burst["outgoing"] + burst["incoming"] for burst in profile["bursts"]
+        )
+    walkie["schema_version"] = 2
+    walkie["matching_algorithm"] = "minimum-cost-one-to-one"
+    walkie.pop("receiver_continuation")
+    walkie["generated_by"] = (
+        "qcsd_lab.fitting_walkie_talkie 2.0.1; algorithm_receipt_sha256="
+        f"{fitting_module._algorithm_receipt_digest(legacy_algorithm)}"
+    )
+    atomic_json(walkie_path, walkie)
+    provenance["fitting_contract"] = fitting_module._legacy_fitting_contract(WORKLOADS)
+    provenance["algorithms"]["walkie_talkie"] = legacy_algorithm
+    provenance["artifacts"]["walkie_talkie"]["sha256"] = sha256_file(walkie_path)
+    atomic_json(provenance_path, provenance)
+    return destination
+
+
 def test_fit_builds_exact_deterministic_bundle_without_mutating_source(tmp_path: Path) -> None:
     result = _make_fitting_result(tmp_path / "source")
     before_experiment = (result / "experiment.json").read_bytes()
@@ -702,7 +761,12 @@ def test_fit_builds_exact_deterministic_bundle_without_mutating_source(tmp_path:
     receipt_text = (first / "provenance.json").read_text(encoding="utf-8")
     receipt = json.loads(receipt_text)
     assert receipt["fitting_contract"]["workload_order"] == list(WORKLOADS)
-    assert receipt["fitting_contract"]["fitter_version"] == "qcsd_lab.fitting 2.0.2"
+    assert receipt["fitting_contract"]["fitter_version"] == "qcsd_lab.fitting 2.1.0"
+    assert receipt["fitting_contract"]["parameter_schema_versions"] == {
+        "traffic_morphing": 2,
+        "walkie_talkie": 3,
+        "wtf_pad": 2,
+    }
     assert receipt["fitting_contract"]["constants"]["extractor"]["production_sequence"] == (
         "unique-contiguous-zero-based-set"
     )
@@ -724,8 +788,17 @@ def test_fit_builds_exact_deterministic_bundle_without_mutating_source(tmp_path:
         "sum-positive-raw-BytesRead-per-batch"
     )
     walkie = json.loads((first / "walkie-talkie.json").read_text(encoding="utf-8"))
+    assert walkie["schema_version"] == 3
+    assert walkie["matching_algorithm"] == "minimum-base-symmetric-mold-padding-cost-one-to-one"
+    assert walkie["receiver_continuation"] == {
+        "application_order": "after-symmetric-elementwise-mold",
+        "cells_per_nonzero_incoming_component": 1,
+        "formula": "adapted_incoming=symmetric_incoming+1-if-symmetric_incoming>0-else-0",
+        "parser_allowance_ceiling_bytes": 1_000,
+        "raw_headroom_bytes_per_nonzero_incoming_component": 1_200,
+    }
     assert walkie["generated_by"].startswith(
-        "qcsd_lab.fitting_walkie_talkie 2.0.1; algorithm_receipt_sha256="
+        "qcsd_lab.fitting_walkie_talkie 2.1.0; algorithm_receipt_sha256="
     )
     assert str(tmp_path) not in receipt_text
     assert "timestamp" not in receipt_text
@@ -781,6 +854,89 @@ def test_fit_builds_exact_deterministic_bundle_without_mutating_source(tmp_path:
     assert (result / "experiment.json").read_bytes() == before_experiment
     assert (result / "evidence.sha256").read_bytes() == before_evidence
     verify_result(result)
+
+
+def test_legacy_v2_bundle_is_strictly_readable_only_as_historical_evidence(
+    tmp_path: Path,
+    fitted_bundle: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    legacy = _legacy_bundle_from_current(fitted_bundle, tmp_path / "research-1200")
+
+    def unexpected_rust_call(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("the v3 Rust parser must not adjudicate a legacy v2 bundle")
+
+    monkeypatch.setattr(
+        fitting_module,
+        "_run_rust_parameter_validator",
+        unexpected_rust_call,
+    )
+    verified = verify_artifact_bundle(legacy)
+    assert verified.provenance["fitting_contract"]["contract_version"] == 2
+
+    walkie_path = legacy / "walkie-talkie.json"
+    provenance_path = legacy / "provenance.json"
+    with pytest.raises(ValueError, match="frozen historical evidence"):
+        validate_parameter_artifact(
+            walkie_path,
+            provenance_path=provenance_path,
+            expected_kind="walkie_talkie",
+            expected_qcsd_profile="research-1200",
+            expected_udp_payload_ceiling=1_200,
+            expected_workloads=set(WORKLOADS),
+        )
+    frozen_arguments = {
+        "provenance_path": provenance_path,
+        "original_parameter_name": "walkie-talkie.json",
+        "expected_kind": "walkie_talkie",
+        "allow_reviewed_fixture": False,
+        "expected_qcsd_profile": "research-1200",
+        "expected_udp_payload_ceiling": 1_200,
+        "expected_workloads": set(WORKLOADS),
+    }
+    with pytest.raises(ValueError, match="frozen historical evidence"):
+        validate_frozen_parameter_artifact(walkie_path, **frozen_arguments)
+    frozen = validate_frozen_parameter_artifact(
+        walkie_path,
+        **frozen_arguments,
+        allow_historical_research_bundle=True,
+    )
+    assert frozen.input_policy == "sealed-fitting-result-v1"
+
+    walkie = json.loads(walkie_path.read_text(encoding="utf-8"))
+    provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+    walkie["profiles"][0]["total_scheduled_bytes"] += 1_200
+    atomic_json(walkie_path, walkie)
+    provenance["artifacts"]["walkie_talkie"]["sha256"] = sha256_file(walkie_path)
+    atomic_json(provenance_path, provenance)
+    with pytest.raises(ValueError, match="not derived from training visits"):
+        verify_artifact_bundle(legacy)
+
+
+@pytest.mark.parametrize("legacy_contract", [False, True])
+def test_bundle_contract_rejects_mixed_walkie_talkie_schema_versions(
+    tmp_path: Path,
+    fitted_bundle: Path,
+    legacy_contract: bool,
+) -> None:
+    if legacy_contract:
+        bundle = _legacy_bundle_from_current(fitted_bundle, tmp_path / "legacy")
+        wrong_schema = 3
+    else:
+        bundle = tmp_path / "current"
+        shutil.copytree(fitted_bundle, bundle)
+        wrong_schema = 2
+    walkie_path = bundle / "walkie-talkie.json"
+    provenance_path = bundle / "provenance.json"
+    walkie = json.loads(walkie_path.read_text(encoding="utf-8"))
+    provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+    walkie["schema_version"] = wrong_schema
+    atomic_json(walkie_path, walkie)
+    provenance["artifacts"]["walkie_talkie"]["sha256"] = sha256_file(walkie_path)
+    atomic_json(provenance_path, provenance)
+
+    with pytest.raises(ValueError, match="invalid runtime contract"):
+        verify_artifact_bundle(bundle)
 
 
 def test_subset_campaign_does_not_permit_partial_bundle_coverage(
@@ -910,6 +1066,10 @@ def test_external_source_claim_tampering_changes_the_recordable_receipt_hash(
         (
             "walkie-talkie.json",
             ("profiles", 0, "training_inputs", "real", 0),
+        ),
+        (
+            "walkie-talkie.json",
+            ("receiver_continuation", "cells_per_nonzero_incoming_component"),
         ),
     ],
 )

@@ -88,7 +88,7 @@ def seal_result(root: Path) -> dict[str, str]:
     if experiment["status"] not in {"complete", "incomplete"}:
         raise ValueError("only a terminal experiment can be sealed")
     validate_resume_fingerprints(root, experiment=experiment)
-    _validate_frozen_contract(root, experiment)
+    _validate_frozen_contract(root, experiment, allow_historical_research_bundle=False)
     validate_accepted_samples(root, experiment)
     checksums = {
         relative: sha256_file(path) for relative, path in authoritative_files(root).items()
@@ -133,7 +133,7 @@ def verify_result(root: Path) -> VerifiedResult:
     if experiment["status"] not in {"complete", "incomplete"}:
         raise ValueError("sealed experiment is not terminal")
     validate_resume_fingerprints(root, experiment=experiment)
-    _validate_frozen_contract(root, experiment)
+    _validate_frozen_contract(root, experiment, allow_historical_research_bundle=True)
     accepted = validate_accepted_samples(root, experiment)
     return VerifiedResult(root, experiment, checksums, accepted)
 
@@ -161,6 +161,11 @@ def prepare_resume(
             expected_configuration=expected_configuration,
             expected_input_digest=expected_input_digest,
         )
+        _validate_frozen_contract(
+            root,
+            experiment,
+            allow_historical_research_bundle=False,
+        )
         # The seal is retired only after every read-only preflight succeeds.
         seal.unlink()
         experiment["status"] = "running"
@@ -176,6 +181,11 @@ def prepare_resume(
             expected_source=expected_source,
             expected_configuration=expected_configuration,
             expected_input_digest=expected_input_digest,
+        )
+        _validate_frozen_contract(
+            root,
+            experiment,
+            allow_historical_research_bundle=False,
         )
         # First validate every accepted binding and reject unbound files
         # anywhere except the canonical path of the one in-progress sample.
@@ -262,9 +272,18 @@ def _format_checksums(checksums: Mapping[str, str]) -> str:
     return "".join(f"{checksums[path]}  {path}\n" for path in sorted(checksums))
 
 
-def _validate_frozen_contract(root: Path, experiment: dict[str, Any]) -> None:
+def _validate_frozen_contract(
+    root: Path,
+    experiment: dict[str, Any],
+    *,
+    allow_historical_research_bundle: bool,
+) -> None:
     # Kept as a lazy import because the orchestrator deliberately imports
     # verification only at command boundaries.
     from .orchestrator import validate_frozen_experiment_contract
 
-    validate_frozen_experiment_contract(root, experiment)
+    validate_frozen_experiment_contract(
+        root,
+        experiment,
+        allow_historical_research_bundle=allow_historical_research_bundle,
+    )

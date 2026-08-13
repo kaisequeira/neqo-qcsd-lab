@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import qcsd_lab.fitting_walkie_talkie as walkie_module
 
 from qcsd_lab.fitting import (
     _validate_traffic_morphing_receipt,
@@ -20,10 +21,15 @@ from qcsd_lab.fitting_morphing import (
 from qcsd_lab.fitting_trace import FittingTrace, PacketObservation, TypedObservation
 from qcsd_lab.fitting_walkie_talkie import (
     BurstPair,
+    ProfileEnvelope,
     burst_sequence,
     componentwise_envelope,
     fit_walkie_talkie,
     minimum_weight_perfect_matching,
+    mold,
+    mold_padding_cost,
+    symmetric_mold,
+    symmetric_mold_padding_cost,
 )
 from qcsd_lab.fitting_wtfpad import (
     ModelCandidate,
@@ -638,12 +644,91 @@ def test_walkie_talkie_matching_is_full_cohort_and_lexically_tied() -> None:
         minimum_weight_perfect_matching({"alpha": envelope})
 
 
+def test_walkie_talkie_runtime_mould_adds_one_cell_to_each_incoming_component() -> None:
+    real = (
+        BurstPair(2, 3, False),
+        BurstPair(4, 0, True),
+        BurstPair(1, 2, True),
+    )
+    decoy = (
+        BurstPair(3, 1, False),
+        BurstPair(1, 0, True),
+        BurstPair(2, 4, True),
+    )
+
+    assert symmetric_mold(real, decoy) == [
+        BurstPair(3, 3, False),
+        BurstPair(4, 0, True),
+        BurstPair(2, 4, True),
+    ]
+    assert mold(real, decoy) == [
+        BurstPair(3, 4, False),
+        BurstPair(4, 0, True),
+        BurstPair(2, 5, True),
+    ]
+    assert symmetric_mold_padding_cost(real, decoy) == 9
+    assert mold_padding_cost(real, decoy) == 13
+
+
+def test_walkie_talkie_receiver_continuation_rejects_u32_overflow() -> None:
+    maximum = (BurstPair(1, 2**32 - 1, True),)
+    with pytest.raises(ValueError, match="adapted incoming component exceeds u32"):
+        mold(maximum, maximum)
+
+
+@pytest.mark.parametrize(
+    ("cost", "label"),
+    [
+        (symmetric_mold_padding_cost, "base"),
+        (mold_padding_cost, "runtime"),
+    ],
+)
+def test_walkie_talkie_matching_cost_rejects_u64_overflow(
+    monkeypatch: pytest.MonkeyPatch,
+    cost: object,
+    label: str,
+) -> None:
+    totals = iter((2**63, 1, 1))
+    monkeypatch.setattr(walkie_module, "_total_packets", lambda _bursts: next(totals))
+    sequence = (BurstPair(1, 1, True),)
+    with pytest.raises(ValueError, match=rf"{label} matching cost exceeds u64"):
+        cost(sequence, sequence)  # type: ignore[operator]
+
+
 def test_walkie_talkie_matching_ignores_nonlexical_input_order() -> None:
     envelope = componentwise_envelope(((BurstPair(2, 3, True),),))
     selected = minimum_weight_perfect_matching(
         {name: envelope for name in ("delta", "alpha", "charlie", "bravo")}
     )
     assert selected == (("alpha", "bravo", 0), ("charlie", "delta", 0))
+
+
+def test_walkie_talkie_pairing_uses_base_cost_before_receiver_adaptation() -> None:
+    def envelope(values: list[tuple[int, int]]) -> ProfileEnvelope:
+        return ProfileEnvelope(
+            tuple(
+                BurstPair(outgoing, incoming, index == len(values) - 1)
+                for index, (outgoing, incoming) in enumerate(values)
+            ),
+            1,
+            0,
+            0,
+        )
+
+    envelopes = {
+        "alpha": envelope([(1, 2), (3, 5)]),
+        "bravo": envelope([(1, 5), (3, 2), (4, 4), (5, 5)]),
+        "charlie": envelope([(5, 1), (4, 5), (2, 1)]),
+        "delta": envelope([(2, 2), (5, 2)]),
+    }
+
+    # The base-cost optimum is alpha/charlie + bravo/delta (9 + 24).
+    # Minimizing adapted cost instead would select alpha/delta + bravo/charlie
+    # (10 + 35 rather than 15 + 32), so this fixture binds the intended stage.
+    assert minimum_weight_perfect_matching(envelopes) == (
+        ("alpha", "charlie", 9),
+        ("bravo", "delta", 24),
+    )
 
 
 def test_walkie_talkie_receipt_rejects_a_nonminimum_lexical_matching() -> None:
@@ -680,11 +765,35 @@ def test_walkie_talkie_receipt_rejects_a_nonminimum_lexical_matching() -> None:
         )
         for index, name in enumerate(names)
     }
-    _artifact, receipt = fit_walkie_talkie(traces)
+    artifact, receipt = fit_walkie_talkie(traces)
+    assert artifact["schema_version"] == 3
+    assert all(
+        candidate["matching_cost_packets"] == candidate["base_matching_cost_packets"] + 2
+        for candidate in receipt["candidate_pair_costs"]
+    )
+    assert all(
+        selected["matching_cost_packets"] == selected["base_matching_cost_packets"] + 2
+        for selected in receipt["selected_pairs"]
+    )
+    for field in ("base_matching_cost_packets", "matching_cost_packets"):
+        tampered_cost = copy.deepcopy(receipt)
+        tampered_cost["candidate_pair_costs"][0][field] += 1
+        with pytest.raises(ValueError, match="disagree with training envelopes"):
+            _validate_walkie_talkie_receipt(tampered_cost, names)
     tampered = copy.deepcopy(receipt)
     tampered["selected_pairs"] = [
-        {"real": "alpha", "decoy": "charlie", "matching_cost_packets": 0},
-        {"real": "bravo", "decoy": "delta", "matching_cost_packets": 0},
+        {
+            "real": "alpha",
+            "decoy": "charlie",
+            "base_matching_cost_packets": 0,
+            "matching_cost_packets": 2,
+        },
+        {
+            "real": "bravo",
+            "decoy": "delta",
+            "base_matching_cost_packets": 0,
+            "matching_cost_packets": 2,
+        },
     ]
     with pytest.raises(ValueError, match="not the recorded optimum"):
         _validate_walkie_talkie_receipt(tampered, names)

@@ -43,11 +43,16 @@ PROVENANCE_FILE = "provenance.json"
 EXACT_BUNDLE_FILES = frozenset((*BUNDLE_FILES.values(), PROVENANCE_FILE))
 RESEARCH_PARAMETER_INPUT_POLICY = "sealed-fitting-result-v1"
 RESEARCH_ARTIFACT_STATUS = "fitted-research-artifact"
-FITTER_VERSION = "qcsd_lab.fitting 2.0.2"
+FITTER_VERSION = "qcsd_lab.fitting 2.1.0"
+LEGACY_FITTER_VERSION = "qcsd_lab.fitting 2.0.2"
 EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 ALGORITHM_GENERATORS = {
     "traffic_morphing": "qcsd_lab.fitting_morphing 2.0.0",
     "wtf_pad": "qcsd_lab.fitting_wtfpad 2.0.0",
+    "walkie_talkie": "qcsd_lab.fitting_walkie_talkie 2.1.0",
+}
+LEGACY_ALGORITHM_GENERATORS = {
+    **ALGORITHM_GENERATORS,
     "walkie_talkie": "qcsd_lab.fitting_walkie_talkie 2.0.1",
 }
 
@@ -296,7 +301,7 @@ def verify_artifact_bundle(root: Path) -> VerifiedArtifactBundle:
     if any(path.is_symlink() or not path.is_file() for path in root.iterdir()):
         raise ValueError("artifact bundle may contain only regular files")
     provenance = load_json(root / PROVENANCE_FILE)
-    _validate_provenance(provenance)
+    contract_version = _validate_provenance(provenance)
     artifact_hashes: dict[str, str] = {}
     for kind, filename in BUNDLE_FILES.items():
         record = provenance["artifacts"][kind]
@@ -304,14 +309,17 @@ def verify_artifact_bundle(root: Path) -> VerifiedArtifactBundle:
             raise ValueError(f"artifact provenance hash mismatch: {filename}")
         artifact_hashes[kind] = record["sha256"]
         parameter = load_json(root / filename)
-        _validate_runtime_parameter(parameter, kind)
+        _validate_runtime_parameter(parameter, kind, contract_version=contract_version)
         assert isinstance(parameter, Mapping)
-        _validate_algorithm_artifact_binding(provenance, kind, parameter)
+        _validate_algorithm_artifact_binding(
+            provenance, kind, parameter, contract_version=contract_version
+        )
     expected_workloads = {record["workload_id"] for record in provenance["sample_contributions"]}
     _validate_artifact_coverage(root, expected_workloads)
-    _run_rust_parameter_validator(
-        "bundle", root, tuple(provenance["fitting_contract"]["workload_order"])
-    )
+    if contract_version == 3:
+        _run_rust_parameter_validator(
+            "bundle", root, tuple(provenance["fitting_contract"]["workload_order"])
+        )
     return VerifiedArtifactBundle(root, dict(provenance), artifact_hashes)
 
 
@@ -322,6 +330,7 @@ def research_parameter_record(
     expected_kind: str,
     expected_workloads: Sequence[str] | Mapping[str, object] | None,
     parameter_name: str | None = None,
+    allow_historical: bool = False,
 ) -> tuple[str, str, str]:
     """Validate one runtime file against a shared fitted-bundle receipt."""
 
@@ -332,7 +341,11 @@ def research_parameter_record(
     parameter_path = parameter_path.resolve()
     provenance_path = provenance_path.resolve()
     provenance = load_json(provenance_path)
-    _validate_provenance(provenance)
+    contract_version = _validate_provenance(provenance)
+    if contract_version == 2 and not allow_historical:
+        raise ValueError(
+            "legacy research parameter bundles are accepted only as frozen historical evidence"
+        )
     if expected_kind not in BUNDLE_FILES:
         raise ValueError(f"unsupported research parameter kind: {expected_kind}")
     record = provenance["artifacts"][expected_kind]
@@ -340,9 +353,11 @@ def research_parameter_record(
     if record["path"] != expected_name or record["sha256"] != sha256_file(parameter_path):
         raise ValueError("research parameter file does not match its shared provenance receipt")
     parameter = load_json(parameter_path)
-    _validate_runtime_parameter(parameter, expected_kind)
+    _validate_runtime_parameter(parameter, expected_kind, contract_version=contract_version)
     assert isinstance(parameter, Mapping)
-    _validate_algorithm_artifact_binding(provenance, expected_kind, parameter)
+    _validate_algorithm_artifact_binding(
+        provenance, expected_kind, parameter, contract_version=contract_version
+    )
     sealed_order = tuple(provenance["fitting_contract"]["workload_order"])
     sealed_workloads = set(sealed_order)
     expected = set(expected_workloads or ())
@@ -354,7 +369,8 @@ def research_parameter_record(
         )
     if expected_kind != "wtf_pad":
         _validate_exact_parameter_coverage(parameter, expected_kind, sealed_workloads)
-    _run_rust_parameter_validator(expected_kind, parameter_path, sealed_order)
+    if contract_version == 3:
+        _run_rust_parameter_validator(expected_kind, parameter_path, sealed_order)
     return record["sha256"], sha256_file(provenance_path), RESEARCH_PARAMETER_INPUT_POLICY
 
 
@@ -416,7 +432,7 @@ def _training_input_digest(
     )
 
 
-def _validate_provenance(value: object) -> None:
+def _validate_provenance(value: object) -> int:
     expected = {
         "schema_version",
         "artifact_type",
@@ -460,21 +476,45 @@ def _validate_provenance(value: object) -> None:
     if _contains_absolute_path(source["source_fingerprints"]):
         raise ValueError("research artifact provenance must not contain absolute paths")
     contract = value["fitting_contract"]
-    if not isinstance(contract, Mapping) or set(contract) != {
-        "contract_version",
-        "fitter_version",
-        "parameter_schema_version",
-        "profile",
-        "request_policies",
-        "visits_per_policy",
-        "workload_order",
-        "constants",
-    }:
+    if not isinstance(contract, Mapping):
+        raise ValueError("research fitting contract receipt is invalid")
+    contract_version = contract.get("contract_version")
+    if contract_version == 2:
+        contract_keys = {
+            "contract_version",
+            "fitter_version",
+            "parameter_schema_version",
+            "profile",
+            "request_policies",
+            "visits_per_policy",
+            "workload_order",
+            "constants",
+        }
+        expected_fitter = LEGACY_FITTER_VERSION
+        expected_schema: object = 2
+        observed_schema = contract.get("parameter_schema_version")
+    elif contract_version == 3:
+        contract_keys = {
+            "contract_version",
+            "fitter_version",
+            "parameter_schema_versions",
+            "profile",
+            "request_policies",
+            "visits_per_policy",
+            "workload_order",
+            "constants",
+        }
+        expected_fitter = FITTER_VERSION
+        expected_schema = {"traffic_morphing": 2, "walkie_talkie": 3, "wtf_pad": 2}
+        observed_schema = contract.get("parameter_schema_versions")
+    else:
+        raise ValueError("research fitting contract receipt is invalid")
+    if set(contract) != contract_keys:
         raise ValueError("research fitting contract receipt is invalid")
     if (
-        contract["contract_version"] != 2
-        or contract["fitter_version"] != FITTER_VERSION
-        or contract["parameter_schema_version"] != 2
+        type(contract_version) is not int
+        or contract["fitter_version"] != expected_fitter
+        or observed_schema != expected_schema
         or contract["profile"] != "research-1200"
         or contract["request_policies"] != ["as-defined", "half-duplex"]
         or contract["visits_per_policy"] != 10
@@ -484,7 +524,12 @@ def _validate_provenance(value: object) -> None:
         or not isinstance(contract["constants"], Mapping)
     ):
         raise ValueError("research fitting contract values are invalid")
-    if dict(contract) != _fitting_contract(contract["workload_order"]):
+    expected_contract = (
+        _legacy_fitting_contract(contract["workload_order"])
+        if contract_version == 2
+        else _fitting_contract(contract["workload_order"])
+    )
+    if dict(contract) != expected_contract:
         raise ValueError("research fitting contract constants are invalid")
     _require_scipy_version()
     contributions = value["sample_contributions"]
@@ -571,7 +616,11 @@ def _validate_provenance(value: object) -> None:
         BUNDLE_FILES
     ):
         raise ValueError("research artifact algorithm receipt is invalid")
-    _validate_algorithm_receipts(value["algorithms"], contract["workload_order"])
+    _validate_algorithm_receipts(
+        value["algorithms"],
+        contract["workload_order"],
+        contract_version=contract_version,
+    )
     artifacts = value["artifacts"]
     if not isinstance(artifacts, Mapping) or set(artifacts) != set(BUNDLE_FILES):
         raise ValueError("research artifact hash receipt is invalid")
@@ -584,14 +633,22 @@ def _validate_provenance(value: object) -> None:
             or not _digest(record["sha256"])
         ):
             raise ValueError(f"research artifact receipt is invalid for {kind}")
+    return contract_version
 
 
 def _validate_algorithm_receipts(
-    algorithms: Mapping[str, object], workload_order: Sequence[str]
+    algorithms: Mapping[str, object],
+    workload_order: Sequence[str],
+    *,
+    contract_version: int,
 ) -> None:
     _validate_traffic_morphing_receipt(algorithms["traffic_morphing"], workload_order)
     _validate_wtf_pad_receipt(algorithms["wtf_pad"])
-    _validate_walkie_talkie_receipt(algorithms["walkie_talkie"], workload_order)
+    _validate_walkie_talkie_receipt(
+        algorithms["walkie_talkie"],
+        workload_order,
+        contract_version=contract_version,
+    )
 
 
 def _validate_traffic_morphing_receipt(value: object, workload_order: Sequence[str]) -> None:
@@ -773,7 +830,21 @@ def _validate_wtf_pad_receipt(value: object) -> None:
             raise ValueError(f"WTF-PAD {direction} population receipt is invalid")
 
 
-def _validate_walkie_talkie_receipt(value: object, workload_order: Sequence[str]) -> None:
+def _validate_walkie_talkie_receipt(
+    value: object,
+    workload_order: Sequence[str],
+    *,
+    contract_version: int = 3,
+) -> None:
+    if contract_version == 2:
+        _validate_legacy_walkie_talkie_receipt(value, workload_order)
+        return
+    if contract_version != 3:
+        raise ValueError("unsupported research fitting contract version")
+    _validate_current_walkie_talkie_receipt(value, workload_order)
+
+
+def _validate_legacy_walkie_talkie_receipt(value: object, workload_order: Sequence[str]) -> None:
     receipt = _exact_mapping(
         value,
         {"algorithm", "candidate_pair_costs", "selected_pairs", "training_visits"},
@@ -789,9 +860,9 @@ def _validate_walkie_talkie_receipt(value: object, workload_order: Sequence[str]
     if not isinstance(training_visits, list) or len(training_visits) != len(workload_order):
         raise ValueError("Walkie-Talkie training visits are invalid")
     observed_training_hashes: set[str] = set()
-    for workload, value in zip(workload_order, training_visits, strict=True):
+    for workload, workload_value in zip(workload_order, training_visits, strict=True):
         record = _exact_mapping(
-            value,
+            workload_value,
             {"workload_id", "visits"},
             "Walkie-Talkie workload training visits",
         )
@@ -873,15 +944,153 @@ def _validate_walkie_talkie_receipt(value: object, workload_order: Sequence[str]
         raise ValueError("Walkie-Talkie selected pairs are not the recorded optimum")
 
 
+def _validate_current_walkie_talkie_receipt(value: object, workload_order: Sequence[str]) -> None:
+    receipt = _exact_mapping(
+        value,
+        {
+            "algorithm",
+            "pairing_objective",
+            "receiver_continuation",
+            "candidate_pair_costs",
+            "selected_pairs",
+            "training_visits",
+        },
+        "Walkie-Talkie algorithm receipt",
+    )
+    if (
+        receipt["algorithm"] != "full-cohort-minimum-weight-perfect-matching"
+        or receipt["pairing_objective"] != "minimum-base-symmetric-mold-padding-cost"
+    ):
+        raise ValueError("Walkie-Talkie algorithm receipt is invalid")
+    if receipt["receiver_continuation"] != fitting_walkie_talkie.receiver_continuation_contract():
+        raise ValueError("Walkie-Talkie receiver-continuation receipt is invalid")
+    lexical = tuple(sorted(workload_order))
+    expected_pairs = [
+        (left, right) for index, left in enumerate(lexical) for right in lexical[index + 1 :]
+    ]
+    training_visits = receipt["training_visits"]
+    if not isinstance(training_visits, list) or len(training_visits) != len(workload_order):
+        raise ValueError("Walkie-Talkie training visits are invalid")
+    observed_training_hashes: set[str] = set()
+    envelopes: dict[str, fitting_walkie_talkie.ProfileEnvelope] = {}
+    for workload, value in zip(workload_order, training_visits, strict=True):
+        record = _exact_mapping(
+            value,
+            {"workload_id", "visits"},
+            "Walkie-Talkie workload training visits",
+        )
+        if record["workload_id"] != workload or not isinstance(record["visits"], list):
+            raise ValueError("Walkie-Talkie training workload order is invalid")
+        if len(record["visits"]) != 10:
+            raise ValueError("Walkie-Talkie requires ten training visits per workload")
+        sequences: list[tuple[fitting_walkie_talkie.BurstPair, ...]] = []
+        for visit, visit_value in enumerate(record["visits"]):
+            visit_record = _exact_mapping(
+                visit_value,
+                {"visit", "training_input_sha256", "bursts", "batch_ends"},
+                "Walkie-Talkie training visit",
+            )
+            training_hash = visit_record["training_input_sha256"]
+            if (
+                visit_record["visit"] != visit
+                or not _digest(training_hash)
+                or training_hash in observed_training_hashes
+            ):
+                raise ValueError("Walkie-Talkie training visit identity is invalid")
+            observed_training_hashes.add(training_hash)
+            sequences.append(
+                _parse_burst_sequence(
+                    visit_record["bursts"],
+                    visit_record["batch_ends"],
+                    "Walkie-Talkie training visit",
+                )
+            )
+        envelopes[workload] = fitting_walkie_talkie.componentwise_envelope(sequences)
+    candidates = _cost_records(
+        receipt["candidate_pair_costs"],
+        identity_fields=("left", "right"),
+        cost_fields=("base_matching_cost_packets", "matching_cost_packets"),
+        label="Walkie-Talkie candidate pair costs",
+        integer_costs=True,
+    )
+    if [(item["left"], item["right"]) for item in candidates] != expected_pairs:
+        raise ValueError("Walkie-Talkie candidate costs do not cover every lexical pair")
+    expected_candidates = [
+        {
+            "left": left,
+            "right": right,
+            "base_matching_cost_packets": fitting_walkie_talkie.symmetric_mold_padding_cost(
+                envelopes[left].bursts, envelopes[right].bursts
+            ),
+            "matching_cost_packets": fitting_walkie_talkie.mold_padding_cost(
+                envelopes[left].bursts, envelopes[right].bursts
+            ),
+        }
+        for left, right in expected_pairs
+    ]
+    if candidates != expected_candidates:
+        raise ValueError("Walkie-Talkie candidate costs disagree with training envelopes")
+    selected = _cost_records(
+        receipt["selected_pairs"],
+        identity_fields=("real", "decoy"),
+        cost_fields=("base_matching_cost_packets", "matching_cost_packets"),
+        label="Walkie-Talkie selected pairs",
+        integer_costs=True,
+    )
+    selected_pairs = [(item["real"], item["decoy"]) for item in selected]
+    if (
+        len(selected_pairs) != len(lexical) // 2
+        or selected_pairs != sorted(selected_pairs)
+        or any(left >= right for left, right in selected_pairs)
+        or sorted(identity for pair in selected_pairs for identity in pair) != list(lexical)
+    ):
+        raise ValueError("Walkie-Talkie selected pairs are not a lexical perfect matching")
+    candidate_by_pair = {(item["left"], item["right"]): item for item in candidates}
+    if any(
+        candidate_by_pair.get((item["real"], item["decoy"])) is None
+        or any(
+            item[field] != candidate_by_pair[(item["real"], item["decoy"])][field]
+            for field in ("base_matching_cost_packets", "matching_cost_packets")
+        )
+        for item in selected
+    ):
+        raise ValueError("Walkie-Talkie selected costs disagree with candidate costs")
+
+    def choose(remaining: tuple[str, ...]) -> tuple[int, tuple[tuple[str, str], ...]]:
+        if not remaining:
+            return 0, ()
+        left = remaining[0]
+        optimum: tuple[int, tuple[tuple[str, str], ...]] | None = None
+        for index in range(1, len(remaining)):
+            right = remaining[index]
+            rest_cost, rest_pairs = choose(remaining[1:index] + remaining[index + 1 :])
+            candidate = (
+                candidate_by_pair[(left, right)]["base_matching_cost_packets"] + rest_cost,
+                tuple(sorted(((left, right), *rest_pairs))),
+            )
+            if optimum is None or candidate < optimum:
+                optimum = candidate
+        assert optimum is not None
+        return optimum
+
+    _cost, optimum_pairs = choose(lexical)
+    if tuple(selected_pairs) != optimum_pairs:
+        raise ValueError("Walkie-Talkie selected pairs are not the recorded optimum")
+
+
 def _validate_algorithm_artifact_binding(
-    provenance: Mapping[str, object], kind: str, parameter: Mapping[str, Any]
+    provenance: Mapping[str, object],
+    kind: str,
+    parameter: Mapping[str, Any],
+    *,
+    contract_version: int,
 ) -> None:
     algorithms = provenance["algorithms"]
     assert isinstance(algorithms, Mapping)
     receipt = algorithms[kind]
+    generators = LEGACY_ALGORITHM_GENERATORS if contract_version == 2 else ALGORITHM_GENERATORS
     expected_generator = (
-        f"{ALGORITHM_GENERATORS[kind]}; algorithm_receipt_sha256="
-        f"{_algorithm_receipt_digest(receipt)}"
+        f"{generators[kind]}; algorithm_receipt_sha256={_algorithm_receipt_digest(receipt)}"
     )
     if parameter.get("generated_by") != expected_generator:
         raise ValueError(f"{kind} artifact does not bind its algorithm receipt")
@@ -892,7 +1101,7 @@ def _validate_algorithm_artifact_binding(
         _validate_wtf_pad_artifact(provenance, parameter)
         return
     if kind == "walkie_talkie":
-        _validate_walkie_talkie_artifact(provenance, parameter)
+        _validate_walkie_talkie_artifact(provenance, parameter, contract_version=contract_version)
         return
     raise ValueError(f"unsupported research parameter kind: {kind}")
 
@@ -1263,6 +1472,20 @@ def _validate_wtf_direction_schema(value: object, direction: str) -> Mapping[str
 
 
 def _validate_walkie_talkie_artifact(
+    provenance: Mapping[str, object],
+    parameter: Mapping[str, Any],
+    *,
+    contract_version: int,
+) -> None:
+    if contract_version == 2:
+        _validate_legacy_walkie_talkie_artifact(provenance, parameter)
+        return
+    if contract_version != 3:
+        raise ValueError("unsupported research fitting contract version")
+    _validate_current_walkie_talkie_artifact(provenance, parameter)
+
+
+def _validate_legacy_walkie_talkie_artifact(
     provenance: Mapping[str, object], parameter: Mapping[str, Any]
 ) -> None:
     _require_exact_keys(
@@ -1321,7 +1544,7 @@ def _validate_walkie_talkie_artifact(
         {
             "left": left,
             "right": right,
-            "matching_cost_packets": fitting_walkie_talkie.mold_padding_cost(
+            "matching_cost_packets": fitting_walkie_talkie.symmetric_mold_padding_cost(
                 envelopes[left].bursts, envelopes[right].bursts
             ),
         }
@@ -1341,12 +1564,149 @@ def _validate_walkie_talkie_artifact(
     for real, decoy, cost in pairs:
         real_envelope = envelopes[real]
         decoy_envelope = envelopes[decoy]
-        molded = tuple(fitting_walkie_talkie.mold(real_envelope.bursts, decoy_envelope.bursts))
+        molded = tuple(
+            fitting_walkie_talkie.symmetric_mold(real_envelope.bursts, decoy_envelope.bursts)
+        )
         expected_profiles.append(
             {
                 "real": real,
                 "decoy": decoy,
                 "matching_cost_packets": cost,
+                "training_inputs": {
+                    "real": training_by_workload[real],
+                    "decoy": training_by_workload[decoy],
+                },
+                "variation": {
+                    "real": fitting_walkie_talkie._variation_json(real_envelope),
+                    "decoy": fitting_walkie_talkie._variation_json(decoy_envelope),
+                },
+                "source_envelopes": {
+                    "real": fitting_walkie_talkie._bursts_json(real_envelope.bursts),
+                    "decoy": fitting_walkie_talkie._bursts_json(decoy_envelope.bursts),
+                },
+                "batch_ends": {
+                    "real": fitting_walkie_talkie._batch_ends(real_envelope.bursts),
+                    "decoy": fitting_walkie_talkie._batch_ends(decoy_envelope.bursts),
+                },
+                "molded_batch_ends": fitting_walkie_talkie._batch_ends(molded),
+                "total_scheduled_bytes": fitting_walkie_talkie._total_packets(molded)
+                * constants["packet_size"],
+                "bursts": fitting_walkie_talkie._bursts_json(molded),
+            }
+        )
+    profiles = parameter["profiles"]
+    if not isinstance(profiles, list) or len(profiles) != len(expected_profiles):
+        raise ValueError("Walkie-Talkie artifact profile count is invalid")
+    for profile in profiles:
+        _validate_walkie_profile_schema(profile)
+    if profiles != expected_profiles:
+        raise ValueError("Walkie-Talkie artifact profiles are not derived from training visits")
+
+
+def _validate_current_walkie_talkie_artifact(
+    provenance: Mapping[str, object], parameter: Mapping[str, Any]
+) -> None:
+    _require_exact_keys(
+        parameter,
+        {
+            "adaptation",
+            "burst_definition",
+            "cell_byte_domain",
+            "schema_version",
+            "generated_by",
+            "matching_algorithm",
+            "paper_equivalent",
+            "packet_size",
+            "receiver_continuation",
+            "profiles",
+        },
+        "Walkie-Talkie artifact",
+    )
+    constants = provenance["fitting_contract"]["constants"]["walkie_talkie"]
+    algorithm = provenance["algorithms"]["walkie_talkie"]
+    assert isinstance(constants, Mapping) and isinstance(algorithm, Mapping)
+    if (
+        parameter["adaptation"] != "qcsd-client-only"
+        or parameter["burst_definition"] != constants["burst_definition"]
+        or parameter["cell_byte_domain"] != constants["cell_byte_domain"]
+        or parameter["schema_version"] != 3
+        or parameter["matching_algorithm"] != constants["pairing_algorithm"]
+        or parameter["paper_equivalent"] is not False
+        or parameter["packet_size"] != constants["packet_size"]
+        or parameter["receiver_continuation"] != constants["receiver_continuation"]
+        or parameter["receiver_continuation"] != algorithm["receiver_continuation"]
+    ):
+        raise ValueError("Walkie-Talkie artifact constants are invalid")
+    expected_hashes = _provenance_training_hashes(provenance, "half-duplex")
+    training_visits = algorithm["training_visits"]
+    flattened_receipt_hashes = [
+        visit["training_input_sha256"]
+        for workload in training_visits
+        for visit in workload["visits"]
+    ]
+    if flattened_receipt_hashes != expected_hashes:
+        raise ValueError("Walkie-Talkie training visits do not match half-duplex contributions")
+    envelopes: dict[str, fitting_walkie_talkie.ProfileEnvelope] = {}
+    training_by_workload: dict[str, list[str]] = {}
+    for workload in training_visits:
+        sequences = [
+            _parse_burst_sequence(
+                visit["bursts"], visit["batch_ends"], "Walkie-Talkie training visit"
+            )
+            for visit in workload["visits"]
+        ]
+        identity = workload["workload_id"]
+        envelopes[identity] = fitting_walkie_talkie.componentwise_envelope(sequences)
+        training_by_workload[identity] = [
+            visit["training_input_sha256"] for visit in workload["visits"]
+        ]
+    lexical = tuple(sorted(envelopes))
+    expected_candidates = [
+        {
+            "left": left,
+            "right": right,
+            "base_matching_cost_packets": (
+                fitting_walkie_talkie.symmetric_mold_padding_cost(
+                    envelopes[left].bursts, envelopes[right].bursts
+                )
+            ),
+            "matching_cost_packets": fitting_walkie_talkie.mold_padding_cost(
+                envelopes[left].bursts, envelopes[right].bursts
+            ),
+        }
+        for index, left in enumerate(lexical)
+        for right in lexical[index + 1 :]
+    ]
+    pairs = fitting_walkie_talkie.minimum_weight_perfect_matching(envelopes)
+    expected_selected = []
+    for real, decoy, base_cost in pairs:
+        expected_selected.append(
+            {
+                "real": real,
+                "decoy": decoy,
+                "base_matching_cost_packets": base_cost,
+                "matching_cost_packets": fitting_walkie_talkie.mold_padding_cost(
+                    envelopes[real].bursts, envelopes[decoy].bursts
+                ),
+            }
+        )
+    if (
+        algorithm["candidate_pair_costs"] != expected_candidates
+        or algorithm["selected_pairs"] != expected_selected
+    ):
+        raise ValueError("Walkie-Talkie matching receipt is inconsistent with its envelopes")
+    expected_profiles: list[dict[str, object]] = []
+    for real, decoy, _base_cost in pairs:
+        real_envelope = envelopes[real]
+        decoy_envelope = envelopes[decoy]
+        molded = tuple(fitting_walkie_talkie.mold(real_envelope.bursts, decoy_envelope.bursts))
+        expected_profiles.append(
+            {
+                "real": real,
+                "decoy": decoy,
+                "matching_cost_packets": fitting_walkie_talkie.mold_padding_cost(
+                    real_envelope.bursts, decoy_envelope.bursts
+                ),
                 "training_inputs": {
                     "real": training_by_workload[real],
                     "decoy": training_by_workload[decoy],
@@ -1577,11 +1937,14 @@ def _algorithm_receipt_digest(value: object) -> str:
     )
 
 
-def _validate_runtime_parameter(value: object, kind: str) -> None:
+def _validate_runtime_parameter(value: object, kind: str, *, contract_version: int) -> None:
     if not isinstance(value, Mapping):
         raise ValueError(f"{kind} parameter artifact must be a JSON object")
+    if contract_version not in {2, 3}:
+        raise ValueError("unsupported research fitting contract version")
+    expected_schema_version = 3 if kind == "walkie_talkie" and contract_version == 3 else 2
     if (
-        value.get("schema_version") != 2
+        value.get("schema_version") != expected_schema_version
         or value.get("adaptation") != "qcsd-client-only"
         or value.get("paper_equivalent") is not False
     ):
@@ -1603,14 +1966,24 @@ def _validate_runtime_parameter(value: object, kind: str) -> None:
         raise ValueError(f"unsupported research parameter kind: {kind}")
     from .parameters import _validate_runtime_shape
 
-    _validate_runtime_shape(value, kind, 1_200, Path(BUNDLE_FILES[kind]))
+    _validate_runtime_shape(
+        value,
+        kind,
+        1_200,
+        Path(BUNDLE_FILES[kind]),
+        expected_schema_version=expected_schema_version,
+    )
 
 
 def _fitting_contract(workload_order: Sequence[str]) -> dict[str, object]:
     return {
-        "contract_version": 2,
+        "contract_version": 3,
         "fitter_version": FITTER_VERSION,
-        "parameter_schema_version": 2,
+        "parameter_schema_versions": {
+            "traffic_morphing": 2,
+            "walkie_talkie": 3,
+            "wtf_pad": 2,
+        },
         "profile": "research-1200",
         "request_policies": ["as-defined", "half-duplex"],
         "visits_per_policy": 10,
@@ -1773,17 +2146,100 @@ def _fitting_contract(workload_order: Sequence[str]) -> dict[str, object]:
                     "visit_order": "0-through-9",
                 },
                 "envelope": "componentwise-max-corresponding-structure",
-                "mold": "batch-aware-componentwise-max-with-zero-for-missing-pair",
-                "matching_cost_formula": "2*total_packets(mold)-total_packets(real)-total_packets(decoy)",
+                "symmetric_mold": "batch-aware-componentwise-max-with-zero-for-missing-pair",
+                "receiver_continuation": (fitting_walkie_talkie.receiver_continuation_contract()),
+                "prepared_receiver_continuation_invariant": {
+                    "adapted_target_formula": (
+                        "sealed_symmetric_envelope_cells*packet_size+packet_size"
+                    ),
+                    "application_stream_bound": (
+                        "raw-request-stream-bytes<="
+                        "projected-stable-body-bytes+max_stream_data_excess"
+                    ),
+                    "chaff_capacity_requirement": (
+                        "eligible-chaff-projected-stable-body-bytes>=packet_size"
+                    ),
+                    "failure_policy": "source-envelope-overflow-is-fidelity-ineligible",
+                    "live_component_bound": (
+                        "source_raw_bytes<=sealed_symmetric_envelope_cells*packet_size"
+                    ),
+                    "parser_bootstrap_requirement": (
+                        "pristine-chaff-header-bytes<=parser_allowance_ceiling_bytes<packet_size"
+                    ),
+                    "post_all_applications_residual_lower_bound_formula": (
+                        "adapted_target_bytes-source_raw_bytes>=packet_size"
+                    ),
+                    "residual_reallocation": (
+                        "cumulative-application-FIN-residuals-requeue-within-same-incoming-turn"
+                    ),
+                    "residual_coalescence": (
+                        "stable-app-first-FIN-return-fragments-coalesce-on-first-eligible-"
+                        "chaff-stream"
+                    ),
+                    "scope": "prepared-research-cohort-under-listed-assumptions",
+                },
+                "runtime_mold": ("receiver-continuation-adaptation(symmetric-mold(real,decoy))"),
+                "matching_cost_formula": (
+                    "2*total_packets(runtime_mold)-total_packets(real)-total_packets(decoy)"
+                ),
                 "matching_tie_break": "lexical-pair-vector",
                 "packet_size": 1_200,
                 "pairing": "full-cohort-minimum-weight-perfect-matching",
+                "pairing_objective": "minimum-base-symmetric-mold-padding-cost",
+                "base_matching_cost_formula": (
+                    "2*total_packets(symmetric_mold)-total_packets(real)-total_packets(decoy)"
+                ),
                 "pair_orientation": "lexical",
-                "runtime_matching_algorithm": "minimum-cost-one-to-one",
-                "total_scheduled_bytes_formula": "total_packets(mold)*packet_size",
+                "pairing_algorithm": ("minimum-base-symmetric-mold-padding-cost-one-to-one"),
+                "total_scheduled_bytes_formula": "total_packets(runtime_mold)*packet_size",
                 "training_hash_order": "visit-order",
             },
         },
+    }
+
+
+def _legacy_fitting_contract(workload_order: Sequence[str]) -> dict[str, object]:
+    """Reconstruct the exact contract-2 oracle used by preserved results."""
+
+    current = _fitting_contract(workload_order)
+    constants = dict(current["constants"])
+    constants["walkie_talkie"] = {
+        "burst_definition": "global-application-batch-direction-transitions",
+        "cell_byte_domain": "http3-request-stream-offset.bytes",
+        "included_stream_role": "application",
+        "excluded_stream_roles": ["chaff", "control"],
+        "outgoing_retransmission_rule": "union-stream-offset-ranges-per-batch",
+        "incoming_rule": "sum-positive-raw-BytesRead-per-batch",
+        "zero_bytes_read": "validated-unsigned-no-op-excluded-from-direction-segmentation",
+        "direction_segmentation": "coalesce-adjacent-equal-directions",
+        "batch_direction_rule": "outgoing-first-and-at-least-one-incoming",
+        "cell_count_formula": "ceil(unique_or_read_bytes/packet_size)",
+        "cross_visit_state": "forbidden",
+        "visit_stability": {
+            "batch_count": "exactly-equal",
+            "per_batch_direction_structure": "exactly-equal",
+            "visit_order": "0-through-9",
+        },
+        "envelope": "componentwise-max-corresponding-structure",
+        "mold": "batch-aware-componentwise-max-with-zero-for-missing-pair",
+        "matching_cost_formula": ("2*total_packets(mold)-total_packets(real)-total_packets(decoy)"),
+        "matching_tie_break": "lexical-pair-vector",
+        "packet_size": 1_200,
+        "pairing": "full-cohort-minimum-weight-perfect-matching",
+        "pair_orientation": "lexical",
+        "runtime_matching_algorithm": "minimum-cost-one-to-one",
+        "total_scheduled_bytes_formula": "total_packets(mold)*packet_size",
+        "training_hash_order": "visit-order",
+    }
+    return {
+        "contract_version": 2,
+        "fitter_version": LEGACY_FITTER_VERSION,
+        "parameter_schema_version": 2,
+        "profile": "research-1200",
+        "request_policies": ["as-defined", "half-duplex"],
+        "visits_per_policy": 10,
+        "workload_order": list(workload_order),
+        "constants": constants,
     }
 
 

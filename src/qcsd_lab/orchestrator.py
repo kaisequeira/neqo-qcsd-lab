@@ -156,10 +156,19 @@ def _object(value: Any, location: str) -> dict[str, Any]:
 def load_campaign(path: Path) -> Campaign:
     """Load the single consolidated campaign schema."""
 
-    return _load_campaign(path, frozen_inputs=None)
+    return _load_campaign(
+        path,
+        frozen_inputs=None,
+        allow_historical_research_bundle=False,
+    )
 
 
-def _load_campaign(path: Path, *, frozen_inputs: Path | None) -> Campaign:
+def _load_campaign(
+    path: Path,
+    *,
+    frozen_inputs: Path | None,
+    allow_historical_research_bundle: bool = False,
+) -> Campaign:
     path = path.resolve()
     try:
         source_bytes = path.read_bytes()
@@ -220,6 +229,7 @@ def _load_campaign(path: Path, *, frozen_inputs: Path | None) -> Campaign:
         profile,
         {workload.id: workload.sha256 for workload in workloads},
         frozen_inputs=frozen_inputs,
+        allow_historical_research_bundle=allow_historical_research_bundle,
     )
     raw_limits = value.get("limits", {})
     limits = _load_limits(raw_limits)
@@ -422,6 +432,7 @@ def _load_defenses(
     workloads: Mapping[str, str],
     *,
     frozen_inputs: Path | None = None,
+    allow_historical_research_bundle: bool = False,
 ) -> tuple[capture_engine.Defense, ...]:
     if not isinstance(raw, list) or not raw:
         raise ValueError("defenses must be a non-empty list")
@@ -555,6 +566,7 @@ def _load_defenses(
                     expected_qcsd_profile=profile,
                     expected_udp_payload_ceiling=UDP_PAYLOAD_CEILING_BY_PROFILE[profile],
                     expected_workloads=workloads,
+                    allow_historical_research_bundle=allow_historical_research_bundle,
                 )
             defenses.append(
                 capture_engine.Defense(
@@ -1433,10 +1445,18 @@ def resume_campaign(root: Path) -> Path:
     return _execute(root, campaign, experiment)
 
 
-def validate_frozen_experiment_contract(root: Path, experiment: dict[str, Any]) -> Campaign:
+def validate_frozen_experiment_contract(
+    root: Path,
+    experiment: dict[str, Any],
+    *,
+    allow_historical_research_bundle: bool = False,
+) -> Campaign:
     """Re-derive every immutable execution field from frozen input bytes."""
 
-    campaign = _campaign_from_frozen_inputs(root)
+    campaign = _campaign_from_frozen_inputs(
+        root,
+        allow_historical_research_bundle=allow_historical_research_bundle,
+    )
     if experiment["name"] != campaign.name:
         raise ValueError("experiment name does not match frozen campaign")
     if experiment["purpose"] != campaign.purpose:
@@ -1455,11 +1475,19 @@ def validate_frozen_experiment_contract(root: Path, experiment: dict[str, Any]) 
     return campaign
 
 
-def _campaign_from_frozen_inputs(root: Path) -> Campaign:
+def _campaign_from_frozen_inputs(
+    root: Path,
+    *,
+    allow_historical_research_bundle: bool = False,
+) -> Campaign:
     inputs = (root / "inputs").resolve()
     if inputs.is_symlink() or not inputs.is_dir():
         raise ValueError(f"result has no regular inputs directory: {root}")
-    return _load_campaign(inputs / "campaign.yml", frozen_inputs=inputs)
+    return _load_campaign(
+        inputs / "campaign.yml",
+        frozen_inputs=inputs,
+        allow_historical_research_bundle=allow_historical_research_bundle,
+    )
 
 
 def _frozen_configuration(root: Path, campaign: Campaign) -> dict[str, Any]:

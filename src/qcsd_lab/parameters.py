@@ -34,6 +34,13 @@ _WTF_PAD_INFINITY_TOKEN_FORMULAS = {
     "burst": "k_inf = (1 - p_fake) / p_fake * K",
     "gap": "k_inf = (K - mean_burst_length + 1) / (mean_burst_length - 1)",
 }
+_WALKIE_TALKIE_RECEIVER_CONTINUATION = {
+    "application_order": "after-symmetric-elementwise-mold",
+    "cells_per_nonzero_incoming_component": 1,
+    "formula": "adapted_incoming=symmetric_incoming+1-if-symmetric_incoming>0-else-0",
+    "parser_allowance_ceiling_bytes": 1_000,
+    "raw_headroom_bytes_per_nonzero_incoming_component": 1_200,
+}
 
 
 @dataclass(frozen=True)
@@ -91,6 +98,7 @@ def validate_parameter_artifact(
         expected_workloads=expected_workloads,
         receipt_parameter_name=None,
         require_checked_in_fixture=True,
+        allow_historical_research_bundle=False,
     )
 
 
@@ -104,13 +112,16 @@ def validate_frozen_parameter_artifact(
     expected_qcsd_profile: str,
     expected_udp_payload_ceiling: int,
     expected_workloads: Mapping[str, object] | Collection[str],
+    allow_historical_research_bundle: bool = False,
 ) -> ParameterArtifact:
     """Revalidate a copied artifact using its frozen campaign binding.
 
     Frozen files deliberately have canonical result names (``parameters.json``
     and ``provenance.json``), while the receipt names the checked-in source
     artifact.  This entry point preserves that filename binding without
-    pretending the result copy itself is a checked-in fixture.
+    pretending the result copy itself is a checked-in fixture.  Historical
+    research bundles are accepted only for explicit read-only evidence
+    verification; they can never become inputs to a current runtime.
     """
 
     if not original_parameter_name or Path(original_parameter_name).name != original_parameter_name:
@@ -125,6 +136,7 @@ def validate_frozen_parameter_artifact(
         expected_workloads=expected_workloads,
         receipt_parameter_name=original_parameter_name,
         require_checked_in_fixture=False,
+        allow_historical_research_bundle=allow_historical_research_bundle,
     )
 
 
@@ -139,6 +151,7 @@ def _validate_parameter_artifact(
     expected_workloads: Mapping[str, object] | Collection[str] | None,
     receipt_parameter_name: str | None,
     require_checked_in_fixture: bool,
+    allow_historical_research_bundle: bool,
 ) -> ParameterArtifact:
     receipt_path = (
         provenance_path
@@ -178,6 +191,7 @@ def _validate_parameter_artifact(
             expected_kind=kind,
             expected_workloads=expected_workloads,
             parameter_name=expected_parameter_name,
+            allow_historical=allow_historical_research_bundle,
         )
         return ParameterArtifact(
             path=parameter_path,
@@ -353,9 +367,11 @@ def _validate_runtime_shape(
     kind: str,
     ceiling: int,
     receipt_path: Path,
+    *,
+    expected_schema_version: int = 2,
 ) -> None:
     if (
-        parameter.get("schema_version") != 2
+        parameter.get("schema_version") != expected_schema_version
         or parameter.get("adaptation") != "qcsd-client-only"
         or parameter.get("paper_equivalent") is not False
     ):
@@ -368,7 +384,12 @@ def _validate_runtime_shape(
     elif kind == "wtf_pad":
         _validate_wtf_pad(parameter, receipt_path)
     else:
-        _validate_walkie_talkie(parameter, ceiling, receipt_path)
+        _validate_walkie_talkie(
+            parameter,
+            ceiling,
+            receipt_path,
+            expected_schema_version=expected_schema_version,
+        )
 
 
 def _validate_traffic_morphing(
@@ -448,11 +469,28 @@ def _validate_wtf_pad(parameter: Mapping[str, Any], receipt_path: Path) -> None:
                 )
 
 
-def _validate_walkie_talkie(parameter: Mapping[str, Any], ceiling: int, receipt_path: Path) -> None:
+def _validate_walkie_talkie(
+    parameter: Mapping[str, Any],
+    ceiling: int,
+    receipt_path: Path,
+    *,
+    expected_schema_version: int,
+) -> None:
     profiles = parameter.get("profiles")
+    expected_matching_algorithm = (
+        "minimum-base-symmetric-mold-padding-cost-one-to-one"
+        if expected_schema_version == 3
+        else "minimum-cost-one-to-one"
+    )
+    receiver_continuation = parameter.get("receiver_continuation")
     if (
         parameter.get("packet_size") != ceiling
-        or parameter.get("matching_algorithm") != "minimum-cost-one-to-one"
+        or parameter.get("matching_algorithm") != expected_matching_algorithm
+        or (
+            expected_schema_version == 3
+            and receiver_continuation != _WALKIE_TALKIE_RECEIVER_CONTINUATION
+        )
+        or (expected_schema_version == 2 and "receiver_continuation" in parameter)
         or not isinstance(profiles, list)
         or not profiles
     ):

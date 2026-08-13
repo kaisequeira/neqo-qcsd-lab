@@ -8,8 +8,10 @@ from typing import Mapping, Sequence
 from .fitting_trace import FittingTrace
 
 
-GENERATED_BY = "qcsd_lab.fitting_walkie_talkie 2.0.1"
+GENERATED_BY = "qcsd_lab.fitting_walkie_talkie 2.1.0"
 PACKET_SIZE = 1_200
+PARSER_ALLOWANCE_CEILING_BYTES = 1_000
+RECEIVER_CONTINUATION_CELLS = 1
 MAX_U32 = 2**32 - 1
 MAX_U64 = 2**64 - 1
 BURST_DEFINITION = "global-application-batch-direction-transitions"
@@ -75,6 +77,9 @@ def fit_walkie_talkie(
         {
             "left": left,
             "right": right,
+            "base_matching_cost_packets": symmetric_mold_padding_cost(
+                envelopes[left].bursts, envelopes[right].bursts
+            ),
             "matching_cost_packets": mold_padding_cost(
                 envelopes[left].bursts, envelopes[right].bursts
             ),
@@ -84,13 +89,16 @@ def fit_walkie_talkie(
     ]
     profiles: list[dict[str, object]] = []
     pair_receipt: list[dict[str, object]] = []
-    for real, decoy, cost in pairs:
+    for real, decoy, base_cost in pairs:
         real_envelope = envelopes[real]
         decoy_envelope = envelopes[decoy]
         molded = tuple(mold(real_envelope.bursts, decoy_envelope.bursts))
-        expected_cost = mold_padding_cost(real_envelope.bursts, decoy_envelope.bursts)
-        if cost != expected_cost:
+        expected_base_cost = symmetric_mold_padding_cost(
+            real_envelope.bursts, decoy_envelope.bursts
+        )
+        if base_cost != expected_base_cost:
             raise AssertionError("Walkie-Talkie matching cost changed during encoding")
+        matching_cost = mold_padding_cost(real_envelope.bursts, decoy_envelope.bursts)
         total_bytes = _total_packets(molded) * PACKET_SIZE
         if total_bytes > MAX_U64:
             raise ValueError("Walkie-Talkie total scheduled bytes exceed u64")
@@ -98,7 +106,7 @@ def fit_walkie_talkie(
             {
                 "real": real,
                 "decoy": decoy,
-                "matching_cost_packets": cost,
+                "matching_cost_packets": matching_cost,
                 "training_inputs": {
                     "real": list(training_inputs[real]),
                     "decoy": list(training_inputs[decoy]),
@@ -120,21 +128,31 @@ def fit_walkie_talkie(
                 "bursts": _bursts_json(molded),
             }
         )
-        pair_receipt.append({"real": real, "decoy": decoy, "matching_cost_packets": cost})
+        pair_receipt.append(
+            {
+                "real": real,
+                "decoy": decoy,
+                "base_matching_cost_packets": base_cost,
+                "matching_cost_packets": matching_cost,
+            }
+        )
 
     artifact: dict[str, object] = {
         "adaptation": "qcsd-client-only",
         "burst_definition": BURST_DEFINITION,
         "cell_byte_domain": CELL_BYTE_DOMAIN,
-        "schema_version": 2,
+        "schema_version": 3,
         "generated_by": GENERATED_BY,
-        "matching_algorithm": "minimum-cost-one-to-one",
+        "matching_algorithm": "minimum-base-symmetric-mold-padding-cost-one-to-one",
         "paper_equivalent": False,
         "packet_size": PACKET_SIZE,
+        "receiver_continuation": receiver_continuation_contract(),
         "profiles": profiles,
     }
     diagnostics: dict[str, object] = {
         "algorithm": "full-cohort-minimum-weight-perfect-matching",
+        "pairing_objective": "minimum-base-symmetric-mold-padding-cost",
+        "receiver_continuation": receiver_continuation_contract(),
         "candidate_pair_costs": candidate_costs,
         "selected_pairs": pair_receipt,
         "training_visits": training_visits,
@@ -290,7 +308,9 @@ def componentwise_envelope(visits: Sequence[Sequence[BurstPair]]) -> ProfileEnve
     return ProfileEnvelope(tuple(envelope), len(checked), varying, maximum_spread)
 
 
-def mold(real: Sequence[BurstPair], decoy: Sequence[BurstPair]) -> list[BurstPair]:
+def symmetric_mold(real: Sequence[BurstPair], decoy: Sequence[BurstPair]) -> list[BurstPair]:
+    """Return the batch-aware element-wise maximum of two observed envelopes."""
+
     real_batches = _split_batches(real, "real mould source")
     decoy_batches = _split_batches(decoy, "decoy mould source")
     if not real_batches or not decoy_batches:
@@ -313,9 +333,57 @@ def mold(real: Sequence[BurstPair], decoy: Sequence[BurstPair]) -> list[BurstPai
     return result
 
 
+def mold(real: Sequence[BurstPair], decoy: Sequence[BurstPair]) -> list[BurstPair]:
+    """Return the runtime mould with one bounded receiver-continuation cell."""
+
+    result: list[BurstPair] = []
+    for pair in symmetric_mold(real, decoy):
+        incoming = pair.incoming
+        if incoming:
+            if incoming > MAX_U32 - RECEIVER_CONTINUATION_CELLS:
+                raise ValueError("Walkie-Talkie adapted incoming component exceeds u32")
+            incoming += RECEIVER_CONTINUATION_CELLS
+        result.append(BurstPair(pair.outgoing, incoming, pair.batch_end))
+    return result
+
+
 def mold_padding_cost(real: Sequence[BurstPair], decoy: Sequence[BurstPair]) -> int:
     molded = mold(real, decoy)
-    return 2 * _total_packets(molded) - _total_packets(real) - _total_packets(decoy)
+    return _padding_cost(molded, real, decoy, "runtime")
+
+
+def symmetric_mold_padding_cost(real: Sequence[BurstPair], decoy: Sequence[BurstPair]) -> int:
+    molded = symmetric_mold(real, decoy)
+    return _padding_cost(molded, real, decoy, "base")
+
+
+def _padding_cost(
+    molded: Sequence[BurstPair],
+    real: Sequence[BurstPair],
+    decoy: Sequence[BurstPair],
+    label: str,
+) -> int:
+    molded_packets = _total_packets(molded)
+    source_packets = _total_packets(real) + _total_packets(decoy)
+    doubled = molded_packets * 2
+    if doubled > MAX_U64 or source_packets > MAX_U64 or doubled < source_packets:
+        raise ValueError(f"Walkie-Talkie {label} matching cost exceeds u64")
+    return doubled - source_packets
+
+
+def receiver_continuation_contract() -> dict[str, object]:
+    """Return the exact, JSON-safe post-mould receiver-continuation contract."""
+
+    raw_headroom = RECEIVER_CONTINUATION_CELLS * PACKET_SIZE
+    if raw_headroom <= PARSER_ALLOWANCE_CEILING_BYTES:
+        raise AssertionError("Walkie-Talkie continuation must exceed the parser allowance")
+    return {
+        "application_order": "after-symmetric-elementwise-mold",
+        "cells_per_nonzero_incoming_component": RECEIVER_CONTINUATION_CELLS,
+        "formula": ("adapted_incoming=symmetric_incoming+1-if-symmetric_incoming>0-else-0"),
+        "parser_allowance_ceiling_bytes": PARSER_ALLOWANCE_CEILING_BYTES,
+        "raw_headroom_bytes_per_nonzero_incoming_component": raw_headroom,
+    }
 
 
 def minimum_weight_perfect_matching(
@@ -325,7 +393,7 @@ def minimum_weight_perfect_matching(
     if not names or len(names) % 2:
         raise ValueError("Walkie-Talkie perfect matching requires an even workload count")
     costs = {
-        (left, right): mold_padding_cost(envelopes[left].bursts, envelopes[right].bursts)
+        (left, right): symmetric_mold_padding_cost(envelopes[left].bursts, envelopes[right].bursts)
         for index, left in enumerate(names)
         for right in names[index + 1 :]
     }
