@@ -28,6 +28,9 @@ from qcsd_lab.fitting_walkie_talkie import (
     minimum_weight_perfect_matching,
     mold,
     mold_padding_cost,
+    receiver_continuation_contract,
+    schema_five_mold,
+    schema_five_mold_padding_cost,
     symmetric_mold,
     symmetric_mold_padding_cost,
 )
@@ -644,7 +647,7 @@ def test_walkie_talkie_matching_is_full_cohort_and_lexically_tied() -> None:
         minimum_weight_perfect_matching({"alpha": envelope})
 
 
-def test_walkie_talkie_runtime_mould_adds_one_cell_to_each_incoming_component() -> None:
+def test_walkie_talkie_runtime_mould_adds_fixed_sender_and_receiver_cells() -> None:
     real = (
         BurstPair(2, 3, False),
         BurstPair(4, 0, True),
@@ -662,17 +665,46 @@ def test_walkie_talkie_runtime_mould_adds_one_cell_to_each_incoming_component() 
         BurstPair(2, 4, True),
     ]
     assert mold(real, decoy) == [
-        BurstPair(3, 4, False),
-        BurstPair(4, 0, True),
-        BurstPair(2, 5, True),
+        BurstPair(4, 4, False),
+        BurstPair(5, 0, True),
+        BurstPair(3, 5, True),
     ]
     assert symmetric_mold_padding_cost(real, decoy) == 9
-    assert mold_padding_cost(real, decoy) == 13
+    assert mold_padding_cost(real, decoy) == 19
 
 
-def test_walkie_talkie_receiver_continuation_rejects_u32_overflow() -> None:
-    maximum = (BurstPair(1, 2**32 - 1, True),)
-    with pytest.raises(ValueError, match="adapted incoming component exceeds u32"):
+def test_walkie_talkie_schema_five_runtime_mould_remains_receiver_only() -> None:
+    real = (BurstPair(2, 3, True),)
+    decoy = (BurstPair(3, 1, True),)
+
+    assert schema_five_mold(real, decoy) == [BurstPair(3, 4, True)]
+    assert schema_five_mold_padding_cost(real, decoy) == 5
+
+
+def test_walkie_talkie_current_contract_has_exact_sender_framing_literals() -> None:
+    contract = receiver_continuation_contract()
+
+    assert contract["sender_framing_cells_per_nonzero_outgoing_component"] == 1
+    assert contract["sender_framing_formula"] == (
+        "symmetric_outgoing=adapted_outgoing-1-if-adapted_outgoing>0-else-0"
+    )
+    assert contract["sender_framing_policy"] == (
+        "one-full-cell-per-positive-symmetric-outgoing-component-reserved-for-quic-http3-"
+        "stream-framing-and-mandatory-control-overhead"
+    )
+
+
+@pytest.mark.parametrize(
+    ("maximum", "direction"),
+    [
+        ((BurstPair(2**32 - 1, 1, True),), "outgoing"),
+        ((BurstPair(1, 2**32 - 1, True),), "incoming"),
+    ],
+)
+def test_walkie_talkie_runtime_adaptation_rejects_u32_overflow(
+    maximum: tuple[BurstPair, ...], direction: str
+) -> None:
+    with pytest.raises(ValueError, match=rf"adapted {direction} component exceeds u32"):
         mold(maximum, maximum)
 
 
@@ -703,7 +735,7 @@ def test_walkie_talkie_matching_ignores_nonlexical_input_order() -> None:
     assert selected == (("alpha", "bravo", 0), ("charlie", "delta", 0))
 
 
-def test_walkie_talkie_pairing_uses_base_cost_before_receiver_adaptation() -> None:
+def test_walkie_talkie_pairing_uses_base_cost_before_runtime_adaptation() -> None:
     def envelope(values: list[tuple[int, int]]) -> ProfileEnvelope:
         return ProfileEnvelope(
             tuple(
@@ -724,7 +756,7 @@ def test_walkie_talkie_pairing_uses_base_cost_before_receiver_adaptation() -> No
 
     # The base-cost optimum is alpha/charlie + bravo/delta (9 + 24).
     # Minimizing adapted cost instead would select alpha/delta + bravo/charlie
-    # (10 + 35 rather than 15 + 32), so this fixture binds the intended stage.
+    # (14 + 43 rather than 21 + 40), so this fixture binds the intended stage.
     assert minimum_weight_perfect_matching(envelopes) == (
         ("alpha", "charlie", 9),
         ("bravo", "delta", 24),
@@ -768,11 +800,11 @@ def test_walkie_talkie_receipt_rejects_a_nonminimum_lexical_matching() -> None:
     artifact, receipt = fit_walkie_talkie(traces)
     assert artifact["schema_version"] == 6
     assert all(
-        candidate["matching_cost_packets"] == candidate["base_matching_cost_packets"] + 2
+        candidate["matching_cost_packets"] == candidate["base_matching_cost_packets"] + 4
         for candidate in receipt["candidate_pair_costs"]
     )
     assert all(
-        selected["matching_cost_packets"] == selected["base_matching_cost_packets"] + 2
+        selected["matching_cost_packets"] == selected["base_matching_cost_packets"] + 4
         for selected in receipt["selected_pairs"]
     )
     for field in ("base_matching_cost_packets", "matching_cost_packets"):
@@ -786,13 +818,13 @@ def test_walkie_talkie_receipt_rejects_a_nonminimum_lexical_matching() -> None:
             "real": "alpha",
             "decoy": "charlie",
             "base_matching_cost_packets": 0,
-            "matching_cost_packets": 2,
+            "matching_cost_packets": 4,
         },
         {
             "real": "bravo",
             "decoy": "delta",
             "base_matching_cost_packets": 0,
-            "matching_cost_packets": 2,
+            "matching_cost_packets": 4,
         },
     ]
     with pytest.raises(ValueError, match="not the recorded optimum"):

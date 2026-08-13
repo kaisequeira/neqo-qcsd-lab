@@ -207,6 +207,10 @@ def _prefix_receipt(
                 "fin_acknowledged": bool(acknowledgements),
             }
         )
+    target_count = sum(
+        int(stage["exact_target_cells"]) for stage in spec["stream_activation_stages"]
+    )
+    target_slots = list(range(1, target_count + 1))
     observations: list[dict[str, object]] = [
         {
             "sequence": 0,
@@ -220,38 +224,22 @@ def _prefix_receipt(
             "direction": "outgoing",
             "udp_payload_bytes": 100,
         },
+        *[
+            {
+                "sequence": index + 2,
+                "phase": "qualification",
+                "direction": "outgoing",
+                "udp_payload_bytes": 1_200,
+            }
+            for index in range(target_count)
+        ],
         {
-            "sequence": 2,
-            "phase": "qualification",
-            "direction": "outgoing",
-            "udp_payload_bytes": 1_200,
-        },
-        {
-            "sequence": 3,
+            "sequence": target_count + 2,
             "phase": "qualification",
             "direction": "outgoing",
             "udp_payload_bytes": 87,
         },
-        {
-            "sequence": 4,
-            "phase": "qualification",
-            "direction": "outgoing",
-            "udp_payload_bytes": 1_200,
-        },
-        {
-            "sequence": 5,
-            "phase": "qualification",
-            "direction": "outgoing",
-            "udp_payload_bytes": 1_200,
-        },
-        {
-            "sequence": 6,
-            "phase": "qualification",
-            "direction": "outgoing",
-            "udp_payload_bytes": 1_200,
-        },
     ]
-    target_slots = [1, 2, 3, 4]
     stage_receipts = []
     prior_active = 0
     for stage_index, stage in enumerate(spec["stream_activation_stages"]):
@@ -454,6 +442,9 @@ def _sidecar(prefix_path: Path | None = None) -> dict[str, object]:
         "schema_six_capacity_falsification_diagnostic": (
             qualification._schema_six_capacity_falsification_diagnostic_receipt()
         ),
+        "schema_two_sender_framing_falsification_diagnostic": (
+            qualification._schema_two_sender_framing_falsification_diagnostic_receipt()
+        ),
         "prefix_pack_spec": {
             "path": "cloudflare-quiche-r3.json",
             "sha256": spec_sha256,
@@ -519,6 +510,7 @@ def test_prefix_spec_is_an_acyclic_numeric_projection() -> None:
     assert spec["maximum_receiver_continuation_reserve_horizon"] == 3
     assert spec["required_chaff_survivors"] == 4
     assert spec["required_chaff_streams"] == 6
+    assert [burst["outgoing"] for burst in spec["numeric_profile"]["bursts"]] == [2, 3, 2]
     assert [
         stage["required_active_chaff_streams"] for stage in spec["stream_activation_stages"]
     ] == [
@@ -578,6 +570,8 @@ def test_prefix_spec_accepts_single_adapted_continuation_without_symmetric_base(
     )
 
     stage = spec["stream_activation_stages"][0]
+    assert stage["exact_target_cells"] == 2
+    assert stage["outgoing_cells"] == 2
     assert stage["adapted_incoming_cells"] == 1
     assert stage["symmetric_incoming_cells"] == 0
     assert validate_prefix_pack_spec(spec, workload_id="cloudflare-quiche-r3") == spec
@@ -587,8 +581,36 @@ def test_prefix_spec_accepts_single_adapted_continuation_without_symmetric_base(
         validate_prefix_pack_spec(changed, workload_id="cloudflare-quiche-r3")
 
 
+def test_prefix_spec_sender_framing_rejects_u32_overflow() -> None:
+    walkie = {
+        "packet_size": 1_200,
+        "profiles": [
+            {
+                "real": "cloudflare-quiche-r3",
+                "decoy": "nginx-quic-r3",
+                "bursts": [{"outgoing": 2**32 - 1, "incoming": 1}],
+            }
+        ],
+    }
+
+    with pytest.raises(ValueError, match="sender-framed prefix target exceeds u32"):
+        prefix_pack_spec(
+            "cloudflare-quiche-r3",
+            walkie,
+            source_walkie_talkie_artifact_sha256=(qualification.SOURCE_WALKIE_TALKIE_SHA256),
+        )
+
+
 def test_schema_two_capacity_plan_is_exact_for_the_sealed_six_workloads() -> None:
     walkie = load_json(SCHEMA_FIVE_WALKIE)
+    sender_framed_targets = {
+        "apache-traffic-server-docs-r3": [2, 5, 3],
+        "nginx-quic-r3": [2, 5, 3],
+        "bootstrap-introduction-r3": [2, 4],
+        "getbootstrap-home-r3": [2, 4],
+        "cloudflare-quiche-r3": [2, 3, 2],
+        "nghttp2-ngtcp2-r3": [2, 3, 2],
+    }
     expected = {
         "apache-traffic-server-docs-r3": (
             14,
@@ -651,6 +673,9 @@ def test_schema_two_capacity_plan_is_exact_for_the_sealed_six_workloads() -> Non
         assert spec["selected_chaff_resource_id"] == resource_id
         assert spec["selected_chaff_body_bytes"] == body_bytes
         assert spec["required_chaff_streams"] == required
+        assert [stage["exact_target_cells"] for stage in stages] == sender_framed_targets[
+            workload_id
+        ]
         assert [stage["application_body_floor_bytes"] for stage in stages] == floors
         assert [stage["base_chaff_bytes"] for stage in stages] == base
         assert [stage["exact_capacity_after_bytes"] for stage in stages] == after
@@ -721,6 +746,9 @@ def test_schema_six_file_backed_spec_hash_cannot_rebind_a_different_mould(
         "schema_five_diagnostic": qualification._schema_five_diagnostic_receipt(),
         "schema_six_capacity_falsification_diagnostic": (
             qualification._schema_six_capacity_falsification_diagnostic_receipt()
+        ),
+        "schema_two_sender_framing_falsification_diagnostic": (
+            qualification._schema_two_sender_framing_falsification_diagnostic_receipt()
         ),
         "workloads": records,
     }
@@ -960,12 +988,47 @@ def test_sidecar_rejects_base_manifest_hash_mismatch(tmp_path: Path) -> None:
         )
 
 
-def test_sidecar_rejects_schema_six_capacity_diagnostic_tampering(tmp_path: Path) -> None:
+def test_sidecar_rejects_boolean_schema_six_capacity_diagnostic_integer(tmp_path: Path) -> None:
     prefix_path = _write_prefix_spec(tmp_path)
     sidecar = _sidecar(prefix_path)
-    sidecar["schema_six_capacity_falsification_diagnostic"]["attempts"] = 2
+    sidecar["schema_six_capacity_falsification_diagnostic"]["failed"] = True
 
     with pytest.raises(ValueError, match="schema-six capacity falsification diagnostic"):
+        validate_sidecar(
+            sidecar,
+            workload_id="cloudflare-quiche-r3",
+            base_manifest_path=WORKLOAD,
+            prefix_spec_path=prefix_path,
+            require_current_implementation=False,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("failed_run_index", False), ("qualification_bytes_excluded", 1)],
+)
+def test_sidecar_binds_and_rejects_sender_framing_diagnostic_boolean_tampering(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    prefix_path = _write_prefix_spec(tmp_path)
+    sidecar = _sidecar(prefix_path)
+    diagnostic = sidecar["schema_two_sender_framing_falsification_diagnostic"]
+    assert diagnostic == qualification._schema_two_sender_framing_falsification_diagnostic_receipt()
+    assert diagnostic["archive_manifest_sha256"] == (
+        "c40d4d9e629d701438ca93b232eb7173814b9e1cec79314e49477e9329076b73"
+    )
+    assert diagnostic["receipt_sha256"] == (
+        "6ee69445b84db197c6602a02f6c91d566d28087aa33f36f1d27df5e7b748d354"
+    )
+    assert diagnostic["packets_sha256"] == (
+        "1b18dd574295061115a55b6c31045fd557aa137d7768f1149e9931e594e093c1"
+    )
+    assert diagnostic["log_sha256"] == (
+        "4de19185892585e194779c35c8125300588f178bc5f80fda02f5749523269b09"
+    )
+    diagnostic[field] = value
+
+    with pytest.raises(ValueError, match="schema-two sender-framing falsification diagnostic"):
         validate_sidecar(
             sidecar,
             workload_id="cloudflare-quiche-r3",

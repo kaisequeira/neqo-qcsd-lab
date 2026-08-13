@@ -8,10 +8,11 @@ from typing import Mapping, Sequence
 from .fitting_trace import FittingTrace
 
 
-GENERATED_BY = "qcsd_lab.fitting_walkie_talkie 2.3.0"
+GENERATED_BY = "qcsd_lab.fitting_walkie_talkie 2.4.0"
 PACKET_SIZE = 1_200
 PARSER_ALLOWANCE_CEILING_BYTES = 1_000
 RECEIVER_CONTINUATION_CELLS = 1
+SENDER_FRAMING_CELLS = 1
 MAX_U32 = 2**32 - 1
 MAX_U64 = 2**64 - 1
 BURST_DEFINITION = "global-application-batch-direction-transitions"
@@ -334,7 +335,26 @@ def symmetric_mold(real: Sequence[BurstPair], decoy: Sequence[BurstPair]) -> lis
 
 
 def mold(real: Sequence[BurstPair], decoy: Sequence[BurstPair]) -> list[BurstPair]:
-    """Return the runtime mould with one bounded receiver-continuation cell."""
+    """Return the runtime mould with fixed sender and receiver continuation cells."""
+
+    result: list[BurstPair] = []
+    for pair in symmetric_mold(real, decoy):
+        outgoing = pair.outgoing
+        if outgoing:
+            if outgoing > MAX_U32 - SENDER_FRAMING_CELLS:
+                raise ValueError("Walkie-Talkie adapted outgoing component exceeds u32")
+            outgoing += SENDER_FRAMING_CELLS
+        incoming = pair.incoming
+        if incoming:
+            if incoming > MAX_U32 - RECEIVER_CONTINUATION_CELLS:
+                raise ValueError("Walkie-Talkie adapted incoming component exceeds u32")
+            incoming += RECEIVER_CONTINUATION_CELLS
+        result.append(BurstPair(outgoing, incoming, pair.batch_end))
+    return result
+
+
+def schema_five_mold(real: Sequence[BurstPair], decoy: Sequence[BurstPair]) -> list[BurstPair]:
+    """Reconstruct the frozen schema-five receiver-only runtime mould."""
 
     result: list[BurstPair] = []
     for pair in symmetric_mold(real, decoy):
@@ -349,6 +369,13 @@ def mold(real: Sequence[BurstPair], decoy: Sequence[BurstPair]) -> list[BurstPai
 
 def mold_padding_cost(real: Sequence[BurstPair], decoy: Sequence[BurstPair]) -> int:
     molded = mold(real, decoy)
+    return _padding_cost(molded, real, decoy, "runtime")
+
+
+def schema_five_mold_padding_cost(real: Sequence[BurstPair], decoy: Sequence[BurstPair]) -> int:
+    """Return the byte-exact frozen schema-five runtime matching cost."""
+
+    molded = schema_five_mold(real, decoy)
     return _padding_cost(molded, real, decoy, "runtime")
 
 
@@ -380,6 +407,14 @@ def receiver_continuation_contract() -> dict[str, object]:
     return {
         **schema_five_receiver_continuation_contract(),
         "formula": "symmetric_incoming=adapted_incoming-1-if-adapted_incoming>0-else-0",
+        "sender_framing_cells_per_nonzero_outgoing_component": SENDER_FRAMING_CELLS,
+        "sender_framing_formula": (
+            "symmetric_outgoing=adapted_outgoing-1-if-adapted_outgoing>0-else-0"
+        ),
+        "sender_framing_policy": (
+            "one-full-cell-per-positive-symmetric-outgoing-component-reserved-for-quic-http3-"
+            "stream-framing-and-mandatory-control-overhead"
+        ),
         "causal_capacity_precondition": (
             "every-molded-component-outgoing>0;effective-configured-max-chaff-streams>=total-"
             "receiver-continuation-reserve-horizon+1;schema-two-stateful-stage-capacity-"

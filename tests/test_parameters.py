@@ -357,6 +357,21 @@ def test_schema_six_rejects_superseded_receiver_and_binding_shapes() -> None:
         Path("walkie-talkie.json"),
         expected_schema_version=6,
     )
+    for sender_field in (
+        "sender_framing_cells_per_nonzero_outgoing_component",
+        "sender_framing_formula",
+        "sender_framing_policy",
+    ):
+        changed = json.loads(json.dumps(value))
+        del changed["receiver_continuation"][sender_field]
+        with pytest.raises(ValueError, match="runtime shape"):
+            parameters._validate_runtime_shape(
+                changed,
+                "walkie_talkie",
+                1_200,
+                Path("walkie-talkie.json"),
+                expected_schema_version=6,
+            )
     changed = json.loads(json.dumps(value))
     changed["receiver_continuation"] = parameters._WALKIE_TALKIE_RECEIVER_CONTINUATION_SCHEMA_FIVE
     with pytest.raises(ValueError, match="runtime shape"):

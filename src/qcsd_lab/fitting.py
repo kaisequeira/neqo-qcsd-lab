@@ -48,14 +48,14 @@ RESEARCH_PARAMETER_INPUT_POLICY = "sealed-fitting-result-v1"
 RESEARCH_ARTIFACT_STATUS = "fitted-research-artifact"
 STRUCTURAL_ARTIFACT_TYPE = "qcsd-structural-research-defense-bundle"
 STRUCTURAL_ARTIFACT_STATUS = "structural-test-only"
-FITTER_VERSION = "qcsd_lab.fitting 2.3.0"
+FITTER_VERSION = "qcsd_lab.fitting 2.4.0"
 CONTRACT_FIVE_FITTER_VERSION = "qcsd_lab.fitting 2.1.2"
 LEGACY_FITTER_VERSION = "qcsd_lab.fitting 2.0.2"
 EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 ALGORITHM_GENERATORS = {
     "traffic_morphing": "qcsd_lab.fitting_morphing 2.0.0",
     "wtf_pad": "qcsd_lab.fitting_wtfpad 2.0.0",
-    "walkie_talkie": "qcsd_lab.fitting_walkie_talkie 2.3.0",
+    "walkie_talkie": "qcsd_lab.fitting_walkie_talkie 2.4.0",
 }
 CONTRACT_FIVE_ALGORITHM_GENERATORS = {
     **ALGORITHM_GENERATORS,
@@ -371,6 +371,7 @@ def _runtime_qualification_inputs(
     from .chaff_qualification import (
         _schema_five_diagnostic_receipt,
         _schema_six_capacity_falsification_diagnostic_receipt,
+        _schema_two_sender_framing_falsification_diagnostic_receipt,
         load_qualified_chaff,
     )
 
@@ -429,6 +430,9 @@ def _runtime_qualification_inputs(
         "schema_five_diagnostic": _schema_five_diagnostic_receipt(),
         "schema_six_capacity_falsification_diagnostic": (
             _schema_six_capacity_falsification_diagnostic_receipt()
+        ),
+        "schema_two_sender_framing_falsification_diagnostic": (
+            _schema_two_sender_framing_falsification_diagnostic_receipt()
         ),
         "workloads": workload_receipts,
     }
@@ -1055,6 +1059,7 @@ def _validate_runtime_qualification_inputs(
             "qualification_bytes_excluded",
             "schema_five_diagnostic",
             "schema_six_capacity_falsification_diagnostic",
+            "schema_two_sender_framing_falsification_diagnostic",
             "workloads",
         },
         "runtime qualification inputs",
@@ -1066,15 +1071,18 @@ def _validate_runtime_qualification_inputs(
         raise ValueError("runtime qualifications are not explicitly excluded from fitting")
     from .chaff_qualification import (
         _schema_five_diagnostic_receipt,
-        _schema_six_capacity_falsification_diagnostic_receipt,
+        _validate_schema_six_capacity_falsification_diagnostic_receipt,
+        _validate_schema_two_sender_framing_falsification_diagnostic_receipt,
     )
 
     if receipt["schema_five_diagnostic"] != _schema_five_diagnostic_receipt():
         raise ValueError("schema-five falsification diagnostic receipt is invalid")
-    if receipt["schema_six_capacity_falsification_diagnostic"] != (
-        _schema_six_capacity_falsification_diagnostic_receipt()
-    ):
-        raise ValueError("schema-six capacity falsification diagnostic receipt is invalid")
+    _validate_schema_six_capacity_falsification_diagnostic_receipt(
+        receipt["schema_six_capacity_falsification_diagnostic"]
+    )
+    _validate_schema_two_sender_framing_falsification_diagnostic_receipt(
+        receipt["schema_two_sender_framing_falsification_diagnostic"]
+    )
     if not isinstance(workload_order, list) or not isinstance(receipt["workloads"], list):
         raise ValueError("runtime qualification workload bindings are invalid")
     if len(receipt["workloads"]) != len(workload_order):
@@ -1256,6 +1264,8 @@ def _validate_prefix_spec_mould_binding(
 ) -> None:
     """Bind each acyclic qualification spec to the actual schema-six mould."""
 
+    from .chaff_qualification import _sender_frame_schema_five_bursts
+
     profiles = walkie_talkie.get("profiles")
     matches = (
         [
@@ -1270,9 +1280,12 @@ def _validate_prefix_spec_mould_binding(
     if len(matches) != 1:
         raise ValueError(f"schema-six Walkie-Talkie profile does not uniquely cover: {workload_id}")
     profile = matches[0]
+    bursts = profile.get("bursts")
+    if walkie_talkie.get("schema_version") == 5 and isinstance(bursts, list):
+        bursts = _sender_frame_schema_five_bursts(bursts)
     expected_numeric_profile = {
         "packet_size": walkie_talkie.get("packet_size"),
-        "bursts": profile.get("bursts"),
+        "bursts": bursts,
     }
     if not isinstance(spec, Mapping) or spec.get("numeric_profile") != expected_numeric_profile:
         raise ValueError(
@@ -1328,6 +1341,7 @@ def _qualification_bindings_from_runtime(value: object) -> list[dict[str, Any]]:
             "qualification_bytes_excluded",
             "schema_five_diagnostic",
             "schema_six_capacity_falsification_diagnostic",
+            "schema_two_sender_framing_falsification_diagnostic",
             "workloads",
         },
         "runtime qualification inputs",
@@ -1566,6 +1580,7 @@ def _validate_walkie_talkie_receipt(
     _validate_current_walkie_talkie_receipt(
         value,
         workload_order,
+        contract_version=contract_version,
         receiver_continuation=(
             fitting_walkie_talkie.schema_five_receiver_continuation_contract()
             if contract_version == 5
@@ -1678,6 +1693,7 @@ def _validate_current_walkie_talkie_receipt(
     value: object,
     workload_order: Sequence[str],
     *,
+    contract_version: int,
     receiver_continuation: Mapping[str, object],
 ) -> None:
     receipt = _exact_mapping(
@@ -1757,8 +1773,14 @@ def _validate_current_walkie_talkie_receipt(
             "base_matching_cost_packets": fitting_walkie_talkie.symmetric_mold_padding_cost(
                 envelopes[left].bursts, envelopes[right].bursts
             ),
-            "matching_cost_packets": fitting_walkie_talkie.mold_padding_cost(
-                envelopes[left].bursts, envelopes[right].bursts
+            "matching_cost_packets": (
+                fitting_walkie_talkie.schema_five_mold_padding_cost(
+                    envelopes[left].bursts, envelopes[right].bursts
+                )
+                if contract_version == 5
+                else fitting_walkie_talkie.mold_padding_cost(
+                    envelopes[left].bursts, envelopes[right].bursts
+                )
             ),
         }
         for left, right in expected_pairs
@@ -2413,6 +2435,16 @@ def _validate_current_walkie_talkie_artifact(
             visit["training_input_sha256"] for visit in workload["visits"]
         ]
     lexical = tuple(sorted(envelopes))
+    runtime_cost = (
+        fitting_walkie_talkie.schema_five_mold_padding_cost
+        if contract_version == 5
+        else fitting_walkie_talkie.mold_padding_cost
+    )
+    runtime_mold = (
+        fitting_walkie_talkie.schema_five_mold
+        if contract_version == 5
+        else fitting_walkie_talkie.mold
+    )
     expected_candidates = [
         {
             "left": left,
@@ -2422,9 +2454,7 @@ def _validate_current_walkie_talkie_artifact(
                     envelopes[left].bursts, envelopes[right].bursts
                 )
             ),
-            "matching_cost_packets": fitting_walkie_talkie.mold_padding_cost(
-                envelopes[left].bursts, envelopes[right].bursts
-            ),
+            "matching_cost_packets": runtime_cost(envelopes[left].bursts, envelopes[right].bursts),
         }
         for index, left in enumerate(lexical)
         for right in lexical[index + 1 :]
@@ -2437,7 +2467,7 @@ def _validate_current_walkie_talkie_artifact(
                 "real": real,
                 "decoy": decoy,
                 "base_matching_cost_packets": base_cost,
-                "matching_cost_packets": fitting_walkie_talkie.mold_padding_cost(
+                "matching_cost_packets": runtime_cost(
                     envelopes[real].bursts, envelopes[decoy].bursts
                 ),
             }
@@ -2451,14 +2481,12 @@ def _validate_current_walkie_talkie_artifact(
     for real, decoy, _base_cost in pairs:
         real_envelope = envelopes[real]
         decoy_envelope = envelopes[decoy]
-        molded = tuple(fitting_walkie_talkie.mold(real_envelope.bursts, decoy_envelope.bursts))
+        molded = tuple(runtime_mold(real_envelope.bursts, decoy_envelope.bursts))
         expected_profiles.append(
             {
                 "real": real,
                 "decoy": decoy,
-                "matching_cost_packets": fitting_walkie_talkie.mold_padding_cost(
-                    real_envelope.bursts, decoy_envelope.bursts
-                ),
+                "matching_cost_packets": runtime_cost(real_envelope.bursts, decoy_envelope.bursts),
                 "training_inputs": {
                     "real": training_by_workload[real],
                     "decoy": training_by_workload[decoy],
@@ -3089,6 +3117,9 @@ def _fitting_contract(workload_order: Sequence[str]) -> dict[str, object]:
     walkie = constants["walkie_talkie"]
     assert isinstance(walkie, dict)
     walkie["receiver_continuation"] = fitting_walkie_talkie.receiver_continuation_contract()
+    walkie["runtime_mold"] = (
+        "sender-framing-and-receiver-continuation-adaptation(symmetric-mold(real,decoy))"
+    )
     prepared = walkie["prepared_receiver_continuation_invariant"]
     assert isinstance(prepared, dict)
     receiver = fitting_walkie_talkie.receiver_continuation_contract()
@@ -3106,6 +3137,11 @@ def _fitting_contract(workload_order: Sequence[str]) -> dict[str, object]:
                 "all-future-reserve-exact-capacity-excluded-before-release;early-current-reserve-"
                 "continuation-release-exposes-only-its-post-cell-tail-to-remaining-ordinary-base-"
                 "allocation"
+            ),
+            "adapted_target_formula": (
+                "adapted_outgoing=symmetric_outgoing+1-if-symmetric_outgoing>0-else-0;"
+                "adapted_incoming=symmetric_incoming+1-if-symmetric_incoming>0-else-0;"
+                "target_bytes=adapted_cells*packet_size"
             ),
             "chaff_capacity_requirement": (
                 "schema-two-stateful-every-component-recurrence-uses-exact-prepared-application-"
@@ -3142,7 +3178,7 @@ def _fitting_contract(workload_order: Sequence[str]) -> dict[str, object]:
             "request_prefix_fit_requirement": (
                 "schema-two-every-component-staged-prefix-qualification-proves-cumulative-"
                 "application-and-one-shot-chaff-request-stream-frames-through-fin-fit-within-"
-                "each-exact-full-molded-outgoing-target"
+                "each-exact-full-sender-framed-molded-outgoing-target"
             ),
             "request_activation_policy": (
                 "schema-two-staged-zero-required-insert-count-nonblocking-qpack-requests;"
@@ -3197,7 +3233,9 @@ def _fitting_contract(workload_order: Sequence[str]) -> dict[str, object]:
                 "qualification_binding_policy"
             ],
             "scope": (
-                "exact-qualified-frozen-six-workload-research-cohort-under-listed-preconditions;"
+                "exact-qualified-frozen-six-workload-research-cohort-with-exact-frozen-request-"
+                "headers-selected-resource-response-identities-current-producer-and-current-"
+                "qualifier-under-listed-preconditions-not-a-universal-origin-guarantee;"
                 "controlled-wire-smoke-is-explicitly-nonauthoritative-and-excluded-from-fitting"
             ),
         }

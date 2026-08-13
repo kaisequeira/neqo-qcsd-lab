@@ -17,6 +17,7 @@ from qcsd_lab.capture_session import Defense
 from qcsd_lab.chaff_qualification import (
     _schema_five_diagnostic_receipt,
     _schema_six_capacity_falsification_diagnostic_receipt,
+    _schema_two_sender_framing_falsification_diagnostic_receipt,
 )
 from qcsd_lab.experiment import (
     accept_sample,
@@ -99,6 +100,9 @@ def _synthetic_qualification_inputs(
         "schema_five_diagnostic": _schema_five_diagnostic_receipt(),
         "schema_six_capacity_falsification_diagnostic": (
             _schema_six_capacity_falsification_diagnostic_receipt()
+        ),
+        "schema_two_sender_framing_falsification_diagnostic": (
+            _schema_two_sender_framing_falsification_diagnostic_receipt()
         ),
         "workloads": records,
     }
@@ -828,6 +832,8 @@ def _legacy_bundle_from_current(source: Path, destination: Path) -> Path:
     }
     for profile in walkie["profiles"]:
         for burst in profile["bursts"]:
+            if burst["outgoing"] > 0:
+                burst["outgoing"] -= 1
             if burst["incoming"] > 0:
                 burst["incoming"] -= 1
         profile["matching_cost_packets"] = selected_cost[(profile["real"], profile["decoy"])]
@@ -893,7 +899,7 @@ def test_fit_builds_exact_deterministic_bundle_without_mutating_source(tmp_path:
         )
     assert receipt["fitting_contract"]["contract_version"] == 6
     assert receipt["fitting_contract"]["workload_order"] == list(WORKLOADS)
-    assert receipt["fitting_contract"]["fitter_version"] == "qcsd_lab.fitting 2.3.0"
+    assert receipt["fitting_contract"]["fitter_version"] == "qcsd_lab.fitting 2.4.0"
     assert receipt["fitting_contract"]["parameter_schema_versions"] == {
         "traffic_morphing": 2,
         "walkie_talkie": 6,
@@ -928,6 +934,9 @@ def test_fit_builds_exact_deterministic_bundle_without_mutating_source(tmp_path:
     )
     assert walkie["receiver_continuation"]["formula"] == (
         "symmetric_incoming=adapted_incoming-1-if-adapted_incoming>0-else-0"
+    )
+    assert walkie["receiver_continuation"]["sender_framing_formula"] == (
+        "symmetric_outgoing=adapted_outgoing-1-if-adapted_outgoing>0-else-0"
     )
     assert walkie[
         "qualification_bindings"
@@ -1149,7 +1158,7 @@ def test_fit_builds_exact_deterministic_bundle_without_mutating_source(tmp_path:
     assert "residual_reallocation" not in continuation_invariant
     assert "residual_coalescence" not in continuation_invariant
     assert walkie["generated_by"].startswith(
-        "qcsd_lab.fitting_walkie_talkie 2.3.0; algorithm_receipt_sha256="
+        "qcsd_lab.fitting_walkie_talkie 2.4.0; algorithm_receipt_sha256="
     )
     assert str(tmp_path) not in receipt_text
     assert "timestamp" not in receipt_text
@@ -1201,6 +1210,45 @@ def test_runtime_receipt_rejects_schema_six_capacity_diagnostic_tampering(
     atomic_json(provenance_path, provenance)
 
     with pytest.raises(ValueError, match="schema-six capacity falsification diagnostic"):
+        _inspect_structural_artifact_bundle(changed)
+
+
+def test_runtime_receipt_rejects_sender_framing_diagnostic_tampering(
+    fitted_bundle: Path, tmp_path: Path
+) -> None:
+    changed = tmp_path / "changed"
+    shutil.copytree(fitted_bundle, changed)
+    provenance_path = changed / "provenance.json"
+    provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+    diagnostic = provenance["runtime_qualification_inputs"][
+        "schema_two_sender_framing_falsification_diagnostic"
+    ]
+    assert diagnostic == _schema_two_sender_framing_falsification_diagnostic_receipt()
+    diagnostic["packets_sha256"] = "0" * 64
+    atomic_json(provenance_path, provenance)
+
+    with pytest.raises(ValueError, match="schema-two sender-framing falsification diagnostic"):
+        _inspect_structural_artifact_bundle(changed)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("failed_run_index", False), ("qualification_bytes_excluded", 1)],
+)
+def test_runtime_receipt_rejects_sender_framing_diagnostic_boolean_aliases(
+    fitted_bundle: Path, tmp_path: Path, field: str, value: object
+) -> None:
+    changed = tmp_path / "changed"
+    shutil.copytree(fitted_bundle, changed)
+    provenance_path = changed / "provenance.json"
+    provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+    diagnostic = provenance["runtime_qualification_inputs"][
+        "schema_two_sender_framing_falsification_diagnostic"
+    ]
+    diagnostic[field] = value
+    atomic_json(provenance_path, provenance)
+
+    with pytest.raises(ValueError, match="schema-two sender-framing falsification diagnostic"):
         _inspect_structural_artifact_bundle(changed)
 
 
@@ -1814,7 +1862,9 @@ def test_schema_six_scope_excludes_controlled_wire_smoke_from_fitting() -> None:
         "walkie_talkie"
     ]
     assert current["prepared_receiver_continuation_invariant"]["scope"] == (
-        "exact-qualified-frozen-six-workload-research-cohort-under-listed-preconditions;"
+        "exact-qualified-frozen-six-workload-research-cohort-with-exact-frozen-request-headers-"
+        "selected-resource-response-identities-current-producer-and-current-qualifier-under-"
+        "listed-preconditions-not-a-universal-origin-guarantee;"
         "controlled-wire-smoke-is-explicitly-nonauthoritative-and-excluded-from-fitting"
     )
     assert historical["prepared_receiver_continuation_invariant"]["scope"] == (

@@ -50,6 +50,8 @@ MAX_QUALIFIED_CHAFF_STREAMS = 20
 MIN_CROSS_MODE_PARALLEL_CHAFF_STREAMS = 5
 UDP_PAYLOAD_CEILING = 1_200
 MAX_STREAM_DATA_EXCESS = 1_000
+MAX_WALKIE_TALKIE_COMPONENT_CELLS = 2**32 - 1
+SENDER_FRAMING_CELLS = 1
 SOURCE_WALKIE_TALKIE_SHA256 = "16dc343e233f7531277d96fd914d177202e7a508a50f7becdf2d8c0102b8446c"
 SCHEMA_FIVE_WALKIE_TALKIE_ARCHIVE = Path(
     "artifacts/research-1200-superseded-schema5-0a141768/walkie-talkie.json"
@@ -109,6 +111,7 @@ SIDECAR_KEYS = {
     "fitting_source",
     "schema_five_diagnostic",
     "schema_six_capacity_falsification_diagnostic",
+    "schema_two_sender_framing_falsification_diagnostic",
     "prefix_pack_spec",
     "resource",
 }
@@ -159,6 +162,17 @@ SCHEMA_SIX_CAPACITY_DIAGNOSTIC_KEYS = DIAGNOSTIC_KEYS | {
     "failed_workload_id",
     "failed_defense",
     "attempts",
+}
+SCHEMA_TWO_SENDER_FRAMING_DIAGNOSTIC_KEYS = {
+    "archive_manifest_sha256",
+    "failed_workload_id",
+    "failed_phase",
+    "failed_run_index",
+    "receipt_sha256",
+    "packets_sha256",
+    "log_sha256",
+    "role",
+    "qualification_bytes_excluded",
 }
 RESOURCE_RECEIPT_KEYS = {
     "resource_id",
@@ -700,22 +714,25 @@ def prefix_pack_spec(
     source_walkie_talkie_artifact_sha256: str,
     application_manifest: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Project the acyclic numeric WT input consumed by the prefix qualifier."""
+    """Project the sealed schema-five mould through current sender framing."""
 
     profile = _walkie_profile(walkie_talkie, workload_id)
     bursts = profile.get("bursts")
     packet_size = walkie_talkie.get("packet_size")
     if packet_size != UDP_PAYLOAD_CEILING or not isinstance(bursts, list) or not bursts:
         raise ValueError("Walkie-Talkie prefix-pack source has an invalid numeric profile")
+    source_bursts = [
+        {"outgoing": burst.get("outgoing"), "incoming": burst.get("incoming")}
+        for burst in bursts
+        if isinstance(burst, Mapping)
+    ]
+    if len(source_bursts) != len(bursts):
+        raise ValueError("Walkie-Talkie prefix-pack source has malformed bursts")
     numeric = {
         "packet_size": packet_size,
-        "bursts": [
-            {"outgoing": burst.get("outgoing"), "incoming": burst.get("incoming")}
-            for burst in bursts
-            if isinstance(burst, Mapping)
-        ],
+        "bursts": _sender_frame_schema_five_bursts(source_bursts),
     }
-    if len(numeric["bursts"]) != len(bursts) or any(
+    if any(
         type(burst[direction]) is not int
         or burst[direction] < 0
         or (direction == "outgoing" and burst[direction] == 0)
@@ -756,6 +773,33 @@ def prefix_pack_spec(
         "stream_activation_stages": stages,
         "numeric_profile": numeric,
     }
+
+
+def _sender_frame_schema_five_bursts(
+    bursts: Sequence[Mapping[str, Any]],
+) -> list[dict[str, int]]:
+    """Add the current fixed sender-framing cell to sealed schema-five targets."""
+
+    result: list[dict[str, int]] = []
+    for burst in bursts:
+        outgoing = burst.get("outgoing")
+        incoming = burst.get("incoming")
+        if (
+            type(outgoing) is not int
+            or type(incoming) is not int
+            or not 0 < outgoing <= MAX_WALKIE_TALKIE_COMPONENT_CELLS
+            or not 0 <= incoming <= MAX_WALKIE_TALKIE_COMPONENT_CELLS
+        ):
+            raise ValueError("Walkie-Talkie prefix-pack source has malformed bursts")
+        if outgoing > MAX_WALKIE_TALKIE_COMPONENT_CELLS - SENDER_FRAMING_CELLS:
+            raise ValueError("Walkie-Talkie sender-framed prefix target exceeds u32")
+        result.append(
+            {
+                "outgoing": outgoing + SENDER_FRAMING_CELLS,
+                "incoming": incoming,
+            }
+        )
+    return result
 
 
 def _walkie_profile(value: Mapping[str, Any], workload_id: str) -> Mapping[str, Any]:
@@ -1132,6 +1176,7 @@ def validate_sidecar(
         sidecar["fitting_source"],
         sidecar["schema_five_diagnostic"],
         sidecar["schema_six_capacity_falsification_diagnostic"],
+        sidecar["schema_two_sender_framing_falsification_diagnostic"],
     )
     spec_receipt = _exact_mapping(sidecar["prefix_pack_spec"], {"path", "sha256"}, "prefix spec")
     if Path(str(spec_receipt["path"])).name != prefix_spec_path.name or spec_receipt[
@@ -1455,6 +1500,9 @@ def qualify_chaff(
             "schema_five_diagnostic": _schema_five_diagnostic_receipt(),
             "schema_six_capacity_falsification_diagnostic": (
                 _schema_six_capacity_falsification_diagnostic_receipt()
+            ),
+            "schema_two_sender_framing_falsification_diagnostic": (
+                _schema_two_sender_framing_falsification_diagnostic_receipt()
             ),
             "prefix_pack_spec": {"path": spec_path.name, "sha256": sha256_file(spec_path)},
             "resource": {
@@ -2738,6 +2786,7 @@ def _validate_nontraining_receipts(
     fitting: object,
     schema_five_diagnostic: object,
     schema_six_capacity_diagnostic: object,
+    schema_two_sender_framing_diagnostic: object,
 ) -> None:
     source = _exact_mapping(fitting, FITTING_SOURCE_KEYS, "fitting source receipt")
     if (
@@ -2761,13 +2810,76 @@ def _validate_nontraining_receipts(
         or record["qualification_bytes_excluded"] is not True
     ):
         raise ValueError("schema-five diagnostic receipt is invalid")
+    _validate_schema_six_capacity_falsification_diagnostic_receipt(schema_six_capacity_diagnostic)
+    _validate_schema_two_sender_framing_falsification_diagnostic_receipt(
+        schema_two_sender_framing_diagnostic
+    )
+
+
+def _validate_schema_six_capacity_falsification_diagnostic_receipt(value: object) -> None:
     current = _exact_mapping(
-        schema_six_capacity_diagnostic,
+        value,
         SCHEMA_SIX_CAPACITY_DIAGNOSTIC_KEYS,
         "schema-six capacity falsification diagnostic receipt",
     )
-    if current != _schema_six_capacity_falsification_diagnostic_receipt():
+    if (
+        any(
+            type(current[field]) is not int
+            for field in ("planned", "accepted", "eligible", "failed", "attempts")
+        )
+        or any(
+            type(current[field]) is not str
+            for field in (
+                "campaign",
+                "evidence_sha256",
+                "experiment_sha256",
+                "status",
+                "failed_workload_id",
+                "failed_defense",
+                "role",
+            )
+        )
+        or current["qualification_bytes_excluded"] is not True
+        or current != _schema_six_capacity_falsification_diagnostic_receipt()
+    ):
         raise ValueError("schema-six capacity falsification diagnostic receipt is invalid")
+
+
+def _validate_schema_two_sender_framing_falsification_diagnostic_receipt(
+    value: object,
+) -> None:
+    sender_framing = _exact_mapping(
+        value,
+        SCHEMA_TWO_SENDER_FRAMING_DIAGNOSTIC_KEYS,
+        "schema-two sender-framing falsification diagnostic receipt",
+    )
+    if (
+        type(sender_framing["failed_run_index"]) is not int
+        or any(
+            type(sender_framing[field]) is not str
+            for field in (
+                "archive_manifest_sha256",
+                "failed_workload_id",
+                "failed_phase",
+                "receipt_sha256",
+                "packets_sha256",
+                "log_sha256",
+                "role",
+            )
+        )
+        or any(
+            not _digest(sender_framing[field])
+            for field in (
+                "archive_manifest_sha256",
+                "receipt_sha256",
+                "packets_sha256",
+                "log_sha256",
+            )
+        )
+        or sender_framing["qualification_bytes_excluded"] is not True
+        or sender_framing != _schema_two_sender_framing_falsification_diagnostic_receipt()
+    ):
+        raise ValueError("schema-two sender-framing falsification diagnostic receipt is invalid")
 
 
 def _validate_udp_statistics(
@@ -2870,6 +2982,24 @@ def _schema_six_capacity_falsification_diagnostic_receipt() -> dict[str, Any]:
         "failed_defense": "walkie-talkie",
         "attempts": 3,
         "role": "schema-six-walkie-talkie-capacity-falsification-diagnostic",
+        "qualification_bytes_excluded": True,
+    }
+
+
+def _schema_two_sender_framing_falsification_diagnostic_receipt() -> dict[str, Any]:
+    """Bind the failed prefix proof that exposed missing sender framing capacity."""
+
+    return {
+        "archive_manifest_sha256": (
+            "c40d4d9e629d701438ca93b232eb7173814b9e1cec79314e49477e9329076b73"
+        ),
+        "failed_workload_id": "nghttp2-ngtcp2-r3",
+        "failed_phase": "prefix-pack",
+        "failed_run_index": 0,
+        "receipt_sha256": "6ee69445b84db197c6602a02f6c91d566d28087aa33f36f1d27df5e7b748d354",
+        "packets_sha256": "1b18dd574295061115a55b6c31045fd557aa137d7768f1149e9931e594e093c1",
+        "log_sha256": "4de19185892585e194779c35c8125300588f178bc5f80fda02f5749523269b09",
+        "role": "schema-two-sender-framing-falsification-diagnostic",
         "qualification_bytes_excluded": True,
     }
 
