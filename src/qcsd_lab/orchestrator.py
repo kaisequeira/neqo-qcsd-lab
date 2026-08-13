@@ -316,8 +316,8 @@ def _load_qualified_chaff_inputs(
 
     if frozen_inputs is None:
         config_root = campaign_path.parent.parent
-        qualification_root = config_root / "chaff-qualification-store/v1"
-        prefix_root = config_root / "chaff-prefix-specs"
+        qualification_root = config_root / "chaff-qualification-store/v2"
+        prefix_root = config_root / "chaff-prefix-specs/v2"
         manifest_root: Path | None = None
     else:
         config_root = frozen_inputs
@@ -402,6 +402,26 @@ def _validate_loaded_qualification_bindings(
             "chaff_qualification_sidecar_sha256": workload.chaff_qualification_sha256,
             "prefix_pack_spec_sha256": workload.chaff_prefix_spec_sha256,
             "qualified_chaff_manifest_sha256": workload.chaff_manifest_sha256,
+            "application_resource_id": (
+                workload.chaff_manifest_data.get("application_resource_id")
+                if isinstance(workload.chaff_manifest_data, Mapping)
+                else None
+            ),
+            "selected_chaff_resource_id": (
+                workload.chaff_manifest_data.get("selected_chaff_resource_id")
+                if isinstance(workload.chaff_manifest_data, Mapping)
+                else None
+            ),
+            "qualified_parallel_chaff_streams": (
+                workload.chaff_manifest_data.get("qualified_parallel_chaff_streams")
+                if isinstance(workload.chaff_manifest_data, Mapping)
+                else None
+            ),
+            "walkie_talkie_required_chaff_streams": (
+                workload.chaff_manifest_data.get("walkie_talkie_required_chaff_streams")
+                if isinstance(workload.chaff_manifest_data, Mapping)
+                else None
+            ),
         }
         for workload in workloads
     }
@@ -1276,8 +1296,8 @@ def _materialize_schema_six_qualification_evidence(
 
     source_directories = {
         "workload": root / "workloads",
-        "chaff qualification": root / "chaff-qualification-store/v1",
-        "chaff prefix specification": root / "chaff-prefix-specs",
+        "chaff qualification": root / "chaff-qualification-store/v2",
+        "chaff prefix specification": root / "chaff-prefix-specs/v2",
     }
     frozen_directories = {
         "workload": inputs / "workloads",

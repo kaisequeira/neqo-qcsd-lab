@@ -48,14 +48,14 @@ RESEARCH_PARAMETER_INPUT_POLICY = "sealed-fitting-result-v1"
 RESEARCH_ARTIFACT_STATUS = "fitted-research-artifact"
 STRUCTURAL_ARTIFACT_TYPE = "qcsd-structural-research-defense-bundle"
 STRUCTURAL_ARTIFACT_STATUS = "structural-test-only"
-FITTER_VERSION = "qcsd_lab.fitting 2.2.0"
+FITTER_VERSION = "qcsd_lab.fitting 2.3.0"
 CONTRACT_FIVE_FITTER_VERSION = "qcsd_lab.fitting 2.1.2"
 LEGACY_FITTER_VERSION = "qcsd_lab.fitting 2.0.2"
 EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 ALGORITHM_GENERATORS = {
     "traffic_morphing": "qcsd_lab.fitting_morphing 2.0.0",
     "wtf_pad": "qcsd_lab.fitting_wtfpad 2.0.0",
-    "walkie_talkie": "qcsd_lab.fitting_walkie_talkie 2.2.0",
+    "walkie_talkie": "qcsd_lab.fitting_walkie_talkie 2.3.0",
 }
 CONTRACT_FIVE_ALGORITHM_GENERATORS = {
     **ALGORITHM_GENERATORS,
@@ -275,7 +275,7 @@ def _fit_result_structural_for_tests(
     result_root: Path,
     *,
     artifacts_root: Path,
-    qualification_inputs: tuple[list[dict[str, str]], dict[str, Any]],
+    qualification_inputs: tuple[list[dict[str, Any]], dict[str, Any]],
 ) -> Path:
     """Build a visibly non-authoritative bundle for internal numeric tests.
 
@@ -365,23 +365,24 @@ def _fit_result_structural_for_tests(
 
 def _runtime_qualification_inputs(
     fitting: FittingInputs,
-) -> tuple[list[dict[str, str]], dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Bind runtime-only qualifications without admitting their bytes to fitting."""
 
     from .chaff_qualification import (
         _schema_five_diagnostic_receipt,
+        _schema_six_capacity_falsification_diagnostic_receipt,
         load_qualified_chaff,
     )
 
     records_by_id = {
         record["id"]: record for record in fitting.verified.experiment["configuration"]["workloads"]
     }
-    bindings: list[dict[str, str]] = []
+    bindings: list[dict[str, Any]] = []
     workload_receipts: list[dict[str, Any]] = []
     for workload_id in fitting.workload_ids:
         manifest_path = fitting.verified.root / records_by_id[workload_id]["manifest"]
-        sidecar_path = LAB_ROOT / "config/chaff-qualification-store/v1" / f"{workload_id}.json"
-        spec_path = LAB_ROOT / "config/chaff-prefix-specs" / f"{workload_id}.json"
+        sidecar_path = LAB_ROOT / "config/chaff-qualification-store/v2" / f"{workload_id}.json"
+        spec_path = LAB_ROOT / "config/chaff-prefix-specs/v2" / f"{workload_id}.json"
         qualified = load_qualified_chaff(
             sidecar_path,
             workload_id=workload_id,
@@ -393,6 +394,12 @@ def _runtime_qualification_inputs(
             "chaff_qualification_sidecar_sha256": qualified.sidecar_sha256,
             "prefix_pack_spec_sha256": sha256_file(spec_path),
             "qualified_chaff_manifest_sha256": qualified.manifest_sha256,
+            "application_resource_id": qualified.application_resource_id,
+            "selected_chaff_resource_id": qualified.selected_chaff_resource_id,
+            "qualified_parallel_chaff_streams": qualified.qualified_parallel_chaff_streams,
+            "walkie_talkie_required_chaff_streams": (
+                qualified.walkie_talkie_required_chaff_streams
+            ),
         }
         bindings.append(binding)
         workload_receipts.append(
@@ -400,20 +407,29 @@ def _runtime_qualification_inputs(
                 "workload_id": workload_id,
                 "application_workload_sha256": qualified.application_manifest_sha256,
                 "chaff_qualification_sidecar": {
-                    "path": f"config/chaff-qualification-store/v1/{workload_id}.json",
+                    "path": f"config/chaff-qualification-store/v2/{workload_id}.json",
                     "sha256": qualified.sidecar_sha256,
                 },
                 "prefix_pack_spec": {
-                    "path": f"config/chaff-prefix-specs/{workload_id}.json",
+                    "path": f"config/chaff-prefix-specs/v2/{workload_id}.json",
                     "sha256": sha256_file(spec_path),
                 },
                 "qualified_chaff_manifest_sha256": qualified.manifest_sha256,
+                "application_resource_id": qualified.application_resource_id,
+                "selected_chaff_resource_id": qualified.selected_chaff_resource_id,
+                "qualified_parallel_chaff_streams": qualified.qualified_parallel_chaff_streams,
+                "walkie_talkie_required_chaff_streams": (
+                    qualified.walkie_talkie_required_chaff_streams
+                ),
             }
         )
     return bindings, {
         "role": "runtime-qualification-only-excluded-from-fitting",
         "qualification_bytes_excluded": True,
         "schema_five_diagnostic": _schema_five_diagnostic_receipt(),
+        "schema_six_capacity_falsification_diagnostic": (
+            _schema_six_capacity_falsification_diagnostic_receipt()
+        ),
         "workloads": workload_receipts,
     }
 
@@ -1038,6 +1054,7 @@ def _validate_runtime_qualification_inputs(
             "role",
             "qualification_bytes_excluded",
             "schema_five_diagnostic",
+            "schema_six_capacity_falsification_diagnostic",
             "workloads",
         },
         "runtime qualification inputs",
@@ -1047,10 +1064,17 @@ def _validate_runtime_qualification_inputs(
         or receipt["qualification_bytes_excluded"] is not True
     ):
         raise ValueError("runtime qualifications are not explicitly excluded from fitting")
-    from .chaff_qualification import _schema_five_diagnostic_receipt
+    from .chaff_qualification import (
+        _schema_five_diagnostic_receipt,
+        _schema_six_capacity_falsification_diagnostic_receipt,
+    )
 
     if receipt["schema_five_diagnostic"] != _schema_five_diagnostic_receipt():
         raise ValueError("schema-five falsification diagnostic receipt is invalid")
+    if receipt["schema_six_capacity_falsification_diagnostic"] != (
+        _schema_six_capacity_falsification_diagnostic_receipt()
+    ):
+        raise ValueError("schema-six capacity falsification diagnostic receipt is invalid")
     if not isinstance(workload_order, list) or not isinstance(receipt["workloads"], list):
         raise ValueError("runtime qualification workload bindings are invalid")
     if len(receipt["workloads"]) != len(workload_order):
@@ -1065,6 +1089,10 @@ def _validate_runtime_qualification_inputs(
                 "chaff_qualification_sidecar",
                 "prefix_pack_spec",
                 "qualified_chaff_manifest_sha256",
+                "application_resource_id",
+                "selected_chaff_resource_id",
+                "qualified_parallel_chaff_streams",
+                "walkie_talkie_required_chaff_streams",
             },
             "runtime qualification workload",
         )
@@ -1077,9 +1105,21 @@ def _validate_runtime_qualification_inputs(
             )
         ):
             raise ValueError("runtime qualification workload binding is invalid")
+        if (
+            type(record["application_resource_id"]) is not int
+            or record["application_resource_id"] != 0
+            or type(record["selected_chaff_resource_id"]) is not int
+            or record["selected_chaff_resource_id"] < 0
+            or type(record["walkie_talkie_required_chaff_streams"]) is not int
+            or not 1 <= record["walkie_talkie_required_chaff_streams"] <= 20
+            or type(record["qualified_parallel_chaff_streams"]) is not int
+            or record["qualified_parallel_chaff_streams"]
+            != max(5, record["walkie_talkie_required_chaff_streams"])
+        ):
+            raise ValueError("runtime qualification resource/capacity binding is invalid")
         for field, directory in (
-            ("chaff_qualification_sidecar", "chaff-qualification-store/v1"),
-            ("prefix_pack_spec", "chaff-prefix-specs"),
+            ("chaff_qualification_sidecar", "chaff-qualification-store/v2"),
+            ("prefix_pack_spec", "chaff-prefix-specs/v2"),
         ):
             file_receipt = _exact_mapping(record[field], {"path", "sha256"}, field)
             expected_path = f"config/{directory}/{workload_id}.json"
@@ -1118,8 +1158,8 @@ def _validate_schema_six_qualification_evidence(
             manifest_root = None
     else:
         workload_root = root / "workloads"
-        sidecar_root = root / "chaff-qualification-store" / "v1"
-        spec_root = root / "chaff-prefix-specs"
+        sidecar_root = root / "chaff-qualification-store" / "v2"
+        spec_root = root / "chaff-prefix-specs" / "v2"
         manifest_root = None
     for directory, label in (
         (workload_root, "application workloads"),
@@ -1143,7 +1183,7 @@ def _validate_schema_six_qualification_evidence(
     if tuple(records_by_id) != workload_order:
         raise ValueError("schema-six qualification evidence order is invalid")
 
-    verified_bindings: list[dict[str, str]] = []
+    verified_bindings: list[dict[str, Any]] = []
     for workload_id in workload_order:
         record = records_by_id[workload_id]
         application_path = _regular_evidence_file(
@@ -1170,6 +1210,12 @@ def _validate_schema_six_qualification_evidence(
             or qualified.sidecar_sha256 != record["chaff_qualification_sidecar"]["sha256"]
             or sha256_file(spec_path) != record["prefix_pack_spec"]["sha256"]
             or qualified.manifest_sha256 != record["qualified_chaff_manifest_sha256"]
+            or qualified.application_resource_id != record["application_resource_id"]
+            or qualified.selected_chaff_resource_id != record["selected_chaff_resource_id"]
+            or qualified.qualified_parallel_chaff_streams
+            != record["qualified_parallel_chaff_streams"]
+            or qualified.walkie_talkie_required_chaff_streams
+            != record["walkie_talkie_required_chaff_streams"]
         ):
             raise ValueError(f"schema-six qualification evidence hash mismatch: {workload_id}")
         if manifest_root is not None:
@@ -1191,6 +1237,12 @@ def _validate_schema_six_qualification_evidence(
                 "chaff_qualification_sidecar_sha256": qualified.sidecar_sha256,
                 "prefix_pack_spec_sha256": sha256_file(spec_path),
                 "qualified_chaff_manifest_sha256": qualified.manifest_sha256,
+                "application_resource_id": qualified.application_resource_id,
+                "selected_chaff_resource_id": qualified.selected_chaff_resource_id,
+                "qualified_parallel_chaff_streams": qualified.qualified_parallel_chaff_streams,
+                "walkie_talkie_required_chaff_streams": (
+                    qualified.walkie_talkie_required_chaff_streams
+                ),
             }
         )
     if verified_bindings != _qualification_bindings_from_runtime(runtime):
@@ -1268,13 +1320,14 @@ def _regular_evidence_file(path: Path, label: str, *, root: Path) -> Path:
     return resolved
 
 
-def _qualification_bindings_from_runtime(value: object) -> list[dict[str, str]]:
+def _qualification_bindings_from_runtime(value: object) -> list[dict[str, Any]]:
     receipt = _exact_mapping(
         value,
         {
             "role",
             "qualification_bytes_excluded",
             "schema_five_diagnostic",
+            "schema_six_capacity_falsification_diagnostic",
             "workloads",
         },
         "runtime qualification inputs",
@@ -1288,6 +1341,10 @@ def _qualification_bindings_from_runtime(value: object) -> list[dict[str, str]]:
             "chaff_qualification_sidecar_sha256": record["chaff_qualification_sidecar"]["sha256"],
             "prefix_pack_spec_sha256": record["prefix_pack_spec"]["sha256"],
             "qualified_chaff_manifest_sha256": record["qualified_chaff_manifest_sha256"],
+            "application_resource_id": record["application_resource_id"],
+            "selected_chaff_resource_id": record["selected_chaff_resource_id"],
+            "qualified_parallel_chaff_streams": record["qualified_parallel_chaff_streams"],
+            "walkie_talkie_required_chaff_streams": record["walkie_talkie_required_chaff_streams"],
         }
         for record in workloads
     ]
@@ -1295,7 +1352,7 @@ def _qualification_bindings_from_runtime(value: object) -> list[dict[str, str]]:
 
 def _qualification_bindings_from_provenance(
     provenance: Mapping[str, object],
-) -> list[dict[str, str]]:
+) -> list[dict[str, Any]]:
     runtime = provenance["runtime_qualification_inputs"]
     assert isinstance(runtime, Mapping)
     return _qualification_bindings_from_runtime(runtime)
@@ -3034,11 +3091,107 @@ def _fitting_contract(workload_order: Sequence[str]) -> dict[str, object]:
     walkie["receiver_continuation"] = fitting_walkie_talkie.receiver_continuation_contract()
     prepared = walkie["prepared_receiver_continuation_invariant"]
     assert isinstance(prepared, dict)
+    receiver = fitting_walkie_talkie.receiver_continuation_contract()
     prepared.update(
         {
+            "action_ordering": (
+                "provision-exact-one-shot-walkie-talkie-required-chaff-streams;stage-exact-"
+                "dependency-batch-application-requests-and-nondecreasing-chaff-cohort-under-"
+                "every-full-molded-outgoing-component;retain-distinct-reserves-for-all-future-"
+                "nonzero-incoming-components;after-base-events-are-requested-prefer-coalesced-"
+                "positive-outstanding-release-otherwise-release-current-oldest-reserve-before-"
+                "remaining-base;remove-corresponding-reserve-once"
+            ),
+            "base_capacity_policy": (
+                "all-future-reserve-exact-capacity-excluded-before-release;early-current-reserve-"
+                "continuation-release-exposes-only-its-post-cell-tail-to-remaining-ordinary-base-"
+                "allocation"
+            ),
+            "chaff_capacity_requirement": (
+                "schema-two-stateful-every-component-recurrence-uses-exact-prepared-application-"
+                "response-body-bytes-and-selected-qualified-response-body-bytes;declared-content-"
+                "length-is-never-capacity-credit"
+            ),
+            "fitting_input_support": (
+                "sealed-schema-five-numeric-mould-plus-exact-frozen-prepared-workload-response-"
+                "identities;live-qualification-bytes-excluded-from-numeric-fitting"
+            ),
+            "outstanding_release_condition": (
+                "prefer-live-unconsumed-base-at-or-below-parser-ceiling-coalesced-on-one-"
+                "acknowledged-nonreserved-stream;otherwise-release-oldest-retained-reserve-"
+                "regardless-of-live-base-debt"
+            ),
+            "positive_outstanding_selection": (
+                "prefer-single-peer-acknowledged-nonreserved-header-blocked-stream-with-exact-"
+                "coalesced-positive-live-outstanding-at-or-below-parser-ceiling;fallback-to-"
+                "oldest-retained-peer-acknowledged-pristine-reserve"
+            ),
+            "prefix_consumability_precondition": (
+                "each-stage-required-selected-resource-request-cohort-is-peer-acknowledged-"
+                "through-fin-before-dependent-base-allocation;selected-frozen-response-identity-"
+                "provides-exact-bound-body-capacity"
+            ),
+            "exact_capacity_requirement": (
+                "stateful-stage-exact-capacity-before>=base-chaff-bytes+continuation-bytes+all-"
+                "future-continuation-reserve-bodies-after-any-early-current-reserve-release"
+            ),
+            "reserve_horizon_capacity_requirement": (
+                "total-receiver-continuation-reserve-horizon+1<=walkie-talkie-required-chaff-"
+                "streams<=qualified-parallel-chaff-streams"
+            ),
+            "request_prefix_fit_requirement": (
+                "schema-two-every-component-staged-prefix-qualification-proves-cumulative-"
+                "application-and-one-shot-chaff-request-stream-frames-through-fin-fit-within-"
+                "each-exact-full-molded-outgoing-target"
+            ),
+            "request_activation_policy": (
+                "schema-two-staged-zero-required-insert-count-nonblocking-qpack-requests;"
+                "application-requests-transmitted-through-fin;required-active-chaff-requests-"
+                "transmitted-and-peer-acknowledged-through-fin-before-each-stage-gate"
+            ),
+            "causal_capacity_precondition": receiver["causal_capacity_precondition"],
+            "request_prefix_delivery_precondition": receiver[
+                "request_prefix_delivery_precondition"
+            ],
+            "post_outgoing_loss_liveness_limitation": receiver[
+                "post_outgoing_loss_liveness_limitation"
+            ],
+            "reserve_horizon_count_formula": (
+                "count-all-nonzero-incoming-components-from-current-component-through-final-"
+                "component"
+            ),
+            "reserve_horizon_definition": (
+                "current-and-all-later-nonzero-incoming-components-regardless-of-intervening-"
+                "positive-outgoing-components"
+            ),
+            "reserve_lifetime": (
+                "retain-each-distinct-initial-one-shot-cohort-reserve-across-later-positive-"
+                "outgoing-components-until-corresponding-continuation-controller-allocation-or-"
+                "session-end"
+            ),
+            "reserve_loss_policy": (
+                "loss-of-required-initial-peer-acknowledged-survivor-after-initial-request-"
+                "batch-fails-closed;no-new-chaff-request-replenishment"
+            ),
+            "reserve_refresh_policy": (
+                "refresh-only-from-initial-peer-acknowledged-preprovisioned-cohort-for-defense-"
+                "pending-continuation-or-tagged-continuation-still-queued-for-allocation"
+            ),
+            "reserve_rollback_policy": (
+                "retryable-unadvertised-continuation-allocation-rollback-or-requeue-"
+                "reconstitutes-corresponding-all-future-horizon-reserve-before-further-base-"
+                "allocation"
+            ),
+            "resource_precondition": receiver["resource_precondition"],
+            "initial_mold_causal_requirement": "every-molded-component-outgoing>0",
+            "zero_outstanding_selection": (
+                "release-corresponding-oldest-retained-peer-acknowledged-pristine-reserve-"
+                "whole-cell-and-remove-once"
+            ),
             "qualification_evidence_policy": (
-                "three-independent-five-way-response-identities-plus-three-independent-"
-                "production-first-cell-prefix-pack-transcripts;excluded-from-fitting"
+                "three-independent-qualified-parallel-response-identities-plus-three-"
+                "independent-production-every-component-staged-prefix-pack-transcripts;"
+                "excluded-from-fitting"
             ),
             "qualification_binding_policy": fitting_walkie_talkie.receiver_continuation_contract()[
                 "qualification_binding_policy"

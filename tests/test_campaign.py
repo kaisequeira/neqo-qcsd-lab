@@ -110,8 +110,8 @@ def _schema_six_qualification_materialization_inputs(
     inputs = tmp_path / "result/inputs"
     for directory in (
         source / "workloads",
-        source / "chaff-qualification-store/v1",
-        source / "chaff-prefix-specs",
+        source / "chaff-qualification-store/v2",
+        source / "chaff-prefix-specs/v2",
     ):
         directory.mkdir(parents=True)
     inputs.mkdir(parents=True)
@@ -120,8 +120,8 @@ def _schema_six_qualification_materialization_inputs(
     manifests: dict[str, dict[str, Any]] = {}
     for index, workload_id in enumerate(chaff_qualification.SEALED_WORKLOAD_IDS):
         application = source / "workloads" / f"{workload_id}.json"
-        sidecar = source / "chaff-qualification-store/v1" / f"{workload_id}.json"
-        spec = source / "chaff-prefix-specs" / f"{workload_id}.json"
+        sidecar = source / "chaff-qualification-store/v2" / f"{workload_id}.json"
+        spec = source / "chaff-prefix-specs/v2" / f"{workload_id}.json"
         atomic_json(
             application,
             {"resources": [_resource(0, f"https://{workload_id}.test/")]},
@@ -135,11 +135,11 @@ def _schema_six_qualification_materialization_inputs(
                 "workload_id": workload_id,
                 "application_workload_sha256": sha256_file(application),
                 "chaff_qualification_sidecar": {
-                    "path": f"config/chaff-qualification-store/v1/{workload_id}.json",
+                    "path": f"config/chaff-qualification-store/v2/{workload_id}.json",
                     "sha256": sha256_file(sidecar),
                 },
                 "prefix_pack_spec": {
-                    "path": f"config/chaff-prefix-specs/{workload_id}.json",
+                    "path": f"config/chaff-prefix-specs/v2/{workload_id}.json",
                     "sha256": sha256_file(spec),
                 },
                 "qualified_chaff_manifest_sha256": sha256_bytes(canonical_bytes(manifest)),
@@ -181,8 +181,8 @@ def test_schema_six_materialization_freezes_exact_cohort_without_expanding_campa
     existing: set[Path] = set()
     for source_directory, frozen_directory in (
         (source / "workloads", inputs / "workloads"),
-        (source / "chaff-qualification-store/v1", inputs / "chaff-qualifications"),
-        (source / "chaff-prefix-specs", inputs / "chaff-prefix-specs"),
+        (source / "chaff-qualification-store/v2", inputs / "chaff-qualifications"),
+        (source / "chaff-prefix-specs/v2", inputs / "chaff-prefix-specs"),
     ):
         frozen_directory.mkdir(exist_ok=True)
         for workload_id in selected:
@@ -334,8 +334,8 @@ def test_schema_six_bundle_materialization_preserves_two_workload_fourteen_sampl
     workloads: list[orchestrator.Workload] = []
     for workload_id in selected:
         application = source / "workloads" / f"{workload_id}.json"
-        sidecar = source / "chaff-qualification-store/v1" / f"{workload_id}.json"
-        spec = source / "chaff-prefix-specs" / f"{workload_id}.json"
+        sidecar = source / "chaff-qualification-store/v2" / f"{workload_id}.json"
+        spec = source / "chaff-prefix-specs/v2" / f"{workload_id}.json"
         data = load_json(application)
         runtime_bytes = canonical_bytes(orchestrator.runtime_manifest(data))
         manifest_bytes = canonical_bytes(manifests[workload_id])
@@ -489,6 +489,55 @@ def test_walkie_talkie_current_contract_classifier_accepts_only_schema_six(
         Defense("current", "walkie_talkie", False, parameters_path=schema_six)
     )
     assert not orchestrator._uses_schema_six_walkie_talkie(Defense("front", "front", False))
+
+
+def test_loaded_schema_six_binding_cross_links_resource_and_cohort_fields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    provenance = tmp_path / "provenance.json"
+    atomic_json(provenance, {"fitting_contract": {"contract_version": 6}})
+    manifest = {
+        "application_resource_id": 0,
+        "selected_chaff_resource_id": 6,
+        "qualified_parallel_chaff_streams": 20,
+        "walkie_talkie_required_chaff_streams": 20,
+    }
+    workload = orchestrator.Workload(
+        id="alpha",
+        visits=1,
+        path=tmp_path / "alpha.json",
+        source_bytes=b"{}\n",
+        sha256="a" * 64,
+        data={},
+        resource_count=1,
+        origin_count=1,
+        chaff_qualification_sha256="b" * 64,
+        chaff_prefix_spec_sha256="c" * 64,
+        chaff_manifest_sha256="d" * 64,
+        chaff_manifest_data=manifest,
+    )
+    defense = Defense(
+        "walkie-talkie",
+        "walkie_talkie",
+        False,
+        parameters_provenance_path=provenance,
+    )
+    binding = {
+        "workload_id": "alpha",
+        "chaff_qualification_sidecar_sha256": "b" * 64,
+        "prefix_pack_spec_sha256": "c" * 64,
+        "qualified_chaff_manifest_sha256": "d" * 64,
+        **manifest,
+    }
+    monkeypatch.setattr(
+        "qcsd_lab.fitting._qualification_bindings_from_provenance",
+        lambda _value: [binding],
+    )
+    orchestrator._validate_loaded_qualification_bindings((defense,), (workload,))
+
+    binding["walkie_talkie_required_chaff_streams"] = 19
+    with pytest.raises(ValueError, match="do not match schema-six"):
+        orchestrator._validate_loaded_qualification_bindings((defense,), (workload,))
 
 
 @pytest.mark.parametrize("failure", ["unknown", "dependent", "empty", "origin-mismatch"])
@@ -998,10 +1047,10 @@ def test_current_qualified_chaff_loader_rejects_symlinked_evidence(
     campaign_path = _configuration(tmp_path)
     workload = load_campaign(campaign_path).workloads[0]
     config = tmp_path / "config"
-    sidecar = config / "chaff-qualification-store/v1/alpha.json"
-    spec = config / "chaff-prefix-specs/alpha.json"
+    sidecar = config / "chaff-qualification-store/v2/alpha.json"
+    spec = config / "chaff-prefix-specs/v2/alpha.json"
     sidecar.parent.mkdir(parents=True)
-    spec.parent.mkdir()
+    spec.parent.mkdir(parents=True)
     sidecar.write_text("{}\n", encoding="utf-8")
     spec.write_text("{}\n", encoding="utf-8")
     selected = sidecar if symlinked == "sidecar" else spec

@@ -31,6 +31,12 @@ CLOCK_EPOCH_MIN_PACKETS = 32
 CLOCK_EPOCH_MIN_SPAN_NS = 500_000_000
 CLOCK_STEP_MIN_INTERVAL_NS = 25_000_000_000
 CLOCK_STEP_MAX_INTERVAL_NS = 35_000_000_000
+CLOCK_ANCHOR_FIELDS = {
+    "start_realtime_unix_ns",
+    "start_monotonic_ns",
+    "end_realtime_unix_ns",
+    "end_monotonic_ns",
+}
 RECONCILIATION_LIMITATIONS = (
     (
         "Encrypted direct PCAP proves datagram timing, direction, and wire length, but cannot "
@@ -53,7 +59,10 @@ RECONCILIATION_LIMITATIONS = (
     (
         "Abrupt capture wall-clock corrections are accepted only as positive 50--100 ms "
         "steps with consecutive packet support, well-supported constant-offset epochs, and "
-        "a 25--35 s cadence when steps repeat; negative steps and drift remain ineligible."
+        "a 25--35 s cadence when steps repeat. A final positive step whose terminal epoch "
+        "lacks the ordinary packet/span support additionally requires independently sealed "
+        "realtime/monotonic wrapper anchors; "
+        "negative steps and drift remain ineligible."
     ),
     (
         "Ethernet frame-to-UDP conversion assumes the declared untagged Ethernet, "
@@ -93,6 +102,7 @@ def reconcile_direct_runner_artifacts(
     direct_trace_path: Path,
     *,
     timestamp_tolerance_ns: int = DEFAULT_TIMESTAMP_TOLERANCE_NS,
+    clock_anchors: Mapping[str, Any] | None = None,
 ) -> DirectRunnerReconciliation:
     """Reconcile collection artifacts before an attempt is promoted."""
 
@@ -104,10 +114,12 @@ def reconcile_direct_runner_artifacts(
     overheads = _endpoint_frame_overheads(run)
     runner_packets = _read_runner_packets(runner_packets_path, overheads)
     direct_packets = _read_direct_packets(direct_trace_path)
+    clock_adjustment_ns = _clock_adjustment_ns(clock_anchors)
     matches, unmatched_tail, residuals, clock_offset, clock_metrics = _reconcile_runner_packets(
         runner_packets,
         direct_packets,
         timestamp_tolerance_ns=timestamp_tolerance_ns,
+        end_anchor_adjustment_ns=clock_adjustment_ns,
     )
     absolute_residuals = sorted(abs(value) for value in residuals)
     return DirectRunnerReconciliation(
@@ -241,6 +253,7 @@ def _reconcile_runner_packets(
     direct: list[_DirectPacket],
     *,
     timestamp_tolerance_ns: int,
+    end_anchor_adjustment_ns: int | None,
 ) -> tuple[dict[int, int], list[int], list[int], int, dict[str, Any]]:
     direct_by_signature: dict[tuple[str, int], deque[int]] = defaultdict(deque)
     runner_by_signature: dict[tuple[str, int], list[_RunnerPacket]] = defaultdict(list)
@@ -287,6 +300,7 @@ def _reconcile_runner_packets(
     residuals, clock_offset, clock_metrics = _reconcile_clock_epochs(
         ordered_matches,
         timestamp_tolerance_ns=timestamp_tolerance_ns,
+        end_anchor_adjustment_ns=end_anchor_adjustment_ns,
     )
     return matches, unmatched, residuals, clock_offset, clock_metrics
 
@@ -295,6 +309,7 @@ def _reconcile_clock_epochs(
     ordered_matches: list[tuple[_RunnerPacket, int, int]],
     *,
     timestamp_tolerance_ns: int,
+    end_anchor_adjustment_ns: int | None,
 ) -> tuple[list[int], int, dict[str, Any]]:
     """Fit only strongly evidenced positive wall-clock steps between constant epochs."""
 
@@ -309,16 +324,47 @@ def _reconcile_clock_epochs(
             f"{min(negative_steps)}ns"
         )
 
+    positive_steps = [
+        (index, ordered_matches[index][2] - ordered_matches[index - 1][2])
+        for index in range(1, len(ordered_matches))
+        if ordered_matches[index][2] - ordered_matches[index - 1][2] >= CLOCK_STEP_MIN_NS
+    ]
     boundaries: list[int] = []
     boundary_deltas: list[int] = []
-    for index in range(1, len(ordered_matches)):
-        delta = ordered_matches[index][2] - ordered_matches[index - 1][2]
-        if not CLOCK_STEP_MIN_NS <= delta <= CLOCK_STEP_MAX_NS:
-            continue
+    end_anchored_boundary: int | None = None
+    for index, delta in positive_steps:
         context_start = index - CLOCK_STEP_CONTEXT_PACKETS
         context_end = index + CLOCK_STEP_CONTEXT_PACKETS
-        if context_start < 0 or context_end > len(ordered_matches):
+        standard_step = CLOCK_STEP_MIN_NS <= delta <= CLOCK_STEP_MAX_NS
+        if context_start < 0:
             raise ValueError("direct/runner clock step has insufficient consecutive support")
+        tail_epoch = ordered_matches[index:]
+        tail_span_ns = (
+            (tail_epoch[-1][0].monotonic_us - tail_epoch[0][0].monotonic_us) * 1_000
+            if tail_epoch
+            else 0
+        )
+        sparse_tail = (
+            len(tail_epoch) < CLOCK_EPOCH_MIN_PACKETS or tail_span_ns < CLOCK_EPOCH_MIN_SPAN_NS
+        )
+        has_standard_context = context_end <= len(ordered_matches)
+        if sparse_tail and end_anchor_adjustment_ns is not None:
+            if end_anchored_boundary is not None or index != positive_steps[-1][0]:
+                raise ValueError("only one final positive clock step may use end-anchor evidence")
+            context_end = len(ordered_matches)
+            end_anchored_boundary = index
+        elif standard_step and has_standard_context:
+            pass
+        elif sparse_tail:
+            raise ValueError(
+                "sparse final positive clock step requires "
+                "realtime/monotonic end-anchor corroboration"
+            )
+        elif not standard_step:
+            raise ValueError(
+                "well-supported direct/runner clock-step epoch offsets are outside the "
+                "50--100 ms bound"
+            )
         direct_indices = [
             direct_index
             for _packet, direct_index, _offset in ordered_matches[context_start:context_end]
@@ -348,9 +394,9 @@ def _reconcile_clock_epochs(
         epoch = ordered_matches[start:end]
         packet_count = len(epoch)
         span_ns = (epoch[-1][0].monotonic_us - epoch[0][0].monotonic_us) * 1_000 if epoch else 0
-        if boundaries and (
-            packet_count < CLOCK_EPOCH_MIN_PACKETS or span_ns < CLOCK_EPOCH_MIN_SPAN_NS
-        ):
+        weak_epoch = packet_count < CLOCK_EPOCH_MIN_PACKETS or span_ns < CLOCK_EPOCH_MIN_SPAN_NS
+        is_end_anchored_tail = end_anchored_boundary is not None and start == end_anchored_boundary
+        if boundaries and weak_epoch and not is_end_anchored_tail:
             raise ValueError(
                 "direct/runner clock epoch lacks minimum support: "
                 f"{packet_count} packets over {span_ns}ns"
@@ -386,7 +432,20 @@ def _reconcile_clock_epochs(
         zip(boundaries, boundary_deltas, strict=True)
     ):
         offset_delta = offsets[step_index + 1] - offsets[step_index]
-        if not CLOCK_STEP_MIN_NS <= offset_delta <= CLOCK_STEP_MAX_NS:
+        end_anchor_corroborated = boundary == end_anchored_boundary
+        if end_anchor_corroborated:
+            assert end_anchor_adjustment_ns is not None
+            cumulative_offset_delta = offsets[-1] - offsets[0]
+            if (
+                end_anchor_adjustment_ns <= 0
+                or abs(cumulative_offset_delta - end_anchor_adjustment_ns)
+                > DEFAULT_TIMESTAMP_TOLERANCE_NS
+            ):
+                raise ValueError(
+                    "direct/runner final clock step does not match the "
+                    "realtime/monotonic end-anchor adjustment"
+                )
+        elif not CLOCK_STEP_MIN_NS <= offset_delta <= CLOCK_STEP_MAX_NS:
             raise ValueError(
                 "direct/runner clock-step epoch offsets are outside the 50--100 ms bound"
             )
@@ -399,6 +458,7 @@ def _reconcile_clock_epochs(
                 "runner_time_ns": packet.monotonic_us * 1_000,
                 "observed_boundary_delta_ns": observed_delta,
                 "epoch_offset_delta_ns": offset_delta,
+                "end_anchor_corroborated": end_anchor_corroborated,
             }
         )
 
@@ -412,8 +472,28 @@ def _reconcile_clock_epochs(
             "direct_clock_step_count": len(steps),
             "direct_clock_segments": segments,
             "direct_clock_steps": steps,
+            "direct_clock_end_anchor_adjustment_ns": end_anchor_adjustment_ns,
+            "direct_clock_end_anchor_used": end_anchored_boundary is not None,
         },
     )
+
+
+def _clock_adjustment_ns(clock_anchors: Mapping[str, Any] | None) -> int | None:
+    if clock_anchors is None:
+        return None
+    if set(clock_anchors) != CLOCK_ANCHOR_FIELDS:
+        raise ValueError("capture clock anchors have invalid fields")
+    values: dict[str, int] = {}
+    for field in CLOCK_ANCHOR_FIELDS:
+        value = clock_anchors.get(field)
+        if type(value) is not int or value < 0:
+            raise ValueError(f"capture clock anchor {field} must be a non-negative integer")
+        values[field] = value
+    monotonic_elapsed = values["end_monotonic_ns"] - values["start_monotonic_ns"]
+    if monotonic_elapsed <= 0:
+        raise ValueError("capture monotonic end anchor must follow its start anchor")
+    realtime_elapsed = values["end_realtime_unix_ns"] - values["start_realtime_unix_ns"]
+    return realtime_elapsed - monotonic_elapsed
 
 
 def _read_exact_csv(path: Path, fields: tuple[str, ...]) -> list[dict[str, str]]:

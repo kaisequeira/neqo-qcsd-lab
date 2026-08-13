@@ -50,9 +50,14 @@ if ! docker image inspect "${image}" >/dev/null 2>&1; then
   exit 1
 fi
 
-if [[ "${1:-}" == "derive-chaff-prefix-specs" || "${1:-}" == "fit" ]]; then
+if [[ "${1:-}" == "derive-chaff-prefix-specs" ||
+      "${1:-}" == "qualify-chaff" ||
+      "${1:-}" == "fit" ]]; then
   guarded_root="${ROOT}/config"
   guarded_label="derive-chaff-prefix-specs config"
+  if [[ "${1:-}" == "qualify-chaff" ]]; then
+    guarded_label="qualify-chaff config"
+  fi
   if [[ "${1:-}" == "fit" ]]; then
     guarded_root="${ROOT}/artifacts"
     guarded_label="fit artifact"
@@ -68,21 +73,32 @@ image_id="$(docker image inspect --format '{{.Id}}' "${image}")"
 
 if [[ "${1:-}" == "qualify-chaff" ]]; then
   for required_directory in \
+    "${ROOT}/config/workloads" \
     "${ROOT}/config/chaff-prefix-specs" \
+    "${ROOT}/config/chaff-prefix-specs/v2" \
     "${ROOT}/config/chaff-qualification-store"; do
     if [[ ! -d "${required_directory}" || -L "${required_directory}" ]]; then
       echo "qualify-chaff requires an existing non-symlink directory: ${required_directory}" >&2
       exit 1
     fi
   done
+  if [[ -e "${ROOT}/config/chaff-qualification-store/v2" ||
+        -L "${ROOT}/config/chaff-qualification-store/v2" ]]; then
+    echo "qualify-chaff requires absent config/chaff-qualification-store/v2" >&2
+    exit 1
+  fi
 fi
 if [[ "${1:-}" == "derive-chaff-prefix-specs" ]]; then
   command -v python3 >/dev/null 2>&1 || {
     echo "derive-chaff-prefix-specs requires python3 on the host" >&2
     exit 1
   }
-  if [[ -e "${ROOT}/config/chaff-prefix-specs" || -L "${ROOT}/config/chaff-prefix-specs" ]]; then
-    echo "derive-chaff-prefix-specs requires absent config/chaff-prefix-specs" >&2
+  if [[ ! -d "${ROOT}/config/chaff-prefix-specs" || -L "${ROOT}/config/chaff-prefix-specs" ]]; then
+    echo "derive-chaff-prefix-specs requires an existing non-symlink config/chaff-prefix-specs parent" >&2
+    exit 1
+  fi
+  if [[ -e "${ROOT}/config/chaff-prefix-specs/v2" || -L "${ROOT}/config/chaff-prefix-specs/v2" ]]; then
+    echo "derive-chaff-prefix-specs requires absent config/chaff-prefix-specs/v2" >&2
     exit 1
   fi
 fi
@@ -199,7 +215,19 @@ if [[ "${1:-}" == "prepare" ]]; then
   container+=(--volume "${ROOT}/config/workloads:/lab/config/workloads:rw")
 fi
 if [[ "${1:-}" == "derive-chaff-prefix-specs" ]]; then
-  container+=(--volume "${ROOT}/config:/lab/config:rw")
+  container+=(
+    --volume "${ROOT}/config/chaff-prefix-specs:/lab/config/chaff-prefix-specs:rw"
+  )
+  while IFS= read -r -d '' prefix_spec_child; do
+    prefix_spec_name="${prefix_spec_child##*/}"
+    if [[ ! "${prefix_spec_name}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+      echo "derive-chaff-prefix-specs rejects unsafe pre-existing child name: ${prefix_spec_name}" >&2
+      exit 1
+    fi
+    container+=(
+      --volume "${prefix_spec_child}:/lab/config/chaff-prefix-specs/${prefix_spec_name}:ro"
+    )
+  done < <(find "${ROOT}/config/chaff-prefix-specs" -mindepth 1 -maxdepth 1 -print0)
 fi
 if [[ "${1:-}" == "qualify-chaff" ]]; then
   container+=(
@@ -207,6 +235,16 @@ if [[ "${1:-}" == "qualify-chaff" ]]; then
     --volume "${ROOT}/config/chaff-prefix-specs:/lab/config/chaff-prefix-specs:ro"
     --volume "${ROOT}/config/chaff-qualification-store:/lab/config/chaff-qualification-store:rw"
   )
+  while IFS= read -r -d '' qualification_child; do
+    qualification_name="${qualification_child##*/}"
+    if [[ ! "${qualification_name}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+      echo "qualify-chaff rejects unsafe store child name: ${qualification_name}" >&2
+      exit 1
+    fi
+    container+=(
+      --volume "${qualification_child}:/lab/config/chaff-qualification-store/${qualification_name}:ro"
+    )
+  done < <(find "${ROOT}/config/chaff-qualification-store" -mindepth 1 -maxdepth 1 -print0)
 fi
 if [[ "${1:-}" == "fit" ]]; then
   container+=(--volume "${ROOT}/artifacts:/lab/artifacts:rw")
@@ -280,6 +318,7 @@ import json, sys
 from pathlib import Path
 before = json.loads(Path(sys.argv[1]).read_text())
 after = json.loads(Path(sys.argv[2]).read_text())
+status = int(sys.argv[3])
 ids = (
     "apache-traffic-server-docs-r3",
     "bootstrap-introduction-r3",
@@ -288,15 +327,18 @@ ids = (
     "nghttp2-ngtcp2-r3",
     "nginx-quic-r3",
 )
-expected = {"chaff-prefix-specs": "directory"}
-expected.update({f"chaff-prefix-specs/{workload}.json": "file" for workload in ids})
+expected = {"chaff-prefix-specs/v2": "directory"}
+expected.update({f"chaff-prefix-specs/v2/{workload}.json": "file" for workload in ids})
 if any(after.get(path) != record for path, record in before.items()):
     raise SystemExit("derive-chaff-prefix-specs changed a pre-existing config input")
-if set(after) - set(before) != set(expected):
+added = set(after) - set(before)
+if status != 0 and added:
+    raise SystemExit("failed derive-chaff-prefix-specs changed the config tree")
+if status == 0 and added != set(expected):
     raise SystemExit("derive-chaff-prefix-specs changed files outside the exact-six output")
-if any(after[path].get("type") != kind for path, kind in expected.items()):
+if status == 0 and any(after[path].get("type") != kind for path, kind in expected.items()):
     raise SystemExit("derive-chaff-prefix-specs output type is invalid")
-' "$1" "$2"
+' "$1" "$2" "$3"
 }
 
 if [[ "${1:-}" == "derive-chaff-prefix-specs" ]]; then
@@ -312,7 +354,7 @@ if [[ "${1:-}" == "derive-chaff-prefix-specs" ]]; then
   status=$?
   set -e
   snapshot_regular_tree "${ROOT}/config" "derive-chaff-prefix-specs config" >"${after_snapshot}"
-  validate_prefix_derivation_delta "${before_snapshot}" "${after_snapshot}"
+  validate_prefix_derivation_delta "${before_snapshot}" "${after_snapshot}" "${status}"
   exit "${status}"
 fi
 
@@ -347,6 +389,64 @@ if not preexisting and status == 0 and any(
     raise SystemExit("fit output type is invalid")
 ' "$1" "$2" "$3" "$4"
 }
+
+validate_qualification_store_delta() {
+  python3 -c '
+import json, re, sys
+from pathlib import Path
+before = json.loads(Path(sys.argv[1]).read_text())
+after = json.loads(Path(sys.argv[2]).read_text())
+status = int(sys.argv[3])
+ids = (
+    "apache-traffic-server-docs-r3",
+    "bootstrap-introduction-r3",
+    "cloudflare-quiche-r3",
+    "getbootstrap-home-r3",
+    "nghttp2-ngtcp2-r3",
+    "nginx-quic-r3",
+)
+if any(after.get(path) != record for path, record in before.items()):
+    raise SystemExit("qualify-chaff changed pre-existing qualification evidence")
+added = set(after) - set(before)
+if status == 0:
+    expected = {"v2": "directory"}
+    expected.update({f"v2/{workload}.json": "file" for workload in ids})
+    if added != set(expected):
+        raise SystemExit("qualify-chaff changed files outside the exact schema-two cohort")
+    if any(after[path].get("type") != kind for path, kind in expected.items()):
+        raise SystemExit("qualify-chaff schema-two output type is invalid")
+else:
+    if not added:
+        raise SystemExit(0)
+    roots = {path.split("/", 1)[0] for path in added}
+    if len(roots) != 1:
+        raise SystemExit("failed qualify-chaff created more than one diagnostic candidate")
+    root = roots.pop()
+    if not re.fullmatch(r"[.]v2[.]qcsd-batch-[A-Za-z0-9_-]+", root):
+        raise SystemExit("failed qualify-chaff changed files outside one hidden candidate")
+    if after.get(root, {}).get("type") != "directory":
+        raise SystemExit("failed qualify-chaff candidate is not a directory")
+' "$1" "$2" "$3"
+}
+
+if [[ "${1:-}" == "qualify-chaff" ]]; then
+  before_snapshot="$(mktemp)"
+  after_snapshot="$(mktemp)"
+  cleanup_snapshots() {
+    rm -f "${before_snapshot}" "${after_snapshot}"
+  }
+  trap cleanup_snapshots EXIT INT TERM
+  snapshot_regular_tree \
+    "${ROOT}/config/chaff-qualification-store" "qualify-chaff store" >"${before_snapshot}"
+  set +e
+  "${container[@]}" "${image_id}" "$@"
+  status=$?
+  set -e
+  snapshot_regular_tree \
+    "${ROOT}/config/chaff-qualification-store" "qualify-chaff store" >"${after_snapshot}"
+  validate_qualification_store_delta "${before_snapshot}" "${after_snapshot}" "${status}"
+  exit "${status}"
+fi
 
 if [[ "${1:-}" == "fit" ]]; then
   before_snapshot="$(mktemp)"

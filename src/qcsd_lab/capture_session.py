@@ -167,6 +167,15 @@ def stable_digest(*parts: object) -> str:
     return digest.hexdigest()
 
 
+def _clock_anchor() -> dict[str, int]:
+    """Sample the two host clocks bracketing one runner invocation."""
+
+    return {
+        "monotonic_ns": time.monotonic_ns(),
+        "realtime_unix_ns": time.time_ns(),
+    }
+
+
 def _manifest_origins(manifest: dict[str, Any]) -> list[str]:
     origins = {https_origin(resource["url"]) for resource in manifest.get("resources", [])}
     return sorted(origin for origin in origins if origin is not None)
@@ -304,6 +313,7 @@ def _collect_attempt(
     capture_active_through_settle = False
     try:
         _wait_for_capture_start(process, capture_log)
+        clock_start = _clock_anchor()
         client, runner_timed_out, runner_host_timeout_seconds = _run_neqo_client(
             _client_command(
                 manifest,
@@ -318,6 +328,13 @@ def _collect_attempt(
             log=diagnostics / "neqo-client.log",
             configured_timeout_seconds=context.limits.timeout_seconds,
         )
+        clock_end = _clock_anchor()
+        capture_clock_anchors = {
+            "start_realtime_unix_ns": clock_start["realtime_unix_ns"],
+            "start_monotonic_ns": clock_start["monotonic_ns"],
+            "end_realtime_unix_ns": clock_end["realtime_unix_ns"],
+            "end_monotonic_ns": clock_end["monotonic_ns"],
+        }
         if neqo.is_dir():
             _copy_defense_parameter_artifacts(defense, neqo)
         if context.limits.settle_seconds:
@@ -397,6 +414,7 @@ def _collect_attempt(
                 run_json,
                 neqo / "packets.csv",
                 trace_path,
+                clock_anchors=capture_clock_anchors,
             )
             direct_runner_reconciliation_valid = reconciliation.evidence_eligible
             direct_runner_reconciliation = {
@@ -476,6 +494,7 @@ def _collect_attempt(
         "pcapng_bytes": output.stat().st_size if output.exists() else 0,
         "udp_payload_ceiling_evidence": ceiling_evidence,
         "capture_offload_evidence": offloads[0],
+        "capture_clock_anchors": capture_clock_anchors,
         "direct_runner_reconciliation": direct_runner_reconciliation,
         "valid": valid,
     }

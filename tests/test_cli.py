@@ -134,12 +134,12 @@ def test_launcher_never_creates_qualification_evidence_and_mounts_least_privileg
     assert 'mkdir -p "${ROOT}/config/chaff-prefix-specs"' not in launcher
     assert 'mkdir -p "${ROOT}/config/chaff-qualification-store"' not in launcher
     assert 'if [[ "${1:-}" == "qualify-chaff" ]]' in launcher
-    assert '"${ROOT}/config/chaff-prefix-specs"' in launcher
+    assert '"${ROOT}/config/chaff-prefix-specs/v2"' in launcher
     assert '"${ROOT}/config/chaff-qualification-store"' in launcher
     assert '[[ ! -d "${required_directory}" || -L "${required_directory}" ]]' in launcher
-    qualification_mounts = launcher.rsplit('if [[ "${1:-}" == "qualify-chaff" ]]; then', 1)[
-        -1
-    ].split("\nfi", 1)[0]
+    qualification_mounts = launcher.split(
+        'if [[ "${1:-}" == "qualify-chaff" ]]; then\n  container+=(', 1
+    )[-1].split("\nfi", 1)[0]
     assert '--volume "${ROOT}/config/workloads:/lab/config/workloads:ro"' in qualification_mounts
     assert (
         '--volume "${ROOT}/config/chaff-prefix-specs:/lab/config/chaff-prefix-specs:ro"'
@@ -149,6 +149,65 @@ def test_launcher_never_creates_qualification_evidence_and_mounts_least_privileg
         '--volume "${ROOT}/config/chaff-qualification-store:'
         '/lab/config/chaff-qualification-store:rw"' in qualification_mounts
     )
+    assert (
+        '--volume "${qualification_child}:'
+        '/lab/config/chaff-qualification-store/${qualification_name}:ro"' in qualification_mounts
+    )
+    assert "validate_qualification_store_delta" in launcher
+    assert "changed pre-existing qualification evidence" in launcher
+    assert "outside the exact schema-two cohort" in launcher
+    assert "outside one hidden candidate" in launcher
+
+
+def test_qualification_store_delta_validator_executes_publication_states(tmp_path):
+    launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
+    validator = _embedded_python(launcher, "validate_qualification_store_delta")
+    existing = {
+        ".gitkeep": {"type": "file", "sha256": "a" * 64},
+        "v1": {"type": "directory"},
+        "v1/historical.json": {"type": "file", "sha256": "b" * 64},
+    }
+    ids = (
+        "apache-traffic-server-docs-r3",
+        "bootstrap-introduction-r3",
+        "cloudflare-quiche-r3",
+        "getbootstrap-home-r3",
+        "nghttp2-ngtcp2-r3",
+        "nginx-quic-r3",
+    )
+    cohort = {"v2": {"type": "directory"}} | {
+        f"v2/{workload}.json": {"type": "file", "sha256": "c" * 64} for workload in ids
+    }
+    published = _run_embedded_python(tmp_path, validator, existing, existing | cohort, "0")
+    assert published.returncode == 0, published.stderr
+
+    unchanged_failure = _run_embedded_python(tmp_path, validator, existing, existing, "7")
+    assert unchanged_failure.returncode == 0, unchanged_failure.stderr
+
+    candidate = {
+        ".v2.qcsd-batch-proof": {"type": "directory"},
+        ".v2.qcsd-batch-proof/run.log": {"type": "file", "sha256": "d" * 64},
+    }
+    retained_failure = _run_embedded_python(
+        tmp_path, validator, existing, existing | candidate, "7"
+    )
+    assert retained_failure.returncode == 0, retained_failure.stderr
+
+    mutated = dict(existing)
+    mutated["v1/historical.json"] = {"type": "file", "sha256": "e" * 64}
+    changed_history = _run_embedded_python(tmp_path, validator, existing, mutated, "7")
+    assert changed_history.returncode != 0
+    assert "pre-existing qualification evidence" in changed_history.stderr
+
+    unauthorized = _run_embedded_python(
+        tmp_path,
+        validator,
+        existing,
+        existing | {"unexpected": {"type": "directory"}},
+        "7",
+    )
+    assert unauthorized.returncode != 0
+    assert "outside one hidden candidate" in unauthorized.stderr
 
 
 def test_launcher_audits_the_exact_prefix_derivation_config_delta():
@@ -161,7 +220,20 @@ def test_launcher_audits_the_exact_prefix_derivation_config_delta():
     common_mkdir = 'mkdir -p "${ROOT}/results" "${ROOT}/artifacts" "${ROOT}/config/workloads"'
     assert launcher.count(common_mkdir) == 1
     assert f"else\n  {common_mkdir}\nfi" in launcher
-    assert '[[ -e "${ROOT}/config/chaff-prefix-specs"' in launcher
+    assert '[[ -e "${ROOT}/config/chaff-prefix-specs/v2"' in launcher
+    derivation_mounts = launcher.split(
+        'if [[ "${1:-}" == "derive-chaff-prefix-specs" ]]; then\n  container+=(', 1
+    )[-1].split("\nfi", 1)[0]
+    assert (
+        '--volume "${ROOT}/config/chaff-prefix-specs:'
+        '/lab/config/chaff-prefix-specs:rw"' in derivation_mounts
+    )
+    assert '--volume "${ROOT}/config:/lab/config:rw"' not in launcher
+    assert (
+        '--volume "${prefix_spec_child}:'
+        '/lab/config/chaff-prefix-specs/${prefix_spec_name}:ro"' in derivation_mounts
+    )
+    assert '"chaff-prefix-specs/v2": "directory"' in launcher
     assert "snapshot_regular_tree" in launcher
     assert "validate_prefix_derivation_delta" in launcher
     assert 'snapshot_regular_tree "${ROOT}/config"' in launcher
@@ -179,6 +251,53 @@ def test_launcher_audits_the_exact_prefix_derivation_config_delta():
         "nginx-quic-r3",
     ):
         assert workload_id in launcher
+
+
+def test_prefix_derivation_delta_validator_executes_publication_states(tmp_path):
+    launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
+    validator = _embedded_python(launcher, "validate_prefix_derivation_delta")
+    existing = {
+        "workloads": {"type": "directory"},
+        "workloads/historical.json": {"type": "file", "sha256": "a" * 64},
+        "chaff-prefix-specs": {"type": "directory"},
+        "chaff-prefix-specs/v1.json": {"type": "file", "sha256": "b" * 64},
+    }
+    ids = (
+        "apache-traffic-server-docs-r3",
+        "bootstrap-introduction-r3",
+        "cloudflare-quiche-r3",
+        "getbootstrap-home-r3",
+        "nghttp2-ngtcp2-r3",
+        "nginx-quic-r3",
+    )
+    cohort = {"chaff-prefix-specs/v2": {"type": "directory"}} | {
+        f"chaff-prefix-specs/v2/{workload}.json": {
+            "type": "file",
+            "sha256": "c" * 64,
+        }
+        for workload in ids
+    }
+    published = _run_embedded_python(tmp_path, validator, existing, existing | cohort, "0")
+    assert published.returncode == 0, published.stderr
+
+    unchanged_failure = _run_embedded_python(tmp_path, validator, existing, existing, "7")
+    assert unchanged_failure.returncode == 0, unchanged_failure.stderr
+
+    partial_failure = _run_embedded_python(
+        tmp_path,
+        validator,
+        existing,
+        existing | {"chaff-prefix-specs/v2": {"type": "directory"}},
+        "7",
+    )
+    assert partial_failure.returncode != 0
+    assert "failed derive-chaff-prefix-specs changed" in partial_failure.stderr
+
+    mutated = dict(existing)
+    mutated["workloads/historical.json"] = {"type": "file", "sha256": "d" * 64}
+    changed_input = _run_embedded_python(tmp_path, validator, existing, mutated, "7")
+    assert changed_input.returncode != 0
+    assert "pre-existing config input" in changed_input.stderr
 
 
 def test_launcher_protects_preexisting_artifacts_during_fit_and_audits_delta():

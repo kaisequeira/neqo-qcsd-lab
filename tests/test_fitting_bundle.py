@@ -14,7 +14,10 @@ import pytest
 import qcsd_lab.fitting as fitting_module
 import qcsd_lab.orchestrator as orchestrator
 from qcsd_lab.capture_session import Defense
-from qcsd_lab.chaff_qualification import _schema_five_diagnostic_receipt
+from qcsd_lab.chaff_qualification import (
+    _schema_five_diagnostic_receipt,
+    _schema_six_capacity_falsification_diagnostic_receipt,
+)
 from qcsd_lab.experiment import (
     accept_sample,
     checkpoint_experiment,
@@ -45,13 +48,13 @@ REPOSITORY_ROOT = Path(__file__).parents[1]
 
 def _synthetic_qualification_inputs(
     fitting: fitting_module.FittingInputs,
-) -> tuple[list[dict[str, str]], dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Build structural, non-network schema-six bindings for synthetic fitter tests."""
 
     experiment = fitting.verified.experiment
     workloads = experiment["configuration"]["workloads"]
     records: list[dict[str, Any]] = []
-    bindings: list[dict[str, str]] = []
+    bindings: list[dict[str, Any]] = []
     for index, workload in enumerate(workloads):
         workload_id = workload["id"]
         marker = f"{index + 1:064x}"
@@ -64,14 +67,18 @@ def _synthetic_qualification_inputs(
                     fitting.verified.root / workload["manifest"]
                 ),
                 "chaff_qualification_sidecar": {
-                    "path": f"config/chaff-qualification-store/v1/{workload_id}.json",
+                    "path": f"config/chaff-qualification-store/v2/{workload_id}.json",
                     "sha256": marker,
                 },
                 "prefix_pack_spec": {
-                    "path": f"config/chaff-prefix-specs/{workload_id}.json",
+                    "path": f"config/chaff-prefix-specs/v2/{workload_id}.json",
                     "sha256": spec,
                 },
                 "qualified_chaff_manifest_sha256": manifest,
+                "application_resource_id": 0,
+                "selected_chaff_resource_id": index,
+                "qualified_parallel_chaff_streams": 5,
+                "walkie_talkie_required_chaff_streams": 4,
             }
         )
         bindings.append(
@@ -80,15 +87,46 @@ def _synthetic_qualification_inputs(
                 "chaff_qualification_sidecar_sha256": marker,
                 "prefix_pack_spec_sha256": spec,
                 "qualified_chaff_manifest_sha256": manifest,
+                "application_resource_id": 0,
+                "selected_chaff_resource_id": index,
+                "qualified_parallel_chaff_streams": 5,
+                "walkie_talkie_required_chaff_streams": 4,
             }
         )
     receipt = {
         "role": "runtime-qualification-only-excluded-from-fitting",
         "qualification_bytes_excluded": True,
         "schema_five_diagnostic": _schema_five_diagnostic_receipt(),
+        "schema_six_capacity_falsification_diagnostic": (
+            _schema_six_capacity_falsification_diagnostic_receipt()
+        ),
         "workloads": records,
     }
     return bindings, receipt
+
+
+def test_runtime_qualification_rejects_boolean_application_resource_id() -> None:
+    _bindings, receipt = _synthetic_qualification_inputs(
+        SimpleNamespace(
+            verified=SimpleNamespace(
+                root=Path("."),
+                experiment={
+                    "configuration": {
+                        "workloads": [
+                            {"id": workload, "manifest": "pyproject.toml"} for workload in WORKLOADS
+                        ]
+                    }
+                },
+            )
+        )
+    )
+    receipt["workloads"][0]["application_resource_id"] = False
+
+    with pytest.raises(ValueError, match="resource/capacity binding"):
+        fitting_module._validate_runtime_qualification_inputs(
+            receipt,
+            list(WORKLOADS),
+        )
 
 
 def _fit_result(result: Path, *, artifacts_root: Path) -> Path:
@@ -855,7 +893,7 @@ def test_fit_builds_exact_deterministic_bundle_without_mutating_source(tmp_path:
         )
     assert receipt["fitting_contract"]["contract_version"] == 6
     assert receipt["fitting_contract"]["workload_order"] == list(WORKLOADS)
-    assert receipt["fitting_contract"]["fitter_version"] == "qcsd_lab.fitting 2.2.0"
+    assert receipt["fitting_contract"]["fitter_version"] == "qcsd_lab.fitting 2.3.0"
     assert receipt["fitting_contract"]["parameter_schema_versions"] == {
         "traffic_morphing": 2,
         "walkie_talkie": 6,
@@ -887,6 +925,9 @@ def test_fit_builds_exact_deterministic_bundle_without_mutating_source(tmp_path:
     assert (
         walkie["receiver_continuation"]
         == fitting_module.fitting_walkie_talkie.receiver_continuation_contract()
+    )
+    assert walkie["receiver_continuation"]["formula"] == (
+        "symmetric_incoming=adapted_incoming-1-if-adapted_incoming>0-else-0"
     )
     assert walkie[
         "qualification_bindings"
@@ -1108,7 +1149,7 @@ def test_fit_builds_exact_deterministic_bundle_without_mutating_source(tmp_path:
     assert "residual_reallocation" not in continuation_invariant
     assert "residual_coalescence" not in continuation_invariant
     assert walkie["generated_by"].startswith(
-        "qcsd_lab.fitting_walkie_talkie 2.2.0; algorithm_receipt_sha256="
+        "qcsd_lab.fitting_walkie_talkie 2.3.0; algorithm_receipt_sha256="
     )
     assert str(tmp_path) not in receipt_text
     assert "timestamp" not in receipt_text
@@ -1143,6 +1184,24 @@ def test_structural_inspector_rejects_authoritative_discriminator_claims(
 
     with pytest.raises(ValueError, match="authoritative production claim"):
         _inspect_structural_artifact_bundle(bundle)
+
+
+def test_runtime_receipt_rejects_schema_six_capacity_diagnostic_tampering(
+    fitted_bundle: Path, tmp_path: Path
+) -> None:
+    changed = tmp_path / "changed"
+    shutil.copytree(fitted_bundle, changed)
+    provenance_path = changed / "provenance.json"
+    provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+    diagnostic = provenance["runtime_qualification_inputs"][
+        "schema_six_capacity_falsification_diagnostic"
+    ]
+    assert diagnostic == _schema_six_capacity_falsification_diagnostic_receipt()
+    diagnostic["attempts"] = 2
+    atomic_json(provenance_path, provenance)
+
+    with pytest.raises(ValueError, match="schema-six capacity falsification diagnostic"):
+        _inspect_structural_artifact_bundle(changed)
 
 
 def test_legacy_v2_bundle_is_strictly_readable_only_as_historical_evidence(

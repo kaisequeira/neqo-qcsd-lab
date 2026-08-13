@@ -75,6 +75,114 @@ def test_direct_runner_reconciliation_accepts_repeated_cadenced_clock_steps(tmp_
     ]
 
 
+@pytest.mark.parametrize(("tail_packets", "adjustment_ns"), [(3, 791_000_000), (1, 835_000_000)])
+def test_direct_runner_reconciliation_accepts_end_anchored_sparse_positive_tail_step(
+    tmp_path,
+    tail_packets,
+    adjustment_ns,
+):
+    packet_count = 32 + tail_packets
+    times = [packet * 20_000_000 for packet in range(packet_count)]
+    offsets = [0] * 32 + [adjustment_ns] * tail_packets
+    run, packets, trace = _clock_reconciliation_artifacts(tmp_path, times, offsets)
+
+    result = reconcile_direct_runner_artifacts(
+        run,
+        packets,
+        trace,
+        clock_anchors=_clock_anchors(adjustment_ns),
+    )
+
+    assert result.evidence_eligible is True
+    assert result.metrics["direct_clock_model"] == "positive-abrupt-steps"
+    assert result.metrics["direct_clock_step_count"] == 1
+    assert result.metrics["direct_clock_end_anchor_adjustment_ns"] == adjustment_ns
+    assert result.metrics["direct_clock_end_anchor_used"] is True
+    assert result.metrics["direct_clock_steps"][0]["end_anchor_corroborated"] is True
+
+
+def test_direct_runner_reconciliation_rejects_sparse_positive_tail_without_end_anchors(tmp_path):
+    times = [packet * 20_000_000 for packet in range(33)]
+    offsets = [0] * 32 + [835_000_000]
+    run, packets, trace = _clock_reconciliation_artifacts(tmp_path, times, offsets)
+
+    with pytest.raises(ValueError, match="requires realtime/monotonic end-anchor"):
+        reconcile_direct_runner_artifacts(run, packets, trace)
+
+
+def test_direct_runner_reconciliation_rejects_sparse_positive_tail_with_mismatched_end_anchor(
+    tmp_path,
+):
+    times = [packet * 20_000_000 for packet in range(33)]
+    offsets = [0] * 32 + [835_000_000]
+    run, packets, trace = _clock_reconciliation_artifacts(tmp_path, times, offsets)
+
+    with pytest.raises(ValueError, match="does not match.*end-anchor adjustment"):
+        reconcile_direct_runner_artifacts(
+            run,
+            packets,
+            trace,
+            clock_anchors=_clock_anchors(800_000_000),
+        )
+
+
+def test_direct_runner_reconciliation_rejects_well_supported_out_of_range_step_with_anchor(
+    tmp_path,
+):
+    times = [packet * 20_000_000 for packet in range(96)]
+    offsets = [0] * 32 + [791_000_000] * 64
+    run, packets, trace = _clock_reconciliation_artifacts(tmp_path, times, offsets)
+
+    with pytest.raises(ValueError, match="well-supported.*outside the 50--100 ms bound"):
+        reconcile_direct_runner_artifacts(
+            run,
+            packets,
+            trace,
+            clock_anchors=_clock_anchors(791_000_000),
+        )
+
+
+def test_direct_runner_reconciliation_keeps_end_anchor_tolerance_fixed_at_ten_ms(tmp_path):
+    times = [packet * 20_000_000 for packet in range(33)]
+    offsets = [0] * 32 + [835_000_000]
+    run, packets, trace = _clock_reconciliation_artifacts(tmp_path, times, offsets)
+
+    with pytest.raises(ValueError, match="does not match.*end-anchor adjustment"):
+        reconcile_direct_runner_artifacts(
+            run,
+            packets,
+            trace,
+            timestamp_tolerance_ns=100_000_000,
+            clock_anchors=_clock_anchors(824_000_000),
+        )
+
+
+@pytest.mark.parametrize("kind", ["negative", "gradual"])
+def test_direct_runner_reconciliation_rejects_negative_step_and_drift_with_end_anchors(
+    tmp_path,
+    kind,
+):
+    if kind == "negative":
+        times = _clock_epoch_times(2)
+        offsets = [75_000_000] * 32 + [0] * 32
+        anchors = _clock_anchors(-75_000_000)
+        expected = "negative clock step"
+    else:
+        times = [index * 20_000_000 for index in range(64)]
+        offsets = [index * 500_000 for index in range(64)]
+        anchors = _clock_anchors(offsets[-1])
+        expected = "timestamp mismatch"
+    run, packets, trace = _clock_reconciliation_artifacts(tmp_path, times, offsets)
+
+    with pytest.raises(ValueError, match=expected):
+        reconcile_direct_runner_artifacts(
+            run,
+            packets,
+            trace,
+            clock_anchors=anchors,
+        )
+
+
 def test_direct_runner_reconciliation_rejects_clock_step_without_supported_epochs(tmp_path):
     times = [packet * 10_000_000 for packet in range(32)] + [
         30_000_000_000 + packet * 10_000_000 for packet in range(32)
@@ -508,3 +616,15 @@ def _clock_reconciliation_artifacts(root, times_ns: list[int], offsets_ns: list[
     packets.write_text("\n".join(packet_rows) + "\n", encoding="utf-8")
     trace.write_text("\n".join(trace_rows) + "\n", encoding="utf-8")
     return run, packets, trace
+
+
+def _clock_anchors(adjustment_ns: int) -> dict[str, int]:
+    start_realtime = 1_800_000_000_000_000_000
+    start_monotonic = 9_000_000_000_000
+    monotonic_elapsed = 12_000_000_000
+    return {
+        "start_realtime_unix_ns": start_realtime,
+        "start_monotonic_ns": start_monotonic,
+        "end_realtime_unix_ns": start_realtime + monotonic_elapsed + adjustment_ns,
+        "end_monotonic_ns": start_monotonic + monotonic_elapsed,
+    }

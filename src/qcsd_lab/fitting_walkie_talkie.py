@@ -8,7 +8,7 @@ from typing import Mapping, Sequence
 from .fitting_trace import FittingTrace
 
 
-GENERATED_BY = "qcsd_lab.fitting_walkie_talkie 2.2.0"
+GENERATED_BY = "qcsd_lab.fitting_walkie_talkie 2.3.0"
 PACKET_SIZE = 1_200
 PARSER_ALLOWANCE_CEILING_BYTES = 1_000
 RECEIVER_CONTINUATION_CELLS = 1
@@ -379,31 +379,86 @@ def receiver_continuation_contract() -> dict[str, object]:
         raise AssertionError("Walkie-Talkie continuation must exceed the parser allowance")
     return {
         **schema_five_receiver_continuation_contract(),
+        "formula": "symmetric_incoming=adapted_incoming-1-if-adapted_incoming>0-else-0",
+        "causal_capacity_precondition": (
+            "every-molded-component-outgoing>0;effective-configured-max-chaff-streams>=total-"
+            "receiver-continuation-reserve-horizon+1;schema-two-stateful-stage-capacity-"
+            "recurrence-proves-higher-priority-due-application-stream-frames-plus-cumulative-"
+            "one-shot-chaff-request-stream-frames-through-fin-fit-within-each-exact-full-molded-"
+            "outgoing-target-through-final-component"
+        ),
+        "request_prefix_delivery_precondition": (
+            "before-first-incoming-component-first-base-allocation-peer-acknowledged-nonblocking-"
+            "chaff-request-survivors>=total-receiver-continuation-reserve-horizon+1;initial-"
+            "survivor-gate-remains-latched-across-complete-schedule"
+        ),
+        "post_outgoing_loss_liveness_limitation": (
+            "loss-of-required-initial-peer-acknowledged-survivor-after-initial-request-chaff-"
+            "batch-holds-base-and-continuation-allocation;no-new-chaff-request-replenishment-or-"
+            "generic-post-loss-liveness-guarantee"
+        ),
+        "resource_precondition": (
+            "schema-two-qualified-manifest-selects-known-valid-same-origin-source-resource;"
+            "derived-selected-resource-projection-dependency-free-with-effective-length>=raw-"
+            "headroom-bytes-per-nonzero-incoming-component;required-chaff-streams-defines-"
+            "effective-configured-max-chaff-streams"
+        ),
+        "provisioning_policy": (
+            "fill-effective-configured-max-chaff-streams-once-before-first-due-molded-outgoing-"
+            "actions;never-replenish-after-initial-request-chaff-batch"
+        ),
+        "reserve_policy": (
+            "reserve-deterministic-acknowledged-pristine-candidates-for-all-remaining-nonzero-"
+            "incoming-components-before-first-base-allocation-and-retain-distinct-reserves-"
+            "across-later-positive-outgoing-components"
+        ),
+        "reserve_lifecycle_policy": (
+            "remove-exactly-first-reserve-once-at-corresponding-continuation-controller-"
+            "allocation-even-when-positive-live-debt-releases-on-nonreserved-stream;refresh-"
+            "only-from-initial-peer-acknowledged-preprovisioned-cohort-for-defense-pending-"
+            "continuation-or-tagged-continuation-still-queued-for-allocation;retryable-"
+            "unadvertised-continuation-allocation-rollback-or-requeue-reconstitutes-"
+            "corresponding-all-future-horizon-reserve-before-further-base-allocation"
+        ),
+        "release_policy": (
+            "after-all-base-events-controller-requested-and-request-signals-observed;batch-gate-"
+            "open;recompute-live-unconsumed-base-each-retry;prefer-single-coalesced-positive-"
+            "outstanding-at-or-below-parser-ceiling-on-peer-acknowledged-nonreserved-header-"
+            "blocked-stream;otherwise-release-whole-cell-to-oldest-retained-peer-acknowledged-"
+            "pristine-reserve-regardless-of-live-base-debt;remove-oldest-reserve-once"
+        ),
         "qualified_chaff_manifest_policy": (
-            "distinct-schema-one-qualified-navigation-root-only;exact-lowercase-accept-accept-"
-            "encoding-accept-language-projection;application-request-headers-unchanged"
+            "schema-two-qualified-navigation-root-and-selected-source-resource;explicit-"
+            "application-resource-id-selected-chaff-resource-id-and-required-chaff-streams;"
+            "selected-source-resource-known-valid-same-origin;derived-selected-resource-"
+            "projection-dependency-free;exact-lowercase-accept-accept-encoding-accept-language-"
+            "projection;application-request-headers-unchanged"
         ),
         "qualified_chaff_response_policy": (
-            "three-independent-five-way-concurrent-unshaped-production-nonblocking-qpack-"
-            "qualifications-derive-compact-status-normalized-content-encoding-body-bytes-body-"
-            "sha256;runtime-complete-responses-must-match-derived-identity;runtime-partial-"
+            "three-independent-staged-qualified-parallel-chaff-streams=max-five-and-walkie-"
+            "talkie-required-chaff-streams-concurrent-unshaped-production-nonblocking-qpack-"
+            "qualifications-derive-selected-resource-compact-status-normalized-content-encoding-"
+            "body-bytes-body-sha256;one-shot-controller-config-uses-exact-walkie-talkie-required-"
+            "chaff-streams;runtime-complete-responses-must-match-derived-identity;runtime-partial-"
             "responses-have-null-identity-match-fields"
         ),
-        "first_cell_prefix_pack_precondition": (
-            "three-independent-production-nonblocking-qpack-runs-after-peer-settings-and-"
-            "drained-h3-control-qpack-warmup-open-one-full-application-root-plus-five-qualified-"
-            "compact-chaff-requests-before-exactly-one-1200-byte-molded-packet-target;all-post-"
-            "cutoff-stream-transmissions-owned-by-sole-target;application-and-maximum-receiver-"
-            "continuation-reserve-horizon+1-chaff-request-streams-contiguous-through-fin;required-"
-            "chaff-peer-acknowledged-through-fin;no-pending-application-or-required-chaff-request-"
-            "stream-output;no-pending-request-causal-h3-control-or-qpack-encoder-stream-output;"
-            "post-warmup-qpack-decoder-stream-output-recorded-and-excluded;zero-targetless-stream-"
-            "bytes"
+        "staged_prefix_pack_precondition": (
+            "schema-two-every-component-staged-prefix-pack-after-peer-settings-and-drained-h3-"
+            "control-qpack-warmup;each-molded-component-is-an-exact-declared-full-packet-target;"
+            "opens-exact-bound-application-resources-and-cumulative-copies-of-selected-qualified-"
+            "resource;active-chaff-cohort-is-nondecreasing-and-zero-delta-stages-are-allowed;all-"
+            "post-cutoff-stream-transmissions-owned-by-one-of-exact-declared-stage-targets;each-"
+            "stage-gate-requires-cumulative-application-requests-transmitted-contiguously-"
+            "through-fin-and-required-active-chaff-requests-transmitted-contiguously-through-fin-"
+            "and-peer-acknowledged-before-dependent-base-allocation;no-pending-request-causal-"
+            "h3-control-or-qpack-encoder-stream-output;post-warmup-qpack-decoder-stream-output-"
+            "recorded-and-excluded;zero-targetless-stream-bytes"
         ),
         "qualification_binding_policy": (
-            "raw-sha256-per-workload-binds-chaff-qualification-sidecar-prefix-pack-spec-and-"
-            "final-qualified-chaff-manifest;runtime-requires-exact-final-manifest-and-embedded-"
-            "prefix-spec-hashes"
+            "schema-six-raw-sha256-per-workload-binds-schema-two-chaff-qualification-sidecar-"
+            "prefix-pack-spec-and-qualified-chaff-manifest;runtime-requires-exact-current-"
+            "artifact-hashes-application-resource-id-selected-chaff-resource-id-and-required-"
+            "chaff-streams"
         ),
     }
 

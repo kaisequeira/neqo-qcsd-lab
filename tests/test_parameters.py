@@ -291,6 +291,104 @@ def test_walkie_talkie_live_fixture_has_exact_receiver_continuation_derivation()
         assert profile["total_scheduled_bytes"] == scheduled_bytes
 
 
+def test_schema_six_rejects_superseded_receiver_and_binding_shapes() -> None:
+    value = {
+        "schema_version": 6,
+        "adaptation": "qcsd-client-only",
+        "paper_equivalent": False,
+        "packet_size": 1_200,
+        "matching_algorithm": "minimum-base-symmetric-mold-padding-cost-one-to-one",
+        "receiver_continuation": parameters._WALKIE_TALKIE_RECEIVER_CONTINUATION,
+        "qualification_bindings": [
+            {
+                "workload_id": "alpha",
+                "chaff_qualification_sidecar_sha256": "a" * 64,
+                "prefix_pack_spec_sha256": "b" * 64,
+                "qualified_chaff_manifest_sha256": "c" * 64,
+                "application_resource_id": 0,
+                "selected_chaff_resource_id": 6,
+                "qualified_parallel_chaff_streams": 20,
+                "walkie_talkie_required_chaff_streams": 20,
+            },
+            {
+                "workload_id": "bravo",
+                "chaff_qualification_sidecar_sha256": "d" * 64,
+                "prefix_pack_spec_sha256": "e" * 64,
+                "qualified_chaff_manifest_sha256": "f" * 64,
+                "application_resource_id": 0,
+                "selected_chaff_resource_id": 0,
+                "qualified_parallel_chaff_streams": 6,
+                "walkie_talkie_required_chaff_streams": 6,
+            },
+        ],
+        "profiles": [
+            {
+                "real": "alpha",
+                "decoy": "bravo",
+                "matching_cost_packets": 0,
+                "training_inputs": {"real": [], "decoy": []},
+                "variation": {
+                    "real": {
+                        "visit_count": 1,
+                        "varying_components": 0,
+                        "maximum_component_spread": 0,
+                    },
+                    "decoy": {
+                        "visit_count": 1,
+                        "varying_components": 0,
+                        "maximum_component_spread": 0,
+                    },
+                },
+                "source_envelopes": {
+                    "real": [{"outgoing": 1, "incoming": 1}],
+                    "decoy": [{"outgoing": 1, "incoming": 1}],
+                },
+                "batch_ends": {"real": [1], "decoy": [1]},
+                "molded_batch_ends": [1],
+                "total_scheduled_bytes": 3_600,
+                "bursts": [{"outgoing": 1, "incoming": 2}],
+            }
+        ],
+    }
+    parameters._validate_runtime_shape(
+        value,
+        "walkie_talkie",
+        1_200,
+        Path("walkie-talkie.json"),
+        expected_schema_version=6,
+    )
+    changed = json.loads(json.dumps(value))
+    changed["receiver_continuation"] = parameters._WALKIE_TALKIE_RECEIVER_CONTINUATION_SCHEMA_FIVE
+    with pytest.raises(ValueError, match="runtime shape"):
+        parameters._validate_runtime_shape(
+            changed,
+            "walkie_talkie",
+            1_200,
+            Path("walkie-talkie.json"),
+            expected_schema_version=6,
+        )
+    changed = json.loads(json.dumps(value))
+    del changed["qualification_bindings"][0]["selected_chaff_resource_id"]
+    with pytest.raises(ValueError, match="binding is malformed"):
+        parameters._validate_runtime_shape(
+            changed,
+            "walkie_talkie",
+            1_200,
+            Path("walkie-talkie.json"),
+            expected_schema_version=6,
+        )
+    changed = json.loads(json.dumps(value))
+    changed["qualification_bindings"][0]["application_resource_id"] = False
+    with pytest.raises(ValueError, match="qualification binding"):
+        parameters._validate_runtime_shape(
+            changed,
+            "walkie_talkie",
+            1_200,
+            Path("walkie-talkie.json"),
+            expected_schema_version=6,
+        )
+
+
 def test_research_1200_receipt_rejects_a_1201_byte_parameter_artifact(tmp_path, monkeypatch):
     parameter, provenance = _copy_fixture(tmp_path, monkeypatch, "walkie-talkie-live.json")
     receipt = json.loads(provenance.read_text(encoding="utf-8"))

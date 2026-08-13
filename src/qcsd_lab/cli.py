@@ -97,7 +97,7 @@ def main(argv: list[str] | None = None) -> None:
                 prefix_spec_root=Path(
                     os.environ.get(
                         "QCSD_CHAFF_PREFIX_SPEC_ROOT",
-                        str(LAB_ROOT / "config/chaff-prefix-specs"),
+                        str(LAB_ROOT / "config/chaff-prefix-specs/v2"),
                     )
                 ),
             )
@@ -134,7 +134,7 @@ def main(argv: list[str] | None = None) -> None:
                 destination_root=Path(
                     os.environ.get(
                         "QCSD_CHAFF_PREFIX_SPEC_ROOT",
-                        str(LAB_ROOT / "config/chaff-prefix-specs"),
+                        str(LAB_ROOT / "config/chaff-prefix-specs/v2"),
                     )
                 ),
             )

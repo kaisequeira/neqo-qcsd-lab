@@ -33,11 +33,12 @@ SCHEMA_FIVE_WALKIE = ROOT / qualification.SCHEMA_FIVE_WALKIE_TALKIE_ARCHIVE
 
 
 def _response() -> dict[str, object]:
+    prepared = load_json(WORKLOAD)["preparation"]["expected_responses"][0]
     return {
         "status": 200,
         "content_encoding": "gzip",
         "body_bytes": 13_390,
-        "body_sha256": "a" * 64,
+        "body_sha256": prepared["body_sha256"],
     }
 
 
@@ -107,18 +108,20 @@ def _response_receipt(
         },
     ]
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "artifact_type": qualification.RESPONSE_ARTIFACT_TYPE,
         "invocation_id": f"response-{run_index}",
         "neqo_version": "test",
         "application_workload_sha256": application_sha256,
         "application_resource_id": 0,
+        "selected_chaff_resource_id": 0,
+        "qualified_parallel_chaff_streams": 6,
         "method": "GET",
         "url": url,
         "request_headers": headers,
-        "parallel_requests": 5,
+        "parallel_requests": 6,
         "connection_count": 1,
-        "requests_opened_before_first_network_output": 5,
+        "requests_opened_before_first_network_output": 6,
         "request_stream_bytes": 163,
         "max_response_bytes": 1_048_576,
         "udp_payload_ceiling": 1_200,
@@ -139,7 +142,7 @@ def _response_receipt(
                 "complete": True,
                 "outcome": "complete",
             }
-            for request_index in range(5)
+            for request_index in range(6)
         ],
         "packet_observations": observations,
         "packet_log_sha256": _packet_log(observations),
@@ -160,19 +163,15 @@ def _prefix_receipt(
 ) -> dict[str, object]:
     application_bytes = 201
     request_bytes = 163
-    required = int(spec["required_chaff_survivors"])
+    required = int(spec["required_chaff_streams"])
     transmissions: list[dict[str, object]] = []
     streams: list[dict[str, object]] = []
-    for order in range(6):
+    for order in range(required + 1):
         role = "application" if order == 0 else "chaff"
         stream_id = order * 4
         size = application_bytes if order == 0 else request_bytes
-        complete = order == 0 or order <= required
-        acknowledgements = (
-            [{"sequence": order, "offset": 0, "bytes": size, "fin": True}]
-            if 0 < order <= required
-            else []
-        )
+        complete = True
+        acknowledgements = [{"sequence": order, "offset": 0, "bytes": size, "fin": True}]
         if complete:
             transmissions.append(
                 {
@@ -192,6 +191,7 @@ def _prefix_receipt(
         streams.append(
             {
                 "request_order": order,
+                "opening_stage_index": 0,
                 "role": role,
                 "resource_id": 0,
                 "request_id": None if order == 0 else order - 1,
@@ -226,9 +226,75 @@ def _prefix_receipt(
             "direction": "outgoing",
             "udp_payload_bytes": 1_200,
         },
+        {
+            "sequence": 3,
+            "phase": "qualification",
+            "direction": "outgoing",
+            "udp_payload_bytes": 87,
+        },
+        {
+            "sequence": 4,
+            "phase": "qualification",
+            "direction": "outgoing",
+            "udp_payload_bytes": 1_200,
+        },
+        {
+            "sequence": 5,
+            "phase": "qualification",
+            "direction": "outgoing",
+            "udp_payload_bytes": 1_200,
+        },
+        {
+            "sequence": 6,
+            "phase": "qualification",
+            "direction": "outgoing",
+            "udp_payload_bytes": 1_200,
+        },
     ]
+    target_slots = [1, 2, 3, 4]
+    stage_receipts = []
+    prior_active = 0
+    for stage_index, stage in enumerate(spec["stream_activation_stages"]):
+        active = int(stage["required_active_chaff_streams"])
+        newly = int(stage["newly_required_chaff_streams"])
+        slots = target_slots[
+            sum(
+                int(value["exact_target_cells"])
+                for value in spec["stream_activation_stages"][:stage_index]
+            ) : sum(
+                int(value["exact_target_cells"])
+                for value in spec["stream_activation_stages"][: stage_index + 1]
+            )
+        ]
+        stage_receipts.append(
+            {
+                "stage_index": stage_index,
+                "component_index": stage_index,
+                "application_resource_ids": stage["application_resource_ids"],
+                "application_request_orders": [0] if stage_index == 0 else [],
+                "application_stream_ids": [0] if stage_index == 0 else [],
+                "target_slot_ids": slots,
+                "exact_target_cells": stage["exact_target_cells"],
+                "scheduled_target_bytes": int(stage["exact_target_cells"]) * 1_200,
+                "required_active_chaff_streams": active,
+                "newly_required_chaff_streams": newly,
+                "peer_acknowledged_active_chaff_streams": active,
+                "newly_peer_acknowledged_request_orders": list(range(prior_active + 1, active + 1)),
+                "newly_peer_acknowledged_stream_ids": [
+                    order * 4 for order in range(prior_active + 1, active + 1)
+                ],
+                "allowed_pending_chaff_request_orders": list(range(active + 1, required + 1)),
+                "allowed_pending_chaff_stream_ids": [
+                    order * 4 for order in range(active + 1, required + 1)
+                ],
+                "targetless_stream_bytes_at_gate": 0,
+                "pending_required_prefix_stream_send": False,
+                "passed": True,
+            }
+        )
+        prior_active = active
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "artifact_type": qualification.PREFIX_ARTIFACT_TYPE,
         "invocation_id": f"prefix-{run_index}",
         "neqo_version": "test",
@@ -237,6 +303,9 @@ def _prefix_receipt(
         "chaff_core_sha256": core_sha256,
         "prefix_pack_spec_sha256": spec_sha256,
         "application_resource_id": 0,
+        "selected_chaff_resource_id": 0,
+        "selected_chaff_body_bytes": 13_390,
+        "required_chaff_streams": required,
         "workload_id": spec["workload_id"],
         "numeric_profile_sha256": spec["numeric_profile_sha256"],
         "source_walkie_talkie_artifact_sha256": spec["source_walkie_talkie_artifact_sha256"],
@@ -245,34 +314,27 @@ def _prefix_receipt(
         "maximum_receiver_continuation_reserve_horizon": spec[
             "maximum_receiver_continuation_reserve_horizon"
         ],
-        "required_chaff_survivors": required,
-        "max_chaff_streams": 5,
+        "required_chaff_survivors": spec["required_chaff_survivors"],
         "connection_count": 1,
         "peer_settings_received": True,
         "warmup_stream_output_drained": True,
         "packet_cutoff_sequence": 2,
-        "requests_opened_before_first_target": 6,
-        "scheduled_target": {
-            "slot_id": 1,
-            "direction": "outgoing",
-            "udp_payload_bytes": 1_200,
-            "scheduled_datagrams": 1,
-            "scheduled_bytes": 1_200,
-            "satisfied_datagrams": 1,
-            "satisfied_bytes": 1_200,
-        },
+        "requests_opened": required + 1,
+        "scheduled_target_slot_ids": target_slots,
+        "satisfied_target_slot_ids": target_slots,
+        "activation_stage_receipts": stage_receipts,
         "streams": streams,
         "stream_transmissions": transmissions,
         "packet_observations": observations,
         "packet_log_sha256": _packet_log(observations),
         "packets": _statistics(observations),
-        "post_slot_pending_stream_send": True,
+        "post_slot_pending_stream_send": False,
         "post_slot_pending_required_prefix_stream_send": False,
         "qpack_decoder_stream_id": 10,
         "qpack_decoder_handler_pending": False,
-        "qpack_decoder_transport_pending": True,
-        "allowed_pending_late_chaff_request_orders": list(range(required + 1, 6)),
-        "allowed_pending_late_chaff_stream_ids": [order * 4 for order in range(required + 1, 6)],
+        "qpack_decoder_transport_pending": False,
+        "allowed_pending_late_chaff_request_orders": [],
+        "allowed_pending_late_chaff_stream_ids": [],
         "targetless_stream_bytes": 0,
         "completion_status": "complete",
         "error": None,
@@ -320,7 +382,7 @@ def _sidecar(prefix_path: Path | None = None) -> dict[str, object]:
         )
         for run_index in range(3)
     ]
-    response_digest = qualification_digest("qcsd-chaff-response-qualification-v1", response_runs)
+    response_digest = qualification_digest("qcsd-chaff-response-qualification-v2", response_runs)
     core = qualification.derive_chaff_core(
         application_manifest_sha256=application_sha256,
         base_resource=root,
@@ -328,6 +390,10 @@ def _sidecar(prefix_path: Path | None = None) -> dict[str, object]:
         request_stream_bytes=163,
         expected_response=expected,
         response_qualification_sha256=response_digest,
+        application_resource_id=0,
+        selected_chaff_resource_id=0,
+        qualified_parallel_chaff_streams=6,
+        walkie_talkie_required_chaff_streams=6,
     )
     if prefix_path is None:
         spec = prefix_pack_spec(
@@ -355,17 +421,22 @@ def _sidecar(prefix_path: Path | None = None) -> dict[str, object]:
         for run_index in range(3)
     ]
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "artifact_type": qualification.SIDECAR_ARTIFACT_TYPE,
         "workload_id": "cloudflare-quiche-r3",
         "base_manifest": {"path": WORKLOAD.name, "sha256": application_sha256},
         "selection_policy": qualification.SELECTION_POLICY,
-        "selected_base_resource_id": 0,
+        "application_resource_id": 0,
+        "selected_chaff_resource_id": 0,
+        "qualified_parallel_chaff_streams": 6,
+        "walkie_talkie_required_chaff_streams": 6,
         "header_projection": list(HEADER_PROJECTION),
         "method": "GET",
         "qualification_policy": {
             "response_runs": 3,
-            "parallel_response_requests": 5,
+            "parallel_response_requests": 6,
+            "qualified_parallel_chaff_streams": 6,
+            "walkie_talkie_required_chaff_streams": 6,
             "prefix_pack_runs": 3,
             "profile": "research-1200",
             "response_defense": "none",
@@ -380,6 +451,9 @@ def _sidecar(prefix_path: Path | None = None) -> dict[str, object]:
         "implementation_receipt": implementation,
         "fitting_source": qualification._fitting_source_receipt(),
         "schema_five_diagnostic": qualification._schema_five_diagnostic_receipt(),
+        "schema_six_capacity_falsification_diagnostic": (
+            qualification._schema_six_capacity_falsification_diagnostic_receipt()
+        ),
         "prefix_pack_spec": {
             "path": "cloudflare-quiche-r3.json",
             "sha256": spec_sha256,
@@ -394,7 +468,7 @@ def _sidecar(prefix_path: Path | None = None) -> dict[str, object]:
             "response_qualification_sha256": response_digest,
             "prefix_pack_runs": prefix_runs,
             "prefix_pack_qualification_sha256": qualification_digest(
-                "qcsd-chaff-prefix-pack-qualification-v1", prefix_runs
+                "qcsd-chaff-prefix-pack-qualification-v2", prefix_runs
             ),
         },
     }
@@ -442,11 +516,24 @@ def test_prefix_spec_is_an_acyclic_numeric_projection() -> None:
     )
 
     assert spec["artifact_type"] == qualification.PREFIX_SPEC_ARTIFACT_TYPE
-    assert spec["maximum_receiver_continuation_reserve_horizon"] == 1
-    assert spec["required_chaff_survivors"] == 2
+    assert spec["maximum_receiver_continuation_reserve_horizon"] == 3
+    assert spec["required_chaff_survivors"] == 4
+    assert spec["required_chaff_streams"] == 6
+    assert [
+        stage["required_active_chaff_streams"] for stage in spec["stream_activation_stages"]
+    ] == [
+        4,
+        6,
+        6,
+    ]
     assert "receiver_continuation" not in spec["numeric_profile"]
     assert walkie == original
     assert validate_prefix_pack_spec(spec, workload_id="cloudflare-quiche-r3") == spec
+
+    changed = copy.deepcopy(spec)
+    changed["application_resource_id"] = False
+    with pytest.raises(ValueError, match="specification binding"):
+        validate_prefix_pack_spec(changed, workload_id="cloudflare-quiche-r3")
 
 
 def test_prefix_spec_numeric_profile_is_bound_to_the_runtime_walkie_talkie_mould() -> None:
@@ -472,14 +559,129 @@ def test_prefix_spec_numeric_profile_is_bound_to_the_runtime_walkie_talkie_mould
         _validate_prefix_spec_mould_binding(spec, changed, "cloudflare-quiche-r3")
 
 
+def test_prefix_spec_accepts_single_adapted_continuation_without_symmetric_base() -> None:
+    walkie = {
+        "packet_size": 1_200,
+        "profiles": [
+            {
+                "real": "cloudflare-quiche-r3",
+                "decoy": "nginx-quic-r3",
+                "bursts": [{"outgoing": 1, "incoming": 1}],
+            }
+        ],
+    }
+
+    spec = prefix_pack_spec(
+        "cloudflare-quiche-r3",
+        walkie,
+        source_walkie_talkie_artifact_sha256=qualification.SOURCE_WALKIE_TALKIE_SHA256,
+    )
+
+    stage = spec["stream_activation_stages"][0]
+    assert stage["adapted_incoming_cells"] == 1
+    assert stage["symmetric_incoming_cells"] == 0
+    assert validate_prefix_pack_spec(spec, workload_id="cloudflare-quiche-r3") == spec
+    changed = copy.deepcopy(spec)
+    changed["stream_activation_stages"][0]["symmetric_incoming_cells"] = 1
+    with pytest.raises(ValueError, match="stage shape"):
+        validate_prefix_pack_spec(changed, workload_id="cloudflare-quiche-r3")
+
+
+def test_schema_two_capacity_plan_is_exact_for_the_sealed_six_workloads() -> None:
+    walkie = load_json(SCHEMA_FIVE_WALKIE)
+    expected = {
+        "apache-traffic-server-docs-r3": (
+            14,
+            184_912,
+            4,
+            [2_922, 96_657, 512_593],
+            [678, 2_943, 2_207],
+            [737_770, 733_627, 730_220],
+        ),
+        "nginx-quic-r3": (
+            6,
+            26_104,
+            20,
+            [2_523, 15_794, 90_127],
+            [1_077, 83_806, 424_673],
+            [102_139, 434_797, 8_924],
+        ),
+        "bootstrap-introduction-r3": (
+            6,
+            38_376,
+            3,
+            [17_109, 120_714],
+            [891, 12_486],
+            [113_037, 99_351],
+        ),
+        "getbootstrap-home-r3": (
+            7,
+            38_376,
+            3,
+            [17_179, 128_447],
+            [821, 4_753],
+            [113_107, 107_154],
+        ),
+        "cloudflare-quiche-r3": (
+            0,
+            13_390,
+            6,
+            [13_390, 0, 0],
+            [1_010, 55_200, 19_200],
+            [51_350, 21_730, 1_330],
+        ),
+        "nghttp2-ngtcp2-r3": (
+            1,
+            39_082,
+            4,
+            [6_324, 54_859, 18_868],
+            [8_076, 341, 332],
+            [147_052, 145_511, 143_979],
+        ),
+    }
+    for workload_id, (resource_id, body_bytes, required, floors, base, after) in expected.items():
+        manifest = load_json(ROOT / "config/workloads" / f"{workload_id}.json")
+        spec = prefix_pack_spec(
+            workload_id,
+            walkie,
+            source_walkie_talkie_artifact_sha256=qualification.SOURCE_WALKIE_TALKIE_SHA256,
+            application_manifest=manifest,
+        )
+        stages = spec["stream_activation_stages"]
+        assert spec["selected_chaff_resource_id"] == resource_id
+        assert spec["selected_chaff_body_bytes"] == body_bytes
+        assert spec["required_chaff_streams"] == required
+        assert [stage["application_body_floor_bytes"] for stage in stages] == floors
+        assert [stage["base_chaff_bytes"] for stage in stages] == base
+        assert [stage["exact_capacity_after_bytes"] for stage in stages] == after
+        assert (
+            validate_prefix_pack_spec(spec, workload_id=workload_id, application_manifest=manifest)
+            == spec
+        )
+
+
+def test_capacity_never_credits_declared_content_length() -> None:
+    manifest = load_json(ROOT / "config/workloads/apache-traffic-server-docs-r3.json")
+    assert manifest["resources"][0]["content_length"] == 14_576
+    assert manifest["preparation"]["expected_responses"][0]["bytes"] == 2_922
+    spec = prefix_pack_spec(
+        "apache-traffic-server-docs-r3",
+        load_json(SCHEMA_FIVE_WALKIE),
+        source_walkie_talkie_artifact_sha256=qualification.SOURCE_WALKIE_TALKIE_SHA256,
+        application_manifest=manifest,
+    )
+    assert spec["stream_activation_stages"][0]["application_body_floor_bytes"] == 2_922
+
+
 def test_schema_six_file_backed_spec_hash_cannot_rebind_a_different_mould(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     workload_root = tmp_path / "workloads"
-    sidecar_root = tmp_path / "chaff-qualification-store/v1"
-    spec_root = tmp_path / "chaff-prefix-specs"
+    sidecar_root = tmp_path / "chaff-qualification-store/v2"
+    spec_root = tmp_path / "chaff-prefix-specs/v2"
     workload_root.mkdir()
     sidecar_root.mkdir(parents=True)
+    spec_root.parent.mkdir(parents=True)
     specs = derive_prefix_pack_specs(
         source_path=SCHEMA_FIVE_WALKIE,
         destination_root=spec_root,
@@ -496,14 +698,20 @@ def test_schema_six_file_backed_spec_hash_cannot_rebind_a_different_mould(
                 "workload_id": workload_id,
                 "application_workload_sha256": sha256_file(application),
                 "chaff_qualification_sidecar": {
-                    "path": f"config/chaff-qualification-store/v1/{workload_id}.json",
+                    "path": f"config/chaff-qualification-store/v2/{workload_id}.json",
                     "sha256": sha256_file(sidecar),
                 },
                 "prefix_pack_spec": {
-                    "path": f"config/chaff-prefix-specs/{workload_id}.json",
+                    "path": f"config/chaff-prefix-specs/v2/{workload_id}.json",
                     "sha256": sha256_file(spec),
                 },
                 "qualified_chaff_manifest_sha256": "d" * 64,
+                "application_resource_id": 0,
+                "selected_chaff_resource_id": load_json(spec)["selected_chaff_resource_id"],
+                "qualified_parallel_chaff_streams": max(
+                    5, load_json(spec)["required_chaff_streams"]
+                ),
+                "walkie_talkie_required_chaff_streams": load_json(spec)["required_chaff_streams"],
             }
         )
     assert len(specs) == 6
@@ -511,6 +719,9 @@ def test_schema_six_file_backed_spec_hash_cannot_rebind_a_different_mould(
         "role": "runtime-qualification-only-excluded-from-fitting",
         "qualification_bytes_excluded": True,
         "schema_five_diagnostic": qualification._schema_five_diagnostic_receipt(),
+        "schema_six_capacity_falsification_diagnostic": (
+            qualification._schema_six_capacity_falsification_diagnostic_receipt()
+        ),
         "workloads": records,
     }
     provenance = {
@@ -529,6 +740,17 @@ def test_schema_six_file_backed_spec_hash_cannot_rebind_a_different_mould(
             application_manifest_sha256=sha256_file(base_manifest_path),
             sidecar_sha256=sha256_file(sidecar_path),
             manifest_sha256="d" * 64,
+            application_resource_id=0,
+            selected_chaff_resource_id=load_json(spec_root / f"{workload_id}.json")[
+                "selected_chaff_resource_id"
+            ],
+            qualified_parallel_chaff_streams=max(
+                5,
+                load_json(spec_root / f"{workload_id}.json")["required_chaff_streams"],
+            ),
+            walkie_talkie_required_chaff_streams=load_json(spec_root / f"{workload_id}.json")[
+                "required_chaff_streams"
+            ],
         )
 
     monkeypatch.setattr(qualification, "load_qualified_chaff", loaded)
@@ -705,6 +927,26 @@ def test_sidecar_derives_one_distinct_root_without_changing_application_headers(
     assert resource["chaff_qualification"]["prefix_spec_sha256"] == sha256_file(prefix_path)
 
 
+def test_prefix_receipt_allows_sub_ceiling_ack_or_control_datagram(tmp_path: Path) -> None:
+    prefix_path = _write_prefix_spec(tmp_path)
+    sidecar = _sidecar(prefix_path)
+    receipt = sidecar["resource"]["prefix_pack_runs"][0]["receipt"]
+    assert any(
+        observation["phase"] == "qualification"
+        and observation["direction"] == "outgoing"
+        and observation["udp_payload_bytes"] < 1_200
+        for observation in receipt["packet_observations"]
+    )
+
+    validate_sidecar(
+        sidecar,
+        workload_id="cloudflare-quiche-r3",
+        base_manifest_path=WORKLOAD,
+        prefix_spec_path=prefix_path,
+        require_current_implementation=False,
+    )
+
+
 def test_sidecar_rejects_base_manifest_hash_mismatch(tmp_path: Path) -> None:
     changed = tmp_path / WORKLOAD.name
     changed.write_bytes(WORKLOAD.read_bytes() + b"\n")
@@ -714,6 +956,36 @@ def test_sidecar_rejects_base_manifest_hash_mismatch(tmp_path: Path) -> None:
             workload_id="cloudflare-quiche-r3",
             base_manifest_path=changed,
             prefix_spec_path=tmp_path / "cloudflare-quiche-r3.json",
+            require_current_implementation=False,
+        )
+
+
+def test_sidecar_rejects_schema_six_capacity_diagnostic_tampering(tmp_path: Path) -> None:
+    prefix_path = _write_prefix_spec(tmp_path)
+    sidecar = _sidecar(prefix_path)
+    sidecar["schema_six_capacity_falsification_diagnostic"]["attempts"] = 2
+
+    with pytest.raises(ValueError, match="schema-six capacity falsification diagnostic"):
+        validate_sidecar(
+            sidecar,
+            workload_id="cloudflare-quiche-r3",
+            base_manifest_path=WORKLOAD,
+            prefix_spec_path=prefix_path,
+            require_current_implementation=False,
+        )
+
+
+def test_sidecar_rejects_boolean_application_resource_id(tmp_path: Path) -> None:
+    prefix_path = _write_prefix_spec(tmp_path)
+    sidecar = _sidecar(prefix_path)
+    sidecar["application_resource_id"] = False
+
+    with pytest.raises(ValueError, match="sidecar policy binding"):
+        validate_sidecar(
+            sidecar,
+            workload_id="cloudflare-quiche-r3",
+            base_manifest_path=WORKLOAD,
+            prefix_spec_path=prefix_path,
             require_current_implementation=False,
         )
 
@@ -804,6 +1076,9 @@ def test_derived_manifest_has_no_application_preparation_metadata() -> None:
         "artifact_type",
         "application_workload_sha256",
         "application_resource_id",
+        "selected_chaff_resource_id",
+        "qualified_parallel_chaff_streams",
+        "walkie_talkie_required_chaff_streams",
         "resources",
     }
     assert "preparation" not in derived
@@ -868,6 +1143,8 @@ def test_qualification_runners_execute_only_the_bound_image_client(
         tmp_path / "response-runs",
         neqo_client=bound,
         neqo_client_sha256=digest,
+        selected_chaff_resource_id=0,
+        qualified_parallel_chaff_streams=6,
         timeout_seconds=30,
         interval_seconds=0,
     )
@@ -927,16 +1204,16 @@ def test_batch_qualification_publishes_exact_six_atomically(
     )
 
     expected = sorted(f"{item}.json" for item in qualification.SEALED_WORKLOAD_IDS)
-    assert sorted(path.name for path in (store / "v1").iterdir()) == expected
-    assert [output.path.parent for output in outputs] == [store / "v1"] * 6
-    assert not list(store.glob(".v1.qcsd-batch-*"))
+    assert sorted(path.name for path in (store / "v2").iterdir()) == expected
+    assert [output.path.parent for output in outputs] == [store / "v2"] * 6
+    assert not list(store.glob(".v2.qcsd-batch-*"))
 
 
-def test_batch_qualification_refuses_existing_v1_before_network(
+def test_batch_qualification_refuses_existing_v2_before_network(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     store = tmp_path / "store"
-    (store / "v1").mkdir(parents=True)
+    (store / "v2").mkdir(parents=True)
     called = False
 
     def network(*args: object, **kwargs: object) -> QualifiedChaffOutput:
@@ -958,6 +1235,8 @@ def test_batch_rederives_specs_from_sealed_schema_five_before_network(
     path = specs / f"{workload_id}.json"
     changed = load_json(path)
     changed["numeric_profile"]["bursts"][0]["outgoing"] += 1
+    changed["stream_activation_stages"][0]["exact_target_cells"] += 1
+    changed["stream_activation_stages"][0]["outgoing_cells"] += 1
     changed["numeric_profile_sha256"] = sha256_bytes(
         b"qcsd-walkie-talkie-numeric-profile-v1\0"
         + json.dumps(changed["numeric_profile"], sort_keys=True, separators=(",", ":")).encode()
@@ -984,7 +1263,7 @@ def test_batch_rederives_specs_from_sealed_schema_five_before_network(
             qualification_store=store,
         )
     assert called is False
-    assert not (store / "v1").exists()
+    assert not (store / "v2").exists()
 
 
 @pytest.mark.parametrize("linked_root", ["workloads", "specs"])
@@ -1011,10 +1290,10 @@ def test_batch_qualification_rejects_symlinked_input_directories_before_network(
             qualification_store=store,
         )
     assert called is False
-    assert not (store / "v1").exists()
+    assert not (store / "v2").exists()
 
 
-def test_batch_qualification_failure_never_publishes_partial_v1(
+def test_batch_qualification_failure_never_publishes_partial_v2(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     workloads, specs, store = _batch_inputs(tmp_path)
@@ -1038,8 +1317,8 @@ def test_batch_qualification_failure_never_publishes_partial_v1(
             qualification_store=store,
             interval_seconds=0,
         )
-    assert not (store / "v1").exists()
-    assert len(list(store.glob(".v1.qcsd-batch-*"))) == 1
+    assert not (store / "v2").exists()
+    assert len(list(store.glob(".v2.qcsd-batch-*"))) == 1
 
 
 def test_batch_qualification_rechecks_all_inputs_before_publication(
@@ -1072,8 +1351,8 @@ def test_batch_qualification_rechecks_all_inputs_before_publication(
             interval_seconds=0,
         )
 
-    assert not (store / "v1").exists()
-    assert len(list(store.glob(".v1.qcsd-batch-*"))) == 1
+    assert not (store / "v2").exists()
+    assert len(list(store.glob(".v2.qcsd-batch-*"))) == 1
 
 
 @pytest.mark.parametrize(
@@ -1089,10 +1368,10 @@ def test_batch_qualification_rechecks_all_inputs_before_publication(
         ),
         (
             lambda receipt: receipt["stream_transmissions"][0].update({"slot": None}),
-            "targetless STREAM",
+            "invalid STREAM data",
         ),
         (
-            lambda receipt: receipt.update({"qpack_decoder_stream_id": 6}),
+            lambda receipt: receipt.update({"selected_chaff_resource_id": 6}),
             "receipt binding",
         ),
     ],
@@ -1107,11 +1386,11 @@ def test_sidecar_rederives_prefix_proof_instead_of_trusting_passed(
     record = sidecar["resource"]["prefix_pack_runs"][0]
     mutate(record["receipt"])
     record["receipt_object_sha256"] = qualification_digest(
-        "qcsd-chaff-prefix-pack-receipt-object-v1", [record["receipt"]]
+        "qcsd-chaff-prefix-pack-receipt-object-v2", [record["receipt"]]
     )
     runs = sidecar["resource"]["prefix_pack_runs"]
     sidecar["resource"]["prefix_pack_qualification_sha256"] = qualification_digest(
-        "qcsd-chaff-prefix-pack-qualification-v1", runs
+        "qcsd-chaff-prefix-pack-qualification-v2", runs
     )
 
     with pytest.raises(ValueError, match=match):

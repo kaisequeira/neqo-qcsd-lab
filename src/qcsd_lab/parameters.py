@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .fitting_walkie_talkie import receiver_continuation_contract as _current_wt_contract
 from .profiles import UDP_PAYLOAD_CEILING_BY_PROFILE
 from .util import LAB_ROOT, load_json, sha256_file
 
@@ -98,34 +99,9 @@ _WALKIE_TALKIE_RECEIVER_CONTINUATION_SCHEMA_FIVE = {
         "horizon-reserve-before-further-base-allocation"
     ),
 }
-_WALKIE_TALKIE_RECEIVER_CONTINUATION = {
-    **_WALKIE_TALKIE_RECEIVER_CONTINUATION_SCHEMA_FIVE,
-    "qualified_chaff_manifest_policy": (
-        "distinct-schema-one-qualified-navigation-root-only;exact-lowercase-accept-accept-"
-        "encoding-accept-language-projection;application-request-headers-unchanged"
-    ),
-    "qualified_chaff_response_policy": (
-        "three-independent-five-way-concurrent-unshaped-production-nonblocking-qpack-"
-        "qualifications-derive-compact-status-normalized-content-encoding-body-bytes-body-"
-        "sha256;runtime-complete-responses-must-match-derived-identity;runtime-partial-"
-        "responses-have-null-identity-match-fields"
-    ),
-    "first_cell_prefix_pack_precondition": (
-        "three-independent-production-nonblocking-qpack-runs-after-peer-settings-and-drained-"
-        "h3-control-qpack-warmup-open-one-full-application-root-plus-five-qualified-compact-"
-        "chaff-requests-before-exactly-one-1200-byte-molded-packet-target;all-post-cutoff-stream-"
-        "transmissions-owned-by-sole-target;application-and-maximum-receiver-continuation-reserve-"
-        "horizon+1-chaff-request-streams-contiguous-through-fin;required-chaff-peer-acknowledged-"
-        "through-fin;no-pending-application-or-required-chaff-request-stream-output;no-pending-"
-        "request-causal-h3-control-or-qpack-encoder-stream-output;post-warmup-qpack-decoder-stream-"
-        "output-recorded-and-excluded;zero-targetless-stream-bytes"
-    ),
-    "qualification_binding_policy": (
-        "raw-sha256-per-workload-binds-chaff-qualification-sidecar-prefix-pack-spec-and-final-"
-        "qualified-chaff-manifest;runtime-requires-exact-final-manifest-and-embedded-prefix-"
-        "spec-hashes"
-    ),
-}
+# Keep the runnable schema-six validator byte-for-byte coupled to the fitter's
+# current contract while retaining the literal schema-five oracle above.
+_WALKIE_TALKIE_RECEIVER_CONTINUATION = _current_wt_contract()
 
 
 @dataclass(frozen=True)
@@ -620,6 +596,10 @@ def _validate_walkie_talkie(
                 "chaff_qualification_sidecar_sha256",
                 "prefix_pack_spec_sha256",
                 "qualified_chaff_manifest_sha256",
+                "application_resource_id",
+                "selected_chaff_resource_id",
+                "qualified_parallel_chaff_streams",
+                "walkie_talkie_required_chaff_streams",
             }:
                 raise ValueError(
                     f"walkie_talkie qualification binding is malformed: {receipt_path}"
@@ -636,6 +616,15 @@ def _validate_walkie_talkie(
                         "qualified_chaff_manifest_sha256",
                     )
                 )
+                or type(value["application_resource_id"]) is not int
+                or value["application_resource_id"] != 0
+                or type(value["selected_chaff_resource_id"]) is not int
+                or value["selected_chaff_resource_id"] < 0
+                or type(value["walkie_talkie_required_chaff_streams"]) is not int
+                or not 1 <= value["walkie_talkie_required_chaff_streams"] <= 20
+                or type(value["qualified_parallel_chaff_streams"]) is not int
+                or value["qualified_parallel_chaff_streams"]
+                != max(5, value["walkie_talkie_required_chaff_streams"])
             ):
                 raise ValueError(f"walkie_talkie qualification binding is invalid: {receipt_path}")
             binding_ids.append(workload_id)

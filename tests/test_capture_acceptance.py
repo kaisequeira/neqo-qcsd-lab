@@ -96,7 +96,7 @@ def test_controlled_schema_six_wire_fixture_is_explicit_and_non_authoritative(
     )
 
     manifest = load_json(chaff_manifest)
-    assert manifest["schema_version"] == 1
+    assert manifest["schema_version"] == 2
     assert manifest["artifact_type"] == "qcsd-qualified-chaff-manifest"
     assert manifest["application_workload_sha256"] == sha256_file(source)
     assert manifest["resources"][0]["headers"] == CONTROLLED_AEL_HEADERS
@@ -119,6 +119,10 @@ def test_controlled_schema_six_wire_fixture_is_explicit_and_non_authoritative(
         "chaff_qualification_sidecar_sha256": sha256_file(sidecar),
         "prefix_pack_spec_sha256": sha256_file(prefix_spec),
         "qualified_chaff_manifest_sha256": sha256_file(chaff_manifest),
+        "application_resource_id": 0,
+        "selected_chaff_resource_id": 0,
+        "qualified_parallel_chaff_streams": 5,
+        "walkie_talkie_required_chaff_streams": 2,
     }
 
     # These artifacts exist only to exercise the real wire/runtime boundary.
@@ -238,12 +242,14 @@ def _synthetic_response_observation(
     }
     headers = chaff_qualification.project_compact_headers(root)
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "artifact_type": chaff_qualification.RESPONSE_ARTIFACT_TYPE,
         "invocation_id": "controlled-offline-observation",
         "neqo_version": "controlled-live-test-only",
         "application_workload_sha256": sha256_file(application_source),
         "application_resource_id": root["id"],
+        "selected_chaff_resource_id": root["id"],
+        "qualified_parallel_chaff_streams": 5,
         "method": "GET",
         "url": root["url"],
         "request_headers": headers,
@@ -322,7 +328,9 @@ def _write_controlled_chaff_manifest(
     identity, request_bytes, *_ = chaff_qualification._validate_response_receipt(
         response_receipt,
         application_manifest_sha256=sha256_file(application_source),
-        resource_id=root["id"],
+        application_resource_id=root["id"],
+        selected_chaff_resource_id=root["id"],
+        qualified_parallel_chaff_streams=5,
         url=root["url"],
         headers=headers,
     )
@@ -334,10 +342,13 @@ def _write_controlled_chaff_manifest(
         CONTROLLED_TEST_DOMAIN + b"prefix-observation\0" + prefix_spec.read_bytes()
     )
     value = {
-        "schema_version": 1,
+        "schema_version": 2,
         "artifact_type": chaff_qualification.MANIFEST_ARTIFACT_TYPE,
         "application_workload_sha256": sha256_file(application_source),
         "application_resource_id": root["id"],
+        "selected_chaff_resource_id": root["id"],
+        "qualified_parallel_chaff_streams": 5,
+        "walkie_talkie_required_chaff_streams": 2,
         "resources": [
             {
                 "id": root["id"],
@@ -350,9 +361,11 @@ def _write_controlled_chaff_manifest(
                 "depends_on": [],
                 "headers": headers,
                 "chaff_qualification": {
-                    "schema_version": 1,
+                    "schema_version": 2,
                     "method": "GET",
                     "request_stream_bytes": request_bytes,
+                    "qualified_parallel_chaff_streams": 5,
+                    "walkie_talkie_required_chaff_streams": 2,
                     "expected_response": {
                         "status": status,
                         "content_encoding": content_encoding,
@@ -377,7 +390,7 @@ def _write_controlled_walkie_talkie(
     value = load_json(historical)
     source_profiles = {profile["real"]: profile for profile in value["profiles"]}
     profiles: list[dict[str, Any]] = []
-    bindings: list[dict[str, str]] = []
+    bindings: list[dict[str, Any]] = []
     for index, (workload_id, (sidecar, spec, manifest)) in enumerate(inputs.items()):
         profile = deepcopy(
             source_profiles.get(workload_id, value["profiles"][index % len(value["profiles"])])
@@ -392,6 +405,10 @@ def _write_controlled_walkie_talkie(
                 "chaff_qualification_sidecar_sha256": sha256_file(sidecar),
                 "prefix_pack_spec_sha256": sha256_file(spec),
                 "qualified_chaff_manifest_sha256": sha256_file(manifest),
+                "application_resource_id": 0,
+                "selected_chaff_resource_id": 0,
+                "qualified_parallel_chaff_streams": 5,
+                "walkie_talkie_required_chaff_streams": 2,
             }
         )
         for field in (
@@ -411,6 +428,10 @@ def _write_controlled_walkie_talkie(
                     "qualified_chaff_manifest_sha256": sha256_bytes(
                         CONTROLLED_TEST_DOMAIN + f"{decoy}:{field}:manifest".encode()
                     ),
+                    "application_resource_id": 0,
+                    "selected_chaff_resource_id": 0,
+                    "qualified_parallel_chaff_streams": 5,
+                    "walkie_talkie_required_chaff_streams": 2,
                 }
             )
             break
@@ -437,8 +458,8 @@ def _qualify_controlled_live_inputs(
     the resulting test-local record.
     """
 
-    qualification_root = directory / "config/chaff-qualification-store/v1"
-    prefix_root = directory / "config/chaff-prefix-specs"
+    qualification_root = directory / "config/chaff-qualification-store/v2"
+    prefix_root = directory / "config/chaff-prefix-specs/v2"
     manifest_root = directory / "controlled-live/chaff-manifests"
     response_root = directory / "controlled-live/response-observations"
     for path in (qualification_root, prefix_root, manifest_root, response_root):
@@ -456,6 +477,8 @@ def _qualify_controlled_live_inputs(
                 "--workload",
                 str(source),
                 "--application-resource-id",
+                "0",
+                "--selected-chaff-resource-id",
                 "0",
                 "--output-dir",
                 str(output),
@@ -731,7 +754,7 @@ def test_controlled_schema_six_walkie_talkie_uses_real_a_r_c_wire_path(
     assert run["application_workload_source_hash_sha256"] == sha256_file(source)
     assert run["chaff_manifest_hash_sha256"] == sha256_file(chaff_manifest)
     chaff_responses = run["chaff_responses"]
-    assert [receipt["request_id"] for receipt in chaff_responses] == list(range(5))
+    assert [receipt["request_id"] for receipt in chaff_responses] == list(range(2))
     assert all(
         receipt["request_stream_bytes"] == receipt["expected_request_stream_bytes"] > 0
         for receipt in chaff_responses
