@@ -1,3 +1,4 @@
+import hashlib
 import json
 from copy import deepcopy
 from pathlib import Path
@@ -12,6 +13,16 @@ from qcsd_lab.manifest import (
     validate_research_preparation,
     write_frozen_manifest,
 )
+
+
+FROZEN_R3_MANIFEST_SHA256 = {
+    "getbootstrap-home-r3": "863638bb6bf7a27c2a4e9184dcb9c3db8d748af1e0da1b875d24a21233b92ca2",
+    "bootstrap-introduction-r3": "e228029e7c987c63f8218e5471375e62e6d4557825bc6c4c0cb4bbfa0be6c16b",
+    "apache-traffic-server-docs-r3": "8f4fa9b10c4488ff99d30e7ac8b2b784867416c84635afe96b9c4ef45ab71ecd",
+    "nginx-quic-r3": "56ddd2eee52affc59d0062c83b49e2fd435d0fe9ca40f4f0b30e65c156e7ef09",
+    "cloudflare-quiche-r3": "e608366c95d6902234b4a705043435b3868f9572bcb8e103feb71db3110cbacc",
+    "nghttp2-ngtcp2-r3": "a871e1d783b52a79fb1f72761ea2771fced38ba408fbed0896a3c280d20927f1",
+}
 
 
 def manifest(resources):
@@ -175,10 +186,21 @@ def test_replay_metadata_is_validated_and_removed_from_runtime_manifest():
         "response_stability": {"runs": 3, "stable_resource_ids": [0]},
     }
     validate_manifest(value)
-    assert "replay" not in runtime_manifest(value)
+    runtime = runtime_manifest(value)
+    assert "replay" not in runtime
+    assert runtime["resources"] is value["resources"]
     value["replay"]["reviewed_origins"] = ["https://unobserved.test"]
     with pytest.raises(ValueError, match="subset"):
         validate_manifest(value)
+
+
+def test_bare_runtime_manifest_remains_unchanged():
+    value = manifest([resource(0)])
+
+    runtime = runtime_manifest(value)
+
+    assert runtime == value
+    assert runtime["resources"] is value["resources"]
 
 
 def test_replay_response_stability_requires_repeated_unique_resource_ids():
@@ -200,9 +222,63 @@ def test_replay_response_stability_requires_repeated_unique_resource_ids():
 
 def test_research_preparation_accepts_the_exact_clean_policy():
     value = prepared_manifest()
+    source = deepcopy(value)
 
     validate_research_preparation(value, workload_id="prepared-site")
-    assert runtime_manifest(value) == {"resources": value["resources"]}
+    runtime = runtime_manifest(value)
+
+    assert [item["content_length"] for item in runtime["resources"]] == [100, 200]
+    assert [item["data_length"] for item in runtime["resources"]] == [0, 0]
+    assert value == source
+
+
+def test_runtime_manifest_projects_the_exact_stale_ats_extent_without_mutating_source():
+    root = Path(__file__).parents[1]
+    path = root / "config/workloads/apache-traffic-server-docs-r3.json"
+    source_bytes = path.read_bytes()
+    value = json.loads(source_bytes)
+    source = deepcopy(value)
+
+    frozen = next(resource for resource in value["resources"] if resource["id"] == 0)
+    expected = next(
+        response
+        for response in value["preparation"]["expected_responses"]
+        if response["resource_id"] == 0
+    )
+    assert frozen["content_length"] == 14_576
+    assert expected["bytes"] == 2_922
+
+    runtime = runtime_manifest(value)
+    projected = next(resource for resource in runtime["resources"] if resource["id"] == 0)
+
+    assert projected["content_length"] == 2_922
+    assert projected["data_length"] <= 2_922
+    assert max(projected["content_length"], projected["data_length"]) == 2_922
+    projected["headers"].append(["x-runtime-only", "true"])
+    assert value == source
+    assert path.read_bytes() == source_bytes
+
+
+def test_runtime_manifest_projects_a_zero_byte_stable_get_to_zero_effective_length():
+    value = prepared_manifest()
+    value["resources"][0].update({"content_length": 14_576, "data_length": 9_999})
+    value["preparation"]["expected_responses"][0]["bytes"] = 0
+    source = deepcopy(value)
+
+    projected = runtime_manifest(value)["resources"][0]
+
+    assert projected["content_length"] == 0
+    assert projected["data_length"] == 0
+    assert max(projected["content_length"], projected["data_length"]) == 0
+    assert value == source
+
+
+def test_runtime_manifest_rejects_an_incomplete_expected_response_length_map():
+    value = prepared_manifest()
+    value["preparation"]["expected_responses"].pop()
+
+    with pytest.raises(ValueError, match="one expected response per resource"):
+        runtime_manifest(value)
 
 
 @pytest.mark.parametrize("mutation", ["missing-document", "wrong-url", "dependent-document"])
@@ -229,6 +305,23 @@ def test_research_preparation_rejects_an_orphan_promoted_to_a_root():
     validate_manifest(value)
     with pytest.raises(ValueError, match="non-navigation resources.*invalid root IDs: 1"):
         validate_research_preparation(value, workload_id="prepared-site")
+
+
+@pytest.mark.parametrize(
+    ("workload_id", "expected_sha256"),
+    FROZEN_R3_MANIFEST_SHA256.items(),
+)
+def test_checked_in_r3_workload_bytes_remain_frozen_and_research_valid(
+    workload_id,
+    expected_sha256,
+):
+    root = Path(__file__).parents[1]
+    path = root / f"config/workloads/{workload_id}.json"
+    source = path.read_bytes()
+
+    assert hashlib.sha256(source).hexdigest() == expected_sha256
+    validate_research_preparation(json.loads(source), workload_id=workload_id)
+    assert path.read_bytes() == source
 
 
 @pytest.mark.parametrize(

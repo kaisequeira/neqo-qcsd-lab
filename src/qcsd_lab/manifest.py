@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -662,7 +663,54 @@ def runtime_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
     validate_manifest(manifest)
     # Preparation has already frozen every safe concrete request header on its
     # resource.  The lab deliberately exposes no second runtime policy layer.
-    return {"resources": manifest["resources"]}
+    preparation = manifest.get("preparation")
+    if not isinstance(preparation, dict):
+        return {"resources": manifest["resources"]}
+    return {
+        "resources": project_stable_response_lengths(
+            manifest["resources"], preparation["expected_responses"]
+        )
+    }
+
+
+def project_stable_response_lengths(
+    resources: list[dict[str, Any]],
+    expected_responses: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Copy resources and make each effective length its stable GET byte count."""
+
+    resource_ids = [resource.get("id") for resource in resources]
+    response_ids = [response.get("resource_id") for response in expected_responses]
+    if (
+        len(resource_ids) != len(set(resource_ids))
+        or len(response_ids) != len(set(response_ids))
+        or set(response_ids) != set(resource_ids)
+    ):
+        raise ValueError("stable response length map must match resources exactly")
+
+    lengths: dict[int, int] = {}
+    for response in expected_responses:
+        resource_id = response.get("resource_id")
+        length = response.get("bytes")
+        if (
+            not isinstance(resource_id, int)
+            or isinstance(resource_id, bool)
+            or not isinstance(length, int)
+            or isinstance(length, bool)
+            or not 0 <= length <= U64_MAX
+        ):
+            raise ValueError("stable response length map is invalid")
+        lengths[resource_id] = length
+
+    projected = deepcopy(resources)
+    for resource in projected:
+        stable_length = lengths[resource["id"]]
+        data_length = resource.get("data_length")
+        if data_length is None:
+            data_length = 0
+        resource["content_length"] = stable_length
+        resource["data_length"] = min(data_length, stable_length)
+    return projected
 
 
 def canonical_bytes(manifest: dict[str, Any]) -> bytes:

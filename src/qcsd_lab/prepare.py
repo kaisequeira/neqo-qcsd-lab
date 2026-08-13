@@ -14,6 +14,7 @@ from typing import Any
 from .discover import DiscoveryResult, discover_page, origin
 from .manifest import (
     canonical_bytes,
+    project_stable_response_lengths,
     runtime_manifest,
     validate_manifest,
     validate_prepared_navigation_graph,
@@ -130,6 +131,12 @@ def prepare_workload(
         raise PreparationError(
             f"repeated Neqo fetches changed or failed for resource IDs: {identifiers}"
         )
+    try:
+        resources = project_stable_response_lengths(resources, evidence["expected_responses"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise PreparationError(
+            f"stable response evidence cannot canonicalize resource lengths: {error}"
+        ) from error
     _freeze_request_headers(resources, runs)
     provenance = _neqo_provenance(runs)
     manifest = {

@@ -59,6 +59,8 @@ def install_fake_preparation(
     changing_resource: int | None = None,
     packet_rows: list[tuple[str, str, str]] | None = None,
     resolved_ceiling: object = 1_200,
+    probe_lengths: dict[int, tuple[int, int]] | None = None,
+    stable_bytes: dict[int, int] | None = None,
 ) -> list[list[str]]:
     discovery = discovered()
     monkeypatch.setattr(prepare, "discover_page", lambda *_args, **_kwargs: discovery)
@@ -89,9 +91,13 @@ def install_fake_preparation(
             assert set(source) == {"resources"}
             resolved = deepcopy(source)
             for resource in resolved["resources"]:
+                content_length, data_length = (probe_lengths or {}).get(
+                    resource["id"],
+                    (100 + resource["id"], 100 + resource["id"]),
+                )
                 resource["known_valid"] = True
-                resource["content_length"] = 100 + resource["id"]
-                resource["data_length"] = 100 + resource["id"]
+                resource["content_length"] = content_length
+                resource["data_length"] = data_length
             Path(command[command.index("--output") + 1]).write_text(
                 json.dumps(resolved), encoding="utf-8"
             )
@@ -113,7 +119,7 @@ def install_fake_preparation(
                         "url": resource["url"],
                         "request_headers": resource["headers"],
                         "status": 200,
-                        "bytes": 100 + resource["id"],
+                        "bytes": (stable_bytes or {}).get(resource["id"], 100 + resource["id"]),
                         "body_sha256": (marker.encode().hex() + "0" * 64)[:64],
                         "complete": True,
                         "outcome": "succeeded",
@@ -223,6 +229,69 @@ def test_prepare_writes_one_policy_free_frozen_workload(tmp_path, monkeypatch):
         1,
     ]
     assert not list(tmp_path.glob(".*-prepare-*"))
+
+
+def test_prepare_canonicalizes_stale_probe_lengths_from_stable_get_evidence(
+    tmp_path,
+    monkeypatch,
+):
+    install_fake_preparation(
+        monkeypatch,
+        probe_lengths={0: (14_576, 14_576), 1: (999, 999)},
+        stable_bytes={0: 2_922, 1: 0},
+    )
+
+    result = prepare.prepare_workload(
+        "canonical-lengths",
+        "https://page.test/",
+        ["https://page.test", "https://cdn.test"],
+        output_root=tmp_path,
+        stability_interval_seconds=0,
+    )
+
+    value = json.loads(result.path.read_text())
+    assert [
+        (resource["content_length"], resource["data_length"]) for resource in value["resources"]
+    ] == [(2_922, 2_922), (0, 0)]
+    assert [response["bytes"] for response in value["preparation"]["expected_responses"]] == [
+        2_922,
+        0,
+    ]
+    assert runtime_manifest(value) == {"resources": value["resources"]}
+
+
+def test_prepare_rejects_a_missing_stable_response_length_map(tmp_path, monkeypatch):
+    install_fake_preparation(monkeypatch)
+    monkeypatch.setattr(
+        prepare,
+        "response_stability_evidence",
+        lambda _runs: {
+            "runs": 3,
+            "stable_resource_ids": [0, 1],
+            "expected_responses": [
+                {
+                    "resource_id": 0,
+                    "status": 200,
+                    "bytes": 100,
+                    "body_sha256": "0" * 64,
+                }
+            ],
+        },
+    )
+
+    with pytest.raises(
+        prepare.PreparationError,
+        match="stable response length map must match resources exactly",
+    ):
+        prepare.prepare_workload(
+            "missing-length",
+            "https://page.test/",
+            ["https://page.test", "https://cdn.test"],
+            output_root=tmp_path,
+            stability_interval_seconds=0,
+        )
+
+    assert not (tmp_path / "missing-length.json").exists()
 
 
 def test_prepare_refuses_existing_id_before_network_work(tmp_path, monkeypatch):
