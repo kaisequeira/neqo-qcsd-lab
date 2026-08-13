@@ -730,16 +730,33 @@ def test_controlled_schema_six_walkie_talkie_uses_real_a_r_c_wire_path(
     assert run["workload_hash_sha256"] == sha256_file(runtime)
     assert run["application_workload_source_hash_sha256"] == sha256_file(source)
     assert run["chaff_manifest_hash_sha256"] == sha256_file(chaff_manifest)
-    assert run["chaff_responses"]
-    assert all(receipt["complete"] is True for receipt in run["chaff_responses"])
-    assert all(receipt["identity_verified"] is True for receipt in run["chaff_responses"])
-    assert all(receipt["outcome"] == "succeeded" for receipt in run["chaff_responses"])
+    chaff_responses = run["chaff_responses"]
+    assert [receipt["request_id"] for receipt in chaff_responses] == list(range(5))
+    assert all(
+        receipt["request_stream_bytes"] == receipt["expected_request_stream_bytes"] > 0
+        for receipt in chaff_responses
+    )
+    # The 129-cell receive budget finishes the 131072-byte application body
+    # but cannot finish another body of the same size.  Runtime chaff receipts
+    # are therefore deliberately partial when the defense completes.
+    assert all(
+        receipt["complete"] is False
+        and receipt["status"] is None
+        and receipt["content_encoding"] is None
+        and receipt["body_sha256"] is None
+        and receipt["status_match"] is None
+        and receipt["content_encoding_match"] is None
+        and receipt["body_bytes_match"] is None
+        and receipt["body_sha256_match"] is None
+        and receipt["identity_verified"] is None
+        and receipt["outcome"] == "incomplete"
+        for receipt in chaff_responses
+    )
+    assert any(receipt["bytes"] > 0 for receipt in chaff_responses)
     application_headers = run["responses"][0]["request_headers"]
     assert application_headers == prepared["resources"][0]["headers"]
     assert application_headers != CONTROLLED_AEL_HEADERS
-    assert all(
-        receipt["request_headers"] == CONTROLLED_AEL_HEADERS for receipt in run["chaff_responses"]
-    )
+    assert all(receipt["request_headers"] == CONTROLLED_AEL_HEADERS for receipt in chaff_responses)
     diagnostics = run["defense_diagnostics"]
     assert diagnostics["scheduled_incoming_requested_bytes"] > 0
     assert (
@@ -748,6 +765,7 @@ def test_controlled_schema_six_walkie_talkie_uses_real_a_r_c_wire_path(
     )
     assert diagnostics["scheduled_incoming_retired_bytes"] == 0
     assert diagnostics["scheduled_incoming_unresolved_bytes"] == 0
+    assert diagnostics["walkie_talkie_incoming_chaff_bytes"] > 0
     assert (
         diagnostics["walkie_talkie_target_outgoing_cells"]
         == diagnostics["walkie_talkie_observed_outgoing_cells"]
