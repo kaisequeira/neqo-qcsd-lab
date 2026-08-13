@@ -1,0 +1,3633 @@
+{
+  "artifact_type": "qcsd-chaff-qualification",
+  "base_manifest": {
+    "path": "cloudflare-quiche-r3.json",
+    "sha256": "e608366c95d6902234b4a705043435b3868f9572bcb8e103feb71db3110cbacc"
+  },
+  "fitting_source": {
+    "evidence_sha256": "655895ce7fe7259566f14d7099c6cb20719c2989a59e8296fe1d79703c058233",
+    "experiment_sha256": "ac16442c46cbc8e44aecba14fb59e096fe9fcb07d4508391af2a0b649faea1cc",
+    "qualification_bytes_excluded": true,
+    "samples_consumed": 120
+  },
+  "header_projection": [
+    "accept",
+    "accept-encoding",
+    "accept-language"
+  ],
+  "implementation_receipt": {
+    "artifact_type": "qcsd-chaff-qualification-implementation",
+    "domain": "qcsd-chaff-qualification-implementation-v1",
+    "installed_entrypoint": {
+      "path": "/usr/local/bin/qcsd-lab-internal",
+      "sha256": "20731024d86af44eb64ee273b1d3383f960638f0510fff6b6df43903090d2747"
+    },
+    "installed_modules": {
+      "src/qcsd_lab/__init__.py": {
+        "path": "/usr/local/lib/python3.11/dist-packages/qcsd_lab/__init__.py",
+        "sha256": "a768d2af1e7b99c92b4cdfb6e74530c26d922ff79669df367eabfac06df1433a"
+      },
+      "src/qcsd_lab/analysis.py": {
+        "path": "/usr/local/lib/python3.11/dist-packages/qcsd_lab/analysis.py",
+        "sha256": "6ebff558e7966a15da7f3067fbf5125cb39d9ac2d8e920fa5d6670a8432c2b77"
+      },
+      "src/qcsd_lab/capture.py": {
+        "path": "/usr/local/lib/python3.11/dist-packages/qcsd_lab/capture.py",
+        "sha256": "9dec5c74d260c1e9e0912d20d093ed5ac8bf0404a91f7d89421cd48517f59694"
+      },
+      "src/qcsd_lab/capture_session.py": {
+        "path": "/usr/local/lib/python3.11/dist-packages/qcsd_lab/capture_session.py",
+        "sha256": "428e69af33ee84d8620f70b35673f7f0f6192ce3aa646b2102aef7fa4a4f62c3"
+      },
+      "src/qcsd_lab/chaff_qualification.py": {
+        "path": "/usr/local/lib/python3.11/dist-packages/qcsd_lab/chaff_qualification.py",
+        "sha256": "fe9ec58a2f10b89c598bb2c2c64b2fbfb1f13fbf288a4bf936b6485f6651cf41"
+      },
+      "src/qcsd_lab/cli.py": {
+        "path": "/usr/local/lib/python3.11/dist-packages/qcsd_lab/cli.py",
+        "sha256": "724005c869696d68a3157cb3c179b43e913445e20277e2ac5cb448fa8c1b0c5b"
+      },
+      "src/qcsd_lab/defenses.py": {
+        "path": "/usr/local/lib/python3.11/dist-packages/qcsd_lab/defenses.py",
+        "sha256": "218f2e32d86e990176fead65321be9b99b5f415a6f42e69858ef746ea4d674ff"
+      },
+      "src/qcsd_lab/discover.py": {
+        "path": "/usr/local/lib/python3.11/dist-packages/qcsd_lab/discover.py",
+        "sha256": "a69c892395aaa8e627bf13f002b13d5cfaa74071b3a54b9fba0495de8e4d22d4"
+      },
+      "src/qcsd_lab/experiment.py": {
+        "path": "/usr/local/lib/python3.11/dist-packages/qcsd_lab/experiment.py",
+        "sha256": "050aa390205053addc692c49fe15bd9c12ca676a8d576da43c6d7e6bf004d7f5"
+      },
+      "src/qcsd_lab/fidelity.py": {
+        "path": "/usr/local/lib/python3.11/dist-packages/qcsd_lab/fidelity.py",
+        "sha256": "7dda83d1b9abf3b5dc789229fc3945f49726fbfdae20f8455d2f2db4b307e501"
+      },
+      "src/qcsd_lab/fitting.py": {
+        "path": "/usr/local/lib/python3.11/dist-packages/qcsd_lab/fitting.py",
+        "sha256": "7c4300e89c3332a0843e34068c2c54582d4266a0b845f83c6dbb744c73e8f015"
+      },
+      "src/qcsd_lab/fitting_morphing.py": {
+        "path": "/usr/local/lib/python3.11/dist-packages/qcsd_lab/fitting_morphing.py",
+        "sha256": "17daea010c0b6ec813faeb6aa5ee8f63622407fb304e3b3db316ade45c30896f"
+      },
+      "src/qcsd_lab/fitting_trace.py": {
+        "path": "/usr/local/lib/python3.11/dist-packages/qcsd_lab/fitting_trace.py",
+        "sha256": "9801b2d2970f629d9958dcd02b4c8d6f40e223dadb8dfdf0d6e6749116fa961e"
+      },
+      "src/qcsd_lab/fitting_walkie_talkie.py": {
+        "path": "/usr/local/lib/python3.11/dist-packages/qcsd_lab/fitting_walkie_talkie.py",
+        "sha256": "2b4ea32b655af8249aad19c23b6744346d4349a658d9c27013e4644fcfe21e6e"
+      },
+      "src/qcsd_lab/fitting_wtfpad.py": {
+        "path": "/usr/local/lib/python3.11/dist-packages/qcsd_lab/fitting_wtfpad.py",
+        "sha256": "d322946b8e247a2b557881ee9b965008e6b0ed12b33bf97d2a3b749b20eb245e"
+      },
+      "src/qcsd_lab/manifest.py": {
+        "path": "/usr/local/lib/python3.11/dist-packages/qcsd_lab/manifest.py",
+        "sha256": "c8878b551e3438d00b36ca6e16d650174bcadea97cbba143824aec8cb5cdd4e0"
+      },
+      "src/qcsd_lab/orchestrator.py": {
+        "path": "/usr/local/lib/python3.11/dist-packages/qcsd_lab/orchestrator.py",
+        "sha256": "f24c044c19e6c64d3bf9538fad95f4aa0e354d6ab3cd61e5d873ba60c40b3c3f"
+      },
+      "src/qcsd_lab/parameters.py": {
+        "path": "/usr/local/lib/python3.11/dist-packages/qcsd_lab/parameters.py",
+        "sha256": "0d6ae648fde6090c05c376af029710e205f033ebffcbea3b0412db1144bd22ff"
+      },
+      "src/qcsd_lab/plotting.py": {
+        "path": "/usr/local/lib/python3.11/dist-packages/qcsd_lab/plotting.py",
+        "sha256": "a537357b9495db97fbedf565b4f8e150f0fb00607ade5099084a053e11445ea1"
+      },
+      "src/qcsd_lab/prepare.py": {
+        "path": "/usr/local/lib/python3.11/dist-packages/qcsd_lab/prepare.py",
+        "sha256": "94a10fba3b220e5530368ebe31b9b87d9d4f2a379a96ad66616cdcb2bdec76ca"
+      },
+      "src/qcsd_lab/profiles.py": {
+        "path": "/usr/local/lib/python3.11/dist-packages/qcsd_lab/profiles.py",
+        "sha256": "a27a2e985937108910f16d5e80a144631c22e228dd626993c4f65b5c2d77dd93"
+      },
+      "src/qcsd_lab/report.py": {
+        "path": "/usr/local/lib/python3.11/dist-packages/qcsd_lab/report.py",
+        "sha256": "a08e0542e7c06ce8645d394815bbfe4e59e26e105a5d5ecd642d663e342e8ceb"
+      },
+      "src/qcsd_lab/util.py": {
+        "path": "/usr/local/lib/python3.11/dist-packages/qcsd_lab/util.py",
+        "sha256": "1919a17fb8bada859d06751a2e60aff45b39edd8b665e001925025195c6d26a1"
+      },
+      "src/qcsd_lab/verification.py": {
+        "path": "/usr/local/lib/python3.11/dist-packages/qcsd_lab/verification.py",
+        "sha256": "d6003b64a9980071e761e189271bf09d8efffb1107db5c9364bc36fdfa2c303f"
+      }
+    },
+    "neqo_qcsd_client": {
+      "path": "/usr/local/bin/neqo-qcsd-client",
+      "sha256": "758d25fea2b6b01ae32876d7e1354955243f7583adbaaf3f0f61a3b0d21b6469"
+    },
+    "schema_version": 1,
+    "sha256": "4f332bbe7d0fb3151d1c84b6f0b5fecd83d95178ec5dc6b0f43fd83d259f1936",
+    "source": {
+      "image_digest": null,
+      "lab_commit": "acc1b5c30b13103f50c49e318e9325e95b48cdd5",
+      "lab_dirty": false,
+      "lab_patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "neqo_commit": "40dcac98f11e9bb2f0c28e9cb8a0abb18447deff",
+      "neqo_dirty": false,
+      "neqo_patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "neqo_pinned_commit": "40dcac98f11e9bb2f0c28e9cb8a0abb18447deff"
+    },
+    "source_files": {
+      ".dockerignore": "2479977ac19784a08ee7265195c9d370339ee0303ce5c2c66f7ddbdc6bfde5a0",
+      "Dockerfile": "f15db388aa9a58343c3e080401dba44b7ae4e7a9e45e911d8395906aad4fee28",
+      "docker/collection-entrypoint": "0988c657d2931d361c90cfbb3dae6fe8b7d2fc448daf92aeeb7d507397a64f71",
+      "pyproject.toml": "3d1e8decee3d15548bc1d731411d6991d044493406b53b87dad296b6d44c1e0b",
+      "qcsd-lab": "a9d5de6cd227103dfc3362ee96202d06d3884454612336673186a317826984d2",
+      "src/qcsd_lab/__init__.py": "a768d2af1e7b99c92b4cdfb6e74530c26d922ff79669df367eabfac06df1433a",
+      "src/qcsd_lab/analysis.py": "6ebff558e7966a15da7f3067fbf5125cb39d9ac2d8e920fa5d6670a8432c2b77",
+      "src/qcsd_lab/capture.py": "9dec5c74d260c1e9e0912d20d093ed5ac8bf0404a91f7d89421cd48517f59694",
+      "src/qcsd_lab/capture_session.py": "428e69af33ee84d8620f70b35673f7f0f6192ce3aa646b2102aef7fa4a4f62c3",
+      "src/qcsd_lab/chaff_qualification.py": "fe9ec58a2f10b89c598bb2c2c64b2fbfb1f13fbf288a4bf936b6485f6651cf41",
+      "src/qcsd_lab/cli.py": "724005c869696d68a3157cb3c179b43e913445e20277e2ac5cb448fa8c1b0c5b",
+      "src/qcsd_lab/defenses.py": "218f2e32d86e990176fead65321be9b99b5f415a6f42e69858ef746ea4d674ff",
+      "src/qcsd_lab/discover.py": "a69c892395aaa8e627bf13f002b13d5cfaa74071b3a54b9fba0495de8e4d22d4",
+      "src/qcsd_lab/experiment.py": "050aa390205053addc692c49fe15bd9c12ca676a8d576da43c6d7e6bf004d7f5",
+      "src/qcsd_lab/fidelity.py": "7dda83d1b9abf3b5dc789229fc3945f49726fbfdae20f8455d2f2db4b307e501",
+      "src/qcsd_lab/fitting.py": "7c4300e89c3332a0843e34068c2c54582d4266a0b845f83c6dbb744c73e8f015",
+      "src/qcsd_lab/fitting_morphing.py": "17daea010c0b6ec813faeb6aa5ee8f63622407fb304e3b3db316ade45c30896f",
+      "src/qcsd_lab/fitting_trace.py": "9801b2d2970f629d9958dcd02b4c8d6f40e223dadb8dfdf0d6e6749116fa961e",
+      "src/qcsd_lab/fitting_walkie_talkie.py": "2b4ea32b655af8249aad19c23b6744346d4349a658d9c27013e4644fcfe21e6e",
+      "src/qcsd_lab/fitting_wtfpad.py": "d322946b8e247a2b557881ee9b965008e6b0ed12b33bf97d2a3b749b20eb245e",
+      "src/qcsd_lab/manifest.py": "c8878b551e3438d00b36ca6e16d650174bcadea97cbba143824aec8cb5cdd4e0",
+      "src/qcsd_lab/orchestrator.py": "f24c044c19e6c64d3bf9538fad95f4aa0e354d6ab3cd61e5d873ba60c40b3c3f",
+      "src/qcsd_lab/parameters.py": "0d6ae648fde6090c05c376af029710e205f033ebffcbea3b0412db1144bd22ff",
+      "src/qcsd_lab/plotting.py": "a537357b9495db97fbedf565b4f8e150f0fb00607ade5099084a053e11445ea1",
+      "src/qcsd_lab/prepare.py": "94a10fba3b220e5530368ebe31b9b87d9d4f2a379a96ad66616cdcb2bdec76ca",
+      "src/qcsd_lab/profiles.py": "a27a2e985937108910f16d5e80a144631c22e228dd626993c4f65b5c2d77dd93",
+      "src/qcsd_lab/report.py": "a08e0542e7c06ce8645d394815bbfe4e59e26e105a5d5ecd642d663e342e8ceb",
+      "src/qcsd_lab/util.py": "1919a17fb8bada859d06751a2e60aff45b39edd8b665e001925025195c6d26a1",
+      "src/qcsd_lab/verification.py": "d6003b64a9980071e761e189271bf09d8efffb1107db5c9364bc36fdfa2c303f",
+      "uv.lock": "192e4fdbd2bebee1fcb00b9138eacd1ada67545f7f9fae5c60a3f6ed4fa17085"
+    }
+  },
+  "method": "GET",
+  "neqo_provenance": {
+    "migration_commit": "40dcac98f11e9bb2f0c28e9cb8a0abb18447deff",
+    "neqo_base_commit": "8a04d065c2d35c8e8fd804f91c7081ab6bb60b89",
+    "neqo_version": "0.30.0",
+    "published_qcsd_commit": "39e293fb384dd341156eedd1e4b833d24904b1f6"
+  },
+  "prefix_pack_spec": {
+    "path": "cloudflare-quiche-r3.json",
+    "sha256": "270849dc299eeb4aef1bd6455ad245aa6c2424547f7d87ffcfe7769185d8150a"
+  },
+  "qualification_image_digest": "sha256:a947b40c80dc7e4b189ae20863c2be06f6e840c28005162f99837e8b62f27a9e",
+  "qualification_policy": {
+    "max_stream_data_excess": 1000,
+    "parallel_response_requests": 5,
+    "prefix_pack_runs": 3,
+    "profile": "research-1200",
+    "response_defense": "none",
+    "response_runs": 3,
+    "seed": 0,
+    "separate_chaff_namespace": true,
+    "udp_payload_ceiling": 1200
+  },
+  "qualification_source": {
+    "image_digest": "sha256:a947b40c80dc7e4b189ae20863c2be06f6e840c28005162f99837e8b62f27a9e",
+    "lab_commit": "acc1b5c30b13103f50c49e318e9325e95b48cdd5",
+    "lab_dirty": false,
+    "lab_patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "neqo_commit": "40dcac98f11e9bb2f0c28e9cb8a0abb18447deff",
+    "neqo_dirty": false,
+    "neqo_patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "neqo_pinned_commit": "40dcac98f11e9bb2f0c28e9cb8a0abb18447deff"
+  },
+  "resource": {
+    "expected_response": {
+      "body_bytes": 13390,
+      "body_sha256": "1a9fb48550bbec3ce4274debd326f0c23c57a5f1eae6ef83eecc7b6c8e51ef69",
+      "content_encoding": "gzip",
+      "status": 200
+    },
+    "headers": [
+      [
+        "accept",
+        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
+      ],
+      [
+        "accept-encoding",
+        "gzip, deflate, br, zstd"
+      ],
+      [
+        "accept-language",
+        "en-US,en;q=0.9"
+      ]
+    ],
+    "prefix_pack_qualification_sha256": "29e4270ef5ba0a4db5ae02c78a706782380a59eb09b6e7a583710ede8076a6f4",
+    "prefix_pack_runs": [
+      {
+        "receipt": {
+          "allowed_pending_late_chaff_request_orders": [
+            3,
+            4,
+            5
+          ],
+          "allowed_pending_late_chaff_stream_ids": [
+            12,
+            16,
+            20
+          ],
+          "application_resource_id": 0,
+          "application_workload_source_sha256": "e608366c95d6902234b4a705043435b3868f9572bcb8e103feb71db3110cbacc",
+          "artifact_type": "qcsd-chaff-prefix-pack-qualification",
+          "chaff_core_sha256": "57e6f35f0e33023c37313891ee6a16be360df551b627b67dcc08a83c6c4d93d0",
+          "completion_status": "complete",
+          "connection_count": 1,
+          "ended_unix_ns": 1786643893701061257,
+          "error": null,
+          "invocation_id": "1786643893649031884-172.17.0.2:42331",
+          "max_chaff_streams": 5,
+          "max_stream_data_excess": 1000,
+          "maximum_receiver_continuation_reserve_horizon": 1,
+          "neqo_version": "0.30.0",
+          "numeric_profile_sha256": "88098f7a4f5eb545fc3f08e6f77098ad6fb48db16c6d6bb77839295d772e45ef",
+          "packet_cutoff_sequence": 15,
+          "packet_log_sha256": "b095113c434a43aa5ba69c3f4929d52b583a839b7e6954fedfe1ede9c115400b",
+          "packet_observations": [
+            {
+              "direction": "outgoing",
+              "phase": "warmup",
+              "sequence": 0,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "outgoing",
+              "phase": "warmup",
+              "sequence": 1,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "warmup",
+              "sequence": 2,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "warmup",
+              "sequence": 3,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "warmup",
+              "sequence": 4,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "warmup",
+              "sequence": 5,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "warmup",
+              "sequence": 6,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "warmup",
+              "sequence": 7,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "warmup",
+              "sequence": 8,
+              "udp_payload_bytes": 505
+            },
+            {
+              "direction": "outgoing",
+              "phase": "warmup",
+              "sequence": 9,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "outgoing",
+              "phase": "warmup",
+              "sequence": 10,
+              "udp_payload_bytes": 83
+            },
+            {
+              "direction": "incoming",
+              "phase": "warmup",
+              "sequence": 11,
+              "udp_payload_bytes": 541
+            },
+            {
+              "direction": "incoming",
+              "phase": "warmup",
+              "sequence": 12,
+              "udp_payload_bytes": 32
+            },
+            {
+              "direction": "incoming",
+              "phase": "warmup",
+              "sequence": 13,
+              "udp_payload_bytes": 32
+            },
+            {
+              "direction": "incoming",
+              "phase": "warmup",
+              "sequence": 14,
+              "udp_payload_bytes": 57
+            },
+            {
+              "direction": "outgoing",
+              "phase": "qualification",
+              "sequence": 15,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 16,
+              "udp_payload_bytes": 32
+            }
+          ],
+          "packet_size": 1200,
+          "packets": {
+            "incoming": {
+              "observed_udp_payload_max": 1200,
+              "oversized_packet_count": 0,
+              "packet_count": 12
+            },
+            "outgoing": {
+              "observed_udp_payload_max": 1200,
+              "oversized_packet_count": 0,
+              "packet_count": 5
+            },
+            "total": {
+              "observed_udp_payload_max": 1200,
+              "oversized_packet_count": 0,
+              "packet_count": 17
+            }
+          },
+          "passed": true,
+          "peer_settings_received": true,
+          "post_slot_pending_required_prefix_stream_send": false,
+          "post_slot_pending_stream_send": true,
+          "prefix_pack_spec_sha256": "270849dc299eeb4aef1bd6455ad245aa6c2424547f7d87ffcfe7769185d8150a",
+          "qpack_decoder_handler_pending": false,
+          "qpack_decoder_stream_id": 10,
+          "qpack_decoder_transport_pending": false,
+          "requests_opened_before_first_target": 6,
+          "required_chaff_survivors": 2,
+          "runtime_workload_sha256": "ce44387892b3b10537bba36d4eb1bb337cb25a5559b4768499a5dc498d81b0b5",
+          "scheduled_target": {
+            "direction": "outgoing",
+            "satisfied_bytes": 1200,
+            "satisfied_datagrams": 1,
+            "scheduled_bytes": 1200,
+            "scheduled_datagrams": 1,
+            "slot_id": 1,
+            "udp_payload_bytes": 1200
+          },
+          "schema_version": 1,
+          "source": {
+            "migration_commit": "40dcac98f11e9bb2f0c28e9cb8a0abb18447deff",
+            "neqo_base_commit": "8a04d065c2d35c8e8fd804f91c7081ab6bb60b89",
+            "published_qcsd_commit": "39e293fb384dd341156eedd1e4b833d24904b1f6"
+          },
+          "source_walkie_talkie_artifact_sha256": "16dc343e233f7531277d96fd914d177202e7a508a50f7becdf2d8c0102b8446c",
+          "started_unix_ns": 1786643893649031884,
+          "stream_transmissions": [
+            {
+              "bytes": 417,
+              "fin": true,
+              "offset": 0,
+              "role": "application",
+              "sequence": 0,
+              "slot": 1,
+              "stream": 0
+            },
+            {
+              "bytes": 163,
+              "fin": true,
+              "offset": 0,
+              "role": {
+                "chaff": {
+                  "request_id": 0,
+                  "resource_id": 0
+                }
+              },
+              "sequence": 1,
+              "slot": 1,
+              "stream": 4
+            },
+            {
+              "bytes": 163,
+              "fin": true,
+              "offset": 0,
+              "role": {
+                "chaff": {
+                  "request_id": 1,
+                  "resource_id": 0
+                }
+              },
+              "sequence": 2,
+              "slot": 1,
+              "stream": 8
+            },
+            {
+              "bytes": 163,
+              "fin": true,
+              "offset": 0,
+              "role": {
+                "chaff": {
+                  "request_id": 2,
+                  "resource_id": 0
+                }
+              },
+              "sequence": 3,
+              "slot": 1,
+              "stream": 12
+            },
+            {
+              "bytes": 163,
+              "fin": true,
+              "offset": 0,
+              "role": {
+                "chaff": {
+                  "request_id": 3,
+                  "resource_id": 0
+                }
+              },
+              "sequence": 4,
+              "slot": 1,
+              "stream": 16
+            },
+            {
+              "bytes": 63,
+              "fin": false,
+              "offset": 0,
+              "role": {
+                "chaff": {
+                  "request_id": 4,
+                  "resource_id": 0
+                }
+              },
+              "sequence": 5,
+              "slot": 1,
+              "stream": 20
+            }
+          ],
+          "streams": [
+            {
+              "acknowledged_unique_bytes": 417,
+              "acknowledged_unique_ranges": [
+                [
+                  0,
+                  417
+                ]
+              ],
+              "acknowledgements": [
+                {
+                  "bytes": 417,
+                  "fin": true,
+                  "offset": 0,
+                  "sequence": 30
+                }
+              ],
+              "fin_acknowledged": true,
+              "fin_transmitted": true,
+              "qualified_request_stream_bytes": null,
+              "request_id": null,
+              "request_order": 0,
+              "request_stream_bytes": 417,
+              "resource_id": 0,
+              "role": "application",
+              "stream_id": 0,
+              "transmitted_unique_bytes": 417,
+              "transmitted_unique_ranges": [
+                [
+                  0,
+                  417
+                ]
+              ]
+            },
+            {
+              "acknowledged_unique_bytes": 163,
+              "acknowledged_unique_ranges": [
+                [
+                  0,
+                  163
+                ]
+              ],
+              "acknowledgements": [
+                {
+                  "bytes": 163,
+                  "fin": true,
+                  "offset": 0,
+                  "sequence": 31
+                }
+              ],
+              "fin_acknowledged": true,
+              "fin_transmitted": true,
+              "qualified_request_stream_bytes": 163,
+              "request_id": 0,
+              "request_order": 1,
+              "request_stream_bytes": 163,
+              "resource_id": 0,
+              "role": "chaff",
+              "stream_id": 4,
+              "transmitted_unique_bytes": 163,
+              "transmitted_unique_ranges": [
+                [
+                  0,
+                  163
+                ]
+              ]
+            },
+            {
+              "acknowledged_unique_bytes": 163,
+              "acknowledged_unique_ranges": [
+                [
+                  0,
+                  163
+                ]
+              ],
+              "acknowledgements": [
+                {
+                  "bytes": 163,
+                  "fin": true,
+                  "offset": 0,
+                  "sequence": 32
+                }
+              ],
+              "fin_acknowledged": true,
+              "fin_transmitted": true,
+              "qualified_request_stream_bytes": 163,
+              "request_id": 1,
+              "request_order": 2,
+              "request_stream_bytes": 163,
+              "resource_id": 0,
+              "role": "chaff",
+              "stream_id": 8,
+              "transmitted_unique_bytes": 163,
+              "transmitted_unique_ranges": [
+                [
+                  0,
+                  163
+                ]
+              ]
+            },
+            {
+              "acknowledged_unique_bytes": 163,
+              "acknowledged_unique_ranges": [
+                [
+                  0,
+                  163
+                ]
+              ],
+              "acknowledgements": [
+                {
+                  "bytes": 163,
+                  "fin": true,
+                  "offset": 0,
+                  "sequence": 33
+                }
+              ],
+              "fin_acknowledged": true,
+              "fin_transmitted": true,
+              "qualified_request_stream_bytes": 163,
+              "request_id": 2,
+              "request_order": 3,
+              "request_stream_bytes": 163,
+              "resource_id": 0,
+              "role": "chaff",
+              "stream_id": 12,
+              "transmitted_unique_bytes": 163,
+              "transmitted_unique_ranges": [
+                [
+                  0,
+                  163
+                ]
+              ]
+            },
+            {
+              "acknowledged_unique_bytes": 163,
+              "acknowledged_unique_ranges": [
+                [
+                  0,
+                  163
+                ]
+              ],
+              "acknowledgements": [
+                {
+                  "bytes": 163,
+                  "fin": true,
+                  "offset": 0,
+                  "sequence": 34
+                }
+              ],
+              "fin_acknowledged": true,
+              "fin_transmitted": true,
+              "qualified_request_stream_bytes": 163,
+              "request_id": 3,
+              "request_order": 4,
+              "request_stream_bytes": 163,
+              "resource_id": 0,
+              "role": "chaff",
+              "stream_id": 16,
+              "transmitted_unique_bytes": 163,
+              "transmitted_unique_ranges": [
+                [
+                  0,
+                  163
+                ]
+              ]
+            },
+            {
+              "acknowledged_unique_bytes": 63,
+              "acknowledged_unique_ranges": [
+                [
+                  0,
+                  63
+                ]
+              ],
+              "acknowledgements": [
+                {
+                  "bytes": 63,
+                  "fin": false,
+                  "offset": 0,
+                  "sequence": 35
+                }
+              ],
+              "fin_acknowledged": false,
+              "fin_transmitted": false,
+              "qualified_request_stream_bytes": 163,
+              "request_id": 4,
+              "request_order": 5,
+              "request_stream_bytes": 163,
+              "resource_id": 0,
+              "role": "chaff",
+              "stream_id": 20,
+              "transmitted_unique_bytes": 63,
+              "transmitted_unique_ranges": [
+                [
+                  0,
+                  63
+                ]
+              ]
+            }
+          ],
+          "targetless_stream_bytes": 0,
+          "warmup_stream_output_drained": true,
+          "workload_id": "cloudflare-quiche-r3"
+        },
+        "receipt_object_sha256": "37672fdd78e5a7abd4dc4fb9a77d80755c6ec7ee299270cd3993393584a41533",
+        "run_index": 0
+      },
+      {
+        "receipt": {
+          "allowed_pending_late_chaff_request_orders": [
+            3,
+            4,
+            5
+          ],
+          "allowed_pending_late_chaff_stream_ids": [
+            12,
+            16,
+            20
+          ],
+          "application_resource_id": 0,
+          "application_workload_source_sha256": "e608366c95d6902234b4a705043435b3868f9572bcb8e103feb71db3110cbacc",
+          "artifact_type": "qcsd-chaff-prefix-pack-qualification",
+          "chaff_core_sha256": "57e6f35f0e33023c37313891ee6a16be360df551b627b67dcc08a83c6c4d93d0",
+          "completion_status": "complete",
+          "connection_count": 1,
+          "ended_unix_ns": 1786643924000955927,
+          "error": null,
+          "invocation_id": "1786643923936954326-172.17.0.2:56028",
+          "max_chaff_streams": 5,
+          "max_stream_data_excess": 1000,
+          "maximum_receiver_continuation_reserve_horizon": 1,
+          "neqo_version": "0.30.0",
+          "numeric_profile_sha256": "88098f7a4f5eb545fc3f08e6f77098ad6fb48db16c6d6bb77839295d772e45ef",
+          "packet_cutoff_sequence": 18,
+          "packet_log_sha256": "76a7f37ec51fb2b9e3c4110d4f51842e79327fff64da798f6e6c7c26186aa37b",
+          "packet_observations": [
+            {
+              "direction": "outgoing",
+              "phase": "warmup",
+              "sequence": 0,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "outgoing",
+              "phase": "warmup",
+              "sequence": 1,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "warmup",
+              "sequence": 2,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "warmup",
+              "sequence": 3,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "warmup",
+              "sequence": 4,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "warmup",
+              "sequence": 5,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "outgoing",
+              "phase": "warmup",
+              "sequence": 6,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "warmup",
+              "sequence": 7,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "outgoing",
+              "phase": "warmup",
+              "sequence": 8,
+              "udp_payload_bytes": 59
+            },
+            {
+              "direction": "incoming",
+              "phase": "warmup",
+              "sequence": 9,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "outgoing",
+              "phase": "warmup",
+              "sequence": 10,
+              "udp_payload_bytes": 59
+            },
+            {
+              "direction": "incoming",
+              "phase": "warmup",
+              "sequence": 11,
+              "udp_payload_bytes": 503
+            },
+            {
+              "direction": "outgoing",
+              "phase": "warmup",
+              "sequence": 12,
+              "udp_payload_bytes": 164
+            },
+            {
+              "direction": "outgoing",
+              "phase": "warmup",
+              "sequence": 13,
+              "udp_payload_bytes": 85
+            },
+            {
+              "direction": "incoming",
+              "phase": "warmup",
+              "sequence": 14,
+              "udp_payload_bytes": 541
+            },
+            {
+              "direction": "incoming",
+              "phase": "warmup",
+              "sequence": 15,
+              "udp_payload_bytes": 32
+            },
+            {
+              "direction": "incoming",
+              "phase": "warmup",
+              "sequence": 16,
+              "udp_payload_bytes": 32
+            },
+            {
+              "direction": "incoming",
+              "phase": "warmup",
+              "sequence": 17,
+              "udp_payload_bytes": 57
+            },
+            {
+              "direction": "outgoing",
+              "phase": "qualification",
+              "sequence": 18,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 19,
+              "udp_payload_bytes": 31
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 20,
+              "udp_payload_bytes": 32
+            }
+          ],
+          "packet_size": 1200,
+          "packets": {
+            "incoming": {
+              "observed_udp_payload_max": 1200,
+              "oversized_packet_count": 0,
+              "packet_count": 13
+            },
+            "outgoing": {
+              "observed_udp_payload_max": 1200,
+              "oversized_packet_count": 0,
+              "packet_count": 8
+            },
+            "total": {
+              "observed_udp_payload_max": 1200,
+              "oversized_packet_count": 0,
+              "packet_count": 21
+            }
+          },
+          "passed": true,
+          "peer_settings_received": true,
+          "post_slot_pending_required_prefix_stream_send": false,
+          "post_slot_pending_stream_send": true,
+          "prefix_pack_spec_sha256": "270849dc299eeb4aef1bd6455ad245aa6c2424547f7d87ffcfe7769185d8150a",
+          "qpack_decoder_handler_pending": false,
+          "qpack_decoder_stream_id": 10,
+          "qpack_decoder_transport_pending": false,
+          "requests_opened_before_first_target": 6,
+          "required_chaff_survivors": 2,
+          "runtime_workload_sha256": "ce44387892b3b10537bba36d4eb1bb337cb25a5559b4768499a5dc498d81b0b5",
+          "scheduled_target": {
+            "direction": "outgoing",
+            "satisfied_bytes": 1200,
+            "satisfied_datagrams": 1,
+            "scheduled_bytes": 1200,
+            "scheduled_datagrams": 1,
+            "slot_id": 1,
+            "udp_payload_bytes": 1200
+          },
+          "schema_version": 1,
+          "source": {
+            "migration_commit": "40dcac98f11e9bb2f0c28e9cb8a0abb18447deff",
+            "neqo_base_commit": "8a04d065c2d35c8e8fd804f91c7081ab6bb60b89",
+            "published_qcsd_commit": "39e293fb384dd341156eedd1e4b833d24904b1f6"
+          },
+          "source_walkie_talkie_artifact_sha256": "16dc343e233f7531277d96fd914d177202e7a508a50f7becdf2d8c0102b8446c",
+          "started_unix_ns": 1786643923936954326,
+          "stream_transmissions": [
+            {
+              "bytes": 417,
+              "fin": true,
+              "offset": 0,
+              "role": "application",
+              "sequence": 0,
+              "slot": 1,
+              "stream": 0
+            },
+            {
+              "bytes": 163,
+              "fin": true,
+              "offset": 0,
+              "role": {
+                "chaff": {
+                  "request_id": 0,
+                  "resource_id": 0
+                }
+              },
+              "sequence": 1,
+              "slot": 1,
+              "stream": 4
+            },
+            {
+              "bytes": 163,
+              "fin": true,
+              "offset": 0,
+              "role": {
+                "chaff": {
+                  "request_id": 1,
+                  "resource_id": 0
+                }
+              },
+              "sequence": 2,
+              "slot": 1,
+              "stream": 8
+            },
+            {
+              "bytes": 163,
+              "fin": true,
+              "offset": 0,
+              "role": {
+                "chaff": {
+                  "request_id": 2,
+                  "resource_id": 0
+                }
+              },
+              "sequence": 3,
+              "slot": 1,
+              "stream": 12
+            },
+            {
+              "bytes": 163,
+              "fin": true,
+              "offset": 0,
+              "role": {
+                "chaff": {
+                  "request_id": 3,
+                  "resource_id": 0
+                }
+              },
+              "sequence": 4,
+              "slot": 1,
+              "stream": 16
+            },
+            {
+              "bytes": 63,
+              "fin": false,
+              "offset": 0,
+              "role": {
+                "chaff": {
+                  "request_id": 4,
+                  "resource_id": 0
+                }
+              },
+              "sequence": 5,
+              "slot": 1,
+              "stream": 20
+            }
+          ],
+          "streams": [
+            {
+              "acknowledged_unique_bytes": 417,
+              "acknowledged_unique_ranges": [
+                [
+                  0,
+                  417
+                ]
+              ],
+              "acknowledgements": [
+                {
+                  "bytes": 417,
+                  "fin": true,
+                  "offset": 0,
+                  "sequence": 34
+                }
+              ],
+              "fin_acknowledged": true,
+              "fin_transmitted": true,
+              "qualified_request_stream_bytes": null,
+              "request_id": null,
+              "request_order": 0,
+              "request_stream_bytes": 417,
+              "resource_id": 0,
+              "role": "application",
+              "stream_id": 0,
+              "transmitted_unique_bytes": 417,
+              "transmitted_unique_ranges": [
+                [
+                  0,
+                  417
+                ]
+              ]
+            },
+            {
+              "acknowledged_unique_bytes": 163,
+              "acknowledged_unique_ranges": [
+                [
+                  0,
+                  163
+                ]
+              ],
+              "acknowledgements": [
+                {
+                  "bytes": 163,
+                  "fin": true,
+                  "offset": 0,
+                  "sequence": 35
+                }
+              ],
+              "fin_acknowledged": true,
+              "fin_transmitted": true,
+              "qualified_request_stream_bytes": 163,
+              "request_id": 0,
+              "request_order": 1,
+              "request_stream_bytes": 163,
+              "resource_id": 0,
+              "role": "chaff",
+              "stream_id": 4,
+              "transmitted_unique_bytes": 163,
+              "transmitted_unique_ranges": [
+                [
+                  0,
+                  163
+                ]
+              ]
+            },
+            {
+              "acknowledged_unique_bytes": 163,
+              "acknowledged_unique_ranges": [
+                [
+                  0,
+                  163
+                ]
+              ],
+              "acknowledgements": [
+                {
+                  "bytes": 163,
+                  "fin": true,
+                  "offset": 0,
+                  "sequence": 36
+                }
+              ],
+              "fin_acknowledged": true,
+              "fin_transmitted": true,
+              "qualified_request_stream_bytes": 163,
+              "request_id": 1,
+              "request_order": 2,
+              "request_stream_bytes": 163,
+              "resource_id": 0,
+              "role": "chaff",
+              "stream_id": 8,
+              "transmitted_unique_bytes": 163,
+              "transmitted_unique_ranges": [
+                [
+                  0,
+                  163
+                ]
+              ]
+            },
+            {
+              "acknowledged_unique_bytes": 163,
+              "acknowledged_unique_ranges": [
+                [
+                  0,
+                  163
+                ]
+              ],
+              "acknowledgements": [
+                {
+                  "bytes": 163,
+                  "fin": true,
+                  "offset": 0,
+                  "sequence": 37
+                }
+              ],
+              "fin_acknowledged": true,
+              "fin_transmitted": true,
+              "qualified_request_stream_bytes": 163,
+              "request_id": 2,
+              "request_order": 3,
+              "request_stream_bytes": 163,
+              "resource_id": 0,
+              "role": "chaff",
+              "stream_id": 12,
+              "transmitted_unique_bytes": 163,
+              "transmitted_unique_ranges": [
+                [
+                  0,
+                  163
+                ]
+              ]
+            },
+            {
+              "acknowledged_unique_bytes": 163,
+              "acknowledged_unique_ranges": [
+                [
+                  0,
+                  163
+                ]
+              ],
+              "acknowledgements": [
+                {
+                  "bytes": 163,
+                  "fin": true,
+                  "offset": 0,
+                  "sequence": 38
+                }
+              ],
+              "fin_acknowledged": true,
+              "fin_transmitted": true,
+              "qualified_request_stream_bytes": 163,
+              "request_id": 3,
+              "request_order": 4,
+              "request_stream_bytes": 163,
+              "resource_id": 0,
+              "role": "chaff",
+              "stream_id": 16,
+              "transmitted_unique_bytes": 163,
+              "transmitted_unique_ranges": [
+                [
+                  0,
+                  163
+                ]
+              ]
+            },
+            {
+              "acknowledged_unique_bytes": 63,
+              "acknowledged_unique_ranges": [
+                [
+                  0,
+                  63
+                ]
+              ],
+              "acknowledgements": [
+                {
+                  "bytes": 63,
+                  "fin": false,
+                  "offset": 0,
+                  "sequence": 39
+                }
+              ],
+              "fin_acknowledged": false,
+              "fin_transmitted": false,
+              "qualified_request_stream_bytes": 163,
+              "request_id": 4,
+              "request_order": 5,
+              "request_stream_bytes": 163,
+              "resource_id": 0,
+              "role": "chaff",
+              "stream_id": 20,
+              "transmitted_unique_bytes": 63,
+              "transmitted_unique_ranges": [
+                [
+                  0,
+                  63
+                ]
+              ]
+            }
+          ],
+          "targetless_stream_bytes": 0,
+          "warmup_stream_output_drained": true,
+          "workload_id": "cloudflare-quiche-r3"
+        },
+        "receipt_object_sha256": "a92f08ef8b2d0c4e927567f3797b689175f4351ab2f68521bb37e72c6a8f5856",
+        "run_index": 1
+      },
+      {
+        "receipt": {
+          "allowed_pending_late_chaff_request_orders": [
+            3,
+            4,
+            5
+          ],
+          "allowed_pending_late_chaff_stream_ids": [
+            12,
+            16,
+            20
+          ],
+          "application_resource_id": 0,
+          "application_workload_source_sha256": "e608366c95d6902234b4a705043435b3868f9572bcb8e103feb71db3110cbacc",
+          "artifact_type": "qcsd-chaff-prefix-pack-qualification",
+          "chaff_core_sha256": "57e6f35f0e33023c37313891ee6a16be360df551b627b67dcc08a83c6c4d93d0",
+          "completion_status": "complete",
+          "connection_count": 1,
+          "ended_unix_ns": 1786643954312730088,
+          "error": null,
+          "invocation_id": "1786643954216132271-172.17.0.2:43139",
+          "max_chaff_streams": 5,
+          "max_stream_data_excess": 1000,
+          "maximum_receiver_continuation_reserve_horizon": 1,
+          "neqo_version": "0.30.0",
+          "numeric_profile_sha256": "88098f7a4f5eb545fc3f08e6f77098ad6fb48db16c6d6bb77839295d772e45ef",
+          "packet_cutoff_sequence": 15,
+          "packet_log_sha256": "157f7140137baee49247bffe0adfe42a311c142fe28643735c048bbdd6496ae2",
+          "packet_observations": [
+            {
+              "direction": "outgoing",
+              "phase": "warmup",
+              "sequence": 0,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "outgoing",
+              "phase": "warmup",
+              "sequence": 1,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "warmup",
+              "sequence": 2,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "warmup",
+              "sequence": 3,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "warmup",
+              "sequence": 4,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "warmup",
+              "sequence": 5,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "warmup",
+              "sequence": 6,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "warmup",
+              "sequence": 7,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "warmup",
+              "sequence": 8,
+              "udp_payload_bytes": 502
+            },
+            {
+              "direction": "outgoing",
+              "phase": "warmup",
+              "sequence": 9,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "outgoing",
+              "phase": "warmup",
+              "sequence": 10,
+              "udp_payload_bytes": 86
+            },
+            {
+              "direction": "incoming",
+              "phase": "warmup",
+              "sequence": 11,
+              "udp_payload_bytes": 541
+            },
+            {
+              "direction": "incoming",
+              "phase": "warmup",
+              "sequence": 12,
+              "udp_payload_bytes": 32
+            },
+            {
+              "direction": "incoming",
+              "phase": "warmup",
+              "sequence": 13,
+              "udp_payload_bytes": 32
+            },
+            {
+              "direction": "incoming",
+              "phase": "warmup",
+              "sequence": 14,
+              "udp_payload_bytes": 57
+            },
+            {
+              "direction": "outgoing",
+              "phase": "qualification",
+              "sequence": 15,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 16,
+              "udp_payload_bytes": 31
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 17,
+              "udp_payload_bytes": 32
+            }
+          ],
+          "packet_size": 1200,
+          "packets": {
+            "incoming": {
+              "observed_udp_payload_max": 1200,
+              "oversized_packet_count": 0,
+              "packet_count": 13
+            },
+            "outgoing": {
+              "observed_udp_payload_max": 1200,
+              "oversized_packet_count": 0,
+              "packet_count": 5
+            },
+            "total": {
+              "observed_udp_payload_max": 1200,
+              "oversized_packet_count": 0,
+              "packet_count": 18
+            }
+          },
+          "passed": true,
+          "peer_settings_received": true,
+          "post_slot_pending_required_prefix_stream_send": false,
+          "post_slot_pending_stream_send": true,
+          "prefix_pack_spec_sha256": "270849dc299eeb4aef1bd6455ad245aa6c2424547f7d87ffcfe7769185d8150a",
+          "qpack_decoder_handler_pending": false,
+          "qpack_decoder_stream_id": 10,
+          "qpack_decoder_transport_pending": false,
+          "requests_opened_before_first_target": 6,
+          "required_chaff_survivors": 2,
+          "runtime_workload_sha256": "ce44387892b3b10537bba36d4eb1bb337cb25a5559b4768499a5dc498d81b0b5",
+          "scheduled_target": {
+            "direction": "outgoing",
+            "satisfied_bytes": 1200,
+            "satisfied_datagrams": 1,
+            "scheduled_bytes": 1200,
+            "scheduled_datagrams": 1,
+            "slot_id": 1,
+            "udp_payload_bytes": 1200
+          },
+          "schema_version": 1,
+          "source": {
+            "migration_commit": "40dcac98f11e9bb2f0c28e9cb8a0abb18447deff",
+            "neqo_base_commit": "8a04d065c2d35c8e8fd804f91c7081ab6bb60b89",
+            "published_qcsd_commit": "39e293fb384dd341156eedd1e4b833d24904b1f6"
+          },
+          "source_walkie_talkie_artifact_sha256": "16dc343e233f7531277d96fd914d177202e7a508a50f7becdf2d8c0102b8446c",
+          "started_unix_ns": 1786643954216132271,
+          "stream_transmissions": [
+            {
+              "bytes": 417,
+              "fin": true,
+              "offset": 0,
+              "role": "application",
+              "sequence": 0,
+              "slot": 1,
+              "stream": 0
+            },
+            {
+              "bytes": 163,
+              "fin": true,
+              "offset": 0,
+              "role": {
+                "chaff": {
+                  "request_id": 0,
+                  "resource_id": 0
+                }
+              },
+              "sequence": 1,
+              "slot": 1,
+              "stream": 4
+            },
+            {
+              "bytes": 163,
+              "fin": true,
+              "offset": 0,
+              "role": {
+                "chaff": {
+                  "request_id": 1,
+                  "resource_id": 0
+                }
+              },
+              "sequence": 2,
+              "slot": 1,
+              "stream": 8
+            },
+            {
+              "bytes": 163,
+              "fin": true,
+              "offset": 0,
+              "role": {
+                "chaff": {
+                  "request_id": 2,
+                  "resource_id": 0
+                }
+              },
+              "sequence": 3,
+              "slot": 1,
+              "stream": 12
+            },
+            {
+              "bytes": 163,
+              "fin": true,
+              "offset": 0,
+              "role": {
+                "chaff": {
+                  "request_id": 3,
+                  "resource_id": 0
+                }
+              },
+              "sequence": 4,
+              "slot": 1,
+              "stream": 16
+            },
+            {
+              "bytes": 63,
+              "fin": false,
+              "offset": 0,
+              "role": {
+                "chaff": {
+                  "request_id": 4,
+                  "resource_id": 0
+                }
+              },
+              "sequence": 5,
+              "slot": 1,
+              "stream": 20
+            }
+          ],
+          "streams": [
+            {
+              "acknowledged_unique_bytes": 417,
+              "acknowledged_unique_ranges": [
+                [
+                  0,
+                  417
+                ]
+              ],
+              "acknowledgements": [
+                {
+                  "bytes": 417,
+                  "fin": true,
+                  "offset": 0,
+                  "sequence": 31
+                }
+              ],
+              "fin_acknowledged": true,
+              "fin_transmitted": true,
+              "qualified_request_stream_bytes": null,
+              "request_id": null,
+              "request_order": 0,
+              "request_stream_bytes": 417,
+              "resource_id": 0,
+              "role": "application",
+              "stream_id": 0,
+              "transmitted_unique_bytes": 417,
+              "transmitted_unique_ranges": [
+                [
+                  0,
+                  417
+                ]
+              ]
+            },
+            {
+              "acknowledged_unique_bytes": 163,
+              "acknowledged_unique_ranges": [
+                [
+                  0,
+                  163
+                ]
+              ],
+              "acknowledgements": [
+                {
+                  "bytes": 163,
+                  "fin": true,
+                  "offset": 0,
+                  "sequence": 32
+                }
+              ],
+              "fin_acknowledged": true,
+              "fin_transmitted": true,
+              "qualified_request_stream_bytes": 163,
+              "request_id": 0,
+              "request_order": 1,
+              "request_stream_bytes": 163,
+              "resource_id": 0,
+              "role": "chaff",
+              "stream_id": 4,
+              "transmitted_unique_bytes": 163,
+              "transmitted_unique_ranges": [
+                [
+                  0,
+                  163
+                ]
+              ]
+            },
+            {
+              "acknowledged_unique_bytes": 163,
+              "acknowledged_unique_ranges": [
+                [
+                  0,
+                  163
+                ]
+              ],
+              "acknowledgements": [
+                {
+                  "bytes": 163,
+                  "fin": true,
+                  "offset": 0,
+                  "sequence": 33
+                }
+              ],
+              "fin_acknowledged": true,
+              "fin_transmitted": true,
+              "qualified_request_stream_bytes": 163,
+              "request_id": 1,
+              "request_order": 2,
+              "request_stream_bytes": 163,
+              "resource_id": 0,
+              "role": "chaff",
+              "stream_id": 8,
+              "transmitted_unique_bytes": 163,
+              "transmitted_unique_ranges": [
+                [
+                  0,
+                  163
+                ]
+              ]
+            },
+            {
+              "acknowledged_unique_bytes": 163,
+              "acknowledged_unique_ranges": [
+                [
+                  0,
+                  163
+                ]
+              ],
+              "acknowledgements": [
+                {
+                  "bytes": 163,
+                  "fin": true,
+                  "offset": 0,
+                  "sequence": 34
+                }
+              ],
+              "fin_acknowledged": true,
+              "fin_transmitted": true,
+              "qualified_request_stream_bytes": 163,
+              "request_id": 2,
+              "request_order": 3,
+              "request_stream_bytes": 163,
+              "resource_id": 0,
+              "role": "chaff",
+              "stream_id": 12,
+              "transmitted_unique_bytes": 163,
+              "transmitted_unique_ranges": [
+                [
+                  0,
+                  163
+                ]
+              ]
+            },
+            {
+              "acknowledged_unique_bytes": 163,
+              "acknowledged_unique_ranges": [
+                [
+                  0,
+                  163
+                ]
+              ],
+              "acknowledgements": [
+                {
+                  "bytes": 163,
+                  "fin": true,
+                  "offset": 0,
+                  "sequence": 35
+                }
+              ],
+              "fin_acknowledged": true,
+              "fin_transmitted": true,
+              "qualified_request_stream_bytes": 163,
+              "request_id": 3,
+              "request_order": 4,
+              "request_stream_bytes": 163,
+              "resource_id": 0,
+              "role": "chaff",
+              "stream_id": 16,
+              "transmitted_unique_bytes": 163,
+              "transmitted_unique_ranges": [
+                [
+                  0,
+                  163
+                ]
+              ]
+            },
+            {
+              "acknowledged_unique_bytes": 63,
+              "acknowledged_unique_ranges": [
+                [
+                  0,
+                  63
+                ]
+              ],
+              "acknowledgements": [
+                {
+                  "bytes": 63,
+                  "fin": false,
+                  "offset": 0,
+                  "sequence": 36
+                }
+              ],
+              "fin_acknowledged": false,
+              "fin_transmitted": false,
+              "qualified_request_stream_bytes": 163,
+              "request_id": 4,
+              "request_order": 5,
+              "request_stream_bytes": 163,
+              "resource_id": 0,
+              "role": "chaff",
+              "stream_id": 20,
+              "transmitted_unique_bytes": 63,
+              "transmitted_unique_ranges": [
+                [
+                  0,
+                  63
+                ]
+              ]
+            }
+          ],
+          "targetless_stream_bytes": 0,
+          "warmup_stream_output_drained": true,
+          "workload_id": "cloudflare-quiche-r3"
+        },
+        "receipt_object_sha256": "ebc88b9b549a7183d163081ebb719b33152e70fe5b7df8e6d248fbc860a1ddeb",
+        "run_index": 2
+      }
+    ],
+    "request_stream_bytes": 163,
+    "resource_id": 0,
+    "response_qualification_sha256": "ad60cfb5d2f908a4194835134aafbdf3108a917cbeab3694fb97147d0a1cc4be",
+    "response_runs": [
+      {
+        "receipt": {
+          "application_resource_id": 0,
+          "application_workload_sha256": "e608366c95d6902234b4a705043435b3868f9572bcb8e103feb71db3110cbacc",
+          "artifact_type": "qcsd-chaff-response-qualification",
+          "completion_status": "complete",
+          "connection_count": 1,
+          "ended_unix_ns": 1786643833001099019,
+          "error": null,
+          "invocation_id": "1786643832890231417-172.17.0.2:46763",
+          "max_response_bytes": 1048576,
+          "method": "GET",
+          "neqo_version": "0.30.0",
+          "packet_log_sha256": "cac65e2316c16ffe09c1f4718f7b7eaf263ec3cc38e35fc98dcaf5a9e4398c2d",
+          "packet_observations": [
+            {
+              "direction": "outgoing",
+              "phase": "handshake",
+              "sequence": 0,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "outgoing",
+              "phase": "handshake",
+              "sequence": 1,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "handshake",
+              "sequence": 2,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "handshake",
+              "sequence": 3,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "handshake",
+              "sequence": 4,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "handshake",
+              "sequence": 5,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "handshake",
+              "sequence": 6,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "handshake",
+              "sequence": 7,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "outgoing",
+              "phase": "handshake",
+              "sequence": 8,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "handshake",
+              "sequence": 9,
+              "udp_payload_bytes": 502
+            },
+            {
+              "direction": "outgoing",
+              "phase": "handshake",
+              "sequence": 10,
+              "udp_payload_bytes": 164
+            },
+            {
+              "direction": "outgoing",
+              "phase": "qualification",
+              "sequence": 11,
+              "udp_payload_bytes": 918
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 12,
+              "udp_payload_bytes": 541
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 13,
+              "udp_payload_bytes": 32
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 14,
+              "udp_payload_bytes": 32
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 15,
+              "udp_payload_bytes": 57
+            },
+            {
+              "direction": "outgoing",
+              "phase": "qualification",
+              "sequence": 16,
+              "udp_payload_bytes": 46
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 17,
+              "udp_payload_bytes": 31
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 18,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 19,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 20,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 21,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "outgoing",
+              "phase": "qualification",
+              "sequence": 22,
+              "udp_payload_bytes": 43
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 23,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 24,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 25,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 26,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 27,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 28,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 29,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "outgoing",
+              "phase": "qualification",
+              "sequence": 30,
+              "udp_payload_bytes": 43
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 31,
+              "udp_payload_bytes": 749
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 32,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 33,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 34,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 35,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 36,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 37,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 38,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "outgoing",
+              "phase": "qualification",
+              "sequence": 39,
+              "udp_payload_bytes": 43
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 40,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 41,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 42,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 43,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "outgoing",
+              "phase": "qualification",
+              "sequence": 44,
+              "udp_payload_bytes": 43
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 45,
+              "udp_payload_bytes": 713
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 46,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 47,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 48,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 49,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 50,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 51,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 52,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 53,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 54,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 55,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 56,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 57,
+              "udp_payload_bytes": 713
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 58,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 59,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "outgoing",
+              "phase": "qualification",
+              "sequence": 60,
+              "udp_payload_bytes": 43
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 61,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 62,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 63,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 64,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 65,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 66,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 67,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "outgoing",
+              "phase": "qualification",
+              "sequence": 68,
+              "udp_payload_bytes": 43
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 69,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 70,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 71,
+              "udp_payload_bytes": 713
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 72,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 73,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "outgoing",
+              "phase": "qualification",
+              "sequence": 74,
+              "udp_payload_bytes": 45
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 75,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 76,
+              "udp_payload_bytes": 712
+            },
+            {
+              "direction": "outgoing",
+              "phase": "qualification",
+              "sequence": 77,
+              "udp_payload_bytes": 46
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 78,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 79,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 80,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 81,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 82,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 83,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 84,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 85,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "outgoing",
+              "phase": "qualification",
+              "sequence": 86,
+              "udp_payload_bytes": 46
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 87,
+              "udp_payload_bytes": 36
+            }
+          ],
+          "packets": {
+            "incoming": {
+              "observed_udp_payload_max": 1200,
+              "oversized_packet_count": 0,
+              "packet_count": 73
+            },
+            "outgoing": {
+              "observed_udp_payload_max": 1200,
+              "oversized_packet_count": 0,
+              "packet_count": 15
+            },
+            "total": {
+              "observed_udp_payload_max": 1200,
+              "oversized_packet_count": 0,
+              "packet_count": 88
+            }
+          },
+          "parallel_requests": 5,
+          "passed": true,
+          "request_headers": [
+            [
+              "accept",
+              "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
+            ],
+            [
+              "accept-encoding",
+              "gzip, deflate, br, zstd"
+            ],
+            [
+              "accept-language",
+              "en-US,en;q=0.9"
+            ]
+          ],
+          "request_stream_bytes": 163,
+          "requests": [
+            {
+              "body_bytes": 13390,
+              "body_sha256": "1a9fb48550bbec3ce4274debd326f0c23c57a5f1eae6ef83eecc7b6c8e51ef69",
+              "complete": true,
+              "content_encoding": "gzip",
+              "outcome": "complete",
+              "request_index": 0,
+              "request_stream_bytes": 163,
+              "status": 200,
+              "stream_id": 0
+            },
+            {
+              "body_bytes": 13390,
+              "body_sha256": "1a9fb48550bbec3ce4274debd326f0c23c57a5f1eae6ef83eecc7b6c8e51ef69",
+              "complete": true,
+              "content_encoding": "gzip",
+              "outcome": "complete",
+              "request_index": 1,
+              "request_stream_bytes": 163,
+              "status": 200,
+              "stream_id": 4
+            },
+            {
+              "body_bytes": 13390,
+              "body_sha256": "1a9fb48550bbec3ce4274debd326f0c23c57a5f1eae6ef83eecc7b6c8e51ef69",
+              "complete": true,
+              "content_encoding": "gzip",
+              "outcome": "complete",
+              "request_index": 2,
+              "request_stream_bytes": 163,
+              "status": 200,
+              "stream_id": 8
+            },
+            {
+              "body_bytes": 13390,
+              "body_sha256": "1a9fb48550bbec3ce4274debd326f0c23c57a5f1eae6ef83eecc7b6c8e51ef69",
+              "complete": true,
+              "content_encoding": "gzip",
+              "outcome": "complete",
+              "request_index": 3,
+              "request_stream_bytes": 163,
+              "status": 200,
+              "stream_id": 12
+            },
+            {
+              "body_bytes": 13390,
+              "body_sha256": "1a9fb48550bbec3ce4274debd326f0c23c57a5f1eae6ef83eecc7b6c8e51ef69",
+              "complete": true,
+              "content_encoding": "gzip",
+              "outcome": "complete",
+              "request_index": 4,
+              "request_stream_bytes": 163,
+              "status": 200,
+              "stream_id": 16
+            }
+          ],
+          "requests_opened_before_first_network_output": 5,
+          "schema_version": 1,
+          "source": {
+            "migration_commit": "40dcac98f11e9bb2f0c28e9cb8a0abb18447deff",
+            "neqo_base_commit": "8a04d065c2d35c8e8fd804f91c7081ab6bb60b89",
+            "published_qcsd_commit": "39e293fb384dd341156eedd1e4b833d24904b1f6"
+          },
+          "started_unix_ns": 1786643832890231417,
+          "udp_payload_ceiling": 1200,
+          "url": "https://cloudflare-quic.com/"
+        },
+        "receipt_object_sha256": "45dbb07b3876d436ea202682b66804d153810db8b2ae5b6a701f62cef50be76f",
+        "run_index": 0
+      },
+      {
+        "receipt": {
+          "application_resource_id": 0,
+          "application_workload_sha256": "e608366c95d6902234b4a705043435b3868f9572bcb8e103feb71db3110cbacc",
+          "artifact_type": "qcsd-chaff-response-qualification",
+          "completion_status": "complete",
+          "connection_count": 1,
+          "ended_unix_ns": 1786643863305963373,
+          "error": null,
+          "invocation_id": "1786643863213423768-172.17.0.2:47496",
+          "max_response_bytes": 1048576,
+          "method": "GET",
+          "neqo_version": "0.30.0",
+          "packet_log_sha256": "806168541bb83b711cd29015909db6127ae35872642d4d18ab373a9262e270e1",
+          "packet_observations": [
+            {
+              "direction": "outgoing",
+              "phase": "handshake",
+              "sequence": 0,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "outgoing",
+              "phase": "handshake",
+              "sequence": 1,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "handshake",
+              "sequence": 2,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "handshake",
+              "sequence": 3,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "handshake",
+              "sequence": 4,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "handshake",
+              "sequence": 5,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "handshake",
+              "sequence": 6,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "handshake",
+              "sequence": 7,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "handshake",
+              "sequence": 8,
+              "udp_payload_bytes": 500
+            },
+            {
+              "direction": "outgoing",
+              "phase": "handshake",
+              "sequence": 9,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "outgoing",
+              "phase": "qualification",
+              "sequence": 10,
+              "udp_payload_bytes": 918
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 11,
+              "udp_payload_bytes": 541
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 12,
+              "udp_payload_bytes": 32
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 13,
+              "udp_payload_bytes": 32
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 14,
+              "udp_payload_bytes": 57
+            },
+            {
+              "direction": "outgoing",
+              "phase": "qualification",
+              "sequence": 15,
+              "udp_payload_bytes": 46
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 16,
+              "udp_payload_bytes": 32
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 17,
+              "udp_payload_bytes": 31
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 18,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 19,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 20,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 21,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 22,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 23,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 24,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 25,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 26,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 27,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 28,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 29,
+              "udp_payload_bytes": 750
+            },
+            {
+              "direction": "outgoing",
+              "phase": "qualification",
+              "sequence": 30,
+              "udp_payload_bytes": 43
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 31,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 32,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 33,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 34,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 35,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 36,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "outgoing",
+              "phase": "qualification",
+              "sequence": 37,
+              "udp_payload_bytes": 43
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 38,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 39,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 40,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 41,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 42,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 43,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 44,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 45,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 46,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 47,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "outgoing",
+              "phase": "qualification",
+              "sequence": 48,
+              "udp_payload_bytes": 45
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 49,
+              "udp_payload_bytes": 714
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 50,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 51,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 52,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 53,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "outgoing",
+              "phase": "qualification",
+              "sequence": 54,
+              "udp_payload_bytes": 43
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 55,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 56,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 57,
+              "udp_payload_bytes": 714
+            },
+            {
+              "direction": "outgoing",
+              "phase": "qualification",
+              "sequence": 58,
+              "udp_payload_bytes": 43
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 59,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 60,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 61,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 62,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 63,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 64,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 65,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 66,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 67,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 68,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 69,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 70,
+              "udp_payload_bytes": 714
+            },
+            {
+              "direction": "outgoing",
+              "phase": "qualification",
+              "sequence": 71,
+              "udp_payload_bytes": 43
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 72,
+              "udp_payload_bytes": 714
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 73,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 74,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 75,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 76,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 77,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 78,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 79,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 80,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 81,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 82,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 83,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 84,
+              "udp_payload_bytes": 714
+            }
+          ],
+          "packets": {
+            "incoming": {
+              "observed_udp_payload_max": 1200,
+              "oversized_packet_count": 0,
+              "packet_count": 74
+            },
+            "outgoing": {
+              "observed_udp_payload_max": 1200,
+              "oversized_packet_count": 0,
+              "packet_count": 11
+            },
+            "total": {
+              "observed_udp_payload_max": 1200,
+              "oversized_packet_count": 0,
+              "packet_count": 85
+            }
+          },
+          "parallel_requests": 5,
+          "passed": true,
+          "request_headers": [
+            [
+              "accept",
+              "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
+            ],
+            [
+              "accept-encoding",
+              "gzip, deflate, br, zstd"
+            ],
+            [
+              "accept-language",
+              "en-US,en;q=0.9"
+            ]
+          ],
+          "request_stream_bytes": 163,
+          "requests": [
+            {
+              "body_bytes": 13390,
+              "body_sha256": "1a9fb48550bbec3ce4274debd326f0c23c57a5f1eae6ef83eecc7b6c8e51ef69",
+              "complete": true,
+              "content_encoding": "gzip",
+              "outcome": "complete",
+              "request_index": 0,
+              "request_stream_bytes": 163,
+              "status": 200,
+              "stream_id": 0
+            },
+            {
+              "body_bytes": 13390,
+              "body_sha256": "1a9fb48550bbec3ce4274debd326f0c23c57a5f1eae6ef83eecc7b6c8e51ef69",
+              "complete": true,
+              "content_encoding": "gzip",
+              "outcome": "complete",
+              "request_index": 1,
+              "request_stream_bytes": 163,
+              "status": 200,
+              "stream_id": 4
+            },
+            {
+              "body_bytes": 13390,
+              "body_sha256": "1a9fb48550bbec3ce4274debd326f0c23c57a5f1eae6ef83eecc7b6c8e51ef69",
+              "complete": true,
+              "content_encoding": "gzip",
+              "outcome": "complete",
+              "request_index": 2,
+              "request_stream_bytes": 163,
+              "status": 200,
+              "stream_id": 8
+            },
+            {
+              "body_bytes": 13390,
+              "body_sha256": "1a9fb48550bbec3ce4274debd326f0c23c57a5f1eae6ef83eecc7b6c8e51ef69",
+              "complete": true,
+              "content_encoding": "gzip",
+              "outcome": "complete",
+              "request_index": 3,
+              "request_stream_bytes": 163,
+              "status": 200,
+              "stream_id": 12
+            },
+            {
+              "body_bytes": 13390,
+              "body_sha256": "1a9fb48550bbec3ce4274debd326f0c23c57a5f1eae6ef83eecc7b6c8e51ef69",
+              "complete": true,
+              "content_encoding": "gzip",
+              "outcome": "complete",
+              "request_index": 4,
+              "request_stream_bytes": 163,
+              "status": 200,
+              "stream_id": 16
+            }
+          ],
+          "requests_opened_before_first_network_output": 5,
+          "schema_version": 1,
+          "source": {
+            "migration_commit": "40dcac98f11e9bb2f0c28e9cb8a0abb18447deff",
+            "neqo_base_commit": "8a04d065c2d35c8e8fd804f91c7081ab6bb60b89",
+            "published_qcsd_commit": "39e293fb384dd341156eedd1e4b833d24904b1f6"
+          },
+          "started_unix_ns": 1786643863213423768,
+          "udp_payload_ceiling": 1200,
+          "url": "https://cloudflare-quic.com/"
+        },
+        "receipt_object_sha256": "02918f74fc3cf99e69482fcfd610ea76e946c67b62d19afa0efd97c12ea0b036",
+        "run_index": 1
+      },
+      {
+        "receipt": {
+          "application_resource_id": 0,
+          "application_workload_sha256": "e608366c95d6902234b4a705043435b3868f9572bcb8e103feb71db3110cbacc",
+          "artifact_type": "qcsd-chaff-response-qualification",
+          "completion_status": "complete",
+          "connection_count": 1,
+          "ended_unix_ns": 1786643893626129846,
+          "error": null,
+          "invocation_id": "1786643893541085882-172.17.0.2:47957",
+          "max_response_bytes": 1048576,
+          "method": "GET",
+          "neqo_version": "0.30.0",
+          "packet_log_sha256": "ebf54412027b9c6168395269221654850061590ed9fa93183b349bc432941767",
+          "packet_observations": [
+            {
+              "direction": "outgoing",
+              "phase": "handshake",
+              "sequence": 0,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "outgoing",
+              "phase": "handshake",
+              "sequence": 1,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "handshake",
+              "sequence": 2,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "handshake",
+              "sequence": 3,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "handshake",
+              "sequence": 4,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "handshake",
+              "sequence": 5,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "handshake",
+              "sequence": 6,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "handshake",
+              "sequence": 7,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "handshake",
+              "sequence": 8,
+              "udp_payload_bytes": 509
+            },
+            {
+              "direction": "outgoing",
+              "phase": "handshake",
+              "sequence": 9,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "outgoing",
+              "phase": "qualification",
+              "sequence": 10,
+              "udp_payload_bytes": 922
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 11,
+              "udp_payload_bytes": 541
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 12,
+              "udp_payload_bytes": 32
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 13,
+              "udp_payload_bytes": 32
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 14,
+              "udp_payload_bytes": 57
+            },
+            {
+              "direction": "outgoing",
+              "phase": "qualification",
+              "sequence": 15,
+              "udp_payload_bytes": 46
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 16,
+              "udp_payload_bytes": 32
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 17,
+              "udp_payload_bytes": 31
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 18,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 19,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 20,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 21,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 22,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 23,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 24,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 25,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 26,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "outgoing",
+              "phase": "qualification",
+              "sequence": 27,
+              "udp_payload_bytes": 43
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 28,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 29,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 30,
+              "udp_payload_bytes": 749
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 31,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "outgoing",
+              "phase": "qualification",
+              "sequence": 32,
+              "udp_payload_bytes": 43
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 33,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 34,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "outgoing",
+              "phase": "qualification",
+              "sequence": 35,
+              "udp_payload_bytes": 43
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 36,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 37,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "outgoing",
+              "phase": "qualification",
+              "sequence": 38,
+              "udp_payload_bytes": 43
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 39,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 40,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 41,
+              "udp_payload_bytes": 713
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 42,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 43,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "outgoing",
+              "phase": "qualification",
+              "sequence": 44,
+              "udp_payload_bytes": 45
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 45,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "outgoing",
+              "phase": "qualification",
+              "sequence": 46,
+              "udp_payload_bytes": 46
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 47,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 48,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 49,
+              "udp_payload_bytes": 713
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 50,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 51,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "outgoing",
+              "phase": "qualification",
+              "sequence": 52,
+              "udp_payload_bytes": 46
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 53,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 54,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 55,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 56,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 57,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 58,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 59,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 60,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 61,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "outgoing",
+              "phase": "qualification",
+              "sequence": 62,
+              "udp_payload_bytes": 43
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 63,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 64,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 65,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 66,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 67,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 68,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "outgoing",
+              "phase": "qualification",
+              "sequence": 69,
+              "udp_payload_bytes": 43
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 70,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 71,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 72,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 73,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "outgoing",
+              "phase": "qualification",
+              "sequence": 74,
+              "udp_payload_bytes": 43
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 75,
+              "udp_payload_bytes": 713
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 76,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "outgoing",
+              "phase": "qualification",
+              "sequence": 77,
+              "udp_payload_bytes": 43
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 78,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 79,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 80,
+              "udp_payload_bytes": 712
+            },
+            {
+              "direction": "outgoing",
+              "phase": "qualification",
+              "sequence": 81,
+              "udp_payload_bytes": 44
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 82,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 83,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 84,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 85,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 86,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 87,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 88,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "outgoing",
+              "phase": "qualification",
+              "sequence": 89,
+              "udp_payload_bytes": 45
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 90,
+              "udp_payload_bytes": 1200
+            },
+            {
+              "direction": "incoming",
+              "phase": "qualification",
+              "sequence": 91,
+              "udp_payload_bytes": 36
+            }
+          ],
+          "packets": {
+            "incoming": {
+              "observed_udp_payload_max": 1200,
+              "oversized_packet_count": 0,
+              "packet_count": 74
+            },
+            "outgoing": {
+              "observed_udp_payload_max": 1200,
+              "oversized_packet_count": 0,
+              "packet_count": 18
+            },
+            "total": {
+              "observed_udp_payload_max": 1200,
+              "oversized_packet_count": 0,
+              "packet_count": 92
+            }
+          },
+          "parallel_requests": 5,
+          "passed": true,
+          "request_headers": [
+            [
+              "accept",
+              "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
+            ],
+            [
+              "accept-encoding",
+              "gzip, deflate, br, zstd"
+            ],
+            [
+              "accept-language",
+              "en-US,en;q=0.9"
+            ]
+          ],
+          "request_stream_bytes": 163,
+          "requests": [
+            {
+              "body_bytes": 13390,
+              "body_sha256": "1a9fb48550bbec3ce4274debd326f0c23c57a5f1eae6ef83eecc7b6c8e51ef69",
+              "complete": true,
+              "content_encoding": "gzip",
+              "outcome": "complete",
+              "request_index": 0,
+              "request_stream_bytes": 163,
+              "status": 200,
+              "stream_id": 0
+            },
+            {
+              "body_bytes": 13390,
+              "body_sha256": "1a9fb48550bbec3ce4274debd326f0c23c57a5f1eae6ef83eecc7b6c8e51ef69",
+              "complete": true,
+              "content_encoding": "gzip",
+              "outcome": "complete",
+              "request_index": 1,
+              "request_stream_bytes": 163,
+              "status": 200,
+              "stream_id": 4
+            },
+            {
+              "body_bytes": 13390,
+              "body_sha256": "1a9fb48550bbec3ce4274debd326f0c23c57a5f1eae6ef83eecc7b6c8e51ef69",
+              "complete": true,
+              "content_encoding": "gzip",
+              "outcome": "complete",
+              "request_index": 2,
+              "request_stream_bytes": 163,
+              "status": 200,
+              "stream_id": 8
+            },
+            {
+              "body_bytes": 13390,
+              "body_sha256": "1a9fb48550bbec3ce4274debd326f0c23c57a5f1eae6ef83eecc7b6c8e51ef69",
+              "complete": true,
+              "content_encoding": "gzip",
+              "outcome": "complete",
+              "request_index": 3,
+              "request_stream_bytes": 163,
+              "status": 200,
+              "stream_id": 12
+            },
+            {
+              "body_bytes": 13390,
+              "body_sha256": "1a9fb48550bbec3ce4274debd326f0c23c57a5f1eae6ef83eecc7b6c8e51ef69",
+              "complete": true,
+              "content_encoding": "gzip",
+              "outcome": "complete",
+              "request_index": 4,
+              "request_stream_bytes": 163,
+              "status": 200,
+              "stream_id": 16
+            }
+          ],
+          "requests_opened_before_first_network_output": 5,
+          "schema_version": 1,
+          "source": {
+            "migration_commit": "40dcac98f11e9bb2f0c28e9cb8a0abb18447deff",
+            "neqo_base_commit": "8a04d065c2d35c8e8fd804f91c7081ab6bb60b89",
+            "published_qcsd_commit": "39e293fb384dd341156eedd1e4b833d24904b1f6"
+          },
+          "started_unix_ns": 1786643893541085882,
+          "udp_payload_ceiling": 1200,
+          "url": "https://cloudflare-quic.com/"
+        },
+        "receipt_object_sha256": "aad8722cda4719bbbe6b02b1131f29114db2cdfed2935d6622eb8492e40bc01f",
+        "run_index": 2
+      }
+    ],
+    "url": "https://cloudflare-quic.com/"
+  },
+  "schema_five_diagnostic": {
+    "accepted": 12,
+    "campaign": "research-smoke-1200",
+    "eligible": 12,
+    "evidence_sha256": "161de34c5b8a6eda1b4eb82e2925735805cd18bec167e25c0dc2d2a6e79c7214",
+    "experiment_sha256": "42e3721522f9c97a920eae17a4cf6945fd93a738367f95b4431b9d2e95e6beb9",
+    "failed": 2,
+    "planned": 14,
+    "qualification_bytes_excluded": true,
+    "role": "schema-five-prefix-capacity-falsification-diagnostic",
+    "status": "incomplete"
+  },
+  "schema_version": 1,
+  "selected_base_resource_id": 0,
+  "selection_policy": "qualified-navigation-root-only-v1",
+  "workload_id": "cloudflare-quiche-r3"
+}
