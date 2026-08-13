@@ -5,7 +5,7 @@ ARG DEBIAN_IMAGE=docker.io/library/debian:bookworm-slim@sha256:7b140f374b289a7c2
 # Inspect the local parent checkout and submodule. This stage is also the
 # source of the immutable provenance copied into both runtime images.
 FROM ${DEBIAN_IMAGE} AS source-metadata
-RUN apt-get update && apt-get install -y --no-install-recommends git && \
+RUN apt-get update && apt-get install -y --no-install-recommends git python3 && \
     rm -rf /var/lib/apt/lists/*
 WORKDIR /source
 COPY . .
@@ -32,6 +32,29 @@ RUN set -eu; \
       "${lab_commit}" "${lab_dirty}" "${lab_patch_sha256}" \
       "${neqo_commit}" "${neqo_pinned_commit}" "${neqo_dirty}" "${neqo_patch_sha256}" \
       > /source-metadata.json
+
+# Hash the complete Python/source surface.  The final runtime stage adds hashes
+# of the installed modules, generated entrypoint, and Neqo client executable.
+RUN python3 - <<'PY'
+import hashlib
+import json
+from pathlib import Path
+
+root = Path("/source")
+paths = [
+    ".dockerignore",
+    "Dockerfile",
+    "docker/collection-entrypoint",
+    "pyproject.toml",
+    "qcsd-lab",
+    "uv.lock",
+]
+paths += [path.relative_to(root).as_posix() for path in sorted((root / "src/qcsd_lab").rglob("*.py"))]
+files = {path: hashlib.sha256((root / path).read_bytes()).hexdigest() for path in paths}
+Path("/qualification-source-files.json").write_text(
+    json.dumps(files, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+)
+PY
 
 # Build NSS once from Mozilla's checksum-pinned combined NSS/NSPR release.
 # No Neqo repository is cloned in this image.
@@ -104,7 +127,52 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=neqo-builder /out/bin/ /usr/local/bin/
 COPY --from=neqo-builder /out/nss/ /opt/nss/
 COPY --from=source-metadata /source-metadata.json /usr/share/qcsd-lab/source.json
+COPY --from=source-metadata /qualification-source-files.json /tmp/qualification-source-files.json
 COPY --chmod=0755 docker/collection-entrypoint /usr/local/bin/
+RUN python3 - <<'PY'
+import hashlib
+import importlib.util
+import json
+from pathlib import Path
+
+domain = "qcsd-chaff-qualification-implementation-v1"
+source_files = json.loads(Path("/tmp/qualification-source-files.json").read_text())
+source = json.loads(Path("/usr/share/qcsd-lab/source.json").read_text())
+package = Path(importlib.util.find_spec("qcsd_lab").submodule_search_locations[0])
+installed_modules = {}
+for source_path, source_sha256 in source_files.items():
+    prefix = "src/qcsd_lab/"
+    if not source_path.startswith(prefix):
+        continue
+    relative = source_path.removeprefix(prefix)
+    installed = package / relative
+    installed_sha256 = hashlib.sha256(installed.read_bytes()).hexdigest()
+    if installed_sha256 != source_sha256:
+        raise SystemExit(f"installed module differs from source: {source_path}")
+    installed_modules[source_path] = {
+        "path": installed.as_posix(),
+        "sha256": installed_sha256,
+    }
+def file_receipt(path):
+    value = Path(path)
+    return {"path": path, "sha256": hashlib.sha256(value.read_bytes()).hexdigest()}
+receipt = {
+    "schema_version": 1,
+    "artifact_type": "qcsd-chaff-qualification-implementation",
+    "domain": domain,
+    "source": source,
+    "source_files": source_files,
+    "installed_modules": installed_modules,
+    "installed_entrypoint": file_receipt("/usr/local/bin/qcsd-lab-internal"),
+    "neqo_qcsd_client": file_receipt("/usr/local/bin/neqo-qcsd-client"),
+}
+payload = json.dumps(receipt, sort_keys=True, separators=(",", ":")).encode()
+receipt["sha256"] = hashlib.sha256(domain.encode() + b"\0" + payload).hexdigest()
+Path("/usr/share/qcsd-lab/qualification-implementation.json").write_text(
+    json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+)
+Path("/tmp/qualification-source-files.json").unlink()
+PY
 ENV LD_LIBRARY_PATH=/opt/nss/lib \
     TEST_FIXTURE_DB=/opt/nss/test-db \
     QCSD_LAB_SOURCE_METADATA=/usr/share/qcsd-lab/source.json \

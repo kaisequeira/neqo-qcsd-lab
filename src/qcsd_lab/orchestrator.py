@@ -103,6 +103,15 @@ class Workload:
     data: dict[str, Any]
     resource_count: int
     origin_count: int
+    runtime_path: Path | None = None
+    runtime_sha256: str | None = None
+    chaff_qualification_path: Path | None = None
+    chaff_qualification_sha256: str | None = None
+    chaff_prefix_spec_path: Path | None = None
+    chaff_prefix_spec_sha256: str | None = None
+    chaff_manifest_path: Path | None = None
+    chaff_manifest_sha256: str | None = None
+    chaff_manifest_data: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -233,7 +242,34 @@ def _load_campaign(
         frozen_inputs=frozen_inputs,
         allow_historical_research_bundle=allow_historical_research_bundle,
     )
-    if any(_uses_schema_five_walkie_talkie(defense) for defense in defenses):
+    has_defended_run = any(not defense.baseline for defense in defenses)
+    current_prepared_inputs = all(
+        isinstance(workload.data.get("preparation"), Mapping) for workload in workloads
+    )
+    historical_research_inputs = (
+        frozen_inputs is not None
+        and any(
+            defense.parameters_input_policy == "sealed-fitting-result-v1"
+            and defense.kind == "walkie_talkie"
+            and defense.parameters_path is not None
+            and load_json(defense.parameters_path).get("schema_version") in {2, 5}
+            for defense in defenses
+        )
+        and not (frozen_inputs / "chaff-qualifications").is_dir()
+    )
+    # Fitting is definitionally undefended and its contract validator below
+    # rejects any defense mutation.  Qualification evidence is an excluded
+    # runtime input and must never be consulted while resolving fitting data.
+    if has_defended_run and purpose != "fitting" and not historical_research_inputs:
+        if not current_prepared_inputs:
+            raise ValueError(
+                "every defended campaign requires research-prepared workloads and qualified chaff"
+            )
+        workloads = _load_qualified_chaff_inputs(path, workloads, frozen_inputs=frozen_inputs)
+    _validate_loaded_qualification_bindings(defenses, workloads)
+    if any(_uses_schema_six_walkie_talkie(defense) for defense in defenses):
+        if not all(workload.chaff_manifest_data is not None for workload in workloads):
+            raise ValueError("schema-six Walkie-Talkie requires qualified chaff for every workload")
         _validate_walkie_talkie_resource_preconditions(workloads)
     raw_limits = value.get("limits", {})
     limits = _load_limits(raw_limits)
@@ -257,15 +293,137 @@ def _load_campaign(
     return campaign
 
 
-def _uses_schema_five_walkie_talkie(defense: capture_engine.Defense) -> bool:
-    """Limit new runtime prerequisites to the current, runnable WT contract."""
+def _uses_schema_six_walkie_talkie(defense: capture_engine.Defense) -> bool:
+    """Identify the only current runtime contract that requires qualified chaff."""
 
     if defense.kind != "walkie_talkie":
         return False
     if defense.parameters_path is None:
         raise ValueError("walkie_talkie defense has no resolved parameter artifact")
     parameter = load_json(defense.parameters_path)
-    return isinstance(parameter, Mapping) and parameter.get("schema_version") == 5
+    return isinstance(parameter, Mapping) and parameter.get("schema_version") == 6
+
+
+def _load_qualified_chaff_inputs(
+    campaign_path: Path,
+    workloads: tuple[Workload, ...],
+    *,
+    frozen_inputs: Path | None,
+) -> tuple[Workload, ...]:
+    """Bind one immutable sidecar/spec/derived chaff manifest per workload."""
+
+    from .chaff_qualification import load_qualified_chaff
+
+    if frozen_inputs is None:
+        config_root = campaign_path.parent.parent
+        qualification_root = config_root / "chaff-qualification-store/v1"
+        prefix_root = config_root / "chaff-prefix-specs"
+        manifest_root: Path | None = None
+    else:
+        config_root = frozen_inputs
+        qualification_root = frozen_inputs / "chaff-qualifications"
+        prefix_root = frozen_inputs / "chaff-prefix-specs"
+        manifest_root = frozen_inputs / "chaff-manifests"
+    qualified: list[Workload] = []
+    for workload in workloads:
+        sidecar_path = _trusted_regular_input(
+            qualification_root / f"{workload.id}.json",
+            root=config_root,
+            label="chaff qualification sidecar",
+        )
+        spec_path = _trusted_regular_input(
+            prefix_root / f"{workload.id}.json",
+            root=config_root,
+            label="chaff prefix-pack specification",
+        )
+        receipt = load_qualified_chaff(
+            sidecar_path,
+            workload_id=workload.id,
+            base_manifest_path=workload.path,
+            prefix_spec_path=spec_path,
+        )
+        if manifest_root is None:
+            manifest_path = None
+        else:
+            manifest_path = _trusted_regular_input(
+                manifest_root / f"{workload.id}.json",
+                root=config_root,
+                label="frozen qualified chaff manifest",
+            )
+            if sha256_file(manifest_path) != receipt.manifest_sha256:
+                raise ValueError(f"frozen qualified chaff manifest SHA-256 mismatch: {workload.id}")
+        qualified.append(
+            replace(
+                workload,
+                chaff_qualification_path=sidecar_path,
+                chaff_qualification_sha256=receipt.sidecar_sha256,
+                chaff_prefix_spec_path=spec_path,
+                chaff_prefix_spec_sha256=sha256_file(spec_path),
+                chaff_manifest_path=manifest_path,
+                chaff_manifest_sha256=receipt.manifest_sha256,
+                chaff_manifest_data=receipt.manifest,
+            )
+        )
+    return tuple(qualified)
+
+
+def _trusted_regular_input(path: Path, *, root: Path, label: str) -> Path:
+    """Reject a symlink or escape before resolving a trusted campaign input."""
+
+    candidate = Path(path)
+    boundary = Path(root)
+    if boundary.is_symlink() or not boundary.is_dir():
+        raise ValueError(f"trusted campaign input root is not a regular directory: {boundary}")
+    if candidate.is_symlink() or not candidate.is_file():
+        raise ValueError(f"{label} is not a regular file: {candidate}")
+    cursor = candidate.parent
+    while cursor != boundary and cursor != cursor.parent:
+        if cursor.is_symlink():
+            raise ValueError(f"{label} contains a symbolic-link component: {cursor}")
+        cursor = cursor.parent
+    if cursor != boundary:
+        raise ValueError(f"{label} escapes the trusted campaign input root: {candidate}")
+    resolved_root = boundary.resolve()
+    resolved = candidate.resolve()
+    if resolved_root not in resolved.parents:
+        raise ValueError(f"{label} escapes the trusted campaign input root: {candidate}")
+    return resolved
+
+
+def _validate_loaded_qualification_bindings(
+    defenses: tuple[capture_engine.Defense, ...],
+    workloads: tuple[Workload, ...],
+) -> None:
+    """Cross-link actual qualified inputs to every loaded schema-six bundle."""
+
+    expected = {
+        workload.id: {
+            "workload_id": workload.id,
+            "chaff_qualification_sidecar_sha256": workload.chaff_qualification_sha256,
+            "prefix_pack_spec_sha256": workload.chaff_prefix_spec_sha256,
+            "qualified_chaff_manifest_sha256": workload.chaff_manifest_sha256,
+        }
+        for workload in workloads
+    }
+    for defense in defenses:
+        if defense.parameters_provenance_path is None:
+            continue
+        provenance = load_json(defense.parameters_provenance_path)
+        contract = provenance.get("fitting_contract")
+        if not isinstance(contract, Mapping) or contract.get("contract_version") != 6:
+            continue
+        from .fitting import _qualification_bindings_from_provenance
+
+        if any(value is None for record in expected.values() for value in record.values()):
+            raise ValueError("schema-six bundle requires qualified chaff for every workload")
+        bindings = {
+            record["workload_id"]: record
+            for record in _qualification_bindings_from_provenance(provenance)
+        }
+        if any(bindings.get(workload_id) != record for workload_id, record in expected.items()):
+            raise ValueError(
+                "loaded chaff qualifications do not match schema-six Walkie-Talkie bindings"
+            )
 
 
 def _validate_walkie_talkie_resource_preconditions(
@@ -274,7 +432,9 @@ def _validate_walkie_talkie_resource_preconditions(
     """Reject manifests that cannot provision the schema-five reserve horizon."""
 
     for workload in workloads:
-        manifest = runtime_manifest(workload.data)
+        if workload.chaff_manifest_data is None:
+            raise ValueError(f"{workload.id} qualified chaff manifest is missing")
+        manifest = workload.chaff_manifest_data
         _validate_walkie_talkie_resource_precondition(
             manifest,
             workload_id=workload.id,
@@ -445,9 +605,11 @@ def _load_workloads(
         seen.add(workload_id)
         if type(raw_visits) is not int or raw_visits < 1:
             raise ValueError("workload visit counts must be positive integers")
-        manifest_path = (root / f"{workload_id}.json").resolve()
-        if not manifest_path.is_file():
-            raise ValueError(f"workload manifest does not exist: {manifest_path}")
+        manifest_path = _trusted_regular_input(
+            root / f"{workload_id}.json",
+            root=(frozen_inputs if frozen_inputs is not None else path.parent.parent),
+            label="workload manifest",
+        )
         try:
             source_bytes = manifest_path.read_bytes()
             manifest = json.loads(source_bytes.decode("utf-8"))
@@ -457,6 +619,24 @@ def _load_workloads(
         if purpose in {"fitting", "evaluation"}:
             validate_research_preparation(manifest, workload_id=workload_id)
         runtime = runtime_manifest(manifest)
+        runtime_bytes = canonical_bytes(runtime)
+        runtime_candidate = (
+            frozen_inputs / "runtime-workloads" / f"{workload_id}.json"
+            if frozen_inputs is not None
+            else None
+        )
+        runtime_path = (
+            _trusted_regular_input(
+                runtime_candidate,
+                root=frozen_inputs,
+                label="frozen runtime workload",
+            )
+            if runtime_candidate is not None
+            and (runtime_candidate.exists() or runtime_candidate.is_symlink())
+            else None
+        )
+        if runtime_path is not None and runtime_path.read_bytes() != runtime_bytes:
+            raise ValueError(f"frozen runtime workload differs from prepared source: {workload_id}")
         origins = capture_engine._manifest_origins(runtime)
         result.append(
             Workload(
@@ -468,6 +648,8 @@ def _load_workloads(
                 data=manifest,
                 resource_count=len(runtime["resources"]),
                 origin_count=len(origins),
+                runtime_path=runtime_path,
+                runtime_sha256=sha256_bytes(runtime_bytes),
             )
         )
     return tuple(result)
@@ -616,7 +798,11 @@ def _load_defenses(
                     provenance_path = (artifact_dir / "provenance.json").resolve()
 
             if purpose == "evaluation":
-                from .fitting import BUNDLE_FILES, verify_artifact_bundle
+                from .fitting import (
+                    BUNDLE_FILES,
+                    _verify_current_artifact_bundle_at,
+                    verify_frozen_artifact_bundle,
+                )
 
                 bundle_root = parameters_path.parent
                 if evaluation_bundle_root is not None and bundle_root != evaluation_bundle_root:
@@ -631,7 +817,16 @@ def _load_defenses(
                             f"{bundle_root}; run ./qcsd-lab fit <fitting-result> first"
                         )
                     try:
-                        verify_artifact_bundle(bundle_root)
+                        if frozen_inputs is None:
+                            _verify_current_artifact_bundle_at(
+                                bundle_root,
+                                qualification_inputs_root=base.parent,
+                            )
+                        else:
+                            verify_frozen_artifact_bundle(
+                                bundle_root,
+                                qualification_inputs_root=frozen_inputs,
+                            )
                     except (OSError, TypeError, ValueError) as error:
                         raise ValueError(
                             f"evaluation campaign research bundle is invalid at "
@@ -654,6 +849,7 @@ def _load_defenses(
                     expected_qcsd_profile=profile,
                     expected_udp_payload_ceiling=UDP_PAYLOAD_CEILING_BY_PROFILE[profile],
                     expected_workloads=workloads,
+                    qualification_inputs_root=base.parent,
                 )
             else:
                 artifact = validate_frozen_parameter_artifact(
@@ -666,6 +862,7 @@ def _load_defenses(
                     expected_udp_payload_ceiling=UDP_PAYLOAD_CEILING_BY_PROFILE[profile],
                     expected_workloads=workloads,
                     allow_historical_research_bundle=allow_historical_research_bundle,
+                    qualification_inputs_root=frozen_inputs,
                 )
             defenses.append(
                 capture_engine.Defense(
@@ -871,11 +1068,28 @@ def _materialize_inputs(
     campaign: Campaign,
     source: dict[str, Any],
 ) -> tuple[Campaign, dict[str, Any]]:
+    if any(not defense.baseline for defense in campaign.defenses) and any(
+        workload.chaff_qualification_path is None
+        or workload.chaff_prefix_spec_path is None
+        or workload.chaff_manifest_data is None
+        or workload.chaff_manifest_sha256 is None
+        for workload in campaign.workloads
+    ):
+        raise ValueError("defended materialization requires prepared source and qualified chaff")
     inputs = root / "inputs"
     workloads_dir = inputs / "workloads"
+    runtime_workloads_dir = inputs / "runtime-workloads"
+    chaff_qualifications_dir = inputs / "chaff-qualifications"
+    chaff_prefix_specs_dir = inputs / "chaff-prefix-specs"
+    chaff_manifests_dir = inputs / "chaff-manifests"
     parameters_dir = inputs / "defense-parameters"
     workloads_dir.mkdir(parents=True)
     parameters_dir.mkdir(parents=True)
+    if any(workload.chaff_qualification_path is not None for workload in campaign.workloads):
+        runtime_workloads_dir.mkdir()
+        chaff_qualifications_dir.mkdir()
+        chaff_prefix_specs_dir.mkdir()
+        chaff_manifests_dir.mkdir()
     # ``load_campaign`` parsed these exact bytes.  Writing the snapshot instead
     # of reopening the mutable source closes the campaign resolution/copy race.
     frozen_campaign = inputs / "campaign.yml"
@@ -890,9 +1104,52 @@ def _materialize_inputs(
         if sha256_file(destination) != workload.sha256:
             raise ValueError(f"{workload.id} workload changed during input materialization")
         validate_manifest(load_json(destination))
-        runtime_workloads.append(
-            replace(workload, path=destination, sha256=sha256_file(destination))
-        )
+        runtime = replace(workload, path=destination, sha256=sha256_file(destination))
+        if workload.chaff_qualification_path is not None:
+            from .chaff_qualification import load_qualified_chaff
+
+            if workload.chaff_prefix_spec_path is None:
+                raise ValueError(f"{workload.id} chaff prefix-pack specification is missing")
+            sidecar_destination = chaff_qualifications_dir / f"{workload.id}.json"
+            spec_destination = chaff_prefix_specs_dir / f"{workload.id}.json"
+            shutil.copy2(workload.chaff_qualification_path, sidecar_destination)
+            shutil.copy2(workload.chaff_prefix_spec_path, spec_destination)
+            if (
+                sha256_file(sidecar_destination) != workload.chaff_qualification_sha256
+                or sha256_file(spec_destination) != workload.chaff_prefix_spec_sha256
+            ):
+                raise ValueError(
+                    f"{workload.id} chaff qualification changed during input materialization"
+                )
+            qualified = load_qualified_chaff(
+                sidecar_destination,
+                workload_id=workload.id,
+                base_manifest_path=destination,
+                prefix_spec_path=spec_destination,
+            )
+            runtime_destination = runtime_workloads_dir / f"{workload.id}.json"
+            runtime_destination.write_bytes(canonical_bytes(runtime_manifest(workload.data)))
+            if sha256_file(runtime_destination) != workload.runtime_sha256:
+                raise ValueError(f"{workload.id} runtime workload changed during materialization")
+            manifest_destination = chaff_manifests_dir / f"{workload.id}.json"
+            manifest_destination.write_bytes(canonical_bytes(qualified.manifest))
+            if sha256_file(manifest_destination) != workload.chaff_manifest_sha256:
+                raise ValueError(
+                    f"{workload.id} derived chaff manifest changed during materialization"
+                )
+            runtime = replace(
+                runtime,
+                chaff_qualification_path=sidecar_destination,
+                chaff_qualification_sha256=sha256_file(sidecar_destination),
+                chaff_prefix_spec_path=spec_destination,
+                chaff_prefix_spec_sha256=sha256_file(spec_destination),
+                chaff_manifest_path=manifest_destination,
+                chaff_manifest_sha256=sha256_file(manifest_destination),
+                chaff_manifest_data=qualified.manifest,
+                runtime_path=runtime_destination,
+                runtime_sha256=sha256_file(runtime_destination),
+            )
+        runtime_workloads.append(runtime)
     runtime_defenses: list[capture_engine.Defense] = []
     for defense in campaign.defenses:
         runtime = defense
@@ -918,13 +1175,22 @@ def _materialize_inputs(
             if defense.parameters_provenance_path is None:
                 raise ValueError(f"{defense.name} parameter provenance is missing")
             if defense.parameters_input_policy == "sealed-fitting-result-v1":
-                from .fitting import verify_artifact_bundle
+                from .fitting import (
+                    _verify_current_artifact_bundle_at,
+                    verify_frozen_artifact_bundle,
+                )
 
-                source_bundle = verify_artifact_bundle(defense.parameters_path.parent)
+                source_bundle = _verify_current_artifact_bundle_at(
+                    defense.parameters_path.parent,
+                    qualification_inputs_root=campaign.path.parent.parent,
+                )
                 research_dir = parameters_dir / "research-1200"
                 if not research_dir.exists():
                     shutil.copytree(source_bundle.root, research_dir)
-                frozen_bundle = verify_artifact_bundle(research_dir)
+                frozen_bundle = verify_frozen_artifact_bundle(
+                    research_dir,
+                    qualification_inputs_root=inputs,
+                )
                 if source_bundle.artifact_hashes != frozen_bundle.artifact_hashes:
                     raise ValueError("research parameter bundle changed during materialization")
                 if defense.parameters is None:
@@ -957,6 +1223,7 @@ def _materialize_inputs(
                 expected_workloads={
                     workload.id: workload.sha256 for workload in campaign.workloads
                 },
+                qualification_inputs_root=inputs,
             )
             if (
                 frozen_artifact.sha256 != defense.parameters_sha256
@@ -1033,22 +1300,51 @@ def _execute(root: Path, campaign: Campaign, experiment: dict[str, Any]) -> Path
                 _checkpoint(root, experiment)
                 attempt = resolved_attempt_directory(root, sample)
                 try:
-                    with tempfile.TemporaryDirectory(prefix="qcsd-runtime-workload-") as temporary:
-                        runtime_path = Path(temporary) / f"{workload.id}.json"
+                    if workload.runtime_path is not None:
+                        runtime_path = workload.runtime_path
+                        if sha256_file(runtime_path) != workload.runtime_sha256:
+                            raise ValueError("frozen runtime workload changed before capture")
+                    else:
+                        temporary = tempfile.TemporaryDirectory(prefix="qcsd-runtime-workload-")
+                        runtime_path = Path(temporary.name) / f"{workload.id}.json"
                         runtime_path.write_bytes(canonical_bytes(runtime_workload))
-                        result = capture_engine._collect_attempt(
-                            attempt,
-                            runtime_path,
-                            workload.id,
-                            defense,
-                            sample["seed"],
-                            _RunContext(
-                                campaign.profile,
-                                sample["request_policy"],
-                                campaign.limits,
-                                campaign.udp_payload_ceiling,
-                            ),
+                    try:
+                        context = _RunContext(
+                            campaign.profile,
+                            sample["request_policy"],
+                            campaign.limits,
+                            campaign.udp_payload_ceiling,
                         )
+                        # Preserve the established collector seam for campaigns
+                        # without qualified inputs.  Current defended campaigns
+                        # take the explicit seventh argument below.
+                        if not defense.baseline and workload.chaff_manifest_path is not None:
+                            result = capture_engine._collect_attempt(
+                                attempt,
+                                runtime_path,
+                                workload.chaff_manifest_path,
+                                workload.id,
+                                defense,
+                                sample["seed"],
+                                context,
+                                application_workload_source=workload.path,
+                            )
+                        else:
+                            if not defense.baseline:
+                                raise ValueError(
+                                    "defended execution lacks frozen prepared source and qualified chaff"
+                                )
+                            result = capture_engine._collect_attempt(
+                                attempt,
+                                runtime_path,
+                                workload.id,
+                                defense,
+                                sample["seed"],
+                                context,
+                            )
+                    finally:
+                        if workload.runtime_path is None:
+                            temporary.cleanup()
                 except Exception as error:
                     attempt.mkdir(parents=True, exist_ok=True)
                     result = {
@@ -1593,17 +1889,7 @@ def _frozen_configuration(root: Path, campaign: Campaign) -> dict[str, Any]:
     """Derive the experiment configuration without consulting experiment.json."""
 
     root = root.resolve()
-    workload_records = [
-        {
-            "id": workload.id,
-            "visits": workload.visits,
-            "manifest": workload.path.relative_to(root).as_posix(),
-            "sha256": workload.sha256,
-            "resource_count": workload.resource_count,
-            "origin_count": workload.origin_count,
-        }
-        for workload in campaign.workloads
-    ]
+    workload_records = [_frozen_workload_record(root, workload) for workload in campaign.workloads]
     defense_records: list[dict[str, Any]] = []
     for defense in campaign.defenses:
         record: dict[str, Any] = {
@@ -1636,3 +1922,32 @@ def _frozen_configuration(root: Path, campaign: Campaign) -> dict[str, Any]:
         "defenses": defense_records,
         "limits": campaign.limits.as_dict(),
     }
+
+
+def _frozen_workload_record(root: Path, workload: Workload) -> dict[str, Any]:
+    record: dict[str, Any] = {
+        "id": workload.id,
+        "visits": workload.visits,
+        "manifest": workload.path.relative_to(root).as_posix(),
+        "sha256": workload.sha256,
+        "resource_count": workload.resource_count,
+        "origin_count": workload.origin_count,
+    }
+    if workload.chaff_qualification_path is not None:
+        if (
+            workload.chaff_prefix_spec_path is None
+            or workload.chaff_manifest_path is None
+            or workload.runtime_path is None
+        ):
+            raise ValueError(f"{workload.id} qualified chaff frozen inputs are incomplete")
+        record.update(
+            chaff_qualification=workload.chaff_qualification_path.relative_to(root).as_posix(),
+            chaff_qualification_sha256=workload.chaff_qualification_sha256,
+            chaff_prefix_spec=workload.chaff_prefix_spec_path.relative_to(root).as_posix(),
+            chaff_prefix_spec_sha256=workload.chaff_prefix_spec_sha256,
+            chaff_manifest=workload.chaff_manifest_path.relative_to(root).as_posix(),
+            chaff_manifest_sha256=workload.chaff_manifest_sha256,
+            runtime_manifest=workload.runtime_path.relative_to(root).as_posix(),
+            runtime_manifest_sha256=workload.runtime_sha256,
+        )
+    return record

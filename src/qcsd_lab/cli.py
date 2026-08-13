@@ -31,6 +31,16 @@ def parser() -> argparse.ArgumentParser:
     prepare.add_argument("url")
     prepare.add_argument("approved_origins", nargs="+")
 
+    commands.add_parser(
+        "qualify-chaff",
+        help="atomically qualify compact HTTP/3 chaff for the sealed six-workload cohort",
+    )
+
+    commands.add_parser(
+        "derive-chaff-prefix-specs",
+        help="create the six standalone numeric prefix-pack qualification specs",
+    )
+
     run = commands.add_parser("run", help="execute a new sequential campaign")
     run.add_argument("campaign", type=Path)
 
@@ -68,6 +78,77 @@ def main(argv: list[str] | None = None) -> None:
         except (FileExistsError, OSError, PreparationError, RuntimeError, ValueError) as error:
             _fail(error)
         print(prepared.path)
+        return
+    if args.command == "qualify-chaff":
+        from .chaff_qualification import qualify_all_chaff
+        from .prepare import PreparationError
+
+        try:
+            qualified = qualify_all_chaff(
+                workload_root=Path(
+                    os.environ.get("QCSD_WORKLOAD_ROOT", str(LAB_ROOT / "config/workloads"))
+                ),
+                qualification_store=Path(
+                    os.environ.get(
+                        "QCSD_CHAFF_QUALIFICATION_STORE",
+                        str(LAB_ROOT / "config/chaff-qualification-store"),
+                    )
+                ),
+                prefix_spec_root=Path(
+                    os.environ.get(
+                        "QCSD_CHAFF_PREFIX_SPEC_ROOT",
+                        str(LAB_ROOT / "config/chaff-prefix-specs"),
+                    )
+                ),
+            )
+        except (FileExistsError, OSError, PreparationError, RuntimeError, ValueError) as error:
+            _fail(error)
+        print(
+            json.dumps(
+                {
+                    str(item.path): {
+                        "sha256": item.sha256,
+                        "derived_chaff_manifest_sha256": item.manifest_sha256,
+                    }
+                    for item in qualified
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return
+    if args.command == "derive-chaff-prefix-specs":
+        from .chaff_qualification import (
+            SCHEMA_FIVE_WALKIE_TALKIE_ARCHIVE,
+            derive_prefix_pack_specs,
+        )
+
+        try:
+            paths = derive_prefix_pack_specs(
+                source_path=Path(
+                    os.environ.get(
+                        "QCSD_SCHEMA_FIVE_WALKIE_TALKIE",
+                        str(LAB_ROOT / SCHEMA_FIVE_WALKIE_TALKIE_ARCHIVE),
+                    )
+                ),
+                destination_root=Path(
+                    os.environ.get(
+                        "QCSD_CHAFF_PREFIX_SPEC_ROOT",
+                        str(LAB_ROOT / "config/chaff-prefix-specs"),
+                    )
+                ),
+            )
+        except (FileExistsError, OSError, RuntimeError, ValueError) as error:
+            _fail(error)
+        from .util import sha256_file
+
+        print(
+            json.dumps(
+                {str(path): sha256_file(path) for path in paths},
+                indent=2,
+                sort_keys=True,
+            )
+        )
         return
     if args.command == "run":
         results = Path(os.environ.get("QCSD_RESULTS_ROOT", str(LAB_ROOT / "results")))

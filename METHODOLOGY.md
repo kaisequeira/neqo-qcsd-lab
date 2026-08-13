@@ -321,8 +321,12 @@ boundary and that closure marker, and later tail observations remain excluded.
   Normal-priority STREAM-data budget after higher-priority due application
   frames at the positive outgoing component that starts its horizon. Fitting
   traces do not expose HTTP/3/QPACK request-prefix lengths or transport
-  STREAM-frame budgets, so this prefix fit remains an explicit prepared
-  precondition rather than a fitting or campaign-preflight observation. Each reserve is excluded from ordinary base allocation, and its
+  STREAM-frame budgets. The schema-6 runtime input therefore binds three
+  independent production prefix-pack transcripts that prove the outgoing
+  application/request-control fit and required compact chaff requests through
+  FIN and chaff peer acknowledgement for the exact mould and reserve horizon;
+  those qualification bytes are excluded from fitting. Each reserve is
+  excluded from ordinary base allocation, and its
   exact capacity is subtracted from ordinary base capacity availability, until
   its corresponding continuation is released or the session or endpoint ends.
   Loss before release requires an equivalent acknowledged pristine replacement
@@ -371,11 +375,13 @@ boundary and that closure marker, and later tail observations remain excluded.
   ledger-inconsistent positive outstanding is ineligible.
 
   The first `prior_requested + 1200` raw response bytes on that selected stream
-  must be consumable. This is a prepared frozen-cohort and
-  reviewed-live-fixture precondition, not a theorem derived by the fitter:
-  half-duplex fitting traces observe application streams and do not observe
-  chaff preprovisioning, peer acknowledgement, reservation, or runtime-created
-  chaff prefixes. A violated continuation precondition, like source-envelope
+  must be consumable. Three independent five-way compact response
+  qualifications derive the stable full-body response identity and length,
+  and three independent prefix-pack qualifications establish the outgoing
+  request/control fit and required chaff FIN acknowledgement. Parser
+  consumability remains runtime fail-closed. Neither evidence layer enters the
+  numeric fit or proves a general HTTP/3 property. The controlled direct wire
+  smoke is explicitly nonauthoritative and excluded from fitting. A violated continuation precondition, like source-envelope
   overflow, is fail-closed and strictly fidelity-ineligible.
   The contract does not rely on application FIN residuals being requeued or
   coalesced. Receipts record both the base pairing cost and the adapted runtime
@@ -399,16 +405,20 @@ collision. Fitting does not mutate or reseal its source result.
 
 The six-workload cohort and fitting campaign are frozen. The sealed fitting
 result at `results/research-fitting-1200/20260812T130241.322364Z` contains all
-120 accepted, eligible samples, and its deterministic four-file
-`artifacts/research-1200/` bundle verifies against the same evidence receipt.
+120 accepted, eligible samples. The verified schema-5 historical bundle is
+archived read-only at
+`artifacts/research-1200-superseded-schema5-0a141768/` and is not accepted by a
+current campaign. The canonical schema-6 bundle is generated only after the
+standalone specs and exact-six qualifications have been published.
 
-The operational order preserves that boundary. `./qcsd-lab test live` first
-exercises all defended modes against controlled local HTTP/3 servers and is
-the bounded networking gate. The completed six-workload fitting campaign
-collected 120 undefended public-Internet samples; its verified result was
-fitted and the four-file bundle verified. The checked-in
-`research-smoke-1200` campaign (seed `2026081204`) therefore passes preflight.
-That smoke uses Cloudflare QUIC and Bootstrap Introduction for one new
+The operational order preserves that boundary. `./qcsd-lab test live` checks
+the sealed baseline path and a direct, nonauthoritative schema-6 A/R/C wire
+path against controlled local HTTP/3 servers. The completed six-workload
+fitting campaign collected 120 undefended public-Internet samples. Before the
+checked-in `research-smoke-1200` campaign (seed `2026081204`) can pass current
+preflight, the standalone prefix specs, exact-six qualification sidecars, and
+schema-6 four-file bundle must be published and verified. That smoke then uses
+Cloudflare QUIC and Bootstrap Introduction for one new
 `as-defined` visit each under all seven modes, producing 14 independent
 post-fit evaluation samples. It never reuses a fitting visit. Rehearsal and
 final remain separate and explicitly on hold.

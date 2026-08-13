@@ -60,6 +60,9 @@ class _ResumeCollector:
 
 
 class _FailFrontCollector:
+    def __init__(self) -> None:
+        self.calls = 0
+
     def __call__(
         self,
         attempt: Path,
@@ -69,7 +72,8 @@ class _FailFrontCollector:
         _seed: int,
         _campaign: Any,
     ) -> dict[str, Any]:
-        if defense.name == "front":
+        self.calls += 1
+        if self.calls == 2:
             attempt.mkdir(parents=True)
             return {
                 "success": False,
@@ -78,10 +82,25 @@ class _FailFrontCollector:
         return _write_successful_attempt(attempt, workload_id, defense.name)
 
 
+def _resume_configuration(tmp_path: Path, *, max_attempts: int = 2) -> Path:
+    """Create two undefended visits for resume mechanics without chaff authority."""
+
+    return _configuration(
+        tmp_path,
+        workloads={
+            "alpha": (
+                2,
+                [_resource(0, "https://alpha.test/", headers=[["accept", "text/html"]])],
+            )
+        },
+        max_attempts=max_attempts,
+    )
+
+
 def _interrupted_result(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> tuple[Path, dict[str, Any]]:
-    campaign = _configuration(tmp_path, max_attempts=2)
+    campaign = _resume_configuration(tmp_path, max_attempts=2)
     monkeypatch.setattr(
         orchestrator.capture_engine,
         "_collect_attempt",
@@ -92,43 +111,6 @@ def _interrupted_result(
     [root] = (tmp_path / "results" / "contract-test").iterdir()
     value = load_json(root / "experiment.json")
     return root, value
-
-
-def _interrupted_smoke_result(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> tuple[Path, dict[str, Any]]:
-    fixture = Path(__file__).parents[1] / "config/defense-params/traffic-morphing-live.json"
-    campaign = _configuration(
-        tmp_path,
-        workloads={
-            "cloudflare-quiche": (
-                1,
-                [_resource(0, "https://cloudflare-quiche.test/")],
-            )
-        },
-        defenses=[
-            "undefended",
-            {
-                "name": "traffic-morphing",
-                "kind": "traffic_morphing",
-                "parameters": str(fixture),
-            },
-        ],
-    )
-    monkeypatch.setattr(
-        orchestrator.capture_engine,
-        "_respect_origin_cooldown",
-        lambda *_args, **_kwargs: None,
-    )
-    monkeypatch.setattr(
-        orchestrator.capture_engine,
-        "_collect_attempt",
-        _InterruptAfterOneAccepted(),
-    )
-    with pytest.raises(KeyboardInterrupt, match="controlled interruption"):
-        run_campaign(campaign, tmp_path / "results")
-    [root] = (tmp_path / "results" / "contract-test").iterdir()
-    return root, load_experiment(root)
 
 
 def _rebind_input_digest(root: Path, experiment: dict[str, Any]) -> None:
@@ -144,7 +126,7 @@ def _rebind_input_digest(root: Path, experiment: dict[str, Any]) -> None:
 def test_resume_keeps_accepted_samples_and_discards_only_interrupted_attempt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    campaign = _configuration(tmp_path, max_attempts=2)
+    campaign = _resume_configuration(tmp_path, max_attempts=2)
     interrupted = _InterruptAfterOneAccepted()
     monkeypatch.setattr(orchestrator.capture_engine, "_collect_attempt", interrupted)
 
@@ -274,44 +256,26 @@ def test_resume_promotes_completed_success_left_before_promotion_checkpoint(
     assert not attempt.exists()
 
 
-def test_resume_quarantines_completed_success_with_pacing_miss_before_retry(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    root, experiment = _interrupted_result(tmp_path, monkeypatch)
-    running = next(sample for sample in experiment["samples"] if sample["state"] == "running")
-    attempt = root / "failures" / running["sample_id"] / f"attempt-{running['attempts']:03d}"
-    (attempt / "unpromoted.tmp").unlink()
-    receipt = _write_successful_attempt(
-        attempt,
-        running["workload_id"],
-        running["defense"],
-    )
+def test_defended_pacing_miss_is_recorded_as_a_fidelity_failure(tmp_path: Path) -> None:
+    attempt = tmp_path / "attempt"
+    receipt = _write_successful_attempt(attempt, "alpha", "front")
     _write_pacing_miss(attempt)
-    atomic_json(attempt / "attempt.json", receipt)
-    resumed = _ResumeCollector()
-    monkeypatch.setattr(orchestrator.capture_engine, "_collect_attempt", resumed)
-
-    assert resume_campaign(root) == root
-
-    verified = verify_result(root)
-    recovered = next(
-        sample
-        for sample in verified.experiment["samples"]
-        if sample["sample_id"] == running["sample_id"]
+    failure = orchestrator._intrinsic_fidelity_failure(
+        {"defense": "front", "runtime_kind": "front"},
+        receipt,
+        attempt,
     )
-    failed_receipt = load_json(attempt / "attempt.json")
-    assert recovered["state"] == "accepted"
-    assert recovered["attempts"] == 2
-    assert resumed.calls == [(running["workload_id"], running["defense"], running["seed"])]
+    assert failure is not None
+    failed_receipt = orchestrator._record_fidelity_failure(attempt, receipt, failure)
     assert failed_receipt["success"] is False
     assert failed_receipt["failure"]["stage"] == "fidelity"
-    assert not list(root.rglob(".promotion"))
+    assert load_json(attempt / "attempt.json") == failed_receipt
 
 
 def test_resume_rejects_mutated_accepted_evidence_before_collecting(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    campaign = _configuration(tmp_path, max_attempts=2)
+    campaign = _resume_configuration(tmp_path, max_attempts=2)
     interrupted = _InterruptAfterOneAccepted()
     monkeypatch.setattr(orchestrator.capture_engine, "_collect_attempt", interrupted)
     with pytest.raises(KeyboardInterrupt):
@@ -332,7 +296,7 @@ def test_resume_rejects_mutated_accepted_evidence_before_collecting(
 def test_resume_recovers_sample_promoted_before_accepted_checkpoint(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    campaign = _configuration(tmp_path, max_attempts=2)
+    campaign = _resume_configuration(tmp_path, max_attempts=2)
     collector = _ResumeCollector()
     monkeypatch.setattr(orchestrator.capture_engine, "_collect_attempt", collector)
     promote = orchestrator._promote_attempt
@@ -377,7 +341,7 @@ def test_resume_recovers_sample_promoted_before_accepted_checkpoint(
 def test_resume_finishes_validated_attempt_interrupted_before_atomic_promotion(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    campaign = _configuration(tmp_path, max_attempts=2)
+    campaign = _resume_configuration(tmp_path, max_attempts=2)
     collector = _ResumeCollector()
     monkeypatch.setattr(orchestrator.capture_engine, "_collect_attempt", collector)
     promote = orchestrator._promote_attempt
@@ -415,7 +379,7 @@ def test_resume_finishes_validated_attempt_interrupted_before_atomic_promotion(
 def test_resume_seals_terminal_complete_checkpoint_without_recollection(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    campaign = _configuration(tmp_path, max_attempts=1)
+    campaign = _resume_configuration(tmp_path, max_attempts=1)
     collector = _ResumeCollector()
     monkeypatch.setattr(orchestrator.capture_engine, "_collect_attempt", collector)
 
@@ -443,7 +407,7 @@ def test_resume_seals_terminal_complete_checkpoint_without_recollection(
 def test_resume_recovers_terminal_incomplete_checkpoint_before_seal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    campaign = _configuration(tmp_path, max_attempts=1)
+    campaign = _resume_configuration(tmp_path, max_attempts=1)
     monkeypatch.setattr(orchestrator.capture_engine, "_collect_attempt", _FailFrontCollector())
     seal = orchestrator._seal
 
@@ -467,7 +431,7 @@ def test_resume_recovers_terminal_incomplete_checkpoint_before_seal(
     verified = verify_result(root)
     assert verified.experiment["status"] == "complete"
     assert len(resumed.calls) == 1
-    assert resumed.calls[0][1] == "front"
+    assert resumed.calls[0][1] == "undefended"
 
 
 def test_resume_rejects_unsafe_sample_id_before_attempt_path_use(
@@ -606,7 +570,7 @@ def test_resume_rejects_rebound_configuration_not_derived_from_frozen_inputs(
     elif mutation == "workload_id":
         workload["id"] = "renamed"
     elif mutation == "workload_visits":
-        workload["visits"] = 2
+        workload["visits"] += 1
     elif mutation == "workload_manifest":
         workload["manifest"] = "inputs/workloads/renamed.json"
     elif mutation == "workload_sha256":
@@ -677,18 +641,14 @@ def test_resume_refuses_rebound_terminal_purpose_before_sealing(
         "input_policy",
     ],
 )
-def test_resume_rejects_rebound_external_parameter_bindings(
+def test_resume_rejects_injected_external_parameter_bindings(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     field: str,
 ) -> None:
-    root, experiment = _interrupted_smoke_result(tmp_path, monkeypatch)
-    parameterized = next(
-        defense
-        for defense in experiment["configuration"]["defenses"]
-        if defense["kind"] == "traffic_morphing"
-    )
-    parameterized[field] = "0" * 64 if field.endswith("sha256") else "tampered"
+    root, experiment = _interrupted_result(tmp_path, monkeypatch)
+    baseline = experiment["configuration"]["defenses"][0]
+    baseline[field] = "0" * 64 if field.endswith("sha256") else "tampered"
     _rebind_input_digest(root, experiment)
     resumed = _ResumeCollector()
     monkeypatch.setattr(orchestrator.capture_engine, "_collect_attempt", resumed)
@@ -701,23 +661,33 @@ def test_resume_rejects_rebound_external_parameter_bindings(
     assert resumed.calls == []
 
 
-def test_frozen_smoke_inputs_cannot_be_reclassified_for_evaluation(
+def test_reviewed_defended_smoke_cannot_enter_resume_workflow_without_qualification(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    root, experiment = _interrupted_smoke_result(tmp_path, monkeypatch)
-    frozen_campaign = root / "inputs/campaign.yml"
-    value = orchestrator.yaml.safe_load(frozen_campaign.read_text(encoding="utf-8"))
-    value["purpose"] = "evaluation"
-    frozen_campaign.write_text(
-        orchestrator.yaml.safe_dump(value, sort_keys=False), encoding="utf-8"
+    fixture = Path(__file__).parents[1] / "config/defense-params/traffic-morphing-live.json"
+    campaign = _configuration(
+        tmp_path,
+        workloads={"simple": (1, [_resource(0, "https://simple.test/")])},
+        defenses=[
+            "undefended",
+            {
+                "name": "traffic-morphing",
+                "kind": "traffic_morphing",
+                "parameters": str(fixture),
+            },
+        ],
     )
-    experiment["purpose"] = "evaluation"
-    experiment["configuration"]["campaign_sha256"] = orchestrator.sha256_file(frozen_campaign)
-    _rebind_input_digest(root, experiment)
+    called = False
 
-    with pytest.raises(ValueError, match="research-grade provenance"):
-        resume_campaign(root)
-    assert not (root / "evidence.sha256").exists()
+    def collect(*_args: object, **_kwargs: object) -> dict[str, Any]:
+        nonlocal called
+        called = True
+        raise AssertionError
+
+    monkeypatch.setattr(orchestrator.capture_engine, "_collect_attempt", collect)
+    with pytest.raises(ValueError, match="research-prepared workloads and qualified chaff"):
+        run_campaign(campaign, tmp_path / "results")
+    assert called is False
 
 
 def test_resume_rejects_symlinked_attempt_ancestor_without_removing_target(

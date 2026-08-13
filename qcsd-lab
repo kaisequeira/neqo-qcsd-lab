@@ -6,7 +6,7 @@ COLLECTION_IMAGE="${QCSD_LAB_COLLECTION_IMAGE:-neqo-qcsd-lab-collection:local}"
 PREPARE_IMAGE="${QCSD_LAB_PREPARE_IMAGE:-neqo-qcsd-lab-prepare:local}"
 
 usage() {
-  echo "Usage: qcsd-lab {build|prepare|run|resume|verify|analyze|fit|test} [arguments...]" >&2
+  echo "Usage: qcsd-lab {build|prepare|derive-chaff-prefix-specs|qualify-chaff|run|resume|verify|analyze|fit|test} [arguments...]" >&2
 }
 
 require_submodule() {
@@ -40,7 +40,7 @@ if [[ "${1:-}" == "build" ]]; then
 fi
 
 case "${1:-}" in
-  prepare) image="${PREPARE_IMAGE}" ;;
+  prepare|derive-chaff-prefix-specs|qualify-chaff) image="${PREPARE_IMAGE}" ;;
   run|resume|verify|analyze|fit|test) image="${COLLECTION_IMAGE}" ;;
   *) usage; exit 2 ;;
 esac
@@ -50,14 +50,129 @@ if ! docker image inspect "${image}" >/dev/null 2>&1; then
   exit 1
 fi
 
-mkdir -p "${ROOT}/results" "${ROOT}/artifacts" "${ROOT}/config/workloads"
+if [[ "${1:-}" == "derive-chaff-prefix-specs" || "${1:-}" == "fit" ]]; then
+  guarded_root="${ROOT}/config"
+  guarded_label="derive-chaff-prefix-specs config"
+  if [[ "${1:-}" == "fit" ]]; then
+    guarded_root="${ROOT}/artifacts"
+    guarded_label="fit artifact"
+  fi
+  if [[ ! -d "${guarded_root}" || -L "${guarded_root}" ]]; then
+    echo "${guarded_label} root must be an existing non-symlink directory" >&2
+    exit 1
+  fi
+else
+  mkdir -p "${ROOT}/results" "${ROOT}/artifacts" "${ROOT}/config/workloads"
+fi
 image_id="$(docker image inspect --format '{{.Id}}' "${image}")"
+
+if [[ "${1:-}" == "qualify-chaff" ]]; then
+  for required_directory in \
+    "${ROOT}/config/chaff-prefix-specs" \
+    "${ROOT}/config/chaff-qualification-store"; do
+    if [[ ! -d "${required_directory}" || -L "${required_directory}" ]]; then
+      echo "qualify-chaff requires an existing non-symlink directory: ${required_directory}" >&2
+      exit 1
+    fi
+  done
+fi
+if [[ "${1:-}" == "derive-chaff-prefix-specs" ]]; then
+  command -v python3 >/dev/null 2>&1 || {
+    echo "derive-chaff-prefix-specs requires python3 on the host" >&2
+    exit 1
+  }
+  if [[ -e "${ROOT}/config/chaff-prefix-specs" || -L "${ROOT}/config/chaff-prefix-specs" ]]; then
+    echo "derive-chaff-prefix-specs requires absent config/chaff-prefix-specs" >&2
+    exit 1
+  fi
+fi
+fit_canonical_preexisting=0
+if [[ "${1:-}" == "fit" ]] &&
+   [[ -e "${ROOT}/artifacts/research-1200" || -L "${ROOT}/artifacts/research-1200" ]]; then
+  if [[ ! -d "${ROOT}/artifacts/research-1200" || -L "${ROOT}/artifacts/research-1200" ]]; then
+    echo "fit canonical artifact must be a non-symlink directory" >&2
+    exit 1
+  fi
+  fit_canonical_preexisting=1
+fi
+
+verify_qualification_checkout() {
+  command -v python3 >/dev/null 2>&1 || {
+    echo "qualify-chaff requires python3 on the host for source verification" >&2
+    exit 1
+  }
+  local metadata
+  local -a image_source=()
+  metadata="$(docker run --rm --entrypoint /bin/cat "${image_id}" /usr/share/qcsd-lab/source.json)"
+  mapfile -t image_source < <(
+    python3 -c 'import json,sys; v=json.load(sys.stdin); print(v["lab_commit"]); print(str(v["lab_dirty"]).lower()); print(v["lab_patch_sha256"]); print(v["neqo_commit"]); print(v["neqo_pinned_commit"]); print(str(v["neqo_dirty"]).lower()); print(v["neqo_patch_sha256"])' <<<"${metadata}"
+  )
+  local empty_sha="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  local lab_head neqo_head neqo_pin
+  lab_head="$(git -C "${ROOT}" rev-parse HEAD)"
+  neqo_head="$(git -C "${ROOT}/neqo-qcsd" rev-parse HEAD)"
+  neqo_pin="$(git -C "${ROOT}" ls-files --stage -- neqo-qcsd | awk '$1 == 160000 {print $2}')"
+  if [[ -n "$(git -C "${ROOT}" status --porcelain --untracked-files=all)" ]] ||
+     [[ -n "$(git -C "${ROOT}/neqo-qcsd" status --porcelain --untracked-files=all)" ]] ||
+     [[ "${#image_source[@]}" -ne 7 ]] ||
+     [[ "${image_source[0]}" != "${lab_head}" ]] ||
+     [[ "${image_source[1]}" != "false" ]] ||
+     [[ "${image_source[2]}" != "${empty_sha}" ]] ||
+     [[ "${image_source[3]}" != "${neqo_head}" ]] ||
+     [[ "${image_source[4]}" != "${neqo_pin}" ]] ||
+     [[ "${image_source[5]}" != "false" ]] ||
+     [[ "${image_source[6]}" != "${empty_sha}" ]]; then
+    echo "qualify-chaff requires the exact clean Lab/Neqo checkout embedded in the image" >&2
+    exit 1
+  fi
+}
+
+verify_fit_neqo_checkout() {
+  command -v python3 >/dev/null 2>&1 || {
+    echo "fit requires python3 on the host for Neqo source verification" >&2
+    exit 1
+  }
+  local empty_sha metadata image_neqo image_pin image_neqo_dirty image_neqo_patch
+  local neqo_head head_gitlink index_gitlink
+  local -a image_neqo_source=()
+  empty_sha="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  metadata="$(docker run --rm --entrypoint /bin/cat "${image_id}" /usr/share/qcsd-lab/source.json)"
+  mapfile -t image_neqo_source < <(
+    python3 -c 'import json,sys; v=json.load(sys.stdin); print(v["neqo_commit"]); print(v["neqo_pinned_commit"]); print(str(v["neqo_dirty"]).lower()); print(v["neqo_patch_sha256"])' <<<"${metadata}"
+  )
+  image_neqo="${image_neqo_source[0]:-}"
+  image_pin="${image_neqo_source[1]:-}"
+  image_neqo_dirty="${image_neqo_source[2]:-}"
+  image_neqo_patch="${image_neqo_source[3]:-}"
+  neqo_head="$(git -C "${ROOT}/neqo-qcsd" rev-parse HEAD)"
+  head_gitlink="$(git -C "${ROOT}" rev-parse HEAD:neqo-qcsd)"
+  index_gitlink="$(git -C "${ROOT}" ls-files --stage -- neqo-qcsd | awk '$1 == 160000 {print $2}')"
+  if [[ "${#image_neqo_source[@]}" -ne 4 ]] ||
+     [[ ! "${image_neqo}" =~ ^[0-9a-f]{40}$ ]] ||
+     [[ "${image_neqo}" != "${image_pin}" ]] ||
+     [[ "${image_neqo_dirty}" != "false" ]] ||
+     [[ "${image_neqo_patch}" != "${empty_sha}" ]] ||
+     [[ "${neqo_head}" != "${image_neqo}" ]] ||
+     [[ "${head_gitlink}" != "${image_neqo}" ]] ||
+     [[ "${index_gitlink}" != "${image_neqo}" ]] ||
+     [[ -n "$(git -C "${ROOT}/neqo-qcsd" status --porcelain --untracked-files=all)" ]]; then
+    echo "fit requires the exact clean Neqo commit and parent gitlink embedded in the image" >&2
+    exit 1
+  fi
+}
+
+if [[ "${1:-}" == "qualify-chaff" ]]; then
+  verify_qualification_checkout
+fi
+if [[ "${1:-}" == "fit" ]]; then
+  verify_fit_neqo_checkout
+fi
 runtime=(--rm --security-opt no-new-privileges)
 network_mode="bridge"
-if [[ "${1:-}" == "fit" ]]; then
+if [[ "${1:-}" == "fit" || "${1:-}" == "derive-chaff-prefix-specs" ]]; then
   network_mode="none"
 fi
-if [[ "${1:-}" == "prepare" ]]; then
+if [[ "${1:-}" == "prepare" || "${1:-}" == "derive-chaff-prefix-specs" || "${1:-}" == "qualify-chaff" ]]; then
   runtime+=(--user "$(id -u):$(id -g)")
 else
   runtime+=(
@@ -76,13 +191,33 @@ container=(
   --env "MPLCONFIGDIR=/tmp/matplotlib"
   --env "QCSD_LAB_IMAGE_DIGEST=${image_id}"
   --volume "${ROOT}:/lab:ro"
-  --volume "${ROOT}/results:/lab/results:rw"
 )
+if [[ "${1:-}" == "run" || "${1:-}" == "resume" || "${1:-}" == "analyze" ]]; then
+  container+=(--volume "${ROOT}/results:/lab/results:rw")
+fi
 if [[ "${1:-}" == "prepare" ]]; then
   container+=(--volume "${ROOT}/config/workloads:/lab/config/workloads:rw")
 fi
+if [[ "${1:-}" == "derive-chaff-prefix-specs" ]]; then
+  container+=(--volume "${ROOT}/config:/lab/config:rw")
+fi
+if [[ "${1:-}" == "qualify-chaff" ]]; then
+  container+=(
+    --volume "${ROOT}/config/workloads:/lab/config/workloads:ro"
+    --volume "${ROOT}/config/chaff-prefix-specs:/lab/config/chaff-prefix-specs:ro"
+    --volume "${ROOT}/config/chaff-qualification-store:/lab/config/chaff-qualification-store:rw"
+  )
+fi
 if [[ "${1:-}" == "fit" ]]; then
   container+=(--volume "${ROOT}/artifacts:/lab/artifacts:rw")
+  while IFS= read -r -d '' artifact_child; do
+    artifact_name="${artifact_child##*/}"
+    if [[ ! "${artifact_name}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+      echo "fit rejects unsafe artifact child name: ${artifact_name}" >&2
+      exit 1
+    fi
+    container+=(--volume "${artifact_child}:/lab/artifacts/${artifact_name}:ro")
+  done < <(find "${ROOT}/artifacts" -mindepth 1 -maxdepth 1 -print0)
 fi
 container+=(--workdir /lab)
 
@@ -107,6 +242,129 @@ start_capture_acceptance_server() {
     'ethtool -K eth0 gro off gso off tso off tx-udp-segmentation off
 exec /usr/local/bin/neqo-server "0.0.0.0:${QCSD_ACCEPTANCE_SERVER_PORT}"'
 }
+
+snapshot_regular_tree() {
+  python3 -c '
+import hashlib, json, os, stat, sys
+from pathlib import Path
+root = Path(sys.argv[1])
+label = sys.argv[2]
+records = {}
+stack = [root]
+while stack:
+    directory = stack.pop()
+    with os.scandir(directory) as entries:
+        for entry in entries:
+            path = Path(entry.path)
+            relative = path.relative_to(root).as_posix()
+            metadata = entry.stat(follow_symlinks=False)
+            if stat.S_ISREG(metadata.st_mode):
+                records[relative] = {
+                    "type": "file",
+                    "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                }
+            elif stat.S_ISDIR(metadata.st_mode):
+                records[relative] = {"type": "directory"}
+                stack.append(path)
+            elif stat.S_ISLNK(metadata.st_mode):
+                raise SystemExit(f"{label} rejects symlink: {relative}")
+            else:
+                raise SystemExit(f"{label} rejects special entry: {relative}")
+print(json.dumps(records, sort_keys=True, separators=(",", ":")))
+' "$1" "$2"
+}
+
+validate_prefix_derivation_delta() {
+  python3 -c '
+import json, sys
+from pathlib import Path
+before = json.loads(Path(sys.argv[1]).read_text())
+after = json.loads(Path(sys.argv[2]).read_text())
+ids = (
+    "apache-traffic-server-docs-r3",
+    "bootstrap-introduction-r3",
+    "cloudflare-quiche-r3",
+    "getbootstrap-home-r3",
+    "nghttp2-ngtcp2-r3",
+    "nginx-quic-r3",
+)
+expected = {"chaff-prefix-specs": "directory"}
+expected.update({f"chaff-prefix-specs/{workload}.json": "file" for workload in ids})
+if any(after.get(path) != record for path, record in before.items()):
+    raise SystemExit("derive-chaff-prefix-specs changed a pre-existing config input")
+if set(after) - set(before) != set(expected):
+    raise SystemExit("derive-chaff-prefix-specs changed files outside the exact-six output")
+if any(after[path].get("type") != kind for path, kind in expected.items()):
+    raise SystemExit("derive-chaff-prefix-specs output type is invalid")
+' "$1" "$2"
+}
+
+if [[ "${1:-}" == "derive-chaff-prefix-specs" ]]; then
+  before_snapshot="$(mktemp)"
+  after_snapshot="$(mktemp)"
+  cleanup_snapshots() {
+    rm -f "${before_snapshot}" "${after_snapshot}"
+  }
+  trap cleanup_snapshots EXIT INT TERM
+  snapshot_regular_tree "${ROOT}/config" "derive-chaff-prefix-specs config" >"${before_snapshot}"
+  set +e
+  "${container[@]}" "${image_id}" "$@"
+  status=$?
+  set -e
+  snapshot_regular_tree "${ROOT}/config" "derive-chaff-prefix-specs config" >"${after_snapshot}"
+  validate_prefix_derivation_delta "${before_snapshot}" "${after_snapshot}"
+  exit "${status}"
+fi
+
+validate_fit_artifact_delta() {
+  python3 -c '
+import json, sys
+from pathlib import Path
+before = json.loads(Path(sys.argv[1]).read_text())
+after = json.loads(Path(sys.argv[2]).read_text())
+if sys.argv[3] not in {"0", "1"}:
+    raise SystemExit("fit pre-existing state is invalid")
+preexisting = sys.argv[3] == "1"
+status = int(sys.argv[4])
+expected = {
+    "research-1200": "directory",
+    "research-1200/provenance.json": "file",
+    "research-1200/traffic-morphing.json": "file",
+    "research-1200/walkie-talkie.json": "file",
+    "research-1200/wtf-pad.json": "file",
+}
+if any(after.get(path) != record for path, record in before.items()):
+    raise SystemExit("fit changed a pre-existing artifact")
+if preexisting and after != before:
+    raise SystemExit("idempotent fit changed the pre-existing artifact tree")
+if not preexisting and status != 0 and after != before:
+    raise SystemExit("failed fit changed the artifact tree")
+if not preexisting and status == 0 and set(after) - set(before) != set(expected):
+    raise SystemExit("fit changed files outside the exact four-file bundle")
+if not preexisting and status == 0 and any(
+    after[path].get("type") != kind for path, kind in expected.items()
+):
+    raise SystemExit("fit output type is invalid")
+' "$1" "$2" "$3" "$4"
+}
+
+if [[ "${1:-}" == "fit" ]]; then
+  before_snapshot="$(mktemp)"
+  after_snapshot="$(mktemp)"
+  cleanup_snapshots() {
+    rm -f "${before_snapshot}" "${after_snapshot}"
+  }
+  trap cleanup_snapshots EXIT INT TERM
+  snapshot_regular_tree "${ROOT}/artifacts" "fit artifact" >"${before_snapshot}"
+  set +e
+  "${container[@]}" "${image_id}" "$@"
+  status=$?
+  set -e
+  snapshot_regular_tree "${ROOT}/artifacts" "fit artifact" >"${after_snapshot}"
+  validate_fit_artifact_delta \
+    "${before_snapshot}" "${after_snapshot}" "${fit_canonical_preexisting}" "${status}"
+  exit "${status}"
+fi
 
 if [[ "${1:-}" == "test" && "${2:-}" == "live" ]]; then
   if (( $# != 2 )); then

@@ -11,9 +11,15 @@ import yaml
 
 import qcsd_lab.orchestrator as orchestrator
 from qcsd_lab.capture import split_endpoint, tuple_filter
-from qcsd_lab.capture_session import Defense, Limits, _runner_result_complete, _validate_run_binding
+from qcsd_lab.capture_session import (
+    Defense,
+    Limits,
+    _client_command,
+    _runner_result_complete,
+    _validate_chaff_response_receipts,
+    _validate_run_binding,
+)
 from qcsd_lab.orchestrator import (
-    CampaignIncomplete,
     load_campaign,
     plan_campaign,
     preflight_campaign,
@@ -78,7 +84,7 @@ def _configuration(
         "profile": profile,
         "workloads": visits,
         "request_policies": policies or ["as-defined"],
-        "defenses": defenses or ["undefended", "front"],
+        "defenses": defenses or ["undefended"],
         "limits": {
             "timeout_seconds": 1,
             "max_response_bytes": 4096,
@@ -106,19 +112,21 @@ def test_walkie_talkie_resource_preflight_accepts_one_initial_same_origin_candid
     )
 
 
-def test_walkie_talkie_resource_preflight_applies_only_to_current_schema(tmp_path: Path) -> None:
-    schema_two = tmp_path / "schema-two.json"
+def test_walkie_talkie_current_contract_classifier_accepts_only_schema_six(
+    tmp_path: Path,
+) -> None:
     schema_five = tmp_path / "schema-five.json"
-    atomic_json(schema_two, {"schema_version": 2})
+    schema_six = tmp_path / "schema-six.json"
     atomic_json(schema_five, {"schema_version": 5})
+    atomic_json(schema_six, {"schema_version": 6})
 
-    assert not orchestrator._uses_schema_five_walkie_talkie(
-        Defense("historical", "walkie_talkie", False, parameters_path=schema_two)
+    assert not orchestrator._uses_schema_six_walkie_talkie(
+        Defense("historical", "walkie_talkie", False, parameters_path=schema_five)
     )
-    assert orchestrator._uses_schema_five_walkie_talkie(
-        Defense("current", "walkie_talkie", False, parameters_path=schema_five)
+    assert orchestrator._uses_schema_six_walkie_talkie(
+        Defense("current", "walkie_talkie", False, parameters_path=schema_six)
     )
-    assert not orchestrator._uses_schema_five_walkie_talkie(Defense("front", "front", False))
+    assert not orchestrator._uses_schema_six_walkie_talkie(Defense("front", "front", False))
 
 
 @pytest.mark.parametrize("failure", ["unknown", "dependent", "empty", "origin-mismatch"])
@@ -391,6 +399,133 @@ def test_capture_session_requires_a_complete_successful_runner_result() -> None:
     )
 
 
+def _runtime_chaff_fixture(tmp_path: Path) -> tuple[Path, dict[str, object]]:
+    manifest = tmp_path / "chaff.json"
+    headers = [["accept", "text/html"], ["accept-encoding", "gzip"], ["accept-language", "en"]]
+    atomic_json(
+        manifest,
+        {
+            "resources": [
+                {
+                    "id": 0,
+                    "url": "https://site.test/",
+                    "headers": headers,
+                    "chaff_qualification": {
+                        "request_stream_bytes": 123,
+                        "expected_response": {
+                            "status": 200,
+                            "content_encoding": "gzip",
+                            "body_bytes": 1_200,
+                            "body_sha256": "a" * 64,
+                        },
+                    },
+                }
+            ]
+        },
+    )
+    receipt: dict[str, object] = {
+        "resource_id": 0,
+        "request_id": 0,
+        "url": "https://site.test/",
+        "request_headers": headers,
+        "request_stream_bytes": 123,
+        "expected_request_stream_bytes": 123,
+        "response_headers": [[":status", "200"], ["content-encoding", "gzip"]],
+        "status": 200,
+        "content_encoding": "gzip",
+        "bytes": 1_200,
+        "body_sha256": "a" * 64,
+        "complete": True,
+        "status_match": True,
+        "content_encoding_match": True,
+        "body_bytes_match": True,
+        "body_sha256_match": True,
+        "identity_verified": True,
+        "outcome": "succeeded",
+    }
+    return manifest, receipt
+
+
+def test_runtime_chaff_receipts_accept_verified_complete_and_truthful_reset(
+    tmp_path: Path,
+) -> None:
+    manifest, receipt = _runtime_chaff_fixture(tmp_path)
+    _validate_chaff_response_receipts({"chaff_responses": [receipt]}, manifest)
+
+    partial = {
+        **receipt,
+        "status": None,
+        "content_encoding": None,
+        "bytes": 81,
+        "body_sha256": None,
+        "complete": False,
+        "status_match": None,
+        "content_encoding_match": None,
+        "body_bytes_match": None,
+        "body_sha256_match": None,
+        "identity_verified": None,
+        "outcome": "reset",
+    }
+    _validate_chaff_response_receipts({"chaff_responses": [partial]}, manifest)
+    partial["outcome"] = "endpoint_closed"
+    _validate_chaff_response_receipts({"chaff_responses": [partial]}, manifest)
+
+
+@pytest.mark.parametrize(
+    ("outcome", "mutation"),
+    [
+        ("response_limit", {"bytes": 1_201, "body_sha256": "b" * 64}),
+        (
+            "identity_mismatch",
+            {"content_encoding": "identity", "content_encoding_match": False},
+        ),
+        ("request_size_mismatch", {"request_stream_bytes": 124}),
+    ],
+)
+def test_runtime_chaff_receipts_reject_known_contradictions(
+    tmp_path: Path, outcome: str, mutation: dict[str, object]
+) -> None:
+    manifest, receipt = _runtime_chaff_fixture(tmp_path)
+    receipt.update(mutation)
+    receipt["outcome"] = outcome
+
+    with pytest.raises(ValueError, match="qualified|contradicts"):
+        _validate_chaff_response_receipts({"chaff_responses": [receipt]}, manifest)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        {"bytes": 1_201},
+        {"response_headers": [[":status", "404"], ["content-encoding", "gzip"]]},
+        {"response_headers": [[":status", "200"], ["content-encoding", "br"]]},
+    ],
+)
+def test_partial_runtime_chaff_receipts_reject_raw_identity_contradictions(
+    tmp_path: Path, mutation: dict[str, object]
+) -> None:
+    manifest, receipt = _runtime_chaff_fixture(tmp_path)
+    receipt.update(
+        {
+            "status": None,
+            "content_encoding": None,
+            "bytes": 81,
+            "body_sha256": None,
+            "complete": False,
+            "status_match": None,
+            "content_encoding_match": None,
+            "body_bytes_match": None,
+            "body_sha256_match": None,
+            "identity_verified": None,
+            "outcome": "incomplete",
+            **mutation,
+        }
+    )
+
+    with pytest.raises(ValueError, match="contradict|invalid identity claim"):
+        _validate_chaff_response_receipts({"chaff_responses": [receipt]}, manifest)
+
+
 def test_runner_receipt_is_bound_to_frozen_launch_inputs(tmp_path: Path) -> None:
     manifest = tmp_path / "workload.json"
     manifest.write_text('{"resources":[]}\n', encoding="utf-8")
@@ -430,6 +565,127 @@ def test_runner_receipt_is_bound_to_frozen_launch_inputs(tmp_path: Path) -> None
         )
 
 
+@pytest.mark.parametrize(
+    "kind",
+    ["static", "front", "tamaraw", "traffic_morphing", "wtf_pad", "walkie_talkie"],
+)
+@pytest.mark.parametrize("missing", ["application", "chaff"])
+def test_every_defended_client_command_requires_both_application_source_and_chaff(
+    tmp_path: Path,
+    kind: str,
+    missing: str,
+) -> None:
+    manifest = tmp_path / "runtime.json"
+    application = tmp_path / "application.json"
+    chaff = tmp_path / "chaff.json"
+    context = SimpleNamespace(
+        qcsd_profile="live",
+        request_policy="as-defined",
+        limits=Limits(max_response_bytes=4_096),
+    )
+    defense = Defense(kind.replace("_", "-"), kind, False)
+
+    with pytest.raises(ValueError, match="prepared source and qualified chaff"):
+        _client_command(
+            manifest,
+            None if missing == "chaff" else chaff,
+            "site",
+            defense,
+            7,
+            context,
+            tmp_path / "output",
+            application_workload_source=None if missing == "application" else application,
+        )
+
+
+def test_baseline_client_command_forbids_application_source_and_chaff(tmp_path: Path) -> None:
+    context = SimpleNamespace(
+        qcsd_profile="live",
+        request_policy="as-defined",
+        limits=Limits(max_response_bytes=4_096),
+    )
+    with pytest.raises(ValueError, match="baseline run forbids"):
+        _client_command(
+            tmp_path / "runtime.json",
+            tmp_path / "chaff.json",
+            "site",
+            Defense("undefended", "none", True),
+            7,
+            context,
+            tmp_path / "output",
+            application_workload_source=tmp_path / "application.json",
+        )
+
+
+def test_campaign_rejects_symlinked_application_workload_before_parsing(tmp_path: Path) -> None:
+    campaign_path = _configuration(tmp_path)
+    workload = tmp_path / "config/workloads/alpha.json"
+    external = tmp_path / "external-workload.json"
+    external.write_bytes(workload.read_bytes())
+    workload.unlink()
+    workload.symlink_to(external)
+
+    with pytest.raises(ValueError, match="workload manifest is not a regular file"):
+        load_campaign(campaign_path)
+
+
+@pytest.mark.parametrize("symlinked", ["sidecar", "spec"])
+def test_current_qualified_chaff_loader_rejects_symlinked_evidence(
+    tmp_path: Path, symlinked: str
+) -> None:
+    campaign_path = _configuration(tmp_path)
+    workload = load_campaign(campaign_path).workloads[0]
+    config = tmp_path / "config"
+    sidecar = config / "chaff-qualification-store/v1/alpha.json"
+    spec = config / "chaff-prefix-specs/alpha.json"
+    sidecar.parent.mkdir(parents=True)
+    spec.parent.mkdir()
+    sidecar.write_text("{}\n", encoding="utf-8")
+    spec.write_text("{}\n", encoding="utf-8")
+    selected = sidecar if symlinked == "sidecar" else spec
+    external = tmp_path / f"external-{symlinked}.json"
+    external.write_bytes(selected.read_bytes())
+    selected.unlink()
+    selected.symlink_to(external)
+
+    with pytest.raises(ValueError, match="is not a regular file"):
+        orchestrator._load_qualified_chaff_inputs(
+            campaign_path,
+            (workload,),
+            frozen_inputs=None,
+        )
+
+
+def test_frozen_qualified_chaff_loader_rejects_symlinked_derived_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    campaign_path = _configuration(tmp_path)
+    workload = load_campaign(campaign_path).workloads[0]
+    frozen = tmp_path / "inputs"
+    for directory in ("chaff-qualifications", "chaff-prefix-specs", "chaff-manifests"):
+        (frozen / directory).mkdir(parents=True, exist_ok=True)
+    (frozen / "chaff-qualifications/alpha.json").write_text("{}\n", encoding="utf-8")
+    (frozen / "chaff-prefix-specs/alpha.json").write_text("{}\n", encoding="utf-8")
+    external = tmp_path / "external-chaff.json"
+    external.write_text("{}\n", encoding="utf-8")
+    (frozen / "chaff-manifests/alpha.json").symlink_to(external)
+    monkeypatch.setattr(
+        "qcsd_lab.chaff_qualification.load_qualified_chaff",
+        lambda *args, **kwargs: SimpleNamespace(
+            sidecar_sha256="a" * 64,
+            manifest_sha256=sha256_file(external),
+            manifest={},
+        ),
+    )
+
+    with pytest.raises(ValueError, match="is not a regular file"):
+        orchestrator._load_qualified_chaff_inputs(
+            campaign_path,
+            (workload,),
+            frozen_inputs=frozen,
+        )
+
+
 def test_expansion_is_deterministic_and_keeps_multi_origin_work_in_one_sample(
     tmp_path: Path,
 ) -> None:
@@ -453,7 +709,7 @@ def test_expansion_is_deterministic_and_keeps_multi_origin_work_in_one_sample(
     second = plan_campaign(load_campaign(path))
 
     assert first == second
-    assert len(first) == (2 + 1) * 2 * 2
+    assert len(first) == (2 + 1) * 2
     groups: list[tuple[str, str, int]] = []
     for sample in first:
         group = (sample["workload_id"], sample["request_policy"], sample["visit"])
@@ -469,12 +725,12 @@ def test_expansion_is_deterministic_and_keeps_multi_origin_work_in_one_sample(
     ]
     complex_workload = next(item for item in load_campaign(path).workloads if item.id == "complex")
     assert complex_workload.origin_count == 2
-    assert all(sample["workload_id"] == "complex" for sample in first[-4:])
-    assert len({sample["path"].split("/")[1] for sample in first[-4:]}) == 1
+    assert all(sample["workload_id"] == "complex" for sample in first[-2:])
+    assert len({sample["path"].split("/")[1] for sample in first[-2:]}) == 1
 
     preflight = preflight_campaign(path)
     assert preflight["valid"] is True
-    assert preflight["sample_count"] == 12
+    assert preflight["sample_count"] == 6
     assert preflight["execution_order"] == [sample["sample_id"] for sample in first]
     assert next(item for item in preflight["workloads"] if item["id"] == "complex")["origins"] == 2
 
@@ -567,7 +823,9 @@ def test_campaign_preflight_accepts_a_valid_static_schedule(tmp_path: Path) -> N
         encoding="utf-8",
     )
 
-    assert preflight_campaign(path)["valid"] is True
+    orchestrator._validate_static_schedule(path.parent / "schedule.csv", udp_payload_ceiling=1_200)
+    with pytest.raises(ValueError, match="research-prepared workloads and qualified chaff"):
+        preflight_campaign(path)
 
 
 def test_multi_defense_campaign_requires_one_response_baseline(tmp_path: Path) -> None:
@@ -588,7 +846,7 @@ def test_preflight_rejects_unicode_identifiers_before_materializing_result(
     elif identifier == "workload":
         value["workloads"] = {"café": 1}
     else:
-        value["defenses"][1] = {"name": "frönt", "kind": "front"}
+        value["defenses"] = ["undefended", {"name": "frönt", "kind": "front"}]
     path.write_text(yaml.safe_dump(value, sort_keys=False), encoding="utf-8")
 
     with pytest.raises(ValueError, match="filesystem-safe"):
@@ -620,19 +878,26 @@ def test_campaign_preflight_allows_custom_defense_alias_for_runtime_kind(tmp_pat
         defenses=["undefended", {"name": "front-experiment", "kind": "front"}],
     )
 
-    campaign = load_campaign(path)
-    assert [(defense.name, defense.kind) for defense in campaign.defenses] == [
+    defenses = orchestrator._load_defenses(
+        path.parent,
+        yaml.safe_load(path.read_text(encoding="utf-8"))["defenses"],
+        "smoke",
+        "live",
+        {"alpha": "a" * 64},
+    )
+    assert [(defense.name, defense.kind) for defense in defenses] == [
         ("undefended", "none"),
         ("front-experiment", "front"),
     ]
-    assert preflight_campaign(path)["valid"] is True
+    with pytest.raises(ValueError, match="research-prepared workloads and qualified chaff"):
+        preflight_campaign(path)
 
 
 def test_run_writes_only_the_canonical_result_and_retains_failed_attempts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     path = _configuration(tmp_path, max_attempts=2)
-    collector = _Collector(fail_once={"front"})
+    collector = _Collector(fail_once={"undefended"})
     monkeypatch.setattr(orchestrator.capture_engine, "_collect_attempt", collector)
 
     root = run_campaign(path, tmp_path / "results")
@@ -641,10 +906,10 @@ def test_run_writes_only_the_canonical_result_and_retains_failed_attempts(
 
     assert experiment["status"] == "complete"
     assert experiment["summary"] == {
-        "planned": 2,
-        "accepted": 2,
+        "planned": 1,
+        "accepted": 1,
         "failed": 0,
-        "eligible": 2,
+        "eligible": 1,
         "passed": True,
     }
     assert set(path.name for path in root.iterdir()) == {
@@ -678,9 +943,9 @@ def test_run_writes_only_the_canonical_result_and_retains_failed_attempts(
         assert sample["diagnostics"]["response_match"] is True
         assert sample["eligible"] is True
 
-    front = next(sample for sample in experiment["samples"] if sample["defense"] == "front")
-    assert front["attempts"] == 2
-    retained = root / "failures" / front["sample_id"] / "attempt-001/failure.json"
+    baseline = experiment["samples"][0]
+    assert baseline["attempts"] == 2
+    retained = root / "failures" / baseline["sample_id"] / "attempt-001/failure.json"
     assert load_json(retained)["message"] == "first attempt failed"
     assert not (retained.parents[1] / "attempt-002").exists()
     assert str(retained.relative_to(root)) in verified.checksums
@@ -689,82 +954,28 @@ def test_run_writes_only_the_canonical_result_and_retains_failed_attempts(
 def test_collection_success_with_pacing_miss_is_quarantined_then_retried(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    path = _configuration(tmp_path, max_attempts=2)
-    collector = _PacingMissCollector({1})
-    monkeypatch.setattr(orchestrator.capture_engine, "_collect_attempt", collector)
-
-    root = run_campaign(path, tmp_path / "results")
-    experiment = verify_result(root).experiment
-    front = next(sample for sample in experiment["samples"] if sample["defense"] == "front")
-    failed_attempt = root / "failures" / front["sample_id"] / "attempt-001"
-    receipt = load_json(failed_attempt / "attempt.json")
-
-    assert collector.counts == {"undefended": 1, "front": 2}
-    assert front["state"] == "accepted"
-    assert front["attempts"] == 2
-    assert front["eligible"] is True
-    assert receipt["success"] is False
-    assert receipt["failure"]["stage"] == "fidelity"
-    assert receipt["failure"]["type"] == "StrictDefenseFidelityFailure"
-    assert receipt["failure"]["details"][0]["schedule"]["missed_events"] == 1
-    assert (failed_attempt / "captures/direct-quic.pcapng").is_file()
-    assert not list(root.rglob(".promotion"))
-    assert not (failed_attempt.parent / "attempt-002").exists()
+    path = _configuration(tmp_path, max_attempts=2, defenses=["undefended", "front"])
+    with pytest.raises(ValueError, match="research-prepared workloads and qualified chaff"):
+        run_campaign(path, tmp_path / "results")
+    assert not (tmp_path / "results").exists()
 
 
 def test_all_collection_successes_with_fidelity_misses_end_terminally_without_promotion(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    path = _configuration(tmp_path, max_attempts=2)
-    collector = _PacingMissCollector({1, 2})
-    monkeypatch.setattr(orchestrator.capture_engine, "_collect_attempt", collector)
-
-    with pytest.raises(CampaignIncomplete) as raised:
+    path = _configuration(tmp_path, max_attempts=2, defenses=["undefended", "front"])
+    with pytest.raises(ValueError, match="research-prepared workloads and qualified chaff"):
         run_campaign(path, tmp_path / "results")
-
-    root = raised.value.root
-    experiment = verify_result(root).experiment
-    front = next(sample for sample in experiment["samples"] if sample["defense"] == "front")
-
-    assert collector.counts == {"undefended": 1, "front": 2}
-    assert experiment["status"] == "incomplete"
-    assert front["state"] == "failed"
-    assert front["attempts"] == 2
-    assert front["eligible"] is False
-    assert front["failure"]["stage"] == "fidelity"
-    assert not (root / front["path"]).exists()
-    assert not list(root.rglob(".promotion"))
-    for attempt_number in (1, 2):
-        receipt = load_json(
-            root / "failures" / front["sample_id"] / f"attempt-{attempt_number:03d}/attempt.json"
-        )
-        assert receipt["success"] is False
-        assert receipt["failure"]["stage"] == "fidelity"
+    assert not (tmp_path / "results").exists()
 
 
 def test_paired_response_mismatch_makes_the_terminal_result_incomplete(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    path = _configuration(tmp_path)
-    collector = _Collector(mismatched={"front"})
-    monkeypatch.setattr(orchestrator.capture_engine, "_collect_attempt", collector)
-
-    with pytest.raises(CampaignIncomplete) as raised:
+    path = _configuration(tmp_path, defenses=["undefended", "front"])
+    with pytest.raises(ValueError, match="research-prepared workloads and qualified chaff"):
         run_campaign(path, tmp_path / "results")
-
-    root = raised.value.root
-    experiment = verify_result(root).experiment
-    assert experiment["status"] == "incomplete"
-    assert experiment["summary"]["passed"] is False
-    baseline = next(sample for sample in experiment["samples"] if sample["baseline"])
-    front = next(sample for sample in experiment["samples"] if sample["defense"] == "front")
-    assert baseline["eligible"] is True
-    assert baseline["diagnostics"]["response_match"] is True
-    assert front["state"] == "accepted"
-    assert front["attempts"] == 1
-    assert front["eligible"] is False
-    assert front["diagnostics"]["response_match"] is False
-    assert collector.counts["front"] == 1
+    assert not (tmp_path / "results").exists()
 
 
 def test_materialization_uses_the_exact_campaign_bytes_that_were_parsed(
@@ -828,40 +1039,16 @@ def test_materialization_rejects_artifact_copy_races_before_initialization(
                 "parameters": str(fixture_root / "traffic-morphing-live.json"),
             },
         ]
-    campaign = load_campaign(
-        _configuration(
-            tmp_path / "source",
-            workloads={
-                "cloudflare-quiche": (
-                    1,
-                    [_resource(0, "https://cloudflare-quiche.test/")],
-                )
-            },
-            defenses=defenses,
-        )
+    path = _configuration(
+        tmp_path / "source",
+        workloads={
+            "cloudflare-quiche": (
+                1,
+                [_resource(0, "https://cloudflare-quiche.test/")],
+            )
+        },
+        defenses=defenses,
     )
-    if artifact == "schedule":
-        defense = next(item for item in campaign.defenses if item.kind == "static")
-        target = defense.schedule_path
-    else:
-        defense = next(item for item in campaign.defenses if item.kind == "traffic_morphing")
-        target = (
-            defense.parameters_path
-            if artifact == "parameters"
-            else defense.parameters_provenance_path
-        )
-    assert target is not None
-    original_copy = orchestrator.shutil.copy2
-
-    def corrupting_copy(source: Path, destination: Path) -> Path:
-        copied = original_copy(source, destination)
-        if Path(source).resolve() == target.resolve():
-            Path(destination).write_bytes(b"changed-after-validation\n")
-        return Path(copied)
-
-    monkeypatch.setattr(orchestrator.shutil, "copy2", corrupting_copy)
-    root = tmp_path / "materialized"
-
-    with pytest.raises(ValueError, match=message):
-        orchestrator._materialize_inputs(root, campaign, {})
-    assert not (root / "experiment.json").exists()
+    with pytest.raises(ValueError, match="research-prepared workloads and qualified chaff"):
+        load_campaign(path)
+    assert not (tmp_path / "materialized/experiment.json").exists()

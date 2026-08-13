@@ -766,7 +766,7 @@ def test_walkie_talkie_receipt_rejects_a_nonminimum_lexical_matching() -> None:
         for index, name in enumerate(names)
     }
     artifact, receipt = fit_walkie_talkie(traces)
-    assert artifact["schema_version"] == 5
+    assert artifact["schema_version"] == 6
     assert all(
         candidate["matching_cost_packets"] == candidate["base_matching_cost_packets"] + 2
         for candidate in receipt["candidate_pair_costs"]

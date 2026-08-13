@@ -34,7 +34,7 @@ _WTF_PAD_INFINITY_TOKEN_FORMULAS = {
     "burst": "k_inf = (1 - p_fake) / p_fake * K",
     "gap": "k_inf = (K - mean_burst_length + 1) / (mean_burst_length - 1)",
 }
-_WALKIE_TALKIE_RECEIVER_CONTINUATION = {
+_WALKIE_TALKIE_RECEIVER_CONTINUATION_SCHEMA_FIVE = {
     "allocation_policy": (
         "single-peer-acknowledged-pristine-header-phase-controlled-chaff-stream-whole-cell"
     ),
@@ -98,6 +98,33 @@ _WALKIE_TALKIE_RECEIVER_CONTINUATION = {
         "horizon-reserve-before-further-base-allocation"
     ),
 }
+_WALKIE_TALKIE_RECEIVER_CONTINUATION = {
+    **_WALKIE_TALKIE_RECEIVER_CONTINUATION_SCHEMA_FIVE,
+    "qualified_chaff_manifest_policy": (
+        "distinct-schema-one-qualified-navigation-root-only;exact-lowercase-accept-accept-"
+        "encoding-accept-language-projection;application-request-headers-unchanged"
+    ),
+    "qualified_chaff_response_policy": (
+        "three-independent-five-way-concurrent-unshaped-production-nonblocking-qpack-"
+        "qualifications-derive-compact-status-normalized-content-encoding-body-bytes-body-"
+        "sha256;runtime-complete-responses-must-match-derived-identity;runtime-partial-"
+        "responses-have-null-identity-match-fields"
+    ),
+    "first_cell_prefix_pack_precondition": (
+        "three-independent-production-nonblocking-qpack-runs-after-peer-settings-and-drained-"
+        "h3-control-qpack-warmup-open-one-full-application-root-plus-five-qualified-compact-"
+        "chaff-requests-before-exactly-one-1200-byte-molded-packet-target;all-post-cutoff-stream-"
+        "transmissions-owned-by-sole-target;application-and-maximum-receiver-continuation-reserve-"
+        "horizon+1-chaff-request-streams-contiguous-through-fin;required-chaff-peer-acknowledged-"
+        "through-fin;no-pending-application-required-chaff-or-h3-qpack-stream-output;zero-"
+        "targetless-stream-bytes"
+    ),
+    "qualification_binding_policy": (
+        "raw-sha256-per-workload-binds-chaff-qualification-sidecar-prefix-pack-spec-and-final-"
+        "qualified-chaff-manifest;runtime-requires-exact-final-manifest-and-embedded-prefix-"
+        "spec-hashes"
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -137,6 +164,7 @@ def validate_parameter_artifact(
     expected_qcsd_profile: str | None = None,
     expected_udp_payload_ceiling: int | None = None,
     expected_workloads: Mapping[str, object] | Collection[str] | None = None,
+    qualification_inputs_root: Path | None = None,
 ) -> ParameterArtifact:
     """Validate one runtime parameter file and its concise smoke receipt.
 
@@ -156,6 +184,8 @@ def validate_parameter_artifact(
         receipt_parameter_name=None,
         require_checked_in_fixture=True,
         allow_historical_research_bundle=False,
+        qualification_inputs_root=qualification_inputs_root,
+        frozen_qualification_inputs=False,
     )
 
 
@@ -170,6 +200,7 @@ def validate_frozen_parameter_artifact(
     expected_udp_payload_ceiling: int,
     expected_workloads: Mapping[str, object] | Collection[str],
     allow_historical_research_bundle: bool = False,
+    qualification_inputs_root: Path | None = None,
 ) -> ParameterArtifact:
     """Revalidate a copied artifact using its frozen campaign binding.
 
@@ -194,6 +225,8 @@ def validate_frozen_parameter_artifact(
         receipt_parameter_name=original_parameter_name,
         require_checked_in_fixture=False,
         allow_historical_research_bundle=allow_historical_research_bundle,
+        qualification_inputs_root=qualification_inputs_root,
+        frozen_qualification_inputs=True,
     )
 
 
@@ -209,6 +242,8 @@ def _validate_parameter_artifact(
     receipt_parameter_name: str | None,
     require_checked_in_fixture: bool,
     allow_historical_research_bundle: bool,
+    qualification_inputs_root: Path | None,
+    frozen_qualification_inputs: bool,
 ) -> ParameterArtifact:
     receipt_path = (
         provenance_path
@@ -249,6 +284,8 @@ def _validate_parameter_artifact(
             expected_workloads=expected_workloads,
             parameter_name=expected_parameter_name,
             allow_historical=allow_historical_research_bundle,
+            qualification_inputs_root=qualification_inputs_root,
+            frozen_qualification_inputs=frozen_qualification_inputs,
         )
         return ParameterArtifact(
             path=parameter_path,
@@ -284,6 +321,11 @@ def _validate_parameter_artifact(
         )
     if not allow_reviewed_fixture:
         raise ValueError("reviewed smoke parameter fixtures are accepted only by smoke campaigns")
+    if reviewed_kind == "walkie_talkie":
+        raise ValueError(
+            "reviewed walkie_talkie schema-five fixtures are historical test oracles only; "
+            "current runtime campaigns require a sealed schema-six bundle"
+        )
     if require_checked_in_fixture:
         _require_checked_in_fixture(parameter_path, receipt_path)
 
@@ -321,7 +363,7 @@ def _validate_parameter_artifact(
         raise ValueError("expected QCSD profile and UDP ceiling disagree")
 
     _validate_reviewed_workload_binding(receipt, str(kind), expected_workloads, receipt_path)
-    expected_schema_version = 5 if kind == "walkie_talkie" else 2
+    expected_schema_version = 2
     _validate_runtime_shape(
         parameter,
         str(kind),
@@ -543,7 +585,7 @@ def _validate_walkie_talkie(
     profiles = parameter.get("profiles")
     expected_matching_algorithm = (
         "minimum-base-symmetric-mold-padding-cost-one-to-one"
-        if expected_schema_version == 5
+        if expected_schema_version in {5, 6}
         else "minimum-cost-one-to-one"
     )
     receiver_continuation = parameter.get("receiver_continuation")
@@ -551,14 +593,57 @@ def _validate_walkie_talkie(
         parameter.get("packet_size") != ceiling
         or parameter.get("matching_algorithm") != expected_matching_algorithm
         or (
-            expected_schema_version == 5
-            and receiver_continuation != _WALKIE_TALKIE_RECEIVER_CONTINUATION
+            expected_schema_version in {5, 6}
+            and receiver_continuation
+            != (
+                _WALKIE_TALKIE_RECEIVER_CONTINUATION_SCHEMA_FIVE
+                if expected_schema_version == 5
+                else _WALKIE_TALKIE_RECEIVER_CONTINUATION
+            )
         )
         or (expected_schema_version == 2 and "receiver_continuation" in parameter)
         or not isinstance(profiles, list)
         or not profiles
     ):
         raise ValueError(f"walkie_talkie parameter runtime shape is invalid: {receipt_path}")
+    bindings = parameter.get("qualification_bindings")
+    if expected_schema_version == 6:
+        if not isinstance(bindings, list) or not bindings:
+            raise ValueError(
+                f"walkie_talkie schema-six qualification bindings are missing: {receipt_path}"
+            )
+        binding_ids: list[str] = []
+        for value in bindings:
+            if not isinstance(value, Mapping) or set(value) != {
+                "workload_id",
+                "chaff_qualification_sidecar_sha256",
+                "prefix_pack_spec_sha256",
+                "qualified_chaff_manifest_sha256",
+            }:
+                raise ValueError(
+                    f"walkie_talkie qualification binding is malformed: {receipt_path}"
+                )
+            workload_id = value["workload_id"]
+            if (
+                not isinstance(workload_id, str)
+                or not workload_id
+                or any(
+                    not isinstance(value[field], str) or not _lower_hex_digest(value[field])
+                    for field in (
+                        "chaff_qualification_sidecar_sha256",
+                        "prefix_pack_spec_sha256",
+                        "qualified_chaff_manifest_sha256",
+                    )
+                )
+            ):
+                raise ValueError(f"walkie_talkie qualification binding is invalid: {receipt_path}")
+            binding_ids.append(workload_id)
+        if len(binding_ids) != len(set(binding_ids)):
+            raise ValueError(f"walkie_talkie qualification bindings are duplicated: {receipt_path}")
+    elif "qualification_bindings" in parameter:
+        raise ValueError(
+            f"historical walkie_talkie artifact contains schema-six bindings: {receipt_path}"
+        )
     real_ids: list[str] = []
     decoy_ids: list[str] = []
     for profile in profiles:
@@ -578,7 +663,7 @@ def _validate_walkie_talkie(
             raise ValueError(f"walkie_talkie profile identity is invalid: {receipt_path}")
         real_ids.append(real)
         decoy_ids.append(decoy)
-        if expected_schema_version == 5:
+        if expected_schema_version in {5, 6}:
             first = bursts[0]
             first_outgoing = first.get("outgoing") if isinstance(first, Mapping) else None
             if type(first_outgoing) is not int or first_outgoing <= 0:

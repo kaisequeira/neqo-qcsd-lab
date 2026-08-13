@@ -275,7 +275,7 @@ def _sealed_result(tmp_path: Path) -> Path:
         "profile: live\n"
         "workloads:\n  site: 1\n"
         "request_policies:\n  - as-defined\n"
-        "defenses:\n  - undefended\n  - front\n"
+        "defenses:\n  - undefended\n"
         "limits:\n"
         "  timeout_seconds: 1\n"
         "  capture_seconds: 2\n"

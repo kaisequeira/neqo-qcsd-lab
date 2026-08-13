@@ -218,12 +218,40 @@ def _offload_metadata(interface: str) -> dict[str, Any]:
 def _collect_attempt(
     attempt: Path,
     manifest: Path,
-    workload_id: str,
-    defense: Defense,
-    seed: int,
-    context: CaptureContext,
+    chaff_manifest_or_workload_id: Path | str | None,
+    workload_id_or_defense: str | Defense,
+    defense_or_seed: Defense | int,
+    seed_or_context: int | CaptureContext,
+    context: CaptureContext | None = None,
+    *,
+    application_workload_source: Path | None = None,
 ) -> dict[str, Any]:
     """Capture and validate one Neqo run without promoting or sealing it."""
+
+    # The explicit chaff path was added without invalidating the narrow
+    # six-argument collector seam used by historical/read-only fixtures.
+    if context is None:
+        chaff_manifest: Path | None = None
+        workload_id = str(chaff_manifest_or_workload_id)
+        defense = workload_id_or_defense
+        seed = defense_or_seed
+        context = seed_or_context
+    else:
+        chaff_manifest = (
+            chaff_manifest_or_workload_id
+            if isinstance(chaff_manifest_or_workload_id, Path)
+            else None
+        )
+        workload_id = str(workload_id_or_defense)
+        defense = defense_or_seed
+        seed = seed_or_context
+    if not isinstance(defense, Defense) or type(seed) is not int or not hasattr(context, "limits"):
+        raise TypeError("invalid capture-attempt arguments")
+    if defense.baseline:
+        if chaff_manifest is not None or application_workload_source is not None:
+            raise ValueError("baseline capture forbids qualified chaff inputs")
+    elif chaff_manifest is None or application_workload_source is None:
+        raise ValueError("every defended capture requires prepared source and qualified chaff")
 
     if (
         defense.parameters_path is not None
@@ -277,7 +305,16 @@ def _collect_attempt(
     try:
         _wait_for_capture_start(process, capture_log)
         client, runner_timed_out, runner_host_timeout_seconds = _run_neqo_client(
-            _client_command(manifest, workload_id, defense, seed, context, neqo),
+            _client_command(
+                manifest,
+                chaff_manifest,
+                workload_id,
+                defense,
+                seed,
+                context,
+                neqo,
+                application_workload_source=application_workload_source,
+            ),
             log=diagnostics / "neqo-client.log",
             configured_timeout_seconds=context.limits.timeout_seconds,
         )
@@ -317,6 +354,8 @@ def _collect_attempt(
         _validate_run_binding(
             run_data,
             manifest=manifest,
+            chaff_manifest=chaff_manifest,
+            application_workload_source=application_workload_source,
             workload_id=workload_id,
             defense=defense,
             seed=seed,
@@ -531,6 +570,8 @@ def _validate_run_binding(
     run_data: dict[str, Any],
     *,
     manifest: Path,
+    chaff_manifest: Path | None = None,
+    application_workload_source: Path | None = None,
     workload_id: str,
     defense: Defense,
     seed: int,
@@ -551,6 +592,32 @@ def _validate_run_binding(
         or resolved_defense.get("kind") != defense.kind
     ):
         raise ValueError("runner receipt does not match the frozen sample inputs")
+    expected_chaff_hash = (
+        None if defense.baseline or chaff_manifest is None else sha256_file(chaff_manifest)
+    )
+    if defense.baseline:
+        if chaff_manifest is not None or application_workload_source is not None:
+            raise ValueError("baseline runner binding forbids qualified chaff inputs")
+    elif chaff_manifest is None or application_workload_source is None:
+        raise ValueError("defended runner binding requires prepared source and qualified chaff")
+    if defense.baseline and (
+        run_data.get("chaff_manifest_hash_sha256") is not None
+        or run_data.get("chaff_responses", []) != []
+    ):
+        raise ValueError("baseline runner receipt contains unexpected chaff inputs")
+    if (
+        chaff_manifest is not None
+        and run_data.get("chaff_manifest_hash_sha256") != expected_chaff_hash
+    ):
+        raise ValueError("runner chaff-manifest receipt does not match the frozen sample inputs")
+    if chaff_manifest is not None:
+        if application_workload_source is None or run_data.get(
+            "application_workload_source_hash_sha256"
+        ) != sha256_file(application_workload_source):
+            raise ValueError("runner prepared application-source receipt is invalid")
+        _validate_chaff_response_receipts(run_data, chaff_manifest)
+    elif run_data.get("application_workload_source_hash_sha256") is not None:
+        raise ValueError("runner receipt contains an unexpected prepared application source")
     if defense.kind in {"traffic_morphing", "walkie_talkie"} and (
         resolved_defense.get("workload_id") != workload_id
     ):
@@ -569,6 +636,132 @@ def _validate_run_binding(
         )
     elif run_data.get("defense_parameters") is not None:
         raise ValueError("runner receipt contains unexpected defense parameters")
+
+
+def _validate_chaff_response_receipts(run_data: dict[str, Any], chaff_manifest_path: Path) -> None:
+    """Recompute every runtime chaff identity claim from the frozen manifest."""
+
+    manifest = load_json(chaff_manifest_path)
+    resources = manifest.get("resources")
+    receipts = run_data.get("chaff_responses")
+    if not isinstance(resources, list) or len(resources) != 1 or not isinstance(receipts, list):
+        raise ValueError("runner chaff response receipt has an invalid schema")
+    resource = resources[0]
+    if not isinstance(resource, dict):
+        raise ValueError("frozen chaff manifest resource is malformed")
+    qualification = resource.get("chaff_qualification")
+    if not isinstance(qualification, dict):
+        raise ValueError("frozen chaff manifest lacks qualification identity")
+    expected = qualification.get("expected_response")
+    if not isinstance(expected, dict):
+        raise ValueError("frozen chaff manifest lacks expected response identity")
+    match_fields = (
+        "status_match",
+        "content_encoding_match",
+        "body_bytes_match",
+        "body_sha256_match",
+        "identity_verified",
+    )
+    request_ids: set[int] = set()
+    for receipt in receipts:
+        if not isinstance(receipt, dict) or set(receipt) != {
+            "resource_id",
+            "request_id",
+            "url",
+            "request_headers",
+            "request_stream_bytes",
+            "expected_request_stream_bytes",
+            "response_headers",
+            "status",
+            "content_encoding",
+            "bytes",
+            "body_sha256",
+            "complete",
+            "status_match",
+            "content_encoding_match",
+            "body_bytes_match",
+            "body_sha256_match",
+            "identity_verified",
+            "outcome",
+        }:
+            raise ValueError("runner chaff response receipt is malformed")
+        request_id = receipt.get("request_id")
+        if type(request_id) is not int or request_id < 0 or request_id in request_ids:
+            raise ValueError("runner chaff response request identity is invalid")
+        request_ids.add(request_id)
+        if (
+            receipt.get("resource_id") != resource.get("id")
+            or receipt.get("url") != resource.get("url")
+            or receipt.get("request_headers") != resource.get("headers")
+            or receipt.get("request_stream_bytes") != qualification.get("request_stream_bytes")
+            or receipt.get("expected_request_stream_bytes")
+            != qualification.get("request_stream_bytes")
+            or not isinstance(receipt.get("response_headers"), list)
+            or any(
+                not isinstance(header, list)
+                or len(header) != 2
+                or any(not isinstance(item, str) for item in header)
+                for header in receipt["response_headers"]
+            )
+            or type(receipt.get("bytes")) is not int
+            or receipt["bytes"] < 0
+        ):
+            raise ValueError("runner chaff response does not match the qualified request")
+        raw_statuses = [
+            value for name, value in receipt["response_headers"] if name.lower() == ":status"
+        ]
+        raw_encodings = [
+            value
+            for name, value in receipt["response_headers"]
+            if name.lower() == "content-encoding"
+        ]
+        if raw_statuses:
+            if len(raw_statuses) != 1:
+                raise ValueError("runner chaff response headers contradict qualified status")
+            try:
+                raw_status = int(raw_statuses[0])
+            except ValueError:
+                raise ValueError(
+                    "runner chaff response headers contradict qualified status"
+                ) from None
+            if str(raw_status) != raw_statuses[0] or raw_status != expected.get("status"):
+                raise ValueError("runner chaff response headers contradict qualified status")
+        elif receipt.get("complete") is True:
+            raise ValueError("completed chaff response lacks raw qualified status evidence")
+        if raw_encodings:
+            normalized_encodings = [value.strip().lower() for value in raw_encodings]
+            if (
+                len(normalized_encodings) != 1
+                or "," in normalized_encodings[0]
+                or normalized_encodings[0] != expected.get("content_encoding")
+            ):
+                raise ValueError(
+                    "runner chaff response headers contradict qualified content encoding"
+                )
+        elif receipt["response_headers"] and expected.get("content_encoding") != "identity":
+            # Once any final response headers have been observed, absence of
+            # Content-Encoding has the wire meaning identity.
+            raise ValueError("runner chaff response headers contradict qualified content encoding")
+        if receipt.get("complete") is True:
+            if (
+                receipt.get("status") != expected.get("status")
+                or receipt.get("content_encoding") != expected.get("content_encoding")
+                or receipt.get("bytes") != expected.get("body_bytes")
+                or receipt.get("body_sha256") != expected.get("body_sha256")
+                or any(receipt.get(field) is not True for field in match_fields)
+                or receipt.get("outcome") != "succeeded"
+            ):
+                raise ValueError("completed chaff response contradicts its qualified identity")
+        elif (
+            receipt.get("complete") is not False
+            or receipt.get("status") is not None
+            or receipt.get("content_encoding") is not None
+            or receipt.get("body_sha256") is not None
+            or receipt["bytes"] > expected.get("body_bytes")
+            or any(receipt.get(field) is not None for field in match_fields)
+            or receipt.get("outcome") not in {"incomplete", "reset", "endpoint_closed"}
+        ):
+            raise ValueError("partial chaff response contains an invalid identity claim")
 
 
 def _copy_defense_parameter_artifacts(defense: Defense, neqo: Path) -> None:
@@ -624,12 +817,39 @@ def _wait_for_capture_start(
 
 def _client_command(
     manifest: Path,
-    workload_id: str,
-    defense: Defense,
-    seed: int,
-    context: CaptureContext,
-    output: Path,
+    chaff_manifest_or_workload_id: Path | str | None,
+    workload_id_or_defense: str | Defense,
+    defense_or_seed: Defense | int,
+    seed_or_context: int | CaptureContext,
+    context_or_output: CaptureContext | Path,
+    output: Path | None = None,
+    *,
+    application_workload_source: Path | None = None,
 ) -> list[str]:
+    if output is None:
+        chaff_manifest: Path | None = None
+        workload_id = str(chaff_manifest_or_workload_id)
+        defense = workload_id_or_defense
+        seed = defense_or_seed
+        context = seed_or_context
+        output = context_or_output if isinstance(context_or_output, Path) else None
+    else:
+        chaff_manifest = (
+            chaff_manifest_or_workload_id
+            if isinstance(chaff_manifest_or_workload_id, Path)
+            else None
+        )
+        workload_id = str(workload_id_or_defense)
+        defense = defense_or_seed
+        seed = seed_or_context
+        context = context_or_output
+    if (
+        not isinstance(defense, Defense)
+        or type(seed) is not int
+        or output is None
+        or not hasattr(context, "limits")
+    ):
+        raise TypeError("invalid client-command arguments")
     command = [
         NEQO_CLIENT,
         "run",
@@ -647,7 +867,16 @@ def _client_command(
         context.request_policy,
     ]
     if not defense.baseline:
-        command += ["--chaff-manifest", str(manifest)]
+        if chaff_manifest is None or application_workload_source is None:
+            raise ValueError("every defended run requires prepared source and qualified chaff")
+        command += [
+            "--application-workload-source",
+            str(application_workload_source),
+            "--chaff-manifest",
+            str(chaff_manifest),
+        ]
+    elif chaff_manifest is not None or application_workload_source is not None:
+        raise ValueError("baseline run forbids qualified chaff inputs")
     runner_kind = RUNNER_KIND_BY_KIND.get(defense.kind, defense.kind)
     command += ["--profile", context.qcsd_profile, "--defense", runner_kind]
     if defense.kind == "static":

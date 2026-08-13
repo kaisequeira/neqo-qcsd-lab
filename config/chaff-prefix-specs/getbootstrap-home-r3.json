@@ -1,0 +1,24 @@
+{
+  "artifact_type": "qcsd-walkie-talkie-prefix-pack-spec",
+  "max_stream_data_excess": 1000,
+  "maximum_receiver_continuation_reserve_horizon": 1,
+  "numeric_profile": {
+    "bursts": [
+      {
+        "incoming": 16,
+        "outgoing": 1
+      },
+      {
+        "incoming": 112,
+        "outgoing": 3
+      }
+    ],
+    "packet_size": 1200
+  },
+  "numeric_profile_sha256": "b6c4a82286e167774a238441db16a5bc466644397551b77a772fef406c26dba1",
+  "packet_size": 1200,
+  "required_chaff_survivors": 2,
+  "schema_version": 1,
+  "source_walkie_talkie_artifact_sha256": "16dc343e233f7531277d96fd914d177202e7a508a50f7becdf2d8c0102b8446c",
+  "workload_id": "getbootstrap-home-r3"
+}

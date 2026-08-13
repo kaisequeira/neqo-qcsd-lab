@@ -1,0 +1,28 @@
+{
+  "artifact_type": "qcsd-walkie-talkie-prefix-pack-spec",
+  "max_stream_data_excess": 1000,
+  "maximum_receiver_continuation_reserve_horizon": 1,
+  "numeric_profile": {
+    "bursts": [
+      {
+        "incoming": 13,
+        "outgoing": 1
+      },
+      {
+        "incoming": 47,
+        "outgoing": 2
+      },
+      {
+        "incoming": 17,
+        "outgoing": 1
+      }
+    ],
+    "packet_size": 1200
+  },
+  "numeric_profile_sha256": "88098f7a4f5eb545fc3f08e6f77098ad6fb48db16c6d6bb77839295d772e45ef",
+  "packet_size": 1200,
+  "required_chaff_survivors": 2,
+  "schema_version": 1,
+  "source_walkie_talkie_artifact_sha256": "16dc343e233f7531277d96fd914d177202e7a508a50f7becdf2d8c0102b8446c",
+  "workload_id": "cloudflare-quiche-r3"
+}

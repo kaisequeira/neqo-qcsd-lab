@@ -143,7 +143,13 @@ def test_receipt_tamper_and_runtime_shape_are_rejected(tmp_path, monkeypatch):
     receipt["parameter_file"]["sha256"] = sha256_file(parameter)
     atomic_json(provenance, receipt)
     with pytest.raises(ValueError, match="runtime shape"):
-        validate_parameter_artifact(parameter, allow_reviewed_fixture=True)
+        parameters._validate_runtime_shape(
+            value,
+            "walkie_talkie",
+            1_200,
+            parameter,
+            expected_schema_version=5,
+        )
 
 
 def test_walkie_talkie_schema_five_requires_exact_receiver_continuation() -> None:
@@ -275,7 +281,10 @@ def test_walkie_talkie_live_fixture_has_exact_receiver_continuation_derivation()
 
     assert value["schema_version"] == 5
     assert value["generated_by"] == "qcsd_lab.walkietalkie 0.7.2"
-    assert value["receiver_continuation"] == parameters._WALKIE_TALKIE_RECEIVER_CONTINUATION
+    assert (
+        value["receiver_continuation"]
+        == parameters._WALKIE_TALKIE_RECEIVER_CONTINUATION_SCHEMA_FIVE
+    )
     for profile, (bursts, cost, scheduled_bytes) in zip(value["profiles"], expected, strict=True):
         assert [(burst["outgoing"], burst["incoming"]) for burst in profile["bursts"]] == bursts
         assert profile["matching_cost_packets"] == cost
@@ -288,13 +297,14 @@ def test_research_1200_receipt_rejects_a_1201_byte_parameter_artifact(tmp_path, 
     receipt["qcsd_profile"] = "research-1200"
     atomic_json(provenance, receipt)
 
-    validate_parameter_artifact(
-        parameter,
-        expected_kind="walkie_talkie",
-        allow_reviewed_fixture=True,
-        expected_qcsd_profile="research-1200",
-        expected_udp_payload_ceiling=1200,
-    )
+    with pytest.raises(ValueError, match="historical test oracles only"):
+        validate_parameter_artifact(
+            parameter,
+            expected_kind="walkie_talkie",
+            allow_reviewed_fixture=True,
+            expected_qcsd_profile="research-1200",
+            expected_udp_payload_ceiling=1200,
+        )
 
     value = json.loads(parameter.read_text(encoding="utf-8"))
     value["packet_size"] = 1201
@@ -302,12 +312,12 @@ def test_research_1200_receipt_rejects_a_1201_byte_parameter_artifact(tmp_path, 
     receipt["parameter_file"]["sha256"] = sha256_file(parameter)
     atomic_json(provenance, receipt)
     with pytest.raises(ValueError, match="runtime shape"):
-        validate_parameter_artifact(
+        parameters._validate_runtime_shape(
+            value,
+            "walkie_talkie",
+            1_200,
             parameter,
-            expected_kind="walkie_talkie",
-            allow_reviewed_fixture=True,
-            expected_qcsd_profile="research-1200",
-            expected_udp_payload_ceiling=1200,
+            expected_schema_version=5,
         )
 
 
@@ -327,41 +337,20 @@ def test_named_profiles_can_be_bound_to_campaign_workloads():
         )
 
 
-def test_smoke_walkie_talkie_binds_exact_workload_hashes_and_allows_extra_identities(
-    tmp_path, monkeypatch
-):
+def test_reviewed_walkie_talkie_fixture_is_historical_only_even_when_bound(tmp_path, monkeypatch):
     parameter, provenance = _copy_fixture(tmp_path, monkeypatch, "walkie-talkie-live.json")
     bindings = _controlled_workload_bindings(tmp_path, ["cloudflare-quiche", "chromium-quic-page"])
     receipt = json.loads(provenance.read_text(encoding="utf-8"))
     receipt["workload_sha256"] = bindings
     atomic_json(provenance, receipt)
-    artifact = validate_parameter_artifact(
-        parameter,
-        expected_kind="walkie_talkie",
-        allow_reviewed_fixture=True,
-        expected_qcsd_profile="live",
-        expected_udp_payload_ceiling=1200,
-        expected_workloads=bindings,
-    )
-    assert artifact.input_policy == REVIEWED_PARAMETER_INPUT_POLICY
-
-    mismatched = {**bindings, "chromium-quic-page": "f" * 64}
-    with pytest.raises(ValueError, match="exact campaign workload SHA-256"):
+    with pytest.raises(ValueError, match="historical test oracles only"):
         validate_parameter_artifact(
             parameter,
             expected_kind="walkie_talkie",
             allow_reviewed_fixture=True,
             expected_qcsd_profile="live",
             expected_udp_payload_ceiling=1200,
-            expected_workloads=mismatched,
-        )
-
-    with pytest.raises(ValueError, match="require campaign workload SHA-256 bindings"):
-        validate_parameter_artifact(
-            parameter,
-            expected_kind="walkie_talkie",
-            allow_reviewed_fixture=True,
-            expected_workloads=set(bindings),
+            expected_workloads=bindings,
         )
 
 
@@ -375,10 +364,12 @@ def test_walkie_talkie_rejects_cross_side_duplicate_identity(tmp_path, monkeypat
     atomic_json(provenance, receipt)
 
     with pytest.raises(ValueError, match="profiles are duplicated"):
-        validate_parameter_artifact(
+        parameters._validate_runtime_shape(
+            value,
+            "walkie_talkie",
+            1_200,
             parameter,
-            expected_kind="walkie_talkie",
-            allow_reviewed_fixture=True,
+            expected_schema_version=5,
         )
 
 

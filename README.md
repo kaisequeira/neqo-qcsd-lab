@@ -18,7 +18,7 @@ Docker is required for every public command. The Neqo source is the
 
 ## Commands
 
-The public surface is deliberately limited to these nine forms.
+The public surface is deliberately limited to the forms documented below.
 
 ### `build`
 
@@ -51,6 +51,37 @@ Preparation refuses to overwrite an existing ID. Chromium is not used during
 measurement. There is no runtime header-policy switch: the exact safe headers
 stored on each resource are the request input.
 
+### `derive-chaff-prefix-specs`
+
+```shell
+./qcsd-lab derive-chaff-prefix-specs
+```
+
+Creates one atomic, create-only directory containing the six standalone
+prefix-pack specifications. The specifications are derived only from the exact
+sealed schema-5 Walkie-Talkie numeric profiles; they do not consume response
+qualification evidence or a schema-6 artifact. The source artifact must have
+its sealed raw hash and `config/chaff-prefix-specs/` must not already exist.
+
+### `qualify-chaff`
+
+```shell
+./qcsd-lab qualify-chaff
+```
+
+Qualifies all six frozen workloads as one create-only transaction. For each
+workload, three independent unshaped runs issue five concurrent compact GETs
+using the exact existing `Accept`, `Accept-Encoding`, and `Accept-Language`
+values in their original order and derive one stable response identity. Three
+separate production prefix-pack runs then prove the first-cell request-prefix
+precondition against the standalone numeric specification. The command embeds
+the exact receipts in each sidecar and publishes all six files together under
+`config/chaff-qualification-store/v1/`; any pre-publication validation or
+network failure leaves that canonical directory absent. A failure after the
+atomic rename can leave a complete canonical directory that requires explicit
+audit. It requires the exact clean Lab/Neqo checkout and executable
+embedded in the preparation image and does not use fitting or campaign samples.
+
 ### `run`
 
 ```shell
@@ -62,13 +93,16 @@ new result directory. A run is successful only when every planned sample is
 accepted and eligible. A terminal incomplete run is still retained and sealed
 for diagnosis.
 
-The checked-in `smoke.yml` is a post-fit, 14-sample external evaluation:
+The checked-in `smoke.yml` defines the post-fit, 14-sample external evaluation:
 Cloudflare QUIC and Bootstrap Introduction, one independent visit
 each, the `as-defined` request policy, and all seven current defence modes. It
 uses `research-1200`, the fixed seed `2026081204`, the mechanical
-`static-control-1200.csv`, and the one sealed production bundle under
-`artifacts/research-1200/`. The bundle was derived from the sealed 120-sample
-fitting result and must verify before this independent smoke can run.
+`static-control-1200.csv`, and the one create-only production bundle under
+`artifacts/research-1200/`. The contract-5 predecessor is archived read-only at
+`artifacts/research-1200-superseded-schema5-0a141768/`; it is verification-only
+and rejected by current preflight. The canonical schema-6 bundle is not yet
+published and must be generated from the sealed 120-sample fitting result and
+verify before this independent smoke can run.
 
 ### `resume`
 
@@ -102,9 +136,10 @@ cooldown before the first resumed request.
 
 For YAML, `verify` is a non-executing preflight. It validates workload and
 parameter files and prints the sample count and exact seeded execution order.
-Before production fitting, verifying the checked-in `smoke.yml` fails because
-its required sealed research bundle does not yet exist; that is its expected
-pre-fit state, not permission to substitute the reviewed live fixtures.
+Before schema-6 publication, verifying the checked-in `smoke.yml` fails because
+its required current research bundle and qualification inputs do not yet
+exist; that is its expected state, not permission to substitute a reviewed or
+historical schema-5 fixture.
 
 For a result directory, `verify` checks the evidence index, exact authoritative
 file set, every file hash, the experiment schema, frozen-input fingerprint,
@@ -189,9 +224,11 @@ Starts two controlled local HTTP/3 servers and runs the direct-capture
 acceptance tests. This is the bounded networking gate for capture startup and
 tail coverage, exact endpoint filtering, interface-offload checks, UDP-payload
 ceiling enforcement, runner/PCAP reconciliation, and overlapping connections
-to distinct origins within one sample. It exercises all defended runtime modes
-with controlled workload-bound fixtures and is the defended **pre-fit** gate;
-it does not consume public fitting visits or create research artifacts.
+to distinct origins within one sample. It exercises the canonical sealed
+baseline workflow plus a direct, explicitly nonauthoritative schema-6
+Walkie-Talkie wire check with test-local A/R/C inputs. It is not evidence for
+the six-workload qualification, does not authorize a campaign artifact, and
+does not consume public fitting visits or create research artifacts.
 
 ## Profiles
 
@@ -305,10 +342,14 @@ acknowledgements before any incoming allocation is due. In addition, every
 required preprovisioned chaff request's STREAM frames through FIN must fit in
 the residual Normal-priority STREAM-data budget after higher-priority due
 application frames at the positive outgoing component that starts its horizon.
-The current fitting inputs do not expose HTTP/3/QPACK request-prefix sizes or
-transport STREAM-frame budgets, so this request-prefix fit is a prepared
-precondition rather than a condition proved by the fitter or Lab campaign
-preflight. Reserved candidates are excluded from ordinary base
+The fitter still does not infer HTTP/3/QPACK request-prefix sizes or transport
+STREAM-frame budgets from campaign samples. Instead, each schema-6 workload
+binding requires three independent production prefix-pack transcripts that
+prove the outgoing application/request-control fit and required compact chaff
+requests through FIN and chaff peer acknowledgement for its exact numeric mould
+and continuation horizon. Those qualification bytes are runtime-only
+falsification evidence and are explicitly excluded from fitting. Reserved
+candidates are excluded from ordinary base
 allocation, and their exact capacity is subtracted from ordinary base capacity
 availability, until their corresponding continuation is released or the
 session or endpoint ends. If a reserve is lost first, an equivalent
@@ -360,14 +401,16 @@ the corresponding retained acknowledged reserve, which is still untouched
 with requested, advertised, and consumed all equal to zero. A split or
 ledger-inconsistent positive base tail is not eligible.
 
-This liveness contract is conditional on the prepared stream having at least
+This liveness contract is conditional on the independently qualified stream having at least
 1200 exact additional available bytes and its first `prior_requested + 1200`
-raw response bytes being consumable. The fitting inputs contain
-application-stream observations; they do not observe chaff preprovisioning,
-peer acknowledgement, reservation, or runtime-created response prefixes, so
-they cannot prove those runtime conditions or a general HTTP/3 property. It
-is explicitly scoped to the frozen prepared cohort and reviewed live fixture,
-and a runtime violation is fail-closed and fidelity-ineligible.
+raw response bytes being consumable. The three response qualifications establish
+the compact response's stable full-body identity and length; the prefix-pack
+qualifications establish the outgoing request/control fit and required chaff
+FIN acknowledgement. Parser consumability remains a runtime fail-closed
+precondition, and neither evidence layer enters the fitted sample corpus or
+establishes a general HTTP/3 property. The controlled wire smoke is explicitly
+nonauthoritative and excluded from fitting. A runtime violation is fail-closed
+and fidelity-ineligible.
 Source-envelope overflow likewise fails the strict fidelity gate. No
 FIN-residual reallocation or fragment-coalescence claim is part of this
 contract. Reported runtime padding cost and scheduled bytes still include the
@@ -608,6 +651,11 @@ active sequence is:
 ./qcsd-lab test live
 ./qcsd-lab run config/campaigns/fitting.yml
 ./qcsd-lab verify results/research-fitting-1200/<run-id>
+./qcsd-lab verify artifacts/research-1200-superseded-schema5-0a141768
+./qcsd-lab derive-chaff-prefix-specs
+# Commit the final qualification code, Neqo gitlink, and six specs as clean Q.
+./qcsd-lab build
+./qcsd-lab qualify-chaff
 ./qcsd-lab fit results/research-fitting-1200/<run-id>
 ./qcsd-lab verify artifacts/research-1200
 ./qcsd-lab verify config/campaigns/smoke.yml
@@ -616,8 +664,10 @@ active sequence is:
 ./qcsd-lab analyze results/research-smoke-1200/<run-id>
 ```
 
-`test live` is the bounded defended local gate. The first public-Internet
-research capture is fitting, not smoke. The checked-in smoke then evaluates
+`test live` is a bounded baseline/direct-wire mechanics gate, not a substitute
+for the exact-six qualification transaction. The first public-Internet
+research capture is fitting, not smoke. After prefix-spec derivation and
+qualification, the checked-in smoke evaluates
 the fitted defenses on new Internet visits and is verified and analyzed as an
 independent post-fit result. This goal does **not** execute the separately
 authorized 42-sample rehearsal or final campaign. The eventual

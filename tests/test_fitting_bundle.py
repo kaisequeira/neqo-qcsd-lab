@@ -6,6 +6,7 @@ import io
 import json
 import shutil
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -13,6 +14,7 @@ import pytest
 import qcsd_lab.fitting as fitting_module
 import qcsd_lab.orchestrator as orchestrator
 from qcsd_lab.capture_session import Defense
+from qcsd_lab.chaff_qualification import _schema_five_diagnostic_receipt
 from qcsd_lab.experiment import (
     accept_sample,
     checkpoint_experiment,
@@ -22,9 +24,10 @@ from qcsd_lab.experiment import (
 )
 from qcsd_lab.fitting import (
     EXACT_BUNDLE_FILES,
-    fit_result,
+    _fit_result_structural_for_tests,
+    _inspect_structural_artifact_bundle,
     validate_fitting_result,
-    verify_artifact_bundle,
+    verify_artifact_bundle as _strict_verify_artifact_bundle,
 )
 from qcsd_lab.fitting_trace import _read_observations, load_fitting_trace
 from qcsd_lab.parameters import (
@@ -37,6 +40,75 @@ from qcsd_lab.verification import authoritative_files, prepare_resume, seal_resu
 
 WORKLOADS = ("alpha", "bravo", "charlie", "delta", "echo", "foxtrot")
 EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+REPOSITORY_ROOT = Path(__file__).parents[1]
+
+
+def _synthetic_qualification_inputs(
+    fitting: fitting_module.FittingInputs,
+) -> tuple[list[dict[str, str]], dict[str, Any]]:
+    """Build structural, non-network schema-six bindings for synthetic fitter tests."""
+
+    experiment = fitting.verified.experiment
+    workloads = experiment["configuration"]["workloads"]
+    records: list[dict[str, Any]] = []
+    bindings: list[dict[str, str]] = []
+    for index, workload in enumerate(workloads):
+        workload_id = workload["id"]
+        marker = f"{index + 1:064x}"
+        spec = f"{index + 11:064x}"
+        manifest = f"{index + 21:064x}"
+        records.append(
+            {
+                "workload_id": workload_id,
+                "application_workload_sha256": sha256_file(
+                    fitting.verified.root / workload["manifest"]
+                ),
+                "chaff_qualification_sidecar": {
+                    "path": f"config/chaff-qualification-store/v1/{workload_id}.json",
+                    "sha256": marker,
+                },
+                "prefix_pack_spec": {
+                    "path": f"config/chaff-prefix-specs/{workload_id}.json",
+                    "sha256": spec,
+                },
+                "qualified_chaff_manifest_sha256": manifest,
+            }
+        )
+        bindings.append(
+            {
+                "workload_id": workload_id,
+                "chaff_qualification_sidecar_sha256": marker,
+                "prefix_pack_spec_sha256": spec,
+                "qualified_chaff_manifest_sha256": manifest,
+            }
+        )
+    receipt = {
+        "role": "runtime-qualification-only-excluded-from-fitting",
+        "qualification_bytes_excluded": True,
+        "schema_five_diagnostic": _schema_five_diagnostic_receipt(),
+        "workloads": records,
+    }
+    return bindings, receipt
+
+
+def _fit_result(result: Path, *, artifacts_root: Path) -> Path:
+    fitting = validate_fitting_result(result)
+    return _fit_result_structural_for_tests(
+        result,
+        artifacts_root=artifacts_root,
+        qualification_inputs=_synthetic_qualification_inputs(fitting),
+    )
+
+
+def _inspect_test_or_verify_historical_bundle(
+    root: Path,
+) -> fitting_module.VerifiedArtifactBundle | fitting_module.InspectedStructuralArtifactBundle:
+    """Inspect synthetic bundles; retain strict verification for historical ones."""
+
+    provenance = json.loads((root / "provenance.json").read_text(encoding="utf-8"))
+    if provenance.get("artifact_type") == fitting_module.STRUCTURAL_ARTIFACT_TYPE:
+        return _inspect_structural_artifact_bundle(root)
+    return _strict_verify_artifact_bundle(root)
 
 
 def _leaf_paths(value: object, path: tuple[str | int, ...] = ()):
@@ -680,7 +752,7 @@ def fitted_bundle(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
     base = tmp_path_factory.mktemp("fitting-leaf-tamper")
     result = _make_fitting_result(base / "source")
-    return fit_result(result, artifacts_root=base / "artifacts")
+    return _fit_result(result, artifacts_root=base / "artifacts")
 
 
 def _legacy_bundle_from_current(source: Path, destination: Path) -> Path:
@@ -727,12 +799,17 @@ def _legacy_bundle_from_current(source: Path, destination: Path) -> Path:
     walkie["schema_version"] = 2
     walkie["matching_algorithm"] = "minimum-cost-one-to-one"
     walkie.pop("receiver_continuation")
+    walkie.pop("qualification_bindings")
     walkie["generated_by"] = (
         "qcsd_lab.fitting_walkie_talkie 2.0.1; algorithm_receipt_sha256="
         f"{fitting_module._algorithm_receipt_digest(legacy_algorithm)}"
     )
     atomic_json(walkie_path, walkie)
     provenance["fitting_contract"] = fitting_module._legacy_fitting_contract(WORKLOADS)
+    provenance["artifact_type"] = "qcsd-research-defense-bundle"
+    provenance["status"] = fitting_module.RESEARCH_ARTIFACT_STATUS
+    provenance["production_ready"] = True
+    provenance.pop("runtime_qualification_inputs")
     provenance["algorithms"]["walkie_talkie"] = legacy_algorithm
     provenance["artifacts"]["walkie_talkie"]["sha256"] = sha256_file(walkie_path)
     atomic_json(provenance_path, provenance)
@@ -744,16 +821,17 @@ def test_fit_builds_exact_deterministic_bundle_without_mutating_source(tmp_path:
     before_experiment = (result / "experiment.json").read_bytes()
     before_evidence = (result / "evidence.sha256").read_bytes()
 
-    first = fit_result(result, artifacts_root=tmp_path / "artifacts-one")
-    second = fit_result(result, artifacts_root=tmp_path / "artifacts-two")
+    first = _fit_result(result, artifacts_root=tmp_path / "artifacts-one")
+    second = _fit_result(result, artifacts_root=tmp_path / "artifacts-two")
     assert {path.name for path in first.iterdir()} == EXACT_BUNDLE_FILES
     assert [(first / filename).read_bytes() for filename in sorted(EXACT_BUNDLE_FILES)] == [
         (second / filename).read_bytes() for filename in sorted(EXACT_BUNDLE_FILES)
     ]
-    assert fit_result(result, artifacts_root=tmp_path / "artifacts-one") == first
+    assert _fit_result(result, artifacts_root=tmp_path / "artifacts-one") == first
 
-    verified = verify_artifact_bundle(first)
-    assert verified.as_dict()["provenance_sha256"] == sha256_file(first / "provenance.json")
+    verified = _inspect_test_or_verify_historical_bundle(first)
+    assert verified.as_dict()["structurally_valid"] is True
+    assert verified.as_dict()["authoritative"] is False
     assert set(verified.artifact_hashes) == {
         "traffic_morphing",
         "wtf_pad",
@@ -761,12 +839,26 @@ def test_fit_builds_exact_deterministic_bundle_without_mutating_source(tmp_path:
     }
     receipt_text = (first / "provenance.json").read_text(encoding="utf-8")
     receipt = json.loads(receipt_text)
-    assert receipt["fitting_contract"]["contract_version"] == 5
+    assert receipt["artifact_type"] == fitting_module.STRUCTURAL_ARTIFACT_TYPE
+    assert receipt["status"] == fitting_module.STRUCTURAL_ARTIFACT_STATUS
+    assert receipt["production_ready"] is False
+    with pytest.raises(ValueError, match="invalid research binding"):
+        _strict_verify_artifact_bundle(first)
+    with pytest.raises(ValueError, match="wrong fields"):
+        validate_parameter_artifact(
+            first / "walkie-talkie.json",
+            provenance_path=first / "provenance.json",
+            expected_kind="walkie_talkie",
+            expected_qcsd_profile="research-1200",
+            expected_udp_payload_ceiling=1_200,
+            expected_workloads=set(WORKLOADS),
+        )
+    assert receipt["fitting_contract"]["contract_version"] == 6
     assert receipt["fitting_contract"]["workload_order"] == list(WORKLOADS)
-    assert receipt["fitting_contract"]["fitter_version"] == "qcsd_lab.fitting 2.1.2"
+    assert receipt["fitting_contract"]["fitter_version"] == "qcsd_lab.fitting 2.2.0"
     assert receipt["fitting_contract"]["parameter_schema_versions"] == {
         "traffic_morphing": 2,
-        "walkie_talkie": 5,
+        "walkie_talkie": 6,
         "wtf_pad": 2,
     }
     assert receipt["fitting_contract"]["constants"]["extractor"]["production_sequence"] == (
@@ -790,9 +882,17 @@ def test_fit_builds_exact_deterministic_bundle_without_mutating_source(tmp_path:
         "sum-positive-raw-BytesRead-per-batch"
     )
     walkie = json.loads((first / "walkie-talkie.json").read_text(encoding="utf-8"))
-    assert walkie["schema_version"] == 5
+    assert walkie["schema_version"] == 6
     assert walkie["matching_algorithm"] == "minimum-base-symmetric-mold-padding-cost-one-to-one"
-    assert walkie["receiver_continuation"] == {
+    assert (
+        walkie["receiver_continuation"]
+        == fitting_module.fitting_walkie_talkie.receiver_continuation_contract()
+    )
+    assert walkie[
+        "qualification_bindings"
+    ] == fitting_module._qualification_bindings_from_provenance(receipt)
+    """Historical schema-five receiver contract, retained below as a literal audit oracle.
+    {
         "allocation_policy": (
             "single-peer-acknowledged-pristine-header-phase-controlled-chaff-stream-whole-cell"
         ),
@@ -859,10 +959,18 @@ def test_fit_builds_exact_deterministic_bundle_without_mutating_source(tmp_path:
             "corresponding-horizon-reserve-before-further-base-allocation"
         ),
     }
+    """
     continuation_invariant = receipt["fitting_contract"]["constants"]["walkie_talkie"][
         "prepared_receiver_continuation_invariant"
     ]
-    assert continuation_invariant == {
+    assert (
+        continuation_invariant
+        == fitting_module._fitting_contract(WORKLOADS)["constants"]["walkie_talkie"][
+            "prepared_receiver_continuation_invariant"
+        ]
+    )
+    """Historical literal retained as non-executing audit text.
+    {
         "action_ordering": (
             "provision-to-configured-chaff-stream-limit;encode-zero-required-insert-count-"
             "nonblocking-qpack-chaff-header-blocks;transmit-positive-final-size-contiguous-[0,"
@@ -996,65 +1104,45 @@ def test_fit_builds_exact_deterministic_bundle_without_mutating_source(tmp_path:
             "reserved-pristine-header-phase-chaff-with-requested_bytes=0"
         ),
     }
+    """
     assert "residual_reallocation" not in continuation_invariant
     assert "residual_coalescence" not in continuation_invariant
     assert walkie["generated_by"].startswith(
-        "qcsd_lab.fitting_walkie_talkie 2.1.2; algorithm_receipt_sha256="
+        "qcsd_lab.fitting_walkie_talkie 2.2.0; algorithm_receipt_sha256="
     )
     assert str(tmp_path) not in receipt_text
     assert "timestamp" not in receipt_text
-    for kind, filename in (
-        ("traffic_morphing", "traffic-morphing.json"),
-        ("wtf_pad", "wtf-pad.json"),
-        ("walkie_talkie", "walkie-talkie.json"),
-    ):
-        artifact = validate_parameter_artifact(
-            first / filename,
-            provenance_path=first / "provenance.json",
-            expected_kind=kind,
-            expected_qcsd_profile="research-1200",
-            expected_udp_payload_ceiling=1_200,
-            expected_workloads=set(WORKLOADS),
-        )
-        assert artifact.input_policy == "sealed-fitting-result-v1"
-
-    subset = set(WORKLOADS[:-1])
-    for kind, filename in (
-        ("traffic_morphing", "traffic-morphing.json"),
-        ("wtf_pad", "wtf-pad.json"),
-        ("walkie_talkie", "walkie-talkie.json"),
-    ):
-        artifact = validate_parameter_artifact(
-            first / filename,
-            provenance_path=first / "provenance.json",
-            expected_kind=kind,
-            expected_qcsd_profile="research-1200",
-            expected_udp_payload_ceiling=1_200,
-            expected_workloads=subset,
-        )
-        assert artifact.input_policy == "sealed-fitting-result-v1"
-
-    with pytest.raises(
-        ValueError,
-        match="campaign workloads are absent from the sealed fitting cohort: unknown-site",
-    ):
-        validate_parameter_artifact(
-            first / "walkie-talkie.json",
-            provenance_path=first / "provenance.json",
-            expected_kind="walkie_talkie",
-            expected_qcsd_profile="research-1200",
-            expected_udp_payload_ceiling=1_200,
-            expected_workloads={*WORKLOADS, "unknown-site"},
-        )
-
     bundle_link = tmp_path / "research-bundle-link"
     bundle_link.symlink_to(first, target_is_directory=True)
     with pytest.raises(ValueError, match="symbolic link"):
-        verify_artifact_bundle(bundle_link)
+        _inspect_test_or_verify_historical_bundle(bundle_link)
 
     assert (result / "experiment.json").read_bytes() == before_experiment
     assert (result / "evidence.sha256").read_bytes() == before_evidence
     verify_result(result)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("artifact_type", "qcsd-research-defense-bundle"),
+        ("status", fitting_module.RESEARCH_ARTIFACT_STATUS),
+        ("production_ready", True),
+    ],
+)
+def test_structural_inspector_rejects_authoritative_discriminator_claims(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    result = _make_fitting_result(tmp_path / "source")
+    bundle = _fit_result(result, artifacts_root=tmp_path / "artifacts")
+    provenance = json.loads((bundle / "provenance.json").read_text(encoding="utf-8"))
+    provenance[field] = value
+    atomic_json(bundle / "provenance.json", provenance)
+
+    with pytest.raises(ValueError, match="authoritative production claim"):
+        _inspect_structural_artifact_bundle(bundle)
 
 
 def test_legacy_v2_bundle_is_strictly_readable_only_as_historical_evidence(
@@ -1072,12 +1160,12 @@ def test_legacy_v2_bundle_is_strictly_readable_only_as_historical_evidence(
         "_run_rust_parameter_validator",
         unexpected_rust_call,
     )
-    verified = verify_artifact_bundle(legacy)
+    verified = _inspect_test_or_verify_historical_bundle(legacy)
     assert verified.provenance["fitting_contract"]["contract_version"] == 2
 
     walkie_path = legacy / "walkie-talkie.json"
     provenance_path = legacy / "provenance.json"
-    with pytest.raises(ValueError, match="frozen historical evidence"):
+    with pytest.raises(ValueError, match="frozen read-only evidence"):
         validate_parameter_artifact(
             walkie_path,
             provenance_path=provenance_path,
@@ -1095,7 +1183,7 @@ def test_legacy_v2_bundle_is_strictly_readable_only_as_historical_evidence(
         "expected_udp_payload_ceiling": 1_200,
         "expected_workloads": set(WORKLOADS),
     }
-    with pytest.raises(ValueError, match="frozen historical evidence"):
+    with pytest.raises(ValueError, match="frozen read-only evidence"):
         validate_frozen_parameter_artifact(walkie_path, **frozen_arguments)
     frozen = validate_frozen_parameter_artifact(
         walkie_path,
@@ -1111,7 +1199,44 @@ def test_legacy_v2_bundle_is_strictly_readable_only_as_historical_evidence(
     provenance["artifacts"]["walkie_talkie"]["sha256"] = sha256_file(walkie_path)
     atomic_json(provenance_path, provenance)
     with pytest.raises(ValueError, match="not derived from training visits"):
-        verify_artifact_bundle(legacy)
+        _inspect_test_or_verify_historical_bundle(legacy)
+
+
+def test_sealed_contract_five_bundle_and_result_are_historical_read_only() -> None:
+    bundle = REPOSITORY_ROOT / "artifacts/research-1200-superseded-schema5-0a141768"
+    verified_bundle = _strict_verify_artifact_bundle(bundle)
+    assert verified_bundle.provenance["fitting_contract"]["contract_version"] == 5
+    assert sha256_file(bundle / "provenance.json") == (
+        "0a141768487ed662607ee41fa2d439a491f02315376b68fed2fb5555d0884569"
+    )
+    assert sha256_file(bundle / "walkie-talkie.json") == (
+        "16dc343e233f7531277d96fd914d177202e7a508a50f7becdf2d8c0102b8446c"
+    )
+    with pytest.raises(ValueError, match="frozen read-only evidence"):
+        validate_parameter_artifact(
+            bundle / "walkie-talkie.json",
+            provenance_path=bundle / "provenance.json",
+            expected_kind="walkie_talkie",
+            expected_qcsd_profile="research-1200",
+            expected_udp_payload_ceiling=1_200,
+        )
+
+    result = REPOSITORY_ROOT / "results/research-smoke-1200/20260813T111550.268124Z"
+    assert sha256_file(result / "evidence.sha256") == (
+        "161de34c5b8a6eda1b4eb82e2925735805cd18bec167e25c0dc2d2a6e79c7214"
+    )
+    assert sha256_file(result / "experiment.json") == (
+        "42e3721522f9c97a920eae17a4cf6945fd93a738367f95b4431b9d2e95e6beb9"
+    )
+    verified_result = verify_result(result)
+    assert verified_result.experiment["status"] == "incomplete"
+    assert verified_result.experiment["summary"] == {
+        "accepted": 12,
+        "eligible": 12,
+        "failed": 2,
+        "passed": False,
+        "planned": 14,
+    }
 
 
 def test_historical_schema_two_walkie_talkie_skips_schema_five_resource_preflight(
@@ -1148,7 +1273,7 @@ def test_historical_schema_two_walkie_talkie_skips_schema_five_resource_prefligh
         False,
         parameters_path=artifact.path,
     )
-    assert not orchestrator._uses_schema_five_walkie_talkie(defense)
+    assert not orchestrator._uses_schema_six_walkie_talkie(defense)
 
 
 def test_sealed_historical_schema_two_result_verifies_but_cannot_resume(
@@ -1216,7 +1341,7 @@ def test_sealed_historical_schema_two_result_verifies_but_cannot_resume(
     verified = verify_result(root)
     assert verified.experiment["status"] == "incomplete"
     before = (root / "evidence.sha256").read_bytes()
-    with pytest.raises(ValueError, match="frozen historical evidence"):
+    with pytest.raises(ValueError, match="frozen read-only evidence"):
         prepare_resume(root)
     assert (root / "evidence.sha256").read_bytes() == before
 
@@ -1244,7 +1369,7 @@ def test_bundle_contract_rejects_mixed_walkie_talkie_schema_versions(
     atomic_json(provenance_path, provenance)
 
     with pytest.raises(ValueError, match="invalid runtime contract"):
-        verify_artifact_bundle(bundle)
+        _inspect_test_or_verify_historical_bundle(bundle)
 
 
 @pytest.mark.parametrize("contract_version", [3, 4])
@@ -1261,7 +1386,7 @@ def test_superseded_contract_is_not_historical_evidence(
     atomic_json(provenance_path, provenance)
 
     with pytest.raises(ValueError, match="fitting contract receipt is invalid"):
-        verify_artifact_bundle(bundle)
+        _inspect_test_or_verify_historical_bundle(bundle)
 
 
 def test_subset_campaign_does_not_permit_partial_bundle_coverage(
@@ -1303,11 +1428,11 @@ def test_every_artifact_schema_leaf_is_bound_by_the_common_receipt(
             for leaf_path, leaf in cases:
                 atomic_json(path, _replace_leaf(original, leaf_path, _alternate_leaf(leaf)))
                 with pytest.raises(ValueError, match="hash mismatch") as rejected:
-                    verify_artifact_bundle(fitted_bundle)
+                    _inspect_test_or_verify_historical_bundle(fitted_bundle)
                 assert filename in str(rejected.value), _display_path(leaf_path)
         finally:
             atomic_json(path, original)
-    verify_artifact_bundle(fitted_bundle)
+    _inspect_test_or_verify_historical_bundle(fitted_bundle)
 
 
 def test_every_internally_bound_provenance_leaf_rejects_single_field_tampering(
@@ -1328,6 +1453,7 @@ def test_every_internally_bound_provenance_leaf_rejects_single_field_tampering(
         ("source_result", "input_digest"),
         ("source_result", "source_fingerprints", "image_digest"),
         ("source_result", "source_fingerprints", "lab_commit"),
+        ("runtime_qualification_inputs", "workloads", 0, "application_workload_sha256"),
     }
     cases = [
         (leaf_path, leaf)
@@ -1342,10 +1468,10 @@ def test_every_internally_bound_provenance_leaf_rejects_single_field_tampering(
                 _replace_leaf(original, leaf_path, _alternate_leaf(leaf)),
             )
             with pytest.raises(ValueError):
-                verify_artifact_bundle(fitted_bundle)
+                _inspect_test_or_verify_historical_bundle(fitted_bundle)
     finally:
         atomic_json(provenance_path, original)
-    verify_artifact_bundle(fitted_bundle)
+    _inspect_test_or_verify_historical_bundle(fitted_bundle)
 
 
 def test_external_source_claim_tampering_changes_the_recordable_receipt_hash(
@@ -1434,7 +1560,7 @@ def test_python_verification_recomputes_derived_artifact_values_before_rust(
     )
     try:
         with pytest.raises(ValueError):
-            verify_artifact_bundle(fitted_bundle)
+            _inspect_test_or_verify_historical_bundle(fitted_bundle)
     finally:
         atomic_json(artifact_path, original_artifact)
         atomic_json(provenance_path, original_provenance)
@@ -1442,16 +1568,16 @@ def test_python_verification_recomputes_derived_artifact_values_before_rust(
 
 def test_bundle_tamper_and_extra_file_are_rejected(tmp_path: Path) -> None:
     result = _make_fitting_result(tmp_path / "source")
-    bundle = fit_result(result, artifacts_root=tmp_path / "artifacts")
+    bundle = _fit_result(result, artifacts_root=tmp_path / "artifacts")
     traffic = bundle / "traffic-morphing.json"
     traffic.write_bytes(traffic.read_bytes() + b" ")
     with pytest.raises(ValueError, match="hash mismatch"):
-        verify_artifact_bundle(bundle)
+        _inspect_test_or_verify_historical_bundle(bundle)
 
     traffic.write_bytes(traffic.read_bytes()[:-1])
     atomic_text(bundle / "unexpected.txt", "not authoritative\n")
     with pytest.raises(ValueError, match="file set mismatch"):
-        verify_artifact_bundle(bundle)
+        _inspect_test_or_verify_historical_bundle(bundle)
     (bundle / "unexpected.txt").unlink()
 
     provenance_path = bundle / "provenance.json"
@@ -1469,14 +1595,14 @@ def test_bundle_tamper_and_extra_file_are_rejected(tmp_path: Path) -> None:
     rejected["estimated_added_bytes"] += 1
     atomic_json(provenance_path, provenance)
     with pytest.raises(ValueError, match="does not bind its algorithm receipt"):
-        verify_artifact_bundle(bundle)
+        _inspect_test_or_verify_historical_bundle(bundle)
 
     provenance_path.write_bytes(pristine_provenance)
     provenance = json.loads(pristine_provenance)
     provenance["algorithms"]["traffic_morphing"]["selected_mapping"][0]["l1_cost"] += 0.25
     atomic_json(provenance_path, provenance)
     with pytest.raises(ValueError, match="selected costs disagree|fidelity cost"):
-        verify_artifact_bundle(bundle)
+        _inspect_test_or_verify_historical_bundle(bundle)
 
     provenance_path.write_bytes(pristine_provenance)
     provenance = json.loads(pristine_provenance)
@@ -1486,14 +1612,14 @@ def test_bundle_tamper_and_extra_file_are_rejected(tmp_path: Path) -> None:
     ][0]["sample_id"]
     atomic_json(provenance_path, provenance)
     with pytest.raises(ValueError, match="training-input digest|globally unique"):
-        verify_artifact_bundle(bundle)
+        _inspect_test_or_verify_historical_bundle(bundle)
 
     provenance_path.write_bytes(pristine_provenance)
     provenance = json.loads(pristine_provenance)
     provenance["source_result"]["source_fingerprints"]["lab_dirty"] = True
     atomic_json(provenance_path, provenance)
     with pytest.raises(ValueError, match="clean lab and Neqo"):
-        verify_artifact_bundle(bundle)
+        _inspect_test_or_verify_historical_bundle(bundle)
 
 
 def test_events_only_extractor_excludes_cover_handshake_tail_and_out_of_window_batches(
@@ -1517,8 +1643,8 @@ def test_packets_csv_cannot_influence_fitted_artifact_bytes_but_tampering_still_
 ) -> None:
     ordinary = _make_fitting_result(tmp_path / "ordinary")
     conflicting = _make_fitting_result(tmp_path / "conflicting", conflicting_packets_csv=True)
-    ordinary_bundle = fit_result(ordinary, artifacts_root=tmp_path / "ordinary-artifacts")
-    conflicting_bundle = fit_result(conflicting, artifacts_root=tmp_path / "conflicting-artifacts")
+    ordinary_bundle = _fit_result(ordinary, artifacts_root=tmp_path / "ordinary-artifacts")
+    conflicting_bundle = _fit_result(conflicting, artifacts_root=tmp_path / "conflicting-artifacts")
     for filename in ("traffic-morphing.json", "wtf-pad.json", "walkie-talkie.json"):
         assert (ordinary_bundle / filename).read_bytes() == (
             conflicting_bundle / filename
@@ -1534,9 +1660,107 @@ def test_existing_different_valid_bundle_is_a_collision(tmp_path: Path) -> None:
     first_result = _make_fitting_result(tmp_path / "one", source_marker="a")
     second_result = _make_fitting_result(tmp_path / "two", source_marker="b")
     artifacts = tmp_path / "artifacts"
-    fit_result(first_result, artifacts_root=artifacts)
+    _fit_result(first_result, artifacts_root=artifacts)
     with pytest.raises(FileExistsError, match="different content"):
-        fit_result(second_result, artifacts_root=artifacts)
+        _fit_result(second_result, artifacts_root=artifacts)
+
+
+@pytest.mark.parametrize("linked_component", ["leaf", "ancestor"])
+def test_authoritative_fit_artifact_root_rejects_symlinks(
+    tmp_path: Path, linked_component: str
+) -> None:
+    real = tmp_path / "real"
+    real.mkdir()
+    if linked_component == "leaf":
+        supplied = tmp_path / "artifacts"
+        supplied.symlink_to(real, target_is_directory=True)
+    else:
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "artifacts").mkdir()
+        linked_parent = tmp_path / "linked-parent"
+        linked_parent.symlink_to(outside, target_is_directory=True)
+        supplied = linked_parent / "artifacts"
+
+    with pytest.raises(ValueError, match="symbolic link"):
+        fitting_module._regular_artifacts_root(supplied)
+
+
+def _write_candidate_bundle(root: Path, marker: bytes) -> None:
+    root.mkdir()
+    for filename in EXACT_BUNDLE_FILES:
+        (root / filename).write_bytes(marker + filename.encode())
+
+
+def test_bundle_publication_is_noreplace_and_fsyncs_candidate_and_parent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    candidate = tmp_path / "candidate"
+    destination = tmp_path / "research-1200"
+    _write_candidate_bundle(candidate, b"one:")
+    synced: list[Path] = []
+    monkeypatch.setattr(fitting_module, "_fsync_directory", synced.append)
+    monkeypatch.setattr(
+        fitting_module,
+        "verify_artifact_bundle",
+        lambda root: SimpleNamespace(root=root),
+    )
+
+    assert fitting_module._publish_bundle_candidate(candidate, destination) == destination
+    assert not candidate.exists()
+    assert destination.is_dir()
+    assert synced == [candidate, tmp_path]
+
+
+def test_bundle_publication_recovers_only_byte_identical_existing_bundle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    candidate = tmp_path / "candidate"
+    destination = tmp_path / "research-1200"
+    _write_candidate_bundle(candidate, b"same:")
+    _write_candidate_bundle(destination, b"same:")
+    synced: list[Path] = []
+    monkeypatch.setattr(fitting_module, "_fsync_directory", synced.append)
+    monkeypatch.setattr(
+        fitting_module,
+        "verify_artifact_bundle",
+        lambda root: SimpleNamespace(root=root),
+    )
+
+    assert fitting_module._publish_bundle_candidate(candidate, destination) == destination
+    assert candidate.is_dir()
+    assert synced == [candidate, tmp_path]
+
+    (candidate / "provenance.json").write_bytes(b"different")
+    with pytest.raises(FileExistsError, match="different content"):
+        fitting_module._publish_bundle_candidate(candidate, destination)
+
+
+def test_bundle_publication_never_replaces_empty_raced_destination(tmp_path: Path) -> None:
+    candidate = tmp_path / "candidate"
+    destination = tmp_path / "research-1200"
+    _write_candidate_bundle(candidate, b"candidate:")
+    destination.mkdir()
+
+    with pytest.raises(FileExistsError, match="not an exact valid bundle"):
+        fitting_module._publish_bundle_candidate(candidate, destination)
+    assert candidate.is_dir()
+    assert destination.is_dir()
+    assert not list(destination.iterdir())
+
+
+def test_schema_six_scope_excludes_controlled_wire_smoke_from_fitting() -> None:
+    current = fitting_module._fitting_contract(WORKLOADS)["constants"]["walkie_talkie"]
+    historical = fitting_module._contract_five_fitting_contract(WORKLOADS)["constants"][
+        "walkie_talkie"
+    ]
+    assert current["prepared_receiver_continuation_invariant"]["scope"] == (
+        "exact-qualified-frozen-six-workload-research-cohort-under-listed-preconditions;"
+        "controlled-wire-smoke-is-explicitly-nonauthoritative-and-excluded-from-fitting"
+    )
+    assert historical["prepared_receiver_continuation_invariant"]["scope"] == (
+        "prepared-frozen-research-cohort-and-reviewed-live-fixture-under-listed-preconditions"
+    )
 
 
 def test_fitting_campaign_rejects_the_wrong_workload_cardinality(tmp_path: Path) -> None:

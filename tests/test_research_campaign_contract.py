@@ -4,6 +4,7 @@ import hashlib
 import json
 import shutil
 from copy import deepcopy
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -11,11 +12,10 @@ import pytest
 import yaml
 
 import qcsd_lab.orchestrator as orchestrator
-from qcsd_lab.capture_session import PARAMETER_FLAG_BY_KIND
-from qcsd_lab.fitting import EXACT_BUNDLE_FILES, fit_result
+from qcsd_lab.capture_session import Defense
 from qcsd_lab.manifest import validate_research_preparation
 from qcsd_lab.util import sha256_file
-from tests.test_fitting_bundle import WORKLOADS, _make_fitting_result
+from tests.test_fitting_bundle import WORKLOADS, _fit_result, _make_fitting_result
 
 
 DEFENSES = (
@@ -63,11 +63,11 @@ def _clean_runtime_source() -> dict[str, Any]:
 
 @pytest.fixture(scope="module")
 def research_workspace(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
-    """Create six strict manifests and one real, production-verified temporary bundle."""
+    """Create six strict manifests and one explicitly structural test bundle."""
 
     base = tmp_path_factory.mktemp("research-campaign-contract")
     result = _make_fitting_result(base)
-    bundle = fit_result(result, artifacts_root=base / "artifacts")
+    bundle = _fit_result(result, artifacts_root=base / "artifacts")
     for workload_id in WORKLOADS:
         manifest = json.loads((base / f"config/workloads/{workload_id}.json").read_text())
         validate_research_preparation(manifest, workload_id=workload_id)
@@ -307,28 +307,18 @@ def test_checked_in_smoke_is_post_fit_evaluation_and_requires_the_sealed_bundle(
         orchestrator.load_campaign(path)
 
 
-def test_checked_in_smoke_loads_with_a_temporary_production_bundle(tmp_path: Path) -> None:
+def test_checked_in_smoke_rejects_a_non_authoritative_structural_bundle(tmp_path: Path) -> None:
     fitting_result = _make_fitting_result(
         tmp_path / "fitting-source",
         workloads=FROZEN_RESEARCH_WORKLOADS,
     )
-    bundle = fit_result(fitting_result, artifacts_root=tmp_path / "fitted-artifacts")
+    bundle = _fit_result(fitting_result, artifacts_root=tmp_path / "fitted-artifacts")
     campaign_root = tmp_path / "campaign"
     path = _copy_checked_in_smoke_inputs(campaign_root)
     shutil.copytree(bundle, campaign_root / "artifacts/research-1200")
 
-    campaign = orchestrator.load_campaign(path)
-    plan = orchestrator.plan_campaign(campaign)
-    assert campaign.name == "research-smoke-1200"
-    assert campaign.purpose == "evaluation"
-    assert campaign.seed == 2_026_081_204
-    assert campaign.profile == "research-1200"
-    assert [workload.id for workload in campaign.workloads] == list(CHECKED_IN_SMOKE_WORKLOADS)
-    assert len(plan) == 14
-    assert {sample["defense"] for sample in plan} == set(DEFENSES)
-    assert {
-        (sample["workload_id"], sample["request_policy"], sample["visit"]) for sample in plan
-    } == {(workload_id, "as-defined", 0) for workload_id in CHECKED_IN_SMOKE_WORKLOADS}
+    with pytest.raises(ValueError, match="invalid research binding"):
+        orchestrator.load_campaign(path)
 
 
 def test_checked_in_fitting_campaign_freezes_six_prepared_workloads_and_120_samples() -> None:
@@ -360,8 +350,46 @@ def test_exact_research_expansions_and_seeded_order_are_deterministic(
     final_path = _write_campaign(base, "final.yml", final_value)
 
     fitting = _assert_deterministic_plan(fitting_path, 120)
-    rehearsal = _assert_deterministic_plan(rehearsal_path, 42)
-    final = _assert_deterministic_plan(final_path, 126)
+    # A structural bundle can exercise numeric fitting tests but cannot cross
+    # the public evaluation authority boundary.  Exercise the pure planner
+    # with explicit in-memory defenses, then assert both public loads reject.
+    base_campaign = orchestrator.load_campaign(fitting_path)
+    planning_defenses = tuple(
+        Defense(name, kind, name == "undefended")
+        for name, kind in (
+            ("undefended", "none"),
+            ("static-control", "static"),
+            ("front", "front"),
+            ("tamaraw", "tamaraw"),
+            ("traffic-morphing", "traffic_morphing"),
+            ("wtf-pad", "wtf_pad"),
+            ("walkie-talkie", "walkie_talkie"),
+        )
+    )
+
+    def planned(name: str, seed: int, visits: int) -> list[dict[str, Any]]:
+        campaign = replace(
+            base_campaign,
+            name=name,
+            purpose="evaluation",
+            seed=seed,
+            workloads=tuple(
+                replace(workload, visits=visits) for workload in base_campaign.workloads
+            ),
+            request_policies=("as-defined",),
+            defenses=planning_defenses,
+        )
+        first = orchestrator.plan_campaign(campaign)
+        assert first == orchestrator.plan_campaign(campaign)
+        return first
+
+    rehearsal = planned("research-rehearsal", 4_242, 1)
+    final = planned("research-final", 9_999, 3)
+    assert len(rehearsal) == 42
+    assert len(final) == 126
+    for path in (rehearsal_path, final_path):
+        with pytest.raises(ValueError, match="invalid research binding"):
+            orchestrator.load_campaign(path)
 
     fitting_groups = [
         (workload_id, policy, visit)
@@ -401,11 +429,8 @@ def test_exact_research_expansions_and_seeded_order_are_deterministic(
         (workload_id, sha256_file(base / f"config/workloads/{workload_id}.json"))
         for workload_id in WORKLOADS
     ]
-    for path in (fitting_path, rehearsal_path, final_path):
-        campaign = orchestrator.load_campaign(path)
-        assert [(workload.id, workload.sha256) for workload in campaign.workloads] == (
-            expected_workloads
-        )
+    campaign = orchestrator.load_campaign(fitting_path)
+    assert [(workload.id, workload.sha256) for workload in campaign.workloads] == expected_workloads
 
 
 @pytest.mark.parametrize(
@@ -560,53 +585,14 @@ def test_evaluation_rejects_mixed_research_bundle_roots(
         _evaluation_campaign(name="mixed-bundles", seed=9, visits=1, bundle_paths=paths),
     )
 
-    with pytest.raises(ValueError, match="one common sealed research bundle"):
+    with pytest.raises(ValueError, match="invalid research binding"):
         orchestrator.load_campaign(path)
 
 
-def test_evaluation_freezes_one_common_bundle_and_revalidates_preparation(
+def test_evaluation_cannot_materialize_a_structural_bundle_as_frozen_evidence(
     tmp_path: Path, research_workspace: tuple[Path, Path]
 ) -> None:
     base, _bundle = research_workspace
     campaign_path = base / "config/campaigns/rehearsal.yml"
-    campaign = orchestrator.load_campaign(campaign_path)
-    root = tmp_path / "materialized"
-    runtime, configuration = orchestrator._materialize_inputs(root, campaign, {})
-
-    frozen_bundle = root / "inputs/defense-parameters/research-1200"
-    assert {path.name for path in frozen_bundle.iterdir()} == EXACT_BUNDLE_FILES
-    assert list((root / "inputs/defense-parameters").rglob("provenance.json")) == [
-        frozen_bundle / "provenance.json"
-    ]
-    parameter_files = [
-        path for path in frozen_bundle.glob("*.json") if path.name != "provenance.json"
-    ]
-    assert {path.name for path in parameter_files} == EXACT_BUNDLE_FILES - {"provenance.json"}
-
-    parameterized = [
-        record for record in configuration["defenses"] if record["kind"] in PARAMETER_FLAG_BY_KIND
-    ]
-    expected_receipt = "inputs/defense-parameters/research-1200/provenance.json"
-    assert len(parameterized) == 3
-    assert {record["provenance"] for record in parameterized} == {expected_receipt}
-    assert len({record["provenance_sha256"] for record in parameterized}) == 1
-    assert {record["parameters"] for record in parameterized} == {
-        f"inputs/defense-parameters/research-1200/{name}"
-        for name in ("traffic-morphing.json", "wtf-pad.json", "walkie-talkie.json")
-    }
-
-    frozen = orchestrator._load_campaign(
-        root / "inputs/campaign.yml",
-        frozen_inputs=root / "inputs",
-    )
-    assert orchestrator.plan_campaign(frozen) == orchestrator.plan_campaign(runtime)
-
-    workload_path = root / f"inputs/workloads/{WORKLOADS[0]}.json"
-    workload = json.loads(workload_path.read_text(encoding="utf-8"))
-    workload.pop("preparation")
-    workload_path.write_text(json.dumps(workload), encoding="utf-8")
-    with pytest.raises(ValueError, match=r"\./qcsd-lab prepare.*research-grade provenance"):
-        orchestrator._load_campaign(
-            root / "inputs/campaign.yml",
-            frozen_inputs=root / "inputs",
-        )
+    with pytest.raises(ValueError, match="invalid research binding"):
+        orchestrator.load_campaign(campaign_path)

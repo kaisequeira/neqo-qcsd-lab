@@ -8,7 +8,7 @@ from typing import Mapping, Sequence
 from .fitting_trace import FittingTrace
 
 
-GENERATED_BY = "qcsd_lab.fitting_walkie_talkie 2.1.2"
+GENERATED_BY = "qcsd_lab.fitting_walkie_talkie 2.2.0"
 PACKET_SIZE = 1_200
 PARSER_ALLOWANCE_CEILING_BYTES = 1_000
 RECEIVER_CONTINUATION_CELLS = 1
@@ -141,7 +141,7 @@ def fit_walkie_talkie(
         "adaptation": "qcsd-client-only",
         "burst_definition": BURST_DEFINITION,
         "cell_byte_domain": CELL_BYTE_DOMAIN,
-        "schema_version": 5,
+        "schema_version": 6,
         "generated_by": GENERATED_BY,
         "matching_algorithm": "minimum-base-symmetric-mold-padding-cost-one-to-one",
         "paper_equivalent": False,
@@ -373,6 +373,41 @@ def _padding_cost(
 
 def receiver_continuation_contract() -> dict[str, object]:
     """Return the exact, JSON-safe post-mould receiver-continuation contract."""
+
+    raw_headroom = RECEIVER_CONTINUATION_CELLS * PACKET_SIZE
+    if raw_headroom <= PARSER_ALLOWANCE_CEILING_BYTES:
+        raise AssertionError("Walkie-Talkie continuation must exceed the parser allowance")
+    return {
+        **schema_five_receiver_continuation_contract(),
+        "qualified_chaff_manifest_policy": (
+            "distinct-schema-one-qualified-navigation-root-only;exact-lowercase-accept-accept-"
+            "encoding-accept-language-projection;application-request-headers-unchanged"
+        ),
+        "qualified_chaff_response_policy": (
+            "three-independent-five-way-concurrent-unshaped-production-nonblocking-qpack-"
+            "qualifications-derive-compact-status-normalized-content-encoding-body-bytes-body-"
+            "sha256;runtime-complete-responses-must-match-derived-identity;runtime-partial-"
+            "responses-have-null-identity-match-fields"
+        ),
+        "first_cell_prefix_pack_precondition": (
+            "three-independent-production-nonblocking-qpack-runs-after-peer-settings-and-"
+            "drained-h3-control-qpack-warmup-open-one-full-application-root-plus-five-qualified-"
+            "compact-chaff-requests-before-exactly-one-1200-byte-molded-packet-target;all-post-"
+            "cutoff-stream-transmissions-owned-by-sole-target;application-and-maximum-receiver-"
+            "continuation-reserve-horizon+1-chaff-request-streams-contiguous-through-fin;required-"
+            "chaff-peer-acknowledged-through-fin;no-pending-application-required-chaff-or-h3-qpack-"
+            "stream-output;zero-targetless-stream-bytes"
+        ),
+        "qualification_binding_policy": (
+            "raw-sha256-per-workload-binds-chaff-qualification-sidecar-prefix-pack-spec-and-"
+            "final-qualified-chaff-manifest;runtime-requires-exact-final-manifest-and-embedded-"
+            "prefix-spec-hashes"
+        ),
+    }
+
+
+def schema_five_receiver_continuation_contract() -> dict[str, object]:
+    """Return the frozen historical schema-five receiver metadata oracle."""
 
     raw_headroom = RECEIVER_CONTINUATION_CELLS * PACKET_SIZE
     if raw_headroom <= PARSER_ALLOWANCE_CEILING_BYTES:
