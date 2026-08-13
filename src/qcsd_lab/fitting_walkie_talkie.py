@@ -8,7 +8,7 @@ from typing import Mapping, Sequence
 from .fitting_trace import FittingTrace
 
 
-GENERATED_BY = "qcsd_lab.fitting_walkie_talkie 2.1.0"
+GENERATED_BY = "qcsd_lab.fitting_walkie_talkie 2.1.1"
 PACKET_SIZE = 1_200
 PARSER_ALLOWANCE_CEILING_BYTES = 1_000
 RECEIVER_CONTINUATION_CELLS = 1
@@ -141,7 +141,7 @@ def fit_walkie_talkie(
         "adaptation": "qcsd-client-only",
         "burst_definition": BURST_DEFINITION,
         "cell_byte_domain": CELL_BYTE_DOMAIN,
-        "schema_version": 3,
+        "schema_version": 4,
         "generated_by": GENERATED_BY,
         "matching_algorithm": "minimum-base-symmetric-mold-padding-cost-one-to-one",
         "paper_equivalent": False,
@@ -378,11 +378,24 @@ def receiver_continuation_contract() -> dict[str, object]:
     if raw_headroom <= PARSER_ALLOWANCE_CEILING_BYTES:
         raise AssertionError("Walkie-Talkie continuation must exceed the parser allowance")
     return {
+        "allocation_policy": "single-pristine-header-phase-controlled-chaff-stream-whole-cell",
         "application_order": "after-symmetric-elementwise-mold",
+        "batch_end_release_policy": (
+            "at-molded-batch-end-after-application-batch-complete-otherwise-no-batch-gate"
+        ),
         "cells_per_nonzero_incoming_component": RECEIVER_CONTINUATION_CELLS,
         "formula": ("adapted_incoming=symmetric_incoming+1-if-symmetric_incoming>0-else-0"),
         "parser_allowance_ceiling_bytes": PARSER_ALLOWANCE_CEILING_BYTES,
+        "prefix_consumability_precondition": (
+            "prepared-selected-pristine-first-prior-requested-plus-raw-headroom-bytes-are-"
+            "consumable"
+        ),
         "raw_headroom_bytes_per_nonzero_incoming_component": raw_headroom,
+        "release_policy": (
+            "after-all-base-events-controller-requested-and-request-signals-observed;recompute-"
+            "live-unconsumed-base-each-retry;extend-single-coalesced-positive-outstanding-header-"
+            "blocked-stream-else-fresh-stream;outstanding-at-or-below-parser-ceiling"
+        ),
     }
 
 

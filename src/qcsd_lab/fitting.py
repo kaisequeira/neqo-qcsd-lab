@@ -43,13 +43,13 @@ PROVENANCE_FILE = "provenance.json"
 EXACT_BUNDLE_FILES = frozenset((*BUNDLE_FILES.values(), PROVENANCE_FILE))
 RESEARCH_PARAMETER_INPUT_POLICY = "sealed-fitting-result-v1"
 RESEARCH_ARTIFACT_STATUS = "fitted-research-artifact"
-FITTER_VERSION = "qcsd_lab.fitting 2.1.0"
+FITTER_VERSION = "qcsd_lab.fitting 2.1.1"
 LEGACY_FITTER_VERSION = "qcsd_lab.fitting 2.0.2"
 EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 ALGORITHM_GENERATORS = {
     "traffic_morphing": "qcsd_lab.fitting_morphing 2.0.0",
     "wtf_pad": "qcsd_lab.fitting_wtfpad 2.0.0",
-    "walkie_talkie": "qcsd_lab.fitting_walkie_talkie 2.1.0",
+    "walkie_talkie": "qcsd_lab.fitting_walkie_talkie 2.1.1",
 }
 LEGACY_ALGORITHM_GENERATORS = {
     **ALGORITHM_GENERATORS,
@@ -316,7 +316,7 @@ def verify_artifact_bundle(root: Path) -> VerifiedArtifactBundle:
         )
     expected_workloads = {record["workload_id"] for record in provenance["sample_contributions"]}
     _validate_artifact_coverage(root, expected_workloads)
-    if contract_version == 3:
+    if contract_version == 4:
         _run_rust_parameter_validator(
             "bundle", root, tuple(provenance["fitting_contract"]["workload_order"])
         )
@@ -369,7 +369,7 @@ def research_parameter_record(
         )
     if expected_kind != "wtf_pad":
         _validate_exact_parameter_coverage(parameter, expected_kind, sealed_workloads)
-    if contract_version == 3:
+    if contract_version == 4:
         _run_rust_parameter_validator(expected_kind, parameter_path, sealed_order)
     return record["sha256"], sha256_file(provenance_path), RESEARCH_PARAMETER_INPUT_POLICY
 
@@ -493,7 +493,7 @@ def _validate_provenance(value: object) -> int:
         expected_fitter = LEGACY_FITTER_VERSION
         expected_schema: object = 2
         observed_schema = contract.get("parameter_schema_version")
-    elif contract_version == 3:
+    elif contract_version == 4:
         contract_keys = {
             "contract_version",
             "fitter_version",
@@ -505,7 +505,7 @@ def _validate_provenance(value: object) -> int:
             "constants",
         }
         expected_fitter = FITTER_VERSION
-        expected_schema = {"traffic_morphing": 2, "walkie_talkie": 3, "wtf_pad": 2}
+        expected_schema = {"traffic_morphing": 2, "walkie_talkie": 4, "wtf_pad": 2}
         observed_schema = contract.get("parameter_schema_versions")
     else:
         raise ValueError("research fitting contract receipt is invalid")
@@ -834,12 +834,12 @@ def _validate_walkie_talkie_receipt(
     value: object,
     workload_order: Sequence[str],
     *,
-    contract_version: int = 3,
+    contract_version: int = 4,
 ) -> None:
     if contract_version == 2:
         _validate_legacy_walkie_talkie_receipt(value, workload_order)
         return
-    if contract_version != 3:
+    if contract_version != 4:
         raise ValueError("unsupported research fitting contract version")
     _validate_current_walkie_talkie_receipt(value, workload_order)
 
@@ -1480,7 +1480,7 @@ def _validate_walkie_talkie_artifact(
     if contract_version == 2:
         _validate_legacy_walkie_talkie_artifact(provenance, parameter)
         return
-    if contract_version != 3:
+    if contract_version != 4:
         raise ValueError("unsupported research fitting contract version")
     _validate_current_walkie_talkie_artifact(provenance, parameter)
 
@@ -1629,7 +1629,7 @@ def _validate_current_walkie_talkie_artifact(
         parameter["adaptation"] != "qcsd-client-only"
         or parameter["burst_definition"] != constants["burst_definition"]
         or parameter["cell_byte_domain"] != constants["cell_byte_domain"]
-        or parameter["schema_version"] != 3
+        or parameter["schema_version"] != 4
         or parameter["matching_algorithm"] != constants["pairing_algorithm"]
         or parameter["paper_equivalent"] is not False
         or parameter["packet_size"] != constants["packet_size"]
@@ -1940,9 +1940,9 @@ def _algorithm_receipt_digest(value: object) -> str:
 def _validate_runtime_parameter(value: object, kind: str, *, contract_version: int) -> None:
     if not isinstance(value, Mapping):
         raise ValueError(f"{kind} parameter artifact must be a JSON object")
-    if contract_version not in {2, 3}:
+    if contract_version not in {2, 4}:
         raise ValueError("unsupported research fitting contract version")
-    expected_schema_version = 3 if kind == "walkie_talkie" and contract_version == 3 else 2
+    expected_schema_version = 4 if kind == "walkie_talkie" and contract_version == 4 else 2
     if (
         value.get("schema_version") != expected_schema_version
         or value.get("adaptation") != "qcsd-client-only"
@@ -1977,11 +1977,11 @@ def _validate_runtime_parameter(value: object, kind: str, *, contract_version: i
 
 def _fitting_contract(workload_order: Sequence[str]) -> dict[str, object]:
     return {
-        "contract_version": 3,
+        "contract_version": 4,
         "fitter_version": FITTER_VERSION,
         "parameter_schema_versions": {
             "traffic_morphing": 2,
-            "walkie_talkie": 3,
+            "walkie_talkie": 4,
             "wtf_pad": 2,
         },
         "profile": "research-1200",
@@ -2152,31 +2152,65 @@ def _fitting_contract(workload_order: Sequence[str]) -> dict[str, object]:
                     "adapted_target_formula": (
                         "sealed_symmetric_envelope_cells*packet_size+packet_size"
                     ),
-                    "application_stream_bound": (
-                        "raw-request-stream-bytes<="
-                        "projected-stable-body-bytes+max_stream_data_excess"
+                    "allocation_policy": (
+                        "one-whole-packet_size-cell-to-one-pristine-header-phase-controlled-"
+                        "chaff-stream"
+                    ),
+                    "base_release_condition": (
+                        "all-base-events-controller-requested-and-request-signals-observed"
+                    ),
+                    "batch_end_release_condition": (
+                        "application-batch-complete-at-molded-batch-end;otherwise-no-batch-"
+                        "completion-gate"
                     ),
                     "chaff_capacity_requirement": (
-                        "eligible-chaff-projected-stable-body-bytes>=packet_size"
+                        "selected-pristine-header-phase-controlled-chaff-exact-available-bytes"
+                        ">=packet_size"
                     ),
-                    "failure_policy": "source-envelope-overflow-is-fidelity-ineligible",
+                    "claim_policy": "provisional-framing-claims-are-ineligible",
+                    "common_header_phase_candidate_definition": (
+                        "role=chaff;status=none;receive_state=ReceivingHeaders;consumed_bytes=0;"
+                        "requested_bytes=advertised_bytes<=parser_allowance_ceiling_bytes;"
+                        "reservation_available=reservation_capacity;framing_bytes=0;"
+                        "parser_lease_used=0;last_parser_lease_boundary=none;"
+                        "pending_parser_boundary=none"
+                    ),
+                    "failure_policy": (
+                        "source-envelope-overflow-or-continuation-precondition-failure-is-"
+                        "fidelity-ineligible"
+                    ),
+                    "fitting_input_support": (
+                        "runtime-created-chaff-prefix-is-not-observed-by-fitting-inputs"
+                    ),
                     "live_component_bound": (
                         "source_raw_bytes<=sealed_symmetric_envelope_cells*packet_size"
                     ),
-                    "parser_bootstrap_requirement": (
-                        "pristine-chaff-header-bytes<=parser_allowance_ceiling_bytes<packet_size"
+                    "outstanding_release_condition": (
+                        "live-unconsumed-base-bytes<=parser_allowance_ceiling_bytes"
                     ),
-                    "post_all_applications_residual_lower_bound_formula": (
-                        "adapted_target_bytes-source_raw_bytes>=packet_size"
+                    "positive_outstanding_selection": (
+                        "require-all-live-unconsumed-base-bytes-coalesced-on-one-pristine-header-"
+                        "phase-chaff-whose-advertised-minus-consumed-exactly-equals-live"
                     ),
-                    "residual_reallocation": (
-                        "cumulative-application-FIN-residuals-requeue-within-same-incoming-turn"
+                    "prefix_consumability_precondition": (
+                        "selected-stream-first-(prior_requested_bytes+packet_size)-raw-response-"
+                        "bytes-are-consumable"
                     ),
-                    "residual_coalescence": (
-                        "stable-app-first-FIN-return-fragments-coalesce-on-first-eligible-"
-                        "chaff-stream"
+                    "exact_capacity_requirement": (
+                        "known_limit>=packet_size;known_limit-requested_bytes>=packet_size"
                     ),
-                    "scope": "prepared-research-cohort-under-listed-assumptions",
+                    "retry_ledger_policy": (
+                        "recompute-live-unconsumed-base-bytes-from-prior-credit-ledger-on-every-"
+                        "retry-excluding-continuation-slot"
+                    ),
+                    "scope": (
+                        "prepared-frozen-research-cohort-and-reviewed-live-fixture-under-listed-"
+                        "preconditions"
+                    ),
+                    "zero_outstanding_selection": (
+                        "when-live-unconsumed-base-is-zero-require-untouched-pristine-header-"
+                        "phase-chaff-with-requested_bytes=0"
+                    ),
                 },
                 "runtime_mold": ("receiver-continuation-adaptation(symmetric-mold(real,decoy))"),
                 "matching_cost_formula": (

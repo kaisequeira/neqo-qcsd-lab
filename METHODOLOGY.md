@@ -298,24 +298,39 @@ boundary and that closure marker, and later tail observations remain excluded.
   the two observed envelopes. The runtime mould then adds exactly one incoming
   1200-byte receiver-continuation cell to every nonzero incoming component.
   This leaves the raw request-stream source envelopes unchanged while providing
-  1200 bytes of headroom beyond each incoming envelope component for the
-  configured parser allowance, whose maximum is 1000 bytes. More precisely, if
-  a live component's raw extent `R` remains within its sealed symmetric
-  envelope of `E` cells, the adapted target `T = E*1200 + 1200` leaves
-  `T - R >= 1200` scheduled raw bytes after all application streams
-  contributing to the component finish. Their cumulative FIN-returned residual
-  requeues within the same incoming turn even if the initial allocation went
-  wholly to application streams. Under the prepared-cohort
-  assumptions that each active application's raw request-stream bytes are at
-  most its projected stable body bytes plus `max_stream_data_excess`, the
-  selected chaff response has at least one cell of projected stable body
-  capacity, and its pristine HEADERS bootstrap is at most the 1000-byte parser
-  ceiling, deterministic stable app-first allocation coalesces FIN-returned
-  slot fragments as contiguous receive credit on the first eligible chaff
-  stream. Source-envelope overflow remains strictly fidelity-ineligible. This
-  is a conditional prepared-cohort invariant, not a claim about arbitrary
-  unprepared resources. Receipts record both the base pairing cost and the
-  adapted runtime padding cost; scheduled bytes are computed from the adapted
+  one cell beyond each incoming envelope component. The continuation cell is a
+  held causal event, not ordinary eager receive credit. It becomes eligible
+  only after all base incoming events have been controller-requested and their
+  request signals observed. Eligibility at a moulded batch end additionally
+  requires application-batch completion. The allocator must place the whole
+  1200-byte cell on one pristine header-phase controlled chaff stream with at
+  least 1200 exact additional available bytes; allocation to an active
+  application stream or fragmentation across streams is forbidden.
+
+  Both candidate branches require controlled chaff in `ReceivingHeaders`, zero
+  bytes consumed, requested equal to advertised, and no more than the parser
+  ceiling. It must have no terminal status, framing bytes, parser-lease use, or
+  prior/pending parser boundary; its reservation must be wholly available, and
+  its exact known capacity after requested bytes must be at least one cell.
+  Provisional framing claims are ineligible. Every allocation retry recomputes
+  live unconsumed base bytes from prior credit-ledger slots, excluding the
+  continuation slot, and requires the result to be at most 1000. For a positive
+  live value, requested and advertised must be positive and all live
+  outstanding must be coalesced on that one header-blocked stream:
+  advertised-minus-consumed must exactly match the live ledger value. The
+  continuation extends that stream. A zero live value instead requires an
+  untouched stream with requested, advertised, and consumed all zero. Split or
+  ledger-inconsistent positive outstanding is ineligible.
+
+  The first `prior_requested + 1200` raw response bytes on that selected stream
+  must be consumable. This is a prepared frozen-cohort and
+  reviewed-live-fixture precondition, not a theorem derived by the fitter:
+  half-duplex fitting traces observe application streams and do not observe
+  runtime-created chaff prefixes. A violated continuation precondition, like
+  source-envelope overflow, is fail-closed and strictly fidelity-ineligible.
+  The contract does not rely on application FIN residuals being requeued or
+  coalesced. Receipts record both the base pairing cost and the adapted runtime
+  padding cost; scheduled bytes are computed from the unchanged numeric adapted
   mould.
 
 These are deterministic, client-only QCSD adaptations, and every artifact says

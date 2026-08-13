@@ -146,29 +146,33 @@ def test_receipt_tamper_and_runtime_shape_are_rejected(tmp_path, monkeypatch):
         validate_parameter_artifact(parameter, allow_reviewed_fixture=True)
 
 
-def test_walkie_talkie_schema_three_requires_exact_receiver_continuation() -> None:
+def test_walkie_talkie_schema_four_requires_exact_receiver_continuation() -> None:
     value = json.loads((FIXTURES / "walkie-talkie-live.json").read_text(encoding="utf-8"))
     parameters._validate_runtime_shape(
         value,
         "walkie_talkie",
         1_200,
         Path("walkie-talkie.json"),
-        expected_schema_version=3,
+        expected_schema_version=4,
     )
 
-    for mutation in ("missing", "changed"):
+    for mutation in ("missing", "changed", "missing-policy", "changed-policy"):
         changed = json.loads(json.dumps(value))
         if mutation == "missing":
             del changed["receiver_continuation"]
-        else:
+        elif mutation == "changed":
             changed["receiver_continuation"]["cells_per_nonzero_incoming_component"] = 2
+        elif mutation == "missing-policy":
+            del changed["receiver_continuation"]["allocation_policy"]
+        else:
+            changed["receiver_continuation"]["release_policy"] = "eager"
         with pytest.raises(ValueError, match="runtime shape"):
             parameters._validate_runtime_shape(
                 changed,
                 "walkie_talkie",
                 1_200,
                 Path("walkie-talkie.json"),
-                expected_schema_version=3,
+                expected_schema_version=4,
             )
 
     legacy = json.loads((FIXTURES / "walkie-talkie-live.json").read_text(encoding="utf-8"))
@@ -183,6 +187,17 @@ def test_walkie_talkie_schema_three_requires_exact_receiver_continuation() -> No
             expected_schema_version=2,
         )
 
+    superseded = json.loads((FIXTURES / "walkie-talkie-live.json").read_text(encoding="utf-8"))
+    superseded["schema_version"] = 3
+    with pytest.raises(ValueError, match="versioned client-only runtime contract"):
+        parameters._validate_runtime_shape(
+            superseded,
+            "walkie_talkie",
+            1_200,
+            Path("walkie-talkie-live.json"),
+            expected_schema_version=4,
+        )
+
 
 def test_walkie_talkie_live_fixture_has_exact_receiver_continuation_derivation() -> None:
     value = json.loads((FIXTURES / "walkie-talkie-live.json").read_text(encoding="utf-8"))
@@ -193,7 +208,7 @@ def test_walkie_talkie_live_fixture_has_exact_receiver_continuation_derivation()
         ([(4, 129), (3, 33), (3, 33)], 66, 246_000),
     ]
 
-    assert value["schema_version"] == 3
+    assert value["schema_version"] == 4
     assert value["receiver_continuation"] == parameters._WALKIE_TALKIE_RECEIVER_CONTINUATION
     for profile, (bursts, cost, scheduled_bytes) in zip(value["profiles"], expected, strict=True):
         assert [(burst["outgoing"], burst["incoming"]) for burst in profile["bursts"]] == bursts

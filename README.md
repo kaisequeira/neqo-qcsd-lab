@@ -282,19 +282,42 @@ The fitted Walkie-Talkie source envelopes remain in the raw HTTP/3
 request-stream cell domain. Pairing minimizes the base symmetric
 element-wise-mould padding cost; the runtime mould then adds one 1200-byte
 incoming cell to every nonzero incoming component. That explicit adaptation
-provides more headroom than the configured 1000-byte parser allowance. If a
-live raw component remains within its sealed envelope, at least one full cell
-remains after all application streams contributing to that component finish;
-their cumulative FIN-returned residual requeues within the same incoming turn.
-For the prepared cohort, the liveness argument additionally
-assumes each active application's raw request-stream bytes are no greater
-than its projected stable body bytes plus `max_stream_data_excess`, an
-eligible chaff response has at least one cell of projected stable body
-capacity, and pristine HEADERS do not exceed the parser ceiling. Stable
-app-first allocation then coalesces FIN-returned slot fragments as contiguous
-receive credit on the first eligible chaff stream. Source-envelope overflow
-fails the strict fidelity gate. Both reported runtime padding cost and
-scheduled bytes include the added receiver-continuation cells.
+provides more headroom than the configured 1000-byte parser allowance. The
+final cell is held causally: it is released only after every base event has
+been requested by the controller and every corresponding request signal has
+been observed. At a moulded batch end, release also waits for
+application-batch completion. The complete 1200-byte cell is then assigned to
+one pristine header-phase controlled chaff stream; it is neither split across
+streams nor assigned to an active application stream.
+
+Both candidate branches require a controlled chaff stream in
+`ReceivingHeaders`, with zero bytes consumed, requested equal to advertised,
+and no more than the parser ceiling. It must have no terminal status, framing
+bytes, parser-lease use, or prior/pending parser boundary; its reservation must
+be wholly available, and its exact known capacity after requested bytes must be
+at least 1200. Provisional framing claims are ineligible. Every allocation
+retry recomputes live unconsumed base bytes from the prior credit ledger,
+excluding the held continuation slot, and requires that value to be no greater
+than 1000. If it is positive, the candidate is a header-blocked stream with
+requested and advertised greater than zero, and all live outstanding must be
+coalesced there: its advertised-minus-consumed amount must exactly equal the
+live ledger value. The cell extends that stream. If the live value has drained
+to zero, the candidate is instead an untouched header-phase stream with
+requested, advertised, and consumed all equal to zero. A split or
+ledger-inconsistent positive base tail is not eligible.
+
+This liveness contract is conditional on the prepared stream having at least
+1200 exact additional available bytes and its first `prior_requested + 1200`
+raw response bytes being consumable. The fitting inputs contain
+application-stream observations and do not observe runtime-created chaff
+prefixes, so they cannot prove that precondition or a general HTTP/3 property.
+It is explicitly scoped to the frozen prepared cohort and reviewed live
+fixture, and a runtime violation is fail-closed and fidelity-ineligible.
+Source-envelope overflow likewise fails the strict fidelity gate. No
+FIN-residual reallocation or fragment-coalescence claim is part of this
+contract. Reported runtime padding cost and scheduled bytes still include the
+added continuation cells, so the numeric mould and pairing objective are
+unchanged.
 FRONT and Tamaraw are generated from the selected QCSD profile and therefore
 do not have external fitted files.
 

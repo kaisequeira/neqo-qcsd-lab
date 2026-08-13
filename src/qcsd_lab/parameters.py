@@ -35,11 +35,23 @@ _WTF_PAD_INFINITY_TOKEN_FORMULAS = {
     "gap": "k_inf = (K - mean_burst_length + 1) / (mean_burst_length - 1)",
 }
 _WALKIE_TALKIE_RECEIVER_CONTINUATION = {
+    "allocation_policy": "single-pristine-header-phase-controlled-chaff-stream-whole-cell",
     "application_order": "after-symmetric-elementwise-mold",
+    "batch_end_release_policy": (
+        "at-molded-batch-end-after-application-batch-complete-otherwise-no-batch-gate"
+    ),
     "cells_per_nonzero_incoming_component": 1,
     "formula": "adapted_incoming=symmetric_incoming+1-if-symmetric_incoming>0-else-0",
     "parser_allowance_ceiling_bytes": 1_000,
+    "prefix_consumability_precondition": (
+        "prepared-selected-pristine-first-prior-requested-plus-raw-headroom-bytes-are-consumable"
+    ),
     "raw_headroom_bytes_per_nonzero_incoming_component": 1_200,
+    "release_policy": (
+        "after-all-base-events-controller-requested-and-request-signals-observed;recompute-live-"
+        "unconsumed-base-each-retry;extend-single-coalesced-positive-outstanding-header-blocked-"
+        "stream-else-fresh-stream;outstanding-at-or-below-parser-ceiling"
+    ),
 }
 
 
@@ -264,7 +276,7 @@ def _validate_parameter_artifact(
         raise ValueError("expected QCSD profile and UDP ceiling disagree")
 
     _validate_reviewed_workload_binding(receipt, str(kind), expected_workloads, receipt_path)
-    expected_schema_version = 3 if kind == "walkie_talkie" else 2
+    expected_schema_version = 4 if kind == "walkie_talkie" else 2
     _validate_runtime_shape(
         parameter,
         str(kind),
@@ -486,7 +498,7 @@ def _validate_walkie_talkie(
     profiles = parameter.get("profiles")
     expected_matching_algorithm = (
         "minimum-base-symmetric-mold-padding-cost-one-to-one"
-        if expected_schema_version == 3
+        if expected_schema_version == 4
         else "minimum-cost-one-to-one"
     )
     receiver_continuation = parameter.get("receiver_continuation")
@@ -494,7 +506,7 @@ def _validate_walkie_talkie(
         parameter.get("packet_size") != ceiling
         or parameter.get("matching_algorithm") != expected_matching_algorithm
         or (
-            expected_schema_version == 3
+            expected_schema_version == 4
             and receiver_continuation != _WALKIE_TALKIE_RECEIVER_CONTINUATION
         )
         or (expected_schema_version == 2 and "receiver_continuation" in parameter)

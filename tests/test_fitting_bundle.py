@@ -760,11 +760,12 @@ def test_fit_builds_exact_deterministic_bundle_without_mutating_source(tmp_path:
     }
     receipt_text = (first / "provenance.json").read_text(encoding="utf-8")
     receipt = json.loads(receipt_text)
+    assert receipt["fitting_contract"]["contract_version"] == 4
     assert receipt["fitting_contract"]["workload_order"] == list(WORKLOADS)
-    assert receipt["fitting_contract"]["fitter_version"] == "qcsd_lab.fitting 2.1.0"
+    assert receipt["fitting_contract"]["fitter_version"] == "qcsd_lab.fitting 2.1.1"
     assert receipt["fitting_contract"]["parameter_schema_versions"] == {
         "traffic_morphing": 2,
-        "walkie_talkie": 3,
+        "walkie_talkie": 4,
         "wtf_pad": 2,
     }
     assert receipt["fitting_contract"]["constants"]["extractor"]["production_sequence"] == (
@@ -788,17 +789,87 @@ def test_fit_builds_exact_deterministic_bundle_without_mutating_source(tmp_path:
         "sum-positive-raw-BytesRead-per-batch"
     )
     walkie = json.loads((first / "walkie-talkie.json").read_text(encoding="utf-8"))
-    assert walkie["schema_version"] == 3
+    assert walkie["schema_version"] == 4
     assert walkie["matching_algorithm"] == "minimum-base-symmetric-mold-padding-cost-one-to-one"
     assert walkie["receiver_continuation"] == {
+        "allocation_policy": "single-pristine-header-phase-controlled-chaff-stream-whole-cell",
         "application_order": "after-symmetric-elementwise-mold",
+        "batch_end_release_policy": (
+            "at-molded-batch-end-after-application-batch-complete-otherwise-no-batch-gate"
+        ),
         "cells_per_nonzero_incoming_component": 1,
         "formula": "adapted_incoming=symmetric_incoming+1-if-symmetric_incoming>0-else-0",
         "parser_allowance_ceiling_bytes": 1_000,
+        "prefix_consumability_precondition": (
+            "prepared-selected-pristine-first-prior-requested-plus-raw-headroom-bytes-are-"
+            "consumable"
+        ),
         "raw_headroom_bytes_per_nonzero_incoming_component": 1_200,
+        "release_policy": (
+            "after-all-base-events-controller-requested-and-request-signals-observed;recompute-"
+            "live-unconsumed-base-each-retry;extend-single-coalesced-positive-outstanding-header-"
+            "blocked-stream-else-fresh-stream;outstanding-at-or-below-parser-ceiling"
+        ),
     }
+    continuation_invariant = receipt["fitting_contract"]["constants"]["walkie_talkie"][
+        "prepared_receiver_continuation_invariant"
+    ]
+    assert continuation_invariant == {
+        "adapted_target_formula": "sealed_symmetric_envelope_cells*packet_size+packet_size",
+        "allocation_policy": (
+            "one-whole-packet_size-cell-to-one-pristine-header-phase-controlled-chaff-stream"
+        ),
+        "base_release_condition": (
+            "all-base-events-controller-requested-and-request-signals-observed"
+        ),
+        "batch_end_release_condition": (
+            "application-batch-complete-at-molded-batch-end;otherwise-no-batch-completion-gate"
+        ),
+        "chaff_capacity_requirement": (
+            "selected-pristine-header-phase-controlled-chaff-exact-available-bytes>=packet_size"
+        ),
+        "claim_policy": "provisional-framing-claims-are-ineligible",
+        "common_header_phase_candidate_definition": (
+            "role=chaff;status=none;receive_state=ReceivingHeaders;consumed_bytes=0;"
+            "requested_bytes=advertised_bytes<=parser_allowance_ceiling_bytes;"
+            "reservation_available=reservation_capacity;framing_bytes=0;parser_lease_used=0;"
+            "last_parser_lease_boundary=none;pending_parser_boundary=none"
+        ),
+        "exact_capacity_requirement": (
+            "known_limit>=packet_size;known_limit-requested_bytes>=packet_size"
+        ),
+        "failure_policy": (
+            "source-envelope-overflow-or-continuation-precondition-failure-is-fidelity-ineligible"
+        ),
+        "fitting_input_support": ("runtime-created-chaff-prefix-is-not-observed-by-fitting-inputs"),
+        "live_component_bound": ("source_raw_bytes<=sealed_symmetric_envelope_cells*packet_size"),
+        "outstanding_release_condition": (
+            "live-unconsumed-base-bytes<=parser_allowance_ceiling_bytes"
+        ),
+        "positive_outstanding_selection": (
+            "require-all-live-unconsumed-base-bytes-coalesced-on-one-pristine-header-phase-chaff-"
+            "whose-advertised-minus-consumed-exactly-equals-live"
+        ),
+        "prefix_consumability_precondition": (
+            "selected-stream-first-(prior_requested_bytes+packet_size)-raw-response-bytes-are-"
+            "consumable"
+        ),
+        "retry_ledger_policy": (
+            "recompute-live-unconsumed-base-bytes-from-prior-credit-ledger-on-every-retry-"
+            "excluding-continuation-slot"
+        ),
+        "scope": (
+            "prepared-frozen-research-cohort-and-reviewed-live-fixture-under-listed-preconditions"
+        ),
+        "zero_outstanding_selection": (
+            "when-live-unconsumed-base-is-zero-require-untouched-pristine-header-phase-chaff-"
+            "with-requested_bytes=0"
+        ),
+    }
+    assert "residual_reallocation" not in continuation_invariant
+    assert "residual_coalescence" not in continuation_invariant
     assert walkie["generated_by"].startswith(
-        "qcsd_lab.fitting_walkie_talkie 2.1.0; algorithm_receipt_sha256="
+        "qcsd_lab.fitting_walkie_talkie 2.1.1; algorithm_receipt_sha256="
     )
     assert str(tmp_path) not in receipt_text
     assert "timestamp" not in receipt_text
@@ -864,7 +935,7 @@ def test_legacy_v2_bundle_is_strictly_readable_only_as_historical_evidence(
     legacy = _legacy_bundle_from_current(fitted_bundle, tmp_path / "research-1200")
 
     def unexpected_rust_call(*_args: object, **_kwargs: object) -> None:
-        raise AssertionError("the v3 Rust parser must not adjudicate a legacy v2 bundle")
+        raise AssertionError("the v4 Rust parser must not adjudicate a legacy v2 bundle")
 
     monkeypatch.setattr(
         fitting_module,
@@ -921,11 +992,11 @@ def test_bundle_contract_rejects_mixed_walkie_talkie_schema_versions(
 ) -> None:
     if legacy_contract:
         bundle = _legacy_bundle_from_current(fitted_bundle, tmp_path / "legacy")
-        wrong_schema = 3
+        wrong_schema = 4
     else:
         bundle = tmp_path / "current"
         shutil.copytree(fitted_bundle, bundle)
-        wrong_schema = 2
+        wrong_schema = 3
     walkie_path = bundle / "walkie-talkie.json"
     provenance_path = bundle / "provenance.json"
     walkie = json.loads(walkie_path.read_text(encoding="utf-8"))
@@ -936,6 +1007,21 @@ def test_bundle_contract_rejects_mixed_walkie_talkie_schema_versions(
     atomic_json(provenance_path, provenance)
 
     with pytest.raises(ValueError, match="invalid runtime contract"):
+        verify_artifact_bundle(bundle)
+
+
+def test_superseded_contract_three_is_not_historical_evidence(
+    tmp_path: Path,
+    fitted_bundle: Path,
+) -> None:
+    bundle = tmp_path / "superseded-contract-three"
+    shutil.copytree(fitted_bundle, bundle)
+    provenance_path = bundle / "provenance.json"
+    provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+    provenance["fitting_contract"]["contract_version"] = 3
+    atomic_json(provenance_path, provenance)
+
+    with pytest.raises(ValueError, match="fitting contract receipt is invalid"):
         verify_artifact_bundle(bundle)
 
 
