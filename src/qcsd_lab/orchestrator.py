@@ -1186,6 +1186,12 @@ def _materialize_inputs(
                 )
                 research_dir = parameters_dir / "research-1200"
                 if not research_dir.exists():
+                    if source_bundle.provenance["fitting_contract"]["contract_version"] == 6:
+                        _materialize_schema_six_qualification_evidence(
+                            inputs,
+                            qualification_inputs_root=campaign.path.parent.parent,
+                            provenance=source_bundle.provenance,
+                        )
                     shutil.copytree(source_bundle.root, research_dir)
                 frozen_bundle = verify_frozen_artifact_bundle(
                     research_dir,
@@ -1246,6 +1252,138 @@ def _materialize_inputs(
         defenses=tuple(runtime_defenses),
     )
     return runtime_campaign, _frozen_configuration(root, runtime_campaign)
+
+
+def _materialize_schema_six_qualification_evidence(
+    inputs: Path,
+    *,
+    qualification_inputs_root: Path,
+    provenance: Mapping[str, Any],
+) -> None:
+    """Freeze the sealed cohort needed to reverify one schema-six bundle."""
+
+    from .chaff_qualification import SEALED_WORKLOAD_IDS, load_qualified_chaff
+
+    root = qualification_inputs_root
+    records = provenance["runtime_qualification_inputs"]["workloads"]
+    if (
+        not isinstance(records, list)
+        or len(records) != len(SEALED_WORKLOAD_IDS)
+        or tuple(record["workload_id"] for record in records) != SEALED_WORKLOAD_IDS
+    ):
+        raise ValueError("schema-six qualification evidence order changed during materialization")
+    records_by_id = {record["workload_id"]: record for record in records}
+
+    source_directories = {
+        "workload": root / "workloads",
+        "chaff qualification": root / "chaff-qualification-store/v1",
+        "chaff prefix specification": root / "chaff-prefix-specs",
+    }
+    frozen_directories = {
+        "workload": inputs / "workloads",
+        "chaff qualification": inputs / "chaff-qualifications",
+        "chaff prefix specification": inputs / "chaff-prefix-specs",
+        "qualified chaff manifest": inputs / "chaff-manifests",
+    }
+    expected_names = {f"{workload_id}.json" for workload_id in SEALED_WORKLOAD_IDS}
+    if inputs.is_symlink() or not inputs.is_dir():
+        raise ValueError("frozen qualification input root is not a regular directory")
+    for directory in frozen_directories.values():
+        if directory.exists() or directory.is_symlink():
+            if directory.is_symlink() or not directory.is_dir():
+                raise ValueError(
+                    f"frozen qualification input directory is not regular: {directory}"
+                )
+        else:
+            directory.mkdir()
+        entries = list(directory.iterdir())
+        if not {path.name for path in entries} <= expected_names or any(
+            path.is_symlink() or not path.is_file() for path in entries
+        ):
+            raise ValueError(
+                f"frozen qualification input directory has an unsafe file set: {directory}"
+            )
+
+    def materialize_file(destination: Path, data: bytes, *, label: str) -> Path:
+        try:
+            with destination.open("xb") as output:
+                output.write(data)
+        except FileExistsError:
+            pass
+        frozen = _trusted_regular_input(
+            destination,
+            root=inputs,
+            label=label,
+        )
+        if frozen.read_bytes() != data:
+            raise ValueError(f"{label} changed during input materialization")
+        return frozen
+
+    for workload_id in SEALED_WORKLOAD_IDS:
+        record = records_by_id[workload_id]
+        expected = {
+            "workload": record["application_workload_sha256"],
+            "chaff qualification": record["chaff_qualification_sidecar"]["sha256"],
+            "chaff prefix specification": record["prefix_pack_spec"]["sha256"],
+        }
+        frozen: dict[str, Path] = {}
+        for label, source_directory in source_directories.items():
+            source_path = _trusted_regular_input(
+                source_directory / f"{workload_id}.json",
+                root=root,
+                label=label,
+            )
+            if sha256_file(source_path) != expected[label]:
+                raise ValueError(f"{workload_id} {label} changed during input materialization")
+            destination = frozen_directories[label] / f"{workload_id}.json"
+            frozen[label] = materialize_file(
+                destination,
+                source_path.read_bytes(),
+                label=f"{workload_id} frozen {label}",
+            )
+            if sha256_file(frozen[label]) != expected[label]:
+                raise ValueError(
+                    f"{workload_id} frozen {label} changed during input materialization"
+                )
+
+        qualified = load_qualified_chaff(
+            frozen["chaff qualification"],
+            workload_id=workload_id,
+            base_manifest_path=frozen["workload"],
+            prefix_spec_path=frozen["chaff prefix specification"],
+            require_current_implementation=True,
+        )
+        if (
+            qualified.application_manifest_sha256 != expected["workload"]
+            or qualified.sidecar_sha256 != expected["chaff qualification"]
+            or qualified.manifest_sha256 != record["qualified_chaff_manifest_sha256"]
+        ):
+            raise ValueError(
+                f"{workload_id} qualification binding changed during input materialization"
+            )
+        manifest = frozen_directories["qualified chaff manifest"] / f"{workload_id}.json"
+        manifest_bytes = canonical_bytes(qualified.manifest)
+        manifest = materialize_file(
+            manifest,
+            manifest_bytes,
+            label=f"{workload_id} frozen qualified chaff manifest",
+        )
+        if (
+            manifest.read_bytes() != manifest_bytes
+            or sha256_file(manifest) != record["qualified_chaff_manifest_sha256"]
+        ):
+            raise ValueError(
+                f"{workload_id} frozen qualified chaff manifest changed during "
+                "input materialization"
+            )
+    for directory in frozen_directories.values():
+        entries = list(directory.iterdir())
+        if {path.name for path in entries} != expected_names or any(
+            path.is_symlink() or not path.is_file() for path in entries
+        ):
+            raise ValueError(
+                f"frozen qualification input directory has an inexact file set: {directory}"
+            )
 
 
 def _checkpoint(root: Path, experiment: dict[str, Any]) -> None:

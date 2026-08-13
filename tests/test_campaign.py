@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 import yaml
 
+import qcsd_lab.chaff_qualification as chaff_qualification
 import qcsd_lab.orchestrator as orchestrator
 from qcsd_lab.capture import split_endpoint, tuple_filter
 from qcsd_lab.capture_session import (
@@ -25,7 +26,8 @@ from qcsd_lab.orchestrator import (
     preflight_campaign,
     run_campaign,
 )
-from qcsd_lab.util import atomic_json, load_json, sha256_file
+from qcsd_lab.manifest import canonical_bytes
+from qcsd_lab.util import atomic_json, load_json, sha256_bytes, sha256_file
 from qcsd_lab.verification import verify_result
 
 
@@ -98,6 +100,366 @@ def _configuration(
     path = campaign_dir / "campaign.yml"
     path.write_text(yaml.safe_dump(campaign, sort_keys=False), encoding="utf-8")
     return path
+
+
+def _schema_six_qualification_materialization_inputs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[Path, Path, dict[str, Any], dict[str, dict[str, Any]]]:
+    source = tmp_path / "config"
+    inputs = tmp_path / "result/inputs"
+    for directory in (
+        source / "workloads",
+        source / "chaff-qualification-store/v1",
+        source / "chaff-prefix-specs",
+    ):
+        directory.mkdir(parents=True)
+    inputs.mkdir(parents=True)
+
+    records: list[dict[str, Any]] = []
+    manifests: dict[str, dict[str, Any]] = {}
+    for index, workload_id in enumerate(chaff_qualification.SEALED_WORKLOAD_IDS):
+        application = source / "workloads" / f"{workload_id}.json"
+        sidecar = source / "chaff-qualification-store/v1" / f"{workload_id}.json"
+        spec = source / "chaff-prefix-specs" / f"{workload_id}.json"
+        atomic_json(
+            application,
+            {"resources": [_resource(0, f"https://{workload_id}.test/")]},
+        )
+        atomic_json(sidecar, {"sidecar": workload_id})
+        atomic_json(spec, {"spec": workload_id})
+        manifest = {"qualified": workload_id, "resource_index": index}
+        manifests[workload_id] = manifest
+        records.append(
+            {
+                "workload_id": workload_id,
+                "application_workload_sha256": sha256_file(application),
+                "chaff_qualification_sidecar": {
+                    "path": f"config/chaff-qualification-store/v1/{workload_id}.json",
+                    "sha256": sha256_file(sidecar),
+                },
+                "prefix_pack_spec": {
+                    "path": f"config/chaff-prefix-specs/{workload_id}.json",
+                    "sha256": sha256_file(spec),
+                },
+                "qualified_chaff_manifest_sha256": sha256_bytes(canonical_bytes(manifest)),
+            }
+        )
+
+    def load_qualified_chaff(
+        sidecar_path: Path,
+        *,
+        workload_id: str,
+        base_manifest_path: Path,
+        prefix_spec_path: Path,
+        require_current_implementation: bool = True,
+    ) -> SimpleNamespace:
+        assert require_current_implementation is True
+        assert prefix_spec_path.is_file()
+        manifest = manifests[workload_id]
+        return SimpleNamespace(
+            application_manifest_sha256=sha256_file(base_manifest_path),
+            sidecar_sha256=sha256_file(sidecar_path),
+            manifest=manifest,
+            manifest_sha256=sha256_bytes(canonical_bytes(manifest)),
+        )
+
+    monkeypatch.setattr(chaff_qualification, "load_qualified_chaff", load_qualified_chaff)
+    provenance = {"runtime_qualification_inputs": {"workloads": records}}
+    return source, inputs, provenance, manifests
+
+
+def test_schema_six_materialization_freezes_exact_cohort_without_expanding_campaign(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source, inputs, provenance, manifests = _schema_six_qualification_materialization_inputs(
+        tmp_path,
+        monkeypatch,
+    )
+    selected = chaff_qualification.SEALED_WORKLOAD_IDS[1:3]
+    existing: set[Path] = set()
+    for source_directory, frozen_directory in (
+        (source / "workloads", inputs / "workloads"),
+        (source / "chaff-qualification-store/v1", inputs / "chaff-qualifications"),
+        (source / "chaff-prefix-specs", inputs / "chaff-prefix-specs"),
+    ):
+        frozen_directory.mkdir(exist_ok=True)
+        for workload_id in selected:
+            destination = frozen_directory / f"{workload_id}.json"
+            destination.write_bytes((source_directory / destination.name).read_bytes())
+            existing.add(destination)
+    manifest_directory = inputs / "chaff-manifests"
+    manifest_directory.mkdir()
+    for workload_id in selected:
+        destination = manifest_directory / f"{workload_id}.json"
+        destination.write_bytes(canonical_bytes(manifests[workload_id]))
+        existing.add(destination)
+
+    original_write_bytes = Path.write_bytes
+
+    def reject_selected_rewrite(path: Path, data: bytes) -> int:
+        if path in existing:
+            raise AssertionError(f"selected campaign evidence was recopied: {path}")
+        return original_write_bytes(path, data)
+
+    monkeypatch.setattr(Path, "write_bytes", reject_selected_rewrite)
+    orchestrator._materialize_schema_six_qualification_evidence(
+        inputs,
+        qualification_inputs_root=source,
+        provenance=provenance,
+    )
+
+    expected = set(chaff_qualification.SEALED_WORKLOAD_IDS)
+    for directory in (
+        "workloads",
+        "chaff-qualifications",
+        "chaff-prefix-specs",
+        "chaff-manifests",
+    ):
+        assert {path.stem for path in (inputs / directory).iterdir()} == expected
+    assert not (inputs / "runtime-workloads").exists()
+
+
+def test_schema_six_materialization_rejects_a_changed_selected_frozen_input(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source, inputs, provenance, _manifests = _schema_six_qualification_materialization_inputs(
+        tmp_path,
+        monkeypatch,
+    )
+    workload_id = chaff_qualification.SEALED_WORKLOAD_IDS[0]
+    frozen_workloads = inputs / "workloads"
+    frozen_workloads.mkdir()
+    changed = frozen_workloads / f"{workload_id}.json"
+    atomic_json(changed, {"changed": True})
+    before = changed.read_bytes()
+
+    with pytest.raises(ValueError, match=f"{workload_id} frozen workload changed"):
+        orchestrator._materialize_schema_six_qualification_evidence(
+            inputs,
+            qualification_inputs_root=source,
+            provenance=provenance,
+        )
+    assert changed.read_bytes() == before
+
+
+def test_schema_six_materialization_rejects_symlinked_directory_without_external_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source, inputs, provenance, _manifests = _schema_six_qualification_materialization_inputs(
+        tmp_path,
+        monkeypatch,
+    )
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (inputs / "chaff-qualifications").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="directory is not regular"):
+        orchestrator._materialize_schema_six_qualification_evidence(
+            inputs,
+            qualification_inputs_root=source,
+            provenance=provenance,
+        )
+    assert list(outside.iterdir()) == []
+
+
+def test_schema_six_materialization_rejects_source_copy_race(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source, inputs, provenance, _manifests = _schema_six_qualification_materialization_inputs(
+        tmp_path,
+        monkeypatch,
+    )
+    workload_id = chaff_qualification.SEALED_WORKLOAD_IDS[0]
+    raced_source = source / "workloads" / f"{workload_id}.json"
+    original_sha256_file = orchestrator.sha256_file
+    raced = False
+
+    def mutate_after_hash(path: Path) -> str:
+        nonlocal raced
+        digest = original_sha256_file(path)
+        if Path(path) == raced_source and not raced:
+            raced_source.write_bytes(b'{"changed":"during-copy"}\n')
+            raced = True
+        return digest
+
+    monkeypatch.setattr(orchestrator, "sha256_file", mutate_after_hash)
+    with pytest.raises(ValueError, match=f"{workload_id} frozen workload changed"):
+        orchestrator._materialize_schema_six_qualification_evidence(
+            inputs,
+            qualification_inputs_root=source,
+            provenance=provenance,
+        )
+    assert raced is True
+    assert not (inputs.parent / "experiment.json").exists()
+
+
+def test_schema_six_materialization_rejects_unexpected_frozen_evidence_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source, inputs, provenance, _manifests = _schema_six_qualification_materialization_inputs(
+        tmp_path,
+        monkeypatch,
+    )
+    frozen_workloads = inputs / "workloads"
+    frozen_workloads.mkdir()
+    unexpected = frozen_workloads / "unexpected.json"
+    unexpected.write_bytes(b"unexpected\n")
+
+    with pytest.raises(ValueError, match="unsafe file set"):
+        orchestrator._materialize_schema_six_qualification_evidence(
+            inputs,
+            qualification_inputs_root=source,
+            provenance=provenance,
+        )
+    assert unexpected.read_bytes() == b"unexpected\n"
+
+
+def test_schema_six_bundle_materialization_preserves_two_workload_fourteen_sample_plan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source, _unused_inputs, provenance, manifests = (
+        _schema_six_qualification_materialization_inputs(
+            tmp_path / "source-fixture",
+            monkeypatch,
+        )
+    )
+    selected = ("cloudflare-quiche-r3", "bootstrap-introduction-r3")
+    workloads: list[orchestrator.Workload] = []
+    for workload_id in selected:
+        application = source / "workloads" / f"{workload_id}.json"
+        sidecar = source / "chaff-qualification-store/v1" / f"{workload_id}.json"
+        spec = source / "chaff-prefix-specs" / f"{workload_id}.json"
+        data = load_json(application)
+        runtime_bytes = canonical_bytes(orchestrator.runtime_manifest(data))
+        manifest_bytes = canonical_bytes(manifests[workload_id])
+        workloads.append(
+            orchestrator.Workload(
+                id=workload_id,
+                visits=1,
+                path=application,
+                source_bytes=application.read_bytes(),
+                sha256=sha256_file(application),
+                data=data,
+                resource_count=1,
+                origin_count=1,
+                runtime_sha256=sha256_bytes(runtime_bytes),
+                chaff_qualification_path=sidecar,
+                chaff_qualification_sha256=sha256_file(sidecar),
+                chaff_prefix_spec_path=spec,
+                chaff_prefix_spec_sha256=sha256_file(spec),
+                chaff_manifest_sha256=sha256_bytes(manifest_bytes),
+                chaff_manifest_data=manifests[workload_id],
+            )
+        )
+
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    for name in (
+        "provenance.json",
+        "traffic-morphing.json",
+        "walkie-talkie.json",
+        "wtf-pad.json",
+    ):
+        atomic_json(bundle / name, {"file": name})
+    parameter = bundle / "walkie-talkie.json"
+    receipt = bundle / "provenance.json"
+    parameter_sha256 = sha256_file(parameter)
+    receipt_sha256 = sha256_file(receipt)
+    artifact_hashes = {"walkie_talkie": parameter_sha256}
+    source_bundle = SimpleNamespace(
+        root=bundle,
+        provenance={
+            "fitting_contract": {"contract_version": 6},
+            **provenance,
+        },
+        artifact_hashes=artifact_hashes,
+    )
+
+    import qcsd_lab.fitting as fitting
+
+    monkeypatch.setattr(
+        fitting,
+        "_verify_current_artifact_bundle_at",
+        lambda *_args, **_kwargs: source_bundle,
+    )
+
+    def verify_frozen(
+        root: Path,
+        *,
+        qualification_inputs_root: Path,
+    ) -> SimpleNamespace:
+        assert root.name == "research-1200"
+        expected = {f"{item}.json" for item in chaff_qualification.SEALED_WORKLOAD_IDS}
+        for directory in (
+            "workloads",
+            "chaff-qualifications",
+            "chaff-prefix-specs",
+            "chaff-manifests",
+        ):
+            assert {path.name for path in (qualification_inputs_root / directory).iterdir()} == (
+                expected
+            )
+        return SimpleNamespace(artifact_hashes=artifact_hashes)
+
+    monkeypatch.setattr(fitting, "verify_frozen_artifact_bundle", verify_frozen)
+    monkeypatch.setattr(
+        orchestrator,
+        "validate_frozen_parameter_artifact",
+        lambda path, **_kwargs: SimpleNamespace(
+            path=path,
+            sha256=parameter_sha256,
+            provenance_path=path.parent / "provenance.json",
+            provenance_sha256=receipt_sha256,
+            input_policy="sealed-fitting-result-v1",
+        ),
+    )
+
+    defenses = (
+        Defense("undefended", "none", True),
+        Defense("static-control", "static", False),
+        Defense("front", "front", False),
+        Defense("tamaraw", "tamaraw", False),
+        Defense("traffic-morphing", "traffic_morphing", False),
+        Defense("wtf-pad", "wtf_pad", False),
+        Defense(
+            "walkie-talkie",
+            "walkie_talkie",
+            False,
+            parameters="../../artifacts/research-1200/walkie-talkie.json",
+            parameters_path=parameter,
+            parameters_sha256=parameter_sha256,
+            parameters_provenance_path=receipt,
+            parameters_provenance_sha256=receipt_sha256,
+            parameters_input_policy="sealed-fitting-result-v1",
+        ),
+    )
+    campaign_path = source / "campaigns/smoke.yml"
+    campaign_path.parent.mkdir()
+    campaign = orchestrator.Campaign(
+        path=campaign_path,
+        source_bytes=b"frozen synthetic campaign\n",
+        name="research-smoke-1200",
+        purpose="evaluation",
+        seed=2_026_081_204,
+        profile="research-1200",
+        workloads=tuple(workloads),
+        request_policies=("as-defined",),
+        defenses=defenses,
+        limits=Limits(),
+    )
+    result = tmp_path / "materialized"
+    runtime, _configuration = orchestrator._materialize_inputs(result, campaign, {})
+
+    assert [workload.id for workload in runtime.workloads] == list(selected)
+    assert len(orchestrator.plan_campaign(runtime)) == 14
+    assert not (result / "experiment.json").exists()
 
 
 def test_walkie_talkie_resource_preflight_accepts_one_initial_same_origin_candidate() -> None:
