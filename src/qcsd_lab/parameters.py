@@ -264,7 +264,14 @@ def _validate_parameter_artifact(
         raise ValueError("expected QCSD profile and UDP ceiling disagree")
 
     _validate_reviewed_workload_binding(receipt, str(kind), expected_workloads, receipt_path)
-    _validate_runtime_shape(parameter, str(kind), int(ceiling), receipt_path)
+    expected_schema_version = 3 if kind == "walkie_talkie" else 2
+    _validate_runtime_shape(
+        parameter,
+        str(kind),
+        int(ceiling),
+        receipt_path,
+        expected_schema_version=expected_schema_version,
+    )
     _validate_workload_coverage(parameter, str(kind), expected_workloads, receipt_path)
     return ParameterArtifact(
         path=parameter_path,
@@ -368,7 +375,7 @@ def _validate_runtime_shape(
     ceiling: int,
     receipt_path: Path,
     *,
-    expected_schema_version: int = 2,
+    expected_schema_version: int,
 ) -> None:
     if (
         parameter.get("schema_version") != expected_schema_version

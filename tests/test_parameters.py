@@ -41,7 +41,7 @@ def test_checked_in_smoke_artifacts_bind_hash_kind_profile_and_ceiling(name, kin
     assert artifact.input_policy == REVIEWED_PARAMETER_INPUT_POLICY
 
 
-def test_obsolete_checked_in_walkie_talkie_fixture_fails_before_execution():
+def test_unbound_checked_in_walkie_talkie_fixture_fails_before_execution():
     with pytest.raises(ValueError, match="not bound to workload SHA-256"):
         validate_parameter_artifact(
             FIXTURES / "walkie-talkie-live.json",
@@ -148,13 +148,6 @@ def test_receipt_tamper_and_runtime_shape_are_rejected(tmp_path, monkeypatch):
 
 def test_walkie_talkie_schema_three_requires_exact_receiver_continuation() -> None:
     value = json.loads((FIXTURES / "walkie-talkie-live.json").read_text(encoding="utf-8"))
-    value.update(
-        {
-            "schema_version": 3,
-            "matching_algorithm": "minimum-base-symmetric-mold-padding-cost-one-to-one",
-            "receiver_continuation": dict(parameters._WALKIE_TALKIE_RECEIVER_CONTINUATION),
-        }
-    )
     parameters._validate_runtime_shape(
         value,
         "walkie_talkie",
@@ -179,14 +172,33 @@ def test_walkie_talkie_schema_three_requires_exact_receiver_continuation() -> No
             )
 
     legacy = json.loads((FIXTURES / "walkie-talkie-live.json").read_text(encoding="utf-8"))
-    legacy["receiver_continuation"] = dict(parameters._WALKIE_TALKIE_RECEIVER_CONTINUATION)
+    legacy["schema_version"] = 2
+    legacy["matching_algorithm"] = "minimum-cost-one-to-one"
     with pytest.raises(ValueError, match="runtime shape"):
         parameters._validate_runtime_shape(
             legacy,
             "walkie_talkie",
             1_200,
             Path("walkie-talkie-live.json"),
+            expected_schema_version=2,
         )
+
+
+def test_walkie_talkie_live_fixture_has_exact_receiver_continuation_derivation() -> None:
+    value = json.loads((FIXTURES / "walkie-talkie-live.json").read_text(encoding="utf-8"))
+    expected = [
+        ([(3, 129)], 26, 158_400),
+        ([(2, 129), (8, 33), (8, 33), (4, 33), (4, 33), (0, 129), (2, 33)], 55, 541_200),
+        ([(3, 129)], 21, 158_400),
+        ([(4, 129), (3, 33), (3, 33)], 66, 246_000),
+    ]
+
+    assert value["schema_version"] == 3
+    assert value["receiver_continuation"] == parameters._WALKIE_TALKIE_RECEIVER_CONTINUATION
+    for profile, (bursts, cost, scheduled_bytes) in zip(value["profiles"], expected, strict=True):
+        assert [(burst["outgoing"], burst["incoming"]) for burst in profile["bursts"]] == bursts
+        assert profile["matching_cost_packets"] == cost
+        assert profile["total_scheduled_bytes"] == scheduled_bytes
 
 
 def test_research_1200_receipt_rejects_a_1201_byte_parameter_artifact(tmp_path, monkeypatch):

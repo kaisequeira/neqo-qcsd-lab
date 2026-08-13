@@ -2,20 +2,27 @@
   "adaptation": "qcsd-client-only",
   "burst_definition": "global-application-batch-direction-transitions",
   "cell_byte_domain": "http3-request-stream-offset.bytes",
-  "generated_by": "qcsd_lab.walkietalkie 0.6.0",
-  "matching_algorithm": "minimum-cost-one-to-one",
+  "generated_by": "qcsd_lab.walkietalkie 0.7.0",
+  "matching_algorithm": "minimum-base-symmetric-mold-padding-cost-one-to-one",
   "packet_size": 1200,
   "paper_equivalent": false,
+  "receiver_continuation": {
+    "application_order": "after-symmetric-elementwise-mold",
+    "cells_per_nonzero_incoming_component": 1,
+    "formula": "adapted_incoming=symmetric_incoming+1-if-symmetric_incoming>0-else-0",
+    "parser_allowance_ceiling_bytes": 1000,
+    "raw_headroom_bytes_per_nonzero_incoming_component": 1200
+  },
   "profiles": [
     {
       "bursts": [
         {
-          "incoming": 128,
+          "incoming": 129,
           "outgoing": 3
         }
       ],
       "decoy": "acceptance-decoy-simple",
-      "matching_cost_packets": 24,
+      "matching_cost_packets": 26,
       "real": "cloudflare-quiche",
       "source_envelopes": {
         "decoy": [
@@ -36,7 +43,7 @@
         "real": [0]
       },
       "molded_batch_ends": [0],
-      "total_scheduled_bytes": 157200,
+      "total_scheduled_bytes": 158400,
       "training_inputs": {
         "decoy": [
           "1e7bfc422d290415b6bbb61cabf6fe4fee90fd822da7c77e078db251f14b4a81"
@@ -61,36 +68,36 @@
     {
       "bursts": [
         {
-          "incoming": 128,
+          "incoming": 129,
           "outgoing": 2
         },
         {
-          "incoming": 32,
+          "incoming": 33,
           "outgoing": 8
         },
         {
-          "incoming": 32,
+          "incoming": 33,
           "outgoing": 8
         },
         {
-          "incoming": 32,
+          "incoming": 33,
           "outgoing": 4
         },
         {
-          "incoming": 32,
+          "incoming": 33,
           "outgoing": 4
         },
         {
-          "incoming": 128,
+          "incoming": 129,
           "outgoing": 0
         },
         {
-          "incoming": 32,
+          "incoming": 33,
           "outgoing": 2
         }
       ],
       "decoy": "acceptance-decoy-complex",
-      "matching_cost_packets": 41,
+      "matching_cost_packets": 55,
       "real": "chromium-quic-page",
       "source_envelopes": {
         "decoy": [
@@ -159,7 +166,7 @@
         "real": [0, 5, 6]
       },
       "molded_batch_ends": [0, 5, 6],
-      "total_scheduled_bytes": 532800,
+      "total_scheduled_bytes": 541200,
       "training_inputs": {
         "decoy": [
           "d2428656bc576afc334aa47cb7bde3a255a2ad7edea5fea83e5202e49ca76d54"
@@ -184,12 +191,12 @@
     {
       "bursts": [
         {
-          "incoming": 128,
+          "incoming": 129,
           "outgoing": 3
         }
       ],
       "decoy": "acceptance-decoy-local-simple",
-      "matching_cost_packets": 19,
+      "matching_cost_packets": 21,
       "real": "simple",
       "source_envelopes": {
         "decoy": [
@@ -210,7 +217,7 @@
         "real": [0]
       },
       "molded_batch_ends": [0],
-      "total_scheduled_bytes": 157200,
+      "total_scheduled_bytes": 158400,
       "training_inputs": {
         "decoy": [
           "2b09843a77a7ba31408b46315659f1d7921279b505b448c3fe3dde43dad97af5"
@@ -235,20 +242,20 @@
     {
       "bursts": [
         {
-          "incoming": 128,
+          "incoming": 129,
           "outgoing": 4
         },
         {
-          "incoming": 32,
+          "incoming": 33,
           "outgoing": 3
         },
         {
-          "incoming": 32,
+          "incoming": 33,
           "outgoing": 3
         }
       ],
       "decoy": "acceptance-decoy-local-complex",
-      "matching_cost_packets": 60,
+      "matching_cost_packets": 66,
       "real": "complex",
       "source_envelopes": {
         "decoy": [
@@ -285,7 +292,7 @@
         "real": [0, 1, 2]
       },
       "molded_batch_ends": [0, 1, 2],
-      "total_scheduled_bytes": 242400,
+      "total_scheduled_bytes": 246000,
       "training_inputs": {
         "decoy": [
           "4192bd37043a1c88265778fc1cda626a02637bcc9712609203593df118b8d9c3"
@@ -308,5 +315,5 @@
       }
     }
   ],
-  "schema_version": 2
+  "schema_version": 3
 }
