@@ -24,6 +24,13 @@ RUNNER_PACKET_FIELDS = (
     "slot_id",
 )
 DEFAULT_TIMESTAMP_TOLERANCE_NS = 10_000_000
+CLOCK_STEP_MIN_NS = 50_000_000
+CLOCK_STEP_MAX_NS = 100_000_000
+CLOCK_STEP_CONTEXT_PACKETS = 5
+CLOCK_EPOCH_MIN_PACKETS = 32
+CLOCK_EPOCH_MIN_SPAN_NS = 500_000_000
+CLOCK_STEP_MIN_INTERVAL_NS = 25_000_000_000
+CLOCK_STEP_MAX_INTERVAL_NS = 35_000_000_000
 RECONCILIATION_LIMITATIONS = (
     (
         "Encrypted direct PCAP proves datagram timing, direction, and wire length, but cannot "
@@ -42,6 +49,11 @@ RECONCILIATION_LIMITATIONS = (
     (
         "Normalization removes the capture's absolute timestamp; a uniform offset between "
         "the runner monotonic clock and capture clock is therefore unobservable."
+    ),
+    (
+        "Abrupt capture wall-clock corrections are accepted only as positive 50--100 ms "
+        "steps with consecutive packet support, well-supported constant-offset epochs, and "
+        "a 25--35 s cadence when steps repeat; negative steps and drift remain ineligible."
     ),
     (
         "Ethernet frame-to-UDP conversion assumes the declared untagged Ethernet, "
@@ -92,7 +104,7 @@ def reconcile_direct_runner_artifacts(
     overheads = _endpoint_frame_overheads(run)
     runner_packets = _read_runner_packets(runner_packets_path, overheads)
     direct_packets = _read_direct_packets(direct_trace_path)
-    matches, unmatched_tail, residuals, clock_offset = _reconcile_runner_packets(
+    matches, unmatched_tail, residuals, clock_offset, clock_metrics = _reconcile_runner_packets(
         runner_packets,
         direct_packets,
         timestamp_tolerance_ns=timestamp_tolerance_ns,
@@ -110,6 +122,7 @@ def reconcile_direct_runner_artifacts(
                 direct_packets[index].frame_length for index in unmatched_tail
             ),
             "direct_clock_offset_ns": clock_offset,
+            **clock_metrics,
             "direct_timestamp_tolerance_ns": timestamp_tolerance_ns,
             "direct_timestamp_error_max_ns": max(absolute_residuals, default=0),
             "direct_timestamp_error_p95_ns": _percentile_95(absolute_residuals),
@@ -228,7 +241,7 @@ def _reconcile_runner_packets(
     direct: list[_DirectPacket],
     *,
     timestamp_tolerance_ns: int,
-) -> tuple[dict[int, int], list[int], list[int], int]:
+) -> tuple[dict[int, int], list[int], list[int], int, dict[str, Any]]:
     direct_by_signature: dict[tuple[str, int], deque[int]] = defaultdict(deque)
     runner_by_signature: dict[tuple[str, int], list[_RunnerPacket]] = defaultdict(list)
     for packet in direct:
@@ -260,19 +273,147 @@ def _reconcile_runner_packets(
     if any(direct[index].direction != "incoming" for index in unmatched):
         raise ValueError("direct trace contains an unrecorded outgoing tail packet")
 
-    offsets = [
-        direct[direct_index].relative_time_ns - runner[runner_index].monotonic_us * 1_000
-        for runner_index, direct_index in matches.items()
+    ordered_matches = sorted(
+        [
+            (
+                runner[runner_index],
+                direct_index,
+                direct[direct_index].relative_time_ns - runner[runner_index].monotonic_us * 1_000,
+            )
+            for runner_index, direct_index in matches.items()
+        ],
+        key=lambda item: (item[0].monotonic_us, item[0].connection, item[0].index),
+    )
+    residuals, clock_offset, clock_metrics = _reconcile_clock_epochs(
+        ordered_matches,
+        timestamp_tolerance_ns=timestamp_tolerance_ns,
+    )
+    return matches, unmatched, residuals, clock_offset, clock_metrics
+
+
+def _reconcile_clock_epochs(
+    ordered_matches: list[tuple[_RunnerPacket, int, int]],
+    *,
+    timestamp_tolerance_ns: int,
+) -> tuple[list[int], int, dict[str, Any]]:
+    """Fit only strongly evidenced positive wall-clock steps between constant epochs."""
+
+    negative_steps = [
+        current[2] - previous[2]
+        for previous, current in zip(ordered_matches, ordered_matches[1:], strict=False)
+        if current[2] - previous[2] <= -CLOCK_STEP_MIN_NS
     ]
-    clock_offset = median_low(offsets)
-    residuals = [offset - clock_offset for offset in offsets]
-    maximum_error = max((abs(value) for value in residuals), default=0)
-    if maximum_error > timestamp_tolerance_ns:
+    if negative_steps:
         raise ValueError(
-            f"direct/runner timestamp mismatch: {maximum_error}ns exceeds "
-            f"{timestamp_tolerance_ns}ns"
+            "direct/runner timestamp mismatch includes a negative clock step: "
+            f"{min(negative_steps)}ns"
         )
-    return matches, unmatched, residuals, clock_offset
+
+    boundaries: list[int] = []
+    boundary_deltas: list[int] = []
+    for index in range(1, len(ordered_matches)):
+        delta = ordered_matches[index][2] - ordered_matches[index - 1][2]
+        if not CLOCK_STEP_MIN_NS <= delta <= CLOCK_STEP_MAX_NS:
+            continue
+        context_start = index - CLOCK_STEP_CONTEXT_PACKETS
+        context_end = index + CLOCK_STEP_CONTEXT_PACKETS
+        if context_start < 0 or context_end > len(ordered_matches):
+            raise ValueError("direct/runner clock step has insufficient consecutive support")
+        direct_indices = [
+            direct_index
+            for _packet, direct_index, _offset in ordered_matches[context_start:context_end]
+        ]
+        if any(
+            current != previous + 1
+            for previous, current in zip(direct_indices, direct_indices[1:], strict=False)
+        ):
+            raise ValueError("direct/runner clock step lacks consecutive packet support")
+        boundaries.append(index)
+        boundary_deltas.append(delta)
+
+    if len(boundaries) > 1:
+        boundary_times = [ordered_matches[index][0].monotonic_us * 1_000 for index in boundaries]
+        for previous, current in zip(boundary_times, boundary_times[1:], strict=False):
+            interval = current - previous
+            if not CLOCK_STEP_MIN_INTERVAL_NS <= interval <= CLOCK_STEP_MAX_INTERVAL_NS:
+                raise ValueError(
+                    "repeated direct/runner clock steps lack the required 25--35 s cadence"
+                )
+
+    epoch_bounds = [0, *boundaries, len(ordered_matches)]
+    residuals: list[int] = []
+    segments: list[dict[str, Any]] = []
+    offsets: list[int] = []
+    for epoch_index, (start, end) in enumerate(zip(epoch_bounds, epoch_bounds[1:], strict=False)):
+        epoch = ordered_matches[start:end]
+        packet_count = len(epoch)
+        span_ns = (epoch[-1][0].monotonic_us - epoch[0][0].monotonic_us) * 1_000 if epoch else 0
+        if boundaries and (
+            packet_count < CLOCK_EPOCH_MIN_PACKETS or span_ns < CLOCK_EPOCH_MIN_SPAN_NS
+        ):
+            raise ValueError(
+                "direct/runner clock epoch lacks minimum support: "
+                f"{packet_count} packets over {span_ns}ns"
+            )
+        offset = median_low([item[2] for item in epoch])
+        epoch_residuals = [item[2] - offset for item in epoch]
+        maximum_error = max((abs(value) for value in epoch_residuals), default=0)
+        if maximum_error > timestamp_tolerance_ns:
+            raise ValueError(
+                f"direct/runner timestamp mismatch in clock epoch {epoch_index}: "
+                f"{maximum_error}ns exceeds {timestamp_tolerance_ns}ns"
+            )
+        residuals.extend(epoch_residuals)
+        offsets.append(offset)
+        absolute_epoch_residuals = sorted(abs(value) for value in epoch_residuals)
+        segments.append(
+            {
+                "index": epoch_index,
+                "runner_packet_start": epoch[0][0].index,
+                "runner_packet_end": epoch[-1][0].index,
+                "direct_packet_start": epoch[0][1],
+                "direct_packet_end": epoch[-1][1],
+                "packets": packet_count,
+                "runner_span_ns": span_ns,
+                "clock_offset_ns": offset,
+                "timestamp_error_max_ns": maximum_error,
+                "timestamp_error_p95_ns": _percentile_95(absolute_epoch_residuals),
+            }
+        )
+
+    steps: list[dict[str, Any]] = []
+    for step_index, (boundary, observed_delta) in enumerate(
+        zip(boundaries, boundary_deltas, strict=True)
+    ):
+        offset_delta = offsets[step_index + 1] - offsets[step_index]
+        if not CLOCK_STEP_MIN_NS <= offset_delta <= CLOCK_STEP_MAX_NS:
+            raise ValueError(
+                "direct/runner clock-step epoch offsets are outside the 50--100 ms bound"
+            )
+        packet, direct_index, _offset = ordered_matches[boundary]
+        steps.append(
+            {
+                "index": step_index,
+                "runner_packet": packet.index,
+                "direct_packet": direct_index,
+                "runner_time_ns": packet.monotonic_us * 1_000,
+                "observed_boundary_delta_ns": observed_delta,
+                "epoch_offset_delta_ns": offset_delta,
+            }
+        )
+
+    clock_offset = offsets[0]
+    return (
+        residuals,
+        clock_offset,
+        {
+            "direct_clock_model": ("positive-abrupt-steps" if steps else "constant-offset"),
+            "direct_clock_segment_count": len(segments),
+            "direct_clock_step_count": len(steps),
+            "direct_clock_segments": segments,
+            "direct_clock_steps": steps,
+        },
+    )
 
 
 def _read_exact_csv(path: Path, fields: tuple[str, ...]) -> list[dict[str, str]]:

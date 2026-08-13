@@ -8,7 +8,7 @@ profile: research-1200
 # post-fitting Internet visits. Each expands to one visit under all seven modes.
 workloads:
   cloudflare-quiche-r3: 1
-  apache-traffic-server-docs-r3: 1
+  bootstrap-introduction-r3: 1
 
 request_policies:
   - as-defined

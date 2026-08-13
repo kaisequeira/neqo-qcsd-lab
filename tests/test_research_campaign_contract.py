@@ -37,7 +37,7 @@ FROZEN_RESEARCH_WORKLOADS = (
 )
 CHECKED_IN_SMOKE_WORKLOADS = (
     "cloudflare-quiche-r3",
-    "apache-traffic-server-docs-r3",
+    "bootstrap-introduction-r3",
 )
 EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 STATIC_CONTROL_ROWS = (

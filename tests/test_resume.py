@@ -12,7 +12,12 @@ from qcsd_lab.orchestrator import resume_campaign, run_campaign
 from qcsd_lab.util import atomic_json, load_json
 from qcsd_lab.verification import verify_result
 
-from .test_campaign import _configuration, _resource, _write_successful_attempt
+from .test_campaign import (
+    _configuration,
+    _resource,
+    _write_pacing_miss,
+    _write_successful_attempt,
+)
 
 
 class _InterruptAfterOneAccepted:
@@ -267,6 +272,40 @@ def test_resume_promotes_completed_success_left_before_promotion_checkpoint(
     assert recovered["attempts"] == 1
     assert resumed.calls == []
     assert not attempt.exists()
+
+
+def test_resume_quarantines_completed_success_with_pacing_miss_before_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, experiment = _interrupted_result(tmp_path, monkeypatch)
+    running = next(sample for sample in experiment["samples"] if sample["state"] == "running")
+    attempt = root / "failures" / running["sample_id"] / f"attempt-{running['attempts']:03d}"
+    (attempt / "unpromoted.tmp").unlink()
+    receipt = _write_successful_attempt(
+        attempt,
+        running["workload_id"],
+        running["defense"],
+    )
+    _write_pacing_miss(attempt)
+    atomic_json(attempt / "attempt.json", receipt)
+    resumed = _ResumeCollector()
+    monkeypatch.setattr(orchestrator.capture_engine, "_collect_attempt", resumed)
+
+    assert resume_campaign(root) == root
+
+    verified = verify_result(root)
+    recovered = next(
+        sample
+        for sample in verified.experiment["samples"]
+        if sample["sample_id"] == running["sample_id"]
+    )
+    failed_receipt = load_json(attempt / "attempt.json")
+    assert recovered["state"] == "accepted"
+    assert recovered["attempts"] == 2
+    assert resumed.calls == [(running["workload_id"], running["defense"], running["seed"])]
+    assert failed_receipt["success"] is False
+    assert failed_receipt["failure"]["stage"] == "fidelity"
+    assert not list(root.rglob(".promotion"))
 
 
 def test_resume_rejects_mutated_accepted_evidence_before_collecting(

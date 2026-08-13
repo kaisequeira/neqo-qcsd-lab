@@ -63,13 +63,12 @@ accepted and eligible. A terminal incomplete run is still retained and sealed
 for diagnosis.
 
 The checked-in `smoke.yml` is a post-fit, 14-sample external evaluation:
-Cloudflare QUIC and Apache Traffic Server documentation, one independent visit
+Cloudflare QUIC and Bootstrap Introduction, one independent visit
 each, the `as-defined` request policy, and all seven current defence modes. It
 uses `research-1200`, the fixed seed `2026081204`, the mechanical
 `static-control-1200.csv`, and the one sealed production bundle under
-`artifacts/research-1200/`. It intentionally fails preflight with the stable
-missing-sealed-bundle error until the 120-sample fitting capture has been
-verified and fitted.
+`artifacts/research-1200/`. The bundle was derived from the sealed 120-sample
+fitting result and must verify before this independent smoke can run.
 
 ### `resume`
 

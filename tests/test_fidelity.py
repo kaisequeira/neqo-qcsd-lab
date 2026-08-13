@@ -24,6 +24,9 @@ def test_direct_runner_reconciliation_preserves_packet_and_tail_evidence(tmp_pat
     assert result.metrics["direct_unmatched_tail_packets"] == 1
     assert result.metrics["direct_unmatched_tail_bytes"] == 100
     assert result.metrics["direct_timestamp_error_max_ns"] == 0
+    assert result.metrics["direct_clock_model"] == "constant-offset"
+    assert result.metrics["direct_clock_segment_count"] == 1
+    assert result.metrics["direct_clock_step_count"] == 0
     assert result.metrics["direct_trace_sha256"]
     assert result.metrics["direct_runner_packets_sha256"]
 
@@ -32,6 +35,116 @@ def test_direct_runner_reconciliation_rejects_unrecorded_outgoing_tail(tmp_path)
     run, packets, trace = _reconciliation_artifacts(tmp_path, tail_direction="outgoing")
 
     with pytest.raises(ValueError, match="unrecorded outgoing tail"):
+        reconcile_direct_runner_artifacts(run, packets, trace)
+
+
+def test_direct_runner_reconciliation_accepts_supported_positive_clock_step(tmp_path):
+    offsets = [0] * 32 + [75_000_000] * 32
+    times = _clock_epoch_times(2)
+    run, packets, trace = _clock_reconciliation_artifacts(tmp_path, times, offsets)
+
+    result = reconcile_direct_runner_artifacts(run, packets, trace)
+
+    assert result.evidence_eligible is True
+    assert result.metrics["direct_timestamp_tolerance_ns"] == 10_000_000
+    assert result.metrics["direct_clock_model"] == "positive-abrupt-steps"
+    assert result.metrics["direct_clock_segment_count"] == 2
+    assert result.metrics["direct_clock_step_count"] == 1
+    assert result.metrics["direct_timestamp_error_max_ns"] == 0
+    assert [segment["packets"] for segment in result.metrics["direct_clock_segments"]] == [
+        32,
+        32,
+    ]
+    assert result.metrics["direct_clock_steps"][0]["observed_boundary_delta_ns"] == 75_000_000
+    assert result.metrics["direct_clock_steps"][0]["epoch_offset_delta_ns"] == 75_000_000
+
+
+def test_direct_runner_reconciliation_accepts_repeated_cadenced_clock_steps(tmp_path):
+    offsets = [0] * 32 + [75_000_000] * 32 + [150_000_000] * 32
+    times = _clock_epoch_times(3)
+    run, packets, trace = _clock_reconciliation_artifacts(tmp_path, times, offsets)
+
+    result = reconcile_direct_runner_artifacts(run, packets, trace)
+
+    assert result.evidence_eligible is True
+    assert result.metrics["direct_clock_segment_count"] == 3
+    assert result.metrics["direct_clock_step_count"] == 2
+    assert [step["runner_time_ns"] for step in result.metrics["direct_clock_steps"]] == [
+        30_000_000_000,
+        60_000_000_000,
+    ]
+
+
+def test_direct_runner_reconciliation_rejects_clock_step_without_supported_epochs(tmp_path):
+    times = [packet * 10_000_000 for packet in range(32)] + [
+        30_000_000_000 + packet * 10_000_000 for packet in range(32)
+    ]
+    offsets = [0] * 32 + [75_000_000] * 32
+    run, packets, trace = _clock_reconciliation_artifacts(tmp_path, times, offsets)
+
+    with pytest.raises(ValueError, match="clock epoch lacks minimum support"):
+        reconcile_direct_runner_artifacts(run, packets, trace)
+
+
+def test_direct_runner_reconciliation_rejects_clock_step_without_packet_context(tmp_path):
+    times = [packet * 20_000_000 for packet in range(4)] + [
+        30_000_000_000 + packet * 20_000_000 for packet in range(32)
+    ]
+    offsets = [0] * 4 + [75_000_000] * 32
+    run, packets, trace = _clock_reconciliation_artifacts(tmp_path, times, offsets)
+
+    with pytest.raises(ValueError, match="insufficient consecutive support"):
+        reconcile_direct_runner_artifacts(run, packets, trace)
+
+
+def test_direct_runner_reconciliation_rejects_uncadenced_repeated_steps(tmp_path):
+    times = [
+        epoch * 20_000_000_000 + packet * 20_000_000 for epoch in range(3) for packet in range(32)
+    ]
+    offsets = [0] * 32 + [75_000_000] * 32 + [150_000_000] * 32
+    run, packets, trace = _clock_reconciliation_artifacts(tmp_path, times, offsets)
+
+    with pytest.raises(ValueError, match="required 25--35 s cadence"):
+        reconcile_direct_runner_artifacts(run, packets, trace)
+
+
+def test_direct_runner_reconciliation_rejects_negative_clock_step(tmp_path):
+    offsets = [75_000_000] * 32 + [0] * 32
+    run, packets, trace = _clock_reconciliation_artifacts(
+        tmp_path,
+        _clock_epoch_times(2),
+        offsets,
+    )
+
+    with pytest.raises(ValueError, match="negative clock step"):
+        reconcile_direct_runner_artifacts(run, packets, trace)
+
+
+def test_direct_runner_reconciliation_rejects_gradual_clock_drift(tmp_path):
+    times = [index * 20_000_000 for index in range(64)]
+    offsets = [index * 500_000 for index in range(64)]
+    run, packets, trace = _clock_reconciliation_artifacts(tmp_path, times, offsets)
+
+    with pytest.raises(ValueError, match="timestamp mismatch"):
+        reconcile_direct_runner_artifacts(run, packets, trace)
+
+
+def test_direct_runner_reconciliation_rejects_single_clock_outlier(tmp_path):
+    times = [index * 100_000_000 for index in range(64)]
+    offsets = [0] * 64
+    offsets[32] = 75_000_000
+    run, packets, trace = _clock_reconciliation_artifacts(tmp_path, times, offsets)
+
+    with pytest.raises(ValueError, match="negative clock step"):
+        reconcile_direct_runner_artifacts(run, packets, trace)
+
+
+def test_direct_runner_reconciliation_rejects_within_epoch_error_over_tolerance(tmp_path):
+    times = [index * 20_000_000 for index in range(64)]
+    offsets = [0] * 32 + [11_000_000] * 32
+    run, packets, trace = _clock_reconciliation_artifacts(tmp_path, times, offsets)
+
+    with pytest.raises(ValueError, match="11000000ns exceeds 10000000ns"):
         reconcile_direct_runner_artifacts(run, packets, trace)
 
 
@@ -349,4 +462,49 @@ def _reconciliation_artifacts(
         f"2000000,{tail_direction},100,{signed_tail}\n",
         encoding="utf-8",
     )
+    return run, packets, trace
+
+
+def _clock_epoch_times(epoch_count: int) -> list[int]:
+    return [
+        epoch * 30_000_000_000 + packet * 20_000_000
+        for epoch in range(epoch_count)
+        for packet in range(32)
+    ]
+
+
+def _clock_reconciliation_artifacts(root, times_ns: list[int], offsets_ns: list[int]):
+    assert len(times_ns) == len(offsets_ns)
+    run = root / "run.json"
+    packets = root / "packets.csv"
+    trace = root / "direct.csv"
+    run.write_text(
+        json.dumps(
+            {
+                "completion_status": "complete",
+                "endpoints": [
+                    {
+                        "id": 0,
+                        "local_address": "10.0.0.2:50000",
+                        "remote_address": "203.0.113.1:443",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    packet_rows = [
+        "direction,monotonic_us,connection,observed_udp_length,"
+        "scheduled_target,satisfaction,slot_id"
+    ]
+    trace_rows = ["relative_time_ns,direction,length_bytes,signed_length_bytes"]
+    first_direct_time = times_ns[0] + offsets_ns[0]
+    for index, (time_ns, offset_ns) in enumerate(zip(times_ns, offsets_ns, strict=True)):
+        udp_length = 1_000 + index
+        frame_length = udp_length + 42
+        packet_rows.append(f"outgoing,{time_ns // 1_000},0,{udp_length},,unshaped,")
+        relative_time = time_ns + offset_ns - first_direct_time
+        trace_rows.append(f"{relative_time},outgoing,{frame_length},{frame_length}")
+    packets.write_text("\n".join(packet_rows) + "\n", encoding="utf-8")
+    trace.write_text("\n".join(trace_rows) + "\n", encoding="utf-8")
     return run, packets, trace

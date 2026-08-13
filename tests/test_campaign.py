@@ -168,6 +168,13 @@ def _write_successful_attempt(
     }
 
 
+def _write_pacing_miss(attempt: Path) -> None:
+    (attempt / "neqo/schedule.csv").write_text(
+        "direction,satisfaction,miss_reason,size,observed_size\noutgoing,missed,pacing,1200,\n",
+        encoding="utf-8",
+    )
+
+
 class _Collector:
     def __init__(
         self,
@@ -209,6 +216,27 @@ class _Collector:
             defense.name,
             body_sha256=digest,
         )
+
+
+class _PacingMissCollector:
+    def __init__(self, miss_front_attempts: set[int]) -> None:
+        self.miss_front_attempts = miss_front_attempts
+        self.counts: Counter[str] = Counter()
+
+    def __call__(
+        self,
+        attempt: Path,
+        _manifest: Path,
+        workload_id: str,
+        defense: Any,
+        _seed: int,
+        _campaign: Any,
+    ) -> dict[str, Any]:
+        self.counts[defense.name] += 1
+        result = _write_successful_attempt(attempt, workload_id, defense.name)
+        if defense.name == "front" and self.counts[defense.name] in self.miss_front_attempts:
+            _write_pacing_miss(attempt)
+        return result
 
 
 def test_endpoint_parser_and_exact_filter_support_both_ip_versions() -> None:
@@ -568,6 +596,62 @@ def test_run_writes_only_the_canonical_result_and_retains_failed_attempts(
     assert str(retained.relative_to(root)) in verified.checksums
 
 
+def test_collection_success_with_pacing_miss_is_quarantined_then_retried(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = _configuration(tmp_path, max_attempts=2)
+    collector = _PacingMissCollector({1})
+    monkeypatch.setattr(orchestrator.capture_engine, "_collect_attempt", collector)
+
+    root = run_campaign(path, tmp_path / "results")
+    experiment = verify_result(root).experiment
+    front = next(sample for sample in experiment["samples"] if sample["defense"] == "front")
+    failed_attempt = root / "failures" / front["sample_id"] / "attempt-001"
+    receipt = load_json(failed_attempt / "attempt.json")
+
+    assert collector.counts == {"undefended": 1, "front": 2}
+    assert front["state"] == "accepted"
+    assert front["attempts"] == 2
+    assert front["eligible"] is True
+    assert receipt["success"] is False
+    assert receipt["failure"]["stage"] == "fidelity"
+    assert receipt["failure"]["type"] == "StrictDefenseFidelityFailure"
+    assert receipt["failure"]["details"][0]["schedule"]["missed_events"] == 1
+    assert (failed_attempt / "captures/direct-quic.pcapng").is_file()
+    assert not list(root.rglob(".promotion"))
+    assert not (failed_attempt.parent / "attempt-002").exists()
+
+
+def test_all_collection_successes_with_fidelity_misses_end_terminally_without_promotion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = _configuration(tmp_path, max_attempts=2)
+    collector = _PacingMissCollector({1, 2})
+    monkeypatch.setattr(orchestrator.capture_engine, "_collect_attempt", collector)
+
+    with pytest.raises(CampaignIncomplete) as raised:
+        run_campaign(path, tmp_path / "results")
+
+    root = raised.value.root
+    experiment = verify_result(root).experiment
+    front = next(sample for sample in experiment["samples"] if sample["defense"] == "front")
+
+    assert collector.counts == {"undefended": 1, "front": 2}
+    assert experiment["status"] == "incomplete"
+    assert front["state"] == "failed"
+    assert front["attempts"] == 2
+    assert front["eligible"] is False
+    assert front["failure"]["stage"] == "fidelity"
+    assert not (root / front["path"]).exists()
+    assert not list(root.rglob(".promotion"))
+    for attempt_number in (1, 2):
+        receipt = load_json(
+            root / "failures" / front["sample_id"] / f"attempt-{attempt_number:03d}/attempt.json"
+        )
+        assert receipt["success"] is False
+        assert receipt["failure"]["stage"] == "fidelity"
+
+
 def test_paired_response_mismatch_makes_the_terminal_result_incomplete(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -586,8 +670,11 @@ def test_paired_response_mismatch_makes_the_terminal_result_incomplete(
     front = next(sample for sample in experiment["samples"] if sample["defense"] == "front")
     assert baseline["eligible"] is True
     assert baseline["diagnostics"]["response_match"] is True
+    assert front["state"] == "accepted"
+    assert front["attempts"] == 1
     assert front["eligible"] is False
     assert front["diagnostics"]["response_match"] is False
+    assert collector.counts["front"] == 1
 
 
 def test_materialization_uses_the_exact_campaign_bytes_that_were_parsed(

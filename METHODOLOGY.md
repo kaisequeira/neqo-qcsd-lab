@@ -311,18 +311,18 @@ workload coverage. Verification requires the exact file set and runtime
 schemas. An identical rerun is idempotent; a different existing bundle is a
 collision. Fitting does not mutate or reseal its source result.
 
-This describes the implemented evidence boundary, not a completed experiment.
-The six-workload cohort and fitting campaign are frozen, but no real
-120-sample fitting result or fitted research bundle exists until the capture,
-verification, and fitting commands succeed.
+The six-workload cohort and fitting campaign are frozen. The sealed fitting
+result at `results/research-fitting-1200/20260812T130241.322364Z` contains all
+120 accepted, eligible samples, and its deterministic four-file
+`artifacts/research-1200/` bundle verifies against the same evidence receipt.
 
 The operational order preserves that boundary. `./qcsd-lab test live` first
 exercises all defended modes against controlled local HTTP/3 servers and is
-the bounded pre-fit networking gate. The six-workload fitting campaign then
-collects 120 undefended public-Internet samples; its verified result is fitted
-and the four-file bundle is verified. Only then can the checked-in
-`research-smoke-1200` campaign (seed `2026081204`) pass preflight. That smoke
-uses Cloudflare QUIC and Apache Traffic Server documentation for one new
+the bounded networking gate. The completed six-workload fitting campaign
+collected 120 undefended public-Internet samples; its verified result was
+fitted and the four-file bundle verified. The checked-in
+`research-smoke-1200` campaign (seed `2026081204`) therefore passes preflight.
+That smoke uses Cloudflare QUIC and Bootstrap Introduction for one new
 `as-defined` visit each under all seven modes, producing 14 independent
 post-fit evaluation samples. It never reuses a fitting visit. Rehearsal and
 final remain separate and explicitly on hold.

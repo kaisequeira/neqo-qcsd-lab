@@ -951,24 +951,27 @@ def _execute(root: Path, campaign: Campaign, experiment: dict[str, Any]) -> Path
                     atomic_json(attempt / "failure.json", result["failure"])
                 capture_engine._mark_origin_completed(runtime_workload, origin_last_run)
                 if result.get("success") is True:
-                    diagnostics = _success_diagnostics(result)
-                    diagnostics["promotion"] = _promotion_receipt(root, sample, attempt)
-                    transition_sample(
-                        experiment,
-                        sample["sample_id"],
-                        "running",
-                        diagnostics=diagnostics,
-                    )
-                    _checkpoint(root, experiment)
-                    _promote_attempt(root, sample, attempt)
-                    diagnostics.pop("promotion")
-                    accept_sample(
-                        root,
-                        experiment,
-                        sample["sample_id"],
-                        diagnostics=diagnostics,
-                    )
-                    break
+                    fidelity_failure = _intrinsic_fidelity_failure(sample, result, attempt)
+                    if fidelity_failure is None:
+                        diagnostics = _success_diagnostics(result)
+                        diagnostics["promotion"] = _promotion_receipt(root, sample, attempt)
+                        transition_sample(
+                            experiment,
+                            sample["sample_id"],
+                            "running",
+                            diagnostics=diagnostics,
+                        )
+                        _checkpoint(root, experiment)
+                        _promote_attempt(root, sample, attempt)
+                        diagnostics.pop("promotion")
+                        accept_sample(
+                            root,
+                            experiment,
+                            sample["sample_id"],
+                            diagnostics=diagnostics,
+                        )
+                        break
+                    result = _record_fidelity_failure(attempt, result, fidelity_failure)
                 _sanitize_failed_attempt(attempt)
                 transition_sample(
                     experiment,
@@ -1033,6 +1036,55 @@ def _success_diagnostics(result: dict[str, Any]) -> dict[str, Any]:
         "operationally_valid": result.get("operationally_valid", True),
         "defense": result.get("defense_diagnostics") or {},
     }
+
+
+def _intrinsic_fidelity_failure(
+    sample: dict[str, Any],
+    result: dict[str, Any],
+    attempt: Path,
+) -> dict[str, Any] | None:
+    """Reject a collected defense realization before it becomes immutable evidence."""
+
+    schedule = _schedule_realization_metrics(attempt)
+    defense_metrics = result.get("defense_diagnostics")
+    if not isinstance(defense_metrics, dict):
+        defense_metrics = {}
+    defense = defense_from_runtime_identity(sample["defense"], sample["runtime_kind"])
+    eligible = fidelity_eligible(
+        defense,
+        defense_metrics,
+        sample_eligible=True,
+        missed_events=schedule.get("missed_events"),
+        outgoing_size_mismatches=schedule.get("outgoing_size_mismatch_events"),
+    )
+    if eligible:
+        return None
+    return {
+        "stage": "fidelity",
+        "type": "StrictDefenseFidelityFailure",
+        "message": "collection artifacts failed strict defense fidelity gates",
+        "details": [
+            {
+                "defense": defense,
+                "schedule": schedule,
+                "defense_diagnostics": defense_metrics,
+            }
+        ],
+    }
+
+
+def _record_fidelity_failure(
+    attempt: Path,
+    result: dict[str, Any],
+    failure: dict[str, Any],
+) -> dict[str, Any]:
+    """Atomically turn a successful collection receipt into a retryable failure."""
+
+    failed = dict(result)
+    failed["success"] = False
+    failed["failure"] = failure
+    atomic_json(attempt / "attempt.json", failed)
+    return failed
 
 
 def _promotion_sources(attempt: Path) -> dict[str, Path]:
@@ -1282,16 +1334,19 @@ def _recover_completed_attempt(root: Path, experiment: dict[str, Any]) -> bool:
         if not isinstance(result, dict) or type(result.get("success")) is not bool:
             raise ValueError("running attempt has an invalid terminal receipt")
         if result["success"] is True:
-            diagnostics = _success_diagnostics(result)
-            diagnostics["promotion"] = _promotion_receipt(root, sample, attempt)
-            transition_sample(
-                experiment,
-                sample["sample_id"],
-                "running",
-                diagnostics=diagnostics,
-            )
-            _checkpoint(root, experiment)
-            return _recover_pending_promotion(root, experiment)
+            fidelity_failure = _intrinsic_fidelity_failure(sample, result, attempt)
+            if fidelity_failure is None:
+                diagnostics = _success_diagnostics(result)
+                diagnostics["promotion"] = _promotion_receipt(root, sample, attempt)
+                transition_sample(
+                    experiment,
+                    sample["sample_id"],
+                    "running",
+                    diagnostics=diagnostics,
+                )
+                _checkpoint(root, experiment)
+                return _recover_pending_promotion(root, experiment)
+            result = _record_fidelity_failure(attempt, result, fidelity_failure)
         failure = result.get("failure")
     elif exception_receipt.is_file():
         failure = load_json(exception_receipt)

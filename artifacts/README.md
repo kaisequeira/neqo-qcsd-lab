@@ -9,5 +9,5 @@ bundle at `artifacts/research-1200/` containing exactly:
 - `provenance.json`
 
 Generated bundle contents are intentionally ignored by Git and excluded from
-the Docker build context. No production research bundle has been fitted or
-checked in yet.
+the Docker build context. The production research bundle has been fitted and
+verified locally; its generated contents are deliberately not checked in.
