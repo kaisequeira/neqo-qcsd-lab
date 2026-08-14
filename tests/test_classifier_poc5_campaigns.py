@@ -16,30 +16,30 @@ ROOT = Path(__file__).parents[1]
 CAMPAIGN_DIR = ROOT / "config/campaigns"
 WORKLOADS = (
     "getbootstrap-home-r3",
-    "apache-traffic-server-docs-r3",
-    "nginx-quic-r3",
     "cloudflare-quiche-r3",
-    "nghttp2-ngtcp2-r3",
+    "hyper-basic-client-r1",
+    "serde-home-r1",
+    "rfc9114-text-r1",
 )
 WORKLOAD_ORDERS = (
     tuple(WORKLOADS[shift:] + WORKLOADS[:shift] for shift in range(len(WORKLOADS))) * 2
 )
 BASELINE_SEEDS = tuple(range(2_026_081_501, 2_026_081_511))
 # Prospectively selected from 2026082001..2026092000 using only deterministic
-# plan expansion. The criterion first bounds every class/defense/position cell
-# as tightly as possible around 100/3, then minimizes cells outside 33..34.
-# No capture result or workload outcome was available to this selection.
+# plan expansion. A fixed search minimized squared distance from 100/3 subject
+# to the acceptance bound 32..35; only three of 45 cells fall outside 33..34.
+# No capture result, workload outcome, or classifier score informed selection.
 PAIRED_SEEDS = (
-    2_026_082_902,
-    2_026_083_050,
-    2_026_085_096,
-    2_026_085_118,
-    2_026_085_300,
-    2_026_085_353,
-    2_026_085_559,
-    2_026_085_658,
-    2_026_089_403,
-    2_026_090_539,
+    2_026_082_040,
+    2_026_082_307,
+    2_026_082_909,
+    2_026_083_171,
+    2_026_083_594,
+    2_026_083_697,
+    2_026_085_480,
+    2_026_086_255,
+    2_026_089_590,
+    2_026_091_763,
 )
 REHEARSAL_SEED = 2_026_081_499
 BASELINE_DEFENSES = ("undefended",)
@@ -50,11 +50,11 @@ DEFENSE_KINDS = {
     "tamaraw": "tamaraw",
 }
 EXPECTED_PAIRED_POSITION_COUNTS = (
-    ((34, 34, 32), (33, 33, 34), (33, 33, 34)),
-    ((33, 33, 34), (33, 34, 33), (34, 33, 33)),
-    ((34, 32, 34), (33, 34, 33), (33, 34, 33)),
-    ((34, 33, 33), (33, 35, 32), (33, 32, 35)),
-    ((33, 33, 34), (34, 33, 33), (33, 34, 33)),
+    ((33, 34, 33), (33, 33, 34), (34, 33, 33)),
+    ((33, 34, 33), (33, 33, 34), (34, 33, 33)),
+    ((34, 33, 33), (33, 34, 33), (33, 33, 34)),
+    ((34, 33, 33), (33, 33, 34), (33, 34, 33)),
+    ((32, 35, 33), (34, 32, 34), (34, 33, 33)),
 )
 LIMITS = {
     "timeout_seconds": 120,
@@ -100,7 +100,7 @@ def _load_value(path: Path) -> dict[str, Any]:
 
 @pytest.fixture(scope="module")
 def planning_base() -> Campaign:
-    return load_campaign(CAMPAIGN_DIR / "fitting.yml")
+    return load_campaign(CAMPAIGN_DIR / "classifier-poc5-baseline-01.yml")
 
 
 def _planning_campaign(base: Campaign, path: Path, value: dict[str, Any]) -> Campaign:
@@ -260,6 +260,7 @@ def test_poc5_formal_aggregate_is_exactly_2500_balanced_samples(
     assert observed_position_counts == EXPECTED_PAIRED_POSITION_COUNTS
     assert min(defense_positions.values()) >= 32
     assert max(defense_positions.values()) <= 35
+    assert sum(count not in {33, 34} for count in defense_positions.values()) == 3
 
     for block in range(10):
         assert tuple(values[2 * block]["workloads"]) == tuple(values[2 * block + 1]["workloads"])

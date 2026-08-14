@@ -8,10 +8,10 @@ profile: research-1200
 # excluded from the formal ten-block classifier proof-of-concept corpus.
 workloads:
   getbootstrap-home-r3: 2
-  apache-traffic-server-docs-r3: 2
-  nginx-quic-r3: 2
   cloudflare-quiche-r3: 2
-  nghttp2-ngtcp2-r3: 2
+  hyper-basic-client-r1: 2
+  serde-home-r1: 2
+  rfc9114-text-r1: 2
 
 request_policies:
   - as-defined

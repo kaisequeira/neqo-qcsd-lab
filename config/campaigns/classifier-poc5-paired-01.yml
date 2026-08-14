@@ -1,20 +1,20 @@
 schema: 1
 name: research-classifier-poc5-paired-01-1200
 purpose: evaluation
-seed: 2026082902
+seed: 2026082040
 profile: research-1200
 
 # Five-class proof-of-concept, temporal block 01 of 10. The undefended
 # visit in each triplet is an additional clean sample; defended samples are
 # reserved for post-training inference.
 # The ten paired seeds were selected prospectively from deterministic order
-# expansion only; every class/defense/order-position cell totals 32..35.
+# expansion only; all cells total 32..35 and only three of 45 fall outside 33..34.
 workloads:
   getbootstrap-home-r3: 10
-  apache-traffic-server-docs-r3: 10
-  nginx-quic-r3: 10
   cloudflare-quiche-r3: 10
-  nghttp2-ngtcp2-r3: 10
+  hyper-basic-client-r1: 10
+  serde-home-r1: 10
+  rfc9114-text-r1: 10
 
 request_policies:
   - as-defined

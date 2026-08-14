@@ -8,10 +8,10 @@ profile: research-1200
 # campaign is paired with classifier-poc5-paired-01.yml.
 workloads:
   getbootstrap-home-r3: 20
-  apache-traffic-server-docs-r3: 20
-  nginx-quic-r3: 20
   cloudflare-quiche-r3: 20
-  nghttp2-ngtcp2-r3: 20
+  hyper-basic-client-r1: 20
+  serde-home-r1: 20
+  rfc9114-text-r1: 20
 
 request_policies:
   - as-defined
