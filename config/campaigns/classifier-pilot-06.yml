@@ -1,0 +1,44 @@
+schema: 1
+name: research-classifier-pilot-06-1200
+purpose: evaluation
+seed: 2026000066
+profile: research-1200
+
+# Pilot block 6 of 7: five-position cyclic workload rotation.
+workloads:
+  nghttp2-ngtcp2-r3: 1
+  getbootstrap-home-r3: 1
+  bootstrap-introduction-r3: 1
+  apache-traffic-server-docs-r3: 1
+  nginx-quic-r3: 1
+  cloudflare-quiche-r3: 1
+
+request_policies:
+  - as-defined
+
+defenses:
+  - undefended
+  - name: static-control
+    kind: static
+    schedule: ../defense-params/static-control-1200.csv
+    mode: chaff-only
+  - front
+  - tamaraw
+  - name: traffic-morphing
+    kind: traffic_morphing
+    parameters: ../../artifacts/research-1200/traffic-morphing.json
+  - name: wtf-pad
+    kind: wtf_pad
+    parameters: ../../artifacts/research-1200/wtf-pad.json
+  - name: walkie-talkie
+    kind: walkie_talkie
+    parameters: ../../artifacts/research-1200/walkie-talkie.json
+
+limits:
+  timeout_seconds: 120
+  max_response_bytes: 1048576
+  capture_seconds: 180
+  capture_megabytes: 64
+  max_attempts: 3
+  per_origin_cooldown_seconds: 30
+  settle_seconds: 1

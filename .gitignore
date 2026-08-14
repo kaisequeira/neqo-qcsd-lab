@@ -2,6 +2,7 @@
 !/results/README.md
 /artifacts/*
 !/artifacts/README.md
+/handoffs/
 /.cache/
 /.pytest_cache/
 /.ruff_cache/

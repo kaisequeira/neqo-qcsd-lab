@@ -9,16 +9,22 @@ The lab does not maintain a second data-processing workflow. A workload is
 simply a frozen graph of HTTPS requests. A visit is one execution of that
 graph. A sample is one visit under one defence.
 
-The active specification has no dataset, classifier, monitored/unmonitored,
-open-world, split, or projection layer. Fitting and evaluation are separate
-campaigns over independent visits of the same frozen workload definitions.
+The capture specification does not train a classifier or define a final
+monitored/unmonitored or open-world corpus. Fitting and evaluation are separate
+campaigns over independent visits of the same frozen workload definitions. A
+separate offline companion can package complete sealed results as a small
+classifier-pipeline pilot; that export does not make the six-workload cohort a
+representative efficacy dataset.
 
 Docker is required for every public command. The Neqo source is the
 `neqo-qcsd/` Git submodule.
 
 ## Commands
 
-The public surface is deliberately limited to the forms documented below.
+The capture surface is deliberately limited to the `qcsd-lab` forms documented
+below. The classifier handoff exporter is a separate offline tool so adding or
+changing it cannot alter the implementation receipt already bound by the
+qualified defences.
 
 ### `build`
 
@@ -192,6 +198,99 @@ scatter, an application-completion marker, and a shaded defence tail. No PDF
 or qlog is produced. Deleting `derived/` and rerunning `analyze` reconstructs
 it from `capture.pcapng`, `run.json`, and `schedule.csv` without modifying or
 resealing evidence.
+
+### Offline classifier-pilot handoff
+
+The classifier exporter is intentionally not a `qcsd-lab` capture command. Run
+the separate Docker wrapper from this checkout after every source result
+verifies:
+
+```shell
+./classifier-pilot export classifier-pilot-v1 \
+  results/research-classifier-pilot-01-1200/<run-id> \
+  results/research-classifier-pilot-02-1200/<run-id> \
+  results/research-classifier-pilot-03-1200/<run-id> \
+  results/research-classifier-pilot-04-1200/<run-id> \
+  results/research-classifier-pilot-05-1200/<run-id> \
+  results/research-classifier-pilot-06-1200/<run-id> \
+  results/research-classifier-pilot-07-1200/<run-id> \
+  --splits train,train,train,train,train,validation,test
+./classifier-pilot verify classifier-pilot-v1
+```
+
+The wrapper runs the exact collection image with networking disabled, all
+capabilities dropped, the checkout and result evidence read-only, and the
+handoff output writable as the invoking UID/GID. Direct
+`uv run python tools/classifier_handoff.py ...` execution is an internal
+developer path for controlled fixtures only: a native host process lacks the
+executed qualification receipt required to verify these research results.
+
+The destination must not exist. Export is create-only and atomic. Every input
+must be a complete sealed result in which all planned samples are accepted and
+eligible. Inputs are read-only; the exporter verifies each evidence seal before
+copying anything and rejects duplicate sample IDs, mismatched block cohorts,
+symlinks, or an existing destination.
+
+The handoff is self-contained:
+
+```text
+handoffs/classifier-pilot-v1/
+  README.md
+  dataset.json
+  samples.jsonl
+  SHA256SUMS
+  raw/
+    <opaque-sample-id>.pcapng
+    <opaque-sample-id>.pcap
+    <opaque-sample-id>.run.json
+  stripped/
+    <opaque-sample-id>.pcap
+  traces/
+    <opaque-sample-id>.csv
+```
+
+`raw/` preserves byte-exact PCAPNG evidence, a full-packet classic-PCAP format
+conversion, and the corresponding Neqo run receipt for a trusted collaborator
+who needs to build a different projection. Both capture formats are restricted
+material: they contain real endpoint metadata, absolute times, and QUIC Initial
+traffic from which handshake metadata may be recovered; the run receipt also
+contains URLs and request configuration. They must not be the default
+classifier input.
+
+`stripped/` contains synthetic classic PCAP with nanosecond timestamps. Every
+packet uses the same fixed documentation-only MAC addresses, TEST-NET IPv4
+addresses, and UDP ports; its UDP payload is all zero. It preserves only the
+relative packet time, client-relative direction, packet count, and Ethernet
+`frame.len`. It is deliberately not a replayable QUIC exchange. `traces/`
+provides the same model-facing projection directly as
+`relative_time_ns,direction,length_bytes,signed_length_bytes`, with client
+egress positive and server ingress negative.
+
+`samples.jsonl` maps each opaque sample ID to workload class, defence,
+request policy, visit, source block, split, and exported file hashes.
+`dataset.json` binds the checked-in campaign, source result, and evidence-index
+hashes, declares the projection, and summarizes classes, defences, blocks, and
+splits. `SHA256SUMS` closes the exported file inventory. These receipts protect
+handoff integrity;
+they do not replace the authoritative result seals.
+
+Verify the portable inventory from inside the handoff root:
+
+```shell
+cd handoffs/classifier-pilot-v1
+sha256sum -c SHA256SUMS
+```
+
+The `--splits` entries align with the result roots in command-line order. Omit
+the option when exporting only block 01 for the importer check; its split is
+then recorded as unassigned. `verify` rechecks the closed handoff inventory and
+all hashes without reading the original result directories.
+
+Josh should train from `traces/` or `stripped/`, use `class_label` as the
+prediction target, and evaluate each defence as a separate condition. Paths,
+`run.json`, defence/controller schedules, and other metadata are not model
+features. `static-control` is labelled as an engineering control rather than a
+privacy defence.
 
 ### `fit`
 
@@ -635,21 +734,43 @@ only a genuinely partial, unpromoted working attempt may be discarded.
 See [METHODOLOGY.md](METHODOLOGY.md) for the scientific interpretation of the
 observer, pairing, fidelity, and derived metrics.
 
-## Research readiness and final hold
+## Research readiness, classifier pilot, and final hold
 
 The post-fit 14-sample evaluation and 120-sample fitting campaign definitions
 are checked in, and their completed results are sealed locally. The six-workload
-fitting cohort is frozen. The research definitions and their exact expansions
-are:
+fitting cohort is frozen. Seven classifier-pilot block definitions are also
+checked in but have not yet been captured. The relevant exact expansions are:
 
 - fitting: six workloads × ten visits × two request policies × undefended =
   120 samples;
 - post-fit smoke: two workloads × one visit × one request policy × seven modes
   = 14 samples;
+- classifier pilot: seven independently sealed blocks × six workloads × one
+  visit × one request policy × seven modes = 42 samples per block and 294
+  samples in the complete pilot;
 - pre-final rehearsal: six workloads × one visit × one request policy × seven
   modes = 42 samples;
 - final: six workloads × three visits × one request policy × seven modes =
   126 samples.
+
+The pilot blocks are `config/campaigns/classifier-pilot-01.yml` through
+`classifier-pilot-07.yml`. They use distinct seeds and rotate workload order to
+reduce simple time-position bias. The seeds were fixed before capture so no
+workload/defence pair occupies any within-visit position more than twice across
+the seven blocks. Capture them separately and verify each result before
+continuing. Block 01 is the first 42-sample interface gate: it
+can be exported alone without committing the remaining capture time. If Josh's
+import succeeds, capture blocks 02–07 and export all seven with blocks 01–05
+assigned to training, block 06 to validation, and block 07 to pilot testing.
+That test block is only a pipeline check; once it informs model or feature
+choices it is not an untouched final-paper test set.
+
+```shell
+./qcsd-lab verify config/campaigns/classifier-pilot-01.yml
+./qcsd-lab run config/campaigns/classifier-pilot-01.yml
+./qcsd-lab verify results/research-classifier-pilot-01-1200/<run-id>
+# Repeat the same verify -> run -> verify sequence for blocks 02 through 07.
+```
 
 The implementation goal established the profiles, preparation policy,
 fitters, runtime realization, campaign contracts, and evidence boundaries.
@@ -688,6 +809,6 @@ manifest-sealed at
 Its outer manifest SHA-256 is
 `4ee68a930a344dc0e5874279e09069f92935a2f4f42bc7bb7e88077153b85aa9`;
 its manifest is bound by the v2 receipts, while its bytes are not positive
-qualification or fitting input. This goal did **not**
-define or execute the 42-sample rehearsal or 126-sample final campaign. Both
-remain explicitly on hold and require later authorization.
+qualification or fitting input. The classifier pilot does not define or
+execute the separately named pre-final rehearsal or 126-sample final campaign.
+Both remain explicitly on hold and require later authorization.

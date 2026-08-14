@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+COLLECTION_IMAGE="${QCSD_LAB_COLLECTION_IMAGE:-neqo-qcsd-lab-collection:local}"
+HANDOFF_ROOT="${ROOT}/handoffs"
+TOOL="${ROOT}/tools/classifier_handoff.py"
+
+usage() {
+  cat >&2 <<'EOF'
+Usage:
+  classifier-pilot export NAME RESULT [RESULT ...] [--splits SPLIT,...]
+  classifier-pilot verify NAME
+
+NAME is a single safe directory name created under handoffs/. RESULT must be a
+sealed result directory under results/. The recommended seven-block split list
+is train,train,train,train,train,validation,test.
+EOF
+}
+
+command -v docker >/dev/null 2>&1 || {
+  echo "classifier-pilot requires Docker on the host" >&2
+  exit 1
+}
+if ! docker info >/dev/null 2>&1; then
+  echo "Docker is installed but its daemon is unavailable" >&2
+  exit 1
+fi
+if ! docker image inspect "${COLLECTION_IMAGE}" >/dev/null 2>&1; then
+  echo "Missing image ${COLLECTION_IMAGE}; run: ./qcsd-lab build" >&2
+  exit 1
+fi
+if [[ ! -f "${TOOL}" || -L "${TOOL}" ]]; then
+  echo "classifier handoff tool must be a regular file: ${TOOL}" >&2
+  exit 1
+fi
+if [[ -e "${HANDOFF_ROOT}" && ( ! -d "${HANDOFF_ROOT}" || -L "${HANDOFF_ROOT}" ) ]]; then
+  echo "handoff root must be a non-symlink directory: ${HANDOFF_ROOT}" >&2
+  exit 1
+fi
+mkdir -p "${HANDOFF_ROOT}"
+
+mode="${1:-}"
+name="${2:-}"
+if [[ "${mode}" != "export" && "${mode}" != "verify" ]]; then
+  usage
+  exit 2
+fi
+if [[ ! "${name}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+  echo "classifier handoff NAME is invalid: ${name}" >&2
+  exit 2
+fi
+shift 2
+
+image_id="$(docker image inspect --format '{{.Id}}' "${COLLECTION_IMAGE}")"
+lab_commit="$(git -C "${ROOT}" rev-parse HEAD)"
+lab_dirty=false
+if [[ -n "$(git -C "${ROOT}" status --porcelain --untracked-files=all)" ]]; then
+  lab_dirty=true
+fi
+container=(
+  docker run --rm
+  --network none
+  --security-opt no-new-privileges
+  --cap-drop ALL
+  --user "$(id -u):$(id -g)"
+  --env "HOME=/tmp/qcsd-home"
+  --env "QCSD_LAB_IMAGE_DIGEST=${image_id}"
+  --env "QCSD_HANDOFF_LAB_COMMIT=${lab_commit}"
+  --env "QCSD_HANDOFF_LAB_DIRTY=${lab_dirty}"
+  --env "QCSD_HANDOFF_LAB_ROOT=/lab"
+  --env "QCSD_HANDOFF_TOOL_PATH=tools/classifier_handoff.py"
+  --volume "${ROOT}:/lab:ro"
+  --volume "${HANDOFF_ROOT}:/lab/handoffs:rw"
+  --volume "${TOOL}:/opt/qcsd-tools/classifier_handoff.py:ro"
+  --entrypoint /usr/bin/python3
+  "${image_id}"
+  /opt/qcsd-tools/classifier_handoff.py
+)
+
+if [[ "${mode}" == "verify" ]]; then
+  if (( $# != 0 )); then
+    usage
+    exit 2
+  fi
+  exec "${container[@]}" verify "/lab/handoffs/${name}"
+fi
+
+if (( $# < 1 )); then
+  usage
+  exit 2
+fi
+arguments=(export "/lab/handoffs/${name}")
+seen_split=0
+result_count=0
+while (( $# )); do
+  if [[ "$1" == "--splits" ]]; then
+    if (( seen_split )) || (( $# != 2 )); then
+      usage
+      exit 2
+    fi
+    if [[ ! "$2" =~ ^(train|validation|test|interface)(,(train|validation|test|interface))*$ ]]; then
+      echo "invalid classifier block split list: $2" >&2
+      exit 2
+    fi
+    arguments+=(--splits "$2")
+    seen_split=1
+    shift 2
+    continue
+  fi
+  result="$(realpath -e -- "$1")"
+  if [[ "${result}" != "${ROOT}/results/"* || ! -d "${result}" || -L "${result}" ]]; then
+    echo "classifier-pilot RESULT must be a non-symlink directory under results/: $1" >&2
+    exit 2
+  fi
+  relative="${result#"${ROOT}/"}"
+  arguments+=("/lab/${relative}")
+  result_count=$((result_count + 1))
+  shift
+done
+
+if (( result_count == 0 )); then
+  usage
+  exit 2
+fi
+
+exec "${container[@]}" "${arguments[@]}"

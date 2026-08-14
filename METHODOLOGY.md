@@ -76,9 +76,11 @@ representativeness claim.
 Fitting used all six frozen manifest definitions; the post-fit smoke selected
 two members of that cohort. For those shared workloads the visits were
 independent: fitting captures were never reused as evaluation samples, and
-evaluation observations did not influence fitted parameters. The active
-specification has no
-monitored/unmonitored roles, open-world view, dataset label, or split map.
+evaluation observations did not influence fitted parameters. The capture
+specification has no monitored/unmonitored roles or open-world view. The
+offline classifier-pilot projection labels these six fixed workload graphs and
+assigns capture blocks to a pipeline-development split, but it is not a final
+classifier study design.
 
 ## Ordering and concurrency
 
@@ -442,8 +444,8 @@ at
 `results/chaff-qualification-diagnostics/q7-b19cb04-7ebcdb0-schema6-203eee42-runtime-falsification/`.
 Its closed outer manifest hashes to
 `4ee68a930a344dc0e5874279e09069f92935a2f4f42bc7bb7e88077153b85aa9`.
-Rehearsal and final remain separate, undefined, unexecuted, and explicitly on
-hold.
+The classifier pilot is separate from the pre-final gate. The named rehearsal
+and final remain undefined, unexecuted, and explicitly on hold.
 
 ## Evidence, sealing, and recovery
 
@@ -510,6 +512,64 @@ plots and `summary.csv` still expose the available accepted evidence and make
 incomplete or ineligible groups visible in the report. SVG generation is
 deterministic, and the report embeds those SVGs so it is self-contained.
 
+## Classifier-pilot projection and handoff
+
+The classifier pilot is a staged interface experiment, not the final efficacy
+corpus. Its seven campaign blocks each execute the same six frozen workloads,
+the `as-defined` request policy, and all seven current modes for one new visit:
+42 samples per sealed block and 294 samples when all blocks complete. Blocks
+use distinct campaign seeds. The first six cyclically rotate workload order;
+the seventh uses a separate reverse ordering. Defence order remains the seeded
+order derived by the ordinary campaign expander. The seven seeds were selected
+before capture so no workload/defence pair occupies a within-visit position
+more than twice across the pilot.
+
+Block 01 is collected and exported first as the 42-sample importer gate. The
+remaining blocks are justified only after the receiver can ingest that
+contract. The complete pilot assigns blocks 01–05 to training, block 06 to
+validation, and block 07 to pilot testing. Splitting at the sealed-result block
+rather than randomly by packet trace prevents samples from the same temporal
+capture block appearing on both sides of a split. Seven observations per
+workload and defence remain far too few for a defence-effectiveness estimate.
+Any pilot test result consulted during feature or model development is also no
+longer eligible as an untouched final-paper test set.
+
+The exporter is an offline companion outside the qualified capture
+implementation. This separation matters because qualification binds the exact
+capture launcher and every installed `qcsd_lab` module. The exporter therefore
+cannot alter a campaign result or the implementation receipt against which its
+defences were qualified. It accepts only complete sealed results for which all
+planned samples are accepted and eligible, re-verifies every evidence index,
+and publishes a create-only handoff atomically. The handoff's `SHA256SUMS`
+closes the derived inventory but does not replace the source result seals.
+
+For each sample, the handoff contains two explicitly different views:
+
+1. a byte-exact raw `capture.pcapng`, full-packet classic-PCAP conversion, and
+   `run.json` copy for restricted audit or creation of a revised projection;
+2. a model-facing CSV and shape-only classic PCAP derived from the direct
+   observer trace.
+
+The shape projection retains only packet-relative nanosecond time, direction
+relative to the client, Ethernet `frame.len`, and packet order. Every packet in
+the shape-only PCAP uses the same fixed documentation MAC addresses, TEST-NET
+IPv4 endpoints, and UDP ports, with an all-zero UDP payload. This removes real
+endpoint identities, absolute capture time, QUIC headers and connection IDs,
+TLS ClientHello/SNI bytes, and controller/application annotations. It is not a
+valid or replayable QUIC transcript. The CSV states the same observation as
+`relative_time_ns,direction,length_bytes,signed_length_bytes`, where client
+egress is positive and server ingress is negative.
+
+Raw evidence is not a neutral alternative model input. It exposes IP and port
+identity, capture time, URLs and headers in the paired run receipt, and QUIC
+Initial metadata, any of which can create a label shortcut unrelated to traffic
+shape. Classifier code should consume only the stripped PCAP or CSV unless a
+separately declared threat model deliberately includes those fields. It must
+not use filenames, manifest labels, `run.json`, Neqo packet/event/schedule
+ledgers, or defence parameters as features. The workload is the class label;
+the defence is an evaluation condition. `static-control` remains a mechanical
+integration control rather than an efficacy defence.
+
 ## Scope and limitations
 
 - Internet responses and path conditions can vary between separately captured
@@ -519,6 +579,9 @@ deterministic, and the report embeds those SVGs so it is self-contained.
   network vantage point.
 - A direct PCAP contains endpoint and encrypted-protocol metadata and is not a
   ready-made public release.
+- The classifier pilot has only six fixed workload graphs spanning five
+  origins. It is suitable for parser, feature, training, and evaluation-pipeline
+  integration, not website-population generalization or open-world claims.
 - Controlled local smoke fixtures validate mechanics before fitting; the
   checked-in external smoke instead requires the sealed fitted bundle and
   evaluates independent post-fit visits.
