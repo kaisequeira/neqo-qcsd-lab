@@ -73,10 +73,11 @@ their fitted distance or mould-padding cost. The cohort is therefore a
 reproducible adaptation cohort, not six independent websites or a
 representativeness claim.
 
-The fitting and evaluation campaigns will reference the same six frozen
-manifest definitions and hashes. They perform independent visits: fitting
-captures are never reused as evaluation samples, and evaluation observations
-cannot influence fitted parameters. The active specification has no
+Fitting used all six frozen manifest definitions; the post-fit smoke selected
+two members of that cohort. For those shared workloads the visits were
+independent: fitting captures were never reused as evaluation samples, and
+evaluation observations did not influence fitted parameters. The active
+specification has no
 monitored/unmonitored roles, open-world view, dataset label, or split map.
 
 ## Ordering and concurrency
@@ -295,105 +296,107 @@ boundary and that closure marker, and later tail observations remain excluded.
   pair and performs a full-cohort minimum-weight perfect matching by mould
   padding cost, with the lexical pair vector resolving an exact tie. That
   pairing objective is the base symmetric mould: the component-wise maximum of
-  the two observed envelopes. The runtime mould then adds exactly one incoming
-  1200-byte receiver-continuation cell to every nonzero incoming component.
-  This leaves the raw request-stream source envelopes unchanged while providing
-  one cell beyond each incoming envelope component. The continuation cell is a
-  held causal event, not ordinary eager receive credit. It becomes eligible
-  only after all base incoming events have been controller-requested and their
-  request signals observed. Eligibility at a moulded batch end additionally
-  requires application-batch completion. Before due moulded outgoing actions,
-  the client fills the configured chaff-stream limit. A response stream is
-  eligible only when its request used a zero-required-insert-count, nonblocking
-  QPACK header block and the peer acknowledged a positive final size, every
-  unique request-stream offset in `[0, final-size)`, and FIN under those
-  outgoing cells. Retransmitted and acknowledged offsets are union-deduplicated
-  and do not advance activation twice. Before the first base allocation for
-  each nonzero incoming component, acknowledged nonblocking survivors must
-  cover the current reserve horizon plus one; deterministic acknowledged pristine
-  candidates are reserved for the current zero-outgoing continuation horizon.
-  The protected horizon includes consecutive incoming components before the
-  next positive outgoing action. The configured chaff-stream maximum must be
-  at least the maximum horizon plus one, preserving a nonreserved candidate;
-  the first moulded component must have positive outgoing cells so activation
-  can precede incoming allocation. Every required preprovisioned chaff
-  request's STREAM frames through FIN must also fit in the residual
-  Normal-priority STREAM-data budget after higher-priority due application
-  frames at the positive outgoing component that starts its horizon. Fitting
-  traces do not expose HTTP/3/QPACK request-prefix lengths or transport
-  STREAM-frame budgets. The schema-6 runtime input therefore binds three
-  independent production prefix-pack transcripts that prove the outgoing
-  application/request-control fit and required compact chaff requests through
-  FIN and chaff peer acknowledgement for the exact mould and reserve horizon;
-  those qualification bytes are excluded from fitting.
+  the two observed envelopes. The runtime mould then adds one 1200-byte
+  sender-framing cell to every positive outgoing component and one 1200-byte
+  receiver-continuation cell to every positive incoming component. The sender
+  cell reserves space for QUIC/HTTP/3 STREAM framing and mandatory control
+  overhead absent from request-stream offsets. The receiver cell provides one
+  cell beyond the incoming envelope and is a held causal event, not eager
+  ordinary receive credit. The raw source envelopes and base pairing objective
+  remain unchanged, but the adapted runtime mould and cost do not equal the
+  historical schema-5 values.
+
+  Before the first due moulded outgoing actions, the client provisions the
+  exact workload-specific one-shot chaff cohort and never replenishes it. A
+  response stream is eligible only when its request used a
+  zero-required-insert-count, nonblocking QPACK header block and the peer
+  acknowledged a positive final size, every unique request-stream offset in
+  `[0, final-size)`, and FIN. Retransmitted offsets and acknowledgements are
+  union-deduplicated. Before the first incoming base allocation, a latched gate
+  requires a peer-acknowledged nonblocking survivor count of at least the total
+  number of remaining receiver continuations plus one. Deterministic pristine
+  reserves cover all remaining nonzero incoming components and stay reserved
+  across later positive outgoing components until their corresponding
+  continuation is allocated.
+
+  Fitting traces do not expose HTTP/3/QPACK request-prefix lengths or transport
+  STREAM-frame budgets. Each schema-6 workload binding therefore requires
+  three independent schema-2 production prefix-pack transcripts. Every
+  component is represented by exact full sender-framed packet targets; the
+  transcripts prove cumulative application requests through FIN, the
+  nondecreasing one-shot chaff cohort through FIN, peer acknowledgement of every
+  required chaff-request STREAM range and FIN, and zero targetless STREAM bytes.
+  Their stateful every-component capacity recurrence binds exact prepared
+  application bodies and the selected qualified response body. Qualification
+  bytes are excluded from fitting.
 
   The prefix transcript starts only after a broad HTTP/3/QPACK warmup drain.
-  Its completion gate continues to reject pending application, required-chaff,
-  HTTP/3-control, or QPACK-encoder output. It separately records and excludes
-  only post-warmup client QPACK-decoder stream output; this fixed critical-
-  stream role is outside request-prefix causality.
+  At every activation stage its completion gate rejects pending application,
+  required-chaff, request-causal HTTP/3-control, or QPACK-encoder output. It
+  separately records and excludes only post-warmup client QPACK-decoder stream
+  output; this fixed critical-stream role is outside request-prefix causality.
 
   Each reserve is excluded from ordinary base allocation, and its exact
-  capacity is subtracted from ordinary base capacity availability, until
-  its corresponding continuation is released or the session or endpoint ends.
-  Loss before release requires an equivalent acknowledged pristine replacement
-  before further base allocation or fails closed. Allocation to an active
-  application stream or fragmentation across streams is forbidden.
+  capacity is subtracted from ordinary base capacity availability, until its
+  corresponding continuation is released or the session or endpoint ends.
+  Loss of a required survivor after the initial request batch holds allocation
+  while the horizon is deterministically reconstituted from an eligible
+  peer-acknowledged pristine member of the already provisioned cohort. It fails
+  closed only if no eligible replacement remains; no new request replenishes
+  the one-shot cohort. Allocation to an active application stream or
+  fragmentation across streams is forbidden.
 
-  The initial priority-aware, largest-eligible chaff selection must yield a
-  known-valid, dependency-free resource of at least 1200 effective bytes whose
-  origin matches a ready request endpoint. The Lab binds the prepared manifest
-  and workload hash and mirrors the initial selector before execution.
-  Same-origin eligibility is ultimately endpoint-relative, so the runtime
-  validates it after connection readiness and fails closed when no qualifying
-  chaff resource exists. If too few acknowledged survivors remain after the
-  positive outgoing targets resolve, base and continuation allocation remain
-  held; no targetless chaff-request retransmission or generic post-loss
-  liveness guarantee is claimed.
+  The initial priority-aware selector binds a known-valid same-origin selected
+  source resource; its derived chaff projection is dependency-free and has at
+  least one cell of exact qualified capacity. The Lab binds the prepared
+  manifest and workload hash before execution. Same-origin eligibility is
+  ultimately endpoint-relative, so the runtime revalidates it after connection
+  readiness. If too few acknowledged survivors remain after the outgoing
+  targets resolve, base and continuation allocation remain held; no targetless
+  request retransmission or generic post-loss liveness guarantee is claimed.
 
-  A continuation allocation discharges exactly the oldest reserve once, even
-  if positive live base debt causes the whole cell to extend a different,
-  nonreserved stream. Reserves refresh only for a defense-pending continuation
-  or a tagged continuation still queued for allocation. A retryable
-  unadvertised rollback or requeue reconstitutes the corresponding horizon
-  reserve before further base allocation; a terminal drop-mode close does not
-  claim reconstitution.
+  A continuation becomes eligible after issued base events have been
+  controller-requested, their request signals observed, and any application
+  batch gate has opened. Release normally follows issuance of all base events.
+  A real reported ordinary nonreserved-capacity snapshot below one cell,
+  including zero, permits early issuance; unknown capacity does not. Allocation
+  then follows the coalesced-tail-or-oldest-reserve rules below, while the
+  corresponding oldest reserve is discharged exactly once. The initial
+  survivor gate still precedes both early continuation and base allocation.
+
+  Every retry recomputes live unconsumed base debt. If one peer-acknowledged
+  nonreserved header-phase chaff stream carries a positive debt at or below the
+  parser ceiling, an advertised tail is extended in place. If that exact tail
+  is awaiting its `MAX_STREAM_DATA` advertisement, the continuation and reserve
+  are retained until the advertisement is observed. Otherwise the whole cell
+  uses the oldest pristine reserve regardless of unrelated live debt. Split or
+  ledger-inconsistent tails are ineligible, and the corresponding reserve is
+  removed exactly once. A retryable unadvertised rollback or requeue restores
+  the corresponding all-future reserve before further base allocation.
 
   Ordinary base receive allocation exhausts application streams before
-  peer-acknowledged, nonreserved controlled chaff streams; within each class,
-  exact capacity precedes bounded provisional framing claims. Opened but
-  unacknowledged chaff therefore cannot satisfy or advertise ordinary
-  Walkie-Talkie base capacity.
+  peer-acknowledged nonreserved controlled chaff streams; exact capacity
+  precedes bounded provisional framing claims. Candidate streams must remain in
+  `ReceivingHeaders`, have no consumed, terminal, framing, parser-lease, or
+  parser-boundary state, retain wholly available reservation, and have one
+  exact cell after requested bytes. Pending coalescence additionally requires
+  requested-minus-advertised bytes to equal the pending base controller credit.
 
-  Both candidate branches require peer-acknowledged controlled chaff in
-  `ReceivingHeaders`, zero bytes consumed, requested equal to advertised, and
-  no more than the parser ceiling. It must have no terminal status, framing
-  bytes, parser-lease use, or prior/pending parser boundary; its reservation
-  must be wholly available, and its exact known capacity after requested bytes
-  must be at least one cell. Provisional framing claims are ineligible. Every
-  allocation retry recomputes live unconsumed base bytes from prior
-  credit-ledger slots, excluding the continuation slot, and requires the result
-  to be at most 1000. For a positive live value, requested and advertised must
-  be positive and all live outstanding must be coalesced on one acknowledged,
-  nonreserved header-blocked stream: advertised-minus-consumed must exactly
-  match the live ledger value. The continuation extends that stream. A zero
-  live value instead uses the corresponding retained acknowledged reserve,
-  still untouched with requested, advertised, and consumed all zero. Split or
-  ledger-inconsistent positive outstanding is ineligible.
+  Three independent compact response qualifications use
+  `max(5, required_chaff_streams)` parallel requests to derive stable full-body
+  identity and length. Three independent every-component prefix-pack
+  qualifications establish outgoing request/control fit and peer
+  acknowledgement of every required chaff-request STREAM range and FIN. Parser
+  consumability and source-envelope bounds remain runtime fail-closed. Neither
+  evidence layer enters the numeric fit or proves a general HTTP/3 property.
+  Receipts record both the base pairing cost and the adapted runtime padding
+  cost; scheduled bytes include sender-framing and receiver-continuation cells.
 
-  The first `prior_requested + 1200` raw response bytes on that selected stream
-  must be consumable. Three independent five-way compact response
-  qualifications derive the stable full-body response identity and length,
-  and three independent prefix-pack qualifications establish the outgoing
-  request/control fit and required chaff FIN acknowledgement. Parser
-  consumability remains runtime fail-closed. Neither evidence layer enters the
-  numeric fit or proves a general HTTP/3 property. The controlled direct wire
-  smoke is explicitly nonauthoritative and excluded from fitting. A violated continuation precondition, like source-envelope
-  overflow, is fail-closed and strictly fidelity-ineligible.
-  The contract does not rely on application FIN residuals being requeued or
-  coalesced. Receipts record both the base pairing cost and the adapted runtime
-  padding cost; scheduled bytes are computed from the unchanged numeric adapted
-  mould.
+  FRONT has a separate terminal incoming-slot liveness rule. For `ChaffOnly`
+  schedules whose incoming side is proven complete, the last untouched whole
+  slot prefers a peer-acknowledged pristine chaff stream with at least one cell
+  of exact capacity. This avoids stranding a sub-header residual on a new
+  response and changes no capture-clock acceptance rule.
 
 These are deterministic, client-only QCSD adaptations, and every artifact says
 `paper_equivalent: false`. Traffic Morphing cannot move mass to a smaller
@@ -415,20 +418,32 @@ result at `results/research-fitting-1200/20260812T130241.322364Z` contains all
 120 accepted, eligible samples. The verified schema-5 historical bundle is
 archived read-only at
 `artifacts/research-1200-superseded-schema5-0a141768/` and is not accepted by a
-current campaign. The canonical schema-6 bundle is generated only after the
-standalone specs and exact-six qualifications have been published.
+current campaign. The canonical schema-6 bundle was generated only after the
+standalone specs and exact-six qualifications had been published. That
+boundary is now complete: the v2 specifications and sidecars are published,
+and the regenerated schema-6 four-file bundle verifies against the sealed
+fitting result.
 
-The operational order preserves that boundary. `./qcsd-lab test live` checks
-the sealed baseline path and a direct, nonauthoritative schema-6 A/R/C wire
-path against controlled local HTTP/3 servers. The completed six-workload
-fitting campaign collected 120 undefended public-Internet samples. Before the
-checked-in `research-smoke-1200` campaign (seed `2026081204`) can pass current
-preflight, the standalone prefix specs, exact-six qualification sidecars, and
-schema-6 four-file bundle must be published and verified. That smoke then uses
-Cloudflare QUIC and Bootstrap Introduction for one new
-`as-defined` visit each under all seven modes, producing 14 independent
-post-fit evaluation samples. It never reuses a fitting visit. Rehearsal and
-final remain separate and explicitly on hold.
+The operational order preserved that boundary. `./qcsd-lab test live` checked
+the sealed baseline path and a direct, nonauthoritative schema-6 A/R/C wire path
+against controlled local HTTP/3 servers. The six-workload fitting campaign
+collected 120 eligible undefended public-Internet samples. The checked-in
+`research-smoke-1200` campaign (seed `2026081204`) then used Cloudflare QUIC and
+Bootstrap Introduction for one new `as-defined` visit each under all seven
+modes. The independent result
+`results/research-smoke-1200/20260814T023209.708923Z` is verified and analyzed:
+14/14 samples were accepted and eligible on their first attempt, with zero
+failures. Its evidence-index and experiment-file SHA-256 values are
+`59371aedf7dfa7ce289cce25766af763ede405d2f62527dc16c0d7882b42203a`
+and `1cd8c415751736aa43677fac67f1bea666b941a47ae90d3658bf7cb2bf17d248`.
+
+The prior runtime failures remain qualification-excluded diagnostic evidence
+at
+`results/chaff-qualification-diagnostics/q7-b19cb04-7ebcdb0-schema6-203eee42-runtime-falsification/`.
+Its closed outer manifest hashes to
+`4ee68a930a344dc0e5874279e09069f92935a2f4f42bc7bb7e88077153b85aa9`.
+Rehearsal and final remain separate, undefined, unexecuted, and explicitly on
+hold.
 
 ## Evidence, sealing, and recovery
 
