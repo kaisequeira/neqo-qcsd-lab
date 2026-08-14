@@ -5,6 +5,7 @@ from collections import Counter
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -32,6 +33,28 @@ EXPORTER_SOURCE = {
         "lab_dirty": False,
     },
 }
+EXPECTED_POC5_CLASSES = (
+    "getbootstrap-home-r3",
+    "cloudflare-quiche-r3",
+    "hyper-basic-client-r1",
+    "serde-home-r1",
+    "rfc9114-text-r1",
+)
+EXPECTED_POC5_CLASS_LABELS = {
+    "getbootstrap-home-r3": "getbootstrap.com",
+    "cloudflare-quiche-r3": "cloudflare-quic.com",
+    "hyper-basic-client-r1": "hyper.rs",
+    "serde-home-r1": "serde.rs",
+    "rfc9114-text-r1": "www.rfc-editor.org",
+}
+LEGACY_PILOT_CLASSES = (
+    "getbootstrap-home-r3",
+    "bootstrap-introduction-r3",
+    "apache-traffic-server-docs-r3",
+    "nginx-quic-r3",
+    "cloudflare-quiche-r3",
+    "nghttp2-ngtcp2-r3",
+)
 
 
 def _response_only_sidecar_from_full(workload_id: str) -> dict:
@@ -328,6 +351,58 @@ def _poc5_rehearsal_export_metadata() -> tuple[dict, list[dict]]:
     )
 
 
+def test_poc5_exact_active_cohort_and_domain_labels_preserve_legacy_contract() -> None:
+    assert classifier_handoff.POC5_CLASSES == EXPECTED_POC5_CLASSES
+    assert classifier_handoff.POC5_CLASS_LABELS == EXPECTED_POC5_CLASS_LABELS
+    for workload_id, domain in EXPECTED_POC5_CLASS_LABELS.items():
+        workload = load_json(ROOT / f"config/workloads/{workload_id}.json")
+        assert urlsplit(workload["preparation"]["final_url"]).hostname == domain
+        assert workload["preparation"]["approved_origins"] == [f"https://{domain}"]
+    assert classifier_handoff.PILOT_CLASSES == LEGACY_PILOT_CLASSES
+    assert classifier_handoff.STABLE3_PILOT_CLASSES == (
+        "getbootstrap-home-r3",
+        "bootstrap-introduction-r3",
+        "cloudflare-quiche-r3",
+    )
+
+
+@pytest.mark.parametrize(
+    "wrong_workload_id",
+    [
+        "apache-traffic-server-docs-r3",
+        "nginx-quic-r3",
+        "nghttp2-ngtcp2-r3",
+        "hyper-basic-client-r1",
+    ],
+)
+def test_poc5_handoff_rejects_old_or_wrong_active_workload_id(
+    wrong_workload_id: str,
+) -> None:
+    dataset, rows = _poc5_export_metadata()
+    rows = deepcopy(rows)
+    assert rows[0]["workload_id"] == "getbootstrap-home-r3"
+    rows[0]["workload_id"] = wrong_workload_id
+
+    with pytest.raises(ValueError, match="2,500-sample protocol"):
+        classifier_handoff._validate_poc5_handoff_protocol(dataset, rows)
+
+
+@pytest.mark.parametrize("workload_id", EXPECTED_POC5_CLASSES)
+def test_poc5_handoff_rejects_wrong_domain_for_each_active_workload(
+    workload_id: str,
+) -> None:
+    dataset, rows = _poc5_export_metadata()
+    rows = deepcopy(rows)
+    row = next(value for value in rows if value["workload_id"] == workload_id)
+    other_labels = set(EXPECTED_POC5_CLASS_LABELS.values()) - {
+        EXPECTED_POC5_CLASS_LABELS[workload_id]
+    }
+    row["class_label"] = sorted(other_labels)[0]
+
+    with pytest.raises(ValueError, match="2,500-sample protocol"):
+        classifier_handoff._validate_poc5_handoff_protocol(dataset, rows)
+
+
 def test_poc5_response_only_expected_config_matches_materialized_frozen_reload(
     tmp_path: Path,
 ) -> None:
@@ -444,6 +519,23 @@ def test_poc5_contract_rejects_non_alternating_within_block_capture_order() -> N
     )
 
     with pytest.raises(ValueError, match="capture order does not alternate"):
+        classifier_handoff._validate_pilot_collection(receipts, [None] * 20)
+
+
+@pytest.mark.parametrize(
+    "wrong_workload_id",
+    ["apache-traffic-server-docs-r3", "hyper-basic-client-r1"],
+    ids=["retired-id", "wrong-active-id"],
+)
+def test_poc5_collection_rejects_old_or_wrong_active_workload_id(
+    wrong_workload_id: str,
+) -> None:
+    receipts = _poc5_receipts()
+    sample = receipts[0].experiment["samples"][0]
+    assert sample["workload_id"] == "getbootstrap-home-r3"
+    sample["workload_id"] = wrong_workload_id
+
+    with pytest.raises(ValueError, match="100-sample cohort"):
         classifier_handoff._validate_pilot_collection(receipts, [None] * 20)
 
 

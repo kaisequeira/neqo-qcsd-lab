@@ -75,17 +75,17 @@ PILOT_RUNTIME = {
 
 POC5_CLASSES = (
     "getbootstrap-home-r3",
-    "apache-traffic-server-docs-r3",
-    "nginx-quic-r3",
     "cloudflare-quiche-r3",
-    "nghttp2-ngtcp2-r3",
+    "hyper-basic-client-r1",
+    "serde-home-r1",
+    "rfc9114-text-r1",
 )
 POC5_CLASS_LABELS = {
     "getbootstrap-home-r3": "getbootstrap.com",
-    "apache-traffic-server-docs-r3": "docs.trafficserver.apache.org",
-    "nginx-quic-r3": "quic.nginx.org",
     "cloudflare-quiche-r3": "cloudflare-quic.com",
-    "nghttp2-ngtcp2-r3": "nghttp2.org",
+    "hyper-basic-client-r1": "hyper.rs",
+    "serde-home-r1": "serde.rs",
+    "rfc9114-text-r1": "www.rfc-editor.org",
 }
 POC5_DEFENSES = ("undefended", "front", "tamaraw")
 POC5_RUNTIME = {
