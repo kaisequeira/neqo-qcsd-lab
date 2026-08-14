@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from collections import Counter
 from copy import deepcopy
 from pathlib import Path
@@ -8,7 +9,8 @@ from types import SimpleNamespace
 import pytest
 
 from qcsd_lab import chaff_qualification
-from qcsd_lab.util import load_json
+import qcsd_lab.orchestrator as orchestrator
+from qcsd_lab.util import atomic_json, load_json
 from tools import classifier_handoff
 
 
@@ -32,15 +34,120 @@ EXPORTER_SOURCE = {
 }
 
 
+def _response_only_sidecar_from_full(workload_id: str) -> dict:
+    """Build a validator-complete, test-only response contract from saved receipts."""
+
+    full = load_json(ROOT / f"config/chaff-qualification-store/v2/{workload_id}.json")
+    response_runs = []
+    for run_index, value in enumerate(full["resource"]["response_runs"]):
+        receipt = deepcopy(value["receipt"])
+        receipt.update(
+            qualified_parallel_chaff_streams=(
+                chaff_qualification.RESPONSE_ONLY_PARALLEL_CHAFF_STREAMS
+            ),
+            parallel_requests=chaff_qualification.RESPONSE_ONLY_PARALLEL_CHAFF_STREAMS,
+            requests_opened_before_first_network_output=(
+                chaff_qualification.RESPONSE_ONLY_PARALLEL_CHAFF_STREAMS
+            ),
+        )
+        receipt["requests"] = receipt["requests"][
+            : chaff_qualification.RESPONSE_ONLY_PARALLEL_CHAFF_STREAMS
+        ]
+        response_runs.append(chaff_qualification._response_run_record(run_index, receipt))
+    response_digest = chaff_qualification.qualification_digest(
+        "qcsd-chaff-response-qualification-v2", response_runs
+    )
+    resource = full["resource"]
+    return {
+        "schema_version": chaff_qualification.RESPONSE_ONLY_SIDECAR_SCHEMA_VERSION,
+        "artifact_type": chaff_qualification.RESPONSE_ONLY_SIDECAR_ARTIFACT_TYPE,
+        "qualification_scope": chaff_qualification.RESPONSE_ONLY_QUALIFICATION_SCOPE,
+        "workload_id": workload_id,
+        "base_manifest": deepcopy(full["base_manifest"]),
+        "selection_policy": full["selection_policy"],
+        "application_resource_id": full["application_resource_id"],
+        "selected_chaff_resource_id": full["selected_chaff_resource_id"],
+        "qualified_parallel_chaff_streams": (
+            chaff_qualification.RESPONSE_ONLY_PARALLEL_CHAFF_STREAMS
+        ),
+        "header_projection": deepcopy(full["header_projection"]),
+        "method": full["method"],
+        "qualification_policy": {
+            "qualification_scope": chaff_qualification.RESPONSE_ONLY_QUALIFICATION_SCOPE,
+            "response_runs": chaff_qualification.QUALIFICATION_RUNS,
+            "parallel_response_requests": (
+                chaff_qualification.RESPONSE_ONLY_PARALLEL_CHAFF_STREAMS
+            ),
+            "qualified_parallel_chaff_streams": (
+                chaff_qualification.RESPONSE_ONLY_PARALLEL_CHAFF_STREAMS
+            ),
+            "profile": "research-1200",
+            "response_defense": "none",
+            "seed": 0,
+            "udp_payload_ceiling": chaff_qualification.UDP_PAYLOAD_CEILING,
+            "max_response_bytes": 1_048_576,
+            "separate_chaff_namespace": True,
+        },
+        "qualification_source": deepcopy(full["qualification_source"]),
+        "qualification_image_digest": full["qualification_image_digest"],
+        "neqo_provenance": deepcopy(full["neqo_provenance"]),
+        "implementation_receipt": deepcopy(full["implementation_receipt"]),
+        "resource": {
+            "resource_id": resource["resource_id"],
+            "url": resource["url"],
+            "headers": deepcopy(resource["headers"]),
+            "request_stream_bytes": resource["request_stream_bytes"],
+            "expected_response": deepcopy(resource["expected_response"]),
+            "response_runs": response_runs,
+            "response_qualification_sha256": response_digest,
+        },
+    }
+
+
 @pytest.fixture(autouse=True)
-def _native_executed_qualification_receipt(monkeypatch: pytest.MonkeyPatch) -> None:
-    sidecar = load_json(ROOT / "config/chaff-qualification-store/v2/getbootstrap-home-r3.json")
-    receipt = sidecar["implementation_receipt"]
+def _poc5_qualification_inputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    lab_root = tmp_path / "poc5-lab"
+    campaigns = lab_root / "config/campaigns"
+    workloads = lab_root / "config/workloads"
+    qualifications = lab_root / "config/chaff-response-qualification-store/v1"
+    campaigns.mkdir(parents=True)
+    workloads.mkdir()
+    qualifications.mkdir(parents=True)
+    for campaign_file in (
+        *classifier_handoff.POC5_CAMPAIGN_FILES,
+        "classifier-poc5-rehearsal.yml",
+    ):
+        source = ROOT / "config/campaigns" / campaign_file
+        (campaigns / campaign_file).write_bytes(source.read_bytes())
+    sidecars = []
+    for workload_id in classifier_handoff.POC5_CLASSES:
+        source = ROOT / "config/workloads" / f"{workload_id}.json"
+        (workloads / source.name).write_bytes(source.read_bytes())
+        live = ROOT / f"config/chaff-response-qualification-store/v1/{workload_id}.json"
+        destination = qualifications / f"{workload_id}.json"
+        if live.is_file() and not live.is_symlink():
+            destination.write_bytes(live.read_bytes())
+            sidecars.append(load_json(live))
+        else:
+            sidecar = _response_only_sidecar_from_full(workload_id)
+            atomic_json(destination, sidecar)
+            sidecars.append(sidecar)
+    receipt = sidecars[0]["implementation_receipt"]
+    assert all(sidecar["implementation_receipt"] == receipt for sidecar in sidecars)
     monkeypatch.setattr(
         chaff_qualification,
         "implementation_receipt",
         lambda *_args, **_kwargs: receipt,
     )
+    monkeypatch.setattr(
+        chaff_qualification,
+        "_implementation_source_files",
+        lambda *_args, **_kwargs: receipt["source_files"],
+    )
+    monkeypatch.setenv("QCSD_HANDOFF_LAB_ROOT", str(lab_root))
+    classifier_handoff._cached_poc5_configuration.cache_clear()
+    yield
+    classifier_handoff._cached_poc5_configuration.cache_clear()
 
 
 def _poc5_receipts() -> list[SimpleNamespace]:
@@ -57,7 +164,7 @@ def _poc5_receipts() -> list[SimpleNamespace]:
         day = acquisition_block + 1
         baseline_first = acquisition_block % 2 == 0
         hour = 0 if baseline_result == baseline_first else 1
-        campaign_path = ROOT / "config/campaigns" / campaign_file
+        campaign_path = classifier_handoff._lab_root() / "config/campaigns" / campaign_file
         campaign, configuration = classifier_handoff._expected_poc5_configuration(campaign_path)
         samples = classifier_handoff.plan_campaign(campaign)
         receipts.append(
@@ -152,7 +259,9 @@ def _poc5_export_metadata() -> tuple[dict, list[dict]]:
 
 
 def _poc5_rehearsal_receipt() -> SimpleNamespace:
-    campaign_path = ROOT / "config/campaigns/classifier-poc5-rehearsal.yml"
+    campaign_path = (
+        classifier_handoff._lab_root() / "config/campaigns/classifier-poc5-rehearsal.yml"
+    )
     campaign, configuration = classifier_handoff._expected_poc5_configuration(campaign_path)
     samples = classifier_handoff.plan_campaign(campaign)
     return SimpleNamespace(
@@ -217,6 +326,89 @@ def _poc5_rehearsal_export_metadata() -> tuple[dict, list[dict]]:
         },
         rows,
     )
+
+
+def test_poc5_response_only_expected_config_matches_materialized_frozen_reload(
+    tmp_path: Path,
+) -> None:
+    campaign_path = (
+        classifier_handoff._lab_root() / "config/campaigns/classifier-poc5-paired-01.yml"
+    )
+    campaign, expected = classifier_handoff._expected_poc5_configuration(campaign_path)
+    result = tmp_path / "response-only-result"
+
+    runtime, materialized = orchestrator._materialize_inputs(result, campaign, {})
+    frozen = orchestrator._campaign_from_frozen_inputs(result)
+    reloaded = orchestrator._frozen_configuration(result, frozen)
+
+    assert expected == materialized == reloaded
+    assert orchestrator.plan_campaign(runtime) == orchestrator.plan_campaign(frozen)
+    assert not (result / "inputs/chaff-prefix-specs").exists()
+    assert all(
+        record["chaff_qualification_scope"] == orchestrator.RESPONSE_ONLY_CHAFF_SCOPE
+        and "chaff_prefix_spec" not in record
+        and "chaff_prefix_spec_sha256" not in record
+        for record in expected["workloads"]
+    )
+    for directory in (
+        "chaff-qualifications",
+        "chaff-manifests",
+        "runtime-workloads",
+    ):
+        assert len(tuple((result / "inputs" / directory).iterdir())) == len(
+            classifier_handoff.POC5_CLASSES
+        )
+
+
+def test_poc5_full_v2_expected_config_preserves_prefix_contract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workload = SimpleNamespace(
+        id="qualified-site",
+        visits=2,
+        sha256="1" * 64,
+        resource_count=3,
+        origin_count=1,
+        chaff_qualification_path=Path("qualification.json"),
+        chaff_qualification_sha256="2" * 64,
+        chaff_qualification_scope=orchestrator.FULL_CHAFF_SCOPE,
+        chaff_prefix_spec_path=Path("prefix.json"),
+        chaff_prefix_spec_sha256="3" * 64,
+        chaff_manifest_sha256="4" * 64,
+        runtime_sha256="5" * 64,
+    )
+    campaign = SimpleNamespace(
+        workloads=(workload,),
+        defenses=(),
+        profile="research-1200",
+        request_policies=("as-defined",),
+        limits=SimpleNamespace(as_dict=lambda: {}),
+    )
+    campaign_path = tmp_path / "full-v2.yml"
+    atomic_json(campaign_path, {})
+    monkeypatch.setattr(classifier_handoff, "load_campaign", lambda _path: campaign)
+    classifier_handoff._cached_poc5_configuration.cache_clear()
+
+    _, expected = classifier_handoff._expected_poc5_configuration(campaign_path)
+
+    assert expected["workloads"] == [
+        {
+            "id": "qualified-site",
+            "visits": 2,
+            "manifest": "inputs/workloads/qualified-site.json",
+            "sha256": "1" * 64,
+            "resource_count": 3,
+            "origin_count": 1,
+            "chaff_qualification": "inputs/chaff-qualifications/qualified-site.json",
+            "chaff_qualification_sha256": "2" * 64,
+            "chaff_prefix_spec": "inputs/chaff-prefix-specs/qualified-site.json",
+            "chaff_prefix_spec_sha256": "3" * 64,
+            "chaff_manifest": "inputs/chaff-manifests/qualified-site.json",
+            "chaff_manifest_sha256": "4" * 64,
+            "runtime_manifest": "inputs/runtime-workloads/qualified-site.json",
+            "runtime_manifest_sha256": "5" * 64,
+        }
+    ]
 
 
 def test_poc5_contract_accepts_only_exact_ordered_twenty_result_lineage() -> None:

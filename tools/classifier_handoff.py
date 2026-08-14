@@ -20,7 +20,12 @@ from typing import Any, Mapping, Sequence
 
 from qcsd_lab.capture import ObserverPacket, extract_trace
 from qcsd_lab.experiment import resolved_sample_directory, validate_planned_sample_identity
-from qcsd_lab.orchestrator import load_campaign, plan_campaign
+from qcsd_lab.orchestrator import (
+    FULL_CHAFF_SCOPE,
+    RESPONSE_ONLY_CHAFF_SCOPE,
+    load_campaign,
+    plan_campaign,
+)
 from qcsd_lab.util import load_json, sha256_file, source_metadata
 from qcsd_lab.verification import verify_result
 
@@ -864,24 +869,43 @@ def _cached_poc5_configuration(campaign_path: Path) -> tuple[Any, str]:
             "origin_count": workload.origin_count,
         }
         if workload.chaff_qualification_path is not None:
-            values = (
+            common_values = (
                 workload.chaff_qualification_sha256,
-                workload.chaff_prefix_spec_sha256,
                 workload.chaff_manifest_sha256,
                 workload.runtime_sha256,
             )
-            if any(not _valid_sha256(value) for value in values):
+            scope = workload.chaff_qualification_scope
+            if any(not _valid_sha256(value) for value in common_values) or scope not in {
+                RESPONSE_ONLY_CHAFF_SCOPE,
+                FULL_CHAFF_SCOPE,
+            }:
                 raise ValueError("classifier POC5 checked-in chaff binding is incomplete")
             record.update(
                 chaff_qualification=f"inputs/chaff-qualifications/{workload.id}.json",
                 chaff_qualification_sha256=workload.chaff_qualification_sha256,
-                chaff_prefix_spec=f"inputs/chaff-prefix-specs/{workload.id}.json",
-                chaff_prefix_spec_sha256=workload.chaff_prefix_spec_sha256,
                 chaff_manifest=f"inputs/chaff-manifests/{workload.id}.json",
                 chaff_manifest_sha256=workload.chaff_manifest_sha256,
                 runtime_manifest=f"inputs/runtime-workloads/{workload.id}.json",
                 runtime_manifest_sha256=workload.runtime_sha256,
             )
+            if scope == RESPONSE_ONLY_CHAFF_SCOPE:
+                if (
+                    workload.chaff_prefix_spec_path is not None
+                    or workload.chaff_prefix_spec_sha256 is not None
+                ):
+                    raise ValueError(
+                        "classifier POC5 response-only chaff binding unexpectedly has a prefix spec"
+                    )
+                record["chaff_qualification_scope"] = RESPONSE_ONLY_CHAFF_SCOPE
+            else:
+                if workload.chaff_prefix_spec_path is None or not _valid_sha256(
+                    workload.chaff_prefix_spec_sha256
+                ):
+                    raise ValueError("classifier POC5 checked-in chaff binding is incomplete")
+                record.update(
+                    chaff_prefix_spec=f"inputs/chaff-prefix-specs/{workload.id}.json",
+                    chaff_prefix_spec_sha256=workload.chaff_prefix_spec_sha256,
+                )
         workload_records.append(record)
 
     defense_records: list[dict[str, Any]] = []

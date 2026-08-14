@@ -35,6 +35,11 @@ def parser() -> argparse.ArgumentParser:
         "qualify-chaff",
         help="atomically qualify compact HTTP/3 chaff for the sealed six-workload cohort",
     )
+    response_qualification = commands.add_parser(
+        "qualify-response-chaff",
+        help="atomically response-qualify an explicit five-workload FRONT/Tamaraw cohort",
+    )
+    response_qualification.add_argument("workload_ids", nargs=5)
 
     commands.add_parser(
         "derive-chaff-prefix-specs",
@@ -98,6 +103,39 @@ def main(argv: list[str] | None = None) -> None:
                     os.environ.get(
                         "QCSD_CHAFF_PREFIX_SPEC_ROOT",
                         str(LAB_ROOT / "config/chaff-prefix-specs/v2"),
+                    )
+                ),
+            )
+        except (FileExistsError, OSError, PreparationError, RuntimeError, ValueError) as error:
+            _fail(error)
+        print(
+            json.dumps(
+                {
+                    str(item.path): {
+                        "sha256": item.sha256,
+                        "derived_chaff_manifest_sha256": item.manifest_sha256,
+                    }
+                    for item in qualified
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return
+    if args.command == "qualify-response-chaff":
+        from .chaff_qualification import qualify_all_response_chaff
+        from .prepare import PreparationError
+
+        try:
+            qualified = qualify_all_response_chaff(
+                args.workload_ids,
+                workload_root=Path(
+                    os.environ.get("QCSD_WORKLOAD_ROOT", str(LAB_ROOT / "config/workloads"))
+                ),
+                qualification_store=Path(
+                    os.environ.get(
+                        "QCSD_CHAFF_RESPONSE_QUALIFICATION_STORE",
+                        str(LAB_ROOT / "config/chaff-response-qualification-store"),
                     )
                 ),
             )

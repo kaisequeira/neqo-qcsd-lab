@@ -32,6 +32,8 @@ from .util import (
 )
 
 QUALIFICATION_SCHEMA_VERSION = 2
+RESPONSE_ONLY_SIDECAR_SCHEMA_VERSION = 1
+RESPONSE_ONLY_MANIFEST_SCHEMA_VERSION = 3
 IMPLEMENTATION_RECEIPT_SCHEMA_VERSION = 1
 # Public compatibility name: this refers to qualification artifacts, not the
 # separately versioned implementation receipt below.
@@ -41,6 +43,8 @@ CORE_ARTIFACT_TYPE = "qcsd-qualified-chaff-core"
 MANIFEST_ARTIFACT_TYPE = "qcsd-qualified-chaff-manifest"
 PREFIX_SPEC_ARTIFACT_TYPE = "qcsd-walkie-talkie-prefix-pack-spec"
 RESPONSE_ARTIFACT_TYPE = "qcsd-chaff-response-qualification"
+RESPONSE_ONLY_SIDECAR_ARTIFACT_TYPE = "qcsd-chaff-response-only-qualification"
+RESPONSE_ONLY_QUALIFICATION_SCOPE = "response-only"
 PREFIX_ARTIFACT_TYPE = "qcsd-chaff-prefix-pack-qualification"
 HEADER_PROJECTION = ("accept", "accept-encoding", "accept-language")
 SELECTION_POLICY = "qualified-largest-known-valid-same-origin-response-v2"
@@ -48,6 +52,7 @@ METHOD = "GET"
 QUALIFICATION_RUNS = 3
 MAX_QUALIFIED_CHAFF_STREAMS = 20
 MIN_CROSS_MODE_PARALLEL_CHAFF_STREAMS = 5
+RESPONSE_ONLY_PARALLEL_CHAFF_STREAMS = 5
 UDP_PAYLOAD_CEILING = 1_200
 MAX_STREAM_DATA_EXCESS = 1_000
 MAX_WALKIE_TALKIE_COMPONENT_CELLS = 2**32 - 1
@@ -116,6 +121,25 @@ SIDECAR_KEYS = {
     "prefix_pack_spec",
     "resource",
 }
+RESPONSE_ONLY_SIDECAR_KEYS = {
+    "schema_version",
+    "artifact_type",
+    "qualification_scope",
+    "workload_id",
+    "base_manifest",
+    "selection_policy",
+    "application_resource_id",
+    "selected_chaff_resource_id",
+    "qualified_parallel_chaff_streams",
+    "header_projection",
+    "method",
+    "qualification_policy",
+    "qualification_source",
+    "qualification_image_digest",
+    "neqo_provenance",
+    "implementation_receipt",
+    "resource",
+}
 BASE_MANIFEST_KEYS = {"path", "sha256"}
 POLICY_KEYS = {
     "response_runs",
@@ -128,6 +152,18 @@ POLICY_KEYS = {
     "seed",
     "udp_payload_ceiling",
     "max_stream_data_excess",
+    "separate_chaff_namespace",
+}
+RESPONSE_ONLY_POLICY_KEYS = {
+    "qualification_scope",
+    "response_runs",
+    "parallel_response_requests",
+    "qualified_parallel_chaff_streams",
+    "profile",
+    "response_defense",
+    "seed",
+    "udp_payload_ceiling",
+    "max_response_bytes",
     "separate_chaff_namespace",
 }
 IMPLEMENTATION_KEYS = {
@@ -203,6 +239,15 @@ RESOURCE_RECEIPT_KEYS = {
     "response_qualification_sha256",
     "prefix_pack_runs",
     "prefix_pack_qualification_sha256",
+}
+RESPONSE_ONLY_RESOURCE_RECEIPT_KEYS = {
+    "resource_id",
+    "url",
+    "headers",
+    "request_stream_bytes",
+    "expected_response",
+    "response_runs",
+    "response_qualification_sha256",
 }
 EXPECTED_RESPONSE_KEYS = {"status", "content_encoding", "body_bytes", "body_sha256"}
 RESPONSE_RUN_KEYS = {
@@ -379,7 +424,7 @@ class QualifiedChaffInput:
     application_resource_id: int
     selected_chaff_resource_id: int
     qualified_parallel_chaff_streams: int
-    walkie_talkie_required_chaff_streams: int
+    walkie_talkie_required_chaff_streams: int | None
 
 
 @dataclass(frozen=True)
@@ -1277,6 +1322,168 @@ def load_qualified_chaff(
     )
 
 
+def validate_response_only_sidecar(
+    value: object,
+    *,
+    workload_id: str,
+    base_manifest_path: Path,
+    require_current_implementation: bool = True,
+) -> QualifiedChaffInput:
+    """Validate a response-only sidecar against exact prepared workload bytes."""
+
+    sidecar = _exact_mapping(
+        value,
+        RESPONSE_ONLY_SIDECAR_KEYS,
+        "response-only chaff qualification sidecar",
+    )
+    if (
+        type(sidecar["schema_version"]) is not int
+        or sidecar["schema_version"] != RESPONSE_ONLY_SIDECAR_SCHEMA_VERSION
+        or sidecar["artifact_type"] != RESPONSE_ONLY_SIDECAR_ARTIFACT_TYPE
+        or sidecar["qualification_scope"] != RESPONSE_ONLY_QUALIFICATION_SCOPE
+        or sidecar["workload_id"] != workload_id
+        or sidecar["selection_policy"] != SELECTION_POLICY
+        or type(sidecar["application_resource_id"]) is not int
+        or sidecar["application_resource_id"] != 0
+        or type(sidecar["selected_chaff_resource_id"]) is not int
+        or type(sidecar["qualified_parallel_chaff_streams"]) is not int
+        or sidecar["qualified_parallel_chaff_streams"] != RESPONSE_ONLY_PARALLEL_CHAFF_STREAMS
+        or sidecar["header_projection"] != list(HEADER_PROJECTION)
+        or sidecar["method"] != METHOD
+    ):
+        raise ValueError("response-only chaff qualification policy binding is invalid")
+    base_receipt = _exact_mapping(sidecar["base_manifest"], BASE_MANIFEST_KEYS, "base manifest")
+    if Path(str(base_receipt["path"])).name != base_manifest_path.name or base_receipt[
+        "sha256"
+    ] != sha256_file(base_manifest_path):
+        raise ValueError("response-only chaff qualification base manifest SHA-256 mismatch")
+    base = load_json(base_manifest_path)
+    validate_research_preparation(base, workload_id=workload_id)
+    application = selected_navigation_root(base, workload_id)
+    selected, _selected_response = selected_chaff_resource(base, workload_id)
+    if sidecar["selected_chaff_resource_id"] != selected["id"]:
+        raise ValueError("response-only chaff qualification resource binding is invalid")
+    _validate_source(sidecar["qualification_source"], sidecar["qualification_image_digest"])
+    if _source_execution_identity(sidecar["implementation_receipt"]["source"]) != (
+        _source_execution_identity(sidecar["qualification_source"])
+    ):
+        raise ValueError("implementation receipt source differs from qualification source")
+    if require_current_implementation:
+        current_source = source_metadata()
+        if current_source.get("neqo_commit") != sidecar["qualification_source"].get(
+            "neqo_commit"
+        ) or current_source.get("neqo_pinned_commit") != current_source.get("neqo_commit"):
+            raise ValueError("Neqo source has changed since response-only chaff qualification")
+    _validate_neqo_provenance(
+        sidecar["neqo_provenance"], qualification_source=sidecar["qualification_source"]
+    )
+    _validate_implementation_receipt(
+        sidecar["implementation_receipt"], require_current=require_current_implementation
+    )
+    _validate_response_only_policy(sidecar["qualification_policy"])
+    resource = _validate_response_only_resource_receipt(
+        sidecar["resource"],
+        selected,
+        application_manifest_sha256=base_receipt["sha256"],
+        application_manifest=base,
+        application_resource_id=application["id"],
+        neqo_provenance=sidecar["neqo_provenance"],
+    )
+    manifest = derive_response_only_chaff_manifest(sidecar, selected, resource)
+    return QualifiedChaffInput(
+        sidecar_path=Path(),
+        sidecar_sha256=sha256_bytes(canonical_bytes(dict(sidecar))),
+        manifest=manifest,
+        manifest_sha256=sha256_bytes(canonical_bytes(manifest)),
+        application_manifest_sha256=sha256_file(base_manifest_path),
+        application_resource_id=application["id"],
+        selected_chaff_resource_id=selected["id"],
+        qualified_parallel_chaff_streams=RESPONSE_ONLY_PARALLEL_CHAFF_STREAMS,
+        walkie_talkie_required_chaff_streams=None,
+    )
+
+
+def load_response_qualified_chaff(
+    sidecar_path: Path,
+    *,
+    workload_id: str,
+    base_manifest_path: Path,
+    require_current_implementation: bool = True,
+) -> QualifiedChaffInput:
+    """Load one regular response-only sidecar without following a final symlink."""
+
+    if sidecar_path.is_symlink() or not sidecar_path.is_file():
+        raise ValueError(
+            f"response-only chaff qualification sidecar is not a regular file: {sidecar_path}"
+        )
+    raw = sidecar_path.read_bytes()
+    try:
+        value = json.loads(raw.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as error:
+        raise ValueError(
+            f"response-only chaff qualification sidecar is invalid JSON: {sidecar_path}"
+        ) from error
+    result = validate_response_only_sidecar(
+        value,
+        workload_id=workload_id,
+        base_manifest_path=base_manifest_path,
+        require_current_implementation=require_current_implementation,
+    )
+    return QualifiedChaffInput(
+        sidecar_path=sidecar_path.resolve(),
+        sidecar_sha256=sha256_bytes(raw),
+        manifest=result.manifest,
+        manifest_sha256=result.manifest_sha256,
+        application_manifest_sha256=result.application_manifest_sha256,
+        application_resource_id=result.application_resource_id,
+        selected_chaff_resource_id=result.selected_chaff_resource_id,
+        qualified_parallel_chaff_streams=result.qualified_parallel_chaff_streams,
+        walkie_talkie_required_chaff_streams=None,
+    )
+
+
+def derive_response_only_chaff_manifest(
+    sidecar: Mapping[str, Any],
+    base_resource: Mapping[str, Any],
+    resource_receipt: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Derive the strict schema-three manifest used only by FRONT and Tamaraw."""
+
+    resource = resource_receipt or dict(sidecar["resource"])
+    response = resource["expected_response"]
+    body_bytes = response["body_bytes"]
+    qualified = {
+        "id": base_resource["id"],
+        "url": base_resource["url"],
+        "type": base_resource.get("type", "Other"),
+        "content_length": body_bytes,
+        "data_length": body_bytes,
+        "chaff_priority": base_resource.get("chaff_priority", False),
+        "known_valid": True,
+        "depends_on": [],
+        "headers": resource["headers"],
+        "chaff_qualification": {
+            "schema_version": RESPONSE_ONLY_MANIFEST_SCHEMA_VERSION,
+            "qualification_scope": RESPONSE_ONLY_QUALIFICATION_SCOPE,
+            "method": METHOD,
+            "request_stream_bytes": resource["request_stream_bytes"],
+            "qualified_parallel_chaff_streams": RESPONSE_ONLY_PARALLEL_CHAFF_STREAMS,
+            "expected_response": response,
+            "response_qualification_sha256": resource["response_qualification_sha256"],
+        },
+    }
+    return {
+        "schema_version": RESPONSE_ONLY_MANIFEST_SCHEMA_VERSION,
+        "artifact_type": MANIFEST_ARTIFACT_TYPE,
+        "qualification_scope": RESPONSE_ONLY_QUALIFICATION_SCOPE,
+        "application_workload_sha256": sidecar["base_manifest"]["sha256"],
+        "application_resource_id": sidecar["application_resource_id"],
+        "selected_chaff_resource_id": sidecar["selected_chaff_resource_id"],
+        "qualified_parallel_chaff_streams": RESPONSE_ONLY_PARALLEL_CHAFF_STREAMS,
+        "resources": [qualified],
+    }
+
+
 def derive_chaff_manifest(
     sidecar: Mapping[str, Any],
     base_resource: Mapping[str, Any],
@@ -1364,6 +1571,258 @@ def derive_chaff_core(
             }
         ],
     }
+
+
+def qualify_response_chaff(
+    workload_id: str,
+    *,
+    qualification_root: Path,
+    workload_root: Path | None = None,
+    timeout_seconds: int = 30,
+    interval_seconds: int = 30,
+    _execution_context: tuple[dict[str, Any], dict[str, Any], str] | None = None,
+) -> QualifiedChaffOutput:
+    """Create one response-only sidecar after three independent five-way runs."""
+
+    if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", workload_id):
+        raise ValueError("workload ID must contain lowercase letters, digits, and single hyphens")
+    destination_root = _regular_directory_without_symlinks(
+        qualification_root, "response qualification destination"
+    )
+    destination = destination_root / f"{workload_id}.json"
+    if destination.exists() or destination.is_symlink():
+        raise FileExistsError(
+            f"{destination} already exists; response qualification is create-only"
+        )
+    workloads = _regular_directory_without_symlinks(
+        workload_root or LAB_ROOT / "config/workloads", "workload root"
+    )
+    base_path = workloads / f"{workload_id}.json"
+    if not base_path.is_file() or base_path.is_symlink():
+        raise ValueError(f"workload manifest is not a regular file: {base_path}")
+    executed_implementation, source, qualification_image = (
+        _execution_context or _qualification_execution_context()
+    )
+    neqo_client, neqo_client_sha256 = _bound_neqo_client(executed_implementation)
+    base = load_json(base_path)
+    validate_research_preparation(base, workload_id=workload_id)
+    application = selected_navigation_root(base, workload_id)
+    selected, prepared_selected = selected_chaff_resource(base, workload_id)
+    headers = project_compact_headers(selected)
+    base_sha = sha256_file(base_path)
+    temporary = Path(
+        tempfile.mkdtemp(
+            prefix=f".{workload_id}-response-qualification-evidence-",
+            dir=destination_root,
+        )
+    )
+    completed = False
+    try:
+        response_runs = _run_response_qualifications(
+            base_path,
+            temporary,
+            selected_chaff_resource_id=selected["id"],
+            qualified_parallel_chaff_streams=RESPONSE_ONLY_PARALLEL_CHAFF_STREAMS,
+            neqo_client=neqo_client,
+            neqo_client_sha256=neqo_client_sha256,
+            timeout_seconds=timeout_seconds,
+            interval_seconds=interval_seconds,
+        )
+        expected_response, request_stream_bytes = _stable_response_identity(
+            response_runs,
+            application_manifest_sha256=base_sha,
+            application_resource_id=application["id"],
+            selected_chaff_resource_id=selected["id"],
+            qualified_parallel_chaff_streams=RESPONSE_ONLY_PARALLEL_CHAFF_STREAMS,
+            url=selected["url"],
+            headers=headers,
+        )
+        if (
+            expected_response["status"] != prepared_selected["status"]
+            or expected_response["body_bytes"] != prepared_selected["bytes"]
+            or expected_response["body_sha256"] != prepared_selected["body_sha256"]
+        ):
+            raise PreparationError(
+                "qualified response differs from the frozen prepared response identity"
+            )
+        response_records = [
+            _response_run_record(index, value) for index, value in enumerate(response_runs)
+        ]
+        response_digest = qualification_digest(
+            "qcsd-chaff-response-qualification-v2", response_records
+        )
+        sidecar = {
+            "schema_version": RESPONSE_ONLY_SIDECAR_SCHEMA_VERSION,
+            "artifact_type": RESPONSE_ONLY_SIDECAR_ARTIFACT_TYPE,
+            "qualification_scope": RESPONSE_ONLY_QUALIFICATION_SCOPE,
+            "workload_id": workload_id,
+            "base_manifest": {"path": base_path.name, "sha256": base_sha},
+            "selection_policy": SELECTION_POLICY,
+            "application_resource_id": application["id"],
+            "selected_chaff_resource_id": selected["id"],
+            "qualified_parallel_chaff_streams": RESPONSE_ONLY_PARALLEL_CHAFF_STREAMS,
+            "header_projection": list(HEADER_PROJECTION),
+            "method": METHOD,
+            "qualification_policy": {
+                "qualification_scope": RESPONSE_ONLY_QUALIFICATION_SCOPE,
+                "response_runs": QUALIFICATION_RUNS,
+                "parallel_response_requests": RESPONSE_ONLY_PARALLEL_CHAFF_STREAMS,
+                "qualified_parallel_chaff_streams": RESPONSE_ONLY_PARALLEL_CHAFF_STREAMS,
+                "profile": "research-1200",
+                "response_defense": "none",
+                "seed": 0,
+                "udp_payload_ceiling": UDP_PAYLOAD_CEILING,
+                "max_response_bytes": 1_048_576,
+                "separate_chaff_namespace": True,
+            },
+            "qualification_source": source,
+            "qualification_image_digest": qualification_image,
+            "neqo_provenance": _stable_neqo_provenance(response_runs),
+            "implementation_receipt": executed_implementation,
+            "resource": {
+                "resource_id": selected["id"],
+                "url": selected["url"],
+                "headers": headers,
+                "request_stream_bytes": request_stream_bytes,
+                "expected_response": expected_response,
+                "response_runs": response_records,
+                "response_qualification_sha256": response_digest,
+            },
+        }
+        validated = validate_response_only_sidecar(
+            sidecar,
+            workload_id=workload_id,
+            base_manifest_path=base_path,
+        )
+        try:
+            with destination.open("xb") as output:
+                output.write(canonical_bytes(sidecar))
+                output.flush()
+                os.fsync(output.fileno())
+        except FileExistsError:
+            raise FileExistsError(
+                f"{destination} already exists; response qualification is create-only"
+            ) from None
+        completed = True
+    finally:
+        if completed:
+            shutil.rmtree(temporary)
+    return QualifiedChaffOutput(
+        destination,
+        sha256_file(destination),
+        validated.manifest_sha256,
+    )
+
+
+def qualify_all_response_chaff(
+    workload_ids: Sequence[str],
+    *,
+    workload_root: Path | None = None,
+    qualification_store: Path | None = None,
+    timeout_seconds: int = 30,
+    interval_seconds: int = 30,
+) -> tuple[QualifiedChaffOutput, ...]:
+    """Qualify an explicit five-workload response cohort and publish immutable v1."""
+
+    cohort = tuple(workload_ids)
+    if (
+        len(cohort) != 5
+        or len(set(cohort)) != 5
+        or any(
+            not isinstance(workload_id, str)
+            or re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", workload_id) is None
+            for workload_id in cohort
+        )
+    ):
+        raise ValueError("response qualification requires exactly five unique workload IDs")
+    store_input = qualification_store or LAB_ROOT / "config/chaff-response-qualification-store"
+    store = _regular_directory_without_symlinks(store_input, "response qualification store")
+    destination = store / "v1"
+    if destination.exists() or destination.is_symlink():
+        raise FileExistsError(
+            f"{destination} already exists; batch response qualification is create-only"
+        )
+    stale = sorted(store.glob(".v1.qcsd-batch-*"))
+    if stale:
+        raise ValueError("response qualification store contains a stale unpublished batch")
+    workloads = _regular_directory_without_symlinks(
+        workload_root or LAB_ROOT / "config/workloads", "workload root"
+    )
+    input_hashes: dict[Path, str] = {}
+    primary_origins: set[tuple[str, str, int]] = set()
+    for workload_id in cohort:
+        workload = workloads / f"{workload_id}.json"
+        if workload.is_symlink() or not workload.is_file():
+            raise ValueError(f"workload manifest is not a regular file: {workload}")
+        manifest = load_json(workload)
+        validate_research_preparation(manifest, workload_id=workload_id)
+        application = selected_navigation_root(manifest, workload_id)
+        primary_origin = _https_origin(application["url"])
+        if primary_origin is None:
+            raise ValueError(
+                f"response qualification workload has no primary HTTPS origin: {workload_id}"
+            )
+        primary_origins.add(primary_origin)
+        selected_chaff_resource(manifest, workload_id)
+        input_hashes[workload] = sha256_file(workload)
+    if len(primary_origins) != 5:
+        raise ValueError("response qualification requires five distinct primary HTTPS origins")
+    execution_context = _qualification_execution_context()
+    candidate = Path(tempfile.mkdtemp(prefix=".v1.qcsd-batch-", dir=store))
+    try:
+        outputs = [
+            qualify_response_chaff(
+                workload_id,
+                workload_root=workloads,
+                qualification_root=candidate,
+                timeout_seconds=timeout_seconds,
+                interval_seconds=interval_seconds,
+                _execution_context=execution_context,
+            )
+            for workload_id in cohort
+        ]
+        entries = sorted(candidate.iterdir(), key=lambda path: path.name)
+        expected_names = sorted(f"{workload_id}.json" for workload_id in cohort)
+        if (
+            [path.name for path in entries] != expected_names
+            or any(path.is_symlink() or not path.is_file() for path in entries)
+            or any(
+                sha256_file(output.path) != output.sha256
+                for output in outputs
+                if output.path.parent == candidate
+            )
+        ):
+            raise ValueError(
+                "batch response qualification did not produce the exact five-workload cohort"
+            )
+        if _regular_directory_without_symlinks(workloads, "workload root") != workloads:
+            raise ValueError("batch response qualification input root changed before publication")
+        for path, expected_sha256 in input_hashes.items():
+            if path.is_symlink() or not path.is_file() or sha256_file(path) != expected_sha256:
+                raise ValueError("batch response qualification input changed before publication")
+        _bound_neqo_client(execution_context[0])
+        directory_fd = os.open(candidate, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+        _rename_noreplace(candidate, destination)
+        store_fd = os.open(store, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(store_fd)
+        finally:
+            os.close(store_fd)
+    except Exception:
+        # Retain one unpublished same-filesystem candidate for diagnosis.
+        raise
+    return tuple(
+        QualifiedChaffOutput(
+            destination / output.path.name,
+            sha256_file(destination / output.path.name),
+            output.manifest_sha256,
+        )
+        for output in outputs
+    )
 
 
 def qualify_chaff(
@@ -1967,22 +2426,30 @@ def _validate_response_receipt(
     ended = receipt["ended_unix_ns"]
     invocation_id = receipt["invocation_id"]
     if (
-        receipt["schema_version"] != QUALIFICATION_SCHEMA_VERSION
+        type(receipt["schema_version"]) is not int
+        or receipt["schema_version"] != QUALIFICATION_SCHEMA_VERSION
         or receipt["artifact_type"] != RESPONSE_ARTIFACT_TYPE
         or receipt["application_workload_sha256"] != application_manifest_sha256
         or type(receipt["application_resource_id"]) is not int
         or receipt["application_resource_id"] != application_resource_id
         or type(receipt["selected_chaff_resource_id"]) is not int
         or receipt["selected_chaff_resource_id"] != selected_chaff_resource_id
+        or type(receipt["qualified_parallel_chaff_streams"]) is not int
         or receipt["qualified_parallel_chaff_streams"] != qualified_parallel_chaff_streams
         or receipt["method"] != METHOD
         or receipt["url"] != url
         or receipt["request_headers"] != headers
+        or type(receipt["parallel_requests"]) is not int
         or receipt["parallel_requests"] != qualified_parallel_chaff_streams
+        or type(receipt["connection_count"]) is not int
         or receipt["connection_count"] != 1
+        or type(receipt["requests_opened_before_first_network_output"]) is not int
         or receipt["requests_opened_before_first_network_output"]
         != qualified_parallel_chaff_streams
+        or type(receipt["request_stream_bytes"]) is not int
+        or type(receipt["max_response_bytes"]) is not int
         or receipt["max_response_bytes"] != 1_048_576
+        or type(receipt["udp_payload_ceiling"]) is not int
         or receipt["udp_payload_ceiling"] != UDP_PAYLOAD_CEILING
         or type(started) is not int
         or type(ended) is not int
@@ -2021,7 +2488,8 @@ def _validate_response_receipt(
         size = request["request_stream_bytes"]
         stream_id = request["stream_id"]
         if (
-            request["request_index"] != index
+            type(request["request_index"]) is not int
+            or request["request_index"] != index
             or type(stream_id) is not int
             or stream_id < 0
             or stream_id in stream_ids
@@ -2055,7 +2523,8 @@ def _validate_response_receipt(
             value_observation, PACKET_OBSERVATION_KEYS, "response packet observation"
         )
         if (
-            observation["sequence"] != sequence
+            type(observation["sequence"]) is not int
+            or observation["sequence"] != sequence
             or observation["phase"] not in {"handshake", "qualification"}
             or observation["direction"] not in {"incoming", "outgoing"}
             or type(observation["udp_payload_bytes"]) is not int
@@ -2093,6 +2562,94 @@ def _prefix_run_record(index: int, run: Mapping[str, Any]) -> dict[str, Any]:
         ),
         "receipt": receipt,
     }
+
+
+def _validate_response_only_resource_receipt(
+    value: object,
+    base_resource: Mapping[str, Any],
+    *,
+    application_manifest_sha256: str,
+    application_manifest: Mapping[str, Any],
+    application_resource_id: int,
+    neqo_provenance: Mapping[str, Any],
+) -> dict[str, Any]:
+    resource = _exact_mapping(
+        value,
+        RESPONSE_ONLY_RESOURCE_RECEIPT_KEYS,
+        "response-only qualified chaff resource",
+    )
+    if (
+        type(resource["resource_id"]) is not int
+        or resource["resource_id"] != base_resource.get("id")
+        or resource["url"] != base_resource.get("url")
+        or resource["headers"] != project_compact_headers(base_resource)
+        or type(resource["request_stream_bytes"]) is not int
+        or resource["request_stream_bytes"] <= 0
+    ):
+        raise ValueError("response-only qualified chaff resource binding is invalid")
+    _validate_expected_response(resource["expected_response"])
+    prepared = _prepared_expected_responses(application_manifest)[resource["resource_id"]]
+    if (
+        resource["expected_response"]["status"] != prepared["status"]
+        or resource["expected_response"]["body_bytes"] != prepared["bytes"]
+        or resource["expected_response"]["body_sha256"] != prepared["body_sha256"]
+    ):
+        raise ValueError("response-only qualified chaff response differs from prepared identity")
+    response_runs = resource["response_runs"]
+    if not isinstance(response_runs, list) or len(response_runs) != QUALIFICATION_RUNS:
+        raise ValueError("response-only qualified chaff requires exactly three response runs")
+    prior_end = -1
+    invocation_ids: set[str] = set()
+    response_identities: list[tuple[int, str, int, str]] = []
+    response_sizes: list[int] = []
+    for index, run in enumerate(response_runs):
+        record = _exact_mapping(run, RESPONSE_RUN_KEYS, "response qualification run")
+        receipt = record["receipt"]
+        expected_object_sha = qualification_digest(
+            "qcsd-chaff-response-receipt-object-v2", [receipt]
+        )
+        if (
+            type(record["run_index"]) is not int
+            or record["run_index"] != index
+            or record["receipt_object_sha256"] != expected_object_sha
+        ):
+            raise ValueError("response qualification run binding is invalid")
+        identity, size, started, ended, invocation_id = _validate_response_receipt(
+            receipt,
+            application_manifest_sha256=application_manifest_sha256,
+            application_resource_id=application_resource_id,
+            selected_chaff_resource_id=resource["resource_id"],
+            qualified_parallel_chaff_streams=RESPONSE_ONLY_PARALLEL_CHAFF_STREAMS,
+            url=resource["url"],
+            headers=resource["headers"],
+        )
+        if (
+            invocation_id in invocation_ids
+            or started <= prior_end
+            or _receipt_neqo_provenance(receipt) != dict(neqo_provenance)
+        ):
+            raise ValueError("response qualifications are not independent invocations")
+        invocation_ids.add(invocation_id)
+        prior_end = ended
+        response_identities.append(identity)
+        response_sizes.append(size)
+    expected_response = resource["expected_response"]
+    expected_identity = (
+        expected_response["status"],
+        expected_response["content_encoding"],
+        expected_response["body_bytes"],
+        expected_response["body_sha256"],
+    )
+    if set(response_identities) != {expected_identity} or set(response_sizes) != {
+        resource["request_stream_bytes"]
+    }:
+        raise ValueError("response-only qualification identity is inconsistent")
+    expected_response_digest = qualification_digest(
+        "qcsd-chaff-response-qualification-v2", response_runs
+    )
+    if resource["response_qualification_sha256"] != expected_response_digest:
+        raise ValueError("response-only qualification aggregate SHA-256 mismatch")
+    return resource
 
 
 def _validate_resource_receipt(
@@ -2703,6 +3260,42 @@ def _validate_policy(
         raise ValueError("chaff qualification policy is not the exact research policy")
 
 
+def _validate_response_only_policy(value: object) -> None:
+    policy = _exact_mapping(
+        value,
+        RESPONSE_ONLY_POLICY_KEYS,
+        "response-only chaff qualification policy",
+    )
+    integer_fields = (
+        "response_runs",
+        "parallel_response_requests",
+        "qualified_parallel_chaff_streams",
+        "seed",
+        "udp_payload_ceiling",
+        "max_response_bytes",
+    )
+    if (
+        any(type(policy[field]) is not int for field in integer_fields)
+        or policy["separate_chaff_namespace"] is not True
+        or policy
+        != {
+            "qualification_scope": RESPONSE_ONLY_QUALIFICATION_SCOPE,
+            "response_runs": QUALIFICATION_RUNS,
+            "parallel_response_requests": RESPONSE_ONLY_PARALLEL_CHAFF_STREAMS,
+            "qualified_parallel_chaff_streams": RESPONSE_ONLY_PARALLEL_CHAFF_STREAMS,
+            "profile": "research-1200",
+            "response_defense": "none",
+            "seed": 0,
+            "udp_payload_ceiling": UDP_PAYLOAD_CEILING,
+            "max_response_bytes": 1_048_576,
+            "separate_chaff_namespace": True,
+        }
+    ):
+        raise ValueError(
+            "response-only chaff qualification policy is not the exact research policy"
+        )
+
+
 def _validate_source(value: object, image: object) -> None:
     source = _exact_mapping(value, SOURCE_METADATA_KEYS, "qualification source")
     if (
@@ -2710,10 +3303,11 @@ def _validate_source(value: object, image: object) -> None:
         or source["neqo_dirty"] is not False
         or source["lab_patch_sha256"] != EMPTY_SHA256
         or source["neqo_patch_sha256"] != EMPTY_SHA256
-        or not _IMAGE_DIGEST.fullmatch(str(source["image_digest"]))
+        or not isinstance(source["image_digest"], str)
+        or not _IMAGE_DIGEST.fullmatch(source["image_digest"])
         or image != source["image_digest"]
         or any(
-            not _COMMIT.fullmatch(str(source[key]))
+            not isinstance(source[key], str) or not _COMMIT.fullmatch(source[key])
             for key in ("lab_commit", "neqo_commit", "neqo_pinned_commit")
         )
         or source["neqo_commit"] != source["neqo_pinned_commit"]
@@ -2732,7 +3326,8 @@ def _validate_neqo_provenance(value: object, *, qualification_source: Mapping[st
 def _validate_implementation_receipt(value: object, *, require_current: bool) -> None:
     receipt = _exact_mapping(value, IMPLEMENTATION_KEYS, "qualification implementation receipt")
     if (
-        receipt["schema_version"] != IMPLEMENTATION_RECEIPT_SCHEMA_VERSION
+        type(receipt["schema_version"]) is not int
+        or receipt["schema_version"] != IMPLEMENTATION_RECEIPT_SCHEMA_VERSION
         or receipt["artifact_type"] != "qcsd-chaff-qualification-implementation"
         or receipt["domain"] != "qcsd-chaff-qualification-implementation-v1"
         or not _digest(receipt["sha256"])
@@ -2751,6 +3346,17 @@ def _validate_implementation_receipt(value: object, *, require_current: bool) ->
         or source["neqo_dirty"] is not False
         or source["lab_patch_sha256"] != EMPTY_SHA256
         or source["neqo_patch_sha256"] != EMPTY_SHA256
+        or (
+            source["image_digest"] is not None
+            and (
+                not isinstance(source["image_digest"], str)
+                or not _IMAGE_DIGEST.fullmatch(source["image_digest"])
+            )
+        )
+        or any(
+            not isinstance(source[key], str) or not _COMMIT.fullmatch(source[key])
+            for key in ("lab_commit", "neqo_commit", "neqo_pinned_commit")
+        )
         or source["neqo_commit"] != source["neqo_pinned_commit"]
     ):
         raise ValueError("qualification image source receipt is not clean and pinned")

@@ -352,6 +352,7 @@ def test_schema_six_bundle_materialization_preserves_two_workload_fourteen_sampl
                 runtime_sha256=sha256_bytes(runtime_bytes),
                 chaff_qualification_path=sidecar,
                 chaff_qualification_sha256=sha256_file(sidecar),
+                chaff_qualification_scope=orchestrator.FULL_CHAFF_SCOPE,
                 chaff_prefix_spec_path=spec,
                 chaff_prefix_spec_sha256=sha256_file(spec),
                 chaff_manifest_sha256=sha256_bytes(manifest_bytes),
@@ -489,6 +490,227 @@ def test_walkie_talkie_current_contract_classifier_accepts_only_schema_six(
         Defense("current", "walkie_talkie", False, parameters_path=schema_six)
     )
     assert not orchestrator._uses_schema_six_walkie_talkie(Defense("front", "front", False))
+
+
+@pytest.mark.parametrize(
+    ("defenses", "scope"),
+    [
+        ((Defense("undefended", "none", True),), None),
+        (
+            (
+                Defense("undefended", "none", True),
+                Defense("front-pilot", "front", False),
+                Defense("tamaraw-pilot", "tamaraw", False),
+            ),
+            orchestrator.RESPONSE_ONLY_CHAFF_SCOPE,
+        ),
+        (
+            (
+                Defense("undefended", "none", True),
+                Defense("front", "front", False),
+                Defense("static", "static", False),
+            ),
+            orchestrator.FULL_CHAFF_SCOPE,
+        ),
+    ],
+)
+def test_campaign_selects_qualification_contract_only_from_runtime_kinds(
+    defenses: tuple[Defense, ...], scope: str | None
+) -> None:
+    assert orchestrator._required_chaff_qualification_scope(defenses) == scope
+
+
+def test_response_only_loader_requires_no_prefix_spec(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    campaign_path = _configuration(tmp_path)
+    workload = load_campaign(campaign_path).workloads[0]
+    sidecar = tmp_path / "config/chaff-response-qualification-store/v1/alpha.json"
+    atomic_json(sidecar, {"response-only": True})
+    manifest = {"schema_version": 3, "qualification_scope": "response-only"}
+
+    def load_response(
+        sidecar_path: Path,
+        *,
+        workload_id: str,
+        base_manifest_path: Path,
+        require_current_implementation: bool = True,
+    ) -> SimpleNamespace:
+        assert sidecar_path.name == sidecar.name
+        assert sidecar_path.read_bytes() == sidecar.read_bytes()
+        assert workload_id == "alpha"
+        assert base_manifest_path.name == workload.path.name
+        assert base_manifest_path.read_bytes() == workload.source_bytes
+        assert require_current_implementation is True
+        return SimpleNamespace(
+            sidecar_sha256=sha256_file(sidecar_path),
+            manifest_sha256=sha256_bytes(canonical_bytes(manifest)),
+            manifest=manifest,
+        )
+
+    monkeypatch.setattr(chaff_qualification, "load_response_qualified_chaff", load_response)
+    qualified = orchestrator._load_qualified_chaff_inputs(
+        campaign_path,
+        (workload,),
+        frozen_inputs=None,
+        qualification_scope=orchestrator.RESPONSE_ONLY_CHAFF_SCOPE,
+    )[0]
+
+    assert qualified.chaff_qualification_scope == "response-only"
+    assert qualified.chaff_prefix_spec_path is None
+    assert qualified.chaff_prefix_spec_sha256 is None
+    assert qualified.chaff_manifest_data == manifest
+
+    campaign = orchestrator.Campaign(
+        path=campaign_path,
+        source_bytes=campaign_path.read_bytes(),
+        name="response-only-materialization",
+        purpose="smoke",
+        seed=7,
+        profile="live",
+        workloads=(qualified,),
+        request_policies=("as-defined",),
+        defenses=(
+            Defense("undefended", "none", True),
+            Defense("front-pilot", "front", False),
+        ),
+        limits=Limits(),
+    )
+    result = tmp_path / "response-result"
+    runtime, configuration = orchestrator._materialize_inputs(result, campaign, {})
+
+    assert not (result / "inputs/chaff-prefix-specs").exists()
+    assert runtime.workloads[0].chaff_prefix_spec_path is None
+    frozen = configuration["workloads"][0]
+    assert frozen["chaff_qualification_scope"] == "response-only"
+    assert "chaff_prefix_spec" not in frozen
+    assert "chaff_prefix_spec_sha256" not in frozen
+
+
+def test_frozen_pre_response_front_result_keeps_full_v2_and_structural_validation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    campaign_path = _configuration(tmp_path)
+    workload = load_campaign(campaign_path).workloads[0]
+    frozen = tmp_path / "frozen-full"
+    for directory in ("chaff-qualifications", "chaff-prefix-specs", "chaff-manifests"):
+        (frozen / directory).mkdir(parents=True)
+    sidecar = frozen / "chaff-qualifications/alpha.json"
+    spec = frozen / "chaff-prefix-specs/alpha.json"
+    manifest_path = frozen / "chaff-manifests/alpha.json"
+    atomic_json(sidecar, {"schema_version": 2})
+    atomic_json(spec, {"schema_version": 2})
+    manifest = {"schema_version": 2, "artifact_type": "qcsd-qualified-chaff-manifest"}
+    atomic_json(manifest_path, manifest)
+    full_calls: list[bool] = []
+
+    def load_full(
+        sidecar_path: Path,
+        *,
+        workload_id: str,
+        base_manifest_path: Path,
+        prefix_spec_path: Path,
+        require_current_implementation: bool = True,
+    ) -> SimpleNamespace:
+        assert sidecar_path == sidecar.resolve()
+        assert prefix_spec_path == spec.resolve()
+        assert workload_id == workload.id
+        assert base_manifest_path == workload.path
+        full_calls.append(require_current_implementation)
+        return SimpleNamespace(
+            sidecar_sha256=sha256_file(sidecar_path),
+            manifest_sha256=sha256_file(manifest_path),
+            manifest=manifest,
+        )
+
+    monkeypatch.setattr(chaff_qualification, "load_qualified_chaff", load_full)
+    monkeypatch.setattr(
+        chaff_qualification,
+        "load_response_qualified_chaff",
+        lambda *_args, **_kwargs: pytest.fail("frozen full-v2 result used response-only loader"),
+    )
+    qualified = orchestrator._load_qualified_chaff_inputs(
+        campaign_path,
+        (workload,),
+        frozen_inputs=frozen,
+        qualification_scope=orchestrator.RESPONSE_ONLY_CHAFF_SCOPE,
+    )[0]
+
+    assert full_calls == [False]
+    assert qualified.chaff_qualification_scope == orchestrator.FULL_CHAFF_SCOPE
+    assert qualified.chaff_prefix_spec_path == spec.resolve()
+
+
+@pytest.mark.parametrize("prefix_present", [False, True])
+def test_frozen_response_scope_requires_explicit_unambiguous_schema_three(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, prefix_present: bool
+) -> None:
+    campaign_path = _configuration(tmp_path)
+    workload = load_campaign(campaign_path).workloads[0]
+    frozen = tmp_path / "frozen-response"
+    for directory in ("chaff-qualifications", "chaff-manifests"):
+        (frozen / directory).mkdir(parents=True)
+    atomic_json(frozen / "chaff-qualifications/alpha.json", {"schema_version": 1})
+    manifest = {
+        "schema_version": 3,
+        "artifact_type": "qcsd-qualified-chaff-manifest",
+        "qualification_scope": "response-only",
+    }
+    manifest_path = frozen / "chaff-manifests/alpha.json"
+    atomic_json(manifest_path, manifest)
+    if prefix_present:
+        prefix = frozen / "chaff-prefix-specs"
+        prefix.mkdir()
+        atomic_json(prefix / "alpha.json", {"schema_version": 2})
+        with pytest.raises(ValueError, match="ambiguously contains"):
+            orchestrator._load_qualified_chaff_inputs(
+                campaign_path,
+                (workload,),
+                frozen_inputs=frozen,
+                qualification_scope=orchestrator.RESPONSE_ONLY_CHAFF_SCOPE,
+            )
+        return
+
+    calls: list[bool] = []
+
+    def load_response(*_args: object, **kwargs: object) -> SimpleNamespace:
+        calls.append(kwargs["require_current_implementation"])
+        return SimpleNamespace(
+            sidecar_sha256=sha256_file(frozen / "chaff-qualifications/alpha.json"),
+            manifest_sha256=sha256_file(manifest_path),
+            manifest=manifest,
+        )
+
+    monkeypatch.setattr(chaff_qualification, "load_response_qualified_chaff", load_response)
+    qualified = orchestrator._load_qualified_chaff_inputs(
+        campaign_path,
+        (workload,),
+        frozen_inputs=frozen,
+        qualification_scope=orchestrator.RESPONSE_ONLY_CHAFF_SCOPE,
+    )[0]
+    assert calls == [False]
+    assert qualified.chaff_qualification_scope == orchestrator.RESPONSE_ONLY_CHAFF_SCOPE
+    assert qualified.chaff_prefix_spec_path is None
+
+
+def test_frozen_response_layout_rejects_missing_schema_three_scope_marker(
+    tmp_path: Path,
+) -> None:
+    campaign_path = _configuration(tmp_path)
+    workload = load_campaign(campaign_path).workloads[0]
+    frozen = tmp_path / "frozen-unscoped"
+    for directory in ("chaff-qualifications", "chaff-manifests"):
+        (frozen / directory).mkdir(parents=True)
+    atomic_json(frozen / "chaff-qualifications/alpha.json", {"schema_version": 1})
+    atomic_json(frozen / "chaff-manifests/alpha.json", {"schema_version": 2})
+
+    with pytest.raises(ValueError, match="explicit schema-three scope markers"):
+        orchestrator._load_qualified_chaff_inputs(
+            campaign_path,
+            (workload,),
+            frozen_inputs=frozen,
+            qualification_scope=orchestrator.RESPONSE_ONLY_CHAFF_SCOPE,
+        )
 
 
 def test_loaded_schema_six_binding_cross_links_resource_and_cohort_fields(

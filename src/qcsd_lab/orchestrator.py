@@ -74,6 +74,9 @@ LIMIT_KEYS = {
 DEFENSE_KEYS = {"name", "kind", "schedule", "mode", "parameters"}
 EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 WALKIE_TALKIE_RECEIVER_RAW_HEADROOM_BYTES = 1_200
+RESPONSE_ONLY_CHAFF_DEFENSE_KINDS = frozenset({"front", "tamaraw"})
+RESPONSE_ONLY_CHAFF_SCOPE = "response-only"
+FULL_CHAFF_SCOPE = "full"
 FITTING_LIMITS = capture_engine.Limits(
     timeout_seconds=120,
     max_response_bytes=1024 * 1024,
@@ -107,6 +110,7 @@ class Workload:
     runtime_sha256: str | None = None
     chaff_qualification_path: Path | None = None
     chaff_qualification_sha256: str | None = None
+    chaff_qualification_scope: str | None = None
     chaff_prefix_spec_path: Path | None = None
     chaff_prefix_spec_sha256: str | None = None
     chaff_manifest_path: Path | None = None
@@ -243,6 +247,7 @@ def _load_campaign(
         allow_historical_research_bundle=allow_historical_research_bundle,
     )
     has_defended_run = any(not defense.baseline for defense in defenses)
+    qualification_scope = _required_chaff_qualification_scope(defenses)
     current_prepared_inputs = all(
         isinstance(workload.data.get("preparation"), Mapping) for workload in workloads
     )
@@ -265,7 +270,14 @@ def _load_campaign(
             raise ValueError(
                 "every defended campaign requires research-prepared workloads and qualified chaff"
             )
-        workloads = _load_qualified_chaff_inputs(path, workloads, frozen_inputs=frozen_inputs)
+        if qualification_scope is None:
+            raise AssertionError("defended campaign has no chaff qualification scope")
+        workloads = _load_qualified_chaff_inputs(
+            path,
+            workloads,
+            frozen_inputs=frozen_inputs,
+            qualification_scope=qualification_scope,
+        )
     _validate_loaded_qualification_bindings(defenses, workloads)
     if any(_uses_schema_six_walkie_talkie(defense) for defense in defenses):
         if not all(workload.chaff_manifest_data is not None for workload in workloads):
@@ -304,25 +316,55 @@ def _uses_schema_six_walkie_talkie(defense: capture_engine.Defense) -> bool:
     return isinstance(parameter, Mapping) and parameter.get("schema_version") == 6
 
 
+def _required_chaff_qualification_scope(
+    defenses: tuple[capture_engine.Defense, ...],
+) -> str | None:
+    """Select one qualification contract from the resolved runtime defense kinds."""
+
+    defended_kinds = {defense.kind for defense in defenses if not defense.baseline}
+    if not defended_kinds:
+        return None
+    if defended_kinds <= RESPONSE_ONLY_CHAFF_DEFENSE_KINDS:
+        return RESPONSE_ONLY_CHAFF_SCOPE
+    return FULL_CHAFF_SCOPE
+
+
 def _load_qualified_chaff_inputs(
     campaign_path: Path,
     workloads: tuple[Workload, ...],
     *,
     frozen_inputs: Path | None,
+    qualification_scope: str = FULL_CHAFF_SCOPE,
 ) -> tuple[Workload, ...]:
-    """Bind one immutable sidecar/spec/derived chaff manifest per workload."""
+    """Bind the selected immutable sidecar contract and derived manifest."""
 
-    from .chaff_qualification import load_qualified_chaff
+    from .chaff_qualification import load_qualified_chaff, load_response_qualified_chaff
 
+    if frozen_inputs is not None:
+        qualification_scope = _frozen_chaff_qualification_scope(
+            frozen_inputs,
+            workloads,
+            defense_derived_scope=qualification_scope,
+        )
     if frozen_inputs is None:
         config_root = campaign_path.parent.parent
-        qualification_root = config_root / "chaff-qualification-store/v2"
-        prefix_root = config_root / "chaff-prefix-specs/v2"
+        if qualification_scope == RESPONSE_ONLY_CHAFF_SCOPE:
+            qualification_root = config_root / "chaff-response-qualification-store/v1"
+            prefix_root: Path | None = None
+        elif qualification_scope == FULL_CHAFF_SCOPE:
+            qualification_root = config_root / "chaff-qualification-store/v2"
+            prefix_root = config_root / "chaff-prefix-specs/v2"
+        else:
+            raise ValueError(f"unsupported chaff qualification scope: {qualification_scope}")
         manifest_root: Path | None = None
     else:
         config_root = frozen_inputs
         qualification_root = frozen_inputs / "chaff-qualifications"
-        prefix_root = frozen_inputs / "chaff-prefix-specs"
+        prefix_root = (
+            None
+            if qualification_scope == RESPONSE_ONLY_CHAFF_SCOPE
+            else frozen_inputs / "chaff-prefix-specs"
+        )
         manifest_root = frozen_inputs / "chaff-manifests"
     qualified: list[Workload] = []
     for workload in workloads:
@@ -331,17 +373,29 @@ def _load_qualified_chaff_inputs(
             root=config_root,
             label="chaff qualification sidecar",
         )
-        spec_path = _trusted_regular_input(
-            prefix_root / f"{workload.id}.json",
-            root=config_root,
-            label="chaff prefix-pack specification",
-        )
-        receipt = load_qualified_chaff(
-            sidecar_path,
-            workload_id=workload.id,
-            base_manifest_path=workload.path,
-            prefix_spec_path=spec_path,
-        )
+        if qualification_scope == RESPONSE_ONLY_CHAFF_SCOPE:
+            spec_path = None
+            receipt = load_response_qualified_chaff(
+                sidecar_path,
+                workload_id=workload.id,
+                base_manifest_path=workload.path,
+                require_current_implementation=frozen_inputs is None,
+            )
+        else:
+            if prefix_root is None:
+                raise AssertionError("full chaff qualification has no prefix-spec root")
+            spec_path = _trusted_regular_input(
+                prefix_root / f"{workload.id}.json",
+                root=config_root,
+                label="chaff prefix-pack specification",
+            )
+            receipt = load_qualified_chaff(
+                sidecar_path,
+                workload_id=workload.id,
+                base_manifest_path=workload.path,
+                prefix_spec_path=spec_path,
+                require_current_implementation=frozen_inputs is None,
+            )
         if manifest_root is None:
             manifest_path = None
         else:
@@ -357,14 +411,56 @@ def _load_qualified_chaff_inputs(
                 workload,
                 chaff_qualification_path=sidecar_path,
                 chaff_qualification_sha256=receipt.sidecar_sha256,
+                chaff_qualification_scope=qualification_scope,
                 chaff_prefix_spec_path=spec_path,
-                chaff_prefix_spec_sha256=sha256_file(spec_path),
+                chaff_prefix_spec_sha256=(sha256_file(spec_path) if spec_path else None),
                 chaff_manifest_path=manifest_path,
                 chaff_manifest_sha256=receipt.manifest_sha256,
                 chaff_manifest_data=receipt.manifest,
             )
         )
     return tuple(qualified)
+
+
+def _frozen_chaff_qualification_scope(
+    frozen_inputs: Path,
+    workloads: tuple[Workload, ...],
+    *,
+    defense_derived_scope: str,
+) -> str:
+    """Select the contract recorded by frozen evidence, never today's routing policy."""
+
+    prefix_root = frozen_inputs / "chaff-prefix-specs"
+    prefix_present = prefix_root.exists() or prefix_root.is_symlink()
+    if prefix_present and (prefix_root.is_symlink() or not prefix_root.is_dir()):
+        raise ValueError("frozen chaff prefix-spec root is not a regular directory")
+    response_markers: list[bool] = []
+    for workload in workloads:
+        manifest_path = _trusted_regular_input(
+            frozen_inputs / "chaff-manifests" / f"{workload.id}.json",
+            root=frozen_inputs,
+            label="frozen qualified chaff manifest",
+        )
+        manifest = load_json(manifest_path)
+        response_markers.append(
+            isinstance(manifest, Mapping)
+            and type(manifest.get("schema_version")) is int
+            and manifest.get("schema_version") == 3
+            and manifest.get("qualification_scope") == RESPONSE_ONLY_CHAFF_SCOPE
+        )
+    if prefix_present:
+        if any(response_markers):
+            raise ValueError(
+                "frozen chaff evidence ambiguously contains response-only manifests and prefix specs"
+            )
+        return FULL_CHAFF_SCOPE
+    if not all(response_markers):
+        raise ValueError(
+            "frozen response-only chaff evidence requires explicit schema-three scope markers"
+        )
+    if defense_derived_scope != RESPONSE_ONLY_CHAFF_SCOPE:
+        raise ValueError("response-only frozen chaff is incompatible with the campaign defenses")
+    return RESPONSE_ONLY_CHAFF_SCOPE
 
 
 def _trusted_regular_input(path: Path, *, root: Path, label: str) -> Path:
@@ -1088,11 +1184,13 @@ def _materialize_inputs(
     campaign: Campaign,
     source: dict[str, Any],
 ) -> tuple[Campaign, dict[str, Any]]:
-    if any(not defense.baseline for defense in campaign.defenses) and any(
+    required_scope = _required_chaff_qualification_scope(campaign.defenses)
+    if required_scope is not None and any(
         workload.chaff_qualification_path is None
-        or workload.chaff_prefix_spec_path is None
+        or workload.chaff_qualification_scope != required_scope
         or workload.chaff_manifest_data is None
         or workload.chaff_manifest_sha256 is None
+        or (required_scope == FULL_CHAFF_SCOPE and workload.chaff_prefix_spec_path is None)
         for workload in campaign.workloads
     ):
         raise ValueError("defended materialization requires prepared source and qualified chaff")
@@ -1108,8 +1206,9 @@ def _materialize_inputs(
     if any(workload.chaff_qualification_path is not None for workload in campaign.workloads):
         runtime_workloads_dir.mkdir()
         chaff_qualifications_dir.mkdir()
-        chaff_prefix_specs_dir.mkdir()
         chaff_manifests_dir.mkdir()
+        if any(workload.chaff_prefix_spec_path is not None for workload in campaign.workloads):
+            chaff_prefix_specs_dir.mkdir()
     # ``load_campaign`` parsed these exact bytes.  Writing the snapshot instead
     # of reopening the mutable source closes the campaign resolution/copy race.
     frozen_campaign = inputs / "campaign.yml"
@@ -1126,27 +1225,45 @@ def _materialize_inputs(
         validate_manifest(load_json(destination))
         runtime = replace(workload, path=destination, sha256=sha256_file(destination))
         if workload.chaff_qualification_path is not None:
-            from .chaff_qualification import load_qualified_chaff
+            from .chaff_qualification import (
+                load_qualified_chaff,
+                load_response_qualified_chaff,
+            )
 
-            if workload.chaff_prefix_spec_path is None:
-                raise ValueError(f"{workload.id} chaff prefix-pack specification is missing")
             sidecar_destination = chaff_qualifications_dir / f"{workload.id}.json"
-            spec_destination = chaff_prefix_specs_dir / f"{workload.id}.json"
             shutil.copy2(workload.chaff_qualification_path, sidecar_destination)
-            shutil.copy2(workload.chaff_prefix_spec_path, spec_destination)
-            if (
-                sha256_file(sidecar_destination) != workload.chaff_qualification_sha256
-                or sha256_file(spec_destination) != workload.chaff_prefix_spec_sha256
-            ):
+            if sha256_file(sidecar_destination) != workload.chaff_qualification_sha256:
                 raise ValueError(
                     f"{workload.id} chaff qualification changed during input materialization"
                 )
-            qualified = load_qualified_chaff(
-                sidecar_destination,
-                workload_id=workload.id,
-                base_manifest_path=destination,
-                prefix_spec_path=spec_destination,
-            )
+            if workload.chaff_qualification_scope == RESPONSE_ONLY_CHAFF_SCOPE:
+                spec_destination = None
+                if workload.chaff_prefix_spec_path is not None:
+                    raise ValueError(
+                        f"{workload.id} response-only qualification unexpectedly has a prefix spec"
+                    )
+                qualified = load_response_qualified_chaff(
+                    sidecar_destination,
+                    workload_id=workload.id,
+                    base_manifest_path=destination,
+                )
+            elif workload.chaff_qualification_scope == FULL_CHAFF_SCOPE:
+                if workload.chaff_prefix_spec_path is None:
+                    raise ValueError(f"{workload.id} chaff prefix-pack specification is missing")
+                spec_destination = chaff_prefix_specs_dir / f"{workload.id}.json"
+                shutil.copy2(workload.chaff_prefix_spec_path, spec_destination)
+                if sha256_file(spec_destination) != workload.chaff_prefix_spec_sha256:
+                    raise ValueError(
+                        f"{workload.id} chaff qualification changed during input materialization"
+                    )
+                qualified = load_qualified_chaff(
+                    sidecar_destination,
+                    workload_id=workload.id,
+                    base_manifest_path=destination,
+                    prefix_spec_path=spec_destination,
+                )
+            else:
+                raise ValueError(f"{workload.id} chaff qualification scope is invalid")
             runtime_destination = runtime_workloads_dir / f"{workload.id}.json"
             runtime_destination.write_bytes(canonical_bytes(runtime_manifest(workload.data)))
             if sha256_file(runtime_destination) != workload.runtime_sha256:
@@ -1161,8 +1278,11 @@ def _materialize_inputs(
                 runtime,
                 chaff_qualification_path=sidecar_destination,
                 chaff_qualification_sha256=sha256_file(sidecar_destination),
+                chaff_qualification_scope=workload.chaff_qualification_scope,
                 chaff_prefix_spec_path=spec_destination,
-                chaff_prefix_spec_sha256=sha256_file(spec_destination),
+                chaff_prefix_spec_sha256=(
+                    sha256_file(spec_destination) if spec_destination is not None else None
+                ),
                 chaff_manifest_path=manifest_destination,
                 chaff_manifest_sha256=sha256_file(manifest_destination),
                 chaff_manifest_data=qualified.manifest,
@@ -2093,19 +2213,33 @@ def _frozen_workload_record(root: Path, workload: Workload) -> dict[str, Any]:
     }
     if workload.chaff_qualification_path is not None:
         if (
-            workload.chaff_prefix_spec_path is None
-            or workload.chaff_manifest_path is None
+            workload.chaff_manifest_path is None
             or workload.runtime_path is None
+            or workload.chaff_qualification_scope
+            not in {
+                RESPONSE_ONLY_CHAFF_SCOPE,
+                FULL_CHAFF_SCOPE,
+            }
+            or (
+                workload.chaff_qualification_scope == FULL_CHAFF_SCOPE
+                and workload.chaff_prefix_spec_path is None
+            )
         ):
             raise ValueError(f"{workload.id} qualified chaff frozen inputs are incomplete")
         record.update(
             chaff_qualification=workload.chaff_qualification_path.relative_to(root).as_posix(),
             chaff_qualification_sha256=workload.chaff_qualification_sha256,
-            chaff_prefix_spec=workload.chaff_prefix_spec_path.relative_to(root).as_posix(),
-            chaff_prefix_spec_sha256=workload.chaff_prefix_spec_sha256,
             chaff_manifest=workload.chaff_manifest_path.relative_to(root).as_posix(),
             chaff_manifest_sha256=workload.chaff_manifest_sha256,
             runtime_manifest=workload.runtime_path.relative_to(root).as_posix(),
             runtime_manifest_sha256=workload.runtime_sha256,
         )
+        if workload.chaff_qualification_scope == RESPONSE_ONLY_CHAFF_SCOPE:
+            record["chaff_qualification_scope"] = RESPONSE_ONLY_CHAFF_SCOPE
+        else:
+            assert workload.chaff_prefix_spec_path is not None
+            record.update(
+                chaff_prefix_spec=workload.chaff_prefix_spec_path.relative_to(root).as_posix(),
+                chaff_prefix_spec_sha256=workload.chaff_prefix_spec_sha256,
+            )
     return record

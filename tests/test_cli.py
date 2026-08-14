@@ -43,6 +43,7 @@ def test_internal_cli_contains_only_container_workflow_boundaries():
         "prepare",
         "derive-chaff-prefix-specs",
         "qualify-chaff",
+        "qualify-response-chaff",
         "run",
         "resume",
         "verify",
@@ -84,12 +85,15 @@ def test_run_resume_and_verify_have_no_mode_flags():
         "help",
         "target",
     }
+    response = command_parsers["qualify-response-chaff"]
+    workload_ids = next(action for action in response._actions if action.dest == "workload_ids")
+    assert workload_ids.nargs == 5
 
 
 def test_launcher_routes_only_consolidated_public_commands():
     launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
     assert (
-        "{build|prepare|derive-chaff-prefix-specs|qualify-chaff|run|resume|verify|analyze|fit|test}"
+        "{build|prepare|derive-chaff-prefix-specs|qualify-chaff|qualify-response-chaff|run|resume|verify|analyze|fit|test}"
         in launcher
     )
     assert 'run|resume|verify|analyze|fit|test) image="${COLLECTION_IMAGE}"' in launcher
@@ -208,6 +212,69 @@ def test_qualification_store_delta_validator_executes_publication_states(tmp_pat
     )
     assert unauthorized.returncode != 0
     assert "outside one hidden candidate" in unauthorized.stderr
+
+
+def test_launcher_response_qualification_is_exact_five_and_least_privilege() -> None:
+    launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
+    assert "qualify-response-chaff requires exactly five workload IDs" in launcher
+    assert '"${ROOT}/config/chaff-response-qualification-store"' in launcher
+    assert "config/chaff-response-qualification-store/v1" in launcher
+    mounts = launcher.split(
+        'if [[ "${1:-}" == "qualify-response-chaff" ]]; then\n  container+=(', 1
+    )[-1].split("\nfi", 1)[0]
+    assert '--volume "${ROOT}/config/workloads:/lab/config/workloads:ro"' in mounts
+    assert (
+        '--volume "${ROOT}/config/chaff-response-qualification-store:'
+        '/lab/config/chaff-response-qualification-store:rw"' in mounts
+    )
+    assert (
+        '--volume "${response_qualification_child}:'
+        '/lab/config/chaff-response-qualification-store/${response_qualification_name}:ro"'
+        in mounts
+    )
+    assert "validate_response_qualification_store_delta" in launcher
+
+
+def test_response_qualification_delta_validator_enforces_dynamic_exact_five(
+    tmp_path: Path,
+) -> None:
+    launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
+    validator = _embedded_python(launcher, "validate_response_qualification_store_delta")
+    existing = {".gitkeep": {"type": "file", "sha256": "a" * 64}}
+    ids = ("alpha", "bravo", "charlie", "delta", "echo")
+    cohort = {"v1": {"type": "directory"}} | {
+        f"v1/{workload}.json": {"type": "file", "sha256": "b" * 64} for workload in ids
+    }
+
+    published = _run_embedded_python(tmp_path, validator, existing, existing | cohort, "0", *ids)
+    assert published.returncode == 0, published.stderr
+
+    candidate = {
+        ".v1.qcsd-batch-proof": {"type": "directory"},
+        ".v1.qcsd-batch-proof/response-0.log": {
+            "type": "file",
+            "sha256": "c" * 64,
+        },
+    }
+    retained = _run_embedded_python(tmp_path, validator, existing, existing | candidate, "7", *ids)
+    assert retained.returncode == 0, retained.stderr
+
+    partial = _run_embedded_python(
+        tmp_path,
+        validator,
+        existing,
+        existing | {"v1": {"type": "directory"}},
+        "0",
+        *ids,
+    )
+    assert partial.returncode != 0
+    assert "outside the exact schema-one cohort" in partial.stderr
+
+    duplicate_ids = _run_embedded_python(
+        tmp_path, validator, existing, existing, "7", *ids[:4], ids[0]
+    )
+    assert duplicate_ids.returncode != 0
+    assert "workload cohort is invalid" in duplicate_ids.stderr
 
 
 def test_launcher_audits_the_exact_prefix_derivation_config_delta():

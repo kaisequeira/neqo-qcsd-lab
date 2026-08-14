@@ -85,6 +85,7 @@ def _response_receipt(
     url: str,
     headers: list[list[str]],
     source: dict[str, str],
+    parallel_requests: int = 6,
 ) -> dict[str, object]:
     expected = _response()
     observations: list[dict[str, object]] = [
@@ -115,13 +116,13 @@ def _response_receipt(
         "application_workload_sha256": application_sha256,
         "application_resource_id": 0,
         "selected_chaff_resource_id": 0,
-        "qualified_parallel_chaff_streams": 6,
+        "qualified_parallel_chaff_streams": parallel_requests,
         "method": "GET",
         "url": url,
         "request_headers": headers,
-        "parallel_requests": 6,
+        "parallel_requests": parallel_requests,
         "connection_count": 1,
-        "requests_opened_before_first_network_output": 6,
+        "requests_opened_before_first_network_output": parallel_requests,
         "request_stream_bytes": 163,
         "max_response_bytes": 1_048_576,
         "udp_payload_ceiling": 1_200,
@@ -142,7 +143,7 @@ def _response_receipt(
                 "complete": True,
                 "outcome": "complete",
             }
-            for request_index in range(6)
+            for request_index in range(parallel_requests)
         ],
         "packet_observations": observations,
         "packet_log_sha256": _packet_log(observations),
@@ -466,6 +467,208 @@ def _sidecar(prefix_path: Path | None = None) -> dict[str, object]:
             ),
         },
     }
+
+
+def _response_only_sidecar() -> dict[str, object]:
+    manifest = load_json(WORKLOAD)
+    root = selected_navigation_root(manifest, "cloudflare-quiche-r3")
+    headers = project_compact_headers(root)
+    expected = _response()
+    combined = _sidecar()
+    source = combined["qualification_source"]
+    neqo_provenance = combined["neqo_provenance"]
+    neqo_source = {
+        key: neqo_provenance[key]
+        for key in qualification.NEQO_PROVENANCE_KEYS
+        if key != "neqo_version"
+    }
+    application_sha256 = sha256_file(WORKLOAD)
+    response_runs = [
+        qualification._response_run_record(
+            run_index,
+            _response_receipt(
+                run_index=run_index,
+                application_sha256=application_sha256,
+                url=root["url"],
+                headers=headers,
+                source=neqo_source,
+                parallel_requests=qualification.RESPONSE_ONLY_PARALLEL_CHAFF_STREAMS,
+            ),
+        )
+        for run_index in range(qualification.QUALIFICATION_RUNS)
+    ]
+    response_digest = qualification_digest("qcsd-chaff-response-qualification-v2", response_runs)
+    return {
+        "schema_version": qualification.RESPONSE_ONLY_SIDECAR_SCHEMA_VERSION,
+        "artifact_type": qualification.RESPONSE_ONLY_SIDECAR_ARTIFACT_TYPE,
+        "qualification_scope": qualification.RESPONSE_ONLY_QUALIFICATION_SCOPE,
+        "workload_id": "cloudflare-quiche-r3",
+        "base_manifest": {"path": WORKLOAD.name, "sha256": application_sha256},
+        "selection_policy": qualification.SELECTION_POLICY,
+        "application_resource_id": 0,
+        "selected_chaff_resource_id": 0,
+        "qualified_parallel_chaff_streams": 5,
+        "header_projection": list(HEADER_PROJECTION),
+        "method": "GET",
+        "qualification_policy": {
+            "qualification_scope": "response-only",
+            "response_runs": 3,
+            "parallel_response_requests": 5,
+            "qualified_parallel_chaff_streams": 5,
+            "profile": "research-1200",
+            "response_defense": "none",
+            "seed": 0,
+            "udp_payload_ceiling": 1_200,
+            "max_response_bytes": 1_048_576,
+            "separate_chaff_namespace": True,
+        },
+        "qualification_source": source,
+        "qualification_image_digest": source["image_digest"],
+        "neqo_provenance": neqo_provenance,
+        "implementation_receipt": combined["implementation_receipt"],
+        "resource": {
+            "resource_id": 0,
+            "url": root["url"],
+            "headers": headers,
+            "request_stream_bytes": 163,
+            "expected_response": expected,
+            "response_runs": response_runs,
+            "response_qualification_sha256": response_digest,
+        },
+    }
+
+
+def test_response_only_sidecar_derives_exact_schema_three_without_prefix_contract() -> None:
+    application = load_json(WORKLOAD)
+    before = copy.deepcopy(application)
+    sidecar = _response_only_sidecar()
+    validated = qualification.validate_response_only_sidecar(
+        sidecar,
+        workload_id="cloudflare-quiche-r3",
+        base_manifest_path=WORKLOAD,
+        require_current_implementation=False,
+    )
+
+    assert application == before
+    assert validated.walkie_talkie_required_chaff_streams is None
+    manifest = validated.manifest
+    assert set(manifest) == {
+        "schema_version",
+        "artifact_type",
+        "qualification_scope",
+        "application_workload_sha256",
+        "application_resource_id",
+        "selected_chaff_resource_id",
+        "qualified_parallel_chaff_streams",
+        "resources",
+    }
+    assert manifest["schema_version"] == 3
+    assert manifest["qualification_scope"] == "response-only"
+    assert manifest["qualified_parallel_chaff_streams"] == 5
+    resource = manifest["resources"][0]
+    nested = resource["chaff_qualification"]
+    assert set(nested) == {
+        "schema_version",
+        "qualification_scope",
+        "method",
+        "request_stream_bytes",
+        "qualified_parallel_chaff_streams",
+        "expected_response",
+        "response_qualification_sha256",
+    }
+    assert nested["schema_version"] == 3
+    assert nested["qualification_scope"] == "response-only"
+    assert nested["qualified_parallel_chaff_streams"] == 5
+    assert len(sidecar["resource"]["response_runs"]) == 3
+    assert all(
+        len(record["receipt"]["requests"]) == 5 for record in sidecar["resource"]["response_runs"]
+    )
+    assert "prefix_spec_sha256" not in nested
+    assert "walkie_talkie_required_chaff_streams" not in manifest
+
+
+def test_response_only_sidecar_rejects_response_cohort_or_run_tampering() -> None:
+    changed = _response_only_sidecar()
+    changed["resource"]["response_runs"].pop()
+
+    with pytest.raises(ValueError, match="exactly three response runs"):
+        qualification.validate_response_only_sidecar(
+            changed,
+            workload_id="cloudflare-quiche-r3",
+            base_manifest_path=WORKLOAD,
+            require_current_implementation=False,
+        )
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda sidecar: sidecar.update({"schema_version": True}),
+        lambda sidecar: sidecar.update({"schema_version": 1.0}),
+        lambda sidecar: sidecar.update({"qualified_parallel_chaff_streams": 5.0}),
+        lambda sidecar: sidecar["resource"].update({"resource_id": False}),
+        lambda sidecar: sidecar["qualification_policy"].update({"seed": False}),
+        lambda sidecar: sidecar["qualification_policy"].update({"separate_chaff_namespace": 1}),
+    ],
+)
+def test_response_only_sidecar_rejects_boolean_and_float_aliases(mutate: object) -> None:
+    sidecar = _response_only_sidecar()
+    mutate(sidecar)
+
+    with pytest.raises(ValueError):
+        qualification.validate_response_only_sidecar(
+            sidecar,
+            workload_id="cloudflare-quiche-r3",
+            base_manifest_path=WORKLOAD,
+            require_current_implementation=False,
+        )
+
+
+@pytest.mark.parametrize("schema_version", [True, 1.0])
+def test_response_only_sidecar_rejects_implementation_schema_numeric_aliases(
+    schema_version: object,
+) -> None:
+    sidecar = _response_only_sidecar()
+    implementation = sidecar["implementation_receipt"]
+    implementation["schema_version"] = schema_version
+    implementation["sha256"] = qualification._implementation_aggregate(implementation)
+
+    with pytest.raises(ValueError, match="implementation receipt is invalid"):
+        qualification.validate_response_only_sidecar(
+            sidecar,
+            workload_id="cloudflare-quiche-r3",
+            base_manifest_path=WORKLOAD,
+            require_current_implementation=False,
+        )
+
+
+def test_response_only_sidecar_rejects_numeric_source_commits_with_valid_aggregate() -> None:
+    sidecar = _response_only_sidecar()
+    numeric_commit = int("1" * 40)
+    sidecar["qualification_source"]["lab_commit"] = numeric_commit
+    implementation = sidecar["implementation_receipt"]
+    implementation["source"]["lab_commit"] = numeric_commit
+    implementation["sha256"] = qualification._implementation_aggregate(implementation)
+
+    with pytest.raises(ValueError, match="clean concrete source/image provenance"):
+        qualification.validate_response_only_sidecar(
+            sidecar,
+            workload_id="cloudflare-quiche-r3",
+            base_manifest_path=WORKLOAD,
+            require_current_implementation=False,
+        )
+
+
+def test_implementation_receipt_rejects_numeric_commit_with_valid_aggregate() -> None:
+    implementation = _response_only_sidecar()["implementation_receipt"]
+    implementation["source"]["lab_commit"] = int("1" * 40)
+    implementation["sha256"] = qualification._implementation_aggregate(implementation)
+
+    with pytest.raises(ValueError, match="image source receipt is not clean and pinned"):
+        qualification._validate_implementation_receipt(
+            implementation,
+            require_current=False,
+        )
 
 
 def test_projection_is_exact_existing_ael_in_original_order() -> None:
@@ -1146,6 +1349,34 @@ def test_qualify_chaff_refuses_existing_destination_before_network(
     assert destination.read_text(encoding="utf-8") == "existing\n"
 
 
+def test_qualify_response_chaff_refuses_existing_destination_before_network(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workloads = tmp_path / "workloads"
+    qualifications = tmp_path / "qualifications"
+    workloads.mkdir()
+    qualifications.mkdir()
+    (workloads / WORKLOAD.name).write_bytes(WORKLOAD.read_bytes())
+    destination = qualifications / WORKLOAD.name
+    destination.write_text("existing\n", encoding="utf-8")
+    called = False
+
+    def network(*args: object, **kwargs: object) -> list[dict[str, object]]:
+        nonlocal called
+        called = True
+        return []
+
+    monkeypatch.setattr(qualification, "_run_response_qualifications", network)
+    with pytest.raises(FileExistsError, match="create-only"):
+        qualification.qualify_response_chaff(
+            "cloudflare-quiche-r3",
+            workload_root=workloads,
+            qualification_root=qualifications,
+        )
+    assert called is False
+    assert destination.read_text(encoding="utf-8") == "existing\n"
+
+
 def test_failed_qualification_retains_raw_receipt_and_log_in_unpublished_workdir(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1222,6 +1453,22 @@ def _batch_inputs(tmp_path: Path) -> tuple[Path, Path, Path]:
         destination_root=specs,
     )
     return workloads, specs, store
+
+
+def _response_batch_inputs(tmp_path: Path) -> tuple[tuple[str, ...], Path, Path]:
+    workload_ids = tuple(
+        workload_id
+        for workload_id in qualification.SEALED_WORKLOAD_IDS
+        if workload_id != "bootstrap-introduction-r3"
+    )
+    workloads = tmp_path / "response-workloads"
+    store = tmp_path / "response-store"
+    workloads.mkdir()
+    store.mkdir()
+    for workload_id in workload_ids:
+        source = ROOT / "config/workloads" / f"{workload_id}.json"
+        (workloads / source.name).write_bytes(source.read_bytes())
+    return workload_ids, workloads, store
 
 
 def _test_execution_context(
@@ -1308,6 +1555,119 @@ def _fake_qualification(
     path = qualification_root / f"{workload_id}.json"
     atomic_json(path, {"workload_id": workload_id})
     return QualifiedChaffOutput(path, sha256_file(path), "f" * 64)
+
+
+def test_response_batch_publishes_explicit_five_in_caller_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workload_ids, workloads, store = _response_batch_inputs(tmp_path)
+    requested = tuple(reversed(workload_ids))
+    calls: list[str] = []
+
+    def qualify(
+        workload_id: str, *, qualification_root: Path, **kwargs: object
+    ) -> QualifiedChaffOutput:
+        calls.append(workload_id)
+        return _fake_qualification(workload_id, qualification_root=qualification_root, **kwargs)
+
+    monkeypatch.setattr(qualification, "qualify_response_chaff", qualify)
+    execution_context = _test_execution_context(tmp_path)
+    monkeypatch.setattr(
+        qualification, "_qualification_execution_context", lambda: execution_context
+    )
+
+    outputs = qualification.qualify_all_response_chaff(
+        requested,
+        workload_root=workloads,
+        qualification_store=store,
+        interval_seconds=0,
+    )
+
+    assert calls == list(requested)
+    assert [output.path.name for output in outputs] == [f"{item}.json" for item in requested]
+    assert {path.name for path in (store / "v1").iterdir()} == {
+        f"{item}.json" for item in workload_ids
+    }
+    assert not list(store.glob(".v1.qcsd-batch-*"))
+
+
+def test_response_batch_requires_exactly_five_unique_ids_before_network(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    called = False
+
+    def execution() -> tuple[dict[str, object], dict[str, object], str]:
+        nonlocal called
+        called = True
+        return {}, {}, "test"
+
+    monkeypatch.setattr(qualification, "_qualification_execution_context", execution)
+    for invalid in (("one",), ("one", "two", "three", "four", "one")):
+        with pytest.raises(ValueError, match="exactly five unique"):
+            qualification.qualify_all_response_chaff(invalid, qualification_store=tmp_path)
+    assert called is False
+
+
+def test_response_batch_rejects_two_workloads_from_one_primary_class_origin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workload_ids = qualification.SEALED_WORKLOAD_IDS[:5]
+    workloads = tmp_path / "duplicate-origin-workloads"
+    store = tmp_path / "duplicate-origin-store"
+    workloads.mkdir()
+    store.mkdir()
+    for workload_id in workload_ids:
+        source = ROOT / "config/workloads" / f"{workload_id}.json"
+        (workloads / source.name).write_bytes(source.read_bytes())
+    called = False
+
+    def execution() -> tuple[dict[str, object], dict[str, object], str]:
+        nonlocal called
+        called = True
+        return {}, {}, "test"
+
+    monkeypatch.setattr(qualification, "_qualification_execution_context", execution)
+    with pytest.raises(ValueError, match="five distinct primary HTTPS origins"):
+        qualification.qualify_all_response_chaff(
+            workload_ids,
+            workload_root=workloads,
+            qualification_store=store,
+        )
+    assert called is False
+    assert not (store / "v1").exists()
+    assert not list(store.glob(".v1.qcsd-batch-*"))
+
+
+def test_response_batch_failure_retains_one_unpublished_candidate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workload_ids, workloads, store = _response_batch_inputs(tmp_path)
+    calls = 0
+
+    def qualify(
+        workload_id: str, *, qualification_root: Path, **kwargs: object
+    ) -> QualifiedChaffOutput:
+        nonlocal calls
+        calls += 1
+        if calls == 3:
+            raise RuntimeError("synthetic response qualification failure")
+        return _fake_qualification(workload_id, qualification_root=qualification_root, **kwargs)
+
+    monkeypatch.setattr(qualification, "qualify_response_chaff", qualify)
+    monkeypatch.setattr(
+        qualification,
+        "_qualification_execution_context",
+        lambda: _test_execution_context(tmp_path),
+    )
+    with pytest.raises(RuntimeError, match="synthetic response"):
+        qualification.qualify_all_response_chaff(
+            workload_ids,
+            workload_root=workloads,
+            qualification_store=store,
+            interval_seconds=0,
+        )
+    assert not (store / "v1").exists()
+    assert len(list(store.glob(".v1.qcsd-batch-*"))) == 1
 
 
 def test_batch_qualification_publishes_exact_six_atomically(
