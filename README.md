@@ -131,6 +131,20 @@ advances to the next candidate; transport, DNS, timeout, or protocol failures
 abort the transaction. Publication is atomic, and no v2 sidecar hash exists
 until that exact five-file transaction succeeds from a clean build.
 
+The active five-file transaction was atomically published from clean Lab
+commit `9953cf3a9a29a2cb5f6aaf02439cd13f318b6b39`, clean Neqo commit
+`a3bd748c1b3f4e24f7dc88f673365e6842db51a7`, and qualification image
+`sha256:c38afc629613bc8e7a5a82b55ad83a7e5787a51f780f14a199e9429be124ff43`.
+Its canonical hashes are:
+
+| Workload | Sidecar SHA-256 | Derived schema-4 manifest SHA-256 |
+|---|---|---|
+| `getbootstrap-home-r3` | `37e5e6933b337872b49889886e5930f3aa1a7778032bc9ed85a0372885e8e95d` | `330a8d41db984fc43c0c324e091cfba2906871a47ee06d7fb9c2de0aac1db32a` |
+| `cloudflare-quiche-r3` | `e8fe81526aec5fa9af2c1c03ad4f093732ecc738a02bd2dd997104dc253a1957` | `38dfa66be8b0a55857845853c237a37014fe47095328d8d32187871277c3ac3e` |
+| `hyper-basic-client-r1` | `816d6bcc0c43cf0d672fc0f21cc0dd871d80fa9ca24ebcadcbc81b48d33a3bed` | `ffc24029a219246cd40060cd70953e4cf0a3590e59a700ec6c6f72ce7800b54d` |
+| `serde-home-r1` | `46abffb21b7f93ebe328f56ad82819fcced1586aa3966de2d733fa7a5133018f` | `91ad7a33ed70cfcf4bc1b062e747b1371bad00ca16171ee3539f40755f18c9d3` |
+| `rfc9114-text-r1` | `d76a4ff366a6b8dce65b42cca02d2a55c6333e649b28316fcdfe58b060d34c2f` | `9fb65d16532ff6290aa530e4829f87167cd784a30bfb68e5d7d921acd5da8fc5` |
+
 Each response-store v2 file is sidecar schema 2 and derives a schema-4
 `qcsd-qualified-chaff-manifest` with `qualification_scope: response-only` and
 the exact request-header primitive. It contains neither Walkie-Talkie
@@ -869,9 +883,12 @@ handoff. FRONT and Tamaraw use their fixed research-profile algorithms and
 seeds; the POC neither consumes nor refits the Traffic-Morphing, WTF-PAD, or
 Walkie-Talkie artifacts. The current recovery contract requires five
 response-store v2 sidecars (schema 2) deriving schema-4 runtime manifests,
-with no prefix-pack or fitted-data dependency. That cohort is the next atomic
-qualification transaction; it is not yet published and does not authorize
-capture merely because the historical v1/schema-3 evidence remains readable.
+with no prefix-pack or fitted-data dependency. That cohort is now atomically
+published and is the active response-qualification input. It does not yet
+authorize capture: the exact sidecars must first be committed and included in
+a fresh clean collection build, and that build must pass the excluded 30/30
+rehearsal and interface handoff. Historical v1/schema-3 evidence remains
+readable only for its frozen compatibility role.
 
 Each temporal block has two campaign files:
 `classifier-poc5-baseline-NN.yml` contributes 20 undefended visits per class,
@@ -960,11 +977,12 @@ qualification diagnostics are likewise never POC5 classifier samples.
 These POC5 campaign files, the offline exporter, tests, and documentation are
 outside the qualification implementation-file inventory. Publish them in a
 clean Lab commit and rebuild the collection image so new captures bind that
-commit. First publish the five response-store v2 sidecars atomically from the
-exact clean qualification build, then rebuild so capture binds the sidecar
-commit. Formal acquisition remains blocked until that schema-2/schema-4 cohort
-exists and a fresh excluded rehearsal finishes exactly 30/30 accepted and
-eligible with a verified interface handoff. Keep the historical response-store
+commit. The five response-store v2 sidecars have now been atomically published
+from the exact clean qualification build. Commit that exact evidence without
+altering it, then produce the fresh final clean collection build so capture
+binds the sidecar commit. Formal acquisition remains blocked until that build
+passes a fresh excluded rehearsal with exactly 30/30 accepted and eligible
+samples and a verified interface handoff. Keep the historical response-store
 v1/schema-3 evidence frozen-compatible; do not regenerate the separate
 historical full-v2 sidecars, prefix specs, fitting result, or sealed
 `research-1200` bundle.

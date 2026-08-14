@@ -541,8 +541,8 @@ active class and contributes no rehearsal, formal, qualification, or handoff
 sample.
 
 FRONT and Tamaraw are the two algorithmic defences in this POC and do not
-consume fitted corpus artifacts. The current recovery contract instead
-requires one create-only five-file transaction under
+consume fitted corpus artifacts. The current recovery contract instead uses
+the active create-only five-file transaction under
 `config/chaff-response-qualification-store/v2/`. Application requests retain
 their prepared headers. The distinct chaff-only namespace copies `Accept` and
 `Accept-Language` exactly and forces `Accept-Encoding: identity`.
@@ -563,8 +563,24 @@ runtime chaff manifest at schema 4 with `qualification_scope: response-only`
 and the exact request-header primitive. There is no Walkie-Talkie prefix-pack
 or fitting-data field. The existing response-store v1/schema-1 sidecars and
 their schema-3 manifests remain frozen-compatible historical inputs; one frozen
-cohort may not mix schemas 3 and 4. The v2 five-file transaction has not yet
-been published, so it currently authorizes no rehearsal or formal sample.
+cohort may not mix schemas 3 and 4. The active v2 transaction was atomically
+published from clean Lab commit
+`9953cf3a9a29a2cb5f6aaf02439cd13f318b6b39`, clean Neqo commit
+`a3bd748c1b3f4e24f7dc88f673365e6842db51a7`, and qualification image
+`sha256:c38afc629613bc8e7a5a82b55ad83a7e5787a51f780f14a199e9429be124ff43`:
+
+| Workload | Sidecar SHA-256 | Derived schema-4 manifest SHA-256 |
+|---|---|---|
+| `getbootstrap-home-r3` | `37e5e6933b337872b49889886e5930f3aa1a7778032bc9ed85a0372885e8e95d` | `330a8d41db984fc43c0c324e091cfba2906871a47ee06d7fb9c2de0aac1db32a` |
+| `cloudflare-quiche-r3` | `e8fe81526aec5fa9af2c1c03ad4f093732ecc738a02bd2dd997104dc253a1957` | `38dfa66be8b0a55857845853c237a37014fe47095328d8d32187871277c3ac3e` |
+| `hyper-basic-client-r1` | `816d6bcc0c43cf0d672fc0f21cc0dd871d80fa9ca24ebcadcbc81b48d33a3bed` | `ffc24029a219246cd40060cd70953e4cf0a3590e59a700ec6c6f72ce7800b54d` |
+| `serde-home-r1` | `46abffb21b7f93ebe328f56ad82819fcced1586aa3966de2d733fa7a5133018f` | `91ad7a33ed70cfcf4bc1b062e747b1371bad00ca16171ee3539f40755f18c9d3` |
+| `rfc9114-text-r1` | `d76a4ff366a6b8dce65b42cca02d2a55c6333e649b28316fcdfe58b060d34c2f` | `9fb65d16532ff6290aa530e4829f87167cd784a30bfb68e5d7d921acd5da8fc5` |
+
+Publication completes the response-qualification gate but does not authorize
+capture by itself. The exact sidecars must be committed and included in a
+fresh clean collection build, and that build must pass the excluded 30/30
+rehearsal and verified interface handoff before any formal sample.
 Qualification traffic is diagnostic evidence and never a classifier
 observation. “No fitting” therefore does not mean unqualified or unchecked
 execution.
@@ -630,9 +646,10 @@ representation mismatches. The separate identity-only chaff namespace and
 120-completion stress test the exact response representation before capture.
 The latest rehearsal, its retries, and the earlier
 `20260814T110741.344914Z` rehearsal remain excluded diagnostic evidence. Formal
-capture stays blocked until the v2 five-sidecar cohort is atomically published
-from the exact clean build and a subsequent fresh rehearsal passes exactly
-30/30 accepted and eligible with a verified interface handoff.
+capture stays blocked while the now-published v2 cohort awaits its exact
+evidence commit and fresh final clean collection build, and until that build's
+subsequent rehearsal passes exactly 30/30 accepted and eligible with a verified
+interface handoff.
 
 The earlier six-class and stable3 schema-1 campaign/export contracts remain
 available as historical pipeline contracts but are not part of POC5. The
