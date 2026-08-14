@@ -101,6 +101,34 @@ be empty. Post-warmup client QPACK decoder-stream output is recorded but
 excluded from that completion predicate because this fixed critical-stream
 role is not a dependency of the already transmitted request prefix.
 
+### `qualify-response-chaff`
+
+```shell
+./qcsd-lab qualify-response-chaff \
+  getbootstrap-home-r3 \
+  cloudflare-quiche-r3 \
+  hyper-basic-client-r1 \
+  serde-home-r1 \
+  rfc9114-text-r1
+```
+
+Publishes the five-class FRONT/Tamaraw chaff evidence as one create-only
+transaction under `config/chaff-response-qualification-store/v1/`. The public
+batch requires exactly five unique workload IDs with five distinct primary
+HTTPS origins. For each workload it deterministically selects one compact
+same-origin response and performs exactly three independent unshaped
+qualifications, each with five parallel requests. All fifteen responses must
+match one stable identity and the frozen prepared workload.
+
+The loader derives a schema-3 `qcsd-qualified-chaff-manifest` with
+`qualification_scope: response-only`. It contains neither Walkie-Talkie
+prefix-pack fields nor a fitting-artifact binding. That narrower evidence is
+valid only when every defended runtime kind is FRONT or Tamaraw; a baseline-only
+campaign needs no chaff qualification, while campaigns containing another
+defence continue to require the full v2 qualification contract. FRONT and
+Tamaraw are algorithmic and require no fitting, but they still require this
+response qualification and all ordinary runtime-fidelity gates.
+
 ### `run`
 
 ```shell
@@ -230,14 +258,16 @@ verifies:
 ./classifier-pilot verify classifier-poc5-v2
 ```
 
-The POC5 contract contains one workload for each of five distinct origins:
-GetBootstrap Home, Apache Traffic Server documentation, NGINX QUIC,
-Cloudflare QUIC, and nghttp2/ngtcp2. Ten acquisition blocks each contribute a
-100-sample baseline result (20 visits per class) and a 150-sample paired result
-(ten visits per class under undefended, FRONT, and Tamaraw). The exact total is
-1,500 undefended, 500 FRONT, and 500 Tamaraw captures. The exporter separately
-retains the earlier schema-1 six-class and stable3 pipeline contracts and
-rejects mixed lineages.
+The active POC5 contract binds one workload to each of five distinct class
+origins: `getbootstrap-home-r3` to `getbootstrap.com`,
+`cloudflare-quiche-r3` to `cloudflare-quic.com`,
+`hyper-basic-client-r1` to `hyper.rs`, `serde-home-r1` to `serde.rs`, and
+`rfc9114-text-r1` to `www.rfc-editor.org`. Ten acquisition blocks each
+contribute a 100-sample baseline result (20 visits per class) and a 150-sample
+paired result (ten visits per class under undefended, FRONT, and Tamaraw). The
+exact total is 1,500 undefended, 500 FRONT, and 500 Tamaraw captures. The
+exporter separately retains the earlier schema-1 six-class and stable3
+pipeline contracts and rejects mixed lineages.
 
 The wrapper runs the exact collection image with networking disabled, all
 capabilities dropped, the checkout and result evidence read-only, and the
@@ -803,13 +833,16 @@ expansions are:
 - final: six workloads × three visits × one request policy × seven modes =
   126 samples.
 
-The POC5 workload classes are the approved origin hostnames bound one-to-one to
-`getbootstrap-home-r3`, `apache-traffic-server-docs-r3`, `nginx-quic-r3`,
-`cloudflare-quiche-r3`, and `nghttp2-ngtcp2-r3`. Bootstrap Introduction is not
-a sixth domain class because it shares `getbootstrap.com` with Bootstrap Home.
-FRONT and Tamaraw use their fixed research-profile algorithms and seeds; the
-POC neither consumes nor refits the Traffic-Morphing, WTF-PAD, or Walkie-Talkie
-artifacts.
+The POC5 workload/class bindings are exactly
+`getbootstrap-home-r3`/`getbootstrap.com`,
+`cloudflare-quiche-r3`/`cloudflare-quic.com`,
+`hyper-basic-client-r1`/`hyper.rs`, `serde-home-r1`/`serde.rs`, and
+`rfc9114-text-r1`/`www.rfc-editor.org`. The prepared Haxx workload
+`http3-explained-en-r1` is not used by the rehearsal, formal campaigns, or
+handoff. FRONT and Tamaraw use their fixed research-profile algorithms and
+seeds; the POC neither consumes nor refits the Traffic-Morphing, WTF-PAD, or
+Walkie-Talkie artifacts. Its five published response-only v1 sidecars derive
+schema-3 runtime manifests and have no prefix-pack or fitted-data dependency.
 
 Each temporal block has two campaign files:
 `classifier-poc5-baseline-NN.yml` contributes 20 undefended visits per class,
@@ -825,8 +858,10 @@ train/validation/test split per class. All 100 FRONT and all 100 Tamaraw rows
 per class are inference-only. Run baseline before paired in odd-numbered
 blocks and paired before baseline in even-numbered blocks, verify both results
 immediately, and retain the shared temporal block in the handoff. The exporter
-enforces that order and requires each pair to finish before the next block
-starts.
+accepts the twenty result arguments in canonical
+`baseline-01, paired-01, ..., baseline-10, paired-10` order, checks sealed
+timestamps for the odd/even capture chronology, and requires each pair to
+finish before the next block starts.
 
 ```shell
 ./qcsd-lab verify config/campaigns/classifier-poc5-rehearsal.yml
@@ -860,22 +895,31 @@ authorizes only the exact image, workloads, and campaign commit that it ran;
 any rebuild, source or workload repair, parameter change, or class replacement
 requires a new excluded 30-sample rehearsal before formal acquisition.
 
+The sealed pre-replacement rehearsal at
+`results/research-classifier-poc5-rehearsal-1200/20260814T110741.344914Z`
+remains valid diagnostic evidence but is incomplete: 18/30 samples were
+accepted, only 16 were eligible, and 12 failed. It is permanently excluded and
+cannot authorize the replacement cohort.
+
 The incomplete six-class diagnostic at
 `results/research-classifier-pilot-01-1200/20260814T064655.275845Z` is excluded
 from the POC5 corpus and classifier export. None of its individually accepted
 samples is reused. Its Apache response drift and FRONT/Tamaraw fidelity
-failures make the clean-clock 30-sample rehearsal a substantive gate: do not
-launch a formal block unless the rehearsal is complete with 30/30 accepted and
-eligible, and do not weaken fidelity to force a pass. Refresh, repair, or
-prospectively replace a failing class under a new frozen contract instead.
+failures show that the strict gates rejected that particular run; they do not,
+by themselves, establish a general defect in Neqo. The replacement cohort must
+therefore pass a fresh clean-clock rehearsal with exactly 30/30 accepted and
+eligible samples and a verified interface handoff before any formal block.
+Never weaken fidelity to force a pass. Refresh, repair, or prospectively
+replace a failing class under a new frozen contract instead.
 The fitting corpus, qualification runs, smoke result, failed attempts, and
 qualification diagnostics are likewise never POC5 classifier samples.
 
 These POC5 campaign files, the offline exporter, tests, and documentation are
 outside the qualification implementation-file inventory. Publish them in a
 clean Lab commit and rebuild the collection image so new captures bind that
-commit; do not regenerate the six qualification sidecars, prefix specs,
-fitting result, or sealed `research-1200` bundle before the rehearsal.
+commit. The five response-only v1 sidecars are the active POC qualification;
+do not regenerate the historical full-v2 sidecars, prefix specs, fitting
+result, or sealed `research-1200` bundle before the rehearsal.
 
 The implementation goal established the profiles, preparation policy,
 fitters, runtime realization, campaign contracts, and evidence boundaries.

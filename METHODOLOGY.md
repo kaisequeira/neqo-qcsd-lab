@@ -518,12 +518,26 @@ deterministic, and the report embeds those SVGs so it is self-contained.
 
 The authorized POC5 corpus is a five-class closed-world domain-shift study, not
 an open-world or adaptive-attacker efficacy corpus. Its five class labels are
-the approved origin hostnames `getbootstrap.com`,
-`docs.trafficserver.apache.org`, `quic.nginx.org`,
-`cloudflare-quic.com`, and `nghttp2.org`. Each is bound one-to-one to a frozen
-workload ID; a class therefore means the fixed page/request graph at that
-origin, not every possible page on the domain. Bootstrap Introduction is not a
-separate class because it shares the Bootstrap origin.
+the approved origin hostnames `getbootstrap.com`, `cloudflare-quic.com`,
+`hyper.rs`, `serde.rs`, and `www.rfc-editor.org`. They are bound one-to-one to
+`getbootstrap-home-r3`, `cloudflare-quiche-r3`, `hyper-basic-client-r1`,
+`serde-home-r1`, and `rfc9114-text-r1`, respectively. A class therefore means
+the fixed page/request graph at that origin, not every possible page on the
+domain. The separately prepared Haxx graph `http3-explained-en-r1` is not an
+active class and contributes no rehearsal, formal, qualification, or handoff
+sample.
+
+FRONT and Tamaraw are the two algorithmic defences in this POC and do not
+consume fitted corpus artifacts. They instead use the create-only response
+qualification store at `config/chaff-response-qualification-store/v1/`.
+Qualification selects one deterministic same-origin chaff response per class
+and requires three independent unshaped invocations of five parallel requests,
+all with one stable response identity. The resulting schema-1 sidecar derives
+a runtime chaff manifest at schema 3 with
+`qualification_scope: response-only`; there is no Walkie-Talkie prefix-pack or
+fitting-data field. Qualification traffic is diagnostic evidence and never a
+classifier observation. “No fitting” therefore does not mean unqualified or
+unchecked execution.
 
 The formal corpus has ten temporal acquisition blocks. Each block contains a
 100-sample baseline result with 20 undefended visits per class and a 150-sample
@@ -535,7 +549,9 @@ occupies every workload position twice. Prospectively selected paired seeds
 place every class/condition in each within-visit position 32--35 times over its
 100 visits. Baseline executes first in odd-numbered blocks and paired first in
 even-numbered blocks so condition is not synonymous with time of capture; the
-exporter enforces this chronology.
+exporter enforces this chronology from sealed timestamps. Its command-line
+inputs use the separate canonical order `baseline-01, paired-01, ...,
+baseline-10, paired-10`.
 
 Undefended samples from blocks 01--08, 09, and 10 form the temporal 8:1:1
 split: 240 training, 30 validation, and 30 clean-test samples per class. Every
@@ -553,22 +569,32 @@ ingestion gate and is permanently excluded from the 2,500. The incomplete
 six-class diagnostic result at
 `results/research-classifier-pilot-01-1200/20260814T064655.275845Z` also
 contributes no POC5 samples. Its ATS response drift and FRONT/Tamaraw fidelity
-failures mean the rehearsal must complete with 30/30 accepted and eligible;
-fitting samples, qualification traffic, smoke results, failed attempts, and
-archived diagnostics are never substituted for a missing formal capture.
+failures are evidence that the strict gates rejected that run, not proof of a
+general underlying Neqo implementation defect. The replacement cohort must
+complete a fresh rehearsal with exactly 30/30 accepted and eligible samples
+and a verified interface handoff. Fitting samples, qualification traffic,
+smoke results, failed attempts, and archived diagnostics are never substituted
+for a missing formal capture.
 That gate authorizes only the exact clean Lab/Neqo/image receipt, frozen
 workloads, and campaign commit it exercised. A rebuild, source/workload repair,
 parameter change, or class substitution invalidates the rehearsal and requires
 a new excluded 30-sample gate. Every one of the twenty formal results must bind
 the same source receipt.
 
+The sealed pre-replacement rehearsal at
+`results/research-classifier-poc5-rehearsal-1200/20260814T110741.344914Z` is
+valid but incomplete: 18/30 samples were accepted, 16 were eligible, and 12
+failed. It remains excluded diagnostic evidence and cannot authorize the
+replacement cohort.
+
 The earlier six-class and stable3 schema-1 campaign/export contracts remain
 available as historical pipeline contracts but are not part of POC5. The
 schema-2 exporter accepts only the exact twenty POC5 results in alternating
-baseline/paired block order, binds their checked-in campaign hashes, derives
-sample-level splits, assigns a shared `acquisition_block_id` to each result
-pair, rejects overlapping or out-of-order temporal blocks, and verifies the
-2,500-row aggregate contract.
+canonical baseline/paired argument order, binds their checked-in campaign
+hashes, derives sample-level splits, assigns a shared `acquisition_block_id` to
+each result pair, rejects chronology that does not alternate odd
+baseline-first/even paired-first, rejects overlapping or out-of-order temporal
+blocks, and verifies the 2,500-row aggregate contract.
 
 The exporter is an offline companion outside the qualified capture
 implementation. This separation matters because qualification binds the exact
