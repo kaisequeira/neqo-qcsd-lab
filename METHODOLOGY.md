@@ -78,8 +78,9 @@ two members of that cohort. For those shared workloads the visits were
 independent: fitting captures were never reused as evaluation samples, and
 evaluation observations did not influence fitted parameters. The capture
 specification has no monitored/unmonitored roles or open-world view. The
-offline classifier-pilot projection labels these six fixed workload graphs and
-assigns capture blocks to a pipeline-development split, but it is not a final
+original offline classifier-pilot contract labels these six fixed workload
+graphs; the immediate stable3 contract labels an explicitly reduced subset.
+Both assign capture blocks to a pipeline-development split, not a final
 classifier study design.
 
 ## Ordering and concurrency
@@ -515,24 +516,46 @@ deterministic, and the report embeds those SVGs so it is self-contained.
 ## Classifier-pilot projection and handoff
 
 The classifier pilot is a staged interface experiment, not the final efficacy
-corpus. Its seven campaign blocks each execute the same six frozen workloads,
-the `as-defined` request policy, and all seven current modes for one new visit:
-42 samples per sealed block and 294 samples when all blocks complete. Blocks
-use distinct campaign seeds. The first six cyclically rotate workload order;
-the seventh uses a separate reverse ordering. Defence order remains the seeded
-order derived by the ordinary campaign expander. The seven seeds were selected
-before capture so no workload/defence pair occupies a within-visit position
-more than twice across the pilot.
+corpus. Two separately named contracts are preserved. The original deferred
+contract has seven blocks of the same six frozen workloads, the `as-defined`
+request policy, and all seven current modes for one new visit: 42 samples per
+block and 294 overall. Its checked-in campaign definitions are retained for a
+future repaired cohort and are never silently reinterpreted as a smaller
+experiment.
 
-Block 01 is collected and exported first as the 42-sample importer gate. The
-remaining blocks are justified only after the receiver can ingest that
-contract. The complete pilot assigns blocks 01–05 to training, block 06 to
-validation, and block 07 to pilot testing. Splitting at the sealed-result block
-rather than randomly by packet trace prevents samples from the same temporal
-capture block appearing on both sides of a split. Seven observations per
-workload and defence remain far too few for a defence-effectiveness estimate.
-Any pilot test result consulted during feature or model development is also no
-longer eligible as an untouched final-paper test set.
+The immediate `stable3` contract instead contains GetBootstrap Home, Bootstrap
+Introduction, and Cloudflare QUIC. Its seven independently sealed blocks use
+the same request policy and modes: 21 samples per block and 147 overall. It
+reuses the seven seeds fixed before the diagnostic capture rather than
+searching for favorable seeds after observing failures. The workload orders
+cover all six permutations plus one repeat; each workload appears in each
+time position two or three times. Seeded defence order remains the ordinary
+campaign expansion, with no workload/defence pair occupying any within-visit
+position more than twice.
+
+Stable3 block 01 is collected and exported first as the 21-sample importer
+gate. The remaining blocks are justified only after the receiver can ingest
+that contract. The complete pilot assigns blocks 01–05 to training, block 06
+to validation, and block 07 to pilot testing. Splitting at the sealed-result
+block rather than randomly by packet trace prevents samples from the same
+temporal capture block appearing on both sides of a split. Per defence this is
+only 15 training samples and three samples in each held-out split, with one
+sample per class in validation and test. Any pilot test result consulted during
+feature or model development is also no longer an untouched final-paper test
+set.
+
+The incomplete six-class diagnostic result at
+`results/research-classifier-pilot-01-1200/20260814T064655.275845Z` contributes
+no stable3 samples, including none of its individually accepted captures.
+Apache Traffic Server, NGINX QUIC, and nghttp2/ngtcp2 are excluded from this
+immediate pilot after the diagnostic exposed response/runtime or strict
+capture-fidelity failures. That selection is outcome-informed and therefore
+cannot estimate performance for the original cohort. Fitting samples,
+qualification traffic, the post-fit smoke, failed attempts, and archived
+falsification diagnostics are also excluded from the stable3 corpus and
+export. Every one
+of the 147 stable3 samples must be a new, complete and eligible evaluation
+sample under its checked-in stable3 campaign.
 
 The exporter is an offline companion outside the qualified capture
 implementation. This separation matters because qualification binds the exact
@@ -542,6 +565,13 @@ defences were qualified. It accepts only complete sealed results for which all
 planned samples are accepted and eligible, re-verifies every evidence index,
 and publishes a create-only handoff atomically. The handoff's `SHA256SUMS`
 closes the derived inventory but does not replace the source result seals.
+Before export, every sample's primary direct capture must additionally have a
+single constant-offset reconciliation segment, zero modeled clock steps,
+evidence-eligible exact runner reconciliation, and a maximum timestamp error
+within its sealed tolerance. The elapsed durations independently calculated
+from the wrapper's realtime and monotonic anchors may differ by no more than
+10 ms. Thus a trace that required accepted clock-step modeling is still
+excluded from classifier input.
 
 For each sample, the handoff contains two explicitly different views:
 
@@ -579,9 +609,14 @@ integration control rather than an efficacy defence.
   network vantage point.
 - A direct PCAP contains endpoint and encrypted-protocol metadata and is not a
   ready-made public release.
-- The classifier pilot has only six fixed workload graphs spanning five
-  origins. It is suitable for parser, feature, training, and evaluation-pipeline
-  integration, not website-population generalization or open-world claims.
+- The immediate classifier pilot has only three fixed workload graphs spanning
+  two origins, and two Bootstrap graphs share one delivery path. It is suitable
+  for parser, feature, training, and evaluation-pipeline integration, not
+  website-population generalization, open-world claims, or defence efficacy.
+- The fitted bundle remains the sealed six-workload fit. In stable3,
+  Cloudflare's Traffic-Morphing target and Walkie-Talkie partner are excluded
+  classes; the unchanged fitted runtime is being exercised, not refitted or
+  claimed as a closed three-class optimum.
 - Controlled local smoke fixtures validate mechanics before fitting; the
   checked-in external smoke instead requires the sealed fitted bundle and
   evaluates independent post-fit visits.

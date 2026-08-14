@@ -13,8 +13,8 @@ The capture specification does not train a classifier or define a final
 monitored/unmonitored or open-world corpus. Fitting and evaluation are separate
 campaigns over independent visits of the same frozen workload definitions. A
 separate offline companion can package complete sealed results as a small
-classifier-pipeline pilot; that export does not make the six-workload cohort a
-representative efficacy dataset.
+classifier-pipeline pilot; that export does not make either the full cohort or
+an operationally reduced subset a representative efficacy dataset.
 
 Docker is required for every public command. The Neqo source is the
 `neqo-qcsd/` Git submodule.
@@ -206,17 +206,23 @@ the separate Docker wrapper from this checkout after every source result
 verifies:
 
 ```shell
-./classifier-pilot export classifier-pilot-v1 \
-  results/research-classifier-pilot-01-1200/<run-id> \
-  results/research-classifier-pilot-02-1200/<run-id> \
-  results/research-classifier-pilot-03-1200/<run-id> \
-  results/research-classifier-pilot-04-1200/<run-id> \
-  results/research-classifier-pilot-05-1200/<run-id> \
-  results/research-classifier-pilot-06-1200/<run-id> \
-  results/research-classifier-pilot-07-1200/<run-id> \
+./classifier-pilot export classifier-stable3-pilot-v1 \
+  results/research-classifier-stable3-pilot-01-1200/<run-id> \
+  results/research-classifier-stable3-pilot-02-1200/<run-id> \
+  results/research-classifier-stable3-pilot-03-1200/<run-id> \
+  results/research-classifier-stable3-pilot-04-1200/<run-id> \
+  results/research-classifier-stable3-pilot-05-1200/<run-id> \
+  results/research-classifier-stable3-pilot-06-1200/<run-id> \
+  results/research-classifier-stable3-pilot-07-1200/<run-id> \
   --splits train,train,train,train,train,validation,test
-./classifier-pilot verify classifier-pilot-v1
+./classifier-pilot verify classifier-stable3-pilot-v1
 ```
+
+This immediate contract contains GetBootstrap Home, Bootstrap Introduction,
+and Cloudflare QUIC: 21 samples per block and 147 across all seven blocks. The
+exporter separately retains the exact original six-class/294-sample contract
+for future use after its excluded workloads and runtime paths are repaired. It
+rejects a mixture of the two result lineages.
 
 The wrapper runs the exact collection image with networking disabled, all
 capabilities dropped, the checkout and result evidence read-only, and the
@@ -231,10 +237,16 @@ eligible. Inputs are read-only; the exporter verifies each evidence seal before
 copying anything and rejects duplicate sample IDs, mismatched block cohorts,
 symlinks, or an existing destination.
 
+Export also applies a stricter timing gate than ordinary result eligibility.
+Every primary direct capture must use one reconciled, evidence-eligible
+constant-offset clock segment with zero steps and bounded timestamp residuals;
+its wrapper realtime and monotonic elapsed durations may differ by at most
+10 ms. A timing-repaired or anchor-drifted trace is not handed to a classifier.
+
 The handoff is self-contained:
 
 ```text
-handoffs/classifier-pilot-v1/
+handoffs/classifier-stable3-pilot-v1/
   README.md
   dataset.json
   samples.jsonl
@@ -277,7 +289,7 @@ they do not replace the authoritative result seals.
 Verify the portable inventory from inside the handoff root:
 
 ```shell
-cd handoffs/classifier-pilot-v1
+cd handoffs/classifier-stable3-pilot-v1
 sha256sum -c SHA256SUMS
 ```
 
@@ -738,39 +750,64 @@ observer, pairing, fidelity, and derived metrics.
 
 The post-fit 14-sample evaluation and 120-sample fitting campaign definitions
 are checked in, and their completed results are sealed locally. The six-workload
-fitting cohort is frozen. Seven classifier-pilot block definitions are also
-checked in but have not yet been captured. The relevant exact expansions are:
+fitting cohort is frozen. The original six-class pilot definitions remain
+checked in for a future repaired cohort. The immediate independently named
+three-class pilot is the current pipeline handoff path. The relevant exact
+expansions are:
 
 - fitting: six workloads × ten visits × two request policies × undefended =
   120 samples;
 - post-fit smoke: two workloads × one visit × one request policy × seven modes
   = 14 samples;
-- classifier pilot: seven independently sealed blocks × six workloads × one
-  visit × one request policy × seven modes = 42 samples per block and 294
-  samples in the complete pilot;
+- deferred six-class classifier pilot: seven independently sealed blocks ×
+  six workloads × one visit × one request policy × seven modes = 42 samples
+  per block and 294 samples in the complete pilot;
+- immediate three-class classifier pilot: seven independently sealed blocks ×
+  three workloads × one visit × one request policy × seven modes = 21 samples
+  per block and 147 samples in the complete pilot;
 - pre-final rehearsal: six workloads × one visit × one request policy × seven
   modes = 42 samples;
 - final: six workloads × three visits × one request policy × seven modes =
   126 samples.
 
-The pilot blocks are `config/campaigns/classifier-pilot-01.yml` through
-`classifier-pilot-07.yml`. They use distinct seeds and rotate workload order to
-reduce simple time-position bias. The seeds were fixed before capture so no
-workload/defence pair occupies any within-visit position more than twice across
-the seven blocks. Capture them separately and verify each result before
-continuing. Block 01 is the first 42-sample interface gate: it
-can be exported alone without committing the remaining capture time. If Josh's
-import succeeds, capture blocks 02–07 and export all seven with blocks 01–05
-assigned to training, block 06 to validation, and block 07 to pilot testing.
-That test block is only a pipeline check; once it informs model or feature
-choices it is not an untouched final-paper test set.
+The immediate blocks are `config/campaigns/classifier-stable3-pilot-01.yml`
+through `classifier-stable3-pilot-07.yml`. They reuse the seven seeds fixed for
+the original pilot rather than searching for seeds after observing failures.
+Their workload orders cover all six three-class permutations plus one base
+repeat, giving each workload each time position either two or three times; no
+workload/defence pair occupies a seeded within-visit defence position more than
+twice. Capture and verify each block separately. Block 01 is the 21-sample
+interface gate and may be exported alone. After Josh confirms ingestion,
+blocks 01–05 are training, block 06 validation, and block 07 pilot testing.
+Each defence then has only 15 training and three validation/test samples, so
+this remains a pipeline check rather than an efficacy estimate.
 
 ```shell
-./qcsd-lab verify config/campaigns/classifier-pilot-01.yml
-./qcsd-lab run config/campaigns/classifier-pilot-01.yml
-./qcsd-lab verify results/research-classifier-pilot-01-1200/<run-id>
+./qcsd-lab verify config/campaigns/classifier-stable3-pilot-01.yml
+./qcsd-lab run config/campaigns/classifier-stable3-pilot-01.yml
+./qcsd-lab verify results/research-classifier-stable3-pilot-01-1200/<run-id>
+./classifier-pilot export classifier-stable3-interface-v1 \
+  results/research-classifier-stable3-pilot-01-1200/<run-id> \
+  --splits interface
+./classifier-pilot verify classifier-stable3-interface-v1
 # Repeat the same verify -> run -> verify sequence for blocks 02 through 07.
 ```
+
+The incomplete six-class diagnostic at
+`results/research-classifier-pilot-01-1200/20260814T064655.275845Z` is excluded
+from the stable3 corpus and from classifier export. None of its accepted
+samples is reused. Apache Traffic Server, NGINX QUIC, and nghttp2/ngtcp2 were
+removed only from this immediate operational pilot after response/runtime or
+strict capture-fidelity failures; that outcome-informed reduction is another
+reason the 147 samples cannot support population or defence-efficacy claims.
+The fitting corpus, qualification runs, smoke result, failed attempts, and
+qualification diagnostics are likewise never stable3 classifier samples.
+
+These stable3 campaign files, the offline exporter, tests, and documentation
+are outside the qualification implementation-file inventory. Publish them in a
+clean Lab commit and rebuild the collection image so new captures bind that
+commit; do not regenerate the six qualification sidecars, prefix specs,
+fitting result, or sealed `research-1200` bundle.
 
 The implementation goal established the profiles, preparation policy,
 fitters, runtime realization, campaign contracts, and evidence boundaries.

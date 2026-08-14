@@ -123,6 +123,34 @@ def _write_raw_capture(path: Path) -> None:
         )
 
 
+def _valid_capture_diagnostics() -> dict:
+    start_monotonic_ns = 10_000_000_000
+    elapsed_ns = 200_000_000
+    start_realtime_unix_ns = 1_786_680_000_000_000_000
+    return {
+        "capture": {
+            "primary": True,
+            "capture_clock_anchors": {
+                "start_monotonic_ns": start_monotonic_ns,
+                "end_monotonic_ns": start_monotonic_ns + elapsed_ns,
+                "start_realtime_unix_ns": start_realtime_unix_ns,
+                "end_realtime_unix_ns": start_realtime_unix_ns + elapsed_ns,
+            },
+            "direct_runner_reconciliation": {
+                "direct_clock_model": "constant-offset",
+                "direct_clock_segment_count": 1,
+                "direct_clock_segments": [{"index": 0}],
+                "direct_clock_step_count": 0,
+                "direct_clock_steps": [],
+                "direct_runner_reconciled": True,
+                "evidence_eligible": True,
+                "direct_timestamp_error_max_ns": 1_000,
+                "direct_timestamp_tolerance_ns": 10_000_000,
+            },
+        }
+    }
+
+
 def _make_result(
     parent: Path,
     *,
@@ -130,6 +158,7 @@ def _make_result(
     accepted: bool = True,
     eligible: bool = True,
     sealed: bool = True,
+    capture_diagnostics: dict | None = None,
 ) -> tuple[Path, dict]:
     fixture_root = parent / f"source-{block_number:03d}"
     root = fixture_root / "results" / f"run-{block_number:03d}"
@@ -187,7 +216,15 @@ def _make_result(
         atomic_text(sample_root / "neqo/packets.csv", "time,size\n")
         atomic_text(sample_root / "neqo/events.csv", "time,event\n")
         atomic_text(sample_root / "neqo/schedule.csv", "time,size\n")
-        accept_sample(root, experiment, planned["sample_id"], eligible=eligible)
+        accept_sample(
+            root,
+            experiment,
+            planned["sample_id"],
+            diagnostics=(
+                _valid_capture_diagnostics() if capture_diagnostics is None else capture_diagnostics
+            ),
+            eligible=eligible,
+        )
     else:
         transition_sample(
             experiment,
@@ -446,6 +483,32 @@ def test_export_requires_sealed_fully_accepted_eligible_results(
     assert not destination.exists()
 
 
+def test_export_rejects_stepped_primary_capture_clock(tmp_path: Path) -> None:
+    diagnostics = _valid_capture_diagnostics()
+    reconciliation = diagnostics["capture"]["direct_runner_reconciliation"]
+    reconciliation.update(
+        direct_clock_model="positive-clock-steps",
+        direct_clock_segment_count=2,
+        direct_clock_segments=[{"index": 0}, {"index": 1}],
+        direct_clock_step_count=1,
+        direct_clock_steps=[{"index": 0}],
+    )
+    source, _ = _make_result(tmp_path, capture_diagnostics=diagnostics)
+
+    with pytest.raises(ValueError, match="clock model is not constant-offset"):
+        export_classifier_handoff([source], tmp_path / "handoff")
+
+
+def test_export_rejects_wrapper_anchor_elapsed_drift_over_10_ms(tmp_path: Path) -> None:
+    diagnostics = _valid_capture_diagnostics()
+    anchors = diagnostics["capture"]["capture_clock_anchors"]
+    anchors["end_realtime_unix_ns"] += 10_000_001
+    source, _ = _make_result(tmp_path, capture_diagnostics=diagnostics)
+
+    with pytest.raises(ValueError, match="elapsed difference exceeds 10 ms"):
+        export_classifier_handoff([source], tmp_path / "handoff")
+
+
 def test_export_rejects_duplicate_sample_ids_across_results(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -496,11 +559,20 @@ def test_pilot_contract_rejects_training_split_for_nonpilot_evaluation() -> None
         classifier_handoff._validate_pilot_collection([receipt], ["train"])
 
 
-def _pilot_receipts() -> list[SimpleNamespace]:
+def _pilot_receipts(
+    *,
+    result_names: tuple[str, ...] = classifier_handoff.PILOT_RESULT_NAMES,
+    classes: tuple[str, ...] = classifier_handoff.PILOT_CLASSES,
+    campaign_files: tuple[str, ...] | None = None,
+) -> list[SimpleNamespace]:
+    if campaign_files is None:
+        campaign_files = tuple(
+            f"classifier-pilot-{block:02d}.yml" for block in range(1, len(result_names) + 1)
+        )
     receipts: list[SimpleNamespace] = []
-    for block, name in enumerate(classifier_handoff.PILOT_RESULT_NAMES, 1):
+    for name, campaign_file in zip(result_names, campaign_files, strict=True):
         samples = []
-        for workload_id in classifier_handoff.PILOT_CLASSES:
+        for workload_id in classes:
             for defense in classifier_handoff.PILOT_DEFENSES:
                 runtime_kind, baseline = classifier_handoff.PILOT_RUNTIME[defense]
                 samples.append(
@@ -513,7 +585,7 @@ def _pilot_receipts() -> list[SimpleNamespace]:
                         "baseline": baseline,
                     }
                 )
-        campaign = ROOT / f"config/campaigns/classifier-pilot-{block:02d}.yml"
+        campaign = ROOT / "config/campaigns" / campaign_file
         receipts.append(
             SimpleNamespace(
                 experiment={
@@ -527,12 +599,50 @@ def _pilot_receipts() -> list[SimpleNamespace]:
     return receipts
 
 
+def _stable3_pilot_receipts() -> list[SimpleNamespace]:
+    return _pilot_receipts(
+        result_names=classifier_handoff.STABLE3_PILOT_RESULT_NAMES,
+        classes=classifier_handoff.STABLE3_PILOT_CLASSES,
+        campaign_files=tuple(f"classifier-stable3-pilot-{block:02d}.yml" for block in range(1, 8)),
+    )
+
+
 def test_pilot_contract_accepts_interface_block_01_and_exact_seven_block_split() -> None:
     receipts = _pilot_receipts()
 
     classifier_handoff._validate_pilot_collection([receipts[0]], [None])
     classifier_handoff._validate_pilot_collection([receipts[0]], ["interface"])
     classifier_handoff._validate_pilot_collection(receipts, list(classifier_handoff.PILOT_SPLITS))
+
+
+def test_stable3_pilot_contract_accepts_interface_and_exact_seven_block_split() -> None:
+    receipts = _stable3_pilot_receipts()
+
+    classifier_handoff._validate_pilot_collection([receipts[0]], [None])
+    classifier_handoff._validate_pilot_collection([receipts[0]], ["interface"])
+    classifier_handoff._validate_pilot_collection(receipts, list(classifier_handoff.PILOT_SPLITS))
+
+
+def test_stable3_pilot_contract_rejects_wrong_cohort_campaign_and_mixed_lineage() -> None:
+    receipts = _stable3_pilot_receipts()
+    receipts[0].experiment["samples"].pop()
+    with pytest.raises(ValueError, match="21-sample cohort"):
+        classifier_handoff._validate_pilot_collection(
+            receipts, list(classifier_handoff.PILOT_SPLITS)
+        )
+
+    receipts = _stable3_pilot_receipts()
+    receipts[0].experiment["configuration"]["campaign_sha256"] = "0" * 64
+    with pytest.raises(ValueError, match="checked-in campaign"):
+        classifier_handoff._validate_pilot_collection(
+            receipts, list(classifier_handoff.PILOT_SPLITS)
+        )
+
+    with pytest.raises(ValueError, match="mix pilot cohort contracts"):
+        classifier_handoff._validate_pilot_collection(
+            [_pilot_receipts()[0], _stable3_pilot_receipts()[0]],
+            ["train", "test"],
+        )
 
 
 @pytest.mark.parametrize(

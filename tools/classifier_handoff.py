@@ -12,6 +12,7 @@ import struct
 import subprocess
 import tempfile
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -33,6 +34,11 @@ PILOT_CLASSES = (
     "cloudflare-quiche-r3",
     "nghttp2-ngtcp2-r3",
 )
+STABLE3_PILOT_CLASSES = (
+    "getbootstrap-home-r3",
+    "bootstrap-introduction-r3",
+    "cloudflare-quiche-r3",
+)
 PILOT_DEFENSES = (
     "undefended",
     "static-control",
@@ -43,6 +49,9 @@ PILOT_DEFENSES = (
     "walkie-talkie",
 )
 PILOT_RESULT_NAMES = tuple(f"research-classifier-pilot-{block:02d}-1200" for block in range(1, 8))
+STABLE3_PILOT_RESULT_NAMES = tuple(
+    f"research-classifier-stable3-pilot-{block:02d}-1200" for block in range(1, 8)
+)
 PILOT_SPLITS = ("train", "train", "train", "train", "train", "validation", "test")
 PILOT_RUNTIME = {
     "undefended": ("none", True),
@@ -54,12 +63,36 @@ PILOT_RUNTIME = {
     "walkie-talkie": ("walkie_talkie", False),
 }
 
+
+@dataclass(frozen=True)
+class PilotContract:
+    """One exact, checked-in classifier-pilot cohort and block lineage."""
+
+    result_names: tuple[str, ...]
+    campaign_files: tuple[str, ...]
+    classes: tuple[str, ...]
+
+
+PILOT_CONTRACTS = (
+    PilotContract(
+        result_names=PILOT_RESULT_NAMES,
+        campaign_files=tuple(f"classifier-pilot-{block:02d}.yml" for block in range(1, 8)),
+        classes=PILOT_CLASSES,
+    ),
+    PilotContract(
+        result_names=STABLE3_PILOT_RESULT_NAMES,
+        campaign_files=tuple(f"classifier-stable3-pilot-{block:02d}.yml" for block in range(1, 8)),
+        classes=STABLE3_PILOT_CLASSES,
+    ),
+)
+
 CLIENT_IP = "192.0.2.1"
 SERVER_IP = "192.0.2.2"
 CLIENT_PORT = 49_152
 SERVER_PORT = 443
 CLIENT_MAC = bytes.fromhex("020000000001")
 SERVER_MAC = bytes.fromhex("020000000002")
+MAX_CLOCK_ANCHOR_ELAPSED_DELTA_NS = 10_000_000
 
 _PCAP_MAGIC_NS = 0xA1B23C4D
 _PCAP_GLOBAL = struct.Struct("<IHHIIII")
@@ -434,21 +467,92 @@ def _validate_source_results(receipts: Sequence[Any]) -> None:
         for sample in experiment["samples"]:
             if sample["state"] != "accepted" or sample["eligible"] is not True:
                 raise ValueError("classifier handoff rejects ineligible samples")
+            _validate_primary_capture_clock(sample)
+
+
+def _validate_primary_capture_clock(sample: Mapping[str, Any]) -> None:
+    """Reject accepted evidence whose direct-capture timing needed clock-step repair."""
+
+    sample_id = sample.get("sample_id")
+    prefix = f"classifier handoff rejects timing-contaminated sample {sample_id}:"
+    diagnostics = sample.get("diagnostics")
+    capture = diagnostics.get("capture") if isinstance(diagnostics, Mapping) else None
+    if not isinstance(capture, Mapping) or capture.get("primary") is not True:
+        raise ValueError(f"{prefix} primary capture diagnostics are missing")
+    reconciliation = capture.get("direct_runner_reconciliation")
+    if not isinstance(reconciliation, Mapping):
+        raise ValueError(f"{prefix} direct/runner reconciliation is missing")
+    if reconciliation.get("direct_clock_model") != "constant-offset":
+        raise ValueError(f"{prefix} direct clock model is not constant-offset")
+
+    segments = reconciliation.get("direct_clock_segments")
+    if (
+        reconciliation.get("direct_clock_segment_count") != 1
+        or not isinstance(segments, list)
+        or len(segments) != 1
+    ):
+        raise ValueError(f"{prefix} direct clock must contain exactly one segment")
+    steps = reconciliation.get("direct_clock_steps")
+    if reconciliation.get("direct_clock_step_count") != 0 or not isinstance(steps, list) or steps:
+        raise ValueError(f"{prefix} direct clock must contain zero steps")
+    if (
+        reconciliation.get("direct_runner_reconciled") is not True
+        or reconciliation.get("evidence_eligible") is not True
+    ):
+        raise ValueError(f"{prefix} direct/runner reconciliation is not evidence-eligible")
+
+    maximum_error = reconciliation.get("direct_timestamp_error_max_ns")
+    tolerance = reconciliation.get("direct_timestamp_tolerance_ns")
+    if (
+        type(maximum_error) is not int
+        or maximum_error < 0
+        or type(tolerance) is not int
+        or tolerance < 0
+        or maximum_error > tolerance
+    ):
+        raise ValueError(f"{prefix} direct timestamp error exceeds its tolerance")
+
+    anchors = capture.get("capture_clock_anchors")
+    anchor_fields = (
+        "start_monotonic_ns",
+        "end_monotonic_ns",
+        "start_realtime_unix_ns",
+        "end_realtime_unix_ns",
+    )
+    if not isinstance(anchors, Mapping) or any(
+        type(anchors.get(field)) is not int for field in anchor_fields
+    ):
+        raise ValueError(f"{prefix} wrapper clock anchors are missing")
+    monotonic_elapsed = anchors["end_monotonic_ns"] - anchors["start_monotonic_ns"]
+    realtime_elapsed = anchors["end_realtime_unix_ns"] - anchors["start_realtime_unix_ns"]
+    if (
+        monotonic_elapsed < 0
+        or realtime_elapsed < 0
+        or abs(realtime_elapsed - monotonic_elapsed) > MAX_CLOCK_ANCHOR_ELAPSED_DELTA_NS
+    ):
+        raise ValueError(f"{prefix} wrapper realtime/monotonic elapsed difference exceeds 10 ms")
 
 
 def _validate_pilot_collection(receipts: Sequence[Any], splits: Sequence[str | None]) -> None:
     names = tuple(receipt.experiment["name"] for receipt in receipts)
-    pilot_named = any(name in PILOT_RESULT_NAMES for name in names)
-    if not pilot_named:
+    contracts = tuple(
+        contract
+        for contract in PILOT_CONTRACTS
+        if any(name in contract.result_names for name in names)
+    )
+    if not contracts:
         if len(receipts) != 1 or splits[0] not in {None, "interface"}:
             raise ValueError("non-pilot handoff supports one interface result only")
         return
+    if len(contracts) != 1:
+        raise ValueError("classifier pilot export cannot mix pilot cohort contracts")
+    contract = contracts[0]
 
     if len(receipts) == 1:
-        if names != PILOT_RESULT_NAMES[:1] or splits[0] not in {None, "interface"}:
+        if names != contract.result_names[:1] or splits[0] not in {None, "interface"}:
             raise ValueError("single-block classifier handoff must be unassigned pilot block 01")
-    elif len(receipts) == len(PILOT_RESULT_NAMES):
-        if names != PILOT_RESULT_NAMES or tuple(splits) != PILOT_SPLITS:
+    elif len(receipts) == len(contract.result_names):
+        if names != contract.result_names or tuple(splits) != PILOT_SPLITS:
             raise ValueError(
                 "complete classifier pilot requires ordered blocks 01--07 and 5/1/1 splits"
             )
@@ -464,9 +568,10 @@ def _validate_pilot_collection(receipts: Sequence[Any], splits: Sequence[str | N
             PILOT_RUNTIME[defense][0],
             PILOT_RUNTIME[defense][1],
         )
-        for workload_id in PILOT_CLASSES
+        for workload_id in contract.classes
         for defense in PILOT_DEFENSES
     )
+    block_samples = len(contract.classes) * len(PILOT_DEFENSES)
     lab_root = _lab_root()
     for block_index, receipt in enumerate(receipts, 1):
         experiment = receipt.experiment
@@ -482,9 +587,11 @@ def _validate_pilot_collection(receipts: Sequence[Any], splits: Sequence[str | N
             for sample in experiment["samples"]
         )
         if experiment["purpose"] != "evaluation" or actual != expected:
-            raise ValueError("classifier pilot block is not the exact 42-sample cohort")
+            raise ValueError(
+                f"classifier pilot block is not the exact {block_samples}-sample cohort"
+            )
         configuration = experiment.get("configuration")
-        campaign = lab_root / f"config/campaigns/classifier-pilot-{block_index:02d}.yml"
+        campaign = lab_root / "config/campaigns" / contract.campaign_files[block_index - 1]
         if not isinstance(configuration, Mapping) or configuration.get(
             "campaign_sha256"
         ) != sha256_file(campaign):
