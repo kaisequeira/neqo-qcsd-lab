@@ -13,19 +13,24 @@ import subprocess
 import tempfile
 from collections import Counter
 from dataclasses import dataclass
+from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from qcsd_lab.capture import ObserverPacket, extract_trace
-from qcsd_lab.experiment import resolved_sample_directory
+from qcsd_lab.experiment import resolved_sample_directory, validate_planned_sample_identity
+from qcsd_lab.orchestrator import load_campaign, plan_campaign
 from qcsd_lab.util import load_json, sha256_file, source_metadata
 from qcsd_lab.verification import verify_result
 
 
 SCHEMA_VERSION = 1
+POC5_SCHEMA_VERSION = 2
 ARTIFACT_TYPE = "qcsd-classifier-pilot-handoff"
 PURPOSE = "classifier-pipeline-pilot"
 SPLITS = {"train", "validation", "test", "interface"}
+POC5_SPLITS = SPLITS | {"inference"}
 PILOT_CLASSES = (
     "getbootstrap-home-r3",
     "bootstrap-introduction-r3",
@@ -63,6 +68,59 @@ PILOT_RUNTIME = {
     "walkie-talkie": ("walkie_talkie", False),
 }
 
+POC5_CLASSES = (
+    "getbootstrap-home-r3",
+    "apache-traffic-server-docs-r3",
+    "nginx-quic-r3",
+    "cloudflare-quiche-r3",
+    "nghttp2-ngtcp2-r3",
+)
+POC5_CLASS_LABELS = {
+    "getbootstrap-home-r3": "getbootstrap.com",
+    "apache-traffic-server-docs-r3": "docs.trafficserver.apache.org",
+    "nginx-quic-r3": "quic.nginx.org",
+    "cloudflare-quiche-r3": "cloudflare-quic.com",
+    "nghttp2-ngtcp2-r3": "nghttp2.org",
+}
+POC5_DEFENSES = ("undefended", "front", "tamaraw")
+POC5_RUNTIME = {
+    "undefended": ("none", True),
+    "front": ("front", False),
+    "tamaraw": ("tamaraw", False),
+}
+POC5_TEMPORAL_SPLITS = (
+    "train",
+    "train",
+    "train",
+    "train",
+    "train",
+    "train",
+    "train",
+    "train",
+    "validation",
+    "test",
+)
+POC5_BASELINE_RESULT_NAMES = tuple(
+    f"research-classifier-poc5-baseline-{block:02d}-1200" for block in range(1, 11)
+)
+POC5_PAIRED_RESULT_NAMES = tuple(
+    f"research-classifier-poc5-paired-{block:02d}-1200" for block in range(1, 11)
+)
+POC5_RESULT_NAMES = tuple(
+    name
+    for block in range(10)
+    for name in (POC5_BASELINE_RESULT_NAMES[block], POC5_PAIRED_RESULT_NAMES[block])
+)
+POC5_CAMPAIGN_FILES = tuple(
+    name
+    for block in range(1, 11)
+    for name in (
+        f"classifier-poc5-baseline-{block:02d}.yml",
+        f"classifier-poc5-paired-{block:02d}.yml",
+    )
+)
+POC5_REHEARSAL_RESULT_NAME = "research-classifier-poc5-rehearsal-1200"
+
 
 @dataclass(frozen=True)
 class PilotContract:
@@ -71,6 +129,14 @@ class PilotContract:
     result_names: tuple[str, ...]
     campaign_files: tuple[str, ...]
     classes: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class Poc5CollectionPlan:
+    """Per-result sample split policies for the exact advisor POC."""
+
+    sample_splits: tuple[Mapping[str, str], ...]
+    protocol: str
 
 
 PILOT_CONTRACTS = (
@@ -93,6 +159,17 @@ SERVER_PORT = 443
 CLIENT_MAC = bytes.fromhex("020000000001")
 SERVER_MAC = bytes.fromhex("020000000002")
 MAX_CLOCK_ANCHOR_ELAPSED_DELTA_NS = 10_000_000
+EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+_POC5_SOURCE_KEYS = {
+    "image_digest",
+    "lab_commit",
+    "lab_dirty",
+    "lab_patch_sha256",
+    "neqo_commit",
+    "neqo_dirty",
+    "neqo_patch_sha256",
+    "neqo_pinned_commit",
+}
 
 _PCAP_MAGIC_NS = 0xA1B23C4D
 _PCAP_GLOBAL = struct.Struct("<IHHIIII")
@@ -135,6 +212,11 @@ _BLOCK_KEYS = {
     "completed_at",
     "source",
 }
+_BLOCK_KEYS_V2 = _BLOCK_KEYS | {
+    "acquisition_block_index",
+    "acquisition_block_id",
+    "sample_splits",
+}
 _SAMPLE_KEYS = {
     "schema_version",
     "sample_id",
@@ -165,6 +247,7 @@ _SAMPLE_KEYS = {
     "trace_sha256",
     "packet_count",
 }
+_SAMPLE_KEYS_V2 = _SAMPLE_KEYS | {"acquisition_block_index", "acquisition_block_id"}
 _TOP_LEVEL_ENTRIES = {
     "README.md",
     "SHA256SUMS",
@@ -269,7 +352,11 @@ def export_classifier_handoff(
 
     verified = [verify_result(root) for root in roots]
     _validate_source_results(verified)
-    _validate_pilot_collection(verified, splits)
+    collection_plan = _validate_pilot_collection(verified, splits)
+    poc5_plan = collection_plan if isinstance(collection_plan, Poc5CollectionPlan) else None
+    schema_version = POC5_SCHEMA_VERSION if poc5_plan is not None else SCHEMA_VERSION
+    if poc5_plan is not None:
+        _validate_poc5_export_environment(verified)
 
     candidate = Path(tempfile.mkdtemp(prefix=f".{destination.name}.qcsd-handoff-", dir=parent))
     try:
@@ -294,13 +381,23 @@ def export_classifier_handoff(
                 expected_policies = policies
             elif (
                 classes != expected_classes
-                or defenses != expected_defenses
                 or policies != expected_policies
+                or (poc5_plan is None and defenses != expected_defenses)
             ):
                 raise ValueError("classifier handoff blocks do not use one exact cohort")
 
             block_id = f"block-{block_index + 1:03d}"
-            blocks.append(_block_receipt(receipt, block_index, block_id, split))
+            sample_splits = None if poc5_plan is None else poc5_plan.sample_splits[block_index]
+            blocks.append(
+                _block_receipt(
+                    receipt,
+                    block_index,
+                    block_id,
+                    split,
+                    sample_splits=sample_splits,
+                    acquisition_block_index=(None if poc5_plan is None else block_index // 2),
+                )
+            )
             for sample in experiment["samples"]:
                 sample_id = str(sample["sample_id"])
                 if sample_id in seen_samples:
@@ -333,19 +430,41 @@ def export_classifier_handoff(
 
                 rows.append(
                     {
-                        "schema_version": SCHEMA_VERSION,
+                        "schema_version": schema_version,
                         "sample_id": sample_id,
                         "block_index": block_index,
                         "block_id": block_id,
-                        "split": split,
+                        **(
+                            {}
+                            if poc5_plan is None
+                            else {
+                                "acquisition_block_index": block_index // 2,
+                                "acquisition_block_id": (
+                                    f"acquisition-block-{block_index // 2 + 1:03d}"
+                                ),
+                            }
+                        ),
+                        "split": (
+                            split
+                            if sample_splits is None
+                            else sample_splits[str(sample["defense"])]
+                        ),
                         "paired_visit_id": (
                             f"{block_id}/{sample['workload_id']}/"
                             f"{sample['request_policy']}/visit-{sample['visit']:03d}"
                         ),
-                        "class_label": sample["workload_id"],
+                        "class_label": (
+                            sample["workload_id"]
+                            if poc5_plan is None
+                            else POC5_CLASS_LABELS[str(sample["workload_id"])]
+                        ),
                         "workload_id": sample["workload_id"],
                         "defense": sample["defense"],
-                        "defense_role": _defense_role(sample),
+                        "defense_role": (
+                            _defense_role(sample)
+                            if poc5_plan is None or sample["baseline"] is True
+                            else "inference-only"
+                        ),
                         "runtime_kind": sample["runtime_kind"],
                         "baseline": sample["baseline"],
                         "request_policy": sample["request_policy"],
@@ -367,7 +486,7 @@ def export_classifier_handoff(
                     }
                 )
 
-        dataset = _dataset_receipt(rows, blocks)
+        dataset = _dataset_receipt(rows, blocks, schema_version=schema_version)
         _write_json(candidate / "dataset.json", dataset)
         _write_json_lines(candidate / "samples.jsonl", rows)
         _write_text(candidate / "README.md", _handoff_readme())
@@ -439,15 +558,16 @@ def validate_classifier_handoff(path: Path) -> Path:
         json.dumps(dataset, indent=2, sort_keys=True) + "\n"
     ):
         raise ValueError("classifier handoff dataset JSON is not canonical")
+    schema_version = dataset["schema_version"]
     if (
-        dataset["schema_version"] != SCHEMA_VERSION
+        schema_version not in {SCHEMA_VERSION, POC5_SCHEMA_VERSION}
         or dataset["artifact_type"] != ARTIFACT_TYPE
         or dataset["purpose"] != PURPOSE
         or dataset["pilot_only"] is not True
     ):
         raise ValueError("classifier handoff dataset identity is invalid")
-    rows = _read_json_lines(root / "samples.jsonl")
-    _validate_dataset_rows(root, dataset, rows)
+    rows = _read_json_lines(root / "samples.jsonl", schema_version=schema_version)
+    _validate_dataset_rows(root, dataset, rows, schema_version=schema_version)
     return root
 
 
@@ -533,8 +653,16 @@ def _validate_primary_capture_clock(sample: Mapping[str, Any]) -> None:
         raise ValueError(f"{prefix} wrapper realtime/monotonic elapsed difference exceeds 10 ms")
 
 
-def _validate_pilot_collection(receipts: Sequence[Any], splits: Sequence[str | None]) -> None:
+def _validate_pilot_collection(
+    receipts: Sequence[Any], splits: Sequence[str | None]
+) -> Poc5CollectionPlan | None:
     names = tuple(receipt.experiment["name"] for receipt in receipts)
+    if names == (POC5_REHEARSAL_RESULT_NAME,):
+        return _validate_poc5_rehearsal_collection(receipts[0], splits)
+    if POC5_REHEARSAL_RESULT_NAME in names:
+        raise ValueError("classifier POC5 rehearsal cannot mix with the formal handoff")
+    if any(name.startswith("research-classifier-poc5-") for name in names):
+        return _validate_poc5_collection(receipts, splits)
     contracts = tuple(
         contract
         for contract in PILOT_CONTRACTS
@@ -598,6 +726,302 @@ def _validate_pilot_collection(receipts: Sequence[Any], splits: Sequence[str | N
             raise ValueError("classifier pilot block does not bind its checked-in campaign")
 
 
+def _validate_poc5_collection(
+    receipts: Sequence[Any], splits: Sequence[str | None]
+) -> Poc5CollectionPlan:
+    """Validate the exact 20-result, 2,500-capture advisor POC lineage."""
+
+    names = tuple(receipt.experiment["name"] for receipt in receipts)
+    if names != POC5_RESULT_NAMES:
+        raise ValueError(
+            "complete classifier POC5 requires 20 ordered baseline/paired results for blocks 01--10"
+        )
+    if any(split is not None for split in splits):
+        raise ValueError("classifier POC5 sample splits are assigned automatically by protocol")
+
+    lab_root = _lab_root()
+    policies: list[Mapping[str, str]] = []
+    for result_index, (receipt, campaign_file) in enumerate(
+        zip(receipts, POC5_CAMPAIGN_FILES, strict=True)
+    ):
+        experiment = receipt.experiment
+        block_index = result_index // 2
+        temporal_split = POC5_TEMPORAL_SPLITS[block_index]
+        baseline_result = result_index % 2 == 0
+        if baseline_result:
+            expected = Counter(
+                (
+                    workload_id,
+                    "undefended",
+                    "as-defined",
+                    visit,
+                    "none",
+                    True,
+                )
+                for workload_id in POC5_CLASSES
+                for visit in range(20)
+            )
+            policies.append({"undefended": temporal_split})
+            expected_count = 100
+        else:
+            expected = Counter(
+                (
+                    workload_id,
+                    defense,
+                    "as-defined",
+                    visit,
+                    POC5_RUNTIME[defense][0],
+                    POC5_RUNTIME[defense][1],
+                )
+                for workload_id in POC5_CLASSES
+                for defense in POC5_DEFENSES
+                for visit in range(10)
+            )
+            policies.append(
+                {
+                    "undefended": temporal_split,
+                    "front": "inference",
+                    "tamaraw": "inference",
+                }
+            )
+            expected_count = 150
+        actual = Counter(
+            (
+                sample["workload_id"],
+                sample["defense"],
+                sample["request_policy"],
+                sample["visit"],
+                sample["runtime_kind"],
+                sample["baseline"],
+            )
+            for sample in experiment["samples"]
+        )
+        if experiment["purpose"] != "evaluation" or actual != expected:
+            raise ValueError(
+                f"classifier POC5 result is not the exact {expected_count}-sample cohort"
+            )
+        campaign = lab_root / "config/campaigns" / campaign_file
+        _validate_poc5_configuration(experiment, campaign)
+    _validate_poc5_temporal_intervals(
+        [
+            (receipt.experiment["started_at"], receipt.experiment["completed_at"])
+            for receipt in receipts
+        ]
+    )
+    _validate_poc5_execution_sources([receipt.experiment["source"] for receipt in receipts])
+    return Poc5CollectionPlan(tuple(policies), "formal")
+
+
+def _validate_poc5_rehearsal_collection(
+    receipt: Any, splits: Sequence[str | None]
+) -> Poc5CollectionPlan:
+    if tuple(splits) != ("interface",):
+        raise ValueError("classifier POC5 rehearsal requires the interface split")
+    experiment = receipt.experiment
+    expected = Counter(
+        (
+            workload_id,
+            defense,
+            "as-defined",
+            visit,
+            POC5_RUNTIME[defense][0],
+            POC5_RUNTIME[defense][1],
+        )
+        for workload_id in POC5_CLASSES
+        for defense in POC5_DEFENSES
+        for visit in range(2)
+    )
+    actual = Counter(
+        (
+            sample["workload_id"],
+            sample["defense"],
+            sample["request_policy"],
+            sample["visit"],
+            sample["runtime_kind"],
+            sample["baseline"],
+        )
+        for sample in experiment["samples"]
+    )
+    if experiment["purpose"] != "evaluation" or actual != expected:
+        raise ValueError("classifier POC5 rehearsal is not the exact 30-sample cohort")
+    campaign = _lab_root() / "config/campaigns/classifier-poc5-rehearsal.yml"
+    _validate_poc5_configuration(experiment, campaign)
+    _validate_poc5_execution_sources([experiment["source"]])
+    return Poc5CollectionPlan(({defense: "interface" for defense in POC5_DEFENSES},), "rehearsal")
+
+
+@lru_cache(maxsize=21)
+def _cached_poc5_configuration(campaign_path: Path) -> tuple[Any, str]:
+    campaign = load_campaign(campaign_path)
+    workload_records: list[dict[str, Any]] = []
+    for workload in campaign.workloads:
+        record: dict[str, Any] = {
+            "id": workload.id,
+            "visits": workload.visits,
+            "manifest": f"inputs/workloads/{workload.id}.json",
+            "sha256": workload.sha256,
+            "resource_count": workload.resource_count,
+            "origin_count": workload.origin_count,
+        }
+        if workload.chaff_qualification_path is not None:
+            values = (
+                workload.chaff_qualification_sha256,
+                workload.chaff_prefix_spec_sha256,
+                workload.chaff_manifest_sha256,
+                workload.runtime_sha256,
+            )
+            if any(not _valid_sha256(value) for value in values):
+                raise ValueError("classifier POC5 checked-in chaff binding is incomplete")
+            record.update(
+                chaff_qualification=f"inputs/chaff-qualifications/{workload.id}.json",
+                chaff_qualification_sha256=workload.chaff_qualification_sha256,
+                chaff_prefix_spec=f"inputs/chaff-prefix-specs/{workload.id}.json",
+                chaff_prefix_spec_sha256=workload.chaff_prefix_spec_sha256,
+                chaff_manifest=f"inputs/chaff-manifests/{workload.id}.json",
+                chaff_manifest_sha256=workload.chaff_manifest_sha256,
+                runtime_manifest=f"inputs/runtime-workloads/{workload.id}.json",
+                runtime_manifest_sha256=workload.runtime_sha256,
+            )
+        workload_records.append(record)
+
+    defense_records: list[dict[str, Any]] = []
+    for defense in campaign.defenses:
+        if defense.schedule_path is not None or defense.parameters_path is not None:
+            raise ValueError("classifier POC5 defense unexpectedly consumes an external artifact")
+        defense_records.append(
+            {
+                "name": defense.name,
+                "kind": defense.kind,
+                "baseline": defense.baseline,
+            }
+        )
+    expected = {
+        "campaign_sha256": sha256_file(campaign_path),
+        "profile": campaign.profile,
+        "request_policies": list(campaign.request_policies),
+        "workloads": workload_records,
+        "defenses": defense_records,
+        "limits": campaign.limits.as_dict(),
+    }
+    return campaign, json.dumps(expected, sort_keys=True, separators=(",", ":"))
+
+
+def _expected_poc5_configuration(campaign_path: Path) -> tuple[Any, dict[str, Any]]:
+    """Return a fresh configuration object from one immutable cached snapshot."""
+
+    campaign, encoded = _cached_poc5_configuration(campaign_path)
+    value = json.loads(encoded)
+    if not isinstance(value, dict):  # pragma: no cover - construction above is closed
+        raise AssertionError("cached POC5 configuration is not an object")
+    return campaign, value
+
+
+def _validate_poc5_configuration(experiment: Mapping[str, Any], campaign_path: Path) -> None:
+    """Bind one result to the exact current campaign, inputs, and sample plan."""
+
+    campaign, expected = _expected_poc5_configuration(campaign_path)
+    configuration = experiment.get("configuration")
+    if not isinstance(configuration, Mapping) or dict(configuration) != expected:
+        raise ValueError(
+            "classifier POC5 result does not bind its exact checked-in campaign/input configuration"
+        )
+    try:
+        validate_planned_sample_identity(experiment, plan_campaign(campaign))
+    except ValueError as error:
+        raise ValueError("classifier POC5 result planned sample identity/order mismatch") from error
+
+
+def _validate_poc5_execution_sources(sources: Sequence[Any]) -> None:
+    """Require one exact clean Lab/Neqo/image lineage for a POC5 collection."""
+
+    if not sources or any(not isinstance(source, Mapping) for source in sources):
+        raise ValueError("classifier POC5 execution source receipt is invalid")
+    first = sources[0]
+    if any(source != first for source in sources[1:]):
+        raise ValueError("classifier POC5 requires one identical execution source")
+    if set(first) != _POC5_SOURCE_KEYS:
+        raise ValueError("classifier POC5 execution source receipt is invalid")
+    image_digest = first["image_digest"]
+    lab_commit = first["lab_commit"]
+    neqo_commit = first["neqo_commit"]
+    pinned_commit = first["neqo_pinned_commit"]
+    if (
+        not isinstance(image_digest, str)
+        or not image_digest.startswith("sha256:")
+        or not _valid_sha256(image_digest.removeprefix("sha256:"))
+        or not isinstance(lab_commit, str)
+        or len(lab_commit) != 40
+        or any(character not in "0123456789abcdef" for character in lab_commit)
+        or not isinstance(neqo_commit, str)
+        or len(neqo_commit) != 40
+        or any(character not in "0123456789abcdef" for character in neqo_commit)
+        or pinned_commit != neqo_commit
+        or first["lab_dirty"] is not False
+        or first["neqo_dirty"] is not False
+        or first["lab_patch_sha256"] != EMPTY_SHA256
+        or first["neqo_patch_sha256"] != EMPTY_SHA256
+    ):
+        raise ValueError("classifier POC5 requires one clean immutable execution source")
+
+
+def _validate_poc5_export_environment(receipts: Sequence[Any]) -> None:
+    """Require export from the same clean checkout and immutable collection image."""
+
+    source = receipts[0].experiment["source"]
+    exporter = _exporter_source_receipt()
+    companion = exporter["companion"]
+    if (
+        companion["lab_dirty"] is not False
+        or companion["lab_commit"] != source["lab_commit"]
+        or exporter["execution_image"] != source
+    ):
+        raise ValueError(
+            "classifier POC5 export requires its clean capture checkout and collection image"
+        )
+
+
+def _validate_poc5_exporter_lineage(dataset: Mapping[str, Any], source: Mapping[str, Any]) -> None:
+    exporter = dataset["exporter_source"]
+    companion = exporter["companion"]
+    if (
+        exporter["execution_image"] != source
+        or companion["lab_commit"] != source["lab_commit"]
+        or companion["lab_dirty"] is not False
+    ):
+        raise ValueError("classifier POC5 handoff exporter lineage is invalid")
+
+
+def _validate_poc5_temporal_intervals(
+    intervals: Sequence[tuple[Any, Any]],
+) -> None:
+    """Require ten ordered, non-overlapping baseline/paired acquisition blocks."""
+
+    if len(intervals) != 20:
+        raise ValueError("classifier POC5 temporal protocol requires 20 result intervals")
+    parsed: list[tuple[datetime, datetime]] = []
+    for started_at, completed_at in intervals:
+        try:
+            start = datetime.fromisoformat(str(started_at).replace("Z", "+00:00"))
+            completed = datetime.fromisoformat(str(completed_at).replace("Z", "+00:00"))
+        except ValueError as error:
+            raise ValueError("classifier POC5 result timestamp is invalid") from error
+        if start.utcoffset() is None or completed.utcoffset() is None or completed < start:
+            raise ValueError("classifier POC5 result interval is invalid")
+        parsed.append((start, completed))
+
+    for acquisition_block in range(10):
+        baseline, paired = parsed[acquisition_block * 2 : acquisition_block * 2 + 2]
+        baseline_first = acquisition_block % 2 == 0
+        if (baseline_first and baseline[1] > paired[0]) or (
+            not baseline_first and paired[1] > baseline[0]
+        ):
+            raise ValueError("classifier POC5 within-block capture order does not alternate")
+        if acquisition_block < 9:
+            next_pair = parsed[(acquisition_block + 1) * 2 : (acquisition_block + 1) * 2 + 2]
+            if max(baseline[1], paired[1]) > min(next_pair[0][0], next_pair[1][0]):
+                raise ValueError("classifier POC5 acquisition blocks are not temporally ordered")
+
+
 def _normalize_splits(splits: Sequence[str | None] | None, blocks: int) -> tuple[str | None, ...]:
     if splits is None:
         return (None,) * blocks
@@ -614,9 +1038,12 @@ def _block_receipt(
     block_index: int,
     block_id: str,
     split: str | None,
+    *,
+    sample_splits: Mapping[str, str] | None = None,
+    acquisition_block_index: int | None = None,
 ) -> dict[str, Any]:
     experiment = verified.experiment
-    return {
+    result = {
         "block_index": block_index,
         "block_id": block_id,
         "split": split,
@@ -632,10 +1059,20 @@ def _block_receipt(
         "completed_at": experiment["completed_at"],
         "source": experiment["source"],
     }
+    if sample_splits is not None:
+        if acquisition_block_index is None:
+            raise ValueError("classifier POC5 acquisition block index is missing")
+        result["acquisition_block_index"] = acquisition_block_index
+        result["acquisition_block_id"] = f"acquisition-block-{acquisition_block_index + 1:03d}"
+        result["sample_splits"] = dict(sorted(sample_splits.items()))
+    return result
 
 
 def _dataset_receipt(
-    rows: Sequence[Mapping[str, Any]], blocks: Sequence[Mapping[str, Any]]
+    rows: Sequence[Mapping[str, Any]],
+    blocks: Sequence[Mapping[str, Any]],
+    *,
+    schema_version: int = SCHEMA_VERSION,
 ) -> dict[str, Any]:
     classes = sorted({str(row["class_label"]) for row in rows})
     defenses = sorted({str(row["defense"]) for row in rows})
@@ -648,7 +1085,7 @@ def _dataset_receipt(
         raise ValueError("classifier handoff defense roles are inconsistent")
     split_counts = Counter("unassigned" if row["split"] is None else row["split"] for row in rows)
     return {
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": schema_version,
         "artifact_type": ARTIFACT_TYPE,
         "purpose": PURPOSE,
         "pilot_only": True,
@@ -914,15 +1351,18 @@ def _read_checksums(path: Path) -> dict[str, str]:
     return result
 
 
-def _read_json_lines(path: Path) -> list[dict[str, Any]]:
+def _read_json_lines(path: Path, *, schema_version: int) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
         try:
             value = json.loads(line)
         except json.JSONDecodeError as error:
             raise ValueError(f"invalid samples.jsonl line {line_number}") from error
-        if not isinstance(value, dict) or set(value) != _SAMPLE_KEYS:
+        expected_keys = _SAMPLE_KEYS_V2 if schema_version == POC5_SCHEMA_VERSION else _SAMPLE_KEYS
+        if not isinstance(value, dict) or set(value) != expected_keys:
             raise ValueError(f"invalid samples.jsonl schema on line {line_number}")
+        if value["schema_version"] != schema_version:
+            raise ValueError(f"samples.jsonl schema version mismatch on line {line_number}")
         if line != json.dumps(value, sort_keys=True, separators=(",", ":")):
             raise ValueError(f"non-canonical samples.jsonl line {line_number}")
         rows.append(value)
@@ -932,7 +1372,11 @@ def _read_json_lines(path: Path) -> list[dict[str, Any]]:
 
 
 def _validate_dataset_rows(
-    root: Path, dataset: Mapping[str, Any], rows: Sequence[Mapping[str, Any]]
+    root: Path,
+    dataset: Mapping[str, Any],
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    schema_version: int,
 ) -> None:
     if dataset["sample_count"] != len(rows):
         raise ValueError("classifier handoff sample count mismatch")
@@ -949,7 +1393,7 @@ def _validate_dataset_rows(
     block_records = dataset["blocks"]
     if not isinstance(block_records, list) or not block_records:
         raise ValueError("classifier handoff block receipts are invalid")
-    block_splits = _validate_block_records(block_records)
+    block_splits = _validate_block_records(block_records, schema_version=schema_version)
     _validate_exporter_source(dataset)
 
     expected_inventory = {"README.md", "dataset.json", "samples.jsonl", "SHA256SUMS"}
@@ -957,7 +1401,7 @@ def _validate_dataset_rows(
     defense_counts: Counter[str] = Counter()
     split_counts: Counter[str] = Counter()
     for row in rows:
-        _validate_sample_row(row, block_splits)
+        _validate_sample_row(row, block_splits, schema_version=schema_version)
         sample_id = row["sample_id"]
         expected_paths = {
             "raw_pcapng_path": f"raw/{sample_id}.pcapng",
@@ -1024,12 +1468,210 @@ def _validate_dataset_rows(
         raise ValueError("classifier handoff defense counts mismatch")
     if dataset["counts_by_split"] != dict(sorted(split_counts.items())):
         raise ValueError("classifier handoff split counts mismatch")
+    if schema_version == POC5_SCHEMA_VERSION:
+        result_names = [block["result_name"] for block in dataset["blocks"]]
+        if result_names == list(POC5_RESULT_NAMES):
+            _validate_poc5_handoff_protocol(dataset, rows)
+        elif result_names == [POC5_REHEARSAL_RESULT_NAME]:
+            _validate_poc5_rehearsal_handoff_protocol(dataset, rows)
+        else:
+            raise ValueError("classifier POC5 handoff result lineage is invalid")
 
 
-def _validate_block_records(records: Sequence[Any]) -> dict[int, str | None]:
-    result: dict[int, str | None] = {}
+def _validate_poc5_handoff_protocol(
+    dataset: Mapping[str, Any], rows: Sequence[Mapping[str, Any]]
+) -> None:
+    """Enforce the formal five-domain, undefended-trained POC design."""
+
+    blocks = dataset["blocks"]
+    if [block["result_name"] for block in blocks] != list(POC5_RESULT_NAMES):
+        raise ValueError("classifier POC5 handoff result lineage is invalid")
+    _validate_poc5_temporal_intervals(
+        [(block["started_at"], block["completed_at"]) for block in blocks]
+    )
+    _validate_poc5_execution_sources([block["source"] for block in blocks])
+    _validate_poc5_exporter_lineage(dataset, blocks[0]["source"])
+
+    expected_rows: Counter[tuple[Any, ...]] = Counter()
+    for result_index in range(len(POC5_RESULT_NAMES)):
+        acquisition_block = result_index // 2
+        temporal_split = POC5_TEMPORAL_SPLITS[acquisition_block]
+        baseline_result = result_index % 2 == 0
+        expected_policy = (
+            {"undefended": temporal_split}
+            if baseline_result
+            else {
+                "front": "inference",
+                "tamaraw": "inference",
+                "undefended": temporal_split,
+            }
+        )
+        block = blocks[result_index]
+        expected_acquisition_id = f"acquisition-block-{acquisition_block + 1:03d}"
+        if (
+            block["split"] is not None
+            or block["sample_splits"] != expected_policy
+            or block["acquisition_block_index"] != acquisition_block
+            or block["acquisition_block_id"] != expected_acquisition_id
+        ):
+            raise ValueError("classifier POC5 handoff sample-split policy is invalid")
+        defenses = ("undefended",) if baseline_result else POC5_DEFENSES
+        visits = range(20) if baseline_result else range(10)
+        for workload_id in POC5_CLASSES:
+            for defense in defenses:
+                runtime_kind, baseline = POC5_RUNTIME[defense]
+                role = "baseline" if baseline else "inference-only"
+                for visit in visits:
+                    expected_rows[
+                        (
+                            result_index,
+                            f"block-{result_index + 1:03d}",
+                            acquisition_block,
+                            expected_acquisition_id,
+                            workload_id,
+                            POC5_CLASS_LABELS[workload_id],
+                            defense,
+                            role,
+                            runtime_kind,
+                            baseline,
+                            "as-defined",
+                            visit,
+                            expected_policy[defense],
+                        )
+                    ] += 1
+
+    actual_rows = Counter(
+        (
+            row["block_index"],
+            row["block_id"],
+            row["acquisition_block_index"],
+            row["acquisition_block_id"],
+            row["workload_id"],
+            row["class_label"],
+            row["defense"],
+            row["defense_role"],
+            row["runtime_kind"],
+            row["baseline"],
+            row["request_policy"],
+            row["visit"],
+            row["split"],
+        )
+        for row in rows
+    )
+    if actual_rows != expected_rows:
+        raise ValueError("classifier POC5 handoff is not the exact 2,500-sample protocol")
+
+    for row in rows:
+        expected_pair = (
+            f"{row['block_id']}/{row['workload_id']}/{row['request_policy']}/"
+            f"visit-{row['visit']:03d}"
+        )
+        if row["paired_visit_id"] != expected_pair:
+            raise ValueError("classifier POC5 paired-visit binding is invalid")
+
+    expected_class_counts = {label: 500 for label in sorted(POC5_CLASS_LABELS.values())}
+    expected_defense_counts = {"front": 500, "tamaraw": 500, "undefended": 1_500}
+    expected_split_counts = {
+        "inference": 1_000,
+        "test": 150,
+        "train": 1_200,
+        "validation": 150,
+    }
+    if (
+        dataset["sample_count"] != 2_500
+        or dataset["classes"] != sorted(POC5_CLASS_LABELS.values())
+        or dataset["counts_by_class"] != expected_class_counts
+        or dataset["counts_by_defense"] != expected_defense_counts
+        or dataset["counts_by_split"] != expected_split_counts
+    ):
+        raise ValueError("classifier POC5 aggregate counts are invalid")
+
+
+def _validate_poc5_rehearsal_handoff_protocol(
+    dataset: Mapping[str, Any], rows: Sequence[Mapping[str, Any]]
+) -> None:
+    """Validate the separate 30-sample schema-v2 importer gate."""
+
+    blocks = dataset["blocks"]
+    policy = {defense: "interface" for defense in POC5_DEFENSES}
+    if (
+        len(blocks) != 1
+        or blocks[0]["result_name"] != POC5_REHEARSAL_RESULT_NAME
+        or blocks[0]["split"] != "interface"
+        or blocks[0]["sample_splits"] != policy
+        or blocks[0]["acquisition_block_index"] != 0
+        or blocks[0]["acquisition_block_id"] != "acquisition-block-001"
+    ):
+        raise ValueError("classifier POC5 rehearsal block contract is invalid")
+    _validate_poc5_execution_sources([blocks[0]["source"]])
+    _validate_poc5_exporter_lineage(dataset, blocks[0]["source"])
+
+    expected = Counter(
+        (
+            0,
+            "block-001",
+            0,
+            "acquisition-block-001",
+            workload_id,
+            POC5_CLASS_LABELS[workload_id],
+            defense,
+            "baseline" if POC5_RUNTIME[defense][1] else "inference-only",
+            POC5_RUNTIME[defense][0],
+            POC5_RUNTIME[defense][1],
+            "as-defined",
+            visit,
+            "interface",
+        )
+        for workload_id in POC5_CLASSES
+        for defense in POC5_DEFENSES
+        for visit in range(2)
+    )
+    actual = Counter(
+        (
+            row["block_index"],
+            row["block_id"],
+            row["acquisition_block_index"],
+            row["acquisition_block_id"],
+            row["workload_id"],
+            row["class_label"],
+            row["defense"],
+            row["defense_role"],
+            row["runtime_kind"],
+            row["baseline"],
+            row["request_policy"],
+            row["visit"],
+            row["split"],
+        )
+        for row in rows
+    )
+    if actual != expected:
+        raise ValueError("classifier POC5 rehearsal is not the exact 30-sample interface gate")
+    for row in rows:
+        expected_pair = (
+            f"{row['block_id']}/{row['workload_id']}/{row['request_policy']}/"
+            f"visit-{row['visit']:03d}"
+        )
+        if row["paired_visit_id"] != expected_pair:
+            raise ValueError("classifier POC5 rehearsal paired-visit binding is invalid")
+
+    expected_class_counts = {label: 6 for label in sorted(POC5_CLASS_LABELS.values())}
+    if (
+        dataset["sample_count"] != 30
+        or dataset["classes"] != sorted(POC5_CLASS_LABELS.values())
+        or dataset["counts_by_class"] != expected_class_counts
+        or dataset["counts_by_defense"] != {"front": 10, "tamaraw": 10, "undefended": 10}
+        or dataset["counts_by_split"] != {"interface": 30}
+    ):
+        raise ValueError("classifier POC5 rehearsal aggregate counts are invalid")
+
+
+def _validate_block_records(
+    records: Sequence[Any], *, schema_version: int
+) -> dict[int, Mapping[str, str | None]]:
+    result: dict[int, Mapping[str, str | None]] = {}
     for expected_index, record in enumerate(records):
-        if not isinstance(record, Mapping) or set(record) != _BLOCK_KEYS:
+        expected_keys = _BLOCK_KEYS_V2 if schema_version == POC5_SCHEMA_VERSION else _BLOCK_KEYS
+        if not isinstance(record, Mapping) or set(record) != expected_keys:
             raise ValueError("classifier handoff block receipt schema is invalid")
         index = record["block_index"]
         split = record["split"]
@@ -1037,8 +1679,28 @@ def _validate_block_records(records: Sequence[Any]) -> dict[int, str | None]:
             raise ValueError("classifier handoff block indexes are invalid")
         if record["block_id"] != f"block-{index + 1:03d}":
             raise ValueError("classifier handoff block ID is invalid")
-        if split is not None and split not in SPLITS:
+        allowed_splits = POC5_SPLITS if schema_version == POC5_SCHEMA_VERSION else SPLITS
+        if split is not None and split not in allowed_splits:
             raise ValueError("classifier handoff block split is invalid")
+        if schema_version == POC5_SCHEMA_VERSION:
+            sample_splits = record["sample_splits"]
+            acquisition_index = record["acquisition_block_index"]
+            if (
+                type(acquisition_index) is not int
+                or acquisition_index != index // 2
+                or record["acquisition_block_id"]
+                != f"acquisition-block-{acquisition_index + 1:03d}"
+                or not isinstance(sample_splits, Mapping)
+                or not sample_splits
+                or (split is not None and set(sample_splits.values()) != {split})
+                or any(
+                    not isinstance(defense, str)
+                    or not defense
+                    or sample_split not in allowed_splits
+                    for defense, sample_split in sample_splits.items()
+                )
+            ):
+                raise ValueError("classifier handoff block sample-split policy is invalid")
         strings = ("result_name", "run_id", "source_result", "started_at", "completed_at")
         if any(not isinstance(record[field], str) or not record[field] for field in strings):
             raise ValueError("classifier handoff block string is invalid")
@@ -1056,7 +1718,9 @@ def _validate_block_records(records: Sequence[Any]) -> dict[int, str | None]:
             raise ValueError("classifier handoff authoritative-file count is invalid")
         if not isinstance(record["source"], Mapping):
             raise ValueError("classifier handoff block source receipt is invalid")
-        result[index] = split
+        result[index] = (
+            dict(sample_splits) if schema_version == POC5_SCHEMA_VERSION else {"*": split}
+        )
     return result
 
 
@@ -1092,17 +1756,39 @@ def _validate_exporter_source(dataset: Mapping[str, Any]) -> None:
         raise ValueError("classifier handoff companion dirty flag is invalid")
 
 
-def _validate_sample_row(row: Mapping[str, Any], block_splits: Mapping[Any, Any]) -> None:
-    integer_fields = ("block_index", "visit", "seed", "attempts", "packet_count")
+def _validate_sample_row(
+    row: Mapping[str, Any],
+    block_splits: Mapping[int, Mapping[str, str | None]],
+    *,
+    schema_version: int,
+) -> None:
+    integer_fields = ["block_index", "visit", "seed", "attempts", "packet_count"]
+    if schema_version == POC5_SCHEMA_VERSION:
+        integer_fields.append("acquisition_block_index")
     if any(type(row[field]) is not int for field in integer_fields):
         raise ValueError("classifier handoff integer field is invalid")
-    if row["block_index"] not in block_splits or row["split"] != block_splits[row["block_index"]]:
+    if row["schema_version"] != schema_version:
+        raise ValueError("classifier handoff sample schema version is invalid")
+    if schema_version == POC5_SCHEMA_VERSION and (
+        row["acquisition_block_index"] != row["block_index"] // 2
+        or row["acquisition_block_id"]
+        != f"acquisition-block-{row['acquisition_block_index'] + 1:03d}"
+    ):
+        raise ValueError("classifier handoff sample acquisition-block binding is invalid")
+    policy = block_splits.get(row["block_index"])
+    if policy is None:
         raise ValueError("classifier handoff sample block binding is invalid")
-    if row["split"] is not None and row["split"] not in SPLITS:
+    expected_split = policy.get("*", policy.get(row["defense"]))
+    if row["defense"] not in policy and "*" not in policy:
+        raise ValueError("classifier handoff sample defense is absent from its split policy")
+    if row["split"] != expected_split:
+        raise ValueError("classifier handoff sample block binding is invalid")
+    allowed_splits = POC5_SPLITS if schema_version == POC5_SCHEMA_VERSION else SPLITS
+    if row["split"] is not None and row["split"] not in allowed_splits:
         raise ValueError("classifier handoff sample split is invalid")
     if type(row["baseline"]) is not bool:
         raise ValueError("classifier handoff baseline field is invalid")
-    string_fields = (
+    string_fields = [
         "sample_id",
         "block_id",
         "paired_visit_id",
@@ -1113,10 +1799,12 @@ def _validate_sample_row(row: Mapping[str, Any], block_splits: Mapping[Any, Any]
         "runtime_kind",
         "request_policy",
         "source_sample_path",
-    )
+    ]
+    if schema_version == POC5_SCHEMA_VERSION:
+        string_fields.append("acquisition_block_id")
     if any(not isinstance(row[field], str) or not row[field] for field in string_fields):
         raise ValueError("classifier handoff string field is invalid")
-    if row["class_label"] != row["workload_id"]:
+    if schema_version == SCHEMA_VERSION and row["class_label"] != row["workload_id"]:
         raise ValueError("classifier handoff class/workload binding is invalid")
     for field in (
         "raw_pcapng_sha256",
@@ -1358,7 +2046,14 @@ a valid QUIC transcript.
 `traces/*.csv` is the canonical classifier-facing projection. Positive signed
 lengths are client egress and negative signed lengths are server ingress.
 `samples.jsonl` contains labels, collection-block splits, provenance bindings,
-and hashes. Keep all samples with the same `paired_visit_id` in the same split.
+and hashes. In schema v2, `class_label` is the frozen domain class while
+`workload_id` identifies its prepared workload. The per-sample `split` is
+authoritative: `inference` samples are evaluation-only and must never enter
+classifier training or model selection. `paired_visit_id` groups conditions
+from one paired acquisition result for audit and paired analysis. Schema-v2
+`acquisition_block_id` groups the adjacent baseline and paired source results
+that form one of the ten temporal collection blocks; use it for block-aware
+resampling and dependence control.
 
 Neqo controller/event/schedule records are intentionally excluded because they
 would disclose defence-internal labels unavailable to a network observer.

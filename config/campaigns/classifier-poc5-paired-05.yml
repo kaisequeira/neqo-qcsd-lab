@@ -1,0 +1,34 @@
+schema: 1
+name: research-classifier-poc5-paired-05-1200
+purpose: evaluation
+seed: 2026085300
+profile: research-1200
+
+# Five-class proof-of-concept, temporal block 05 of 10. The undefended
+# visit in each triplet is an additional clean sample; defended samples are
+# reserved for post-training inference.
+# The ten paired seeds were selected prospectively from deterministic order
+# expansion only; every class/defense/order-position cell totals 32..35.
+workloads:
+  nghttp2-ngtcp2-r3: 10
+  getbootstrap-home-r3: 10
+  apache-traffic-server-docs-r3: 10
+  nginx-quic-r3: 10
+  cloudflare-quiche-r3: 10
+
+request_policies:
+  - as-defined
+
+defenses:
+  - undefended
+  - front
+  - tamaraw
+
+limits:
+  timeout_seconds: 120
+  max_response_bytes: 1048576
+  capture_seconds: 180
+  capture_megabytes: 64
+  max_attempts: 3
+  per_origin_cooldown_seconds: 30
+  settle_seconds: 1

@@ -9,12 +9,12 @@ The lab does not maintain a second data-processing workflow. A workload is
 simply a frozen graph of HTTPS requests. A visit is one execution of that
 graph. A sample is one visit under one defence.
 
-The capture specification does not train a classifier or define a final
-monitored/unmonitored or open-world corpus. Fitting and evaluation are separate
-campaigns over independent visits of the same frozen workload definitions. A
-separate offline companion can package complete sealed results as a small
-classifier-pipeline pilot; that export does not make either the full cohort or
-an operationally reduced subset a representative efficacy dataset.
+The capture specification does not train a classifier or define an open-world
+corpus. Fitting and evaluation are separate campaigns over independent visits
+of the same frozen workload definitions. A separate offline companion packages
+complete sealed results for a five-class closed-world proof of concept; that
+export does not make the five fixed domains a representative website
+population or evaluate an attacker retrained on defended traffic.
 
 Docker is required for every public command. The Neqo source is the
 `neqo-qcsd/` Git submodule.
@@ -206,23 +206,38 @@ the separate Docker wrapper from this checkout after every source result
 verifies:
 
 ```shell
-./classifier-pilot export classifier-stable3-pilot-v1 \
-  results/research-classifier-stable3-pilot-01-1200/<run-id> \
-  results/research-classifier-stable3-pilot-02-1200/<run-id> \
-  results/research-classifier-stable3-pilot-03-1200/<run-id> \
-  results/research-classifier-stable3-pilot-04-1200/<run-id> \
-  results/research-classifier-stable3-pilot-05-1200/<run-id> \
-  results/research-classifier-stable3-pilot-06-1200/<run-id> \
-  results/research-classifier-stable3-pilot-07-1200/<run-id> \
-  --splits train,train,train,train,train,validation,test
-./classifier-pilot verify classifier-stable3-pilot-v1
+./classifier-pilot export classifier-poc5-v2 \
+  results/research-classifier-poc5-baseline-01-1200/<run-id> \
+  results/research-classifier-poc5-paired-01-1200/<run-id> \
+  results/research-classifier-poc5-baseline-02-1200/<run-id> \
+  results/research-classifier-poc5-paired-02-1200/<run-id> \
+  results/research-classifier-poc5-baseline-03-1200/<run-id> \
+  results/research-classifier-poc5-paired-03-1200/<run-id> \
+  results/research-classifier-poc5-baseline-04-1200/<run-id> \
+  results/research-classifier-poc5-paired-04-1200/<run-id> \
+  results/research-classifier-poc5-baseline-05-1200/<run-id> \
+  results/research-classifier-poc5-paired-05-1200/<run-id> \
+  results/research-classifier-poc5-baseline-06-1200/<run-id> \
+  results/research-classifier-poc5-paired-06-1200/<run-id> \
+  results/research-classifier-poc5-baseline-07-1200/<run-id> \
+  results/research-classifier-poc5-paired-07-1200/<run-id> \
+  results/research-classifier-poc5-baseline-08-1200/<run-id> \
+  results/research-classifier-poc5-paired-08-1200/<run-id> \
+  results/research-classifier-poc5-baseline-09-1200/<run-id> \
+  results/research-classifier-poc5-paired-09-1200/<run-id> \
+  results/research-classifier-poc5-baseline-10-1200/<run-id> \
+  results/research-classifier-poc5-paired-10-1200/<run-id>
+./classifier-pilot verify classifier-poc5-v2
 ```
 
-This immediate contract contains GetBootstrap Home, Bootstrap Introduction,
-and Cloudflare QUIC: 21 samples per block and 147 across all seven blocks. The
-exporter separately retains the exact original six-class/294-sample contract
-for future use after its excluded workloads and runtime paths are repaired. It
-rejects a mixture of the two result lineages.
+The POC5 contract contains one workload for each of five distinct origins:
+GetBootstrap Home, Apache Traffic Server documentation, NGINX QUIC,
+Cloudflare QUIC, and nghttp2/ngtcp2. Ten acquisition blocks each contribute a
+100-sample baseline result (20 visits per class) and a 150-sample paired result
+(ten visits per class under undefended, FRONT, and Tamaraw). The exact total is
+1,500 undefended, 500 FRONT, and 500 Tamaraw captures. The exporter separately
+retains the earlier schema-1 six-class and stable3 pipeline contracts and
+rejects mixed lineages.
 
 The wrapper runs the exact collection image with networking disabled, all
 capabilities dropped, the checkout and result evidence read-only, and the
@@ -246,7 +261,7 @@ its wrapper realtime and monotonic elapsed durations may differ by at most
 The handoff is self-contained:
 
 ```text
-handoffs/classifier-stable3-pilot-v1/
+handoffs/classifier-poc5-v2/
   README.md
   dataset.json
   samples.jsonl
@@ -260,6 +275,11 @@ handoffs/classifier-stable3-pilot-v1/
   traces/
     <opaque-sample-id>.csv
 ```
+
+The formal handoff contains 2,500 samples: 7,500 files under `raw/`, 2,500
+stripped PCAPs, 2,500 CSV traces, and the four top-level receipt/inventory
+files. That is 12,504 regular files in total; `SHA256SUMS` governs the other
+12,503 files and deliberately excludes itself.
 
 `raw/` preserves byte-exact PCAPNG evidence, a full-packet classic-PCAP format
 conversion, and the corresponding Neqo run receipt for a trusted collaborator
@@ -278,8 +298,16 @@ provides the same model-facing projection directly as
 `relative_time_ns,direction,length_bytes,signed_length_bytes`, with client
 egress positive and server ingress negative.
 
-`samples.jsonl` maps each opaque sample ID to workload class, defence,
-request policy, visit, source block, split, and exported file hashes.
+In the schema-2 POC handoff, `class_label` is the approved origin hostname and
+`workload_id` retains the exact frozen request-graph identity. `samples.jsonl`
+maps each opaque sample ID to those identities, defence, request policy, visit,
+source result, shared `acquisition_block_id`, split, and exported file hashes.
+The exporter rejects overlapping or out-of-order acquisition blocks.
+Undefended samples from
+acquisition blocks 01--08, 09, and 10 are respectively `train`, `validation`,
+and `test`; all FRONT and Tamaraw rows are `inference` and
+`inference-only`, regardless of their temporal block. The exporter derives and
+validates these assignments rather than accepting a caller-supplied split list.
 `dataset.json` binds the checked-in campaign, source result, and evidence-index
 hashes, declares the projection, and summarizes classes, defences, blocks, and
 splits. `SHA256SUMS` closes the exported file inventory. These receipts protect
@@ -289,20 +317,22 @@ they do not replace the authoritative result seals.
 Verify the portable inventory from inside the handoff root:
 
 ```shell
-cd handoffs/classifier-stable3-pilot-v1
+cd handoffs/classifier-poc5-v2
 sha256sum -c SHA256SUMS
 ```
 
-The `--splits` entries align with the result roots in command-line order. Omit
-the option when exporting only block 01 for the importer check; its split is
-then recorded as unassigned. `verify` rechecks the closed handoff inventory and
-all hashes without reading the original result directories.
+For the retained schema-1 pilots, `--splits` entries still align with result
+roots in command-line order. POC5 instead requires all twenty roots in the
+exact baseline/paired order shown above. `verify` rechecks the closed handoff
+inventory, protocol counts, split policy, and all hashes without reading the
+original result directories.
 
 Josh should train from `traces/` or `stripped/`, use `class_label` as the
-prediction target, and evaluate each defence as a separate condition. Paths,
-`run.json`, defence/controller schedules, and other metadata are not model
-features. `static-control` is labelled as an engineering control rather than a
-privacy defence.
+prediction target, and fit preprocessing, features, classifiers, and
+hyperparameters only from undefended `train`/`validation` rows. The undefended
+`test` rows provide the clean baseline; FRONT and Tamaraw are locked
+inference-only conditions. Paths, `run.json`, defence/controller schedules,
+and other metadata are not model features.
 
 ### `fit`
 
@@ -746,13 +776,12 @@ only a genuinely partial, unpromoted working attempt may be discarded.
 See [METHODOLOGY.md](METHODOLOGY.md) for the scientific interpretation of the
 observer, pairing, fidelity, and derived metrics.
 
-## Research readiness, classifier pilot, and final hold
+## Research readiness and five-class classifier proof of concept
 
 The post-fit 14-sample evaluation and 120-sample fitting campaign definitions
 are checked in, and their completed results are sealed locally. The six-workload
-fitting cohort is frozen. The original six-class pilot definitions remain
-checked in for a future repaired cohort. The immediate independently named
-three-class pilot is the current pipeline handoff path. The relevant exact
+fitting cohort is frozen. The later classifier study is a separately authorized
+five-origin, three-condition closed-world proof of concept. The relevant exact
 expansions are:
 
 - fitting: six workloads × ten visits × two request policies × undefended =
@@ -764,50 +793,89 @@ expansions are:
   per block and 294 samples in the complete pilot;
 - immediate three-class classifier pilot: seven independently sealed blocks ×
   three workloads × one visit × one request policy × seven modes = 21 samples
-  per block and 147 samples in the complete pilot;
+  per block and 147 samples in the complete, now-superseded pipeline pilot;
+- POC5 rehearsal: five workloads × two visits × one request policy ×
+  undefended/FRONT/Tamaraw = 30 samples, all excluded from the formal corpus;
+- POC5 formal corpus: ten temporal blocks × five workloads ×
+  (30 undefended + 10 FRONT + 10 Tamaraw visits) = 2,500 samples;
 - pre-final rehearsal: six workloads × one visit × one request policy × seven
   modes = 42 samples;
 - final: six workloads × three visits × one request policy × seven modes =
   126 samples.
 
-The immediate blocks are `config/campaigns/classifier-stable3-pilot-01.yml`
-through `classifier-stable3-pilot-07.yml`. They reuse the seven seeds fixed for
-the original pilot rather than searching for seeds after observing failures.
-Their workload orders cover all six three-class permutations plus one base
-repeat, giving each workload each time position either two or three times; no
-workload/defence pair occupies a seeded within-visit defence position more than
-twice. Capture and verify each block separately. Block 01 is the 21-sample
-interface gate and may be exported alone. After Josh confirms ingestion,
-blocks 01–05 are training, block 06 validation, and block 07 pilot testing.
-Each defence then has only 15 training and three validation/test samples, so
-this remains a pipeline check rather than an efficacy estimate.
+The POC5 workload classes are the approved origin hostnames bound one-to-one to
+`getbootstrap-home-r3`, `apache-traffic-server-docs-r3`, `nginx-quic-r3`,
+`cloudflare-quiche-r3`, and `nghttp2-ngtcp2-r3`. Bootstrap Introduction is not
+a sixth domain class because it shares `getbootstrap.com` with Bootstrap Home.
+FRONT and Tamaraw use their fixed research-profile algorithms and seeds; the
+POC neither consumes nor refits the Traffic-Morphing, WTF-PAD, or Walkie-Talkie
+artifacts.
+
+Each temporal block has two campaign files:
+`classifier-poc5-baseline-NN.yml` contributes 20 undefended visits per class,
+and `classifier-poc5-paired-NN.yml` contributes ten visits per class under each
+of undefended, FRONT, and Tamaraw. Thus every block contributes 30/10/10 per
+class without extending the campaign schema. The workload order rotates so
+every class occupies every workload position exactly twice across ten blocks.
+The paired seeds were selected prospectively from deterministic plan expansion;
+each class/condition occupies each of the three within-visit positions 32--35
+times across its 100 visits.
+Blocks 01--08, 09, and 10 supply the undefended 240/30/30
+train/validation/test split per class. All 100 FRONT and all 100 Tamaraw rows
+per class are inference-only. Run baseline before paired in odd-numbered
+blocks and paired before baseline in even-numbered blocks, verify both results
+immediately, and retain the shared temporal block in the handoff. The exporter
+enforces that order and requires each pair to finish before the next block
+starts.
 
 ```shell
-./qcsd-lab verify config/campaigns/classifier-stable3-pilot-01.yml
-./qcsd-lab run config/campaigns/classifier-stable3-pilot-01.yml
-./qcsd-lab verify results/research-classifier-stable3-pilot-01-1200/<run-id>
-./classifier-pilot export classifier-stable3-interface-v1 \
-  results/research-classifier-stable3-pilot-01-1200/<run-id> \
+./qcsd-lab verify config/campaigns/classifier-poc5-rehearsal.yml
+./qcsd-lab run config/campaigns/classifier-poc5-rehearsal.yml
+./qcsd-lab verify results/research-classifier-poc5-rehearsal-1200/<run-id>
+./classifier-pilot export classifier-poc5-rehearsal-v2 \
+  results/research-classifier-poc5-rehearsal-1200/<run-id> \
   --splits interface
-./classifier-pilot verify classifier-stable3-interface-v1
-# Repeat the same verify -> run -> verify sequence for blocks 02 through 07.
+./classifier-pilot verify classifier-poc5-rehearsal-v2
+# Proceed only if all 30 rehearsal samples are accepted and eligible and the
+# handoff is ingestible. The rehearsal is never reused in classifier training
+# or evaluation. Then run and verify both campaigns in blocks 01 through 10.
 ```
+
+For odd block `NN`, run the baseline campaign before the paired campaign; for
+even `NN`, reverse those two operations. In either case each operation is:
+
+```shell
+./qcsd-lab verify config/campaigns/classifier-poc5-<kind>-NN.yml
+./qcsd-lab run config/campaigns/classifier-poc5-<kind>-NN.yml
+./qcsd-lab verify \
+  results/research-classifier-poc5-<kind>-NN-1200/<run-id>
+```
+
+Do not start block `NN+1` until both block-`NN` results verify as complete,
+with every planned sample accepted and eligible. A failed formal result is
+retained and diagnosed; it is never replaced with an ad-hoc campaign or a
+different seed. All twenty formal results must bind one identical clean Lab
+commit, Neqo commit, and collection-image source receipt. The rehearsal
+authorizes only the exact image, workloads, and campaign commit that it ran;
+any rebuild, source or workload repair, parameter change, or class replacement
+requires a new excluded 30-sample rehearsal before formal acquisition.
 
 The incomplete six-class diagnostic at
 `results/research-classifier-pilot-01-1200/20260814T064655.275845Z` is excluded
-from the stable3 corpus and from classifier export. None of its accepted
-samples is reused. Apache Traffic Server, NGINX QUIC, and nghttp2/ngtcp2 were
-removed only from this immediate operational pilot after response/runtime or
-strict capture-fidelity failures; that outcome-informed reduction is another
-reason the 147 samples cannot support population or defence-efficacy claims.
+from the POC5 corpus and classifier export. None of its individually accepted
+samples is reused. Its Apache response drift and FRONT/Tamaraw fidelity
+failures make the clean-clock 30-sample rehearsal a substantive gate: do not
+launch a formal block unless the rehearsal is complete with 30/30 accepted and
+eligible, and do not weaken fidelity to force a pass. Refresh, repair, or
+prospectively replace a failing class under a new frozen contract instead.
 The fitting corpus, qualification runs, smoke result, failed attempts, and
-qualification diagnostics are likewise never stable3 classifier samples.
+qualification diagnostics are likewise never POC5 classifier samples.
 
-These stable3 campaign files, the offline exporter, tests, and documentation
-are outside the qualification implementation-file inventory. Publish them in a
+These POC5 campaign files, the offline exporter, tests, and documentation are
+outside the qualification implementation-file inventory. Publish them in a
 clean Lab commit and rebuild the collection image so new captures bind that
 commit; do not regenerate the six qualification sidecars, prefix specs,
-fitting result, or sealed `research-1200` bundle.
+fitting result, or sealed `research-1200` bundle before the rehearsal.
 
 The implementation goal established the profiles, preparation policy,
 fitters, runtime realization, campaign contracts, and evidence boundaries.
@@ -846,6 +914,7 @@ manifest-sealed at
 Its outer manifest SHA-256 is
 `4ee68a930a344dc0e5874279e09069f92935a2f4f42bc7bb7e88077153b85aa9`;
 its manifest is bound by the v2 receipts, while its bytes are not positive
-qualification or fitting input. The classifier pilot does not define or
-execute the separately named pre-final rehearsal or 126-sample final campaign.
-Both remain explicitly on hold and require later authorization.
+qualification or fitting input. The POC5 campaigns do not define or execute
+the separately named historical 42-sample pre-final rehearsal or 126-sample
+engineering campaign. Both remain explicitly on hold and require later
+authorization.

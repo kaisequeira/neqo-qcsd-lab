@@ -77,11 +77,11 @@ Fitting used all six frozen manifest definitions; the post-fit smoke selected
 two members of that cohort. For those shared workloads the visits were
 independent: fitting captures were never reused as evaluation samples, and
 evaluation observations did not influence fitted parameters. The capture
-specification has no monitored/unmonitored roles or open-world view. The
-original offline classifier-pilot contract labels these six fixed workload
-graphs; the immediate stable3 contract labels an explicitly reduced subset.
-Both assign capture blocks to a pipeline-development split, not a final
-classifier study design.
+specification has no monitored/unmonitored roles or open-world view. The later
+POC5 contract labels five approved origin hostnames, each bound to one frozen
+workload graph, and evaluates only an undefended-trained five-class
+closed-world classifier against undefended, FRONT, and Tamaraw traffic. It is
+not a website-population or adaptive-attacker study.
 
 ## Ordering and concurrency
 
@@ -445,8 +445,9 @@ at
 `results/chaff-qualification-diagnostics/q7-b19cb04-7ebcdb0-schema6-203eee42-runtime-falsification/`.
 Its closed outer manifest hashes to
 `4ee68a930a344dc0e5874279e09069f92935a2f4f42bc7bb7e88077153b85aa9`.
-The classifier pilot is separate from the pre-final gate. The named rehearsal
-and final remain undefined, unexecuted, and explicitly on hold.
+POC5 is separate from the historical pre-final engineering gate. Its own
+30-sample rehearsal and twenty formal campaign definitions are now frozen but
+unexecuted; the historical 42/126 sequence remains undefined and on hold.
 
 ## Evidence, sealing, and recovery
 
@@ -513,49 +514,61 @@ plots and `summary.csv` still expose the available accepted evidence and make
 incomplete or ineligible groups visible in the report. SVG generation is
 deterministic, and the report embeds those SVGs so it is self-contained.
 
-## Classifier-pilot projection and handoff
+## Classifier proof-of-concept projection and handoff
 
-The classifier pilot is a staged interface experiment, not the final efficacy
-corpus. Two separately named contracts are preserved. The original deferred
-contract has seven blocks of the same six frozen workloads, the `as-defined`
-request policy, and all seven current modes for one new visit: 42 samples per
-block and 294 overall. Its checked-in campaign definitions are retained for a
-future repaired cohort and are never silently reinterpreted as a smaller
-experiment.
+The authorized POC5 corpus is a five-class closed-world domain-shift study, not
+an open-world or adaptive-attacker efficacy corpus. Its five class labels are
+the approved origin hostnames `getbootstrap.com`,
+`docs.trafficserver.apache.org`, `quic.nginx.org`,
+`cloudflare-quic.com`, and `nghttp2.org`. Each is bound one-to-one to a frozen
+workload ID; a class therefore means the fixed page/request graph at that
+origin, not every possible page on the domain. Bootstrap Introduction is not a
+separate class because it shares the Bootstrap origin.
 
-The immediate `stable3` contract instead contains GetBootstrap Home, Bootstrap
-Introduction, and Cloudflare QUIC. Its seven independently sealed blocks use
-the same request policy and modes: 21 samples per block and 147 overall. It
-reuses the seven seeds fixed before the diagnostic capture rather than
-searching for favorable seeds after observing failures. The workload orders
-cover all six permutations plus one repeat; each workload appears in each
-time position two or three times. Seeded defence order remains the ordinary
-campaign expansion, with no workload/defence pair occupying any within-visit
-position more than twice.
+The formal corpus has ten temporal acquisition blocks. Each block contains a
+100-sample baseline result with 20 undefended visits per class and a 150-sample
+paired result with ten visits per class under undefended, FRONT, and Tamaraw.
+This produces exactly 300 undefended, 100 FRONT, and 100 Tamaraw captures per
+class: 2,500 total. The baseline and paired campaigns in a block have distinct
+fixed seeds but the same workload order; across ten blocks each workload
+occupies every workload position twice. Prospectively selected paired seeds
+place every class/condition in each within-visit position 32--35 times over its
+100 visits. Baseline executes first in odd-numbered blocks and paired first in
+even-numbered blocks so condition is not synonymous with time of capture; the
+exporter enforces this chronology.
 
-Stable3 block 01 is collected and exported first as the 21-sample importer
-gate. The remaining blocks are justified only after the receiver can ingest
-that contract. The complete pilot assigns blocks 01–05 to training, block 06
-to validation, and block 07 to pilot testing. Splitting at the sealed-result
-block rather than randomly by packet trace prevents samples from the same
-temporal capture block appearing on both sides of a split. Per defence this is
-only 15 training samples and three samples in each held-out split, with one
-sample per class in validation and test. Any pilot test result consulted during
-feature or model development is also no longer an untouched final-paper test
-set.
+Undefended samples from blocks 01--08, 09, and 10 form the temporal 8:1:1
+split: 240 training, 30 validation, and 30 clean-test samples per class. Every
+FRONT and Tamaraw sample is `inference`/`inference-only`. Preprocessing,
+feature selection, classifier fitting, and hyperparameter selection must use
+only the undefended training and validation rows. Inspecting defended outcomes
+to choose a model converts them into development data and invalidates their
+locked inference interpretation. This protocol measures transfer of an
+undefended-trained classifier to defended traffic; it does not test an attacker
+retrained on defended traces.
 
-The incomplete six-class diagnostic result at
-`results/research-classifier-pilot-01-1200/20260814T064655.275845Z` contributes
-no stable3 samples, including none of its individually accepted captures.
-Apache Traffic Server, NGINX QUIC, and nghttp2/ngtcp2 are excluded from this
-immediate pilot after the diagnostic exposed response/runtime or strict
-capture-fidelity failures. That selection is outcome-informed and therefore
-cannot estimate performance for the original cohort. Fitting samples,
-qualification traffic, the post-fit smoke, failed attempts, and archived
-falsification diagnostics are also excluded from the stable3 corpus and
-export. Every one
-of the 147 stable3 samples must be a new, complete and eligible evaluation
-sample under its checked-in stable3 campaign.
+Before any formal block, `classifier-poc5-rehearsal.yml` collects two visits per
+class and condition: 30 samples. It is a clean-clock operational and receiver
+ingestion gate and is permanently excluded from the 2,500. The incomplete
+six-class diagnostic result at
+`results/research-classifier-pilot-01-1200/20260814T064655.275845Z` also
+contributes no POC5 samples. Its ATS response drift and FRONT/Tamaraw fidelity
+failures mean the rehearsal must complete with 30/30 accepted and eligible;
+fitting samples, qualification traffic, smoke results, failed attempts, and
+archived diagnostics are never substituted for a missing formal capture.
+That gate authorizes only the exact clean Lab/Neqo/image receipt, frozen
+workloads, and campaign commit it exercised. A rebuild, source/workload repair,
+parameter change, or class substitution invalidates the rehearsal and requires
+a new excluded 30-sample gate. Every one of the twenty formal results must bind
+the same source receipt.
+
+The earlier six-class and stable3 schema-1 campaign/export contracts remain
+available as historical pipeline contracts but are not part of POC5. The
+schema-2 exporter accepts only the exact twenty POC5 results in alternating
+baseline/paired block order, binds their checked-in campaign hashes, derives
+sample-level splits, assigns a shared `acquisition_block_id` to each result
+pair, rejects overlapping or out-of-order temporal blocks, and verifies the
+2,500-row aggregate contract.
 
 The exporter is an offline companion outside the qualified capture
 implementation. This separation matters because qualification binds the exact
@@ -596,9 +609,9 @@ Initial metadata, any of which can create a label shortcut unrelated to traffic
 shape. Classifier code should consume only the stripped PCAP or CSV unless a
 separately declared threat model deliberately includes those fields. It must
 not use filenames, manifest labels, `run.json`, Neqo packet/event/schedule
-ledgers, or defence parameters as features. The workload is the class label;
-the defence is an evaluation condition. `static-control` remains a mechanical
-integration control rather than an efficacy defence.
+ledgers, or defence parameters as features. In POC5, `class_label` is the
+approved origin hostname, `workload_id` is provenance, and the defence is an
+evaluation condition.
 
 ## Scope and limitations
 
@@ -609,17 +622,15 @@ integration control rather than an efficacy defence.
   network vantage point.
 - A direct PCAP contains endpoint and encrypted-protocol metadata and is not a
   ready-made public release.
-- The immediate classifier pilot has only three fixed workload graphs spanning
-  two origins, and two Bootstrap graphs share one delivery path. It is suitable
-  for parser, feature, training, and evaluation-pipeline integration, not
-  website-population generalization, open-world claims, or defence efficacy.
-- The fitted bundle remains the sealed six-workload fit. In stable3,
-  Cloudflare's Traffic-Morphing target and Walkie-Talkie partner are excluded
-  classes; the unchanged fitted runtime is being exercised, not refitted or
-  claimed as a closed three-class optimum.
+- POC5 has five fixed workload graphs and five approved origins. It can support
+  a descriptive five-way closed-world comparison for these pages, not
+  website-population generalization, open-world false-positive claims, or
+  security against a classifier retrained on defended samples.
+- FRONT and Tamaraw use fixed research-profile algorithms and do not consume a
+  fitted artifact. Their client-only QCSD adaptations still require qualified
+  chaff and strict runtime fidelity; "no fitting" does not waive those gates.
 - Controlled local smoke fixtures validate mechanics before fitting; the
   checked-in external smoke instead requires the sealed fitted bundle and
   evaluates independent post-fit visits.
-- The final 126-sample capture is explicitly on hold. It must follow a sealed
-  120-sample fitting result, fitted-bundle verification, and the independent
-  42-sample pre-final rehearsal.
+- The historical 42/126 engineering campaign remains explicitly on hold and is
+  not combined with POC5.
