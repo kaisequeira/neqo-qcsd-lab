@@ -1,0 +1,1505 @@
+{
+  "preparation": {
+    "approved_origins": [
+      "https://serde.rs"
+    ],
+    "chromium_version": "151.0.7922.137",
+    "exclusions": [
+      {
+        "reason": "origin not approved",
+        "url": "https://img.shields.io/crates/v/serde.svg?style=social"
+      },
+      {
+        "reason": "unsafe method: POST",
+        "url": "https://serde.rs/cdn-cgi/rum?"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://static.cloudflareinsights.com/beacon.min.js/v4513226cdae34746b4dedf0b4dfa099e1781791509496"
+      },
+      {
+        "reason": "unsafe method: POST",
+        "url": "https://www.google-analytics.com/g/collect?v=2&tid=G-T5QD1R7FZW&gtm=45je68c1v896778963za200zd896778963&_p=1786717847491&gcd=13l3l3l3l1l1&npa=0&dma=0&_eu=AAAAAAQ&are=1&cid=622567271.1786717848&frm=0&ngs=1&pscdl=noapi&rcb=6&sr=1280x720&uaa=arm&uab=64&uafvl=Chromium%3B151.0.7922.137%7CNot%253DA%253FBrand%3B99.0.0.0&uam=&uamb=0&uap=Linux&uapv=&uaw=0&ul=en-us&_s=2&tag_exp=115938466~115938469~118897920~118897930~119367802~119367810~119527020~120385422&dl=%2F&sid=1786717848&sct=1&seg=1&dt=Overview%20%C2%B7%20Serde&_tu=QA&en=page_view&_ee=1&ep.anonymize_ip=true&_et=3&tfd=816"
+      },
+      {
+        "reason": "unsafe method: POST",
+        "url": "https://www.google-analytics.com/g/collect?v=2&tid=G-T5QD1R7FZW&gtm=45je68c1v896778963za200zd896778963&_p=1786717847491&gcd=13l3l3l3l1l1&npa=0&dma=0&are=1&cid=622567271.1786717848&frm=0&ngs=1&pscdl=noapi&rcb=6&sr=1280x720&uaa=arm&uab=64&uafvl=Chromium%3B151.0.7922.137%7CNot%253DA%253FBrand%3B99.0.0.0&uam=&uamb=0&uap=Linux&uapv=&uaw=0&ul=en-us&_s=1&tag_exp=115938466~115938469~118897920~118897930~119367802~119367810~119527020~120385422&sid=1786717848&sct=1&seg=0&dl=https%3A%2F%2Fserde.rs%2F&dt=Overview%20%C2%B7%20Serde&_tu=QA&en=page_view&_fv=1&_nsi=1&_ss=1&_ee=1&ep.anonymize_ip=true&tfd=807"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://www.googletagmanager.com/gtag/js?id=G-T5QD1R7FZW"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://www.youtube-nocookie.com/embed/BI_bHCGRgMY"
+      }
+    ],
+    "expected_responses": [
+      {
+        "body_sha256": "4628dad38b02f822b1178802469ebdc54e1bae22a1cef9d63d396c12324436d0",
+        "bytes": 6491,
+        "resource_id": 0,
+        "status": 200
+      },
+      {
+        "body_sha256": "b3d39bc6151d4aefca9b08c124e4ece1a80baaf8bdc4ffad0894b93b414d034d",
+        "bytes": 10853,
+        "resource_id": 1,
+        "status": 200
+      },
+      {
+        "body_sha256": "f92c7f8d36dc6c89ba415fbf35ac13214cc37bdeb34eb4496767f67b60250f1b",
+        "bytes": 245,
+        "resource_id": 2,
+        "status": 200
+      },
+      {
+        "body_sha256": "a757a8a21cfefcc151721da996b256861bf7d8ed3eaddf828dc8776ddcd39da3",
+        "bytes": 193,
+        "resource_id": 3,
+        "status": 200
+      },
+      {
+        "body_sha256": "89e83df2a6a140f2d4fe6ff8fd78e20ef92c4b24d8f9b920cfd24096998c919a",
+        "bytes": 285,
+        "resource_id": 4,
+        "status": 200
+      },
+      {
+        "body_sha256": "b51c56d1fc625cfb88dc7969d4c2d78506d64eb0eabec023987e635554391471",
+        "bytes": 2644,
+        "resource_id": 5,
+        "status": 200
+      },
+      {
+        "body_sha256": "b6fe4dfe9a34dd7900bd05887735eb84265f81ca676a8f2c1f00c2595e8e6b65",
+        "bytes": 1181,
+        "resource_id": 6,
+        "status": 200
+      },
+      {
+        "body_sha256": "21583115febc745b800b8bdcec17fa383f86ba8db61d7f71b8a6975f480962f8",
+        "bytes": 396,
+        "resource_id": 7,
+        "status": 200
+      },
+      {
+        "body_sha256": "d729e751b3e66ad18863e7b4f9b982b6b9d082fa4693866e8ac636402bfb64ad",
+        "bytes": 1042,
+        "resource_id": 8,
+        "status": 200
+      },
+      {
+        "body_sha256": "3507738fe77f72720ba95af84156ccf8f19ab62998ecb38c8e1546f0bc58c3df",
+        "bytes": 456,
+        "resource_id": 9,
+        "status": 200
+      },
+      {
+        "body_sha256": "66c949eef3b459838c71e429ec1af0a1d336bfe64f66e8bc5b4473c638e7487e",
+        "bytes": 37304,
+        "resource_id": 10,
+        "status": 200
+      },
+      {
+        "body_sha256": "e56a40728354468048b1f0209b2cc06564a6dc3ecf7f58b0f2cf6dbc40ae3ef5",
+        "bytes": 40087,
+        "resource_id": 11,
+        "status": 200
+      },
+      {
+        "body_sha256": "5532093167dc93b844610d734df2ee166c1082531d51ee970943fffe2d5a3488",
+        "bytes": 165,
+        "resource_id": 12,
+        "status": 200
+      },
+      {
+        "body_sha256": "018b8e3e7fdc4514c211a23871b1e22c4968d915226339ea546fa31e7527b067",
+        "bytes": 400,
+        "resource_id": 13,
+        "status": 200
+      },
+      {
+        "body_sha256": "32b524a8e964159ae172e994b8507fa8cdd3ae2062075adb80b7bd16042c3af5",
+        "bytes": 459,
+        "resource_id": 14,
+        "status": 200
+      },
+      {
+        "body_sha256": "abfcf55b48483ad85dc3ca205eb3ef1def34b82bbed71a18e5215da2d09c2e6c",
+        "bytes": 4859,
+        "resource_id": 15,
+        "status": 200
+      },
+      {
+        "body_sha256": "5eee146a430e731226de9895f704ce62beddb1bf6e76c83cca6929bb4cc36b6e",
+        "bytes": 625,
+        "resource_id": 16,
+        "status": 200
+      },
+      {
+        "body_sha256": "0bd83cec8e329a436a7621156ba32dfbb8ab76aa85efce95efc32972a1abfb92",
+        "bytes": 1557,
+        "resource_id": 17,
+        "status": 200
+      },
+      {
+        "body_sha256": "7dacf83f51179de8d7980a513e67ab3a08f2c6272bb5946df8fd77c0d1763b73",
+        "bytes": 71896,
+        "resource_id": 18,
+        "status": 200
+      },
+      {
+        "body_sha256": "ffcec3d95831ab5be6642ffb7487fa2bccae4070157345b3dc001e0c7f81c812",
+        "bytes": 888,
+        "resource_id": 19,
+        "status": 200
+      }
+    ],
+    "final_url": "https://serde.rs/",
+    "lab_source": {
+      "image_digest": "sha256:0e642a14eb0906fc12c15d4acbe5c5780ee59e00f428fe5c389226f878f909cd",
+      "lab_commit": "cee117d467799e042138a104f3aa32fa06e53417",
+      "lab_dirty": false,
+      "lab_patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "neqo_commit": "12c5d7118e46575b5a227214ff646d9d7e3c17a6",
+      "neqo_dirty": false,
+      "neqo_patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "neqo_pinned_commit": "12c5d7118e46575b5a227214ff646d9d7e3c17a6"
+    },
+    "max_response_bytes": 1048576,
+    "migration_commit": "12c5d7118e46575b5a227214ff646d9d7e3c17a6",
+    "neqo_base_commit": "8a04d065c2d35c8e8fd804f91c7081ab6bb60b89",
+    "neqo_version": "0.30.0",
+    "observed_origins": [
+      "https://img.shields.io",
+      "https://serde.rs",
+      "https://static.cloudflareinsights.com",
+      "https://www.google-analytics.com",
+      "https://www.googletagmanager.com",
+      "https://www.youtube-nocookie.com"
+    ],
+    "observed_request_count": 27,
+    "prepare_image_digest": "sha256:0e642a14eb0906fc12c15d4acbe5c5780ee59e00f428fe5c389226f878f909cd",
+    "published_qcsd_commit": "39e293fb384dd341156eedd1e4b833d24904b1f6",
+    "settle_ms": 3000,
+    "source_url": "https://serde.rs/",
+    "stability_defense": "none",
+    "stability_profile": "live",
+    "stability_runs": 3,
+    "stability_seed": 0,
+    "timeout_seconds": 120,
+    "udp_payload_qualification": {
+      "configured_udp_payload_ceiling": 1200,
+      "runs": [
+        {
+          "incoming": {
+            "observed_udp_payload_max": 1200,
+            "oversized_packet_count": 0,
+            "packet_count": 201
+          },
+          "outgoing": {
+            "observed_udp_payload_max": 1200,
+            "oversized_packet_count": 0,
+            "packet_count": 48
+          },
+          "packets_sha256": "ebfad09f4f378b0ec56b1d6407865d2108d50697b7ba010b3bcd5b4cd2b22639",
+          "run_index": 0,
+          "total": {
+            "observed_udp_payload_max": 1200,
+            "oversized_packet_count": 0,
+            "packet_count": 249
+          }
+        },
+        {
+          "incoming": {
+            "observed_udp_payload_max": 1200,
+            "oversized_packet_count": 0,
+            "packet_count": 199
+          },
+          "outgoing": {
+            "observed_udp_payload_max": 1200,
+            "oversized_packet_count": 0,
+            "packet_count": 50
+          },
+          "packets_sha256": "1299ca26f938c606ae5f645281e1c58c13a6d691f80ae3e3874055e830e51131",
+          "run_index": 1,
+          "total": {
+            "observed_udp_payload_max": 1200,
+            "oversized_packet_count": 0,
+            "packet_count": 249
+          }
+        },
+        {
+          "incoming": {
+            "observed_udp_payload_max": 1200,
+            "oversized_packet_count": 0,
+            "packet_count": 200
+          },
+          "outgoing": {
+            "observed_udp_payload_max": 1200,
+            "oversized_packet_count": 0,
+            "packet_count": 45
+          },
+          "packets_sha256": "6c396c9708b945b841edeed032a5067b6e69bf4f69b3b0abc2468bf491c5bc57",
+          "run_index": 2,
+          "total": {
+            "observed_udp_payload_max": 1200,
+            "oversized_packet_count": 0,
+            "packet_count": 245
+          }
+        }
+      ],
+      "schema_version": 1
+    }
+  },
+  "resources": [
+    {
+      "chaff_priority": false,
+      "content_length": 6491,
+      "data_length": 6491,
+      "depends_on": [],
+      "headers": [
+        [
+          "accept",
+          "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=0, i"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "document"
+        ],
+        [
+          "sec-fetch-mode",
+          "navigate"
+        ],
+        [
+          "sec-fetch-site",
+          "none"
+        ],
+        [
+          "sec-fetch-user",
+          "?1"
+        ],
+        [
+          "upgrade-insecure-requests",
+          "1"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 0,
+      "known_valid": true,
+      "type": "Document",
+      "url": "https://serde.rs/"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 10853,
+      "data_length": 0,
+      "depends_on": [
+        0
+      ],
+      "headers": [
+        [
+          "accept",
+          "text/css,*/*;q=0.1"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=0"
+        ],
+        [
+          "referer",
+          "https://serde.rs/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "style"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 1,
+      "known_valid": true,
+      "type": "Stylesheet",
+      "url": "https://serde.rs/gitbook/style.css"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 245,
+      "data_length": 0,
+      "depends_on": [
+        0
+      ],
+      "headers": [
+        [
+          "accept",
+          "text/css,*/*;q=0.1"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=0"
+        ],
+        [
+          "referer",
+          "https://serde.rs/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "style"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 2,
+      "known_valid": true,
+      "type": "Stylesheet",
+      "url": "https://serde.rs/gitbook/gitbook-plugin-codeblock-rust/block.css"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 193,
+      "data_length": 0,
+      "depends_on": [
+        0
+      ],
+      "headers": [
+        [
+          "accept",
+          "text/css,*/*;q=0.1"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=0"
+        ],
+        [
+          "referer",
+          "https://serde.rs/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "style"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 3,
+      "known_valid": true,
+      "type": "Stylesheet",
+      "url": "https://serde.rs/gitbook/gitbook-plugin-checklist/checklist.css"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 285,
+      "data_length": 0,
+      "depends_on": [
+        0
+      ],
+      "headers": [
+        [
+          "accept",
+          "text/css,*/*;q=0.1"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=0"
+        ],
+        [
+          "referer",
+          "https://serde.rs/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "style"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 4,
+      "known_valid": true,
+      "type": "Stylesheet",
+      "url": "https://serde.rs/gitbook/gitbook-plugin-anchors/plugin.css"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 2644,
+      "data_length": 0,
+      "depends_on": [
+        0
+      ],
+      "headers": [
+        [
+          "accept",
+          "text/css,*/*;q=0.1"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=0"
+        ],
+        [
+          "referer",
+          "https://serde.rs/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "style"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 5,
+      "known_valid": true,
+      "type": "Stylesheet",
+      "url": "https://serde.rs/gitbook/gitbook-plugin-highlight/website.css"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 1181,
+      "data_length": 0,
+      "depends_on": [
+        0
+      ],
+      "headers": [
+        [
+          "accept",
+          "text/css,*/*;q=0.1"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=0"
+        ],
+        [
+          "referer",
+          "https://serde.rs/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "style"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 6,
+      "known_valid": true,
+      "type": "Stylesheet",
+      "url": "https://serde.rs/gitbook/gitbook-plugin-fontsettings/website.css"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 396,
+      "data_length": 0,
+      "depends_on": [
+        0
+      ],
+      "headers": [
+        [
+          "accept",
+          "text/css,*/*;q=0.1"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=0"
+        ],
+        [
+          "referer",
+          "https://serde.rs/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "style"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 7,
+      "known_valid": true,
+      "type": "Stylesheet",
+      "url": "https://serde.rs/styles/website.css"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 1042,
+      "data_length": 0,
+      "depends_on": [
+        0
+      ],
+      "headers": [
+        [
+          "accept",
+          "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=2, i"
+        ],
+        [
+          "referer",
+          "https://serde.rs/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "image"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 8,
+      "known_valid": true,
+      "type": "Image",
+      "url": "https://serde.rs/img/github.svg"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 456,
+      "data_length": 0,
+      "depends_on": [
+        0
+      ],
+      "headers": [
+        [
+          "accept",
+          "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=2, i"
+        ],
+        [
+          "referer",
+          "https://serde.rs/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "image"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 9,
+      "known_valid": true,
+      "type": "Image",
+      "url": "https://serde.rs/img/rustdoc.svg"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 37304,
+      "data_length": 0,
+      "depends_on": [
+        0
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=2"
+        ],
+        [
+          "referer",
+          "https://serde.rs/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 10,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://serde.rs/gitbook/gitbook.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 40087,
+      "data_length": 0,
+      "depends_on": [
+        0
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=2"
+        ],
+        [
+          "referer",
+          "https://serde.rs/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 11,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://serde.rs/gitbook/theme.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 165,
+      "data_length": 165,
+      "depends_on": [
+        0
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=2"
+        ],
+        [
+          "referer",
+          "https://serde.rs/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 12,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://serde.rs/gitbook/gitbook-plugin-sane-sidebar/plugin.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 400,
+      "data_length": 0,
+      "depends_on": [
+        0
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=2"
+        ],
+        [
+          "referer",
+          "https://serde.rs/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 13,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://serde.rs/gitbook/gitbook-plugin-edit-link/plugin.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 459,
+      "data_length": 0,
+      "depends_on": [
+        0
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=2"
+        ],
+        [
+          "referer",
+          "https://serde.rs/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 14,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://serde.rs/gitbook/gitbook-plugin-ga4/plugin.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 4859,
+      "data_length": 0,
+      "depends_on": [
+        0
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=2"
+        ],
+        [
+          "referer",
+          "https://serde.rs/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 15,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://serde.rs/gitbook/gitbook-plugin-lunr/lunr.min.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 625,
+      "data_length": 0,
+      "depends_on": [
+        0
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=2"
+        ],
+        [
+          "referer",
+          "https://serde.rs/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 16,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://serde.rs/gitbook/gitbook-plugin-lunr/search-lunr.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 1557,
+      "data_length": 0,
+      "depends_on": [
+        0
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=2"
+        ],
+        [
+          "referer",
+          "https://serde.rs/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 17,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://serde.rs/gitbook/gitbook-plugin-fontsettings/fontsettings.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 71896,
+      "data_length": 0,
+      "depends_on": [
+        0,
+        1
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "origin",
+          "https://serde.rs"
+        ],
+        [
+          "priority",
+          "u=0"
+        ],
+        [
+          "referer",
+          "https://serde.rs/gitbook/style.css"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "font"
+        ],
+        [
+          "sec-fetch-mode",
+          "cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 18,
+      "known_valid": true,
+      "type": "Font",
+      "url": "https://serde.rs/gitbook/fonts/fontawesome/fontawesome-webfont.woff2?v=4.6.3"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 888,
+      "data_length": 0,
+      "depends_on": [
+        0
+      ],
+      "headers": [
+        [
+          "accept",
+          "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=1, i"
+        ],
+        [
+          "referer",
+          "https://serde.rs/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "image"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 19,
+      "known_valid": true,
+      "type": "Other",
+      "url": "https://serde.rs/gitbook/images/favicon.ico"
+    }
+  ]
+}
