@@ -1,0 +1,2169 @@
+{
+  "preparation": {
+    "approved_origins": [
+      "https://http3-explained.haxx.se"
+    ],
+    "chromium_version": "151.0.7922.137",
+    "exclusions": [
+      {
+        "reason": "origin not approved",
+        "url": "https://app.gitbook.com/__session/2/?proposed=7c27e03e-46dd-4e72-869d-f6689e4ba6bbR"
+      },
+      {
+        "reason": "unsafe method: POST",
+        "url": "https://http3-explained.haxx.se/en"
+      },
+      {
+        "reason": "HTTP/3 preflight unavailable",
+        "url": "https://http3-explained.haxx.se/en/"
+      },
+      {
+        "reason": "unsafe method: POST",
+        "url": "https://http3-explained.haxx.se/~gitbook/__evt?o=-LxuH0qSm4xO9nWfEBlB&s=site_KXtlR"
+      },
+      {
+        "reason": "HTTP/3 preflight unavailable",
+        "url": "https://http3-explained.haxx.se/~gitbook/image?url=https%3A%2F%2F3391341413-files.gitbook.io%2F%7E%2Ffiles%2Fv0%2Fb%2Fgitbook-legacy-files%2Fo%2Fspaces%252F-LvW30M9uwlSh6noqzxa%252Favatar.png%3Fgeneration%3D1578309610234856%26alt%3Dmedia&width=32&dpr=1&quality=100&sign=781f94f0&sv=2"
+      },
+      {
+        "reason": "HTTP/3 preflight unavailable",
+        "url": "https://http3-explained.haxx.se/~gitbook/image?url=https%3A%2F%2F3391341413-files.gitbook.io%2F%7E%2Ffiles%2Fv0%2Fb%2Fgitbook-legacy-files%2Fo%2Fspaces%252F-LvW30M9uwlSh6noqzxa%252Favatar.png%3Fgeneration%3D1578309610234856%26alt%3Dmedia&width=48&height=48&sign=781f94f0&sv=2"
+      },
+      {
+        "reason": "HTTP/3 preflight unavailable",
+        "url": "https://http3-explained.haxx.se/~gitbook/image?url=https%3A%2F%2Fstatic-2v.gitbook.com%2F_next%2Fstatic%2Fmedia%2Fad-gitbook-sponsored.87465e07.svg&width=192&dpr=2&sign=9156c6a9&sv=2"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://static-2v.gitbook.com/_next/static/chunks/1050-7b7473e8c1bc8041.js?dpl=p-3db14ad950af3a31c6bfe42c26e76d"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://static-2v.gitbook.com/_next/static/chunks/1834-f6126cff1fda4bc0.js?dpl=p-3db14ad950af3a31c6bfe42c26e76d"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://static-2v.gitbook.com/_next/static/chunks/1968-32ab9d94fa7a30b9.js?dpl=p-3db14ad950af3a31c6bfe42c26e76d"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://static-2v.gitbook.com/_next/static/chunks/1985-3d8f20e9cc7be720.js?dpl=p-3db14ad950af3a31c6bfe42c26e76d"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://static-2v.gitbook.com/_next/static/chunks/2335-c4172ab51588451c.js?dpl=p-3db14ad950af3a31c6bfe42c26e76d"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://static-2v.gitbook.com/_next/static/chunks/3916-44f82124dc191b6c.js?dpl=p-3db14ad950af3a31c6bfe42c26e76d"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://static-2v.gitbook.com/_next/static/chunks/5504-015797baaf960612.js?dpl=p-3db14ad950af3a31c6bfe42c26e76d"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://static-2v.gitbook.com/_next/static/chunks/6140-f06c23834b20ddb8.js?dpl=p-3db14ad950af3a31c6bfe42c26e76d"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://static-2v.gitbook.com/_next/static/chunks/7434-08a7f97a0e9104de.js?dpl=p-3db14ad950af3a31c6bfe42c26e76d"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://static-2v.gitbook.com/_next/static/chunks/7849-afea4539691cefb3.js?dpl=p-3db14ad950af3a31c6bfe42c26e76d"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://static-2v.gitbook.com/_next/static/chunks/8384-e1569c2924e950b2.js?dpl=p-3db14ad950af3a31c6bfe42c26e76d"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://static-2v.gitbook.com/_next/static/chunks/87c73c54-e11922cda838f8cc.js?dpl=p-3db14ad950af3a31c6bfe42c26e76d"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://static-2v.gitbook.com/_next/static/chunks/8925-e56f2c9dcb7928a9.js?dpl=p-3db14ad950af3a31c6bfe42c26e76d"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://static-2v.gitbook.com/_next/static/chunks/9071f66d-65831af376c95d36.js?dpl=p-3db14ad950af3a31c6bfe42c26e76d"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://static-2v.gitbook.com/_next/static/chunks/9226-d2b770b0652a72de.js?dpl=p-3db14ad950af3a31c6bfe42c26e76d"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://static-2v.gitbook.com/_next/static/chunks/9540-8b649c5bdb86e5cb.js?dpl=p-3db14ad950af3a31c6bfe42c26e76d"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://static-2v.gitbook.com/_next/static/chunks/9935-c5ecb29204651d88.js?dpl=p-3db14ad950af3a31c6bfe42c26e76d"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://static-2v.gitbook.com/_next/static/chunks/app/global-error-e277b906d472a109.js?dpl=p-3db14ad950af3a31c6bfe42c26e76d"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://static-2v.gitbook.com/_next/static/chunks/app/sites/static/%5Bmode%5D/%5BsiteURL%5D/%5BsiteData%5D/(content)/%5BpagePath%5D/page-25476f191760b395.js?dpl=p-3db14ad950af3a31c6bfe42c26e76d"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://static-2v.gitbook.com/_next/static/chunks/app/sites/static/%5Bmode%5D/%5BsiteURL%5D/%5BsiteData%5D/(content)/layout-e8bae816e99577d2.js?dpl=p-3db14ad950af3a31c6bfe42c26e76d"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://static-2v.gitbook.com/_next/static/chunks/f5718501-f918635bca5b6141.js?dpl=p-3db14ad950af3a31c6bfe42c26e76d"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://static-2v.gitbook.com/_next/static/chunks/main-app-ee8cc6c3a8f135ed.js?dpl=p-3db14ad950af3a31c6bfe42c26e76d"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://static-2v.gitbook.com/_next/static/chunks/webpack-38a76b5016754225.js?dpl=p-3db14ad950af3a31c6bfe42c26e76d"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://static-2v.gitbook.com/_next/static/css/400c25fc222cac34.css?dpl=p-3db14ad950af3a31c6bfe42c26e76d"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://static-2v.gitbook.com/_next/static/css/569bb037d1d4eca6.css?dpl=p-3db14ad950af3a31c6bfe42c26e76d"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://static-2v.gitbook.com/_next/static/css/66171f2abb76e4d8.css?dpl=p-3db14ad950af3a31c6bfe42c26e76d"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://static-2v.gitbook.com/_next/static/css/9190f61c13cd3620.css?dpl=p-3db14ad950af3a31c6bfe42c26e76d"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://static-2v.gitbook.com/_next/static/css/c36dde9599bfc781.css?dpl=p-3db14ad950af3a31c6bfe42c26e76d"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://static-2v.gitbook.com/_next/static/css/d191fa1f4ae4be78.css?dpl=p-3db14ad950af3a31c6bfe42c26e76d"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://static-2v.gitbook.com/_next/static/css/e3d65466d47b91eb.css?dpl=p-3db14ad950af3a31c6bfe42c26e76d"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://static-2v.gitbook.com/_next/static/css/f8804de55e621b4f.css?dpl=p-3db14ad950af3a31c6bfe42c26e76d"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://static-2v.gitbook.com/_next/static/media/1a634e73dfeff02c-s.woff2?dpl=p-3db14ad950af3a31c6bfe42c26e76d"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://static-2v.gitbook.com/_next/static/media/1e41be92c43b3255-s.woff2?dpl=p-3db14ad950af3a31c6bfe42c26e76d"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://static-2v.gitbook.com/_next/static/media/d3ebbfd689654d3a.woff2?dpl=p-3db14ad950af3a31c6bfe42c26e76d"
+      }
+    ],
+    "expected_responses": [
+      {
+        "body_sha256": "2f7dc48b1500a9966f00ec18f3294a94fbe94cf9b4bccb9a0f37bd9d75ea250b",
+        "bytes": 66077,
+        "resource_id": 1,
+        "status": 200
+      },
+      {
+        "body_sha256": "00e65aa111cd0911bc412bb2e34d8822905545c5ccc5bce1abcad80fa074b2e7",
+        "bytes": 14300,
+        "resource_id": 3,
+        "status": 200
+      },
+      {
+        "body_sha256": "d72184ea1fb44264e8460c78ecd7d91c3057852f29b1fa81cfa9a619bebfe1d8",
+        "bytes": 54291,
+        "resource_id": 5,
+        "status": 200
+      },
+      {
+        "body_sha256": "2e5765d44f8309d17df11b67d45ae54f36c3d481a9ee892a9d299bed73482932",
+        "bytes": 54145,
+        "resource_id": 6,
+        "status": 200
+      },
+      {
+        "body_sha256": "e457ff97360bc7e4274d682f8e0ce132d5a11b8ee87e59805a1093fa0b2efca8",
+        "bytes": 53719,
+        "resource_id": 7,
+        "status": 200
+      },
+      {
+        "body_sha256": "fb34db6deeec39e52b9383cd5ba10aa189d3b468c6076a088bc1e665bd589dec",
+        "bytes": 53953,
+        "resource_id": 8,
+        "status": 200
+      },
+      {
+        "body_sha256": "d09d1ae7ffdb7f7f4a260dc09d100145d9a1b7c08e96f144b20d099f46e5f574",
+        "bytes": 54151,
+        "resource_id": 9,
+        "status": 200
+      },
+      {
+        "body_sha256": "5805ecbd81d0e663336628d973b1c2b60babb784d5853c39f759921eb0d21a06",
+        "bytes": 52083,
+        "resource_id": 10,
+        "status": 200
+      },
+      {
+        "body_sha256": "880a432511949f2341e9ca5d6e59c29800fdf13eeeaf181bba3bd327f83b7763",
+        "bytes": 52059,
+        "resource_id": 11,
+        "status": 200
+      },
+      {
+        "body_sha256": "ccec33bae4d8b8c1a4e25a38acf2eaf6349ee0bacc3dd6eca516fdf6b32de5a3",
+        "bytes": 53210,
+        "resource_id": 12,
+        "status": 200
+      },
+      {
+        "body_sha256": "6e05a7981f3c13dbf67a0b9e467d7aff05c48acd143515c6779a0571a99a0cd2",
+        "bytes": 53226,
+        "resource_id": 13,
+        "status": 200
+      },
+      {
+        "body_sha256": "a5062d928c877ab1af7e9050f01a5d2d5131d2f8c76aa601c34d58dc52f1e4c4",
+        "bytes": 51613,
+        "resource_id": 14,
+        "status": 200
+      },
+      {
+        "body_sha256": "d1882ec2ea8d8e4098599e4fd7c0cd5b3fc365ec82d91bea3ae53f4f2cdc11eb",
+        "bytes": 51758,
+        "resource_id": 15,
+        "status": 200
+      },
+      {
+        "body_sha256": "ae49e8ff3230053571ff4cd0003f2dd13ff43697db31e12706ab9588c9549b3d",
+        "bytes": 57582,
+        "resource_id": 16,
+        "status": 200
+      },
+      {
+        "body_sha256": "77494a3234639fb10d5990d69128f2271d05a10f9c9ab2f40f2c884299cb2670",
+        "bytes": 53755,
+        "resource_id": 18,
+        "status": 200
+      },
+      {
+        "body_sha256": "93c5f00d9633f242553230d250f1a008be9da9740c1a948b5f1af3ed82e07356",
+        "bytes": 53740,
+        "resource_id": 19,
+        "status": 200
+      },
+      {
+        "body_sha256": "88eebde00a962a6a64d2a93ca86b93f0257b4997bff366964529ff0a3fe029f6",
+        "bytes": 54234,
+        "resource_id": 20,
+        "status": 200
+      },
+      {
+        "body_sha256": "bfe175fbe522204e6ae523c6855eedbbdd8258d0953c52cde3f45677b94179af",
+        "bytes": 53652,
+        "resource_id": 21,
+        "status": 200
+      },
+      {
+        "body_sha256": "22361f6bcc54a90276c06b3ba1786aaacdaaa9958c205a284b3422abc49a62c9",
+        "bytes": 53714,
+        "resource_id": 22,
+        "status": 200
+      },
+      {
+        "body_sha256": "01d165d0e9be32d28a429f1c934958919b965032ff86c5144fdf98278335e792",
+        "bytes": 51978,
+        "resource_id": 23,
+        "status": 200
+      },
+      {
+        "body_sha256": "5f15ca701cf74fdb1130d9263e411eaf9ef46f3391e6094b6786e7f56e4eaa5a",
+        "bytes": 51525,
+        "resource_id": 24,
+        "status": 200
+      },
+      {
+        "body_sha256": "7157c9fce502bd1095a4b3c71743ef7c823657f1199dc1b2847088777aa60a9d",
+        "bytes": 53563,
+        "resource_id": 25,
+        "status": 200
+      }
+    ],
+    "final_url": "https://http3-explained.haxx.se/en",
+    "lab_source": {
+      "image_digest": "sha256:69fbb6bd30b487e72247aa9adeeecf572008304062207552a1b80a667d653274",
+      "lab_commit": "76b395cb022b59783c21ef7328f571bfe1e48207",
+      "lab_dirty": false,
+      "lab_patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "neqo_commit": "12c5d7118e46575b5a227214ff646d9d7e3c17a6",
+      "neqo_dirty": false,
+      "neqo_patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "neqo_pinned_commit": "12c5d7118e46575b5a227214ff646d9d7e3c17a6"
+    },
+    "max_response_bytes": 1048576,
+    "migration_commit": "12c5d7118e46575b5a227214ff646d9d7e3c17a6",
+    "neqo_base_commit": "8a04d065c2d35c8e8fd804f91c7081ab6bb60b89",
+    "neqo_version": "0.30.0",
+    "observed_origins": [
+      "https://app.gitbook.com",
+      "https://http3-explained.haxx.se",
+      "https://static-2v.gitbook.com"
+    ],
+    "observed_request_count": 63,
+    "prepare_image_digest": "sha256:69fbb6bd30b487e72247aa9adeeecf572008304062207552a1b80a667d653274",
+    "published_qcsd_commit": "39e293fb384dd341156eedd1e4b833d24904b1f6",
+    "settle_ms": 3000,
+    "source_url": "https://http3-explained.haxx.se/en/",
+    "stability_defense": "none",
+    "stability_profile": "live",
+    "stability_runs": 3,
+    "stability_seed": 0,
+    "timeout_seconds": 120,
+    "udp_payload_qualification": {
+      "configured_udp_payload_ceiling": 1200,
+      "runs": [
+        {
+          "incoming": {
+            "observed_udp_payload_max": 1200,
+            "oversized_packet_count": 0,
+            "packet_count": 1051
+          },
+          "outgoing": {
+            "observed_udp_payload_max": 1200,
+            "oversized_packet_count": 0,
+            "packet_count": 101
+          },
+          "packets_sha256": "217b72e859db3b69bbe2f5770bd149908a04c78956ad7b3752e3165f8986ee54",
+          "run_index": 0,
+          "total": {
+            "observed_udp_payload_max": 1200,
+            "oversized_packet_count": 0,
+            "packet_count": 1152
+          }
+        },
+        {
+          "incoming": {
+            "observed_udp_payload_max": 1200,
+            "oversized_packet_count": 0,
+            "packet_count": 1087
+          },
+          "outgoing": {
+            "observed_udp_payload_max": 1200,
+            "oversized_packet_count": 0,
+            "packet_count": 177
+          },
+          "packets_sha256": "e7ea8d099ea022448d190fc4bb973b43f12e11dd54dd3103f6926c1ed2cacf66",
+          "run_index": 1,
+          "total": {
+            "observed_udp_payload_max": 1200,
+            "oversized_packet_count": 0,
+            "packet_count": 1264
+          }
+        },
+        {
+          "incoming": {
+            "observed_udp_payload_max": 1200,
+            "oversized_packet_count": 0,
+            "packet_count": 1095
+          },
+          "outgoing": {
+            "observed_udp_payload_max": 1200,
+            "oversized_packet_count": 0,
+            "packet_count": 158
+          },
+          "packets_sha256": "9a622131d10b54480a2b25ee43b26886a4e3a6e53511164220037be8e95a542b",
+          "run_index": 2,
+          "total": {
+            "observed_udp_payload_max": 1200,
+            "oversized_packet_count": 0,
+            "packet_count": 1253
+          }
+        }
+      ],
+      "schema_version": 1
+    }
+  },
+  "resources": [
+    {
+      "chaff_priority": false,
+      "content_length": 66077,
+      "data_length": 66077,
+      "depends_on": [],
+      "headers": [
+        [
+          "accept",
+          "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=0, i"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "document"
+        ],
+        [
+          "sec-fetch-mode",
+          "navigate"
+        ],
+        [
+          "sec-fetch-site",
+          "none"
+        ],
+        [
+          "sec-fetch-user",
+          "?1"
+        ],
+        [
+          "upgrade-insecure-requests",
+          "1"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 1,
+      "known_valid": true,
+      "type": "Document",
+      "url": "https://http3-explained.haxx.se/en"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 14300,
+      "data_length": 14300,
+      "depends_on": [
+        1
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "origin",
+          "https://http3-explained.haxx.se"
+        ],
+        [
+          "priority",
+          "u=1, i"
+        ],
+        [
+          "referer",
+          "https://http3-explained.haxx.se/en"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "empty"
+        ],
+        [
+          "sec-fetch-mode",
+          "cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 3,
+      "known_valid": true,
+      "type": "Other",
+      "url": "https://http3-explained.haxx.se/~gitbook/site-index"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 54291,
+      "data_length": 54291,
+      "depends_on": [
+        1
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "next-router-prefetch",
+          "1"
+        ],
+        [
+          "next-router-segment-prefetch",
+          "/_tree"
+        ],
+        [
+          "next-url",
+          "/sites/static/url-host/http3-explained.haxx.se%2F/en"
+        ],
+        [
+          "priority",
+          "i"
+        ],
+        [
+          "referer",
+          "https://http3-explained.haxx.se/en"
+        ],
+        [
+          "rsc",
+          "1"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "empty"
+        ],
+        [
+          "sec-fetch-mode",
+          "cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "x-deployment-id",
+          "p-3db14ad950af3a31c6bfe42c26e76d"
+        ]
+      ],
+      "id": 5,
+      "known_valid": true,
+      "type": "Fetch",
+      "url": "https://http3-explained.haxx.se/zh-tw?_rsc=9bAvow0tEUID13x5"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 54145,
+      "data_length": 54145,
+      "depends_on": [
+        1
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "next-router-prefetch",
+          "1"
+        ],
+        [
+          "next-router-segment-prefetch",
+          "/_tree"
+        ],
+        [
+          "next-url",
+          "/sites/static/url-host/http3-explained.haxx.se%2F/en"
+        ],
+        [
+          "priority",
+          "i"
+        ],
+        [
+          "referer",
+          "https://http3-explained.haxx.se/en"
+        ],
+        [
+          "rsc",
+          "1"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "empty"
+        ],
+        [
+          "sec-fetch-mode",
+          "cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "x-deployment-id",
+          "p-3db14ad950af3a31c6bfe42c26e76d"
+        ]
+      ],
+      "id": 6,
+      "known_valid": true,
+      "type": "Fetch",
+      "url": "https://http3-explained.haxx.se/zh?_rsc=9bAvow0tEUID13x5"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 53719,
+      "data_length": 53719,
+      "depends_on": [
+        1
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "next-router-prefetch",
+          "1"
+        ],
+        [
+          "next-router-segment-prefetch",
+          "/_tree"
+        ],
+        [
+          "next-url",
+          "/sites/static/url-host/http3-explained.haxx.se%2F/en"
+        ],
+        [
+          "priority",
+          "i"
+        ],
+        [
+          "referer",
+          "https://http3-explained.haxx.se/en"
+        ],
+        [
+          "rsc",
+          "1"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "empty"
+        ],
+        [
+          "sec-fetch-mode",
+          "cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "x-deployment-id",
+          "p-3db14ad950af3a31c6bfe42c26e76d"
+        ]
+      ],
+      "id": 7,
+      "known_valid": true,
+      "type": "Fetch",
+      "url": "https://http3-explained.haxx.se/ro?_rsc=9bAvow0tEUID13x5"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 53953,
+      "data_length": 53953,
+      "depends_on": [
+        1
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "next-router-prefetch",
+          "1"
+        ],
+        [
+          "next-router-segment-prefetch",
+          "/_tree"
+        ],
+        [
+          "next-url",
+          "/sites/static/url-host/http3-explained.haxx.se%2F/en"
+        ],
+        [
+          "priority",
+          "i"
+        ],
+        [
+          "referer",
+          "https://http3-explained.haxx.se/en"
+        ],
+        [
+          "rsc",
+          "1"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "empty"
+        ],
+        [
+          "sec-fetch-mode",
+          "cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "x-deployment-id",
+          "p-3db14ad950af3a31c6bfe42c26e76d"
+        ]
+      ],
+      "id": 8,
+      "known_valid": true,
+      "type": "Fetch",
+      "url": "https://http3-explained.haxx.se/ko?_rsc=9bAvow0tEUID13x5"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 54151,
+      "data_length": 54151,
+      "depends_on": [
+        1
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "next-router-prefetch",
+          "1"
+        ],
+        [
+          "next-router-segment-prefetch",
+          "/_tree"
+        ],
+        [
+          "next-url",
+          "/sites/static/url-host/http3-explained.haxx.se%2F/en"
+        ],
+        [
+          "priority",
+          "i"
+        ],
+        [
+          "referer",
+          "https://http3-explained.haxx.se/en"
+        ],
+        [
+          "rsc",
+          "1"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "empty"
+        ],
+        [
+          "sec-fetch-mode",
+          "cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "x-deployment-id",
+          "p-3db14ad950af3a31c6bfe42c26e76d"
+        ]
+      ],
+      "id": 9,
+      "known_valid": true,
+      "type": "Fetch",
+      "url": "https://http3-explained.haxx.se/en/criticism?_rsc=9bAvow0tEUID13x5"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 52083,
+      "data_length": 52083,
+      "depends_on": [
+        1
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "next-router-prefetch",
+          "1"
+        ],
+        [
+          "next-router-segment-prefetch",
+          "/_tree"
+        ],
+        [
+          "next-url",
+          "/sites/static/url-host/http3-explained.haxx.se%2F/en"
+        ],
+        [
+          "priority",
+          "i"
+        ],
+        [
+          "referer",
+          "https://http3-explained.haxx.se/en"
+        ],
+        [
+          "rsc",
+          "1"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "empty"
+        ],
+        [
+          "sec-fetch-mode",
+          "cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "x-deployment-id",
+          "p-3db14ad950af3a31c6bfe42c26e76d"
+        ]
+      ],
+      "id": 10,
+      "known_valid": true,
+      "type": "Fetch",
+      "url": "https://http3-explained.haxx.se/en/h3?_rsc=9bAvow0tEUID13x5"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 52059,
+      "data_length": 52059,
+      "depends_on": [
+        1
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "next-router-prefetch",
+          "1"
+        ],
+        [
+          "next-router-segment-prefetch",
+          "/_tree"
+        ],
+        [
+          "next-url",
+          "/sites/static/url-host/http3-explained.haxx.se%2F/en"
+        ],
+        [
+          "priority",
+          "i"
+        ],
+        [
+          "referer",
+          "https://http3-explained.haxx.se/en"
+        ],
+        [
+          "rsc",
+          "1"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "empty"
+        ],
+        [
+          "sec-fetch-mode",
+          "cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "x-deployment-id",
+          "p-3db14ad950af3a31c6bfe42c26e76d"
+        ]
+      ],
+      "id": 11,
+      "known_valid": true,
+      "type": "Fetch",
+      "url": "https://http3-explained.haxx.se/en/quic?_rsc=9bAvow0tEUID13x5"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 53210,
+      "data_length": 53210,
+      "depends_on": [
+        1
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "next-router-prefetch",
+          "1"
+        ],
+        [
+          "next-router-segment-prefetch",
+          "/_tree"
+        ],
+        [
+          "next-url",
+          "/sites/static/url-host/http3-explained.haxx.se%2F/en"
+        ],
+        [
+          "priority",
+          "i"
+        ],
+        [
+          "referer",
+          "https://http3-explained.haxx.se/en"
+        ],
+        [
+          "rsc",
+          "1"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "empty"
+        ],
+        [
+          "sec-fetch-mode",
+          "cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "x-deployment-id",
+          "p-3db14ad950af3a31c6bfe42c26e76d"
+        ]
+      ],
+      "id": 12,
+      "known_valid": true,
+      "type": "Fetch",
+      "url": "https://http3-explained.haxx.se/en/specs?_rsc=9bAvow0tEUID13x5"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 53226,
+      "data_length": 53226,
+      "depends_on": [
+        1
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "next-router-prefetch",
+          "1"
+        ],
+        [
+          "next-router-segment-prefetch",
+          "/_tree"
+        ],
+        [
+          "next-url",
+          "/sites/static/url-host/http3-explained.haxx.se%2F/en"
+        ],
+        [
+          "priority",
+          "i"
+        ],
+        [
+          "referer",
+          "https://http3-explained.haxx.se/en"
+        ],
+        [
+          "rsc",
+          "1"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "empty"
+        ],
+        [
+          "sec-fetch-mode",
+          "cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "x-deployment-id",
+          "p-3db14ad950af3a31c6bfe42c26e76d"
+        ]
+      ],
+      "id": 13,
+      "known_valid": true,
+      "type": "Fetch",
+      "url": "https://http3-explained.haxx.se/en/quic-future?_rsc=9bAvow0tEUID13x5"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 51613,
+      "data_length": 51613,
+      "depends_on": [
+        1
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "next-router-prefetch",
+          "1"
+        ],
+        [
+          "next-router-segment-prefetch",
+          "/_tree"
+        ],
+        [
+          "next-url",
+          "/sites/static/url-host/http3-explained.haxx.se%2F/en"
+        ],
+        [
+          "priority",
+          "i"
+        ],
+        [
+          "referer",
+          "https://http3-explained.haxx.se/en"
+        ],
+        [
+          "rsc",
+          "1"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "empty"
+        ],
+        [
+          "sec-fetch-mode",
+          "cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "x-deployment-id",
+          "p-3db14ad950af3a31c6bfe42c26e76d"
+        ]
+      ],
+      "id": 14,
+      "known_valid": true,
+      "type": "Fetch",
+      "url": "https://http3-explained.haxx.se/en/the-protocol?_rsc=9bAvow0tEUID13x5"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 51758,
+      "data_length": 51758,
+      "depends_on": [
+        1
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "next-router-prefetch",
+          "1"
+        ],
+        [
+          "next-router-segment-prefetch",
+          "/_tree"
+        ],
+        [
+          "next-url",
+          "/sites/static/url-host/http3-explained.haxx.se%2F/en"
+        ],
+        [
+          "priority",
+          "i"
+        ],
+        [
+          "referer",
+          "https://http3-explained.haxx.se/en"
+        ],
+        [
+          "rsc",
+          "1"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "empty"
+        ],
+        [
+          "sec-fetch-mode",
+          "cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "x-deployment-id",
+          "p-3db14ad950af3a31c6bfe42c26e76d"
+        ]
+      ],
+      "id": 15,
+      "known_valid": true,
+      "type": "Fetch",
+      "url": "https://http3-explained.haxx.se/en/proc?_rsc=9bAvow0tEUID13x5"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 57582,
+      "data_length": 57582,
+      "depends_on": [
+        1
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "next-router-prefetch",
+          "1"
+        ],
+        [
+          "next-router-segment-prefetch",
+          "/_tree"
+        ],
+        [
+          "next-url",
+          "/sites/static/url-host/http3-explained.haxx.se%2F/en"
+        ],
+        [
+          "priority",
+          "i"
+        ],
+        [
+          "referer",
+          "https://http3-explained.haxx.se/en"
+        ],
+        [
+          "rsc",
+          "1"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "empty"
+        ],
+        [
+          "sec-fetch-mode",
+          "cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "x-deployment-id",
+          "p-3db14ad950af3a31c6bfe42c26e76d"
+        ]
+      ],
+      "id": 16,
+      "known_valid": true,
+      "type": "Fetch",
+      "url": "https://http3-explained.haxx.se/ja?_rsc=9bAvow0tEUID13x5"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 53755,
+      "data_length": 53755,
+      "depends_on": [
+        1
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "next-router-prefetch",
+          "1"
+        ],
+        [
+          "next-router-segment-prefetch",
+          "/_tree"
+        ],
+        [
+          "next-url",
+          "/sites/static/url-host/http3-explained.haxx.se%2F/en"
+        ],
+        [
+          "priority",
+          "i"
+        ],
+        [
+          "referer",
+          "https://http3-explained.haxx.se/en"
+        ],
+        [
+          "rsc",
+          "1"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "empty"
+        ],
+        [
+          "sec-fetch-mode",
+          "cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "x-deployment-id",
+          "p-3db14ad950af3a31c6bfe42c26e76d"
+        ]
+      ],
+      "id": 18,
+      "known_valid": true,
+      "type": "Fetch",
+      "url": "https://http3-explained.haxx.se/it?_rsc=9bAvow0tEUID13x5"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 53740,
+      "data_length": 53740,
+      "depends_on": [
+        1
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "next-router-prefetch",
+          "1"
+        ],
+        [
+          "next-router-segment-prefetch",
+          "/_tree"
+        ],
+        [
+          "next-url",
+          "/sites/static/url-host/http3-explained.haxx.se%2F/en"
+        ],
+        [
+          "priority",
+          "i"
+        ],
+        [
+          "referer",
+          "https://http3-explained.haxx.se/en"
+        ],
+        [
+          "rsc",
+          "1"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "empty"
+        ],
+        [
+          "sec-fetch-mode",
+          "cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "x-deployment-id",
+          "p-3db14ad950af3a31c6bfe42c26e76d"
+        ]
+      ],
+      "id": 19,
+      "known_valid": true,
+      "type": "Fetch",
+      "url": "https://http3-explained.haxx.se/fr?_rsc=9bAvow0tEUID13x5"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 54234,
+      "data_length": 54234,
+      "depends_on": [
+        1
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "next-router-prefetch",
+          "1"
+        ],
+        [
+          "next-router-segment-prefetch",
+          "/_tree"
+        ],
+        [
+          "next-url",
+          "/sites/static/url-host/http3-explained.haxx.se%2F/en"
+        ],
+        [
+          "priority",
+          "i"
+        ],
+        [
+          "referer",
+          "https://http3-explained.haxx.se/en"
+        ],
+        [
+          "rsc",
+          "1"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "empty"
+        ],
+        [
+          "sec-fetch-mode",
+          "cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "x-deployment-id",
+          "p-3db14ad950af3a31c6bfe42c26e76d"
+        ]
+      ],
+      "id": 20,
+      "known_valid": true,
+      "type": "Fetch",
+      "url": "https://http3-explained.haxx.se/fa?_rsc=9bAvow0tEUID13x5"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 53652,
+      "data_length": 53652,
+      "depends_on": [
+        1
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "next-router-prefetch",
+          "1"
+        ],
+        [
+          "next-router-segment-prefetch",
+          "/_tree"
+        ],
+        [
+          "next-url",
+          "/sites/static/url-host/http3-explained.haxx.se%2F/en"
+        ],
+        [
+          "priority",
+          "i"
+        ],
+        [
+          "referer",
+          "https://http3-explained.haxx.se/en"
+        ],
+        [
+          "rsc",
+          "1"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "empty"
+        ],
+        [
+          "sec-fetch-mode",
+          "cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "x-deployment-id",
+          "p-3db14ad950af3a31c6bfe42c26e76d"
+        ]
+      ],
+      "id": 21,
+      "known_valid": true,
+      "type": "Fetch",
+      "url": "https://http3-explained.haxx.se/de?_rsc=9bAvow0tEUID13x5"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 53714,
+      "data_length": 53714,
+      "depends_on": [
+        1
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "next-router-prefetch",
+          "1"
+        ],
+        [
+          "next-router-segment-prefetch",
+          "/_tree"
+        ],
+        [
+          "next-url",
+          "/sites/static/url-host/http3-explained.haxx.se%2F/en"
+        ],
+        [
+          "priority",
+          "i"
+        ],
+        [
+          "referer",
+          "https://http3-explained.haxx.se/en"
+        ],
+        [
+          "rsc",
+          "1"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "empty"
+        ],
+        [
+          "sec-fetch-mode",
+          "cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "x-deployment-id",
+          "p-3db14ad950af3a31c6bfe42c26e76d"
+        ]
+      ],
+      "id": 22,
+      "known_valid": true,
+      "type": "Fetch",
+      "url": "https://http3-explained.haxx.se/es?_rsc=9bAvow0tEUID13x5"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 51978,
+      "data_length": 51978,
+      "depends_on": [
+        1
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "next-router-prefetch",
+          "1"
+        ],
+        [
+          "next-router-segment-prefetch",
+          "/_tree"
+        ],
+        [
+          "next-url",
+          "/sites/static/url-host/http3-explained.haxx.se%2F/en"
+        ],
+        [
+          "priority",
+          "i"
+        ],
+        [
+          "referer",
+          "https://http3-explained.haxx.se/en"
+        ],
+        [
+          "rsc",
+          "1"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "empty"
+        ],
+        [
+          "sec-fetch-mode",
+          "cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "x-deployment-id",
+          "p-3db14ad950af3a31c6bfe42c26e76d"
+        ]
+      ],
+      "id": 23,
+      "known_valid": true,
+      "type": "Fetch",
+      "url": "https://http3-explained.haxx.se/en/why-quic?_rsc=9bAvow0tEUID13x5"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 51525,
+      "data_length": 51525,
+      "depends_on": [
+        1
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "next-router-prefetch",
+          "1"
+        ],
+        [
+          "next-router-segment-prefetch",
+          "/_tree"
+        ],
+        [
+          "next-url",
+          "/sites/static/url-host/http3-explained.haxx.se%2F/en"
+        ],
+        [
+          "priority",
+          "i"
+        ],
+        [
+          "referer",
+          "https://http3-explained.haxx.se/en"
+        ],
+        [
+          "rsc",
+          "1"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "empty"
+        ],
+        [
+          "sec-fetch-mode",
+          "cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "x-deployment-id",
+          "p-3db14ad950af3a31c6bfe42c26e76d"
+        ]
+      ],
+      "id": 24,
+      "known_valid": true,
+      "type": "Fetch",
+      "url": "https://http3-explained.haxx.se/?_rsc=9bAvow0tEUID13x5"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 53563,
+      "data_length": 53563,
+      "depends_on": [
+        1
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "next-router-state-tree",
+          "%5B%22%22%2C%7B%7D%2Cnull%2C%22metadata-only%22%5D"
+        ],
+        [
+          "next-url",
+          "/sites/static/url-host/http3-explained.haxx.se%2F/en"
+        ],
+        [
+          "priority",
+          "i"
+        ],
+        [
+          "referer",
+          "https://http3-explained.haxx.se/en"
+        ],
+        [
+          "rsc",
+          "1"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "empty"
+        ],
+        [
+          "sec-fetch-mode",
+          "cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ],
+        [
+          "x-deployment-id",
+          "p-3db14ad950af3a31c6bfe42c26e76d"
+        ]
+      ],
+      "id": 25,
+      "known_valid": true,
+      "type": "Fetch",
+      "url": "https://http3-explained.haxx.se/en?_rsc=YchtYOSYjGBMMJCh"
+    }
+  ]
+}

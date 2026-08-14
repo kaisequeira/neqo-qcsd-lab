@@ -1,0 +1,465 @@
+{
+  "preparation": {
+    "approved_origins": [
+      "https://hyper.rs"
+    ],
+    "chromium_version": "151.0.7922.137",
+    "exclusions": [
+      {
+        "reason": "origin not approved",
+        "url": "https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
+      },
+      {
+        "reason": "unsafe method: POST",
+        "url": "https://hyper.rs/cdn-cgi/rum?"
+      },
+      {
+        "reason": "origin not approved",
+        "url": "https://static.cloudflareinsights.com/beacon.min.js/v4513226cdae34746b4dedf0b4dfa099e1781791509496"
+      }
+    ],
+    "expected_responses": [
+      {
+        "body_sha256": "96411b4e30fa8e579eebf6f9b2b7604ccb7335e990266a2da893fe4ff7426c40",
+        "bytes": 6165,
+        "resource_id": 0,
+        "status": 200
+      },
+      {
+        "body_sha256": "fd9f4519f414e39044d3232c82c2fb0519a5745d42d529a8dc097ae5072cb848",
+        "bytes": 1463,
+        "resource_id": 1,
+        "status": 200
+      },
+      {
+        "body_sha256": "6e1b1d2d0f16b65bd911bda3ac4f184ee27f514fad3d338699226533d889b23b",
+        "bytes": 820,
+        "resource_id": 2,
+        "status": 200
+      },
+      {
+        "body_sha256": "56247531662385249d9d59ccc480802e940c04ccef151f396bfa6db874d4c57f",
+        "bytes": 250,
+        "resource_id": 3,
+        "status": 200
+      },
+      {
+        "body_sha256": "ced6290e090f946c3d8773fbcb67256a5922931fcd44d686bca4943a42d273d8",
+        "bytes": 96,
+        "resource_id": 4,
+        "status": 200
+      }
+    ],
+    "final_url": "https://hyper.rs/guides/1/client/basic/",
+    "lab_source": {
+      "image_digest": "sha256:69fbb6bd30b487e72247aa9adeeecf572008304062207552a1b80a667d653274",
+      "lab_commit": "76b395cb022b59783c21ef7328f571bfe1e48207",
+      "lab_dirty": false,
+      "lab_patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "neqo_commit": "12c5d7118e46575b5a227214ff646d9d7e3c17a6",
+      "neqo_dirty": false,
+      "neqo_patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "neqo_pinned_commit": "12c5d7118e46575b5a227214ff646d9d7e3c17a6"
+    },
+    "max_response_bytes": 1048576,
+    "migration_commit": "12c5d7118e46575b5a227214ff646d9d7e3c17a6",
+    "neqo_base_commit": "8a04d065c2d35c8e8fd804f91c7081ab6bb60b89",
+    "neqo_version": "0.30.0",
+    "observed_origins": [
+      "https://cdn.jsdelivr.net",
+      "https://hyper.rs",
+      "https://static.cloudflareinsights.com"
+    ],
+    "observed_request_count": 10,
+    "prepare_image_digest": "sha256:69fbb6bd30b487e72247aa9adeeecf572008304062207552a1b80a667d653274",
+    "published_qcsd_commit": "39e293fb384dd341156eedd1e4b833d24904b1f6",
+    "settle_ms": 3000,
+    "source_url": "https://hyper.rs/guides/1/client/basic/",
+    "stability_defense": "none",
+    "stability_profile": "live",
+    "stability_runs": 3,
+    "stability_seed": 0,
+    "timeout_seconds": 120,
+    "udp_payload_qualification": {
+      "configured_udp_payload_ceiling": 1200,
+      "runs": [
+        {
+          "incoming": {
+            "observed_udp_payload_max": 1200,
+            "oversized_packet_count": 0,
+            "packet_count": 25
+          },
+          "outgoing": {
+            "observed_udp_payload_max": 1200,
+            "oversized_packet_count": 0,
+            "packet_count": 13
+          },
+          "packets_sha256": "b0be8d5010daccb9c5237652d410f189d11b411c248dcdbb5c5b31c5e1c28be3",
+          "run_index": 0,
+          "total": {
+            "observed_udp_payload_max": 1200,
+            "oversized_packet_count": 0,
+            "packet_count": 38
+          }
+        },
+        {
+          "incoming": {
+            "observed_udp_payload_max": 1200,
+            "oversized_packet_count": 0,
+            "packet_count": 26
+          },
+          "outgoing": {
+            "observed_udp_payload_max": 1200,
+            "oversized_packet_count": 0,
+            "packet_count": 18
+          },
+          "packets_sha256": "92b13f1b6f00dbf306719fd86e17b0e275b1c8929f55812a3ae973502c114d98",
+          "run_index": 1,
+          "total": {
+            "observed_udp_payload_max": 1200,
+            "oversized_packet_count": 0,
+            "packet_count": 44
+          }
+        },
+        {
+          "incoming": {
+            "observed_udp_payload_max": 1200,
+            "oversized_packet_count": 0,
+            "packet_count": 26
+          },
+          "outgoing": {
+            "observed_udp_payload_max": 1200,
+            "oversized_packet_count": 0,
+            "packet_count": 15
+          },
+          "packets_sha256": "4950091160e3e9878f48c88ebb8ce0815823d72decfcefef16f8c8ec90193dcb",
+          "run_index": 2,
+          "total": {
+            "observed_udp_payload_max": 1200,
+            "oversized_packet_count": 0,
+            "packet_count": 41
+          }
+        }
+      ],
+      "schema_version": 1
+    }
+  },
+  "resources": [
+    {
+      "chaff_priority": false,
+      "content_length": 6165,
+      "data_length": 6165,
+      "depends_on": [],
+      "headers": [
+        [
+          "accept",
+          "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=0, i"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "document"
+        ],
+        [
+          "sec-fetch-mode",
+          "navigate"
+        ],
+        [
+          "sec-fetch-site",
+          "none"
+        ],
+        [
+          "sec-fetch-user",
+          "?1"
+        ],
+        [
+          "upgrade-insecure-requests",
+          "1"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 0,
+      "known_valid": true,
+      "type": "Document",
+      "url": "https://hyper.rs/guides/1/client/basic/"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 1463,
+      "data_length": 1463,
+      "depends_on": [
+        0
+      ],
+      "headers": [
+        [
+          "accept",
+          "text/css,*/*;q=0.1"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=0"
+        ],
+        [
+          "referer",
+          "https://hyper.rs/guides/1/client/basic/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "style"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 1,
+      "known_valid": true,
+      "type": "Stylesheet",
+      "url": "https://hyper.rs/css/main.css"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 820,
+      "data_length": 820,
+      "depends_on": [
+        0
+      ],
+      "headers": [
+        [
+          "accept",
+          "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=2, i"
+        ],
+        [
+          "referer",
+          "https://hyper.rs/guides/1/client/basic/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "image"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 2,
+      "known_valid": true,
+      "type": "Image",
+      "url": "https://hyper.rs/icons/hyper.svg"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 250,
+      "data_length": 250,
+      "depends_on": [
+        0
+      ],
+      "headers": [
+        [
+          "accept",
+          "*/*"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=2"
+        ],
+        [
+          "referer",
+          "https://hyper.rs/guides/1/client/basic/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "script"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 3,
+      "known_valid": true,
+      "type": "Script",
+      "url": "https://hyper.rs/js/rustdoc.js"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 96,
+      "data_length": 96,
+      "depends_on": [
+        0
+      ],
+      "headers": [
+        [
+          "accept",
+          "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=1, i"
+        ],
+        [
+          "referer",
+          "https://hyper.rs/guides/1/client/basic/"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "image"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 4,
+      "known_valid": true,
+      "type": "Other",
+      "url": "https://hyper.rs/icons/favicon.ico"
+    }
+  ]
+}

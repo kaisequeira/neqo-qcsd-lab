@@ -1,0 +1,242 @@
+{
+  "preparation": {
+    "approved_origins": [
+      "https://www.rfc-editor.org"
+    ],
+    "chromium_version": "151.0.7922.137",
+    "exclusions": [],
+    "expected_responses": [
+      {
+        "body_sha256": "3a9e4619d1305c1654fe71528dd58b346a334c76d26d1b544ca5570351457b54",
+        "bytes": 41891,
+        "resource_id": 0,
+        "status": 200
+      },
+      {
+        "body_sha256": "fe4b8fdfd2e0269e743fd4362e58cf4cfd27393e2c9d6dae7640b6283c172cf6",
+        "bytes": 1017,
+        "resource_id": 1,
+        "status": 200
+      }
+    ],
+    "final_url": "https://www.rfc-editor.org/rfc/rfc9114.txt",
+    "lab_source": {
+      "image_digest": "sha256:69fbb6bd30b487e72247aa9adeeecf572008304062207552a1b80a667d653274",
+      "lab_commit": "76b395cb022b59783c21ef7328f571bfe1e48207",
+      "lab_dirty": false,
+      "lab_patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "neqo_commit": "12c5d7118e46575b5a227214ff646d9d7e3c17a6",
+      "neqo_dirty": false,
+      "neqo_patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "neqo_pinned_commit": "12c5d7118e46575b5a227214ff646d9d7e3c17a6"
+    },
+    "max_response_bytes": 1048576,
+    "migration_commit": "12c5d7118e46575b5a227214ff646d9d7e3c17a6",
+    "neqo_base_commit": "8a04d065c2d35c8e8fd804f91c7081ab6bb60b89",
+    "neqo_version": "0.30.0",
+    "observed_origins": [
+      "https://www.rfc-editor.org"
+    ],
+    "observed_request_count": 2,
+    "prepare_image_digest": "sha256:69fbb6bd30b487e72247aa9adeeecf572008304062207552a1b80a667d653274",
+    "published_qcsd_commit": "39e293fb384dd341156eedd1e4b833d24904b1f6",
+    "settle_ms": 3000,
+    "source_url": "https://www.rfc-editor.org/rfc/rfc9114.txt",
+    "stability_defense": "none",
+    "stability_profile": "live",
+    "stability_runs": 3,
+    "stability_seed": 0,
+    "timeout_seconds": 120,
+    "udp_payload_qualification": {
+      "configured_udp_payload_ceiling": 1200,
+      "runs": [
+        {
+          "incoming": {
+            "observed_udp_payload_max": 1200,
+            "oversized_packet_count": 0,
+            "packet_count": 54
+          },
+          "outgoing": {
+            "observed_udp_payload_max": 1200,
+            "oversized_packet_count": 0,
+            "packet_count": 13
+          },
+          "packets_sha256": "7cc37feacdcba8d16459c890da6f80dd6d70c918bb96d1bdb7cd4b650490591b",
+          "run_index": 0,
+          "total": {
+            "observed_udp_payload_max": 1200,
+            "oversized_packet_count": 0,
+            "packet_count": 67
+          }
+        },
+        {
+          "incoming": {
+            "observed_udp_payload_max": 1200,
+            "oversized_packet_count": 0,
+            "packet_count": 55
+          },
+          "outgoing": {
+            "observed_udp_payload_max": 1200,
+            "oversized_packet_count": 0,
+            "packet_count": 16
+          },
+          "packets_sha256": "cb130ac5ca69dcda6d2936316c80ce6927358fed7bb2488e38dc56000afc323a",
+          "run_index": 1,
+          "total": {
+            "observed_udp_payload_max": 1200,
+            "oversized_packet_count": 0,
+            "packet_count": 71
+          }
+        },
+        {
+          "incoming": {
+            "observed_udp_payload_max": 1200,
+            "oversized_packet_count": 0,
+            "packet_count": 52
+          },
+          "outgoing": {
+            "observed_udp_payload_max": 1200,
+            "oversized_packet_count": 0,
+            "packet_count": 13
+          },
+          "packets_sha256": "98590e2ded98b66b6592d34e5dc39dba0d75d55cf613acd62a2e42f5b9dd96d3",
+          "run_index": 2,
+          "total": {
+            "observed_udp_payload_max": 1200,
+            "oversized_packet_count": 0,
+            "packet_count": 65
+          }
+        }
+      ],
+      "schema_version": 1
+    }
+  },
+  "resources": [
+    {
+      "chaff_priority": false,
+      "content_length": 41891,
+      "data_length": 41891,
+      "depends_on": [],
+      "headers": [
+        [
+          "accept",
+          "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=0, i"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "document"
+        ],
+        [
+          "sec-fetch-mode",
+          "navigate"
+        ],
+        [
+          "sec-fetch-site",
+          "none"
+        ],
+        [
+          "sec-fetch-user",
+          "?1"
+        ],
+        [
+          "upgrade-insecure-requests",
+          "1"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 0,
+      "known_valid": true,
+      "type": "Document",
+      "url": "https://www.rfc-editor.org/rfc/rfc9114.txt"
+    },
+    {
+      "chaff_priority": false,
+      "content_length": 1017,
+      "data_length": 1017,
+      "depends_on": [
+        0
+      ],
+      "headers": [
+        [
+          "accept",
+          "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
+        ],
+        [
+          "accept-encoding",
+          "gzip, deflate, br, zstd"
+        ],
+        [
+          "accept-language",
+          "en-US,en;q=0.9"
+        ],
+        [
+          "priority",
+          "u=1, i"
+        ],
+        [
+          "referer",
+          "https://www.rfc-editor.org/rfc/rfc9114.txt"
+        ],
+        [
+          "sec-ch-ua",
+          "\"Chromium\";v=\"151\", \"Not=A?Brand\";v=\"99\""
+        ],
+        [
+          "sec-ch-ua-mobile",
+          "?0"
+        ],
+        [
+          "sec-ch-ua-platform",
+          "\"Linux\""
+        ],
+        [
+          "sec-fetch-dest",
+          "image"
+        ],
+        [
+          "sec-fetch-mode",
+          "no-cors"
+        ],
+        [
+          "sec-fetch-site",
+          "same-origin"
+        ],
+        [
+          "user-agent",
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+        ]
+      ],
+      "id": 1,
+      "known_valid": true,
+      "type": "Other",
+      "url": "https://www.rfc-editor.org/favicon.ico"
+    }
+  ]
+}
