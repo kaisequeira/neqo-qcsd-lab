@@ -442,6 +442,9 @@ def _sidecar(prefix_path: Path | None = None) -> dict[str, object]:
         "schema_six_capacity_falsification_diagnostic": (
             qualification._schema_six_capacity_falsification_diagnostic_receipt()
         ),
+        "schema_six_runtime_falsification_diagnostic": (
+            qualification._schema_six_runtime_falsification_diagnostic_receipt()
+        ),
         "schema_two_sender_framing_falsification_diagnostic": (
             qualification._schema_two_sender_framing_falsification_diagnostic_receipt()
         ),
@@ -747,6 +750,9 @@ def test_schema_six_file_backed_spec_hash_cannot_rebind_a_different_mould(
         "schema_six_capacity_falsification_diagnostic": (
             qualification._schema_six_capacity_falsification_diagnostic_receipt()
         ),
+        "schema_six_runtime_falsification_diagnostic": (
+            qualification._schema_six_runtime_falsification_diagnostic_receipt()
+        ),
         "schema_two_sender_framing_falsification_diagnostic": (
             qualification._schema_two_sender_framing_falsification_diagnostic_receipt()
         ),
@@ -994,6 +1000,61 @@ def test_sidecar_rejects_boolean_schema_six_capacity_diagnostic_integer(tmp_path
     sidecar["schema_six_capacity_falsification_diagnostic"]["failed"] = True
 
     with pytest.raises(ValueError, match="schema-six capacity falsification diagnostic"):
+        validate_sidecar(
+            sidecar,
+            workload_id="cloudflare-quiche-r3",
+            base_manifest_path=WORKLOAD,
+            prefix_spec_path=prefix_path,
+            require_current_implementation=False,
+        )
+
+
+def test_sidecar_binds_exact_schema_six_runtime_falsification_archive(tmp_path: Path) -> None:
+    prefix_path = _write_prefix_spec(tmp_path)
+    sidecar = _sidecar(prefix_path)
+    diagnostic = sidecar["schema_six_runtime_falsification_diagnostic"]
+
+    assert diagnostic == qualification._schema_six_runtime_falsification_diagnostic_receipt()
+    assert diagnostic["archive_manifest_sha256"] == (
+        "4ee68a930a344dc0e5874279e09069f92935a2f4f42bc7bb7e88077153b85aa9"
+    )
+    assert (
+        diagnostic["planned"],
+        diagnostic["accepted"],
+        diagnostic["eligible"],
+        diagnostic["failed"],
+    ) == (14, 12, 12, 2)
+    assert diagnostic["terminal_failures"] == [
+        {
+            "workload_id": "cloudflare-quiche-r3",
+            "defense": "walkie-talkie",
+            "stage": "runner",
+            "attempts": 3,
+        },
+        {
+            "workload_id": "bootstrap-introduction-r3",
+            "defense": "front",
+            "stage": "capture",
+            "attempts": 3,
+        },
+    ]
+    assert diagnostic["recovered_retries"] == [
+        {
+            "workload_id": "bootstrap-introduction-r3",
+            "defense": "walkie-talkie",
+            "failed_attempts": 2,
+            "accepted_attempt": 3,
+        },
+        {
+            "workload_id": "bootstrap-introduction-r3",
+            "defense": "traffic-morphing",
+            "failed_attempts": 1,
+            "accepted_attempt": 2,
+        },
+    ]
+
+    diagnostic["terminal_failures"][0]["attempts"] = True
+    with pytest.raises(ValueError, match="schema-six runtime falsification diagnostic"):
         validate_sidecar(
             sidecar,
             workload_id="cloudflare-quiche-r3",

@@ -29,6 +29,7 @@ from qcsd_lab.fitting_walkie_talkie import (
     mold,
     mold_padding_cost,
     receiver_continuation_contract,
+    schema_five_receiver_continuation_contract,
     schema_five_mold,
     schema_five_mold_padding_cost,
     symmetric_mold,
@@ -691,6 +692,24 @@ def test_walkie_talkie_current_contract_has_exact_sender_framing_literals() -> N
     assert contract["sender_framing_policy"] == (
         "one-full-cell-per-positive-symmetric-outgoing-component-reserved-for-quic-http3-"
         "stream-framing-and-mandatory-control-overhead"
+    )
+
+
+def test_walkie_talkie_current_contract_releases_early_only_from_real_subcell_capacity() -> None:
+    contract = receiver_continuation_contract()
+
+    assert contract["release_policy"] == (
+        "after-issued-base-events-controller-requested-and-request-signals-observed;batch-gate-"
+        "open;release-when-all-base-events-issued-or-real-reported-nonreserved-capacity-is-"
+        "below-one-cell;recompute-live-unconsumed-base-each-retry;retain-single-coalescible-"
+        "unadvertised-positive-outstanding-at-or-below-parser-ceiling-until-max-stream-data-"
+        "advertised;prefer-single-coalesced-advertised-positive-outstanding-at-or-below-parser-"
+        "ceiling-on-peer-acknowledged-nonreserved-header-blocked-stream;otherwise-release-whole-"
+        "cell-to-oldest-retained-peer-acknowledged-pristine-reserve-regardless-of-live-base-"
+        "debt;remove-oldest-reserve-once"
+    )
+    assert schema_five_receiver_continuation_contract()["release_policy"].startswith(
+        "after-all-base-events-controller-requested-and-request-signals-observed;reserve-"
     )
 
 

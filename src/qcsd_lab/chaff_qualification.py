@@ -111,6 +111,7 @@ SIDECAR_KEYS = {
     "fitting_source",
     "schema_five_diagnostic",
     "schema_six_capacity_falsification_diagnostic",
+    "schema_six_runtime_falsification_diagnostic",
     "schema_two_sender_framing_falsification_diagnostic",
     "prefix_pack_spec",
     "resource",
@@ -162,6 +163,24 @@ SCHEMA_SIX_CAPACITY_DIAGNOSTIC_KEYS = DIAGNOSTIC_KEYS | {
     "failed_workload_id",
     "failed_defense",
     "attempts",
+}
+SCHEMA_SIX_RUNTIME_FALSIFICATION_DIAGNOSTIC_KEYS = DIAGNOSTIC_KEYS | {
+    "archive_manifest_path",
+    "archive_manifest_sha256",
+    "terminal_failures",
+    "recovered_retries",
+}
+SCHEMA_SIX_RUNTIME_TERMINAL_FAILURE_KEYS = {
+    "workload_id",
+    "defense",
+    "stage",
+    "attempts",
+}
+SCHEMA_SIX_RUNTIME_RECOVERED_RETRY_KEYS = {
+    "workload_id",
+    "defense",
+    "failed_attempts",
+    "accepted_attempt",
 }
 SCHEMA_TWO_SENDER_FRAMING_DIAGNOSTIC_KEYS = {
     "archive_manifest_sha256",
@@ -1176,6 +1195,7 @@ def validate_sidecar(
         sidecar["fitting_source"],
         sidecar["schema_five_diagnostic"],
         sidecar["schema_six_capacity_falsification_diagnostic"],
+        sidecar["schema_six_runtime_falsification_diagnostic"],
         sidecar["schema_two_sender_framing_falsification_diagnostic"],
     )
     spec_receipt = _exact_mapping(sidecar["prefix_pack_spec"], {"path", "sha256"}, "prefix spec")
@@ -1500,6 +1520,9 @@ def qualify_chaff(
             "schema_five_diagnostic": _schema_five_diagnostic_receipt(),
             "schema_six_capacity_falsification_diagnostic": (
                 _schema_six_capacity_falsification_diagnostic_receipt()
+            ),
+            "schema_six_runtime_falsification_diagnostic": (
+                _schema_six_runtime_falsification_diagnostic_receipt()
             ),
             "schema_two_sender_framing_falsification_diagnostic": (
                 _schema_two_sender_framing_falsification_diagnostic_receipt()
@@ -2786,6 +2809,7 @@ def _validate_nontraining_receipts(
     fitting: object,
     schema_five_diagnostic: object,
     schema_six_capacity_diagnostic: object,
+    schema_six_runtime_diagnostic: object,
     schema_two_sender_framing_diagnostic: object,
 ) -> None:
     source = _exact_mapping(fitting, FITTING_SOURCE_KEYS, "fitting source receipt")
@@ -2811,6 +2835,7 @@ def _validate_nontraining_receipts(
     ):
         raise ValueError("schema-five diagnostic receipt is invalid")
     _validate_schema_six_capacity_falsification_diagnostic_receipt(schema_six_capacity_diagnostic)
+    _validate_schema_six_runtime_falsification_diagnostic_receipt(schema_six_runtime_diagnostic)
     _validate_schema_two_sender_framing_falsification_diagnostic_receipt(
         schema_two_sender_framing_diagnostic
     )
@@ -2843,6 +2868,79 @@ def _validate_schema_six_capacity_falsification_diagnostic_receipt(value: object
         or current != _schema_six_capacity_falsification_diagnostic_receipt()
     ):
         raise ValueError("schema-six capacity falsification diagnostic receipt is invalid")
+
+
+def _validate_schema_six_runtime_falsification_diagnostic_receipt(value: object) -> None:
+    """Require the exact sealed q7 runtime-falsification archive receipt."""
+
+    current = _exact_mapping(
+        value,
+        SCHEMA_SIX_RUNTIME_FALSIFICATION_DIAGNOSTIC_KEYS,
+        "schema-six runtime falsification diagnostic receipt",
+    )
+    terminal_failures = current["terminal_failures"]
+    recovered_retries = current["recovered_retries"]
+    if (
+        any(
+            type(current[field]) is not int
+            for field in ("planned", "accepted", "eligible", "failed")
+        )
+        or any(
+            type(current[field]) is not str
+            for field in (
+                "archive_manifest_path",
+                "archive_manifest_sha256",
+                "campaign",
+                "evidence_sha256",
+                "experiment_sha256",
+                "status",
+                "role",
+            )
+        )
+        or any(
+            not _digest(current[field])
+            for field in (
+                "archive_manifest_sha256",
+                "evidence_sha256",
+                "experiment_sha256",
+            )
+        )
+        or current["qualification_bytes_excluded"] is not True
+        or not isinstance(terminal_failures, list)
+        or not isinstance(recovered_retries, list)
+    ):
+        raise ValueError("schema-six runtime falsification diagnostic receipt is invalid")
+    parsed_failures = [
+        _exact_mapping(
+            record,
+            SCHEMA_SIX_RUNTIME_TERMINAL_FAILURE_KEYS,
+            "schema-six runtime terminal failure",
+        )
+        for record in terminal_failures
+    ]
+    parsed_retries = [
+        _exact_mapping(
+            record,
+            SCHEMA_SIX_RUNTIME_RECOVERED_RETRY_KEYS,
+            "schema-six runtime recovered retry",
+        )
+        for record in recovered_retries
+    ]
+    if (
+        any(
+            any(type(record[field]) is not str for field in ("workload_id", "defense", "stage"))
+            or type(record["attempts"]) is not int
+            for record in parsed_failures
+        )
+        or any(
+            any(type(record[field]) is not str for field in ("workload_id", "defense"))
+            or type(record["failed_attempts"]) is not int
+            or type(record["accepted_attempt"]) is not int
+            for record in parsed_retries
+        )
+        or current != _schema_six_runtime_falsification_diagnostic_receipt()
+    ):
+        raise ValueError("schema-six runtime falsification diagnostic receipt is invalid")
 
 
 def _validate_schema_two_sender_framing_falsification_diagnostic_receipt(
@@ -2982,6 +3080,58 @@ def _schema_six_capacity_falsification_diagnostic_receipt() -> dict[str, Any]:
         "failed_defense": "walkie-talkie",
         "attempts": 3,
         "role": "schema-six-walkie-talkie-capacity-falsification-diagnostic",
+        "qualification_bytes_excluded": True,
+    }
+
+
+def _schema_six_runtime_falsification_diagnostic_receipt() -> dict[str, Any]:
+    """Bind the sealed q7 smoke and its exact terminal/recovered outcomes."""
+
+    return {
+        "archive_manifest_path": (
+            "results/chaff-qualification-diagnostics/"
+            "q7-b19cb04-7ebcdb0-schema6-203eee42-runtime-falsification/MANIFEST.sha256"
+        ),
+        "archive_manifest_sha256": (
+            "4ee68a930a344dc0e5874279e09069f92935a2f4f42bc7bb7e88077153b85aa9"
+        ),
+        "campaign": "research-smoke-1200",
+        "evidence_sha256": "2b2bd50d0949ea216eb1badb8b6d702ef9eb487556b5b3f3fd7ab133a1c073fc",
+        "experiment_sha256": ("ee124b7c0b2d9e022d25bd2107d0f25ec19de2987309d62e217dbdae2e15354e"),
+        "status": "incomplete",
+        "planned": 14,
+        "accepted": 12,
+        "eligible": 12,
+        "failed": 2,
+        "terminal_failures": [
+            {
+                "workload_id": "cloudflare-quiche-r3",
+                "defense": "walkie-talkie",
+                "stage": "runner",
+                "attempts": 3,
+            },
+            {
+                "workload_id": "bootstrap-introduction-r3",
+                "defense": "front",
+                "stage": "capture",
+                "attempts": 3,
+            },
+        ],
+        "recovered_retries": [
+            {
+                "workload_id": "bootstrap-introduction-r3",
+                "defense": "walkie-talkie",
+                "failed_attempts": 2,
+                "accepted_attempt": 3,
+            },
+            {
+                "workload_id": "bootstrap-introduction-r3",
+                "defense": "traffic-morphing",
+                "failed_attempts": 1,
+                "accepted_attempt": 2,
+            },
+        ],
+        "role": "schema-six-runtime-falsification-diagnostic",
         "qualification_bytes_excluded": True,
     }
 

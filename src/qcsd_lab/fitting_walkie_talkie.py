@@ -8,7 +8,7 @@ from typing import Mapping, Sequence
 from .fitting_trace import FittingTrace
 
 
-GENERATED_BY = "qcsd_lab.fitting_walkie_talkie 2.4.0"
+GENERATED_BY = "qcsd_lab.fitting_walkie_talkie 2.4.1"
 PACKET_SIZE = 1_200
 PARSER_ALLOWANCE_CEILING_BYTES = 1_000
 RECEIVER_CONTINUATION_CELLS = 1
@@ -456,11 +456,14 @@ def receiver_continuation_contract() -> dict[str, object]:
             "corresponding-all-future-horizon-reserve-before-further-base-allocation"
         ),
         "release_policy": (
-            "after-all-base-events-controller-requested-and-request-signals-observed;batch-gate-"
-            "open;recompute-live-unconsumed-base-each-retry;prefer-single-coalesced-positive-"
-            "outstanding-at-or-below-parser-ceiling-on-peer-acknowledged-nonreserved-header-"
-            "blocked-stream;otherwise-release-whole-cell-to-oldest-retained-peer-acknowledged-"
-            "pristine-reserve-regardless-of-live-base-debt;remove-oldest-reserve-once"
+            "after-issued-base-events-controller-requested-and-request-signals-observed;batch-"
+            "gate-open;release-when-all-base-events-issued-or-real-reported-nonreserved-"
+            "capacity-is-below-one-cell;recompute-live-unconsumed-base-each-retry;retain-single-"
+            "coalescible-unadvertised-positive-outstanding-at-or-below-parser-ceiling-until-max-"
+            "stream-data-advertised;prefer-single-coalesced-advertised-positive-outstanding-at-"
+            "or-below-parser-ceiling-on-peer-acknowledged-nonreserved-header-blocked-stream;"
+            "otherwise-release-whole-cell-to-oldest-retained-peer-acknowledged-pristine-"
+            "reserve-regardless-of-live-base-debt;remove-oldest-reserve-once"
         ),
         "qualified_chaff_manifest_policy": (
             "schema-two-qualified-navigation-root-and-selected-source-resource;explicit-"

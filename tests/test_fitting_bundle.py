@@ -17,6 +17,7 @@ from qcsd_lab.capture_session import Defense
 from qcsd_lab.chaff_qualification import (
     _schema_five_diagnostic_receipt,
     _schema_six_capacity_falsification_diagnostic_receipt,
+    _schema_six_runtime_falsification_diagnostic_receipt,
     _schema_two_sender_framing_falsification_diagnostic_receipt,
 )
 from qcsd_lab.experiment import (
@@ -100,6 +101,9 @@ def _synthetic_qualification_inputs(
         "schema_five_diagnostic": _schema_five_diagnostic_receipt(),
         "schema_six_capacity_falsification_diagnostic": (
             _schema_six_capacity_falsification_diagnostic_receipt()
+        ),
+        "schema_six_runtime_falsification_diagnostic": (
+            _schema_six_runtime_falsification_diagnostic_receipt()
         ),
         "schema_two_sender_framing_falsification_diagnostic": (
             _schema_two_sender_framing_falsification_diagnostic_receipt()
@@ -899,7 +903,7 @@ def test_fit_builds_exact_deterministic_bundle_without_mutating_source(tmp_path:
         )
     assert receipt["fitting_contract"]["contract_version"] == 6
     assert receipt["fitting_contract"]["workload_order"] == list(WORKLOADS)
-    assert receipt["fitting_contract"]["fitter_version"] == "qcsd_lab.fitting 2.4.0"
+    assert receipt["fitting_contract"]["fitter_version"] == "qcsd_lab.fitting 2.4.1"
     assert receipt["fitting_contract"]["parameter_schema_versions"] == {
         "traffic_morphing": 2,
         "walkie_talkie": 6,
@@ -1018,6 +1022,19 @@ def test_fit_builds_exact_deterministic_bundle_without_mutating_source(tmp_path:
         == fitting_module._fitting_contract(WORKLOADS)["constants"]["walkie_talkie"][
             "prepared_receiver_continuation_invariant"
         ]
+    )
+    assert continuation_invariant["base_release_condition"] == (
+        "issued-base-events-controller-requested-and-request-signals-observed-and-(all-base-"
+        "events-issued-or-real-reported-nonreserved-capacity<packet_size)"
+    )
+    assert continuation_invariant["early_release_capacity_snapshot_policy"] == (
+        "incoming-capacity-must-have-real-reported-snapshot;unknown-capacity-never-enables-"
+        "early-continuation-release"
+    )
+    assert continuation_invariant["pending_advertisement_coalescing_policy"] == (
+        "retain-oldest-reserve-and-defer-continuation-while-exact-single-pending-candidate-"
+        "exists;after-max-stream-data-advertisement-prefer-coalesced-append;fallback-to-oldest-"
+        "reserve-only-when-no-pending-candidate"
     )
     """Historical literal retained as non-executing audit text.
     {
@@ -1158,7 +1175,7 @@ def test_fit_builds_exact_deterministic_bundle_without_mutating_source(tmp_path:
     assert "residual_reallocation" not in continuation_invariant
     assert "residual_coalescence" not in continuation_invariant
     assert walkie["generated_by"].startswith(
-        "qcsd_lab.fitting_walkie_talkie 2.4.0; algorithm_receipt_sha256="
+        "qcsd_lab.fitting_walkie_talkie 2.4.1; algorithm_receipt_sha256="
     )
     assert str(tmp_path) not in receipt_text
     assert "timestamp" not in receipt_text
@@ -1210,6 +1227,25 @@ def test_runtime_receipt_rejects_schema_six_capacity_diagnostic_tampering(
     atomic_json(provenance_path, provenance)
 
     with pytest.raises(ValueError, match="schema-six capacity falsification diagnostic"):
+        _inspect_structural_artifact_bundle(changed)
+
+
+def test_runtime_receipt_rejects_schema_six_runtime_diagnostic_tampering(
+    fitted_bundle: Path, tmp_path: Path
+) -> None:
+    changed = tmp_path / "changed"
+    shutil.copytree(fitted_bundle, changed)
+    provenance_path = changed / "provenance.json"
+    provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+    diagnostic = provenance["runtime_qualification_inputs"][
+        "schema_six_runtime_falsification_diagnostic"
+    ]
+
+    assert diagnostic == _schema_six_runtime_falsification_diagnostic_receipt()
+    diagnostic["recovered_retries"][1]["accepted_attempt"] = False
+    atomic_json(provenance_path, provenance)
+
+    with pytest.raises(ValueError, match="schema-six runtime falsification diagnostic"):
         _inspect_structural_artifact_bundle(changed)
 
 

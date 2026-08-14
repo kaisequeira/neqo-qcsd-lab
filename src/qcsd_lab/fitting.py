@@ -48,14 +48,14 @@ RESEARCH_PARAMETER_INPUT_POLICY = "sealed-fitting-result-v1"
 RESEARCH_ARTIFACT_STATUS = "fitted-research-artifact"
 STRUCTURAL_ARTIFACT_TYPE = "qcsd-structural-research-defense-bundle"
 STRUCTURAL_ARTIFACT_STATUS = "structural-test-only"
-FITTER_VERSION = "qcsd_lab.fitting 2.4.0"
+FITTER_VERSION = "qcsd_lab.fitting 2.4.1"
 CONTRACT_FIVE_FITTER_VERSION = "qcsd_lab.fitting 2.1.2"
 LEGACY_FITTER_VERSION = "qcsd_lab.fitting 2.0.2"
 EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 ALGORITHM_GENERATORS = {
     "traffic_morphing": "qcsd_lab.fitting_morphing 2.0.0",
     "wtf_pad": "qcsd_lab.fitting_wtfpad 2.0.0",
-    "walkie_talkie": "qcsd_lab.fitting_walkie_talkie 2.4.0",
+    "walkie_talkie": "qcsd_lab.fitting_walkie_talkie 2.4.1",
 }
 CONTRACT_FIVE_ALGORITHM_GENERATORS = {
     **ALGORITHM_GENERATORS,
@@ -371,6 +371,7 @@ def _runtime_qualification_inputs(
     from .chaff_qualification import (
         _schema_five_diagnostic_receipt,
         _schema_six_capacity_falsification_diagnostic_receipt,
+        _schema_six_runtime_falsification_diagnostic_receipt,
         _schema_two_sender_framing_falsification_diagnostic_receipt,
         load_qualified_chaff,
     )
@@ -430,6 +431,9 @@ def _runtime_qualification_inputs(
         "schema_five_diagnostic": _schema_five_diagnostic_receipt(),
         "schema_six_capacity_falsification_diagnostic": (
             _schema_six_capacity_falsification_diagnostic_receipt()
+        ),
+        "schema_six_runtime_falsification_diagnostic": (
+            _schema_six_runtime_falsification_diagnostic_receipt()
         ),
         "schema_two_sender_framing_falsification_diagnostic": (
             _schema_two_sender_framing_falsification_diagnostic_receipt()
@@ -1059,6 +1063,7 @@ def _validate_runtime_qualification_inputs(
             "qualification_bytes_excluded",
             "schema_five_diagnostic",
             "schema_six_capacity_falsification_diagnostic",
+            "schema_six_runtime_falsification_diagnostic",
             "schema_two_sender_framing_falsification_diagnostic",
             "workloads",
         },
@@ -1072,6 +1077,7 @@ def _validate_runtime_qualification_inputs(
     from .chaff_qualification import (
         _schema_five_diagnostic_receipt,
         _validate_schema_six_capacity_falsification_diagnostic_receipt,
+        _validate_schema_six_runtime_falsification_diagnostic_receipt,
         _validate_schema_two_sender_framing_falsification_diagnostic_receipt,
     )
 
@@ -1079,6 +1085,9 @@ def _validate_runtime_qualification_inputs(
         raise ValueError("schema-five falsification diagnostic receipt is invalid")
     _validate_schema_six_capacity_falsification_diagnostic_receipt(
         receipt["schema_six_capacity_falsification_diagnostic"]
+    )
+    _validate_schema_six_runtime_falsification_diagnostic_receipt(
+        receipt["schema_six_runtime_falsification_diagnostic"]
     )
     _validate_schema_two_sender_framing_falsification_diagnostic_receipt(
         receipt["schema_two_sender_framing_falsification_diagnostic"]
@@ -1341,6 +1350,7 @@ def _qualification_bindings_from_runtime(value: object) -> list[dict[str, Any]]:
             "qualification_bytes_excluded",
             "schema_five_diagnostic",
             "schema_six_capacity_falsification_diagnostic",
+            "schema_six_runtime_falsification_diagnostic",
             "schema_two_sender_framing_falsification_diagnostic",
             "workloads",
         },
@@ -3129,14 +3139,22 @@ def _fitting_contract(workload_order: Sequence[str]) -> dict[str, object]:
                 "provision-exact-one-shot-walkie-talkie-required-chaff-streams;stage-exact-"
                 "dependency-batch-application-requests-and-nondecreasing-chaff-cohort-under-"
                 "every-full-molded-outgoing-component;retain-distinct-reserves-for-all-future-"
-                "nonzero-incoming-components;after-base-events-are-requested-prefer-coalesced-"
-                "positive-outstanding-release-otherwise-release-current-oldest-reserve-before-"
-                "remaining-base;remove-corresponding-reserve-once"
+                "nonzero-incoming-components;after-issued-base-events-are-requested-and-signals-"
+                "observed-release-when-all-base-events-are-issued-or-real-reported-nonreserved-"
+                "capacity-is-below-one-cell;hold-current-reserve-for-exact-pending-"
+                "advertisement-coalescence;otherwise-prefer-advertised-positive-outstanding-"
+                "release-or-release-current-oldest-reserve-before-remaining-base;remove-"
+                "corresponding-reserve-once"
+            ),
+            "base_release_condition": (
+                "issued-base-events-controller-requested-and-request-signals-observed-and-(all-"
+                "base-events-issued-or-real-reported-nonreserved-capacity<packet_size)"
             ),
             "base_capacity_policy": (
-                "all-future-reserve-exact-capacity-excluded-before-release;early-current-reserve-"
-                "continuation-release-exposes-only-its-post-cell-tail-to-remaining-ordinary-base-"
-                "allocation"
+                "all-future-reserve-exact-capacity-excluded-before-release;real-reported-"
+                "ordinary-nonreserved-capacity-below-packet_size-permits-early-current-reserve-"
+                "continuation;release-exposes-only-its-post-cell-tail-to-remaining-ordinary-"
+                "base-allocation"
             ),
             "adapted_target_formula": (
                 "adapted_outgoing=symmetric_outgoing+1-if-symmetric_outgoing>0-else-0;"
@@ -3153,14 +3171,34 @@ def _fitting_contract(workload_order: Sequence[str]) -> dict[str, object]:
                 "identities;live-qualification-bytes-excluded-from-numeric-fitting"
             ),
             "outstanding_release_condition": (
-                "prefer-live-unconsumed-base-at-or-below-parser-ceiling-coalesced-on-one-"
-                "acknowledged-nonreserved-stream;otherwise-release-oldest-retained-reserve-"
-                "regardless-of-live-base-debt"
+                "retain-current-oldest-reserve-while-one-exact-coalescible-unadvertised-"
+                "positive-outstanding-candidate-awaits-max-stream-data-advertisement;after-"
+                "advertisement-prefer-coalesced-release;otherwise-release-oldest-retained-"
+                "reserve-regardless-of-live-base-debt"
             ),
             "positive_outstanding_selection": (
-                "prefer-single-peer-acknowledged-nonreserved-header-blocked-stream-with-exact-"
-                "coalesced-positive-live-outstanding-at-or-below-parser-ceiling;fallback-to-"
-                "oldest-retained-peer-acknowledged-pristine-reserve"
+                "prefer-single-peer-acknowledged-nonreserved-header-blocked-stream-with-0<global-"
+                "live-unconsumed-base-bytes<=parser-allowance-ceiling;requested_bytes=advertised-"
+                "bytes=global-live-unconsumed-base-bytes;known_limit-requested_bytes>=packet_"
+                "size;fallback-to-oldest-retained-peer-acknowledged-pristine-reserve"
+            ),
+            "early_release_capacity_snapshot_policy": (
+                "incoming-capacity-must-have-real-reported-snapshot;unknown-capacity-never-"
+                "enables-early-continuation-release"
+            ),
+            "pending_advertisement_coalescing_policy": (
+                "retain-oldest-reserve-and-defer-continuation-while-exact-single-pending-"
+                "candidate-exists;after-max-stream-data-advertisement-prefer-coalesced-append;"
+                "fallback-to-oldest-reserve-only-when-no-pending-candidate"
+            ),
+            "unadvertised_positive_outstanding_selection": (
+                "single-peer-acknowledged-nonreserved-header-phase-chaff-stream;0<global-live-"
+                "unconsumed-base-bytes<=parser-allowance-ceiling;requested_bytes=global-live-"
+                "unconsumed-base-bytes;requested_bytes>advertised_bytes;requested_bytes-"
+                "advertised_bytes=pending-base-controller-credit;consumed_bytes=0;status=none;"
+                "receive-claim=none;framing_bytes=0;parser_lease_used=0;last-parser-lease-"
+                "boundary=none;pending-parser-boundary=none;known_limit-requested_bytes>=packet_"
+                "size"
             ),
             "prefix_consumability_precondition": (
                 "each-stage-required-selected-resource-request-cohort-is-peer-acknowledged-"
