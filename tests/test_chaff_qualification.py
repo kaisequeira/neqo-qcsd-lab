@@ -107,6 +107,12 @@ def _response_receipt(
             "direction": "outgoing",
             "udp_payload_bytes": 1_200,
         },
+        {
+            "sequence": 3,
+            "phase": "qualification",
+            "direction": "incoming",
+            "udp_payload_bytes": 1_100,
+        },
     ]
     return {
         "schema_version": 2,
@@ -130,7 +136,7 @@ def _response_receipt(
         "ended_unix_ns": run_index * 20 + 10,
         "completion_status": "complete",
         "error": None,
-        "source": source,
+        "source": dict(source),
         "requests": [
             {
                 "request_index": request_index,
@@ -150,6 +156,135 @@ def _response_receipt(
         "packets": _statistics(observations),
         "passed": True,
     }
+
+
+def _response_v2_receipt(
+    *,
+    run_index: int,
+    candidate: dict[str, object],
+    application_sha256: str,
+    source: dict[str, str],
+    identity: tuple[int, str, int, str] | None = None,
+    mismatch_request: int | None = None,
+    capacity_failure: bool = False,
+) -> dict[str, object]:
+    headers = qualification.project_identity_chaff_headers(candidate)
+    status, encoding, body_bytes, body_sha256 = identity or (
+        200,
+        "identity",
+        6_500,
+        "6" * 64,
+    )
+    failure_class: str | None = None
+    if capacity_failure:
+        body_bytes = 1_199
+        body_sha256 = "7" * 64
+        failure_class = "capacity"
+    elif mismatch_request is not None:
+        failure_class = "identity"
+    elif encoding != "identity":
+        failure_class = "identity"
+    observations: list[dict[str, object]] = [
+        {
+            "sequence": 0,
+            "phase": "handshake",
+            "direction": "incoming",
+            "udp_payload_bytes": 900,
+        },
+        {
+            "sequence": 1,
+            "phase": "qualification",
+            "direction": "outgoing",
+            "udp_payload_bytes": 1_200,
+        },
+        {
+            "sequence": 2,
+            "phase": "qualification",
+            "direction": "incoming",
+            "udp_payload_bytes": 1_100,
+        },
+    ]
+    requests = []
+    for request_index in range(qualification.RESPONSE_ONLY_REQUESTS_PER_EPOCH):
+        request_body_bytes = body_bytes
+        request_body_sha256 = body_sha256
+        if mismatch_request == request_index:
+            request_body_bytes += 1
+            request_body_sha256 = "8" * 64
+        requests.append(
+            {
+                "request_index": request_index,
+                "wave_index": request_index // 5,
+                "stream_id": request_index * 4,
+                "request_stream_bytes": 151,
+                "status": status,
+                "content_encoding": encoding,
+                "body_bytes": request_body_bytes,
+                "body_sha256": request_body_sha256,
+                "complete": True,
+                "outcome": "complete",
+            }
+        )
+    spacing_ns = qualification.RESPONSE_ONLY_EPOCH_SPACING_SECONDS * 10**9
+    started = run_index * (spacing_ns + 100)
+    return {
+        "schema_version": qualification.RESPONSE_QUALIFICATION_V2_RECEIPT_SCHEMA_VERSION,
+        "artifact_type": qualification.RESPONSE_ARTIFACT_TYPE,
+        "invocation_id": f"response-v2-{candidate['id']}-{run_index}",
+        "neqo_version": "test",
+        "application_workload_sha256": application_sha256,
+        "application_resource_id": 0,
+        "selected_chaff_resource_id": candidate["id"],
+        "qualified_parallel_chaff_streams": 5,
+        "method": "GET",
+        "url": candidate["url"],
+        "request_headers": headers,
+        "request_header_mode": qualification.IDENTITY_REQUEST_HEADER_MODE,
+        "parallel_requests": 5,
+        "total_requests": 40,
+        "request_waves": 8,
+        "max_concurrent_requests": 5,
+        "connection_count": 1,
+        "requests_opened_before_first_network_output": 5,
+        "request_stream_bytes": 151,
+        "max_response_bytes": 1_048_576,
+        "udp_payload_ceiling": 1_200,
+        "started_unix_ns": started,
+        "ended_unix_ns": started + 100,
+        "completion_status": "complete",
+        "error": None if failure_class is None else f"synthetic {failure_class} rejection",
+        "failure_class": failure_class,
+        "source": dict(source),
+        "requests": requests,
+        "packet_observations": observations,
+        "packet_log_sha256": _packet_log(observations),
+        "packets": _statistics(observations),
+        "passed": failure_class is None,
+    }
+
+
+def _response_v2_epochs(
+    *,
+    candidate: dict[str, object],
+    application_sha256: str,
+    source: dict[str, str],
+    identity: tuple[int, str, int, str] | None = None,
+    mismatch_request: int | None = None,
+    capacity_failure: bool = False,
+) -> list[tuple[int, dict[str, object]]]:
+    receipts = [
+        _response_v2_receipt(
+            run_index=run_index,
+            candidate=candidate,
+            application_sha256=application_sha256,
+            source=source,
+            identity=identity,
+            mismatch_request=mismatch_request,
+            capacity_failure=capacity_failure,
+        )
+        for run_index in range(3)
+    ]
+    return [(0 if receipt["passed"] else 1, receipt) for receipt in receipts]
 
 
 def _prefix_receipt(
@@ -538,6 +673,106 @@ def _response_only_sidecar() -> dict[str, object]:
     }
 
 
+def _response_only_v2_sidecar(
+    workload_path: Path,
+    workload_id: str,
+    *,
+    reject_candidate_indexes: set[int] | None = None,
+) -> dict[str, object]:
+    manifest = load_json(workload_path)
+    candidates = qualification.response_only_candidate_resources(manifest, workload_id)
+    combined = _sidecar()
+    source = copy.deepcopy(combined["qualification_source"])
+    neqo_provenance = copy.deepcopy(combined["neqo_provenance"])
+    neqo_source = {
+        key: neqo_provenance[key]
+        for key in qualification.NEQO_PROVENANCE_KEYS
+        if key != "neqo_version"
+    }
+    application_sha256 = sha256_file(workload_path)
+    attempts: list[dict[str, object]] = []
+    all_receipts: list[dict[str, object]] = []
+    selected: dict[str, object] | None = None
+    expected_response: dict[str, object] | None = None
+    request_stream_bytes: int | None = None
+    rejected = reject_candidate_indexes or set()
+    for candidate_index, (candidate, prepared) in enumerate(candidates):
+        epochs = _response_v2_epochs(
+            candidate=candidate,
+            application_sha256=application_sha256,
+            source=neqo_source,
+            mismatch_request=35 if candidate_index in rejected else None,
+        )
+        attempt, identity, size = qualification._candidate_attempt_record_v2(
+            candidate_index=candidate_index,
+            base_resource=candidate,
+            prepared_response=prepared,
+            epochs=epochs,
+            application_manifest_sha256=application_sha256,
+            application_resource_id=0,
+        )
+        attempts.append(attempt)
+        all_receipts.extend(receipt for _exit_code, receipt in epochs)
+        if attempt["outcome"] == "qualified":
+            selected = candidate
+            expected_response = identity
+            request_stream_bytes = size
+            break
+    assert selected is not None
+    assert expected_response is not None
+    assert request_stream_bytes is not None
+    return {
+        "schema_version": qualification.RESPONSE_ONLY_SIDECAR_V2_SCHEMA_VERSION,
+        "artifact_type": qualification.RESPONSE_ONLY_SIDECAR_ARTIFACT_TYPE,
+        "qualification_scope": qualification.RESPONSE_ONLY_QUALIFICATION_SCOPE,
+        "workload_id": workload_id,
+        "base_manifest": {"path": workload_path.name, "sha256": application_sha256},
+        "selection_policy": qualification.RESPONSE_ONLY_V2_SELECTION_POLICY,
+        "application_resource_id": 0,
+        "selected_chaff_resource_id": selected["id"],
+        "qualified_parallel_chaff_streams": 5,
+        "request_header_primitive": qualification.response_only_request_header_primitive(),
+        "method": "GET",
+        "qualification_policy": qualification.response_only_v2_qualification_policy(),
+        "qualification_source": source,
+        "qualification_image_digest": source["image_digest"],
+        "neqo_provenance": qualification._stable_neqo_provenance(all_receipts),
+        "implementation_receipt": combined["implementation_receipt"],
+        "candidate_attempts": attempts,
+        "resource": {
+            "resource_id": selected["id"],
+            "url": selected["url"],
+            "headers": qualification.project_identity_chaff_headers(selected),
+            "request_stream_bytes": request_stream_bytes,
+            "expected_response": expected_response,
+            "response_qualification_sha256": attempts[-1]["response_qualification_sha256"],
+        },
+    }
+
+
+def _rehash_response_only_v2_sidecar(sidecar: dict[str, object]) -> None:
+    attempts = sidecar["candidate_attempts"]
+    assert isinstance(attempts, list)
+    for attempt in attempts:
+        epochs = attempt["connection_epochs"]
+        for epoch in epochs:
+            epoch["receipt_object_sha256"] = qualification_digest(
+                "qcsd-chaff-sustained-response-receipt-object-v3",
+                [epoch["receipt"]],
+            )
+        attempt["response_qualification_sha256"] = qualification_digest(
+            "qcsd-chaff-sustained-response-qualification-v3",
+            epochs,
+        )
+    sidecar["resource"]["response_qualification_sha256"] = attempts[-1][
+        "response_qualification_sha256"
+    ]
+
+
+def _selected_v2_receipt(sidecar: dict[str, object]) -> dict[str, object]:
+    return sidecar["candidate_attempts"][-1]["connection_epochs"][0]["receipt"]
+
+
 def test_response_only_sidecar_derives_exact_schema_three_without_prefix_contract() -> None:
     application = load_json(WORKLOAD)
     before = copy.deepcopy(application)
@@ -546,6 +781,7 @@ def test_response_only_sidecar_derives_exact_schema_three_without_prefix_contrac
         sidecar,
         workload_id="cloudflare-quiche-r3",
         base_manifest_path=WORKLOAD,
+        expected_sidecar_schema_version=qualification.RESPONSE_ONLY_SIDECAR_SCHEMA_VERSION,
         require_current_implementation=False,
     )
 
@@ -587,6 +823,75 @@ def test_response_only_sidecar_derives_exact_schema_three_without_prefix_contrac
     assert "walkie_talkie_required_chaff_streams" not in manifest
 
 
+@pytest.mark.parametrize(
+    ("sidecar", "workload_id", "workload_path"),
+    [
+        (_response_only_sidecar(), "cloudflare-quiche-r3", WORKLOAD),
+        (
+            _response_only_v2_sidecar(WORKLOAD, "cloudflare-quiche-r3"),
+            "cloudflare-quiche-r3",
+            WORKLOAD,
+        ),
+    ],
+)
+def test_response_only_sidecar_dual_schema_validation_is_explicit(
+    sidecar: dict[str, object], workload_id: str, workload_path: Path
+) -> None:
+    validated = qualification.validate_response_only_sidecar(
+        copy.deepcopy(sidecar),
+        workload_id=workload_id,
+        base_manifest_path=workload_path,
+        expected_sidecar_schema_version=None,
+        require_current_implementation=False,
+    )
+    assert validated.manifest["schema_version"] in {3, 4}
+
+    unexpected = 2 if sidecar["schema_version"] == 1 else 1
+    with pytest.raises(ValueError, match="schema version is unexpected"):
+        qualification.validate_response_only_sidecar(
+            copy.deepcopy(sidecar),
+            workload_id=workload_id,
+            base_manifest_path=workload_path,
+            expected_sidecar_schema_version=unexpected,
+            require_current_implementation=False,
+        )
+
+
+@pytest.mark.parametrize("expected", [True, 0, 3, 1.0, "2"])
+def test_response_only_sidecar_rejects_invalid_expected_schema(expected: object) -> None:
+    with pytest.raises(
+        ValueError, match="expected response-only sidecar schema version is invalid"
+    ):
+        qualification.validate_response_only_sidecar(
+            _response_only_v2_sidecar(WORKLOAD, "cloudflare-quiche-r3"),
+            workload_id="cloudflare-quiche-r3",
+            base_manifest_path=WORKLOAD,
+            expected_sidecar_schema_version=expected,  # type: ignore[arg-type]
+            require_current_implementation=False,
+        )
+
+
+@pytest.mark.parametrize(
+    ("sidecar", "expected_schema"),
+    [
+        (_response_only_sidecar(), 1),
+        (_response_only_v2_sidecar(WORKLOAD, "cloudflare-quiche-r3"), 2),
+    ],
+)
+def test_response_only_sidecar_rejects_structurally_invalid_implementation_before_indexing(
+    sidecar: dict[str, object], expected_schema: int
+) -> None:
+    sidecar["implementation_receipt"] = []
+    with pytest.raises(ValueError, match="qualification implementation receipt has an invalid"):
+        qualification.validate_response_only_sidecar(
+            sidecar,
+            workload_id="cloudflare-quiche-r3",
+            base_manifest_path=WORKLOAD,
+            expected_sidecar_schema_version=expected_schema,
+            require_current_implementation=False,
+        )
+
+
 def test_response_only_sidecar_rejects_response_cohort_or_run_tampering() -> None:
     changed = _response_only_sidecar()
     changed["resource"]["response_runs"].pop()
@@ -596,6 +901,7 @@ def test_response_only_sidecar_rejects_response_cohort_or_run_tampering() -> Non
             changed,
             workload_id="cloudflare-quiche-r3",
             base_manifest_path=WORKLOAD,
+            expected_sidecar_schema_version=qualification.RESPONSE_ONLY_SIDECAR_SCHEMA_VERSION,
             require_current_implementation=False,
         )
 
@@ -620,6 +926,7 @@ def test_response_only_sidecar_rejects_boolean_and_float_aliases(mutate: object)
             sidecar,
             workload_id="cloudflare-quiche-r3",
             base_manifest_path=WORKLOAD,
+            expected_sidecar_schema_version=qualification.RESPONSE_ONLY_SIDECAR_SCHEMA_VERSION,
             require_current_implementation=False,
         )
 
@@ -638,6 +945,7 @@ def test_response_only_sidecar_rejects_implementation_schema_numeric_aliases(
             sidecar,
             workload_id="cloudflare-quiche-r3",
             base_manifest_path=WORKLOAD,
+            expected_sidecar_schema_version=qualification.RESPONSE_ONLY_SIDECAR_SCHEMA_VERSION,
             require_current_implementation=False,
         )
 
@@ -655,8 +963,460 @@ def test_response_only_sidecar_rejects_numeric_source_commits_with_valid_aggrega
             sidecar,
             workload_id="cloudflare-quiche-r3",
             base_manifest_path=WORKLOAD,
+            expected_sidecar_schema_version=qualification.RESPONSE_ONLY_SIDECAR_SCHEMA_VERSION,
             require_current_implementation=False,
         )
+
+
+def test_response_only_v2_derives_schema_four_identity_namespace_without_app_mutation() -> None:
+    application = load_json(WORKLOAD)
+    before = copy.deepcopy(application)
+    sidecar = _response_only_v2_sidecar(WORKLOAD, "cloudflare-quiche-r3")
+
+    validated = qualification.validate_response_only_sidecar(
+        sidecar,
+        workload_id="cloudflare-quiche-r3",
+        base_manifest_path=WORKLOAD,
+        expected_sidecar_schema_version=qualification.RESPONSE_ONLY_SIDECAR_V2_SCHEMA_VERSION,
+        require_current_implementation=False,
+    )
+
+    assert application == before
+    manifest = validated.manifest
+    assert manifest["schema_version"] == 4
+    assert manifest["qualification_scope"] == "response-only"
+    resource = manifest["resources"][0]
+    original = application["resources"][0]
+    assert resource["headers"] == [
+        next(header for header in original["headers"] if header[0] == "accept"),
+        ["accept-encoding", "identity"],
+        next(header for header in original["headers"] if header[0] == "accept-language"),
+    ]
+    assert (
+        next(header for header in original["headers"] if header[0] == "accept-encoding")[1]
+        == "gzip, deflate, br, zstd"
+    )
+    nested = resource["chaff_qualification"]
+    assert nested["schema_version"] == 4
+    assert nested["request_header_primitive"] == {
+        "mode": "identity-chaff-v1",
+        "copied_from_application": ["accept", "accept-language"],
+        "forced": [["accept-encoding", "identity"]],
+    }
+    assert nested["qualified_completion_count"] == 120
+    assert sidecar["resource"]["expected_response"]["content_encoding"] == "identity"
+    assert len(sidecar["candidate_attempts"]) == 1
+    assert len(sidecar["candidate_attempts"][0]["connection_epochs"]) == 3
+    assert all(
+        len(epoch["receipt"]["requests"]) == 40
+        for epoch in sidecar["candidate_attempts"][0]["connection_epochs"]
+    )
+
+
+def test_response_only_v2_detects_identity_mismatch_at_request_35() -> None:
+    manifest = load_json(WORKLOAD)
+    candidate, prepared = qualification.response_only_candidate_resources(
+        manifest, "cloudflare-quiche-r3"
+    )[0]
+    source = {
+        "neqo_base_commit": "d" * 40,
+        "published_qcsd_commit": "e" * 40,
+        "migration_commit": "c" * 40,
+    }
+    epochs = _response_v2_epochs(
+        candidate=candidate,
+        application_sha256=sha256_file(WORKLOAD),
+        source=source,
+        mismatch_request=35,
+    )
+
+    attempt, identity, _size = qualification._candidate_attempt_record_v2(
+        candidate_index=0,
+        base_resource=candidate,
+        prepared_response=prepared,
+        epochs=epochs,
+        application_manifest_sha256=sha256_file(WORKLOAD),
+        application_resource_id=0,
+    )
+
+    assert attempt["outcome"] == "rejected"
+    assert attempt["failure_class"] == "identity"
+    assert identity is None
+    assert all(epoch[0] != 0 for epoch in epochs)
+    assert all(len(epoch[1]["requests"]) == 40 for epoch in epochs)
+    assert all(epoch[1]["requests"][35]["body_sha256"] == "8" * 64 for epoch in epochs)
+
+
+def test_response_only_v2_requires_literal_identity_encoding() -> None:
+    manifest = load_json(WORKLOAD)
+    candidate, prepared = qualification.response_only_candidate_resources(
+        manifest, "cloudflare-quiche-r3"
+    )[0]
+    source = {
+        "neqo_base_commit": "d" * 40,
+        "published_qcsd_commit": "e" * 40,
+        "migration_commit": "c" * 40,
+    }
+    epochs = _response_v2_epochs(
+        candidate=candidate,
+        application_sha256=sha256_file(WORKLOAD),
+        source=source,
+        identity=(200, "gzip", 6_500, "6" * 64),
+    )
+
+    attempt, identity, _size = qualification._candidate_attempt_record_v2(
+        candidate_index=0,
+        base_resource=candidate,
+        prepared_response=prepared,
+        epochs=epochs,
+        application_manifest_sha256=sha256_file(WORKLOAD),
+        application_resource_id=0,
+    )
+
+    assert attempt["outcome"] == "rejected"
+    assert attempt["failure_class"] == "identity"
+    assert identity is None
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("request_waves", 7), ("request_header_mode", "legacy")],
+)
+def test_response_only_v2_receipt_rejects_nonexact_epoch_primitives(
+    field: str, value: object
+) -> None:
+    manifest = load_json(WORKLOAD)
+    candidate, _prepared = qualification.response_only_candidate_resources(
+        manifest, "cloudflare-quiche-r3"
+    )[0]
+    source = {
+        "neqo_base_commit": "d" * 40,
+        "published_qcsd_commit": "e" * 40,
+        "migration_commit": "c" * 40,
+    }
+    receipt = _response_v2_receipt(
+        run_index=0,
+        candidate=candidate,
+        application_sha256=sha256_file(WORKLOAD),
+        source=source,
+    )
+    receipt[field] = value
+
+    with pytest.raises(ValueError, match="receipt binding"):
+        qualification._validate_response_receipt_v2(
+            receipt,
+            application_manifest_sha256=sha256_file(WORKLOAD),
+            application_resource_id=0,
+            selected_chaff_resource_id=candidate["id"],
+            url=candidate["url"],
+            headers=qualification.project_identity_chaff_headers(candidate),
+        )
+
+
+def test_response_only_v2_receipt_rejects_wrong_wave_index() -> None:
+    manifest = load_json(WORKLOAD)
+    candidate, _prepared = qualification.response_only_candidate_resources(
+        manifest, "cloudflare-quiche-r3"
+    )[0]
+    source = {
+        "neqo_base_commit": "d" * 40,
+        "published_qcsd_commit": "e" * 40,
+        "migration_commit": "c" * 40,
+    }
+    receipt = _response_v2_receipt(
+        run_index=0,
+        candidate=candidate,
+        application_sha256=sha256_file(WORKLOAD),
+        source=source,
+    )
+    receipt["requests"][35]["wave_index"] = 6
+
+    with pytest.raises(ValueError, match="request is invalid"):
+        qualification._validate_response_receipt_v2(
+            receipt,
+            application_manifest_sha256=sha256_file(WORKLOAD),
+            application_resource_id=0,
+            selected_chaff_resource_id=candidate["id"],
+            url=candidate["url"],
+            headers=qualification.project_identity_chaff_headers(candidate),
+        )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["oversized-body", "noncanonical-stream", "padded-invocation", "receipt-commit", "version"],
+)
+def test_response_only_v2_rejects_fully_rehashed_receipt_mutations(mutation: str) -> None:
+    sidecar = _response_only_v2_sidecar(WORKLOAD, "cloudflare-quiche-r3")
+    receipt = _selected_v2_receipt(sidecar)
+    if mutation == "oversized-body":
+        receipt["requests"][35]["body_bytes"] = receipt["max_response_bytes"] + 1
+    elif mutation == "noncanonical-stream":
+        receipt["requests"][35]["stream_id"] = 142
+    elif mutation == "padded-invocation":
+        receipt["invocation_id"] = f" {receipt['invocation_id']} "
+    elif mutation == "receipt-commit":
+        receipt["source"]["neqo_base_commit"] = "D" * 40
+    else:
+        receipt["neqo_version"] = " test "
+    _rehash_response_only_v2_sidecar(sidecar)
+
+    with pytest.raises(ValueError):
+        qualification.validate_response_only_sidecar(
+            sidecar,
+            workload_id="cloudflare-quiche-r3",
+            base_manifest_path=WORKLOAD,
+            expected_sidecar_schema_version=qualification.RESPONSE_ONLY_SIDECAR_V2_SCHEMA_VERSION,
+            require_current_implementation=False,
+        )
+
+
+def test_response_only_v2_requires_qualification_packets_in_both_directions_after_rehash() -> None:
+    sidecar = _response_only_v2_sidecar(WORKLOAD, "cloudflare-quiche-r3")
+    receipt = _selected_v2_receipt(sidecar)
+    observations = [
+        row
+        for row in receipt["packet_observations"]
+        if not (row["phase"] == "qualification" and row["direction"] == "incoming")
+    ]
+    receipt["packet_observations"] = observations
+    receipt["packet_log_sha256"] = _packet_log(observations)
+    receipt["packets"] = _statistics(observations)
+    _rehash_response_only_v2_sidecar(sidecar)
+
+    with pytest.raises(ValueError, match="packet transcript hash is invalid"):
+        qualification.validate_response_only_sidecar(
+            sidecar,
+            workload_id="cloudflare-quiche-r3",
+            base_manifest_path=WORKLOAD,
+            expected_sidecar_schema_version=qualification.RESPONSE_ONLY_SIDECAR_V2_SCHEMA_VERSION,
+            require_current_implementation=False,
+        )
+
+
+@pytest.mark.parametrize("error", ["   ", " synthetic identity rejection "])
+def test_response_only_v2_rejects_unstripped_failure_error_after_rehash(error: str) -> None:
+    workload = ROOT / "config/workloads/hyper-basic-client-r1.json"
+    sidecar = _response_only_v2_sidecar(
+        workload,
+        "hyper-basic-client-r1",
+        reject_candidate_indexes={0},
+    )
+    receipt = sidecar["candidate_attempts"][0]["connection_epochs"][0]["receipt"]
+    receipt["error"] = error
+    _rehash_response_only_v2_sidecar(sidecar)
+
+    with pytest.raises(ValueError, match="lacks an exact failure class"):
+        qualification.validate_response_only_sidecar(
+            sidecar,
+            workload_id="hyper-basic-client-r1",
+            base_manifest_path=workload,
+            expected_sidecar_schema_version=qualification.RESPONSE_ONLY_SIDECAR_V2_SCHEMA_VERSION,
+            require_current_implementation=False,
+        )
+
+
+@pytest.mark.parametrize(
+    "commit_field", ["neqo_base_commit", "published_qcsd_commit", "migration_commit"]
+)
+@pytest.mark.parametrize("invalid_commit", ["A" * 40, "a" * 39])
+def test_response_only_v2_rejects_fully_rehashed_nonexact_provenance_commits(
+    commit_field: str, invalid_commit: str
+) -> None:
+    sidecar = _response_only_v2_sidecar(WORKLOAD, "cloudflare-quiche-r3")
+    sidecar["neqo_provenance"][commit_field] = invalid_commit
+    for attempt in sidecar["candidate_attempts"]:
+        for epoch in attempt["connection_epochs"]:
+            epoch["receipt"]["source"][commit_field] = invalid_commit
+    _rehash_response_only_v2_sidecar(sidecar)
+
+    with pytest.raises(ValueError, match="Neqo qualification provenance is invalid"):
+        qualification.validate_response_only_sidecar(
+            sidecar,
+            workload_id="cloudflare-quiche-r3",
+            base_manifest_path=WORKLOAD,
+            expected_sidecar_schema_version=qualification.RESPONSE_ONLY_SIDECAR_V2_SCHEMA_VERSION,
+            require_current_implementation=False,
+        )
+
+
+@pytest.mark.parametrize("invalid_version", ["   ", " 0.30.0 "])
+def test_response_only_v2_rejects_fully_rehashed_untrimmed_neqo_version(
+    invalid_version: str,
+) -> None:
+    sidecar = _response_only_v2_sidecar(WORKLOAD, "cloudflare-quiche-r3")
+    sidecar["neqo_provenance"]["neqo_version"] = invalid_version
+    for attempt in sidecar["candidate_attempts"]:
+        for epoch in attempt["connection_epochs"]:
+            epoch["receipt"]["neqo_version"] = invalid_version
+    _rehash_response_only_v2_sidecar(sidecar)
+
+    with pytest.raises(ValueError, match="Neqo qualification provenance is invalid"):
+        qualification.validate_response_only_sidecar(
+            sidecar,
+            workload_id="cloudflare-quiche-r3",
+            base_manifest_path=WORKLOAD,
+            expected_sidecar_schema_version=qualification.RESPONSE_ONLY_SIDECAR_V2_SCHEMA_VERSION,
+            require_current_implementation=False,
+        )
+
+
+def test_response_only_v2_rejects_epoch_provenance_drift() -> None:
+    manifest = load_json(WORKLOAD)
+    candidate, prepared = qualification.response_only_candidate_resources(
+        manifest, "cloudflare-quiche-r3"
+    )[0]
+    source = {
+        "neqo_base_commit": "d" * 40,
+        "published_qcsd_commit": "e" * 40,
+        "migration_commit": "c" * 40,
+    }
+    epochs = _response_v2_epochs(
+        candidate=candidate,
+        application_sha256=sha256_file(WORKLOAD),
+        source=source,
+    )
+    epochs[1][1]["source"]["migration_commit"] = "f" * 40
+
+    with pytest.raises(qualification.PreparationError, match="provenance changed"):
+        qualification._candidate_attempt_record_v2(
+            candidate_index=0,
+            base_resource=candidate,
+            prepared_response=prepared,
+            epochs=epochs,
+            application_manifest_sha256=sha256_file(WORKLOAD),
+            application_resource_id=0,
+        )
+
+
+def test_legacy_response_receipt_keeps_exact_schema_two_request_shape() -> None:
+    manifest = load_json(WORKLOAD)
+    root = selected_navigation_root(manifest, "cloudflare-quiche-r3")
+    headers = project_compact_headers(root)
+    source = {
+        "neqo_base_commit": "d" * 40,
+        "published_qcsd_commit": "e" * 40,
+        "migration_commit": "c" * 40,
+    }
+    receipt = _response_receipt(
+        run_index=0,
+        application_sha256=sha256_file(WORKLOAD),
+        url=root["url"],
+        headers=headers,
+        source=source,
+        parallel_requests=5,
+    )
+
+    qualification._validate_response_receipt(
+        receipt,
+        application_manifest_sha256=sha256_file(WORKLOAD),
+        application_resource_id=0,
+        selected_chaff_resource_id=0,
+        qualified_parallel_chaff_streams=5,
+        url=root["url"],
+        headers=headers,
+    )
+    assert "request_header_mode" not in receipt
+    assert all("wave_index" not in request for request in receipt["requests"])
+
+
+def test_response_only_v2_hyper_falls_back_from_root_to_css() -> None:
+    workload = ROOT / "config/workloads/hyper-basic-client-r1.json"
+    candidates = qualification.response_only_candidate_resources(
+        load_json(workload), "hyper-basic-client-r1"
+    )
+    assert [(item[0]["id"], item[1]["bytes"]) for item in candidates] == [
+        (0, 6_165),
+        (1, 1_463),
+    ]
+    sidecar = _response_only_v2_sidecar(
+        workload,
+        "hyper-basic-client-r1",
+        reject_candidate_indexes={0},
+    )
+
+    validated = qualification.validate_response_only_sidecar(
+        sidecar,
+        workload_id="hyper-basic-client-r1",
+        base_manifest_path=workload,
+        expected_sidecar_schema_version=qualification.RESPONSE_ONLY_SIDECAR_V2_SCHEMA_VERSION,
+        require_current_implementation=False,
+    )
+
+    assert sidecar["selected_chaff_resource_id"] == 1
+    assert [attempt["resource_id"] for attempt in sidecar["candidate_attempts"]] == [0, 1]
+    assert [attempt["outcome"] for attempt in sidecar["candidate_attempts"]] == [
+        "rejected",
+        "qualified",
+    ]
+    assert validated.manifest["resources"][0]["url"] == "https://hyper.rs/css/main.css"
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda sidecar: sidecar.update({"schema_version": 2.0}),
+        lambda sidecar: sidecar["request_header_primitive"].update(
+            {"forced": [["accept-encoding", "gzip"]]}
+        ),
+        lambda sidecar: sidecar["candidate_attempts"][0]["connection_epochs"][0]["receipt"].update(
+            {"request_header_mode": "legacy"}
+        ),
+    ],
+)
+def test_response_only_v2_rejects_schema_or_header_primitive_aliases(mutate: object) -> None:
+    sidecar = _response_only_v2_sidecar(WORKLOAD, "cloudflare-quiche-r3")
+    mutate(sidecar)
+
+    with pytest.raises(ValueError):
+        qualification.validate_response_only_sidecar(
+            sidecar,
+            workload_id="cloudflare-quiche-r3",
+            base_manifest_path=WORKLOAD,
+            expected_sidecar_schema_version=qualification.RESPONSE_ONLY_SIDECAR_V2_SCHEMA_VERSION,
+            require_current_implementation=False,
+        )
+
+
+def test_response_only_v2_cloudflare_sole_candidate_failure_is_not_published(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workloads = tmp_path / "workloads"
+    qualifications = tmp_path / "qualifications"
+    workloads.mkdir()
+    qualifications.mkdir()
+    copied = workloads / WORKLOAD.name
+    copied.write_bytes(WORKLOAD.read_bytes())
+    manifest = load_json(copied)
+    candidates = qualification.response_only_candidate_resources(manifest, "cloudflare-quiche-r3")
+    assert len(candidates) == 1
+    source = {
+        "neqo_base_commit": "d" * 40,
+        "published_qcsd_commit": "e" * 40,
+        "migration_commit": "c" * 40,
+    }
+
+    def reject(*_args: object, **_kwargs: object) -> list[tuple[int, dict[str, object]]]:
+        return _response_v2_epochs(
+            candidate=candidates[0][0],
+            application_sha256=sha256_file(copied),
+            source=source,
+            capacity_failure=True,
+        )
+
+    monkeypatch.setattr(qualification, "_run_response_qualifications_v2", reject)
+    with pytest.raises(qualification.PreparationError, match="no frozen response-only candidate"):
+        qualification.qualify_response_chaff_v2(
+            "cloudflare-quiche-r3",
+            workload_root=workloads,
+            qualification_root=qualifications,
+            _execution_context=_test_execution_context(tmp_path),
+        )
+
+    assert not (qualifications / WORKLOAD.name).exists()
+    evidence = list(qualifications.glob(".cloudflare-quiche-r3-response-v2-*"))
+    assert len(evidence) == 1
+    assert [path.name for path in evidence[0].iterdir()] == ["candidate-000-resource-0"]
 
 
 def test_implementation_receipt_rejects_numeric_commit_with_valid_aggregate() -> None:
@@ -700,6 +1460,20 @@ def test_projection_rejects_missing_reordered_or_synthesized_headers(mutation: s
 
     with pytest.raises(ValueError, match="exact lowercase accept"):
         project_compact_headers(changed)
+
+
+@pytest.mark.parametrize("mutation", ["uppercase", "mixed-duplicate"])
+def test_identity_projection_rejects_nonlowercase_or_casefold_duplicates(mutation: str) -> None:
+    root = selected_navigation_root(load_json(WORKLOAD), "cloudflare-quiche-r3")
+    changed = copy.deepcopy(root)
+    if mutation == "uppercase":
+        next(header for header in changed["headers"] if header[0] == "accept")[0] = "Accept"
+    else:
+        accept = next(header for header in changed["headers"] if header[0] == "accept")
+        changed["headers"].append(["Accept", accept[1]])
+
+    with pytest.raises(ValueError, match="lowercase"):
+        qualification.project_identity_chaff_headers(changed)
 
 
 def test_prefix_spec_is_an_acyclic_numeric_projection() -> None:
@@ -1499,12 +2273,34 @@ def test_qualification_runners_execute_only_the_bound_image_client(
     unbound.chmod(0o755)
     monkeypatch.setenv("QCSD_NEQO_CLIENT", str(unbound))
     commands: list[list[str]] = []
+    manifest = load_json(WORKLOAD)
+    candidate = qualification.response_only_candidate_resources(manifest, "cloudflare-quiche-r3")[
+        0
+    ][0]
+    application_sha256 = sha256_file(WORKLOAD)
+    neqo_source = {
+        "neqo_base_commit": "d" * 40,
+        "published_qcsd_commit": "e" * 40,
+        "migration_commit": "c" * 40,
+    }
+    sustained_calls = 0
 
     def run_client(command: list[str], **_: object) -> SimpleNamespace:
+        nonlocal sustained_calls
         commands.append(command)
         output = Path(command[command.index("--output-dir") + 1])
         output.mkdir()
-        atomic_json(output / "qualification.json", {"run": len(commands)})
+        if "--total-requests" in command:
+            receipt = _response_v2_receipt(
+                run_index=sustained_calls,
+                candidate=candidate,
+                application_sha256=application_sha256,
+                source=neqo_source,
+            )
+            sustained_calls += 1
+        else:
+            receipt = {"run": len(commands)}
+        atomic_json(output / "qualification.json", receipt)
         return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(qualification, "_run_neqo", run_client)
@@ -1516,6 +2312,20 @@ def test_qualification_runners_execute_only_the_bound_image_client(
         neqo_client_sha256=digest,
         selected_chaff_resource_id=0,
         qualified_parallel_chaff_streams=6,
+        timeout_seconds=30,
+        interval_seconds=0,
+    )
+    (tmp_path / "sustained-response-runs").mkdir()
+    sustained = qualification._run_response_qualifications_v2(
+        WORKLOAD,
+        tmp_path / "sustained-response-runs",
+        neqo_client=bound,
+        neqo_client_sha256=digest,
+        selected_chaff_resource_id=0,
+        application_manifest_sha256=application_sha256,
+        application_resource_id=0,
+        url=candidate["url"],
+        headers=qualification.project_identity_chaff_headers(candidate),
         timeout_seconds=30,
         interval_seconds=0,
     )
@@ -1532,9 +2342,110 @@ def test_qualification_runners_execute_only_the_bound_image_client(
         interval_seconds=0,
     )
 
-    assert len(response) == len(prefix) == qualification.QUALIFICATION_RUNS
+    assert len(response) == len(sustained) == len(prefix) == qualification.QUALIFICATION_RUNS
     assert {command[0] for command in commands} == {str(bound)}
     assert str(unbound) not in {item for command in commands for item in command}
+    sustained_commands = [command for command in commands if "--total-requests" in command]
+    assert all(
+        command[command.index("--total-requests") + 1] == "40"
+        and command[command.index("--parallel-requests") + 1] == "5"
+        and command[command.index("--request-header-mode") + 1] == "identity-chaff-v1"
+        for command in sustained_commands
+    )
+
+
+@pytest.mark.parametrize("failure_class", ["transport", "dns", "timeout", "protocol"])
+def test_sustained_runner_aborts_on_nonrepresentation_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_class: str
+) -> None:
+    implementation, _, _ = _test_execution_context(tmp_path)
+    bound, digest = qualification._bound_neqo_client(implementation)
+    directory = tmp_path / "sustained-abort"
+    directory.mkdir()
+    calls = 0
+    candidate = qualification.response_only_candidate_resources(
+        load_json(WORKLOAD), "cloudflare-quiche-r3"
+    )[0][0]
+
+    def run_client(command: list[str], **_: object) -> SimpleNamespace:
+        nonlocal calls
+        calls += 1
+        output = Path(command[command.index("--output-dir") + 1])
+        output.mkdir()
+        atomic_json(
+            output / "qualification.json",
+            {"passed": False, "failure_class": failure_class},
+        )
+        return SimpleNamespace(returncode=7)
+
+    monkeypatch.setattr(qualification, "_run_neqo", run_client)
+    with pytest.raises(qualification.PreparationError, match=failure_class):
+        qualification._run_response_qualifications_v2(
+            WORKLOAD,
+            directory,
+            neqo_client=bound,
+            neqo_client_sha256=digest,
+            selected_chaff_resource_id=0,
+            application_manifest_sha256=sha256_file(WORKLOAD),
+            application_resource_id=0,
+            url=candidate["url"],
+            headers=qualification.project_identity_chaff_headers(candidate),
+            timeout_seconds=30,
+            interval_seconds=0,
+        )
+    assert calls == 1
+
+
+@pytest.mark.parametrize("failure_class", ["identity", "capacity"])
+def test_sustained_runner_retains_all_three_representation_failure_epochs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_class: str
+) -> None:
+    implementation, _, _ = _test_execution_context(tmp_path)
+    bound, digest = qualification._bound_neqo_client(implementation)
+    directory = tmp_path / "sustained-rejection"
+    directory.mkdir()
+    calls = 0
+    candidate = qualification.response_only_candidate_resources(
+        load_json(WORKLOAD), "cloudflare-quiche-r3"
+    )[0][0]
+    neqo_source = {
+        "neqo_base_commit": "d" * 40,
+        "published_qcsd_commit": "e" * 40,
+        "migration_commit": "c" * 40,
+    }
+
+    def run_client(command: list[str], **_: object) -> SimpleNamespace:
+        nonlocal calls
+        calls += 1
+        output = Path(command[command.index("--output-dir") + 1])
+        output.mkdir()
+        receipt = _response_v2_receipt(
+            run_index=calls - 1,
+            candidate=candidate,
+            application_sha256=sha256_file(WORKLOAD),
+            source=neqo_source,
+            mismatch_request=35 if failure_class == "identity" else None,
+            capacity_failure=failure_class == "capacity",
+        )
+        atomic_json(output / "qualification.json", receipt)
+        return SimpleNamespace(returncode=3)
+
+    monkeypatch.setattr(qualification, "_run_neqo", run_client)
+    runs = qualification._run_response_qualifications_v2(
+        WORKLOAD,
+        directory,
+        neqo_client=bound,
+        neqo_client_sha256=digest,
+        selected_chaff_resource_id=0,
+        application_manifest_sha256=sha256_file(WORKLOAD),
+        application_resource_id=0,
+        url=candidate["url"],
+        headers=qualification.project_identity_chaff_headers(candidate),
+        timeout_seconds=30,
+        interval_seconds=0,
+    )
+    assert calls == len(runs) == 3
+    assert [exit_code for exit_code, _receipt in runs] == [3, 3, 3]
 
 
 def test_bound_qualification_client_is_rehashed_before_execution(tmp_path: Path) -> None:
@@ -1570,7 +2481,7 @@ def test_response_batch_publishes_explicit_five_in_caller_order(
         calls.append(workload_id)
         return _fake_qualification(workload_id, qualification_root=qualification_root, **kwargs)
 
-    monkeypatch.setattr(qualification, "qualify_response_chaff", qualify)
+    monkeypatch.setattr(qualification, "qualify_response_chaff_v2", qualify)
     execution_context = _test_execution_context(tmp_path)
     monkeypatch.setattr(
         qualification, "_qualification_execution_context", lambda: execution_context
@@ -1585,10 +2496,10 @@ def test_response_batch_publishes_explicit_five_in_caller_order(
 
     assert calls == list(requested)
     assert [output.path.name for output in outputs] == [f"{item}.json" for item in requested]
-    assert {path.name for path in (store / "v1").iterdir()} == {
+    assert {path.name for path in (store / "v2").iterdir()} == {
         f"{item}.json" for item in workload_ids
     }
-    assert not list(store.glob(".v1.qcsd-batch-*"))
+    assert not list(store.glob(".v2.qcsd-batch-*"))
 
 
 def test_response_batch_requires_exactly_five_unique_ids_before_network(
@@ -1634,8 +2545,8 @@ def test_response_batch_rejects_two_workloads_from_one_primary_class_origin(
             qualification_store=store,
         )
     assert called is False
-    assert not (store / "v1").exists()
-    assert not list(store.glob(".v1.qcsd-batch-*"))
+    assert not (store / "v2").exists()
+    assert not list(store.glob(".v2.qcsd-batch-*"))
 
 
 def test_response_batch_failure_retains_one_unpublished_candidate(
@@ -1653,7 +2564,7 @@ def test_response_batch_failure_retains_one_unpublished_candidate(
             raise RuntimeError("synthetic response qualification failure")
         return _fake_qualification(workload_id, qualification_root=qualification_root, **kwargs)
 
-    monkeypatch.setattr(qualification, "qualify_response_chaff", qualify)
+    monkeypatch.setattr(qualification, "qualify_response_chaff_v2", qualify)
     monkeypatch.setattr(
         qualification,
         "_qualification_execution_context",
@@ -1666,8 +2577,8 @@ def test_response_batch_failure_retains_one_unpublished_candidate(
             qualification_store=store,
             interval_seconds=0,
         )
-    assert not (store / "v1").exists()
-    assert len(list(store.glob(".v1.qcsd-batch-*"))) == 1
+    assert not (store / "v2").exists()
+    assert len(list(store.glob(".v2.qcsd-batch-*"))) == 1
 
 
 def test_batch_qualification_publishes_exact_six_atomically(

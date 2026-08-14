@@ -218,7 +218,7 @@ def test_launcher_response_qualification_is_exact_five_and_least_privilege() -> 
     launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
     assert "qualify-response-chaff requires exactly five workload IDs" in launcher
     assert '"${ROOT}/config/chaff-response-qualification-store"' in launcher
-    assert "config/chaff-response-qualification-store/v1" in launcher
+    assert "config/chaff-response-qualification-store/v2" in launcher
     mounts = launcher.split(
         'if [[ "${1:-}" == "qualify-response-chaff" ]]; then\n  container+=(', 1
     )[-1].split("\nfi", 1)[0]
@@ -242,16 +242,16 @@ def test_response_qualification_delta_validator_enforces_dynamic_exact_five(
     validator = _embedded_python(launcher, "validate_response_qualification_store_delta")
     existing = {".gitkeep": {"type": "file", "sha256": "a" * 64}}
     ids = ("alpha", "bravo", "charlie", "delta", "echo")
-    cohort = {"v1": {"type": "directory"}} | {
-        f"v1/{workload}.json": {"type": "file", "sha256": "b" * 64} for workload in ids
+    cohort = {"v2": {"type": "directory"}} | {
+        f"v2/{workload}.json": {"type": "file", "sha256": "b" * 64} for workload in ids
     }
 
     published = _run_embedded_python(tmp_path, validator, existing, existing | cohort, "0", *ids)
     assert published.returncode == 0, published.stderr
 
     candidate = {
-        ".v1.qcsd-batch-proof": {"type": "directory"},
-        ".v1.qcsd-batch-proof/response-0.log": {
+        ".v2.qcsd-batch-proof": {"type": "directory"},
+        ".v2.qcsd-batch-proof/response-0.log": {
             "type": "file",
             "sha256": "c" * 64,
         },
@@ -263,12 +263,12 @@ def test_response_qualification_delta_validator_enforces_dynamic_exact_five(
         tmp_path,
         validator,
         existing,
-        existing | {"v1": {"type": "directory"}},
+        existing | {"v2": {"type": "directory"}},
         "0",
         *ids,
     )
     assert partial.returncode != 0
-    assert "outside the exact schema-one cohort" in partial.stderr
+    assert "outside the exact schema-two cohort" in partial.stderr
 
     duplicate_ids = _run_embedded_python(
         tmp_path, validator, existing, existing, "7", *ids[:4], ids[0]

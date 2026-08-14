@@ -855,6 +855,80 @@ def _validate_poc5_rehearsal_collection(
     return Poc5CollectionPlan(({defense: "interface" for defense in POC5_DEFENSES},), "rehearsal")
 
 
+def _validate_poc5_response_only_binding(workload: Any) -> None:
+    """Require the active POC to bind sustained identity-response evidence.
+
+    ``load_campaign`` performs the authoritative semantic validation. This
+    exporter gate also makes the active POC format explicit: the sidecar hash
+    binds schema-two candidate/epoch receipts, and the derived-manifest hash
+    binds the matching schema-four request primitive. Frozen schema-one and
+    schema-three evidence remains a verifier input, but cannot be mistaken for
+    the active collection contract.
+    """
+
+    from qcsd_lab import chaff_qualification
+
+    path = workload.chaff_qualification_path
+    manifest = workload.chaff_manifest_data
+    if path is None or not isinstance(manifest, Mapping):
+        raise ValueError("classifier POC5 response-only chaff binding is incomplete")
+    sidecar = load_json(path)
+    if not isinstance(sidecar, Mapping):
+        raise ValueError("classifier POC5 response-only chaff sidecar is invalid")
+
+    primitive = chaff_qualification.response_only_request_header_primitive()
+    attempts = sidecar.get("candidate_attempts")
+    resources = manifest.get("resources")
+    if (
+        sidecar.get("schema_version") != chaff_qualification.RESPONSE_ONLY_SIDECAR_V2_SCHEMA_VERSION
+        or manifest.get("schema_version")
+        != chaff_qualification.RESPONSE_ONLY_MANIFEST_V2_SCHEMA_VERSION
+        or sidecar.get("request_header_primitive") != primitive
+        or not isinstance(attempts, list)
+        or not attempts
+        or not isinstance(resources, list)
+        or len(resources) != 1
+        or not isinstance(resources[0], Mapping)
+    ):
+        raise ValueError(
+            "classifier POC5 response-only chaff binding is not v2/schema-four identity evidence"
+        )
+
+    final_attempt = attempts[-1]
+    qualification = resources[0].get("chaff_qualification")
+    if (
+        not isinstance(final_attempt, Mapping)
+        or final_attempt.get("outcome") != "qualified"
+        or final_attempt.get("failure_class") is not None
+        or any(
+            not isinstance(attempt, Mapping)
+            or not isinstance(attempt.get("connection_epochs"), list)
+            or len(attempt["connection_epochs"]) != chaff_qualification.QUALIFICATION_RUNS
+            or any(
+                not isinstance(epoch, Mapping)
+                or not isinstance(epoch.get("receipt"), Mapping)
+                or epoch["receipt"].get("schema_version")
+                != chaff_qualification.RESPONSE_QUALIFICATION_V2_RECEIPT_SCHEMA_VERSION
+                or epoch["receipt"].get("request_header_mode")
+                != chaff_qualification.IDENTITY_REQUEST_HEADER_MODE
+                for epoch in attempt["connection_epochs"]
+            )
+            for attempt in attempts
+        )
+        or not isinstance(qualification, Mapping)
+        or qualification.get("schema_version")
+        != chaff_qualification.RESPONSE_ONLY_MANIFEST_V2_SCHEMA_VERSION
+        or qualification.get("request_header_primitive") != primitive
+        or qualification.get("qualified_completion_count")
+        != chaff_qualification.RESPONSE_ONLY_COMPLETIONS_PER_CANDIDATE
+        or qualification.get("response_qualification_sha256")
+        != final_attempt.get("response_qualification_sha256")
+    ):
+        raise ValueError(
+            "classifier POC5 response-only chaff candidate/identity binding is invalid"
+        )
+
+
 @lru_cache(maxsize=21)
 def _cached_poc5_configuration(campaign_path: Path) -> tuple[Any, str]:
     campaign = load_campaign(campaign_path)
@@ -896,6 +970,7 @@ def _cached_poc5_configuration(campaign_path: Path) -> tuple[Any, str]:
                     raise ValueError(
                         "classifier POC5 response-only chaff binding unexpectedly has a prefix spec"
                     )
+                _validate_poc5_response_only_binding(workload)
                 record["chaff_qualification_scope"] = RESPONSE_ONLY_CHAFF_SCOPE
             else:
                 if workload.chaff_prefix_spec_path is None or not _valid_sha256(

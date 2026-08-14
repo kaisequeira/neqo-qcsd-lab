@@ -77,6 +77,7 @@ WALKIE_TALKIE_RECEIVER_RAW_HEADROOM_BYTES = 1_200
 RESPONSE_ONLY_CHAFF_DEFENSE_KINDS = frozenset({"front", "tamaraw"})
 RESPONSE_ONLY_CHAFF_SCOPE = "response-only"
 FULL_CHAFF_SCOPE = "full"
+RESPONSE_ONLY_MANIFEST_TO_SIDECAR_SCHEMA = {3: 1, 4: 2}
 FITTING_LIMITS = capture_engine.Limits(
     timeout_seconds=120,
     max_response_bytes=1024 * 1024,
@@ -349,7 +350,7 @@ def _load_qualified_chaff_inputs(
     if frozen_inputs is None:
         config_root = campaign_path.parent.parent
         if qualification_scope == RESPONSE_ONLY_CHAFF_SCOPE:
-            qualification_root = config_root / "chaff-response-qualification-store/v1"
+            qualification_root = config_root / "chaff-response-qualification-store/v2"
             prefix_root: Path | None = None
         elif qualification_scope == FULL_CHAFF_SCOPE:
             qualification_root = config_root / "chaff-qualification-store/v2"
@@ -368,6 +369,14 @@ def _load_qualified_chaff_inputs(
         manifest_root = frozen_inputs / "chaff-manifests"
     qualified: list[Workload] = []
     for workload in workloads:
+        if manifest_root is None:
+            manifest_path = None
+        else:
+            manifest_path = _trusted_regular_input(
+                manifest_root / f"{workload.id}.json",
+                root=config_root,
+                label="frozen qualified chaff manifest",
+            )
         sidecar_path = _trusted_regular_input(
             qualification_root / f"{workload.id}.json",
             root=config_root,
@@ -375,10 +384,16 @@ def _load_qualified_chaff_inputs(
         )
         if qualification_scope == RESPONSE_ONLY_CHAFF_SCOPE:
             spec_path = None
+            expected_sidecar_schema_version = (
+                2
+                if manifest_path is None
+                else _response_only_sidecar_schema_for_manifest(load_json(manifest_path))
+            )
             receipt = load_response_qualified_chaff(
                 sidecar_path,
                 workload_id=workload.id,
                 base_manifest_path=workload.path,
+                expected_sidecar_schema_version=expected_sidecar_schema_version,
                 require_current_implementation=frozen_inputs is None,
             )
         else:
@@ -396,14 +411,7 @@ def _load_qualified_chaff_inputs(
                 prefix_spec_path=spec_path,
                 require_current_implementation=frozen_inputs is None,
             )
-        if manifest_root is None:
-            manifest_path = None
-        else:
-            manifest_path = _trusted_regular_input(
-                manifest_root / f"{workload.id}.json",
-                root=config_root,
-                label="frozen qualified chaff manifest",
-            )
+        if manifest_path is not None:
             if sha256_file(manifest_path) != receipt.manifest_sha256:
                 raise ValueError(f"frozen qualified chaff manifest SHA-256 mismatch: {workload.id}")
         qualified.append(
@@ -434,7 +442,7 @@ def _frozen_chaff_qualification_scope(
     prefix_present = prefix_root.exists() or prefix_root.is_symlink()
     if prefix_present and (prefix_root.is_symlink() or not prefix_root.is_dir()):
         raise ValueError("frozen chaff prefix-spec root is not a regular directory")
-    response_markers: list[bool] = []
+    response_versions: list[int | None] = []
     for workload in workloads:
         manifest_path = _trusted_regular_input(
             frozen_inputs / "chaff-manifests" / f"{workload.id}.json",
@@ -442,25 +450,47 @@ def _frozen_chaff_qualification_scope(
             label="frozen qualified chaff manifest",
         )
         manifest = load_json(manifest_path)
-        response_markers.append(
-            isinstance(manifest, Mapping)
+        response_versions.append(
+            manifest.get("schema_version")
+            if isinstance(manifest, Mapping)
             and type(manifest.get("schema_version")) is int
-            and manifest.get("schema_version") == 3
+            and manifest.get("schema_version") in {3, 4}
             and manifest.get("qualification_scope") == RESPONSE_ONLY_CHAFF_SCOPE
+            else None
         )
     if prefix_present:
-        if any(response_markers):
+        if any(version is not None for version in response_versions):
             raise ValueError(
                 "frozen chaff evidence ambiguously contains response-only manifests and prefix specs"
             )
         return FULL_CHAFF_SCOPE
-    if not all(response_markers):
+    if any(version is None for version in response_versions):
         raise ValueError(
-            "frozen response-only chaff evidence requires explicit schema-three scope markers"
+            "frozen response-only chaff evidence requires explicit schema-three scope markers "
+            "or explicit schema-four scope markers"
         )
+    if len(set(response_versions)) != 1:
+        raise ValueError("frozen response-only chaff evidence mixes schema-three and schema-four")
     if defense_derived_scope != RESPONSE_ONLY_CHAFF_SCOPE:
         raise ValueError("response-only frozen chaff is incompatible with the campaign defenses")
     return RESPONSE_ONLY_CHAFF_SCOPE
+
+
+def _response_only_sidecar_schema_for_manifest(value: object) -> int:
+    """Map an exact response-only runtime schema to its immutable sidecar schema."""
+
+    if (
+        not isinstance(value, Mapping)
+        or value.get("qualification_scope") != RESPONSE_ONLY_CHAFF_SCOPE
+    ):
+        raise ValueError("response-only chaff manifest scope marker is invalid")
+    schema_version = value.get("schema_version")
+    if (
+        type(schema_version) is not int
+        or schema_version not in RESPONSE_ONLY_MANIFEST_TO_SIDECAR_SCHEMA
+    ):
+        raise ValueError("response-only chaff manifest schema version is invalid")
+    return RESPONSE_ONLY_MANIFEST_TO_SIDECAR_SCHEMA[schema_version]
 
 
 def _trusted_regular_input(path: Path, *, root: Path, label: str) -> Path:
@@ -1246,6 +1276,9 @@ def _materialize_inputs(
                     sidecar_destination,
                     workload_id=workload.id,
                     base_manifest_path=destination,
+                    expected_sidecar_schema_version=_response_only_sidecar_schema_for_manifest(
+                        workload.chaff_manifest_data
+                    ),
                 )
             elif workload.chaff_qualification_scope == FULL_CHAFF_SCOPE:
                 if workload.chaff_prefix_spec_path is None:

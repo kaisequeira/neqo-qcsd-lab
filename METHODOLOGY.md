@@ -385,6 +385,17 @@ boundary and that closure marker, and later tail observations remain excluded.
   exact cell after requested bytes. Pending coalescence additionally requires
   requested-minus-advertised bytes to equal the pending base controller credit.
 
+  A separate bounded bootstrap covers a transport stall before HTTP/3 can
+  parse an atomic HEADERS frame. The controller retains an exact
+  `STREAM_DATA_BLOCKED` report only for a pristine, wholly pre-header stream.
+  Once its prepared body floor and requested, advertised, and known limits
+  agree below the fixed absolute 1,000-byte framing target, the controller may
+  lease the remaining prefix toward that target, subject to the existing
+  lifetime `max_stream_data_excess` budget. This lease is unowned and
+  slotless: grant or advertisement cannot satisfy scheduled incoming debt, and
+  any typed progress invalidates the retained transport proof. It changes no
+  defence parameter, schedule, slot-accounting rule, or acceptance threshold.
+
   Three independent compact response qualifications use
   `max(5, required_chaff_streams)` parallel requests to derive stable full-body
   identity and length. Three independent every-component prefix-pack
@@ -446,8 +457,10 @@ at
 Its closed outer manifest hashes to
 `4ee68a930a344dc0e5874279e09069f92935a2f4f42bc7bb7e88077153b85aa9`.
 POC5 is separate from the historical pre-final engineering gate. Its own
-30-sample rehearsal and twenty formal campaign definitions are now frozen but
-unexecuted; the historical 42/126 sequence remains undefined and on hold.
+30-sample rehearsal and twenty formal campaign definitions are frozen. Its
+latest rehearsal is retained as excluded diagnostic evidence, while all twenty
+formal campaigns remain unexecuted; the historical 42/126 sequence remains
+undefined and on hold.
 
 ## Evidence, sealing, and recovery
 
@@ -528,16 +541,33 @@ active class and contributes no rehearsal, formal, qualification, or handoff
 sample.
 
 FRONT and Tamaraw are the two algorithmic defences in this POC and do not
-consume fitted corpus artifacts. They instead use the create-only response
-qualification store at `config/chaff-response-qualification-store/v1/`.
-Qualification selects one deterministic same-origin chaff response per class
-and requires three independent unshaped invocations of five parallel requests,
-all with one stable response identity. The resulting schema-1 sidecar derives
-a runtime chaff manifest at schema 3 with
-`qualification_scope: response-only`; there is no Walkie-Talkie prefix-pack or
-fitting-data field. Qualification traffic is diagnostic evidence and never a
-classifier observation. “No fitting” therefore does not mean unqualified or
-unchecked execution.
+consume fitted corpus artifacts. The current recovery contract instead
+requires one create-only five-file transaction under
+`config/chaff-response-qualification-store/v2/`. Application requests retain
+their prepared headers. The distinct chaff-only namespace copies `Accept` and
+`Accept-Language` exactly and forces `Accept-Encoding: identity`.
+
+For each class, known-valid same-origin resources with at least 1,200 prepared
+body bytes form a deterministic candidate prefix ordered by descending body
+size, then resource ID and URL. A candidate receives three independent
+connection epochs at fixed 30-second spacing. Each connection issues 40
+requests in eight sequential waves of at most five concurrent requests, for
+120 completions per candidate. Qualification requires one exact 2xx identity
+across all completions: status, identity content encoding, body length, and
+body SHA-256. Only a recorded identity or capacity rejection advances to the
+next deterministic candidate; transport, DNS, timeout, and protocol failures
+abort the transaction.
+
+The resulting response-store v2 artifact is sidecar schema 2 and derives a
+runtime chaff manifest at schema 4 with `qualification_scope: response-only`
+and the exact request-header primitive. There is no Walkie-Talkie prefix-pack
+or fitting-data field. The existing response-store v1/schema-1 sidecars and
+their schema-3 manifests remain frozen-compatible historical inputs; one frozen
+cohort may not mix schemas 3 and 4. The v2 five-file transaction has not yet
+been published, so it currently authorizes no rehearsal or formal sample.
+Qualification traffic is diagnostic evidence and never a classifier
+observation. “No fitting” therefore does not mean unqualified or unchecked
+execution.
 
 The formal corpus has ten temporal acquisition blocks. Each block contains a
 100-sample baseline result with 20 undefended visits per class and a 150-sample
@@ -581,11 +611,28 @@ parameter change, or class substitution invalidates the rehearsal and requires
 a new excluded 30-sample gate. Every one of the twenty formal results must bind
 the same source receipt.
 
-The sealed pre-replacement rehearsal at
-`results/research-classifier-poc5-rehearsal-1200/20260814T110741.344914Z` is
-valid but incomplete: 18/30 samples were accepted, 16 were eligible, and 12
-failed. It remains excluded diagnostic evidence and cannot authorize the
-replacement cohort.
+The latest sealed rehearsal at
+`results/research-classifier-poc5-rehearsal-1200/20260814T150747.615059Z` is
+valid but incomplete: 26/30 samples were both accepted and eligible. Its four
+terminal failures were exactly two Hyper Tamaraw and two Serde Tamaraw
+samples. Every accepted defended trace recorded zero schedule misses and valid
+clock evidence. The failures confirmed a narrow implementation deadlock rather
+than a general QUIC failure: for these small responses, exact body credit was
+smaller than the atomic HTTP/3 HEADERS frame; the peer emitted
+`STREAM_DATA_BLOCKED` before any bytes; and manual receive discarded the only
+transport proof while HTTP/3 could not yet emit typed header progress. The
+bounded 1,000-byte pre-header bootstrap above repairs that path using only the
+existing lifetime excess budget and cannot satisfy a defence slot by grant or
+advertisement.
+
+Recoverable attempts in the same rehearsal also exposed transient compressed
+representation mismatches. The separate identity-only chaff namespace and
+120-completion stress test the exact response representation before capture.
+The latest rehearsal, its retries, and the earlier
+`20260814T110741.344914Z` rehearsal remain excluded diagnostic evidence. Formal
+capture stays blocked until the v2 five-sidecar cohort is atomically published
+from the exact clean build and a subsequent fresh rehearsal passes exactly
+30/30 accepted and eligible with a verified interface handoff.
 
 The earlier six-class and stable3 schema-1 campaign/export contracts remain
 available as historical pipeline contracts but are not part of POC5. The

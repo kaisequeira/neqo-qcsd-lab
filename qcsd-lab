@@ -114,9 +114,9 @@ if [[ "${1:-}" == "qualify-response-chaff" ]]; then
       exit 1
     fi
   done
-  if [[ -e "${ROOT}/config/chaff-response-qualification-store/v1" ||
-        -L "${ROOT}/config/chaff-response-qualification-store/v1" ]]; then
-    echo "qualify-response-chaff requires absent config/chaff-response-qualification-store/v1" >&2
+  if [[ -e "${ROOT}/config/chaff-response-qualification-store/v2" ||
+        -L "${ROOT}/config/chaff-response-qualification-store/v2" ]]; then
+    echo "qualify-response-chaff requires absent config/chaff-response-qualification-store/v2" >&2
     exit 1
   fi
 fi
@@ -517,14 +517,14 @@ if any(after.get(path) != record for path, record in before.items()):
     raise SystemExit("qualify-response-chaff changed pre-existing qualification evidence")
 added = set(after) - set(before)
 if status == 0:
-    expected = {"v1": "directory"}
-    expected.update({f"v1/{workload}.json": "file" for workload in ids})
+    expected = {"v2": "directory"}
+    expected.update({f"v2/{workload}.json": "file" for workload in ids})
     if added != set(expected):
         raise SystemExit(
-            "qualify-response-chaff changed files outside the exact schema-one cohort"
+            "qualify-response-chaff changed files outside the exact schema-two cohort"
         )
     if any(after[path].get("type") != kind for path, kind in expected.items()):
-        raise SystemExit("qualify-response-chaff schema-one output type is invalid")
+        raise SystemExit("qualify-response-chaff schema-two output type is invalid")
 else:
     if not added:
         raise SystemExit(0)
@@ -534,7 +534,7 @@ else:
             "failed qualify-response-chaff created more than one diagnostic candidate"
         )
     root = roots.pop()
-    if not re.fullmatch(r"[.]v1[.]qcsd-batch-[A-Za-z0-9_-]+", root):
+    if not re.fullmatch(r"[.]v2[.]qcsd-batch-[A-Za-z0-9_-]+", root):
         raise SystemExit(
             "failed qualify-response-chaff changed files outside one hidden candidate"
         )

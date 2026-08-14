@@ -113,21 +113,36 @@ role is not a dependency of the already transmitted request prefix.
 ```
 
 Publishes the five-class FRONT/Tamaraw chaff evidence as one create-only
-transaction under `config/chaff-response-qualification-store/v1/`. The public
+transaction under `config/chaff-response-qualification-store/v2/`. The public
 batch requires exactly five unique workload IDs with five distinct primary
-HTTPS origins. For each workload it deterministically selects one compact
-same-origin response and performs exactly three independent unshaped
-qualifications, each with five parallel requests. All fifteen responses must
-match one stable identity and the frozen prepared workload.
+HTTPS origins. It keeps application requests unchanged and creates a separate
+chaff-only request namespace: `Accept` and `Accept-Language` are copied exactly
+from the prepared resource, while `Accept-Encoding` is forced to `identity`.
 
-The loader derives a schema-3 `qcsd-qualified-chaff-manifest` with
-`qualification_scope: response-only`. It contains neither Walkie-Talkie
-prefix-pack fields nor a fitting-artifact binding. That narrower evidence is
-valid only when every defended runtime kind is FRONT or Tamaraw; a baseline-only
-campaign needs no chaff qualification, while campaigns containing another
-defence continue to require the full v2 qualification contract. FRONT and
-Tamaraw are algorithmic and require no fitting, but they still require this
-response qualification and all ordinary runtime-fidelity gates.
+For each workload, eligible known-valid same-origin candidates of at least
+1,200 prepared body bytes are ordered deterministically by prepared body size,
+resource ID, and URL. Each attempted candidate receives three independent
+connection epochs separated by at least 30 seconds. One connection per epoch
+issues 40 requests as eight sequential waves of at most five concurrent
+requests, so a candidate qualifies only after 120 exact completions. Every
+completion must have the same successful identity-encoded response status,
+body length, and body SHA-256. Only an explicit identity or capacity rejection
+advances to the next candidate; transport, DNS, timeout, or protocol failures
+abort the transaction. Publication is atomic, and no v2 sidecar hash exists
+until that exact five-file transaction succeeds from a clean build.
+
+Each response-store v2 file is sidecar schema 2 and derives a schema-4
+`qcsd-qualified-chaff-manifest` with `qualification_scope: response-only` and
+the exact request-header primitive. It contains neither Walkie-Talkie
+prefix-pack fields nor a fitting-artifact binding. Historical response-store
+v1 sidecars and their schema-3 runtime manifests remain frozen-compatible
+verification inputs, but a frozen cohort cannot mix schema 3 and schema 4.
+This narrower evidence is valid only when every defended runtime kind is FRONT
+or Tamaraw; a baseline-only campaign needs no chaff qualification, while
+campaigns containing another defence continue to require the full-v2
+qualification contract. FRONT and Tamaraw are algorithmic and require no
+fitting, but they still require response qualification and all ordinary
+runtime-fidelity gates.
 
 ### `run`
 
@@ -558,6 +573,17 @@ contract promises neither targetless request retransmission nor generic
 post-loss liveness. Retryable unadvertised continuation rollback or requeue
 restores the corresponding all-future reserve before further base allocation.
 
+Manual receive also retains an exact `STREAM_DATA_BLOCKED` report only while a
+stream is pristine and wholly pre-header. Once the prepared body floor and the
+requested, advertised, and known limits agree below 1,000 bytes, that proof may
+lease only the remaining prefix toward an absolute 1,000-byte framing target,
+bounded by the existing lifetime `max_stream_data_excess` budget. The lease is
+slotless and unowned: neither granting nor advertising it satisfies a defence
+slot, and any typed HTTP/3 progress invalidates the retained proof. This
+bounded bootstrap permits one atomic HEADERS frame to exceed a small prepared
+body floor without changing a defence schedule, parameter, slot-accounting
+rule, or capture-fidelity gate.
+
 The initial priority-aware selector binds a known-valid same-origin selected
 source resource; its derived chaff projection is dependency-free and has exact
 qualified body capacity. Campaign loading binds the prepared workload and
@@ -841,8 +867,11 @@ The POC5 workload/class bindings are exactly
 `http3-explained-en-r1` is not used by the rehearsal, formal campaigns, or
 handoff. FRONT and Tamaraw use their fixed research-profile algorithms and
 seeds; the POC neither consumes nor refits the Traffic-Morphing, WTF-PAD, or
-Walkie-Talkie artifacts. Its five published response-only v1 sidecars derive
-schema-3 runtime manifests and have no prefix-pack or fitted-data dependency.
+Walkie-Talkie artifacts. The current recovery contract requires five
+response-store v2 sidecars (schema 2) deriving schema-4 runtime manifests,
+with no prefix-pack or fitted-data dependency. That cohort is the next atomic
+qualification transaction; it is not yet published and does not authorize
+capture merely because the historical v1/schema-3 evidence remains readable.
 
 Each temporal block has two campaign files:
 `classifier-poc5-baseline-NN.yml` contributes 20 undefended visits per class,
@@ -895,11 +924,25 @@ authorizes only the exact image, workloads, and campaign commit that it ran;
 any rebuild, source or workload repair, parameter change, or class replacement
 requires a new excluded 30-sample rehearsal before formal acquisition.
 
-The sealed pre-replacement rehearsal at
-`results/research-classifier-poc5-rehearsal-1200/20260814T110741.344914Z`
-remains valid diagnostic evidence but is incomplete: 18/30 samples were
-accepted, only 16 were eligible, and 12 failed. It is permanently excluded and
-cannot authorize the replacement cohort.
+The latest excluded rehearsal at
+`results/research-classifier-poc5-rehearsal-1200/20260814T150747.615059Z`
+is valid but incomplete: 26/30 samples were accepted and eligible, and the four
+terminal failures were exactly the two Hyper Tamaraw and two Serde Tamaraw
+samples. Every accepted defended trace had zero schedule misses, and its clock
+evidence was valid. The failed small responses exposed a confirmed
+manual-receive liveness deadlock: their exact body credit was smaller than an
+atomic HTTP/3 HEADERS frame, the peer reported `STREAM_DATA_BLOCKED` before
+delivering bytes, and the controller could neither retain that proof nor
+receive typed header progress. The bounded pre-header bootstrap described
+above repairs that implementation path without changing FRONT, Tamaraw, or an
+acceptance threshold.
+
+The same run also observed transient compressed-representation mismatches on
+otherwise recoverable attempts. That evidence motivates the v2 chaff-only
+`Accept-Encoding: identity` namespace and 120-completion sustained identity
+stress. The rehearsal, all of its retries, and the earlier
+`20260814T110741.344914Z` rehearsal remain permanently excluded and cannot
+authorize formal capture.
 
 The incomplete six-class diagnostic at
 `results/research-classifier-pilot-01-1200/20260814T064655.275845Z` is excluded
@@ -917,9 +960,14 @@ qualification diagnostics are likewise never POC5 classifier samples.
 These POC5 campaign files, the offline exporter, tests, and documentation are
 outside the qualification implementation-file inventory. Publish them in a
 clean Lab commit and rebuild the collection image so new captures bind that
-commit. The five response-only v1 sidecars are the active POC qualification;
-do not regenerate the historical full-v2 sidecars, prefix specs, fitting
-result, or sealed `research-1200` bundle before the rehearsal.
+commit. First publish the five response-store v2 sidecars atomically from the
+exact clean qualification build, then rebuild so capture binds the sidecar
+commit. Formal acquisition remains blocked until that schema-2/schema-4 cohort
+exists and a fresh excluded rehearsal finishes exactly 30/30 accepted and
+eligible with a verified interface handoff. Keep the historical response-store
+v1/schema-3 evidence frozen-compatible; do not regenerate the separate
+historical full-v2 sidecars, prefix specs, fitting result, or sealed
+`research-1200` bundle.
 
 The implementation goal established the profiles, preparation policy,
 fitters, runtime realization, campaign contracts, and evidence boundaries.

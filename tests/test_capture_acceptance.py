@@ -221,12 +221,18 @@ def _synthetic_response_observation(
             "direction": "outgoing",
             "udp_payload_bytes": 1_200,
         },
+        {
+            "sequence": 2,
+            "phase": "qualification",
+            "direction": "incoming",
+            "udp_payload_bytes": 1_000,
+        },
     ]
     packet_log = json.dumps(observations, separators=(",", ":")).encode()
     statistic = {
         "incoming": {
-            "packet_count": 1,
-            "observed_udp_payload_max": 900,
+            "packet_count": 2,
+            "observed_udp_payload_max": 1_000,
             "oversized_packet_count": 0,
         },
         "outgoing": {
@@ -235,7 +241,7 @@ def _synthetic_response_observation(
             "oversized_packet_count": 0,
         },
         "total": {
-            "packet_count": 2,
+            "packet_count": 3,
             "observed_udp_payload_max": 1_200,
             "oversized_packet_count": 0,
         },
@@ -264,9 +270,9 @@ def _synthetic_response_observation(
         "completion_status": "complete",
         "error": None,
         "source": {
-            "neqo_base_commit": "controlled-live-test-only",
-            "published_qcsd_commit": "controlled-live-test-only",
-            "migration_commit": "controlled-live-test-only",
+            "neqo_base_commit": "0" * 40,
+            "published_qcsd_commit": "0" * 40,
+            "migration_commit": "0" * 40,
         },
         "requests": [
             {

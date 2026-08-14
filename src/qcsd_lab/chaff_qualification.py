@@ -32,8 +32,15 @@ from .util import (
 )
 
 QUALIFICATION_SCHEMA_VERSION = 2
+# The published response-only v1 sidecars and their schema-three runtime
+# manifests are immutable verification inputs.  The stronger identity
+# qualification therefore advances both namespaces rather than changing the
+# meaning of either frozen schema.
 RESPONSE_ONLY_SIDECAR_SCHEMA_VERSION = 1
 RESPONSE_ONLY_MANIFEST_SCHEMA_VERSION = 3
+RESPONSE_ONLY_SIDECAR_V2_SCHEMA_VERSION = 2
+RESPONSE_ONLY_MANIFEST_V2_SCHEMA_VERSION = 4
+RESPONSE_QUALIFICATION_V2_RECEIPT_SCHEMA_VERSION = 3
 IMPLEMENTATION_RECEIPT_SCHEMA_VERSION = 1
 # Public compatibility name: this refers to qualification artifacts, not the
 # separately versioned implementation receipt below.
@@ -48,11 +55,24 @@ RESPONSE_ONLY_QUALIFICATION_SCOPE = "response-only"
 PREFIX_ARTIFACT_TYPE = "qcsd-chaff-prefix-pack-qualification"
 HEADER_PROJECTION = ("accept", "accept-encoding", "accept-language")
 SELECTION_POLICY = "qualified-largest-known-valid-same-origin-response-v2"
+RESPONSE_ONLY_V2_SELECTION_POLICY = (
+    "first-stable-identity-response-from-prepared-body-descending-prefix-v1"
+)
+IDENTITY_COPIED_HEADERS = ("accept", "accept-language")
+IDENTITY_FORCED_HEADERS = (("accept-encoding", "identity"),)
+IDENTITY_REQUEST_HEADER_MODE = "identity-chaff-v1"
 METHOD = "GET"
 QUALIFICATION_RUNS = 3
 MAX_QUALIFIED_CHAFF_STREAMS = 20
 MIN_CROSS_MODE_PARALLEL_CHAFF_STREAMS = 5
 RESPONSE_ONLY_PARALLEL_CHAFF_STREAMS = 5
+RESPONSE_ONLY_WAVES_PER_EPOCH = 8
+RESPONSE_ONLY_REQUESTS_PER_EPOCH = (
+    RESPONSE_ONLY_WAVES_PER_EPOCH * RESPONSE_ONLY_PARALLEL_CHAFF_STREAMS
+)
+RESPONSE_ONLY_COMPLETIONS_PER_CANDIDATE = QUALIFICATION_RUNS * RESPONSE_ONLY_REQUESTS_PER_EPOCH
+RESPONSE_ONLY_EPOCH_SPACING_SECONDS = 30
+RESPONSE_ONLY_WAVE_SPACING_MILLISECONDS = 0
 UDP_PAYLOAD_CEILING = 1_200
 MAX_STREAM_DATA_EXCESS = 1_000
 MAX_WALKIE_TALKIE_COMPONENT_CELLS = 2**32 - 1
@@ -140,6 +160,26 @@ RESPONSE_ONLY_SIDECAR_KEYS = {
     "implementation_receipt",
     "resource",
 }
+RESPONSE_ONLY_V2_SIDECAR_KEYS = {
+    "schema_version",
+    "artifact_type",
+    "qualification_scope",
+    "workload_id",
+    "base_manifest",
+    "selection_policy",
+    "application_resource_id",
+    "selected_chaff_resource_id",
+    "qualified_parallel_chaff_streams",
+    "request_header_primitive",
+    "method",
+    "qualification_policy",
+    "qualification_source",
+    "qualification_image_digest",
+    "neqo_provenance",
+    "implementation_receipt",
+    "candidate_attempts",
+    "resource",
+}
 BASE_MANIFEST_KEYS = {"path", "sha256"}
 POLICY_KEYS = {
     "response_runs",
@@ -165,6 +205,28 @@ RESPONSE_ONLY_POLICY_KEYS = {
     "udp_payload_ceiling",
     "max_response_bytes",
     "separate_chaff_namespace",
+}
+RESPONSE_ONLY_V2_POLICY_KEYS = {
+    "qualification_scope",
+    "connection_epochs_per_candidate",
+    "waves_per_connection_epoch",
+    "parallel_requests_per_wave",
+    "total_requests_per_connection_epoch",
+    "total_completions_per_candidate",
+    "connection_epoch_spacing_seconds",
+    "inter_wave_spacing_milliseconds",
+    "qualified_parallel_chaff_streams",
+    "profile",
+    "response_defense",
+    "seed",
+    "udp_payload_ceiling",
+    "max_response_bytes",
+    "separate_chaff_namespace",
+}
+REQUEST_HEADER_PRIMITIVE_KEYS = {
+    "mode",
+    "copied_from_application",
+    "forced",
 }
 IMPLEMENTATION_KEYS = {
     "schema_version",
@@ -249,12 +311,38 @@ RESPONSE_ONLY_RESOURCE_RECEIPT_KEYS = {
     "response_runs",
     "response_qualification_sha256",
 }
+RESPONSE_ONLY_V2_RESOURCE_RECEIPT_KEYS = {
+    "resource_id",
+    "url",
+    "headers",
+    "request_stream_bytes",
+    "expected_response",
+    "response_qualification_sha256",
+}
 EXPECTED_RESPONSE_KEYS = {"status", "content_encoding", "body_bytes", "body_sha256"}
 RESPONSE_RUN_KEYS = {
     "run_index",
     "receipt_object_sha256",
     "receipt",
 }
+RESPONSE_V2_RUN_KEYS = {
+    "epoch_index",
+    "process_exit_code",
+    "receipt_object_sha256",
+    "receipt",
+}
+CANDIDATE_ATTEMPT_KEYS = {
+    "candidate_index",
+    "resource_id",
+    "url",
+    "prepared_response",
+    "headers",
+    "outcome",
+    "failure_class",
+    "connection_epochs",
+    "response_qualification_sha256",
+}
+PREPARED_CANDIDATE_RESPONSE_KEYS = {"status", "body_bytes", "body_sha256"}
 PREFIX_RUN_KEYS = {"run_index", "receipt_object_sha256", "receipt"}
 RESPONSE_RECEIPT_KEYS = {
     "schema_version",
@@ -285,6 +373,13 @@ RESPONSE_RECEIPT_KEYS = {
     "packets",
     "passed",
 }
+RESPONSE_V2_RECEIPT_KEYS = RESPONSE_RECEIPT_KEYS | {
+    "total_requests",
+    "request_waves",
+    "max_concurrent_requests",
+    "request_header_mode",
+    "failure_class",
+}
 RESPONSE_REQUEST_KEYS = {
     "request_index",
     "stream_id",
@@ -296,6 +391,7 @@ RESPONSE_REQUEST_KEYS = {
     "complete",
     "outcome",
 }
+RESPONSE_V2_REQUEST_KEYS = RESPONSE_REQUEST_KEYS | {"wave_index"}
 PACKET_OBSERVATION_KEYS = {"sequence", "phase", "direction", "udp_payload_bytes"}
 PREFIX_RECEIPT_KEYS = {
     "schema_version",
@@ -520,6 +616,56 @@ def project_compact_headers(resource: Mapping[str, Any]) -> list[list[str]]:
     return projected
 
 
+def project_identity_chaff_headers(resource: Mapping[str, Any]) -> list[list[str]]:
+    """Derive the response-only v2 request namespace without rewriting the app.
+
+    Accept and Accept-Language are copied byte-for-byte from the frozen
+    application resource.  Accept-Encoding is deliberately *not* copied: the
+    distinct chaff request forces the literal value ``identity`` so its
+    qualified representation cannot silently depend on content negotiation.
+    """
+
+    headers = resource.get("headers")
+    if not isinstance(headers, list):
+        raise ValueError("qualified application resource headers must be a list")
+    by_name: dict[str, list[str]] = {}
+    for header in headers:
+        if (
+            not isinstance(header, list)
+            or len(header) != 2
+            or not all(isinstance(part, str) for part in header)
+        ):
+            raise ValueError("qualified application resource headers must be pairs")
+        name = header[0]
+        normalized = name.lower()
+        if normalized in {*IDENTITY_COPIED_HEADERS, "accept-encoding"}:
+            if name != normalized:
+                raise ValueError("identity chaff application headers must use lowercase names")
+            if normalized in by_name:
+                raise ValueError("identity chaff request headers must be unique")
+            by_name[normalized] = list(header)
+    if set(by_name) != {*IDENTITY_COPIED_HEADERS, "accept-encoding"}:
+        raise ValueError(
+            "identity chaff requires exact lowercase accept, accept-encoding, "
+            "and accept-language application headers"
+        )
+    return [
+        by_name["accept"],
+        ["accept-encoding", "identity"],
+        by_name["accept-language"],
+    ]
+
+
+def response_only_request_header_primitive() -> dict[str, Any]:
+    """Return the exact schema-four request-header derivation primitive."""
+
+    return {
+        "mode": IDENTITY_REQUEST_HEADER_MODE,
+        "copied_from_application": list(IDENTITY_COPIED_HEADERS),
+        "forced": [list(header) for header in IDENTITY_FORCED_HEADERS],
+    }
+
+
 def selected_navigation_root(manifest: Mapping[str, Any], workload_id: str) -> dict[str, Any]:
     preparation = manifest.get("preparation")
     resources = manifest.get("resources")
@@ -634,6 +780,57 @@ def selected_chaff_resource(
         )
     _negative_bytes, _resource_id, _url, resource, response = min(candidates)
     return resource, dict(response)
+
+
+def response_only_candidate_resources(
+    manifest: Mapping[str, Any], workload_id: str
+) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    """Return the frozen eligible candidate order used by response-only v2.
+
+    Eligibility is intentionally decided from the immutable preparation
+    evidence, not a live probe: known-valid, primary same-origin resources with
+    at least one 1200-byte prepared body.  A candidate's separately negotiated
+    identity response is only authoritative after sustained qualification.
+    """
+
+    application = selected_navigation_root(manifest, workload_id)
+    resources = manifest.get("resources")
+    preparation = manifest.get("preparation")
+    assert isinstance(resources, list) and isinstance(preparation, Mapping)
+    expected = _prepared_expected_responses(manifest)
+    application_origin = _https_origin(application["url"])
+    approved = preparation.get("approved_origins")
+    if (
+        application_origin is None
+        or not isinstance(approved, list)
+        or application_origin not in {_https_origin(value) for value in approved}
+    ):
+        raise ValueError(f"qualified workload {workload_id!r} has no approved HTTPS origin")
+    candidates: list[tuple[int, int, str, dict[str, Any], dict[str, Any]]] = []
+    for value in resources:
+        if not isinstance(value, dict):
+            continue
+        resource_id = value.get("id")
+        response = expected.get(resource_id) if type(resource_id) is int else None
+        if (
+            response is None
+            or value.get("known_valid") is not True
+            or _https_origin(value.get("url")) != application_origin
+            or response["bytes"] < UDP_PAYLOAD_CEILING
+        ):
+            continue
+        try:
+            project_identity_chaff_headers(value)
+        except ValueError:
+            continue
+        candidates.append(
+            (-response["bytes"], resource_id, str(value["url"]), dict(value), dict(response))
+        )
+    if not candidates:
+        raise ValueError(
+            f"qualified workload {workload_id!r} has no eligible identity-response candidate"
+        )
+    return [(resource, response) for _, _, _, resource, response in sorted(candidates)]
 
 
 def _application_resource_batches(manifest: Mapping[str, Any]) -> list[list[int]]:
@@ -1220,6 +1417,9 @@ def validate_sidecar(
     application = selected_navigation_root(base, workload_id)
     selected, _selected_response = selected_chaff_resource(base, workload_id)
     _validate_source(sidecar["qualification_source"], sidecar["qualification_image_digest"])
+    _validate_implementation_receipt(
+        sidecar["implementation_receipt"], require_current=require_current_implementation
+    )
     if _source_execution_identity(sidecar["implementation_receipt"]["source"]) != (
         _source_execution_identity(sidecar["qualification_source"])
     ):
@@ -1232,9 +1432,6 @@ def validate_sidecar(
             raise ValueError("Neqo source has changed since chaff qualification")
     _validate_neqo_provenance(
         sidecar["neqo_provenance"], qualification_source=sidecar["qualification_source"]
-    )
-    _validate_implementation_receipt(
-        sidecar["implementation_receipt"], require_current=require_current_implementation
     )
     _validate_nontraining_receipts(
         sidecar["fitting_source"],
@@ -1327,9 +1524,52 @@ def validate_response_only_sidecar(
     *,
     workload_id: str,
     base_manifest_path: Path,
+    expected_sidecar_schema_version: int | None,
     require_current_implementation: bool = True,
 ) -> QualifiedChaffInput:
-    """Validate a response-only sidecar against exact prepared workload bytes."""
+    """Validate one explicitly selected immutable response-only schema contract."""
+
+    if not isinstance(value, Mapping) or type(value.get("schema_version")) is not int:
+        raise ValueError("response-only chaff qualification schema version is invalid")
+    if expected_sidecar_schema_version is not None and (
+        type(expected_sidecar_schema_version) is not int
+        or expected_sidecar_schema_version
+        not in {
+            RESPONSE_ONLY_SIDECAR_SCHEMA_VERSION,
+            RESPONSE_ONLY_SIDECAR_V2_SCHEMA_VERSION,
+        }
+    ):
+        raise ValueError("expected response-only sidecar schema version is invalid")
+    if (
+        expected_sidecar_schema_version is not None
+        and value["schema_version"] != expected_sidecar_schema_version
+    ):
+        raise ValueError("response-only chaff qualification schema version is unexpected")
+    if value["schema_version"] == RESPONSE_ONLY_SIDECAR_SCHEMA_VERSION:
+        return _validate_response_only_sidecar_v1(
+            value,
+            workload_id=workload_id,
+            base_manifest_path=base_manifest_path,
+            require_current_implementation=require_current_implementation,
+        )
+    if value["schema_version"] == RESPONSE_ONLY_SIDECAR_V2_SCHEMA_VERSION:
+        return _validate_response_only_sidecar_v2(
+            value,
+            workload_id=workload_id,
+            base_manifest_path=base_manifest_path,
+            require_current_implementation=require_current_implementation,
+        )
+    raise ValueError("unsupported response-only chaff qualification schema version")
+
+
+def _validate_response_only_sidecar_v1(
+    value: object,
+    *,
+    workload_id: str,
+    base_manifest_path: Path,
+    require_current_implementation: bool = True,
+) -> QualifiedChaffInput:
+    """Validate a frozen v1 sidecar and derive its schema-three manifest."""
 
     sidecar = _exact_mapping(
         value,
@@ -1364,6 +1604,9 @@ def validate_response_only_sidecar(
     if sidecar["selected_chaff_resource_id"] != selected["id"]:
         raise ValueError("response-only chaff qualification resource binding is invalid")
     _validate_source(sidecar["qualification_source"], sidecar["qualification_image_digest"])
+    _validate_implementation_receipt(
+        sidecar["implementation_receipt"], require_current=require_current_implementation
+    )
     if _source_execution_identity(sidecar["implementation_receipt"]["source"]) != (
         _source_execution_identity(sidecar["qualification_source"])
     ):
@@ -1376,9 +1619,6 @@ def validate_response_only_sidecar(
             raise ValueError("Neqo source has changed since response-only chaff qualification")
     _validate_neqo_provenance(
         sidecar["neqo_provenance"], qualification_source=sidecar["qualification_source"]
-    )
-    _validate_implementation_receipt(
-        sidecar["implementation_receipt"], require_current=require_current_implementation
     )
     _validate_response_only_policy(sidecar["qualification_policy"])
     resource = _validate_response_only_resource_receipt(
@@ -1403,11 +1643,117 @@ def validate_response_only_sidecar(
     )
 
 
+def _validate_response_only_sidecar_v2(
+    value: object,
+    *,
+    workload_id: str,
+    base_manifest_path: Path,
+    require_current_implementation: bool = True,
+) -> QualifiedChaffInput:
+    """Validate the sustained identity-response sidecar and schema-four manifest."""
+
+    sidecar = _exact_mapping(
+        value,
+        RESPONSE_ONLY_V2_SIDECAR_KEYS,
+        "response-only v2 chaff qualification sidecar",
+    )
+    if (
+        type(sidecar["schema_version"]) is not int
+        or sidecar["schema_version"] != RESPONSE_ONLY_SIDECAR_V2_SCHEMA_VERSION
+        or sidecar["artifact_type"] != RESPONSE_ONLY_SIDECAR_ARTIFACT_TYPE
+        or sidecar["qualification_scope"] != RESPONSE_ONLY_QUALIFICATION_SCOPE
+        or sidecar["workload_id"] != workload_id
+        or sidecar["selection_policy"] != RESPONSE_ONLY_V2_SELECTION_POLICY
+        or type(sidecar["application_resource_id"]) is not int
+        or sidecar["application_resource_id"] != 0
+        or type(sidecar["selected_chaff_resource_id"]) is not int
+        or type(sidecar["qualified_parallel_chaff_streams"]) is not int
+        or sidecar["qualified_parallel_chaff_streams"] != RESPONSE_ONLY_PARALLEL_CHAFF_STREAMS
+        or sidecar["method"] != METHOD
+    ):
+        raise ValueError("response-only v2 chaff qualification policy binding is invalid")
+    _validate_response_only_request_header_primitive(sidecar["request_header_primitive"])
+    _validate_response_only_v2_policy(sidecar["qualification_policy"])
+
+    base_receipt = _exact_mapping(sidecar["base_manifest"], BASE_MANIFEST_KEYS, "base manifest")
+    if Path(str(base_receipt["path"])).name != base_manifest_path.name or base_receipt[
+        "sha256"
+    ] != sha256_file(base_manifest_path):
+        raise ValueError("response-only v2 chaff qualification base manifest mismatch")
+    base = load_json(base_manifest_path)
+    validate_research_preparation(base, workload_id=workload_id)
+    application = selected_navigation_root(base, workload_id)
+    candidates = response_only_candidate_resources(base, workload_id)
+
+    _validate_source(sidecar["qualification_source"], sidecar["qualification_image_digest"])
+    _validate_implementation_receipt(
+        sidecar["implementation_receipt"], require_current=require_current_implementation
+    )
+    if _source_execution_identity(sidecar["implementation_receipt"]["source"]) != (
+        _source_execution_identity(sidecar["qualification_source"])
+    ):
+        raise ValueError("implementation receipt source differs from qualification source")
+    if require_current_implementation:
+        current_source = source_metadata()
+        if current_source.get("neqo_commit") != sidecar["qualification_source"].get(
+            "neqo_commit"
+        ) or current_source.get("neqo_pinned_commit") != current_source.get("neqo_commit"):
+            raise ValueError("Neqo source has changed since response-only chaff qualification")
+    _validate_neqo_provenance(
+        sidecar["neqo_provenance"], qualification_source=sidecar["qualification_source"]
+    )
+
+    attempts = sidecar["candidate_attempts"]
+    if not isinstance(attempts, list) or not attempts or len(attempts) > len(candidates):
+        raise ValueError("response-only v2 candidate attempts must be a non-empty prefix")
+    validated_attempts: list[dict[str, Any]] = []
+    for candidate_index, value_attempt in enumerate(attempts):
+        candidate, prepared = candidates[candidate_index]
+        attempt = _validate_response_only_candidate_attempt(
+            value_attempt,
+            candidate_index=candidate_index,
+            base_resource=candidate,
+            prepared_response=prepared,
+            application_manifest_sha256=base_receipt["sha256"],
+            application_resource_id=application["id"],
+            neqo_provenance=sidecar["neqo_provenance"],
+        )
+        expected_outcome = "qualified" if candidate_index == len(attempts) - 1 else "rejected"
+        if attempt["outcome"] != expected_outcome:
+            raise ValueError("response-only v2 candidate prefix outcome is invalid")
+        validated_attempts.append(attempt)
+    selected_attempt = validated_attempts[-1]
+    selected_resource, _prepared = candidates[len(attempts) - 1]
+    if (
+        selected_attempt["failure_class"] is not None
+        or sidecar["selected_chaff_resource_id"] != selected_resource["id"]
+    ):
+        raise ValueError("response-only v2 selected candidate binding is invalid")
+    resource = _validate_response_only_v2_resource_receipt(
+        sidecar["resource"],
+        selected_resource,
+        selected_attempt=selected_attempt,
+    )
+    manifest = derive_response_only_chaff_manifest_v2(sidecar, selected_resource, resource)
+    return QualifiedChaffInput(
+        sidecar_path=Path(),
+        sidecar_sha256=sha256_bytes(canonical_bytes(dict(sidecar))),
+        manifest=manifest,
+        manifest_sha256=sha256_bytes(canonical_bytes(manifest)),
+        application_manifest_sha256=sha256_file(base_manifest_path),
+        application_resource_id=application["id"],
+        selected_chaff_resource_id=selected_resource["id"],
+        qualified_parallel_chaff_streams=RESPONSE_ONLY_PARALLEL_CHAFF_STREAMS,
+        walkie_talkie_required_chaff_streams=None,
+    )
+
+
 def load_response_qualified_chaff(
     sidecar_path: Path,
     *,
     workload_id: str,
     base_manifest_path: Path,
+    expected_sidecar_schema_version: int | None,
     require_current_implementation: bool = True,
 ) -> QualifiedChaffInput:
     """Load one regular response-only sidecar without following a final symlink."""
@@ -1427,6 +1773,7 @@ def load_response_qualified_chaff(
         value,
         workload_id=workload_id,
         base_manifest_path=base_manifest_path,
+        expected_sidecar_schema_version=expected_sidecar_schema_version,
         require_current_implementation=require_current_implementation,
     )
     return QualifiedChaffInput(
@@ -1474,6 +1821,51 @@ def derive_response_only_chaff_manifest(
     }
     return {
         "schema_version": RESPONSE_ONLY_MANIFEST_SCHEMA_VERSION,
+        "artifact_type": MANIFEST_ARTIFACT_TYPE,
+        "qualification_scope": RESPONSE_ONLY_QUALIFICATION_SCOPE,
+        "application_workload_sha256": sidecar["base_manifest"]["sha256"],
+        "application_resource_id": sidecar["application_resource_id"],
+        "selected_chaff_resource_id": sidecar["selected_chaff_resource_id"],
+        "qualified_parallel_chaff_streams": RESPONSE_ONLY_PARALLEL_CHAFF_STREAMS,
+        "resources": [qualified],
+    }
+
+
+def derive_response_only_chaff_manifest_v2(
+    sidecar: Mapping[str, Any],
+    base_resource: Mapping[str, Any],
+    resource_receipt: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Derive the schema-four FRONT/Tamaraw identity-chaff runtime input."""
+
+    resource = resource_receipt or dict(sidecar["resource"])
+    response = resource["expected_response"]
+    body_bytes = response["body_bytes"]
+    primitive = response_only_request_header_primitive()
+    qualified = {
+        "id": base_resource["id"],
+        "url": base_resource["url"],
+        "type": base_resource.get("type", "Other"),
+        "content_length": body_bytes,
+        "data_length": body_bytes,
+        "chaff_priority": base_resource.get("chaff_priority", False),
+        "known_valid": True,
+        "depends_on": [],
+        "headers": resource["headers"],
+        "chaff_qualification": {
+            "schema_version": RESPONSE_ONLY_MANIFEST_V2_SCHEMA_VERSION,
+            "qualification_scope": RESPONSE_ONLY_QUALIFICATION_SCOPE,
+            "method": METHOD,
+            "request_header_primitive": primitive,
+            "request_stream_bytes": resource["request_stream_bytes"],
+            "qualified_parallel_chaff_streams": RESPONSE_ONLY_PARALLEL_CHAFF_STREAMS,
+            "qualified_completion_count": RESPONSE_ONLY_COMPLETIONS_PER_CANDIDATE,
+            "expected_response": response,
+            "response_qualification_sha256": resource["response_qualification_sha256"],
+        },
+    }
+    return {
+        "schema_version": RESPONSE_ONLY_MANIFEST_V2_SCHEMA_VERSION,
         "artifact_type": MANIFEST_ARTIFACT_TYPE,
         "qualification_scope": RESPONSE_ONLY_QUALIFICATION_SCOPE,
         "application_workload_sha256": sidecar["base_manifest"]["sha256"],
@@ -1693,6 +2085,151 @@ def qualify_response_chaff(
             sidecar,
             workload_id=workload_id,
             base_manifest_path=base_path,
+            expected_sidecar_schema_version=RESPONSE_ONLY_SIDECAR_SCHEMA_VERSION,
+        )
+        try:
+            with destination.open("xb") as output:
+                output.write(canonical_bytes(sidecar))
+                output.flush()
+                os.fsync(output.fileno())
+        except FileExistsError:
+            raise FileExistsError(
+                f"{destination} already exists; response qualification is create-only"
+            ) from None
+        completed = True
+    finally:
+        if completed:
+            shutil.rmtree(temporary)
+    return QualifiedChaffOutput(
+        destination,
+        sha256_file(destination),
+        validated.manifest_sha256,
+    )
+
+
+def qualify_response_chaff_v2(
+    workload_id: str,
+    *,
+    qualification_root: Path,
+    workload_root: Path | None = None,
+    timeout_seconds: int = 30,
+    interval_seconds: int = RESPONSE_ONLY_EPOCH_SPACING_SECONDS,
+    _execution_context: tuple[dict[str, Any], dict[str, Any], str] | None = None,
+) -> QualifiedChaffOutput:
+    """Create one v2 sidecar from a sustained deterministic candidate prefix."""
+
+    if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", workload_id):
+        raise ValueError("workload ID must contain lowercase letters, digits, and single hyphens")
+    if type(interval_seconds) is not int or interval_seconds != RESPONSE_ONLY_EPOCH_SPACING_SECONDS:
+        raise ValueError(
+            "response-only v2 qualification requires the fixed 30-second epoch spacing"
+        )
+    destination_root = _regular_directory_without_symlinks(
+        qualification_root, "response qualification destination"
+    )
+    destination = destination_root / f"{workload_id}.json"
+    if destination.exists() or destination.is_symlink():
+        raise FileExistsError(
+            f"{destination} already exists; response qualification is create-only"
+        )
+    workloads = _regular_directory_without_symlinks(
+        workload_root or LAB_ROOT / "config/workloads", "workload root"
+    )
+    base_path = workloads / f"{workload_id}.json"
+    if not base_path.is_file() or base_path.is_symlink():
+        raise ValueError(f"workload manifest is not a regular file: {base_path}")
+    executed_implementation, source, qualification_image = (
+        _execution_context or _qualification_execution_context()
+    )
+    neqo_client, neqo_client_sha256 = _bound_neqo_client(executed_implementation)
+    base = load_json(base_path)
+    validate_research_preparation(base, workload_id=workload_id)
+    application = selected_navigation_root(base, workload_id)
+    candidates = response_only_candidate_resources(base, workload_id)
+    base_sha = sha256_file(base_path)
+    temporary = Path(
+        tempfile.mkdtemp(
+            prefix=f".{workload_id}-response-v2-qualification-evidence-",
+            dir=destination_root,
+        )
+    )
+    completed = False
+    attempts: list[dict[str, Any]] = []
+    all_receipts: list[dict[str, Any]] = []
+    selected: dict[str, Any] | None = None
+    selected_response: dict[str, Any] | None = None
+    selected_request_stream_bytes: int | None = None
+    try:
+        for candidate_index, (candidate, prepared_response) in enumerate(candidates):
+            candidate_directory = temporary / (
+                f"candidate-{candidate_index:03d}-resource-{candidate['id']}"
+            )
+            candidate_directory.mkdir()
+            epochs = _run_response_qualifications_v2(
+                base_path,
+                candidate_directory,
+                selected_chaff_resource_id=candidate["id"],
+                application_manifest_sha256=base_sha,
+                application_resource_id=application["id"],
+                url=candidate["url"],
+                headers=project_identity_chaff_headers(candidate),
+                neqo_client=neqo_client,
+                neqo_client_sha256=neqo_client_sha256,
+                timeout_seconds=timeout_seconds,
+                interval_seconds=interval_seconds,
+            )
+            all_receipts.extend(receipt for _exit_code, receipt in epochs)
+            attempt, expected_response, request_stream_bytes = _candidate_attempt_record_v2(
+                candidate_index=candidate_index,
+                base_resource=candidate,
+                prepared_response=prepared_response,
+                epochs=epochs,
+                application_manifest_sha256=base_sha,
+                application_resource_id=application["id"],
+            )
+            attempts.append(attempt)
+            if attempt["outcome"] == "qualified":
+                selected = candidate
+                selected_response = expected_response
+                selected_request_stream_bytes = request_stream_bytes
+                break
+        if selected is None or selected_response is None or selected_request_stream_bytes is None:
+            raise PreparationError(
+                "no frozen response-only candidate passed sustained identity qualification"
+            )
+        response_digest = attempts[-1]["response_qualification_sha256"]
+        sidecar = {
+            "schema_version": RESPONSE_ONLY_SIDECAR_V2_SCHEMA_VERSION,
+            "artifact_type": RESPONSE_ONLY_SIDECAR_ARTIFACT_TYPE,
+            "qualification_scope": RESPONSE_ONLY_QUALIFICATION_SCOPE,
+            "workload_id": workload_id,
+            "base_manifest": {"path": base_path.name, "sha256": base_sha},
+            "selection_policy": RESPONSE_ONLY_V2_SELECTION_POLICY,
+            "application_resource_id": application["id"],
+            "selected_chaff_resource_id": selected["id"],
+            "qualified_parallel_chaff_streams": RESPONSE_ONLY_PARALLEL_CHAFF_STREAMS,
+            "request_header_primitive": response_only_request_header_primitive(),
+            "method": METHOD,
+            "qualification_policy": response_only_v2_qualification_policy(),
+            "qualification_source": source,
+            "qualification_image_digest": qualification_image,
+            "neqo_provenance": _stable_neqo_provenance(all_receipts),
+            "implementation_receipt": executed_implementation,
+            "candidate_attempts": attempts,
+            "resource": {
+                "resource_id": selected["id"],
+                "url": selected["url"],
+                "headers": project_identity_chaff_headers(selected),
+                "request_stream_bytes": selected_request_stream_bytes,
+                "expected_response": selected_response,
+                "response_qualification_sha256": response_digest,
+            },
+        }
+        validated = validate_response_only_sidecar(
+            sidecar,
+            workload_id=workload_id,
+            base_manifest_path=base_path,
+            expected_sidecar_schema_version=RESPONSE_ONLY_SIDECAR_V2_SCHEMA_VERSION,
         )
         try:
             with destination.open("xb") as output:
@@ -1722,7 +2259,7 @@ def qualify_all_response_chaff(
     timeout_seconds: int = 30,
     interval_seconds: int = 30,
 ) -> tuple[QualifiedChaffOutput, ...]:
-    """Qualify an explicit five-workload response cohort and publish immutable v1."""
+    """Qualify an explicit five-workload response cohort and publish immutable v2."""
 
     cohort = tuple(workload_ids)
     if (
@@ -1737,12 +2274,12 @@ def qualify_all_response_chaff(
         raise ValueError("response qualification requires exactly five unique workload IDs")
     store_input = qualification_store or LAB_ROOT / "config/chaff-response-qualification-store"
     store = _regular_directory_without_symlinks(store_input, "response qualification store")
-    destination = store / "v1"
+    destination = store / "v2"
     if destination.exists() or destination.is_symlink():
         raise FileExistsError(
             f"{destination} already exists; batch response qualification is create-only"
         )
-    stale = sorted(store.glob(".v1.qcsd-batch-*"))
+    stale = sorted(store.glob(".v2.qcsd-batch-*"))
     if stale:
         raise ValueError("response qualification store contains a stale unpublished batch")
     workloads = _regular_directory_without_symlinks(
@@ -1763,15 +2300,15 @@ def qualify_all_response_chaff(
                 f"response qualification workload has no primary HTTPS origin: {workload_id}"
             )
         primary_origins.add(primary_origin)
-        selected_chaff_resource(manifest, workload_id)
+        response_only_candidate_resources(manifest, workload_id)
         input_hashes[workload] = sha256_file(workload)
     if len(primary_origins) != 5:
         raise ValueError("response qualification requires five distinct primary HTTPS origins")
     execution_context = _qualification_execution_context()
-    candidate = Path(tempfile.mkdtemp(prefix=".v1.qcsd-batch-", dir=store))
+    candidate = Path(tempfile.mkdtemp(prefix=".v2.qcsd-batch-", dir=store))
     try:
         outputs = [
-            qualify_response_chaff(
+            qualify_response_chaff_v2(
                 workload_id,
                 workload_root=workloads,
                 qualification_root=candidate,
@@ -2301,6 +2838,103 @@ def _run_response_qualifications(
     return runs
 
 
+def _run_response_qualifications_v2(
+    application_path: Path,
+    directory: Path,
+    *,
+    selected_chaff_resource_id: int,
+    application_manifest_sha256: str,
+    application_resource_id: int,
+    url: str,
+    headers: list[list[str]],
+    neqo_client: Path,
+    neqo_client_sha256: str,
+    timeout_seconds: int,
+    interval_seconds: int,
+) -> list[tuple[int, dict[str, Any]]]:
+    """Run three fresh sustained connection epochs for one candidate.
+
+    Representation identity and response-capacity failures are complete
+    measurements, so all three epochs are retained before the candidate is
+    rejected.  Every network, name-resolution, timeout, or protocol failure is
+    an environmental/transport failure and aborts the whole transaction.
+    """
+
+    runs: list[tuple[int, dict[str, Any]]] = []
+    for index in range(QUALIFICATION_RUNS):
+        if index:
+            time.sleep(interval_seconds)
+        _recheck_bound_neqo_client(neqo_client, neqo_client_sha256)
+        output = directory / f"response-{index}"
+        result = _run_neqo(
+            [
+                str(neqo_client),
+                "qualify-chaff-response",
+                "--workload",
+                str(application_path),
+                "--application-resource-id",
+                "0",
+                "--selected-chaff-resource-id",
+                str(selected_chaff_resource_id),
+                "--output-dir",
+                str(output),
+                "--timeout-seconds",
+                str(timeout_seconds),
+                "--max-response-bytes",
+                "1048576",
+                "--packet-size",
+                str(UDP_PAYLOAD_CEILING),
+                "--parallel-requests",
+                str(RESPONSE_ONLY_PARALLEL_CHAFF_STREAMS),
+                "--total-requests",
+                str(RESPONSE_ONLY_REQUESTS_PER_EPOCH),
+                "--request-header-mode",
+                IDENTITY_REQUEST_HEADER_MODE,
+            ],
+            log=directory / f"response-{index}.log",
+            configured_timeout_seconds=timeout_seconds,
+            label=f"sustained chaff response qualification {index + 1}",
+        )
+        receipt_path = output / "qualification.json"
+        try:
+            receipt = load_json(receipt_path)
+        except (OSError, TypeError, ValueError) as error:
+            raise PreparationError(
+                f"sustained chaff response qualification {index + 1} lacks a valid receipt"
+            ) from error
+        if not isinstance(receipt, Mapping):
+            raise PreparationError(
+                f"sustained chaff response qualification {index + 1} receipt is not an object"
+            )
+        failure_class = receipt.get("failure_class")
+        if result.returncode == 0:
+            if receipt.get("passed") is not True or failure_class is not None:
+                raise PreparationError(
+                    "successful sustained response qualifier returned an inconsistent receipt"
+                )
+        elif failure_class not in {"identity", "capacity"}:
+            rendered = failure_class if isinstance(failure_class, str) else "unclassified"
+            raise PreparationError(
+                "sustained response qualification aborted on "
+                f"{rendered} failure in epoch {index + 1}"
+            )
+        try:
+            _validate_response_receipt_v2(
+                receipt,
+                application_manifest_sha256=application_manifest_sha256,
+                application_resource_id=application_resource_id,
+                selected_chaff_resource_id=selected_chaff_resource_id,
+                url=url,
+                headers=headers,
+            )
+        except ValueError as error:
+            raise PreparationError(
+                f"sustained response qualification epoch {index + 1} is malformed: {error}"
+            ) from error
+        runs.append((result.returncode, dict(receipt)))
+    return runs
+
+
 def _run_prefix_qualifications(
     base_path: Path,
     runtime_path: Path,
@@ -2456,21 +3090,14 @@ def _validate_response_receipt(
         or started < 0
         or ended <= started
         or not isinstance(invocation_id, str)
-        or not invocation_id
+        or not invocation_id.strip()
+        or invocation_id != invocation_id.strip()
         or receipt["completion_status"] != "complete"
         or receipt["error"] is not None
         or receipt["passed"] is not True
     ):
         raise ValueError("response qualification receipt binding is invalid")
-    source = _exact_mapping(
-        receipt["source"], set(NEQO_PROVENANCE_KEYS) - {"neqo_version"}, "response source"
-    )
-    if any(not isinstance(item, str) or not item for item in source.values()) or (
-        receipt["neqo_version"] is None
-        or not isinstance(receipt["neqo_version"], str)
-        or not receipt["neqo_version"]
-    ):
-        raise ValueError("response qualification source is invalid")
+    _validate_receipt_neqo_provenance(receipt, label="response qualification")
     requests = receipt["requests"]
     if not isinstance(requests, list) or len(requests) != qualified_parallel_chaff_streams:
         raise ValueError("response qualification request count is invalid")
@@ -2517,7 +3144,7 @@ def _validate_response_receipt(
     if not isinstance(observations, list) or not observations:
         raise ValueError("response qualification packet transcript is missing")
     normalized: list[dict[str, Any]] = []
-    qualification_output = False
+    qualification_directions: set[str] = set()
     for sequence, value_observation in enumerate(observations):
         observation = _exact_mapping(
             value_observation, PACKET_OBSERVATION_KEYS, "response packet observation"
@@ -2531,9 +3158,8 @@ def _validate_response_receipt(
             or not 1 <= observation["udp_payload_bytes"] <= UDP_PAYLOAD_CEILING
         ):
             raise ValueError("response qualification packet transcript is invalid")
-        qualification_output |= (
-            observation["phase"] == "qualification" and observation["direction"] == "outgoing"
-        )
+        if observation["phase"] == "qualification":
+            qualification_directions.add(observation["direction"])
         normalized.append(observation)
     rust_ordered = [
         {
@@ -2545,10 +3171,429 @@ def _validate_response_receipt(
         for item in normalized
     ]
     packet_log = json.dumps(rust_ordered, separators=(",", ":")).encode()
-    if receipt["packet_log_sha256"] != sha256_bytes(packet_log) or not qualification_output:
+    if receipt["packet_log_sha256"] != sha256_bytes(packet_log) or qualification_directions != {
+        "incoming",
+        "outgoing",
+    }:
         raise ValueError("response qualification packet transcript hash is invalid")
     _validate_udp_statistics(receipt["packets"], observations=rust_ordered)
     return identities[0], sizes[0], started, ended, invocation_id
+
+
+def _validate_response_receipt_v2(
+    value: object,
+    *,
+    application_manifest_sha256: str,
+    application_resource_id: int,
+    selected_chaff_resource_id: int,
+    url: str,
+    headers: list[list[str]],
+) -> tuple[list[tuple[int, str, int, str]], int, int, int, str, str | None]:
+    """Validate one sustained 8x5 response epoch without hiding a rejection."""
+
+    receipt = _exact_mapping(
+        value, RESPONSE_V2_RECEIPT_KEYS, "sustained response qualification receipt"
+    )
+    started = receipt["started_unix_ns"]
+    ended = receipt["ended_unix_ns"]
+    invocation_id = receipt["invocation_id"]
+    failure_class = receipt["failure_class"]
+    if (
+        type(receipt["schema_version"]) is not int
+        or receipt["schema_version"] != RESPONSE_QUALIFICATION_V2_RECEIPT_SCHEMA_VERSION
+        or receipt["artifact_type"] != RESPONSE_ARTIFACT_TYPE
+        or receipt["application_workload_sha256"] != application_manifest_sha256
+        or type(receipt["application_resource_id"]) is not int
+        or receipt["application_resource_id"] != application_resource_id
+        or type(receipt["selected_chaff_resource_id"]) is not int
+        or receipt["selected_chaff_resource_id"] != selected_chaff_resource_id
+        or type(receipt["qualified_parallel_chaff_streams"]) is not int
+        or receipt["qualified_parallel_chaff_streams"] != RESPONSE_ONLY_PARALLEL_CHAFF_STREAMS
+        or receipt["method"] != METHOD
+        or receipt["url"] != url
+        or receipt["request_headers"] != headers
+        or receipt["request_header_mode"] != IDENTITY_REQUEST_HEADER_MODE
+        or type(receipt["parallel_requests"]) is not int
+        or receipt["parallel_requests"] != RESPONSE_ONLY_PARALLEL_CHAFF_STREAMS
+        or type(receipt["total_requests"]) is not int
+        or receipt["total_requests"] != RESPONSE_ONLY_REQUESTS_PER_EPOCH
+        or type(receipt["request_waves"]) is not int
+        or receipt["request_waves"] != RESPONSE_ONLY_WAVES_PER_EPOCH
+        or type(receipt["max_concurrent_requests"]) is not int
+        or receipt["max_concurrent_requests"] != RESPONSE_ONLY_PARALLEL_CHAFF_STREAMS
+        or type(receipt["connection_count"]) is not int
+        or receipt["connection_count"] != 1
+        or type(receipt["requests_opened_before_first_network_output"]) is not int
+        or receipt["requests_opened_before_first_network_output"]
+        != RESPONSE_ONLY_PARALLEL_CHAFF_STREAMS
+        or type(receipt["request_stream_bytes"]) is not int
+        or receipt["request_stream_bytes"] <= 0
+        or type(receipt["max_response_bytes"]) is not int
+        or receipt["max_response_bytes"] != 1_048_576
+        or type(receipt["udp_payload_ceiling"]) is not int
+        or receipt["udp_payload_ceiling"] != UDP_PAYLOAD_CEILING
+        or type(started) is not int
+        or type(ended) is not int
+        or started < 0
+        or ended <= started
+        or not isinstance(invocation_id, str)
+        or not invocation_id.strip()
+        or invocation_id != invocation_id.strip()
+        or receipt["completion_status"] != "complete"
+        or failure_class not in {None, "identity", "capacity"}
+    ):
+        raise ValueError("sustained response qualification receipt binding is invalid")
+    if receipt["passed"] is True:
+        if failure_class is not None or receipt["error"] is not None:
+            raise ValueError("passing sustained response receipt reports a failure")
+    elif receipt["passed"] is False:
+        if (
+            failure_class not in {"identity", "capacity"}
+            or not isinstance(receipt["error"], str)
+            or not receipt["error"].strip()
+            or receipt["error"] != receipt["error"].strip()
+        ):
+            raise ValueError("rejected sustained response receipt lacks an exact failure class")
+    else:
+        raise ValueError("sustained response qualification passed flag is invalid")
+
+    _validate_receipt_neqo_provenance(receipt, label="sustained response qualification")
+    requests = receipt["requests"]
+    if not isinstance(requests, list) or len(requests) != RESPONSE_ONLY_REQUESTS_PER_EPOCH:
+        raise ValueError("sustained response qualification request count is invalid")
+    identities: list[tuple[int, str, int, str]] = []
+    sizes: list[int] = []
+    stream_ids: set[int] = set()
+    for index, value_request in enumerate(requests):
+        request = _exact_mapping(
+            value_request, RESPONSE_V2_REQUEST_KEYS, "sustained response qualification request"
+        )
+        status = request["status"]
+        encoding = request["content_encoding"]
+        body_bytes = request["body_bytes"]
+        body_sha256 = request["body_sha256"]
+        size = request["request_stream_bytes"]
+        stream_id = request["stream_id"]
+        if (
+            type(request["request_index"]) is not int
+            or request["request_index"] != index
+            or type(request["wave_index"]) is not int
+            or request["wave_index"] != index // RESPONSE_ONLY_PARALLEL_CHAFF_STREAMS
+            or type(stream_id) is not int
+            or stream_id != index * 4
+            or stream_id in stream_ids
+            or type(size) is not int
+            or size <= 0
+            or type(status) is not int
+            or not 100 <= status <= 599
+            or not isinstance(encoding, str)
+            or encoding != _normalize_content_encoding(encoding)
+            or type(body_bytes) is not int
+            or body_bytes < 0
+            or body_bytes > receipt["max_response_bytes"]
+            or not _digest(body_sha256)
+            or request["complete"] is not True
+            or request["outcome"] != "complete"
+        ):
+            raise ValueError("sustained response qualification request is invalid")
+        stream_ids.add(stream_id)
+        identities.append((status, encoding, body_bytes, body_sha256))
+        sizes.append(size)
+    if len(set(sizes)) != 1 or receipt["request_stream_bytes"] != sizes[0]:
+        raise ValueError("sustained response qualification request primitive changed")
+    capacity_failure = any(identity[2] < UDP_PAYLOAD_CEILING for identity in identities)
+    identity_failure = len(set(identities)) != 1 or any(
+        not 200 <= identity[0] <= 299 or identity[1] != "identity" for identity in identities
+    )
+    derived_failure = "capacity" if capacity_failure else "identity" if identity_failure else None
+    if failure_class != derived_failure or receipt["passed"] is (derived_failure is not None):
+        raise ValueError("sustained response qualification failure class is inconsistent")
+
+    observations = receipt["packet_observations"]
+    if not isinstance(observations, list) or not observations:
+        raise ValueError("sustained response qualification packet transcript is missing")
+    normalized: list[dict[str, Any]] = []
+    qualification_directions: set[str] = set()
+    for sequence, value_observation in enumerate(observations):
+        observation = _exact_mapping(
+            value_observation, PACKET_OBSERVATION_KEYS, "response packet observation"
+        )
+        if (
+            type(observation["sequence"]) is not int
+            or observation["sequence"] != sequence
+            or observation["phase"] not in {"handshake", "qualification"}
+            or observation["direction"] not in {"incoming", "outgoing"}
+            or type(observation["udp_payload_bytes"]) is not int
+            or not 1 <= observation["udp_payload_bytes"] <= UDP_PAYLOAD_CEILING
+        ):
+            raise ValueError("sustained response qualification packet transcript is invalid")
+        if observation["phase"] == "qualification":
+            qualification_directions.add(observation["direction"])
+        normalized.append(observation)
+    rust_ordered = [
+        {
+            "sequence": item["sequence"],
+            "phase": item["phase"],
+            "direction": item["direction"],
+            "udp_payload_bytes": item["udp_payload_bytes"],
+        }
+        for item in normalized
+    ]
+    packet_log = json.dumps(rust_ordered, separators=(",", ":")).encode()
+    if receipt["packet_log_sha256"] != sha256_bytes(packet_log) or qualification_directions != {
+        "incoming",
+        "outgoing",
+    }:
+        raise ValueError("sustained response qualification packet transcript hash is invalid")
+    _validate_udp_statistics(receipt["packets"], observations=rust_ordered)
+    return identities, sizes[0], started, ended, invocation_id, failure_class
+
+
+def _response_v2_run_record(
+    epoch_index: int, process_exit_code: int, receipt: Mapping[str, Any]
+) -> dict[str, Any]:
+    value = dict(receipt)
+    return {
+        "epoch_index": epoch_index,
+        "process_exit_code": process_exit_code,
+        "receipt_object_sha256": qualification_digest(
+            "qcsd-chaff-sustained-response-receipt-object-v3", [value]
+        ),
+        "receipt": value,
+    }
+
+
+def _prepared_candidate_response(value: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "status": value["status"],
+        "body_bytes": value["bytes"],
+        "body_sha256": value["body_sha256"],
+    }
+
+
+def _candidate_attempt_record_v2(
+    *,
+    candidate_index: int,
+    base_resource: Mapping[str, Any],
+    prepared_response: Mapping[str, Any],
+    epochs: Sequence[tuple[int, Mapping[str, Any]]],
+    application_manifest_sha256: str,
+    application_resource_id: int,
+    neqo_provenance: Mapping[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any] | None, int]:
+    """Validate and bind all 120 completions for one deterministic candidate."""
+
+    if len(epochs) != QUALIFICATION_RUNS:
+        raise PreparationError("each response-only v2 candidate requires exactly three epochs")
+    headers = project_identity_chaff_headers(base_resource)
+    identities: list[tuple[int, str, int, str]] = []
+    sizes: list[int] = []
+    invocation_ids: set[str] = set()
+    provenances: list[dict[str, Any]] = []
+    prior_end = -1
+    records: list[dict[str, Any]] = []
+    explicit_failures: set[str] = set()
+    for epoch_index, (exit_code, raw_receipt) in enumerate(epochs):
+        if type(exit_code) is not int or exit_code < 0:
+            raise PreparationError("sustained response qualifier exit code is invalid")
+        try:
+            epoch_identities, size, started, ended, invocation_id, failure_class = (
+                _validate_response_receipt_v2(
+                    raw_receipt,
+                    application_manifest_sha256=application_manifest_sha256,
+                    application_resource_id=application_resource_id,
+                    selected_chaff_resource_id=base_resource["id"],
+                    url=base_resource["url"],
+                    headers=headers,
+                )
+            )
+        except ValueError as error:
+            raise PreparationError(str(error)) from error
+        if (exit_code == 0) is (failure_class is not None):
+            raise PreparationError("sustained response qualifier exit status is inconsistent")
+        if invocation_id in invocation_ids or started <= prior_end:
+            raise PreparationError("sustained response epochs are not independent invocations")
+        if prior_end >= 0 and started - prior_end < RESPONSE_ONLY_EPOCH_SPACING_SECONDS * 10**9:
+            raise PreparationError("sustained response epochs lack the fixed 30-second spacing")
+        invocation_ids.add(invocation_id)
+        prior_end = ended
+        identities.extend(epoch_identities)
+        sizes.append(size)
+        provenance = _receipt_neqo_provenance(raw_receipt)
+        provenances.append(provenance)
+        if neqo_provenance is not None and provenance != dict(neqo_provenance):
+            raise PreparationError("sustained response epoch Neqo provenance changed")
+        if failure_class is not None:
+            explicit_failures.add(failure_class)
+        records.append(_response_v2_run_record(epoch_index, exit_code, raw_receipt))
+    if len({json.dumps(value, sort_keys=True) for value in provenances}) != 1:
+        raise PreparationError("sustained response epoch Neqo provenance changed")
+    if len(set(sizes)) != 1:
+        raise PreparationError("identity chaff request-stream bytes changed across epochs")
+    capacity_failure = "capacity" in explicit_failures or any(
+        identity[2] < UDP_PAYLOAD_CEILING for identity in identities
+    )
+    identity_failure = (
+        "identity" in explicit_failures
+        or len(set(identities)) != 1
+        or any(
+            not 200 <= identity[0] <= 299 or identity[1] != "identity" for identity in identities
+        )
+    )
+    failure_class = "capacity" if capacity_failure else "identity" if identity_failure else None
+    outcome = "qualified" if failure_class is None else "rejected"
+    response_digest = qualification_digest(
+        "qcsd-chaff-sustained-response-qualification-v3", records
+    )
+    expected_response: dict[str, Any] | None = None
+    if failure_class is None:
+        status, encoding, body_bytes, body_sha256 = identities[0]
+        expected_response = {
+            "status": status,
+            "content_encoding": encoding,
+            "body_bytes": body_bytes,
+            "body_sha256": body_sha256,
+        }
+        _validate_expected_response(expected_response)
+    attempt = {
+        "candidate_index": candidate_index,
+        "resource_id": base_resource["id"],
+        "url": base_resource["url"],
+        "prepared_response": _prepared_candidate_response(prepared_response),
+        "headers": headers,
+        "outcome": outcome,
+        "failure_class": failure_class,
+        "connection_epochs": records,
+        "response_qualification_sha256": response_digest,
+    }
+    return attempt, expected_response, sizes[0]
+
+
+def _validate_response_only_candidate_attempt(
+    value: object,
+    *,
+    candidate_index: int,
+    base_resource: Mapping[str, Any],
+    prepared_response: Mapping[str, Any],
+    application_manifest_sha256: str,
+    application_resource_id: int,
+    neqo_provenance: Mapping[str, Any],
+) -> dict[str, Any]:
+    attempt = _exact_mapping(value, CANDIDATE_ATTEMPT_KEYS, "response-only v2 candidate attempt")
+    prepared = _exact_mapping(
+        attempt["prepared_response"],
+        PREPARED_CANDIDATE_RESPONSE_KEYS,
+        "response-only v2 prepared candidate response",
+    )
+    if (
+        type(attempt["candidate_index"]) is not int
+        or attempt["candidate_index"] != candidate_index
+        or type(attempt["resource_id"]) is not int
+        or attempt["resource_id"] != base_resource.get("id")
+        or attempt["url"] != base_resource.get("url")
+        or attempt["headers"] != project_identity_chaff_headers(base_resource)
+        or attempt["outcome"] not in {"qualified", "rejected"}
+        or attempt["failure_class"] not in {None, "identity", "capacity"}
+        or type(prepared["status"]) is not int
+        or type(prepared["body_bytes"]) is not int
+        or not _digest(prepared["body_sha256"])
+    ):
+        raise ValueError("response-only v2 candidate attempt binding is invalid")
+    epochs_value = attempt["connection_epochs"]
+    if not isinstance(epochs_value, list) or len(epochs_value) != QUALIFICATION_RUNS:
+        raise ValueError("response-only v2 candidate requires exactly three epochs")
+    epochs: list[tuple[int, Mapping[str, Any]]] = []
+    for epoch_index, value_epoch in enumerate(epochs_value):
+        epoch = _exact_mapping(value_epoch, RESPONSE_V2_RUN_KEYS, "sustained response epoch")
+        receipt = epoch["receipt"]
+        if not isinstance(receipt, Mapping):
+            raise ValueError("sustained response epoch receipt must be an object")
+        expected_sha256 = qualification_digest(
+            "qcsd-chaff-sustained-response-receipt-object-v3", [receipt]
+        )
+        if (
+            type(epoch["epoch_index"]) is not int
+            or epoch["epoch_index"] != epoch_index
+            or type(epoch["process_exit_code"]) is not int
+            or epoch["process_exit_code"] < 0
+            or epoch["receipt_object_sha256"] != expected_sha256
+        ):
+            raise ValueError("sustained response epoch binding is invalid")
+        epochs.append((epoch["process_exit_code"], receipt))
+    try:
+        expected, _identity, _request_size = _candidate_attempt_record_v2(
+            candidate_index=candidate_index,
+            base_resource=base_resource,
+            prepared_response=prepared_response,
+            epochs=epochs,
+            application_manifest_sha256=application_manifest_sha256,
+            application_resource_id=application_resource_id,
+            neqo_provenance=neqo_provenance,
+        )
+    except PreparationError as error:
+        raise ValueError(str(error)) from error
+    if dict(attempt) != expected:
+        raise ValueError("response-only v2 candidate attempt derivation is inconsistent")
+    return dict(attempt)
+
+
+def _validate_response_only_v2_resource_receipt(
+    value: object,
+    base_resource: Mapping[str, Any],
+    *,
+    selected_attempt: Mapping[str, Any],
+) -> dict[str, Any]:
+    resource = _exact_mapping(
+        value,
+        RESPONSE_ONLY_V2_RESOURCE_RECEIPT_KEYS,
+        "response-only v2 qualified chaff resource",
+    )
+    if (
+        type(resource["resource_id"]) is not int
+        or resource["resource_id"] != base_resource.get("id")
+        or resource["url"] != base_resource.get("url")
+        or resource["headers"] != project_identity_chaff_headers(base_resource)
+        or type(resource["request_stream_bytes"]) is not int
+        or resource["request_stream_bytes"] <= 0
+        or resource["response_qualification_sha256"]
+        != selected_attempt["response_qualification_sha256"]
+    ):
+        raise ValueError("response-only v2 qualified resource binding is invalid")
+    _validate_expected_response(resource["expected_response"])
+    if resource["expected_response"]["content_encoding"] != "identity":
+        raise ValueError("response-only v2 authoritative response must use identity encoding")
+    epochs = selected_attempt["connection_epochs"]
+    identities: set[tuple[int, str, int, str]] = set()
+    sizes: set[int] = set()
+    for epoch in epochs:
+        receipt = epoch["receipt"]
+        for request in receipt["requests"]:
+            identities.add(
+                (
+                    request["status"],
+                    request["content_encoding"],
+                    request["body_bytes"],
+                    request["body_sha256"],
+                )
+            )
+            sizes.add(request["request_stream_bytes"])
+    expected_response = resource["expected_response"]
+    expected_identity = {
+        (
+            expected_response["status"],
+            expected_response["content_encoding"],
+            expected_response["body_bytes"],
+            expected_response["body_sha256"],
+        )
+    }
+    if (
+        selected_attempt["outcome"] != "qualified"
+        or selected_attempt["failure_class"] is not None
+        or identities != expected_identity
+        or sizes != {resource["request_stream_bytes"]}
+    ):
+        raise ValueError("response-only v2 authoritative response identity is inconsistent")
+    return dict(resource)
 
 
 def _prefix_run_record(index: int, run: Mapping[str, Any]) -> dict[str, Any]:
@@ -2863,18 +3908,11 @@ def _validate_prefix_receipt(
         or type(receipt["ended_unix_ns"]) is not int
         or receipt["ended_unix_ns"] <= receipt["started_unix_ns"]
         or not isinstance(receipt["invocation_id"], str)
-        or not receipt["invocation_id"]
+        or not receipt["invocation_id"].strip()
+        or receipt["invocation_id"] != receipt["invocation_id"].strip()
     ):
         raise ValueError("prefix-pack qualification receipt binding is invalid")
-    source = _exact_mapping(
-        receipt["source"], set(NEQO_PROVENANCE_KEYS) - {"neqo_version"}, "prefix source"
-    )
-    if (
-        not isinstance(receipt["neqo_version"], str)
-        or not receipt["neqo_version"]
-        or any(not isinstance(item, str) or not item for item in source.values())
-    ):
-        raise ValueError("prefix-pack qualification source is invalid")
+    _validate_receipt_neqo_provenance(receipt, label="prefix-pack qualification")
 
     specifications = prefix_spec["stream_activation_stages"]
     stage_receipts = receipt["activation_stage_receipts"]
@@ -3296,6 +4334,56 @@ def _validate_response_only_policy(value: object) -> None:
         )
 
 
+def response_only_v2_qualification_policy() -> dict[str, Any]:
+    """Return the exact sustained response-only v2 acquisition primitive."""
+
+    return {
+        "qualification_scope": RESPONSE_ONLY_QUALIFICATION_SCOPE,
+        "connection_epochs_per_candidate": QUALIFICATION_RUNS,
+        "waves_per_connection_epoch": RESPONSE_ONLY_WAVES_PER_EPOCH,
+        "parallel_requests_per_wave": RESPONSE_ONLY_PARALLEL_CHAFF_STREAMS,
+        "total_requests_per_connection_epoch": RESPONSE_ONLY_REQUESTS_PER_EPOCH,
+        "total_completions_per_candidate": RESPONSE_ONLY_COMPLETIONS_PER_CANDIDATE,
+        "connection_epoch_spacing_seconds": RESPONSE_ONLY_EPOCH_SPACING_SECONDS,
+        "inter_wave_spacing_milliseconds": RESPONSE_ONLY_WAVE_SPACING_MILLISECONDS,
+        "qualified_parallel_chaff_streams": RESPONSE_ONLY_PARALLEL_CHAFF_STREAMS,
+        "profile": "research-1200",
+        "response_defense": "none",
+        "seed": 0,
+        "udp_payload_ceiling": UDP_PAYLOAD_CEILING,
+        "max_response_bytes": 1_048_576,
+        "separate_chaff_namespace": True,
+    }
+
+
+def _validate_response_only_v2_policy(value: object) -> None:
+    policy = _exact_mapping(
+        value,
+        RESPONSE_ONLY_V2_POLICY_KEYS,
+        "response-only v2 chaff qualification policy",
+    )
+    integer_fields = RESPONSE_ONLY_V2_POLICY_KEYS - {
+        "qualification_scope",
+        "profile",
+        "response_defense",
+        "separate_chaff_namespace",
+    }
+    if (
+        any(type(policy[field]) is not int for field in integer_fields)
+        or policy["separate_chaff_namespace"] is not True
+        or dict(policy) != response_only_v2_qualification_policy()
+    ):
+        raise ValueError("response-only v2 qualification policy is not the exact sustained policy")
+
+
+def _validate_response_only_request_header_primitive(value: object) -> None:
+    primitive = _exact_mapping(
+        value, REQUEST_HEADER_PRIMITIVE_KEYS, "response-only request-header primitive"
+    )
+    if dict(primitive) != response_only_request_header_primitive():
+        raise ValueError("response-only request-header primitive is not exact")
+
+
 def _validate_source(value: object, image: object) -> None:
     source = _exact_mapping(value, SOURCE_METADATA_KEYS, "qualification source")
     if (
@@ -3317,7 +4405,16 @@ def _validate_source(value: object, image: object) -> None:
 
 def _validate_neqo_provenance(value: object, *, qualification_source: Mapping[str, Any]) -> None:
     receipt = _exact_mapping(value, set(NEQO_PROVENANCE_KEYS), "Neqo qualification provenance")
-    if any(not isinstance(receipt[key], str) or not receipt[key] for key in NEQO_PROVENANCE_KEYS):
+    version = receipt["neqo_version"]
+    if (
+        not isinstance(version, str)
+        or not version.strip()
+        or version != version.strip()
+        or any(
+            not isinstance(receipt[key], str) or not _COMMIT.fullmatch(receipt[key])
+            for key in ("neqo_base_commit", "published_qcsd_commit", "migration_commit")
+        )
+    ):
         raise ValueError("Neqo qualification provenance is invalid")
     if receipt["migration_commit"] != qualification_source.get("neqo_commit"):
         raise ValueError("Neqo qualification provenance does not match the clean source commit")
@@ -3627,12 +4724,26 @@ def _validate_udp_statistics(
 
 
 def _receipt_neqo_provenance(receipt: Mapping[str, Any]) -> dict[str, Any]:
+    return _validate_receipt_neqo_provenance(receipt, label="qualification")
+
+
+def _validate_receipt_neqo_provenance(receipt: Mapping[str, Any], *, label: str) -> dict[str, Any]:
     source = _exact_mapping(
         receipt.get("source"),
         set(NEQO_PROVENANCE_KEYS) - {"neqo_version"},
-        "qualification source",
+        f"{label} source",
     )
-    return {"neqo_version": receipt.get("neqo_version"), **source}
+    version = receipt.get("neqo_version")
+    if (
+        not isinstance(version, str)
+        or not version.strip()
+        or version != version.strip()
+        or any(
+            not isinstance(value, str) or not _COMMIT.fullmatch(value) for value in source.values()
+        )
+    ):
+        raise ValueError(f"{label} source is invalid")
+    return {"neqo_version": version, **source}
 
 
 def _stable_neqo_provenance(runs: Sequence[Mapping[str, Any]]) -> dict[str, str]:

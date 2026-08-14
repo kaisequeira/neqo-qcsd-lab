@@ -525,15 +525,16 @@ def test_response_only_loader_requires_no_prefix_spec(
 ) -> None:
     campaign_path = _configuration(tmp_path)
     workload = load_campaign(campaign_path).workloads[0]
-    sidecar = tmp_path / "config/chaff-response-qualification-store/v1/alpha.json"
+    sidecar = tmp_path / "config/chaff-response-qualification-store/v2/alpha.json"
     atomic_json(sidecar, {"response-only": True})
-    manifest = {"schema_version": 3, "qualification_scope": "response-only"}
+    manifest = {"schema_version": 4, "qualification_scope": "response-only"}
 
     def load_response(
         sidecar_path: Path,
         *,
         workload_id: str,
         base_manifest_path: Path,
+        expected_sidecar_schema_version: int | None,
         require_current_implementation: bool = True,
     ) -> SimpleNamespace:
         assert sidecar_path.name == sidecar.name
@@ -541,6 +542,7 @@ def test_response_only_loader_requires_no_prefix_spec(
         assert workload_id == "alpha"
         assert base_manifest_path.name == workload.path.name
         assert base_manifest_path.read_bytes() == workload.source_bytes
+        assert expected_sidecar_schema_version == 2
         assert require_current_implementation is True
         return SimpleNamespace(
             sidecar_sha256=sha256_file(sidecar_path),
@@ -642,17 +644,22 @@ def test_frozen_pre_response_front_result_keeps_full_v2_and_structural_validatio
 
 
 @pytest.mark.parametrize("prefix_present", [False, True])
-def test_frozen_response_scope_requires_explicit_unambiguous_schema_three(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, prefix_present: bool
+@pytest.mark.parametrize(("manifest_schema", "sidecar_schema"), [(3, 1), (4, 2)])
+def test_frozen_response_scope_requires_explicit_unambiguous_schema_contract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    prefix_present: bool,
+    manifest_schema: int,
+    sidecar_schema: int,
 ) -> None:
     campaign_path = _configuration(tmp_path)
     workload = load_campaign(campaign_path).workloads[0]
     frozen = tmp_path / "frozen-response"
     for directory in ("chaff-qualifications", "chaff-manifests"):
         (frozen / directory).mkdir(parents=True)
-    atomic_json(frozen / "chaff-qualifications/alpha.json", {"schema_version": 1})
+    atomic_json(frozen / "chaff-qualifications/alpha.json", {"schema_version": sidecar_schema})
     manifest = {
-        "schema_version": 3,
+        "schema_version": manifest_schema,
         "artifact_type": "qcsd-qualified-chaff-manifest",
         "qualification_scope": "response-only",
     }
@@ -671,10 +678,15 @@ def test_frozen_response_scope_requires_explicit_unambiguous_schema_three(
             )
         return
 
-    calls: list[bool] = []
+    calls: list[tuple[bool, int | None]] = []
 
     def load_response(*_args: object, **kwargs: object) -> SimpleNamespace:
-        calls.append(kwargs["require_current_implementation"])
+        calls.append(
+            (
+                kwargs["require_current_implementation"],
+                kwargs["expected_sidecar_schema_version"],
+            )
+        )
         return SimpleNamespace(
             sidecar_sha256=sha256_file(frozen / "chaff-qualifications/alpha.json"),
             manifest_sha256=sha256_file(manifest_path),
@@ -688,7 +700,7 @@ def test_frozen_response_scope_requires_explicit_unambiguous_schema_three(
         frozen_inputs=frozen,
         qualification_scope=orchestrator.RESPONSE_ONLY_CHAFF_SCOPE,
     )[0]
-    assert calls == [False]
+    assert calls == [(False, sidecar_schema)]
     assert qualified.chaff_qualification_scope == orchestrator.RESPONSE_ONLY_CHAFF_SCOPE
     assert qualified.chaff_prefix_spec_path is None
 
@@ -711,6 +723,41 @@ def test_frozen_response_layout_rejects_missing_schema_three_scope_marker(
             frozen_inputs=frozen,
             qualification_scope=orchestrator.RESPONSE_ONLY_CHAFF_SCOPE,
         )
+
+
+def test_frozen_response_cohort_rejects_mixed_schema_three_and_four(tmp_path: Path) -> None:
+    frozen = tmp_path / "frozen-mixed-response"
+    manifests = frozen / "chaff-manifests"
+    manifests.mkdir(parents=True)
+    workloads = (SimpleNamespace(id="alpha"), SimpleNamespace(id="bravo"))
+    for workload, schema_version in zip(workloads, (3, 4), strict=True):
+        atomic_json(
+            manifests / f"{workload.id}.json",
+            {
+                "schema_version": schema_version,
+                "qualification_scope": "response-only",
+            },
+        )
+
+    with pytest.raises(ValueError, match="mixes schema-three and schema-four"):
+        orchestrator._frozen_chaff_qualification_scope(
+            frozen,
+            workloads,
+            defense_derived_scope=orchestrator.RESPONSE_ONLY_CHAFF_SCOPE,
+        )
+
+    atomic_json(
+        manifests / "bravo.json",
+        {"schema_version": 3, "qualification_scope": "response-only"},
+    )
+    assert (
+        orchestrator._frozen_chaff_qualification_scope(
+            frozen,
+            workloads,
+            defense_derived_scope=orchestrator.RESPONSE_ONLY_CHAFF_SCOPE,
+        )
+        == orchestrator.RESPONSE_ONLY_CHAFF_SCOPE
+    )
 
 
 def test_loaded_schema_six_binding_cross_links_resource_and_cohort_fields(
