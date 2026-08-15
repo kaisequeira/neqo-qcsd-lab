@@ -131,11 +131,11 @@ advances to the next candidate; transport, DNS, timeout, or protocol failures
 abort the transaction. Publication is atomic, and no v2 sidecar hash exists
 until that exact five-file transaction succeeds from a clean build.
 
-The active five-file transaction was atomically published from clean Lab
+The now-superseded five-file transaction was atomically published from clean Lab
 commit `9953cf3a9a29a2cb5f6aaf02439cd13f318b6b39`, clean Neqo commit
 `a3bd748c1b3f4e24f7dc88f673365e6842db51a7`, and qualification image
 `sha256:c38afc629613bc8e7a5a82b55ad83a7e5787a51f780f14a199e9429be124ff43`.
-Its canonical hashes are:
+Its historical hashes are:
 
 | Workload | Sidecar SHA-256 | Derived schema-4 manifest SHA-256 |
 |---|---|---|
@@ -144,6 +144,14 @@ Its canonical hashes are:
 | `hyper-basic-client-r1` | `816d6bcc0c43cf0d672fc0f21cc0dd871d80fa9ca24ebcadcbc81b48d33a3bed` | `ffc24029a219246cd40060cd70953e4cf0a3590e59a700ec6c6f72ce7800b54d` |
 | `serde-home-r1` | `46abffb21b7f93ebe328f56ad82819fcced1586aa3966de2d733fa7a5133018f` | `91ad7a33ed70cfcf4bc1b062e747b1371bad00ca16171ee3539f40755f18c9d3` |
 | `rfc9114-text-r1` | `d76a4ff366a6b8dce65b42cca02d2a55c6333e649b28316fcdfe58b060d34c2f` | `9fb65d16532ff6290aa530e4829f87167cd784a30bfb68e5d7d921acd5da8fc5` |
+
+Those exact files remain recoverable from Lab commit
+`88569f268260b36f0c4ccfc36681f7a42887b66c` and from frozen sealed results.
+Canonical response-store v2 is intentionally absent in this
+qualification-source revision: Neqo
+`867246557ec719fc34552b60abf624895be2706c` adds the terminal-tail bridge, so
+all five sidecars must be regenerated atomically from a clean image before any
+new capture image can be built.
 
 Each response-store v2 file is sidecar schema 2 and derives a schema-4
 `qcsd-qualified-chaff-manifest` with `qualification_scope: response-only` and
@@ -598,6 +606,18 @@ bounded bootstrap permits one atomic HEADERS frame to exceed a small prepared
 body floor without changing a defence schedule, parameter, slot-accounting
 rule, or capture-fidelity gate.
 
+A separate terminal-tail bridge covers the corresponding post-DATA boundary
+without changing scheduled ownership. Once incoming scheduling is complete,
+with no queued assignment, continuation, or same-stream backing, a pristine
+typed boundary may receive one ordinary 16-byte parser lease only when its
+entire outstanding scheduled tail is already advertised, contiguous, and
+between one and fifteen bytes; requested and advertised limits agree, known
+exact capacity continues beyond them, and the full 16 bytes remain inside the
+existing lifetime parser allowance. The lease is unowned and slotless. Its
+grant or advertisement satisfies nothing: the original tail retains its slot
+and only consuming those scheduled bytes can settle it. Gapped, partial,
+post-cap, continuation-owned, or nonterminal states remain fail-closed.
+
 The initial priority-aware selector binds a known-valid same-origin selected
 source resource; its derived chaff projection is dependency-free and has exact
 qualified body capacity. Campaign loading binds the prepared workload and
@@ -883,11 +903,12 @@ handoff. FRONT and Tamaraw use their fixed research-profile algorithms and
 seeds; the POC neither consumes nor refits the Traffic-Morphing, WTF-PAD, or
 Walkie-Talkie artifacts. The current recovery contract requires five
 response-store v2 sidecars (schema 2) deriving schema-4 runtime manifests,
-with no prefix-pack or fitted-data dependency. That cohort is now atomically
-published and is the active response-qualification input. It does not yet
-authorize capture: the exact sidecars must first be committed and included in
-a fresh clean collection build, and that build must pass the excluded 30/30
-rehearsal and interface handoff. Historical v1/schema-3 evidence remains
+with no prefix-pack or fitted-data dependency. The previous cohort is
+superseded and canonical v2 is intentionally absent pending requalification
+from fixed Neqo `867246557ec719fc34552b60abf624895be2706c`. A replacement
+cohort will not authorize capture until its exact sidecars are committed and
+included in a fresh clean collection build, and that build passes the excluded
+30/30 rehearsal and interface handoff. Historical v1/schema-3 evidence remains
 readable only for its frozen compatibility role.
 
 Each temporal block has two campaign files:
@@ -942,23 +963,24 @@ any rebuild, source or workload repair, parameter change, or class replacement
 requires a new excluded 30-sample rehearsal before formal acquisition.
 
 The latest excluded rehearsal at
-`results/research-classifier-poc5-rehearsal-1200/20260814T150747.615059Z`
-is valid but incomplete: 26/30 samples were accepted and eligible, and the four
-terminal failures were exactly the two Hyper Tamaraw and two Serde Tamaraw
-samples. Every accepted defended trace had zero schedule misses, and its clock
-evidence was valid. The failed small responses exposed a confirmed
-manual-receive liveness deadlock: their exact body credit was smaller than an
-atomic HTTP/3 HEADERS frame, the peer reported `STREAM_DATA_BLOCKED` before
-delivering bytes, and the controller could neither retain that proof nor
-receive typed header progress. The bounded pre-header bootstrap described
-above repairs that implementation path without changing FRONT, Tamaraw, or an
-acceptance threshold.
+`results/research-classifier-poc5-rehearsal-1200/20260815T103924.969402Z`
+is valid but incomplete: 27/30 samples were accepted and eligible. Its three
+terminal failures were Cloudflare visit-0 FRONT and both Cloudflare Tamaraw
+visits. All nine terminal Cloudflare attempts, plus one Serde Tamaraw attempt
+that recovered on retry, ended with an exact two-byte advertised scheduled
+tail at a pristine DATA boundary: application and qualified chaff identities
+were valid, but no parser lease could cross the boundary, so those bytes
+retired only during the 120-second timeout teardown. Every accepted sample
+passed identity, fidelity, capture, UDP-ceiling, and clock gates with zero
+schedule misses. The terminal-tail bridge above repairs this distinct
+post-DATA path without forgiving, migrating, or prematurely satisfying
+scheduled bytes.
 
-The same run also observed transient compressed-representation mismatches on
-otherwise recoverable attempts. That evidence motivates the v2 chaff-only
-`Accept-Encoding: identity` namespace and 120-completion sustained identity
-stress. The rehearsal, all of its retries, and the earlier
-`20260814T110741.344914Z` rehearsal remain permanently excluded and cannot
+The prior `20260814T150747.615059Z` rehearsal remains the excluded diagnostic
+for the pre-header small-response deadlock and compressed-representation
+variance; it motivated the bounded pre-header bootstrap and identity-only
+120-completion response qualification. Both rehearsals, all retries, and the
+earlier `20260814T110741.344914Z` run remain permanently excluded and cannot
 authorize formal capture.
 
 The incomplete six-class diagnostic at

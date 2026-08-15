@@ -396,6 +396,17 @@ boundary and that closure marker, and later tail observations remain excluded.
   any typed progress invalidates the retained transport proof. It changes no
   defence parameter, schedule, slot-accounting rule, or acceptance threshold.
 
+  A separate terminal-tail bridge handles a pristine typed boundary after
+  DATA. It is available only when incoming scheduling is complete, no incoming
+  assignment, continuation, or same-stream backing remains, requested and
+  advertised limits agree, known exact capacity continues beyond them, and
+  the complete contiguous advertised scheduled tail is between one and
+  fifteen bytes. If the full 16-byte parser allowance remains inside the same
+  lifetime excess budget, one ordinary unowned, slotless lease is appended.
+  The original tail retains its slot: grant and advertisement satisfy no debt,
+  and only consumption of those scheduled bytes can settle it. Partial,
+  gapped, post-cap, continuation-owned, and nonterminal states fail closed.
+
   Three independent compact response qualifications use
   `max(5, required_chaff_streams)` parallel requests to derive stable full-body
   identity and length. Three independent every-component prefix-pack
@@ -563,7 +574,7 @@ runtime chaff manifest at schema 4 with `qualification_scope: response-only`
 and the exact request-header primitive. There is no Walkie-Talkie prefix-pack
 or fitting-data field. The existing response-store v1/schema-1 sidecars and
 their schema-3 manifests remain frozen-compatible historical inputs; one frozen
-cohort may not mix schemas 3 and 4. The active v2 transaction was atomically
+cohort may not mix schemas 3 and 4. The superseded v2 transaction was atomically
 published from clean Lab commit
 `9953cf3a9a29a2cb5f6aaf02439cd13f318b6b39`, clean Neqo commit
 `a3bd748c1b3f4e24f7dc88f673365e6842db51a7`, and qualification image
@@ -576,6 +587,13 @@ published from clean Lab commit
 | `hyper-basic-client-r1` | `816d6bcc0c43cf0d672fc0f21cc0dd871d80fa9ca24ebcadcbc81b48d33a3bed` | `ffc24029a219246cd40060cd70953e4cf0a3590e59a700ec6c6f72ce7800b54d` |
 | `serde-home-r1` | `46abffb21b7f93ebe328f56ad82819fcced1586aa3966de2d733fa7a5133018f` | `91ad7a33ed70cfcf4bc1b062e747b1371bad00ca16171ee3539f40755f18c9d3` |
 | `rfc9114-text-r1` | `d76a4ff366a6b8dce65b42cca02d2a55c6333e649b28316fcdfe58b060d34c2f` | `9fb65d16532ff6290aa530e4829f87167cd784a30bfb68e5d7d921acd5da8fc5` |
+
+These historical files remain available from Lab commit
+`88569f268260b36f0c4ccfc36681f7a42887b66c` and frozen sealed results. This
+qualification-source revision intentionally leaves canonical v2 absent. Neqo
+`867246557ec719fc34552b60abf624895be2706c` changes the qualified
+implementation, so one new atomic five-file transaction is mandatory before a
+new capture image or rehearsal.
 
 Publication completes the response-qualification gate but does not authorize
 capture by itself. The exact sidecars must be committed and included in a
@@ -628,28 +646,25 @@ a new excluded 30-sample gate. Every one of the twenty formal results must bind
 the same source receipt.
 
 The latest sealed rehearsal at
-`results/research-classifier-poc5-rehearsal-1200/20260814T150747.615059Z` is
-valid but incomplete: 26/30 samples were both accepted and eligible. Its four
-terminal failures were exactly two Hyper Tamaraw and two Serde Tamaraw
-samples. Every accepted defended trace recorded zero schedule misses and valid
-clock evidence. The failures confirmed a narrow implementation deadlock rather
-than a general QUIC failure: for these small responses, exact body credit was
-smaller than the atomic HTTP/3 HEADERS frame; the peer emitted
-`STREAM_DATA_BLOCKED` before any bytes; and manual receive discarded the only
-transport proof while HTTP/3 could not yet emit typed header progress. The
-bounded 1,000-byte pre-header bootstrap above repairs that path using only the
-existing lifetime excess budget and cannot satisfy a defence slot by grant or
-advertisement.
+`results/research-classifier-poc5-rehearsal-1200/20260815T103924.969402Z` is
+valid but incomplete: 27/30 samples were both accepted and eligible. Its three
+terminal failures were Cloudflare visit-0 FRONT and both Cloudflare Tamaraw
+visits. All nine terminal Cloudflare attempts, plus a recovered Serde Tamaraw
+attempt, reached a pristine DATA boundary with exactly two already-advertised
+scheduled bytes left. Application and qualified chaff identities remained
+valid, but the boundary could not obtain parser credit; the two bytes retired
+only at the 120-second timeout. Accepted samples had zero schedule misses and
+passed identity, fidelity, capture, UDP-ceiling, and clock gates. The bounded
+terminal-tail bridge above repairs that separate post-DATA path while
+preserving ownership and consumption-only slot satisfaction.
 
-Recoverable attempts in the same rehearsal also exposed transient compressed
-representation mismatches. The separate identity-only chaff namespace and
-120-completion stress test the exact response representation before capture.
-The latest rehearsal, its retries, and the earlier
-`20260814T110741.344914Z` rehearsal remain excluded diagnostic evidence. Formal
-capture stays blocked while the now-published v2 cohort awaits its exact
-evidence commit and fresh final clean collection build, and until that build's
-subsequent rehearsal passes exactly 30/30 accepted and eligible with a verified
-interface handoff.
+The earlier `20260814T150747.615059Z` rehearsal remains the excluded diagnostic
+for the pre-header small-response deadlock and compressed-representation
+variance; it motivated the bounded pre-header bootstrap and identity-only
+120-completion qualification. Both rehearsals, their retries, and the earlier
+`20260814T110741.344914Z` run remain excluded evidence. Formal capture stays
+blocked while canonical v2 is absent, and until the fixed clean build passes a
+new exact 30/30 rehearsal and verified interface handoff.
 
 The earlier six-class and stable3 schema-1 campaign/export contracts remain
 available as historical pipeline contracts but are not part of POC5. The
