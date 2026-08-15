@@ -585,25 +585,58 @@ one create-only five-file transaction under
 `config/chaff-response-qualification-store/v2/`. Application requests retain
 their prepared headers. The distinct chaff-only namespace copies `Accept` and
 `Accept-Language` exactly and forces `Accept-Encoding: identity`. Canonical v2
-is intentionally absent pending a replacement atomic qualification.
+now contains the successful exact-five cohort and will be published without
+alteration by the upcoming P commit.
 
 For each class, known-valid same-origin resources with at least 1,200 prepared
 body bytes form a deterministic candidate prefix ordered by descending body
 size, then resource ID and URL. A candidate receives three independent
-connection epochs at fixed 30-second spacing. Each connection issues 40
-requests in eight sequential waves of at most five concurrent requests, for
-120 completions per candidate. Qualification requires one exact 2xx identity
-across all completions: status, identity content encoding, body length, and
-body SHA-256. Only a recorded identity or capacity rejection advances to the
-next deterministic candidate; transport, DNS, timeout, and protocol failures
-abort the transaction.
+connection epochs with at least 30 seconds between epochs. Each connection
+issues 40 requests in eight sequential waves of at most five concurrent
+requests, for 120 completions per candidate. Qualification requires one exact
+2xx identity across all completions: status, identity content encoding, body
+length, and body SHA-256. Only a recorded identity or capacity rejection
+advances to the next deterministic candidate; transport, DNS, timeout, and
+protocol failures abort the transaction.
 
 The resulting response-store v2 artifact is sidecar schema 2 and derives a
 runtime chaff manifest at schema 4 with `qualification_scope: response-only`
 and the exact request-header primitive. There is no Walkie-Talkie prefix-pack
 or fitting-data field. The existing response-store v1/schema-1 sidecars and
 their schema-3 manifests remain frozen-compatible historical inputs; one frozen
-cohort may not mix schemas 3 and 4. The earlier superseded v2 transaction was
+cohort may not mix schemas 3 and 4.
+
+The current canonical five-file transaction succeeded atomically from clean
+Lab qualification source `fcc6af4394b2b2f7dee5f8b1a214cd7673a9e0e8` (Q),
+clean Neqo `a8378520b9740be782bfe526cdb3eb05e6665571` (F), qualification
+collection image
+`sha256:29a6e0adaa65d88e1e30afd3722f20f976fe14ed0676fb28d0448ec9155c0700`,
+and prepare/actual qualification image
+`sha256:ef5a3e7bcd20e8841f6c32064d40fcf94be48380f390146d5c039a49fc3665c0`.
+Every sidecar binds implementation-receipt aggregate
+`a8384fd28e9b22c0a683138c0d7a039db3abf927bcc6bd15ffc936bdf2f352a0`.
+The deterministic first candidate (`candidate_index: 0`) qualified for all
+five workloads. Across 15 independent connection epochs, 600 stable identity
+completions produced 62,007 packet observations. Within each workload,
+consecutive epochs retained at least the required 30-second gaps, the maximum
+observed UDP payload was 1,200 bytes, and no oversized packet was observed.
+The active sidecar and derived-manifest hashes are:
+
+| Workload | Sidecar SHA-256 | Derived schema-4 manifest SHA-256 |
+|---|---|---|
+| `getbootstrap-home-r3` | `4b63acf9dfa58413500cf8eaa34fc326a71a74d6c5df3404378543ea5ae707cf` | `c2dc6643caa028e137d717adf4fc13561b1e3c07bfbad28bef2267c0ed20fc92` |
+| `cloudflare-quiche-r3` | `5728dda8668bc4aca816495d87c56038a7ed267b3e902518cdd7bd84b990c3d2` | `0b7794ebdf2155901f7398c95602e111e27087ce5f945a22b198391aa1054277` |
+| `hyper-basic-client-r1` | `e30e877f068a199688948357b19c61803f94cad57123382e79812492750ab55e` | `7b5a2755a6bf47010289df74d40dc45aeaf58c30dd2a8ce32fc928eaa7b70332` |
+| `serde-home-r1` | `86b6d3fcdc208e50b71e5cf957770a9e6319dae39a2e87b9d884f713c0ec3da4` | `e433468dcfee5c2ff6de7d4376588e7c104f60d13977894412ee58a04c88a212` |
+| `rfc9114-text-r1` | `e55414ca9da748f17b89c02d762b1ac39f74acb349ed60d67833c1d5999e627b` | `20ce6ddd56b4684179c0cec8cac12bcef7ce8ef9327d954c2ecfe2239ec84bd9` |
+
+This exact create-only batch is the active canonical evidence and will be
+published without alteration by the upcoming P commit; no P hash is assigned
+yet. The final clean post-P collection-image build, fresh excluded 30/30
+rehearsal, and verified interface handoff remain pending, so the evidence does
+not yet authorize formal capture.
+
+The earlier superseded v2 transaction was
 atomically published from clean Lab commit
 `9953cf3a9a29a2cb5f6aaf02439cd13f318b6b39`, clean Neqo commit
 `a3bd748c1b3f4e24f7dc88f673365e6842db51a7`, and qualification image
@@ -648,18 +681,14 @@ Its historical sidecar and derived-manifest hashes are:
 
 Those exact files remain recoverable from Lab publication commit
 `d5543406359528b1382222d8ef3d3cffd67b7d4d` and frozen sealed results.
-Canonical response-store v2 is intentionally absent from this
-qualification-source revision. Neqo
-`a8378520b9740be782bfe526cdb3eb05e6665571`
-changes the qualified acquisition implementation, so all five sidecars must
-be regenerated as one atomic create-only transaction from the exact clean Q/F
-images. No sidecar, implementation receipt, image, rehearsal, or formal
-capture from either superseded implementation may be mixed with the
-replacement cohort. Publication of the replacement evidence will complete the
-response-qualification gate but will not authorize capture by itself: the
-exact evidence must be committed into a fresh clean collection build, and that
-build must pass a fresh excluded 30/30 rehearsal and verified interface handoff
-before any restarted formal sample.
+Canonical response-store v2 now contains the exact active five-file cohort
+above and will be published without alteration by the upcoming P commit. No
+sidecar, implementation receipt, image, rehearsal, or formal capture from
+either superseded implementation may be mixed with the active cohort. P will
+complete publication of the response-qualification evidence but will not
+authorize capture by itself: the exact evidence must be included in a fresh
+clean post-P collection build, and that build must pass a fresh excluded 30/30
+rehearsal and verified interface handoff before any restarted formal sample.
 Qualification traffic is diagnostic evidence and never a classifier
 observation. “No fitting” therefore does not mean unqualified or unchecked
 execution.
@@ -744,11 +773,11 @@ schedule, fidelity threshold, or acceptance-threshold change.
 All three result roots remain immutable diagnostic evidence. The passing
 rehearsal no longer authorizes a replacement image, baseline-01 contributes no
 sample to the replacement corpus, and no accepted row from incomplete
-paired-01 may be reused. Once the replacement sidecars are qualified and
-committed into a new clean collection image, that exact image must pass a
-fresh excluded 30/30 rehearsal and verified interface handoff. Formal
-acquisition then restarts from baseline-01 under one homogeneous source
-receipt. The earlier `20260815T103924.969402Z`,
+paired-01 may be reused. Once the successful sidecars are published by P
+without alteration, they must be included in a new clean post-P collection
+image. That exact image must pass a fresh excluded 30/30 rehearsal and
+verified interface handoff. Formal acquisition then restarts from baseline-01
+under one homogeneous source receipt. The earlier `20260815T103924.969402Z`,
 `20260814T150747.615059Z`, and `20260814T110741.344914Z` rehearsals and all
 their retries remain excluded evidence.
 
