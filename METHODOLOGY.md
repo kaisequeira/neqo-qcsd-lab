@@ -589,11 +589,33 @@ published from clean Lab commit
 | `rfc9114-text-r1` | `d76a4ff366a6b8dce65b42cca02d2a55c6333e649b28316fcdfe58b060d34c2f` | `9fb65d16532ff6290aa530e4829f87167cd784a30bfb68e5d7d921acd5da8fc5` |
 
 These historical files remain available from Lab commit
-`88569f268260b36f0c4ccfc36681f7a42887b66c` and frozen sealed results. This
-qualification-source revision intentionally leaves canonical v2 absent. Neqo
-`867246557ec719fc34552b60abf624895be2706c` changes the qualified
-implementation, so one new atomic five-file transaction is mandatory before a
-new capture image or rehearsal.
+`88569f268260b36f0c4ccfc36681f7a42887b66c` and frozen sealed results. They
+remain explicitly superseded and are not the active response cohort.
+
+The fixed transaction is now the canonical response-store v2. Its clean
+qualification source is Lab
+`2290b1f1a100d0d36f2d5ada405d9c26d382716d` (Q) with Neqo
+`867246557ec719fc34552b60abf624895be2706c` (F). The qualification collection
+image was `sha256:7b556344d65339e5cb399c37f7fe2a84ea248c9608e193f12269018c4ca47920`;
+preparation produced, and the actual qualification used,
+`sha256:5d85e8d7d090e5a29e77fe5751c65c70299e2cf1fc709cb62c3fde50c16e191d`.
+Each sidecar binds implementation-receipt aggregate
+`33fe7032e9bf35efb7bb4d3d84b7e2733f4e81a455baef0df1df0120687e2c35`.
+All five workloads qualified deterministic candidate index zero. Across five
+candidates, three connection epochs and 40 responses per epoch produced
+`5 × 3 × 40 = 600` stable identity completions. Each epoch comprised eight sequential
+waves of five requests (`8 × 5`), consecutive epochs kept the 30-second gaps,
+and every epoch recorded a maximum UDP payload of 1,200 bytes and zero oversized
+packets.
+The canonical sidecar and derived-manifest hashes are:
+
+| Workload | Sidecar SHA-256 | Derived schema-4 manifest SHA-256 |
+|---|---|---|
+| `getbootstrap-home-r3` | `0bef93532273f59718e1fc4123eccfa6833922ff34f0d22cc9cf6cf03963cb5d` | `f411d539e656a5abd6a49c94da5a60d4e2898f141b1ebf86e48b2d2bd2ca4372` |
+| `cloudflare-quiche-r3` | `d9dc5898464e7cb05f37fe9faf758250a72eaf14209913d7f2e56ffd31ced6ac` | `5d51d0f68d67c1847f49df01640c0ea6ca0a303dc3b567a4dc81f1ed5aef190a` |
+| `hyper-basic-client-r1` | `4f8f51722d0c9a3d1d696f845bf2ee91ff45f3387b62c472115f682b5c353428` | `3fc7f34b90e9cbc423dc1f727bf157c5b3910b30bb61c2a52eef7a74cebf8a55` |
+| `serde-home-r1` | `ee1f97b15a4f93702eda6c98b6578a2eb958df6f0f6a5129ab6b0a9d27ce3ca1` | `edb21e2792dfe59dd0c30f586709e5310e5b6ba5744a0c0a5ce334bd7746f797` |
+| `rfc9114-text-r1` | `1d75fcf42ba170eabe76f5184adcc9551a4b3360d3e869f694108055360541af` | `e9dfb138adbdb18d43bf2c70eb34240dc54894a8e58aa1766853e4fbfdf178b6` |
 
 Publication completes the response-qualification gate but does not authorize
 capture by itself. The exact sidecars must be committed and included in a
@@ -634,7 +656,7 @@ six-class diagnostic result at
 `results/research-classifier-pilot-01-1200/20260814T064655.275845Z` also
 contributes no POC5 samples. Its ATS response drift and FRONT/Tamaraw fidelity
 failures are evidence that the strict gates rejected that run, not proof of a
-general underlying Neqo implementation defect. The replacement cohort must
+general underlying Neqo implementation defect. The canonical cohort must
 complete a fresh rehearsal with exactly 30/30 accepted and eligible samples
 and a verified interface handoff. Fitting samples, qualification traffic,
 smoke results, failed attempts, and archived diagnostics are never substituted
@@ -663,8 +685,9 @@ for the pre-header small-response deadlock and compressed-representation
 variance; it motivated the bounded pre-header bootstrap and identity-only
 120-completion qualification. Both rehearsals, their retries, and the earlier
 `20260814T110741.344914Z` run remain excluded evidence. Formal capture stays
-blocked while canonical v2 is absent, and until the fixed clean build passes a
-new exact 30/30 rehearsal and verified interface handoff.
+blocked until the canonical sidecars are committed into a fresh clean
+collection build and that exact build passes a new 30/30 rehearsal and verified
+interface handoff.
 
 The earlier six-class and stable3 schema-1 campaign/export contracts remain
 available as historical pipeline contracts but are not part of POC5. The
