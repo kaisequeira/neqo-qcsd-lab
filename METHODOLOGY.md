@@ -388,13 +388,18 @@ boundary and that closure marker, and later tail observations remain excluded.
   A separate bounded bootstrap covers a transport stall before HTTP/3 can
   parse an atomic HEADERS frame. The controller retains an exact
   `STREAM_DATA_BLOCKED` report only for a pristine, wholly pre-header stream.
-  Once its prepared body floor and requested, advertised, and known limits
-  agree below the fixed absolute 1,000-byte framing target, the controller may
-  lease the remaining prefix toward that target, subject to the existing
-  lifetime `max_stream_data_excess` budget. This lease is unowned and
-  slotless: grant or advertisement cannot satisfy scheduled incoming debt, and
-  any typed progress invalidates the retained transport proof. It changes no
-  defence parameter, schedule, slot-accounting rule, or acceptance threshold.
+  The original small-floor path remains available when the prepared body floor
+  and requested, advertised, and known limits agree below the fixed absolute
+  1,000-byte framing target. A positive floor does not discard the proof merely
+  because scheduled credit has already raised the requested limit: that
+  residual branch is permitted only when the controller proves one live
+  contiguous advertised scheduled range from the effective initial receive
+  offset through `requested == advertised < 1000`, with known capacity beyond
+  it. Either branch appends only an ownerless, slotless parser lease through
+  absolute offset 1,000, bounded by the existing lifetime
+  `max_stream_data_excess` budget. The residual branch neither moves nor
+  satisfies the scheduled range or its slot; only consumption retires that
+  debt, and any typed progress invalidates the retained transport proof.
 
   A separate terminal-tail bridge handles a pristine typed boundary after
   DATA. It is available only when incoming scheduling is complete, no incoming
@@ -406,6 +411,29 @@ boundary and that closure marker, and later tail observations remain excluded.
   The original tail retains its slot: grant and advertisement satisfy no debt,
   and only consumption of those scheduled bytes can settle it. Partial,
   gapped, post-cap, continuation-owned, and nonterminal states fail closed.
+
+  FRONT alone opts into prearming its frozen packet targets. Future incoming
+  targets remain private and ineligible before their exact not-before times;
+  each endpoint and deadline remains frozen, including the strict 5 ms
+  deadline. Each drive reconciles all due fixed events and their incoming
+  credit before eligible output and ordinary input, using fresh monotonic time
+  and absolute wake instants. Release uses ceiling conversion and deadlines
+  use floor conversion, preventing early transmission or deadline extension.
+  Static and non-FRONT dynamic schedules retain their existing activation
+  behavior.
+
+  Receive-control batches undergo a pure global typed preflight before
+  mutation. Exact current-batch identities and persistent
+  accepted-but-unencoded `MAX_STREAM_DATA` identities are validated together;
+  shared transitive closures are cancelled once, transport LIFO rollback is
+  previewed, and encoded or advertised credit is never revoked. A
+  lifecycle-invalid receive-limit increase or manual-receive configuration
+  becomes terminal or gone only when unavailability is proven. Ledger,
+  ordering, identity, and rollback inconsistencies remain fatal. The
+  transaction flushes resulting observations and defence realizability before
+  unrelated actions, and a fatal case records the raw action with its typed
+  error. These recovery rules change no seed, defence parameter, schedule,
+  fidelity threshold, or acceptance threshold.
 
   Three independent compact response qualifications use
   `max(5, required_chaff_streams)` parallel requests to derive stable full-body
@@ -553,10 +581,11 @@ sample.
 
 FRONT and Tamaraw are the two algorithmic defences in this POC and do not
 consume fitted corpus artifacts. The current recovery contract instead uses
-the active create-only five-file transaction under
+one create-only five-file transaction under
 `config/chaff-response-qualification-store/v2/`. Application requests retain
 their prepared headers. The distinct chaff-only namespace copies `Accept` and
-`Accept-Language` exactly and forces `Accept-Encoding: identity`.
+`Accept-Language` exactly and forces `Accept-Encoding: identity`. Canonical v2
+is intentionally absent pending a replacement atomic qualification.
 
 For each class, known-valid same-origin resources with at least 1,200 prepared
 body bytes form a deterministic candidate prefix ordered by descending body
@@ -574,8 +603,8 @@ runtime chaff manifest at schema 4 with `qualification_scope: response-only`
 and the exact request-header primitive. There is no Walkie-Talkie prefix-pack
 or fitting-data field. The existing response-store v1/schema-1 sidecars and
 their schema-3 manifests remain frozen-compatible historical inputs; one frozen
-cohort may not mix schemas 3 and 4. The superseded v2 transaction was atomically
-published from clean Lab commit
+cohort may not mix schemas 3 and 4. The earlier superseded v2 transaction was
+atomically published from clean Lab commit
 `9953cf3a9a29a2cb5f6aaf02439cd13f318b6b39`, clean Neqo commit
 `a3bd748c1b3f4e24f7dc88f673365e6842db51a7`, and qualification image
 `sha256:c38afc629613bc8e7a5a82b55ad83a7e5787a51f780f14a199e9429be124ff43`:
@@ -588,12 +617,11 @@ published from clean Lab commit
 | `serde-home-r1` | `46abffb21b7f93ebe328f56ad82819fcced1586aa3966de2d733fa7a5133018f` | `91ad7a33ed70cfcf4bc1b062e747b1371bad00ca16171ee3539f40755f18c9d3` |
 | `rfc9114-text-r1` | `d76a4ff366a6b8dce65b42cca02d2a55c6333e649b28316fcdfe58b060d34c2f` | `9fb65d16532ff6290aa530e4829f87167cd784a30bfb68e5d7d921acd5da8fc5` |
 
-These historical files remain available from Lab commit
+These earlier historical files remain available from Lab commit
 `88569f268260b36f0c4ccfc36681f7a42887b66c` and frozen sealed results. They
 remain explicitly superseded and are not the active response cohort.
 
-The fixed transaction is now the canonical response-store v2. Its clean
-qualification source is Lab
+The later fixed transaction was published from clean qualification source Lab
 `2290b1f1a100d0d36f2d5ada405d9c26d382716d` (Q) with Neqo
 `867246557ec719fc34552b60abf624895be2706c` (F). The qualification collection
 image was `sha256:7b556344d65339e5cb399c37f7fe2a84ea248c9608e193f12269018c4ca47920`;
@@ -601,13 +629,14 @@ preparation produced, and the actual qualification used,
 `sha256:5d85e8d7d090e5a29e77fe5751c65c70299e2cf1fc709cb62c3fde50c16e191d`.
 Each sidecar binds implementation-receipt aggregate
 `33fe7032e9bf35efb7bb4d3d84b7e2733f4e81a455baef0df1df0120687e2c35`.
-All five workloads qualified deterministic candidate index zero. Across five
-candidates, three connection epochs and 40 responses per epoch produced
-`5 × 3 × 40 = 600` stable identity completions. Each epoch comprised eight sequential
-waves of five requests (`8 × 5`), consecutive epochs kept the 30-second gaps,
-and every epoch recorded a maximum UDP payload of 1,200 bytes and zero oversized
-packets.
-The canonical sidecar and derived-manifest hashes are:
+That transaction is now superseded because the qualified acquisition
+implementation changed in Neqo. All five workloads had qualified deterministic
+candidate index zero. Across five candidates, three connection epochs and 40
+responses per epoch produced `5 × 3 × 40 = 600` stable identity completions.
+Each epoch comprised eight sequential waves of five requests (`8 × 5`),
+consecutive epochs kept the 30-second gaps, and every epoch recorded a maximum
+UDP payload of 1,200 bytes and zero oversized packets.
+Its historical sidecar and derived-manifest hashes are:
 
 | Workload | Sidecar SHA-256 | Derived schema-4 manifest SHA-256 |
 |---|---|---|
@@ -617,10 +646,20 @@ The canonical sidecar and derived-manifest hashes are:
 | `serde-home-r1` | `ee1f97b15a4f93702eda6c98b6578a2eb958df6f0f6a5129ab6b0a9d27ce3ca1` | `edb21e2792dfe59dd0c30f586709e5310e5b6ba5744a0c0a5ce334bd7746f797` |
 | `rfc9114-text-r1` | `1d75fcf42ba170eabe76f5184adcc9551a4b3360d3e869f694108055360541af` | `e9dfb138adbdb18d43bf2c70eb34240dc54894a8e58aa1766853e4fbfdf178b6` |
 
-Publication completes the response-qualification gate but does not authorize
-capture by itself. The exact sidecars must be committed and included in a
-fresh clean collection build, and that build must pass the excluded 30/30
-rehearsal and verified interface handoff before any formal sample.
+Those exact files remain recoverable from Lab publication commit
+`d5543406359528b1382222d8ef3d3cffd67b7d4d` and frozen sealed results.
+Canonical response-store v2 is intentionally absent from this
+qualification-source revision. Neqo
+`a8378520b9740be782bfe526cdb3eb05e6665571`
+changes the qualified acquisition implementation, so all five sidecars must
+be regenerated as one atomic create-only transaction from the exact clean Q/F
+images. No sidecar, implementation receipt, image, rehearsal, or formal
+capture from either superseded implementation may be mixed with the
+replacement cohort. Publication of the replacement evidence will complete the
+response-qualification gate but will not authorize capture by itself: the
+exact evidence must be committed into a fresh clean collection build, and that
+build must pass a fresh excluded 30/30 rehearsal and verified interface handoff
+before any restarted formal sample.
 Qualification traffic is diagnostic evidence and never a classifier
 observation. “No fitting” therefore does not mean unqualified or unchecked
 execution.
@@ -656,7 +695,7 @@ six-class diagnostic result at
 `results/research-classifier-pilot-01-1200/20260814T064655.275845Z` also
 contributes no POC5 samples. Its ATS response drift and FRONT/Tamaraw fidelity
 failures are evidence that the strict gates rejected that run, not proof of a
-general underlying Neqo implementation defect. The canonical cohort must
+general underlying Neqo implementation defect. The replacement cohort must
 complete a fresh rehearsal with exactly 30/30 accepted and eligible samples
 and a verified interface handoff. Fitting samples, qualification traffic,
 smoke results, failed attempts, and archived diagnostics are never substituted
@@ -667,27 +706,51 @@ parameter change, or class substitution invalidates the rehearsal and requires
 a new excluded 30-sample gate. Every one of the twenty formal results must bind
 the same source receipt.
 
-The latest sealed rehearsal at
-`results/research-classifier-poc5-rehearsal-1200/20260815T103924.969402Z` is
-valid but incomplete: 27/30 samples were both accepted and eligible. Its three
-terminal failures were Cloudflare visit-0 FRONT and both Cloudflare Tamaraw
-visits. All nine terminal Cloudflare attempts, plus a recovered Serde Tamaraw
-attempt, reached a pristine DATA boundary with exactly two already-advertised
-scheduled bytes left. Application and qualified chaff identities remained
-valid, but the boundary could not obtain parser credit; the two bytes retired
-only at the 120-second timeout. Accepted samples had zero schedule misses and
-passed identity, fidelity, capture, UDP-ceiling, and clock gates. The bounded
-terminal-tail bridge above repairs that separate post-DATA path while
-preserving ownership and consumption-only slot satisfaction.
+The superseded clean source receipt—Lab
+`d5543406359528b1382222d8ef3d3cffd67b7d4d`, Neqo
+`867246557ec719fc34552b60abf624895be2706c`, and collection image
+`sha256:5d56c63fdd182ba311392602bad77e8f4c3198c6bd08958a691cac197f74f05e`—
+passed the excluded rehearsal at
+`results/research-classifier-poc5-rehearsal-1200/20260815T132537.356504Z`
+with 30/30 accepted and eligible samples. Its sealed evidence-index and
+experiment hashes are
+`350e015f97d49fa8c14f7e5d82489b05f2fbdd5d0cb9a0345b54abba32d9b560`
+and `f3028b05a7908826b003fafb8e07bdd0d0a709a183be0513fa7cc5efb7eb2703`;
+the verified interface handoff's `SHA256SUMS` hash is
+`392d897369de9e38bbdae116b79c1559a9f5d00a65f33c4b8eccbb887053e02c`.
+The same receipt completed baseline-01 at
+`results/research-classifier-poc5-baseline-01-1200/20260815T134617.090622Z`
+with 100/100 accepted and eligible samples, all on their first attempt. Its
+sealed evidence-index and experiment hashes are
+`65a858a25a714a534dff1afb7ec57d510fd2ac8ea6b1995b9aad34fd94136bc9`
+and `5ae8cded5a7dc117ec21ce302a9a1b12051acc8690939a75fbbe004f76fd593b`.
+Paired-01 at
+`results/research-classifier-poc5-paired-01-1200/20260815T144004.646818Z`
+is sealed and valid but incomplete: 146/150 samples were accepted and eligible
+across 166 attempts, split U/F/T as 50/46/50, with four terminal FRONT
+failures—Hyper visits 002, 004, and 009, and RFC visit 003. Its sealed
+evidence-index and experiment hashes are
+`dc1b656a8745d589ff43224862647d46aed67d8cf3687d1d7cd78e7e84ffb2af`
+and `767d0237d3172b506d951bdb9a9c1c4b37df6aee3e166d90b9193c3d7c9ab7d2`.
+Hyper 002 and RFC 003 exhausted their retries on strict schedule misses. Hyper
+004 retained
+310–325 scheduled response bytes below the atomic HEADERS boundary until the
+120-second timeout. Hyper 009 combined strict misses with a typed transport
+`InvalidInput` on one attempt. These observations motivated the prospective
+residual scheduled-prefix bootstrap, FRONT-only prearming, and transactional
+typed receive-action preflight above. They caused no seed, defence parameter,
+schedule, fidelity threshold, or acceptance-threshold change.
 
-The earlier `20260814T150747.615059Z` rehearsal remains the excluded diagnostic
-for the pre-header small-response deadlock and compressed-representation
-variance; it motivated the bounded pre-header bootstrap and identity-only
-120-completion qualification. Both rehearsals, their retries, and the earlier
-`20260814T110741.344914Z` run remain excluded evidence. Formal capture stays
-blocked until the canonical sidecars are committed into a fresh clean
-collection build and that exact build passes a new 30/30 rehearsal and verified
-interface handoff.
+All three result roots remain immutable diagnostic evidence. The passing
+rehearsal no longer authorizes a replacement image, baseline-01 contributes no
+sample to the replacement corpus, and no accepted row from incomplete
+paired-01 may be reused. Once the replacement sidecars are qualified and
+committed into a new clean collection image, that exact image must pass a
+fresh excluded 30/30 rehearsal and verified interface handoff. Formal
+acquisition then restarts from baseline-01 under one homogeneous source
+receipt. The earlier `20260815T103924.969402Z`,
+`20260814T150747.615059Z`, and `20260814T110741.344914Z` rehearsals and all
+their retries remain excluded evidence.
 
 The earlier six-class and stable3 schema-1 campaign/export contracts remain
 available as historical pipeline contracts but are not part of POC5. The
