@@ -131,10 +131,22 @@ advances to the next candidate; transport, DNS, timeout, or protocol failures
 abort the transaction. Publication is atomic, and no v2 sidecar hash exists
 until that exact five-file transaction succeeds from a clean build.
 
-The current canonical five-file transaction succeeded atomically from clean
-Lab qualification source `fcc6af4394b2b2f7dee5f8b1a214cd7673a9e0e8` (Q),
-clean Neqo `a8378520b9740be782bfe526cdb3eb05e6665571` (F), qualification
-collection image
+Canonical response-store v2 is intentionally absent from this Q3 acquisition
+source. Q3 pins clean Neqo
+`6aceaac85243d6e0e34354108e010705d3c83088` (F3), tree
+`691209bdd616c25759d508f1af0547904b8ce058`, whose parent is F2
+`a8378520b9740be782bfe526cdb3eb05e6665571` and whose exact patch hashes to
+`a4b17821f8c119af9f022a609dd33e40be4f196fcad397b04ba444d859c4a7f8`.
+The only authorized next publication is one new atomic exact-five
+qualification from a clean Q3/F3 build. Until that transaction succeeds, no
+canonical v2 sidecar or derived-manifest hash exists, and no formal capture or
+classifier export is authorized.
+
+The immediately preceding five-file transaction succeeded atomically from
+clean Lab qualification source
+`fcc6af4394b2b2f7dee5f8b1a214cd7673a9e0e8` (Q2), clean Neqo
+`a8378520b9740be782bfe526cdb3eb05e6665571` (F2), qualification collection
+image
 `sha256:29a6e0adaa65d88e1e30afd3722f20f976fe14ed0676fb28d0448ec9155c0700`,
 and prepare/actual qualification image
 `sha256:ef5a3e7bcd20e8841f6c32064d40fcf94be48380f390146d5c039a49fc3665c0`.
@@ -145,7 +157,7 @@ five workloads. Fifteen independent connection epochs produced
 `5 × 3 × 40 = 600` stable identity completions and 62,007 packet
 observations. Within each workload, consecutive epochs retained at least the
 required 30-second gaps, the maximum observed UDP payload was 1,200 bytes, and
-no oversized packet was observed. The active hashes are:
+no oversized packet was observed. Its historical hashes are:
 
 | Workload | Sidecar SHA-256 | Derived schema-4 manifest SHA-256 |
 |---|---|---|
@@ -155,11 +167,16 @@ no oversized packet was observed. The active hashes are:
 | `serde-home-r1` | `86b6d3fcdc208e50b71e5cf957770a9e6319dae39a2e87b9d884f713c0ec3da4` | `e433468dcfee5c2ff6de7d4376588e7c104f60d13977894412ee58a04c88a212` |
 | `rfc9114-text-r1` | `e55414ca9da748f17b89c02d762b1ac39f74acb349ed60d67833c1d5999e627b` | `20ce6ddd56b4684179c0cec8cac12bcef7ce8ef9327d954c2ecfe2239ec84bd9` |
 
-This exact create-only batch is the active canonical evidence and will be
-published without alteration by the upcoming P commit; no P hash is assigned
-yet. The final clean post-P collection-image build, fresh excluded 30/30
-rehearsal, and verified interface handoff remain pending, so this evidence does
-not yet authorize formal capture.
+That exact batch was published without alteration by P2
+`8a8d605166bfc27c6a7b8907162119e055ca7ca2`. The clean final P2 collection
+and preparation images were respectively
+`sha256:a971810d2d26f7b87d380c96ae3516890b0715267a717879a4f93316caa96122`
+and
+`sha256:82434c67e194d29dc26c0cfa90014f01a2473c61ea92e9213c47ea1afc55297d`.
+Q2, F2, P2, both qualification images, both final P2 images, the implementation
+receipt, and all five files and derived manifests are now historical and
+excluded from the replacement source lineage. The hashes remain recorded
+verbatim for recovery and audit; none is active canonical evidence.
 
 The fixed transaction published from clean Lab qualification source
 `2290b1f1a100d0d36f2d5ada405d9c26d382716d` (Q), clean Neqo
@@ -204,13 +221,12 @@ Its historical hashes are:
 
 Those exact files remain recoverable from Lab commit
 `88569f268260b36f0c4ccfc36681f7a42887b66c` and from frozen sealed results.
-Both prior transactions are historical only. Canonical response-store v2 now
-contains the exact active five-file cohort above and will be published without
-alteration by the upcoming P commit. No sidecar, implementation receipt,
-image, rehearsal, or formal capture from either superseded implementation may
-be mixed with the active cohort. The final clean post-P collection build and
-its fresh excluded 30/30 rehearsal and verified interface handoff are still
-pending.
+All three prior response-store v2 transactions are historical only. Canonical
+v2 is intentionally absent pending the one atomic exact-five Q3/F3
+qualification. No historical sidecar, implementation receipt, image,
+rehearsal, formal sample, or export may be mixed into that new cohort. A fresh
+post-publication collection build, excluded 30/30 rehearsal, and verified
+interface handoff will still be required before formal acquisition may restart.
 
 Each response-store v2 file is sidecar schema 2 and derives a schema-4
 `qcsd-qualified-chaff-manifest` with `qualification_scope: response-only` and
@@ -989,14 +1005,14 @@ handoff. FRONT and Tamaraw use their fixed research-profile algorithms and
 seeds; the POC neither consumes nor refits the Traffic-Morphing, WTF-PAD, or
 Walkie-Talkie artifacts. The current recovery contract requires five
 response-store v2 sidecars (schema 2) deriving schema-4 runtime manifests,
-with no prefix-pack or fitted-data dependency. Both previous v2 transactions
-are superseded. Canonical v2 now contains the successful exact-five cohort for
-Neqo `a8378520b9740be782bfe526cdb3eb05e6665571` and will be published
-without alteration by the upcoming P commit. It will not authorize capture
-until that evidence is included in a fresh clean post-P collection build and
-that build passes a new excluded 30/30 rehearsal and interface handoff.
-Historical v1/schema-3 evidence remains readable only for its frozen
-compatibility role.
+with no prefix-pack or fitted-data dependency. All previous v2 transactions
+are superseded. Canonical v2 is intentionally absent from Q3 pending one
+atomic exact-five qualification bound to clean Neqo F3
+`6aceaac85243d6e0e34354108e010705d3c83088`. Even a successful transaction
+will not authorize capture until its publication is included in a fresh clean
+collection build and that exact build passes a new excluded 30/30 rehearsal
+and interface handoff. Historical v1/schema-3 evidence remains readable only
+for its frozen compatibility role.
 
 Each temporal block has two campaign files:
 `classifier-poc5-baseline-NN.yml` contributes 20 undefended visits per class,
@@ -1084,16 +1100,45 @@ the residual scheduled-prefix bootstrap, FRONT-only prearming, and
 transactional typed receive-action preflight described above; no seed,
 schedule, fidelity gate, or acceptance threshold was changed.
 
-All three result roots remain immutable diagnostic evidence. The passing
-rehearsal no longer authorizes a replacement image, baseline-01 contributes no
-sample to the replacement corpus, and no accepted row from incomplete
-paired-01 may be reused. After the five successful sidecars are published by P
-without alteration, they must be included in a new clean post-P collection
-image. That exact image must pass a fresh excluded 30/30 rehearsal and
-verified interface handoff. Formal acquisition then restarts from baseline-01
-under one homogeneous source receipt. The earlier `20260815T103924.969402Z`,
-`20260814T150747.615059Z`, and `20260814T110741.344914Z` rehearsals and all
-their retries remain permanently excluded.
+P2 then produced a fresh excluded rehearsal at
+`results/research-classifier-poc5-rehearsal-1200/20260815T201524.981071Z`
+from clean Lab P2 `8a8d605166bfc27c6a7b8907162119e055ca7ca2`, F2
+`a8378520b9740be782bfe526cdb3eb05e6665571`, and collection image
+`sha256:a971810d2d26f7b87d380c96ae3516890b0715267a717879a4f93316caa96122`.
+It is sealed incomplete and permanently excluded: 29/30 samples were accepted
+and eligible, while Hyper visit 000 FRONT failed deterministically across all
+three attempts. The sealed evidence-index and experiment hashes are
+`3d9baba02bb87e3e884992c1a215dcb549b8f1628b732826a5b502669e496df7`
+and `c9544d06a4349f5160388fb93f7ea8b9be7c5f80435668ef0dd66360379978ff`.
+Each failed attempt opened every application request stream, and every
+application request's bytes and FIN were acknowledged, but all five response
+resources remained incomplete; 1,333,200 scheduled incoming bytes were
+requested, zero were consumed, and all were retired at timeout. Retained
+capture evidence shows that response datagrams reached the host.
+
+The failure was a two-layer F2 liveness defect. FRONT's fixed-schedule
+`reconcile_due_fixed` processed due incoming work at the exact elapsed instant
+but did not advance the incoming boundary used by `next_deadline`; when that
+work could not yet allocate, its retry deadline remained in the past. The
+single-thread runner treated the past deadline with an await-free `continue`,
+so it hot-looped without polling socket readiness and starved the already
+arriving response. F3 advances only that fixed-schedule retry watermark while
+retaining exact elapsed processing, private future events, and global order;
+the runner now performs a readiness-aware await with a one-microsecond retry
+timer for an already-due target while leaving future absolute wake arithmetic
+unchanged. No schedule event is dropped, reordered, or artificially satisfied.
+
+All four result roots above remain immutable diagnostic evidence. The earlier
+passing rehearsal no longer authorizes a replacement image, baseline-01
+contributes no sample to the replacement corpus, and no accepted row from
+either incomplete result may be reused. No formal campaign and no classifier
+export was run from P2. Q3 therefore restarts at atomic exact-five F3
+qualification; after publication, a new clean collection image must pass a
+fresh excluded 30/30 rehearsal and verified interface handoff before formal
+acquisition can restart from baseline-01 under one homogeneous source receipt.
+The earlier `20260815T103924.969402Z`, `20260814T150747.615059Z`, and
+`20260814T110741.344914Z` rehearsals and all their retries remain permanently
+excluded.
 
 The incomplete six-class diagnostic at
 `results/research-classifier-pilot-01-1200/20260814T064655.275845Z` is excluded
@@ -1110,14 +1155,13 @@ qualification diagnostics are likewise never POC5 classifier samples.
 
 These POC5 campaign files, the offline exporter, tests, and documentation are
 outside the qualification implementation-file inventory, but the clean Lab
-commit remains part of source provenance. Canonical response-store v2 now
-contains the exact successful five-file qualification cohort and is awaiting
-publication without alteration by the upcoming P commit. Only after P may the
-fresh final clean collection image be built. Formal acquisition remains
-blocked until that exact post-P image passes a fresh excluded rehearsal with
-exactly 30/30 accepted and eligible samples and a verified interface handoff;
-formal capture then restarts from baseline-01. Keep the historical
-response-store v1/schema-3 evidence
+commit remains part of source provenance. Canonical response-store v2 is
+intentionally absent in Q3. One clean atomic exact-five F3 qualification and a
+later publication commit must precede the next final collection build. Formal
+acquisition and classifier export remain blocked until that exact future image
+passes a fresh excluded rehearsal with exactly 30/30 accepted and eligible
+samples and a verified interface handoff; formal capture then restarts from
+baseline-01. Keep the historical response-store v1/schema-3 evidence
 frozen-compatible; do not regenerate the separate historical full-v2
 sidecars, prefix specs, fitting result, or sealed `research-1200` bundle.
 
