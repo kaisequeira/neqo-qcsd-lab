@@ -585,10 +585,10 @@ one create-only five-file transaction under
 `config/chaff-response-qualification-store/v2/`. Application requests retain
 their prepared headers. The distinct chaff-only namespace copies `Accept` and
 `Accept-Language` exactly and forces `Accept-Encoding: identity`. Canonical v2
-is intentionally absent from this Q3 acquisition source pending one atomic
-exact-five qualification bound to clean Neqo F3
-`6aceaac85243d6e0e34354108e010705d3c83088`. No formal capture or classifier
-export is authorized while the store is absent.
+is now the active exact-five cohort qualified from clean Q3 and clean Neqo F3
+`6aceaac85243d6e0e34354108e010705d3c83088`. Its publication does not yet
+authorize formal capture or classifier export: the clean final images and a
+fresh excluded rehearsal and interface handoff remain pending.
 
 For each class, known-valid same-origin resources with at least 1,200 prepared
 body bytes form a deterministic candidate prefix ordered by descending body
@@ -612,10 +612,34 @@ Q3 pins F3 `6aceaac85243d6e0e34354108e010705d3c83088`, tree
 `691209bdd616c25759d508f1af0547904b8ce058`, directly above F2
 `a8378520b9740be782bfe526cdb3eb05e6665571`; the F3 patch SHA-256 is
 `a4b17821f8c119af9f022a609dd33e40be4f196fcad397b04ba444d859c4a7f8`.
-The absence of canonical v2 is deliberate acquisition state, not missing
-evidence: the next allowed publication is one clean create-only exact-five
-Q3/F3 transaction, and no canonical sidecar or derived-manifest hash exists
-before its atomic success.
+The create-only exact-five transaction succeeded atomically from clean Lab Q3
+`06cacddc21ab0ded9422d445723f60f37c530363` and F3. Its qualification
+collection image was
+`sha256:bea517984b866d0c413ccc3d7c381e07a586a86eac5660717a9b8a809b4da382`;
+preparation produced, and the qualification actually used,
+`sha256:227a931f5ae410fe298285d69a1d5d7b403ba026970949e5b30723d86b66b68a`.
+Every sidecar binds implementation-receipt aggregate
+`558705bb0560ee3a87140670de7140ac087e9a0bf5ab13c1215f214f618f5ea4`.
+The deterministic first candidate (`candidate_index: 0`) qualified for all
+five workloads. Across 15 independent connection epochs, 600 stable identity
+completions produced 61,875 packet observations: 54,573 incoming and 7,302
+outgoing. Within every workload, consecutive epochs retained at least the
+required 30-second gaps, the maximum observed UDP payload was 1,200 bytes, and
+no oversized packet was observed. The active hashes are:
+
+| Workload | Sidecar SHA-256 | Derived schema-4 manifest SHA-256 |
+|---|---|---|
+| `getbootstrap-home-r3` | `9b868b3b083c3acca66d6d05c7c9962e3aad28750defbdbe21a340fb054c1148` | `7fb560f246c90b2ad3eaf937f7a97f3bf9661f244fd10fd84e86753db51ddf3d` |
+| `cloudflare-quiche-r3` | `c9dacbabdd2861c5ef505fa572f7f1b9407084c7002a5ef28057b66c12788246` | `51e90afbd48747f9a776eeb9fb80158b38f4a909d9fd35932ceb4c7fb1edd80a` |
+| `hyper-basic-client-r1` | `92b5090ba4b4d228db652f7d435da3d29867f9ffe221a835e4f6d965cd6840d9` | `2fa47f098191f2c72f9abcf90b4b2f7b0edef1d21bc480c93fc18f5f988df514` |
+| `serde-home-r1` | `19fa46e8da00b6af47090ae9857335b9db966a3b55dc9c0592059cdceb2eafc4` | `d463076c6baf2a01fd94d534fae8015f99d523a54ebd4a9dc9d95d4109cf1f11` |
+| `rfc9114-text-r1` | `f43285364a01de0f5024632995b83f034911c5d3c7c5770396b240f07c5fcf62` | `0152f1137aa31e5371ad4792829485710cb9218192cf115bc7bbdfa0a26ae797` |
+
+P3 publishes these exact files as the active canonical response cohort. Its
+non-self-referential commit hash is intentionally pending at this documented
+boundary. Clean final collection and preparation image IDs and the fresh
+excluded rehearsal are also pending; no formal capture or classifier export
+has been run or is yet authorized.
 
 The immediately preceding transaction succeeded atomically from clean Lab
 qualification source `fcc6af4394b2b2f7dee5f8b1a214cd7673a9e0e8` (Q2), clean
@@ -697,13 +721,13 @@ Its historical sidecar and derived-manifest hashes are:
 
 Those exact files remain recoverable from Lab publication commit
 `d5543406359528b1382222d8ef3d3cffd67b7d4d` and frozen sealed results.
-All three prior response-store v2 transactions are historical. Canonical v2 is
-intentionally absent pending the one atomic exact-five Q3/F3 qualification. No
+All three prior response-store v2 transactions are historical. The active
+canonical cohort is the exact Q3/F3 five-file publication recorded above. No
 historical sidecar, implementation receipt, image, rehearsal, formal sample,
-or export may be mixed into that new cohort. A later publication still will
-not authorize capture by itself: the new evidence must be included in a fresh
-clean collection build, and that exact build must pass a fresh excluded 30/30
-rehearsal and verified interface handoff before any restarted formal sample.
+or export may be mixed into it. Publication does not authorize capture by
+itself: the active evidence must be included in a fresh clean final collection
+build, and that exact build must pass a fresh excluded 30/30 rehearsal and
+verified interface handoff before any restarted formal sample.
 Qualification traffic is diagnostic evidence and never a classifier
 observation. “No fitting” therefore does not mean unqualified or unchecked
 execution.
@@ -819,10 +843,12 @@ All four result roots above remain immutable diagnostic evidence. The earlier
 passing rehearsal no longer authorizes a replacement image, baseline-01
 contributes no sample to the replacement corpus, and no accepted row from
 either incomplete result may be reused. P2 produced no formal campaign result
-and no classifier export. Q3 restarts at atomic exact-five F3 qualification;
-after its publication, a new clean collection image must pass a fresh excluded
-30/30 rehearsal and verified interface handoff before formal acquisition can
-restart from baseline-01 under one homogeneous source receipt. The earlier
+and no classifier export. Q3 has now completed the atomic exact-five F3
+qualification and P3 publishes that cohort; the P3 identifier and clean final
+images remain pending. The eventual exact collection image must pass a fresh
+excluded 30/30 rehearsal and verified interface handoff before formal
+acquisition can restart from baseline-01 under one homogeneous source
+receipt. The earlier
 `20260815T103924.969402Z`, `20260814T150747.615059Z`, and
 `20260814T110741.344914Z` rehearsals and all their retries remain excluded
 evidence.

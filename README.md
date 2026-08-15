@@ -131,16 +131,39 @@ advances to the next candidate; transport, DNS, timeout, or protocol failures
 abort the transaction. Publication is atomic, and no v2 sidecar hash exists
 until that exact five-file transaction succeeds from a clean build.
 
-Canonical response-store v2 is intentionally absent from this Q3 acquisition
-source. Q3 pins clean Neqo
-`6aceaac85243d6e0e34354108e010705d3c83088` (F3), tree
+Canonical response-store v2 is the active exact-five Q3/F3 cohort. It was
+qualified atomically from clean Lab Q3
+`06cacddc21ab0ded9422d445723f60f37c530363` and clean Neqo F3
+`6aceaac85243d6e0e34354108e010705d3c83088`, tree
 `691209bdd616c25759d508f1af0547904b8ce058`, whose parent is F2
 `a8378520b9740be782bfe526cdb3eb05e6665571` and whose exact patch hashes to
 `a4b17821f8c119af9f022a609dd33e40be4f196fcad397b04ba444d859c4a7f8`.
-The only authorized next publication is one new atomic exact-five
-qualification from a clean Q3/F3 build. Until that transaction succeeds, no
-canonical v2 sidecar or derived-manifest hash exists, and no formal capture or
-classifier export is authorized.
+The qualification collection image was
+`sha256:bea517984b866d0c413ccc3d7c381e07a586a86eac5660717a9b8a809b4da382`;
+preparation produced, and the qualification actually used,
+`sha256:227a931f5ae410fe298285d69a1d5d7b403ba026970949e5b30723d86b66b68a`.
+Every sidecar binds implementation-receipt aggregate
+`558705bb0560ee3a87140670de7140ac087e9a0bf5ab13c1215f214f618f5ea4`.
+The deterministic first candidate (`candidate_index: 0`) qualified for all
+five workloads. Across 15 independent connection epochs, 600 stable identity
+completions produced 61,875 packet observations: 54,573 incoming and 7,302
+outgoing. Within every workload, consecutive epochs retained at least the
+required 30-second gaps, the maximum observed UDP payload was 1,200 bytes, and
+no oversized packet was observed. The active hashes are:
+
+| Workload | Sidecar SHA-256 | Derived schema-4 manifest SHA-256 |
+|---|---|---|
+| `getbootstrap-home-r3` | `9b868b3b083c3acca66d6d05c7c9962e3aad28750defbdbe21a340fb054c1148` | `7fb560f246c90b2ad3eaf937f7a97f3bf9661f244fd10fd84e86753db51ddf3d` |
+| `cloudflare-quiche-r3` | `c9dacbabdd2861c5ef505fa572f7f1b9407084c7002a5ef28057b66c12788246` | `51e90afbd48747f9a776eeb9fb80158b38f4a909d9fd35932ceb4c7fb1edd80a` |
+| `hyper-basic-client-r1` | `92b5090ba4b4d228db652f7d435da3d29867f9ffe221a835e4f6d965cd6840d9` | `2fa47f098191f2c72f9abcf90b4b2f7b0edef1d21bc480c93fc18f5f988df514` |
+| `serde-home-r1` | `19fa46e8da00b6af47090ae9857335b9db966a3b55dc9c0592059cdceb2eafc4` | `d463076c6baf2a01fd94d534fae8015f99d523a54ebd4a9dc9d95d4109cf1f11` |
+| `rfc9114-text-r1` | `f43285364a01de0f5024632995b83f034911c5d3c7c5770396b240f07c5fcf62` | `0152f1137aa31e5371ad4792829485710cb9218192cf115bc7bbdfa0a26ae797` |
+
+P3 publishes these exact files as the active cohort. Its non-self-referential
+commit hash is intentionally pending at this documented boundary. Clean final
+collection and preparation image IDs and the fresh excluded rehearsal are
+also pending; no formal capture or classifier export has been run or is yet
+authorized.
 
 The immediately preceding five-file transaction succeeded atomically from
 clean Lab qualification source
@@ -221,12 +244,12 @@ Its historical hashes are:
 
 Those exact files remain recoverable from Lab commit
 `88569f268260b36f0c4ccfc36681f7a42887b66c` and from frozen sealed results.
-All three prior response-store v2 transactions are historical only. Canonical
-v2 is intentionally absent pending the one atomic exact-five Q3/F3
-qualification. No historical sidecar, implementation receipt, image,
-rehearsal, formal sample, or export may be mixed into that new cohort. A fresh
-post-publication collection build, excluded 30/30 rehearsal, and verified
-interface handoff will still be required before formal acquisition may restart.
+All three prior response-store v2 transactions are historical only. The active
+canonical cohort is the exact Q3/F3 five-file publication recorded above. No
+historical sidecar, implementation receipt, image, rehearsal, formal sample,
+or export may be mixed into it. A fresh clean final collection build, excluded
+30/30 rehearsal, and verified interface handoff are still required before
+formal acquisition may restart.
 
 Each response-store v2 file is sidecar schema 2 and derives a schema-4
 `qcsd-qualified-chaff-manifest` with `qualification_scope: response-only` and
@@ -1006,13 +1029,12 @@ seeds; the POC neither consumes nor refits the Traffic-Morphing, WTF-PAD, or
 Walkie-Talkie artifacts. The current recovery contract requires five
 response-store v2 sidecars (schema 2) deriving schema-4 runtime manifests,
 with no prefix-pack or fitted-data dependency. All previous v2 transactions
-are superseded. Canonical v2 is intentionally absent from Q3 pending one
-atomic exact-five qualification bound to clean Neqo F3
-`6aceaac85243d6e0e34354108e010705d3c83088`. Even a successful transaction
-will not authorize capture until its publication is included in a fresh clean
-collection build and that exact build passes a new excluded 30/30 rehearsal
-and interface handoff. Historical v1/schema-3 evidence remains readable only
-for its frozen compatibility role.
+are superseded. The active exact-five cohort is published from Q3 and clean
+Neqo F3 `6aceaac85243d6e0e34354108e010705d3c83088`. Publication alone does not
+authorize capture: the P3 hash and clean final image IDs remain unrecorded,
+and that exact future collection build must pass a new excluded 30/30
+rehearsal and interface handoff. Historical v1/schema-3 evidence remains
+readable only for its frozen compatibility role.
 
 Each temporal block has two campaign files:
 `classifier-poc5-baseline-NN.yml` contributes 20 undefended visits per class,
@@ -1132,9 +1154,10 @@ All four result roots above remain immutable diagnostic evidence. The earlier
 passing rehearsal no longer authorizes a replacement image, baseline-01
 contributes no sample to the replacement corpus, and no accepted row from
 either incomplete result may be reused. No formal campaign and no classifier
-export was run from P2. Q3 therefore restarts at atomic exact-five F3
-qualification; after publication, a new clean collection image must pass a
-fresh excluded 30/30 rehearsal and verified interface handoff before formal
+export was run from P2. Q3 has now completed the atomic exact-five F3
+qualification and P3 publishes that cohort; the P3 identifier and clean final
+images remain pending. The eventual exact collection image must pass a fresh
+excluded 30/30 rehearsal and verified interface handoff before formal
 acquisition can restart from baseline-01 under one homogeneous source receipt.
 The earlier `20260815T103924.969402Z`, `20260814T150747.615059Z`, and
 `20260814T110741.344914Z` rehearsals and all their retries remain permanently
@@ -1155,13 +1178,13 @@ qualification diagnostics are likewise never POC5 classifier samples.
 
 These POC5 campaign files, the offline exporter, tests, and documentation are
 outside the qualification implementation-file inventory, but the clean Lab
-commit remains part of source provenance. Canonical response-store v2 is
-intentionally absent in Q3. One clean atomic exact-five F3 qualification and a
-later publication commit must precede the next final collection build. Formal
-acquisition and classifier export remain blocked until that exact future image
-passes a fresh excluded rehearsal with exactly 30/30 accepted and eligible
-samples and a verified interface handoff; formal capture then restarts from
-baseline-01. Keep the historical response-store v1/schema-3 evidence
+commit remains part of source provenance. Canonical response-store v2 is now
+the published exact-five Q3/F3 cohort. The P3 hash and clean final collection
+and preparation image IDs remain pending. Formal acquisition and classifier
+export remain blocked until the exact future collection image passes a fresh
+excluded rehearsal with exactly 30/30 accepted and eligible samples and a
+verified interface handoff; formal capture then restarts from baseline-01.
+Keep the historical response-store v1/schema-3 evidence
 frozen-compatible; do not regenerate the separate historical full-v2
 sidecars, prefix specs, fitting result, or sealed `research-1200` bundle.
 
