@@ -17,7 +17,7 @@ CAMPAIGN_DIR = ROOT / "config/campaigns"
 WORKLOADS = (
     "getbootstrap-home-r3",
     "cloudflare-quiche-r3",
-    "hyper-basic-client-r1",
+    "hyper-basic-client-r2",
     "serde-home-r1",
     "rfc9114-text-r1",
 )
@@ -26,20 +26,21 @@ WORKLOAD_ORDERS = (
 )
 BASELINE_SEEDS = tuple(range(2_026_081_501, 2_026_081_511))
 # Prospectively selected from 2026082001..2026092000 using only deterministic
-# plan expansion. A fixed search minimized squared distance from 100/3 subject
-# to the acceptance bound 32..35; only three of 45 cells fall outside 33..34.
-# No capture result, workload outcome, or classifier score informed selection.
+# plan expansion. A fixed search first enforced the 32..35 acceptance bound,
+# then minimized cells outside 33..34 and squared integer distance from 100/3.
+# The exact tuple and matrix below are the frozen output. No capture result,
+# workload outcome, or classifier score informed selection.
 PAIRED_SEEDS = (
-    2_026_082_040,
-    2_026_082_307,
-    2_026_082_909,
-    2_026_083_171,
-    2_026_083_594,
-    2_026_083_697,
-    2_026_085_480,
-    2_026_086_255,
-    2_026_089_590,
-    2_026_091_763,
+    2_026_083_316,
+    2_026_083_511,
+    2_026_084_706,
+    2_026_087_201,
+    2_026_087_399,
+    2_026_087_913,
+    2_026_089_238,
+    2_026_089_629,
+    2_026_090_180,
+    2_026_091_012,
 )
 REHEARSAL_SEED = 2_026_081_499
 BASELINE_DEFENSES = ("undefended",)
@@ -51,10 +52,10 @@ DEFENSE_KINDS = {
 }
 EXPECTED_PAIRED_POSITION_COUNTS = (
     ((33, 34, 33), (33, 33, 34), (34, 33, 33)),
+    ((33, 33, 34), (34, 33, 33), (33, 34, 33)),
+    ((33, 32, 35), (33, 34, 33), (34, 34, 32)),
     ((33, 34, 33), (33, 33, 34), (34, 33, 33)),
-    ((34, 33, 33), (33, 34, 33), (33, 33, 34)),
-    ((34, 33, 33), (33, 33, 34), (33, 34, 33)),
-    ((32, 35, 33), (34, 32, 34), (34, 33, 33)),
+    ((33, 33, 34), (34, 33, 33), (33, 34, 33)),
 )
 LIMITS = {
     "timeout_seconds": 120,

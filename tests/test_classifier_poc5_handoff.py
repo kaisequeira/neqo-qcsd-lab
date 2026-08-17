@@ -38,17 +38,21 @@ EXPORTER_SOURCE = {
 EXPECTED_POC5_CLASSES = (
     "getbootstrap-home-r3",
     "cloudflare-quiche-r3",
-    "hyper-basic-client-r1",
+    "hyper-basic-client-r2",
     "serde-home-r1",
     "rfc9114-text-r1",
 )
 EXPECTED_POC5_CLASS_LABELS = {
     "getbootstrap-home-r3": "getbootstrap.com",
     "cloudflare-quiche-r3": "cloudflare-quic.com",
-    "hyper-basic-client-r1": "hyper.rs",
+    "hyper-basic-client-r2": "hyper.rs",
     "serde-home-r1": "serde.rs",
     "rfc9114-text-r1": "www.rfc-editor.org",
 }
+HISTORICAL_POC5_V1_CLASSES = tuple(
+    "hyper-basic-client-r1" if workload_id == "hyper-basic-client-r2" else workload_id
+    for workload_id in EXPECTED_POC5_CLASSES
+)
 LEGACY_PILOT_CLASSES = (
     "getbootstrap-home-r3",
     "bootstrap-introduction-r3",
@@ -198,8 +202,15 @@ def _synthetic_response_only_v2_sidecar(workload_id: str) -> dict:
     candidate, prepared = chaff_qualification.response_only_candidate_resources(
         workload, workload_id
     )[0]
+    # Schema-one evidence is used only as a synthetic provenance template.
+    # Hyper r2 is a prospective response refresh and intentionally has no
+    # historical schema-one sidecar, so reuse r1's provenance fields without
+    # carrying over its workload or response identity.
+    historical_workload_id = (
+        "hyper-basic-client-r1" if workload_id == "hyper-basic-client-r2" else workload_id
+    )
     historical = load_json(
-        ROOT / f"config/chaff-response-qualification-store/v1/{workload_id}.json"
+        ROOT / f"config/chaff-response-qualification-store/v1/{historical_workload_id}.json"
     )
     neqo_provenance = deepcopy(historical["neqo_provenance"])
     application_sha256 = sha256_file(workload_path)
@@ -514,6 +525,7 @@ def test_poc5_exact_active_cohort_and_domain_labels_preserve_legacy_contract() -
         "nginx-quic-r3",
         "nghttp2-ngtcp2-r3",
         "hyper-basic-client-r1",
+        "hyper-basic-client-r2",
     ],
 )
 def test_poc5_handoff_rejects_old_or_wrong_active_workload_id(
@@ -632,14 +644,25 @@ def test_poc5_response_only_expected_config_matches_materialized_frozen_reload(
 def test_poc5_frozen_v1_schema_three_response_evidence_still_reloads(
     tmp_path: Path,
 ) -> None:
-    campaign_path = (
-        classifier_handoff._lab_root() / "config/campaigns/classifier-poc5-paired-01.yml"
+    lab_root = classifier_handoff._lab_root()
+    active_campaign_path = lab_root / "config/campaigns/classifier-poc5-paired-01.yml"
+    historical_campaign_path = lab_root / "config/campaigns/historical-poc5-paired-01.yml"
+    historical_campaign_path.write_text(
+        active_campaign_path.read_text().replace("hyper-basic-client-r2", "hyper-basic-client-r1")
     )
-    campaign, _expected = classifier_handoff._expected_poc5_configuration(campaign_path)
+    historical_workload = ROOT / "config/workloads/hyper-basic-client-r1.json"
+    (lab_root / "config/workloads/hyper-basic-client-r1.json").write_bytes(
+        historical_workload.read_bytes()
+    )
+    atomic_json(
+        lab_root / "config/chaff-response-qualification-store/v2/hyper-basic-client-r1.json",
+        deepcopy(_synthetic_response_only_v2_sidecar("hyper-basic-client-r1")),
+    )
+    campaign = orchestrator.load_campaign(historical_campaign_path)
     result = tmp_path / "historical-response-only-result"
     orchestrator._materialize_inputs(result, campaign, {})
 
-    for workload_id in classifier_handoff.POC5_CLASSES:
+    for workload_id in HISTORICAL_POC5_V1_CLASSES:
         sidecar = load_json(
             ROOT / f"config/chaff-response-qualification-store/v1/{workload_id}.json"
         )
@@ -823,8 +846,12 @@ def test_poc5_contract_rejects_non_alternating_within_block_capture_order() -> N
 
 @pytest.mark.parametrize(
     "wrong_workload_id",
-    ["apache-traffic-server-docs-r3", "hyper-basic-client-r1"],
-    ids=["retired-id", "wrong-active-id"],
+    [
+        "apache-traffic-server-docs-r3",
+        "hyper-basic-client-r1",
+        "hyper-basic-client-r2",
+    ],
+    ids=["legacy-retired-id", "newly-retired-id", "wrong-active-id"],
 )
 def test_poc5_collection_rejects_old_or_wrong_active_workload_id(
     wrong_workload_id: str,

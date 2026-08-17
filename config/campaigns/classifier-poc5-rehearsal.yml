@@ -9,7 +9,7 @@ profile: research-1200
 workloads:
   getbootstrap-home-r3: 2
   cloudflare-quiche-r3: 2
-  hyper-basic-client-r1: 2
+  hyper-basic-client-r2: 2
   serde-home-r1: 2
   rfc9114-text-r1: 2
 

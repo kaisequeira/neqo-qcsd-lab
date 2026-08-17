@@ -7,7 +7,7 @@ profile: research-1200
 # Five-class proof-of-concept, temporal block 03 of 10. This baseline
 # campaign is paired with classifier-poc5-paired-03.yml.
 workloads:
-  hyper-basic-client-r1: 20
+  hyper-basic-client-r2: 20
   serde-home-r1: 20
   rfc9114-text-r1: 20
   getbootstrap-home-r3: 20

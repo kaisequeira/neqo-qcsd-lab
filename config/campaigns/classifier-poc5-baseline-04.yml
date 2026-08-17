@@ -11,7 +11,7 @@ workloads:
   rfc9114-text-r1: 20
   getbootstrap-home-r3: 20
   cloudflare-quiche-r3: 20
-  hyper-basic-client-r1: 20
+  hyper-basic-client-r2: 20
 
 request_policies:
   - as-defined

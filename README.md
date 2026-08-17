@@ -107,7 +107,7 @@ role is not a dependency of the already transmitted request prefix.
 ./qcsd-lab qualify-response-chaff \
   getbootstrap-home-r3 \
   cloudflare-quiche-r3 \
-  hyper-basic-client-r1 \
+  hyper-basic-client-r2 \
   serde-home-r1 \
   rfc9114-text-r1
 ```
@@ -131,7 +131,7 @@ advances to the next candidate; transport, DNS, timeout, or protocol failures
 abort the transaction. Publication is atomic, and no v2 sidecar hash exists
 until that exact five-file transaction succeeds from a clean build.
 
-The active exact-five cohort was qualified atomically from clean Lab Q5
+The now-historical P5 exact-five cohort was qualified atomically from clean Lab Q5
 `af3403d60f5be008dc88cc52c6ce8ec5a34bc47c`, tree
 `7110eebb2e4763a9e197d3c5be8f6b55b0b2feb9`, and clean Neqo F3
 `6aceaac85243d6e0e34354108e010705d3c83088`. Q5 is the documentation
@@ -158,7 +158,7 @@ epochs, 600 stable identity completions produced 61,726 packet observations:
 54,454 incoming and 7,272 outgoing. All 120 request waves completed; the ten
 within-workload inter-epoch gaps ranged from 30.013367067 to 30.062120752
 seconds, the maximum observed UDP payload was 1,200 bytes, and no oversized
-packet was observed. The active hashes are:
+packet was observed. Its historical hashes are:
 
 | Workload | Sidecar SHA-256 | Derived schema-4 manifest SHA-256 |
 |---|---|---|
@@ -168,11 +168,55 @@ packet was observed. The active hashes are:
 | `serde-home-r1` | `773f4e4a0c9ecfc50ed59a7787e9102e58b25941fdae874c53d43da4b798903b` | `165436bf45941105d2f29d1b3193564cb416b3e4a3bad4ab441a1819163480b9` |
 | `rfc9114-text-r1` | `b77dd117607ce698bcc4ad7da12367621a12baafbc7805f5ff13cf11557eee6c` | `2bb2bf65644172d338496eadba17524d9a5521bf4dff130c42f3482c3081a600` |
 
-P5 publishes these exact files as the active canonical response cohort. Its
-non-self-referential commit hash is intentionally pending at this documented
-boundary. Clean final collection and preparation image IDs and the fresh
-excluded 30/30 rehearsal and interface handoff are also pending; no formal
-capture or classifier export has yet been run.
+P5 `f215b538e043a26038aae8bb93e8926f3de6d322`, tree
+`257fb2b0f7433b96279927c109f3397a6d1be733` and parent Q5, published those
+exact files. Its final collection and preparation images were respectively
+`sha256:3f4f10a47b72d3d280ad1bbed4dc0338e7823abdf62e6304b4e674a3777375ea`
+and
+`sha256:fbb2560054f5cdc8b789b50698fc093b3d14fe0ef76d101baba913f99b666fdb`,
+under build tag suffix
+`p5-f215b538e043-6aceaac85243-20260817T175203Z`. Their `source.json` SHA-256
+was `370b6b6e1edbbec5137f04381e13db4187263f16e735b68584671c6afa2123f3`,
+their raw implementation-receipt SHA-256 was
+`6f99ba3b443ee35fb6cd258dc02178ff973cae0fc8a74b6cfd126a0224ea78bd`,
+and their implementation-receipt aggregate was
+`dda2dfd54b10da49234e14744a844a0befaac90f6694395508cbbb721d61634e`.
+
+The excluded P5 rehearsal at
+`results/research-classifier-poc5-rehearsal-1200/20260817T181058.212792Z`
+sealed `incomplete`: 30 planned, 28 accepted, 24 eligible, and two terminal
+failures. Its evidence-index SHA-256 is
+`04a4d40a9c09bc8618eec8322d68df07508994a12968535a5e37883c96bae89b`
+and its `experiment.json` SHA-256 is
+`89338ae55eb4a7124b42dec28386247dfc5c0abd034af51718d8418e5f0cfdfd`.
+All 35 retained attempts passed the Linux-local capture-clock gate with one
+constant-offset segment, zero modeled steps, and exact direct-runner packet
+reconciliation. The failure was therefore not Windows, WSL, or capture-clock
+instability. Hyper r1 had frozen resource 0 at 6,165 bytes and SHA-256
+`96411b4e30fa8e579eebf6f9b2b7604ccb7335e990266a2da893fe4ff7426c40`,
+while all ten retained Hyper executions returned 5,917 bytes and SHA-256
+`59974039ec7fdcbc0461fd86f91fddc294ed7c2eb3cd46f96352be0687eaf106`.
+Each of the six Tamaraw attempts correctly failed one slot with
+`ReceiveCreditRetired` and exactly 243 retired bytes; the four undefended/FRONT
+captures matched each other but not the frozen prepared identity.
+
+The create-only replacement `config/workloads/hyper-basic-client-r2.json`
+has SHA-256
+`11baf7f3fe0db6f9c86af51fbc4100b2b5f1683385f7f9d30fefd33349569d6f`
+and records three stable preparation runs at the new 5,917-byte identity,
+with 1,200-byte maximum UDP payloads and zero oversized packets. Q6
+prospectively changes only the active POC5 Hyper binding to r2 and keeps Neqo
+F3 unchanged. Because the workload ID is an input to deterministic defence
+ordering and to every Hyper sample seed and ID, Q6 also reselects the ten
+paired campaign seeds prospectively from
+`2026082001..2026092000` using plan expansion only. The 2,500-sample plan has
+unique sample IDs and seeds, every class/defence/position cell occurs 32--35
+times, and only three of 45 cells fall outside 33--34. Canonical response-store
+v2 is deliberately absent at the Q6
+acquisition boundary. A fresh atomic exact-five Q6/F3 qualification,
+publication build, excluded 30/30 rehearsal, and verified interface handoff
+are required before formal acquisition restarts from baseline-01. No P5-bound
+interface handoff, formal capture, or classifier export was run.
 
 The immediately preceding, now-historical exact-five cohort was qualified
 atomically from clean Lab Q3
@@ -259,7 +303,7 @@ test fixture by deriving the current mold and matching prefix specification;
 it does not change production capture semantics or Neqo F3. Q5
 `af3403d60f5be008dc88cc52c6ce8ec5a34bc47c` is the documentation acquisition
 child of that repair. Its clean image passed all 731 local prerequisite tests,
-and its atomic exact-five qualification is the active cohort published by P5.
+and its atomic exact-five qualification is the historical cohort published by P5.
 
 The immediately preceding five-file transaction succeeded atomically from
 clean Lab qualification source
@@ -340,15 +384,16 @@ Its historical hashes are:
 
 Those exact files remain recoverable from Lab commit
 `88569f268260b36f0c4ccfc36681f7a42887b66c` and from frozen sealed results.
-All four prior response-store v2 transactions are historical only. Canonical
-v2 now contains only the active Q5/F3 exact-five cohort published by P5.
+All five recorded response-store v2 transactions, including Q5/P5, are
+historical only. Canonical v2 is deliberately absent in Q6.
 Commit `47c91bb36dcddd3943253ee16141febbaf9041e8` remains the causal production
 implementation change, while `32f8f4d816cf05ebc483cc547732d146225493c9`
 repairs only the prerequisite's controlled schema-six fixture.
 No historical sidecar, implementation receipt, image, rehearsal, formal
-sample, or export may be mixed into the active lineage. A clean P5/F3
-final-image build, an excluded 30/30 rehearsal, and a verified interface
-handoff are required before formal acquisition may restart.
+sample, or export may be mixed into the prospective Q6 lineage. A fresh
+atomic Q6/F3 exact-five qualification, P6 publication and final-image build,
+an excluded 30/30 rehearsal, and a verified interface handoff are required
+before formal acquisition may restart.
 
 Each response-store v2 file is sidecar schema 2 and derives a schema-4
 `qcsd-qualified-chaff-manifest` with `qualification_scope: response-only` and
@@ -495,7 +540,7 @@ verifies:
 The active POC5 contract binds one workload to each of five distinct class
 origins: `getbootstrap-home-r3` to `getbootstrap.com`,
 `cloudflare-quiche-r3` to `cloudflare-quic.com`,
-`hyper-basic-client-r1` to `hyper.rs`, `serde-home-r1` to `serde.rs`, and
+`hyper-basic-client-r2` to `hyper.rs`, `serde-home-r1` to `serde.rs`, and
 `rfc9114-text-r1` to `www.rfc-editor.org`. Ten acquisition blocks each
 contribute a 100-sample baseline result (20 visits per class) and a 150-sample
 paired result (ten visits per class under undefended, FRONT, and Tamaraw). The
@@ -903,10 +948,12 @@ are not research inputs.
 
 A case-insensitive Chromium-header merge correction made the earlier `-r1`
 manifests ineligible for research because they contained duplicate header
-names. The `-r2` manifests then predated absolute whole-run UDP qualification:
-their application traffic used a 1200-byte configuration, but their receipts
-did not prove that every handshake and application datagram respected that
-ceiling. Both generations remain historical preparation evidence only.
+names. The earlier catalogue cohort's `-r2` manifests then predated absolute
+whole-run UDP qualification: their application traffic used a 1200-byte
+configuration, but their receipts did not prove that every handshake and
+application datagram respected that ceiling. Those two earlier generations
+remain historical preparation evidence only; the prospective Hyper r2
+replacement has a current whole-run UDP receipt.
 
 The frozen research adaptation cohort was therefore prepared from the clean,
 corrected image as six new `-r3` workloads. Each preparation passed three
@@ -1138,7 +1185,7 @@ expansions are:
 The POC5 workload/class bindings are exactly
 `getbootstrap-home-r3`/`getbootstrap.com`,
 `cloudflare-quiche-r3`/`cloudflare-quic.com`,
-`hyper-basic-client-r1`/`hyper.rs`, `serde-home-r1`/`serde.rs`, and
+`hyper-basic-client-r2`/`hyper.rs`, `serde-home-r1`/`serde.rs`, and
 `rfc9114-text-r1`/`www.rfc-editor.org`. The prepared Haxx workload
 `http3-explained-en-r1` is not used by the rehearsal, formal campaigns, or
 handoff. FRONT and Tamaraw use their fixed research-profile algorithms and
@@ -1146,13 +1193,16 @@ seeds; the POC neither consumes nor refits the Traffic-Morphing, WTF-PAD, or
 Walkie-Talkie artifacts. The current recovery contract requires five
 response-store v2 sidecars (schema 2) deriving schema-4 runtime manifests,
 with no prefix-pack or fitted-data dependency. All previous v2 transactions
-are superseded. Canonical v2 is the active exact-five Q5/F3 cohort published
-by P5 after the Linux-local capture-integrity change
-`47c91bb36dcddd3943253ee16141febbaf9041e8` and controlled-fixture repair. The
-clean Q5 image passed all 731 local prerequisite tests before the atomic
-qualification completed. A clean P5/F3 final image must still pass an excluded
-30/30 rehearsal and verified interface handoff. Historical v1/schema-3
-evidence remains readable only for its frozen compatibility role.
+are superseded, and canonical v2 is deliberately absent in Q6. The historical
+Q5 image, incorporating Linux-local capture integrity commit
+`47c91bb36dcddd3943253ee16141febbaf9041e8`, passed all 731 local prerequisite
+tests before its atomic
+qualification, and the P5 final images then passed their image and campaign
+preflights; the excluded rehearsal nevertheless rejected the stale Hyper r1
+identity as recorded above. A fresh Q6/F3 qualification and P6 final image
+must pass a new excluded 30/30 rehearsal and verified interface handoff.
+Historical v1/schema-3 evidence remains readable only for its frozen
+compatibility role.
 
 Each temporal block has two campaign files:
 `classifier-poc5-baseline-NN.yml` contributes 20 undefended visits per class,
@@ -1268,7 +1318,7 @@ the runner now performs a readiness-aware await with a one-microsecond retry
 timer for an already-due target while leaving future absolute wake arithmetic
 unchanged. No schedule event is dropped, reordered, or artificially satisfied.
 
-All four result roots above remain immutable diagnostic evidence. The earlier
+All five result roots above remain immutable diagnostic evidence. The earlier
 passing rehearsal no longer authorizes a replacement image, baseline-01
 contributes no sample to the replacement corpus, and no accepted row from
 either incomplete result may be reused. No formal campaign and no classifier
@@ -1281,13 +1331,17 @@ replacement Lab capture-integrity implementation at
 sidecars ineligible under the current-implementation contract. Q4 kept
 canonical v2 absent and launched no public qualification after its local live
 fixture failed. Q5 passed its repaired live prerequisite, completed the new
-atomic exact-five Q5/F3 qualification, and P5 published that active cohort.
-The clean P5/F3 final collection image must pass a fresh excluded 30/30
-rehearsal and verified interface handoff before formal acquisition can restart
-from baseline-01 under one homogeneous source receipt.
-The earlier `20260815T103924.969402Z`, `20260814T150747.615059Z`, and
-`20260814T110741.344914Z` rehearsals and all their retries remain permanently
-excluded.
+atomic exact-five Q5/F3 qualification, and P5 published that now-historical
+cohort. Its `20260817T181058.212792Z` rehearsal sealed incomplete because the
+frozen Hyper r1 response had drifted, even though every retained attempt
+passed the Linux-local capture-integrity gate. Q6 replaces the active binding
+with the independently prepared Hyper r2 graph and deliberately removes the
+canonical v2 cohort. A clean Q6/F3 exact-five qualification and P6 final image
+must pass a wholly new excluded 30/30 rehearsal and verified interface handoff
+before formal acquisition restarts from baseline-01 under one homogeneous
+source receipt. The earlier `20260815T103924.969402Z`,
+`20260814T150747.615059Z`, and `20260814T110741.344914Z` rehearsals and all
+their retries remain permanently excluded as well.
 
 The incomplete six-class diagnostic at
 `results/research-classifier-pilot-01-1200/20260814T064655.275845Z` is excluded
@@ -1305,13 +1359,12 @@ qualification diagnostics are likewise never POC5 classifier samples.
 
 These POC5 campaign files, the offline exporter, tests, and documentation are
 outside the qualification implementation-file inventory, but the clean Lab
-commit remains part of source provenance. Canonical response-store v2 is the
-active Q5/F3 cohort published by P5 after Q4's local-only prerequisite exposed
-and stopped on the controlled fixture mismatch. Formal acquisition and
-classifier export remain blocked until a clean P5/F3 final collection image
-passes a fresh excluded rehearsal with exactly 30/30 accepted and eligible
-samples plus a verified interface handoff. Formal capture then restarts from
-baseline-01.
+commit remains part of source provenance. Canonical response-store v2 is
+deliberately absent in Q6 after the P5 rehearsal exposed stale Hyper r1
+response identity. Formal acquisition and classifier export remain blocked
+until a newly qualified P6/F3 final collection image passes a fresh excluded
+rehearsal with exactly 30/30 accepted and eligible samples plus a verified
+interface handoff. Formal capture then restarts from baseline-01.
 Keep the historical response-store v1/schema-3 evidence
 frozen-compatible; do not regenerate the separate historical full-v2
 sidecars, prefix specs, fitting result, or sealed `research-1200` bundle.

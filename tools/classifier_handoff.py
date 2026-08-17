@@ -77,14 +77,14 @@ PILOT_RUNTIME = {
 POC5_CLASSES = (
     "getbootstrap-home-r3",
     "cloudflare-quiche-r3",
-    "hyper-basic-client-r1",
+    "hyper-basic-client-r2",
     "serde-home-r1",
     "rfc9114-text-r1",
 )
 POC5_CLASS_LABELS = {
     "getbootstrap-home-r3": "getbootstrap.com",
     "cloudflare-quiche-r3": "cloudflare-quic.com",
-    "hyper-basic-client-r1": "hyper.rs",
+    "hyper-basic-client-r2": "hyper.rs",
     "serde-home-r1": "serde.rs",
     "rfc9114-text-r1": "www.rfc-editor.org",
 }

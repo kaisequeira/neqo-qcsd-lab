@@ -1,7 +1,7 @@
 schema: 1
 name: research-classifier-poc5-paired-07-1200
 purpose: evaluation
-seed: 2026085480
+seed: 2026089238
 profile: research-1200
 
 # Five-class proof-of-concept, temporal block 07 of 10. The undefended
@@ -11,7 +11,7 @@ profile: research-1200
 # expansion only; all cells total 32..35 and only three of 45 fall outside 33..34.
 workloads:
   cloudflare-quiche-r3: 10
-  hyper-basic-client-r1: 10
+  hyper-basic-client-r2: 10
   serde-home-r1: 10
   rfc9114-text-r1: 10
   getbootstrap-home-r3: 10

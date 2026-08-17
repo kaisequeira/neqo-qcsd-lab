@@ -324,6 +324,18 @@ def test_checked_in_r3_workload_bytes_remain_frozen_and_research_valid(
     assert path.read_bytes() == source
 
 
+def test_checked_in_hyper_r2_bytes_remain_frozen_and_research_valid():
+    workload_id = "hyper-basic-client-r2"
+    expected_sha256 = "11baf7f3fe0db6f9c86af51fbc4100b2b5f1683385f7f9d30fefd33349569d6f"
+    root = Path(__file__).parents[1]
+    path = root / f"config/workloads/{workload_id}.json"
+    source = path.read_bytes()
+
+    assert hashlib.sha256(source).hexdigest() == expected_sha256
+    validate_research_preparation(json.loads(source), workload_id=workload_id)
+    assert path.read_bytes() == source
+
+
 @pytest.mark.parametrize(
     "workload_id",
     [
