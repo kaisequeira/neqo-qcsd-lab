@@ -928,7 +928,33 @@ def _write_successful_attempt(
     )
     return {
         "success": True,
-        "views": [{"id": "direct-quic", "valid": True}],
+        "views": [
+            {
+                "id": "direct-quic",
+                "primary": True,
+                "timestamp_type": "host",
+                "valid": True,
+                "capture_clock_anchors": {
+                    "start_monotonic_ns": 1_000_000_000,
+                    "end_monotonic_ns": 2_000_000_000,
+                    "start_realtime_unix_ns": 10_000_000_000,
+                    "end_realtime_unix_ns": 11_000_000_000,
+                    "start_pairing_uncertainty_ns": 100,
+                    "end_pairing_uncertainty_ns": 100,
+                },
+                "direct_runner_reconciliation": {
+                    "direct_clock_model": "constant-offset",
+                    "direct_clock_segment_count": 1,
+                    "direct_clock_segments": [{"index": 0}],
+                    "direct_clock_step_count": 0,
+                    "direct_clock_steps": [],
+                    "direct_runner_reconciled": True,
+                    "evidence_eligible": True,
+                    "direct_timestamp_error_max_ns": 0,
+                    "direct_timestamp_tolerance_ns": 10_000_000,
+                },
+            }
+        ],
         "offloads": [{"interface": "eth0", "verified": True}],
         "endpoint_count": 1,
         "endpoint_count_valid": True,
@@ -1077,6 +1103,87 @@ def test_capture_session_requires_a_complete_successful_runner_result() -> None:
         },
         {0},
     )
+
+
+def test_capture_clock_anchor_uses_narrowest_linux_monotonic_bracket(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert orchestrator.capture_engine._DIRECT_CAPTURE_VIEW.as_dict()["timestamp_type"] == "host"
+    monotonic = iter((1_000, 1_100, 2_000, 2_080, 3_000, 3_020, 4_000, 4_060, 5_000, 5_040))
+    realtime = iter((10_000, 20_000, 30_000, 40_000, 50_000))
+    monkeypatch.setattr(orchestrator.capture_engine.time, "monotonic_ns", lambda: next(monotonic))
+    monkeypatch.setattr(orchestrator.capture_engine.time, "time_ns", lambda: next(realtime))
+
+    assert orchestrator.capture_engine._clock_anchor() == {
+        "monotonic_ns": 3_010,
+        "realtime_unix_ns": 30_000,
+        "pairing_uncertainty_ns": 10,
+    }
+
+
+def test_capture_clock_end_anchor_requires_stopped_dumpcap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    process = SimpleNamespace(poll=lambda: None)
+    monkeypatch.setattr(
+        orchestrator.capture_engine,
+        "_clock_anchor",
+        lambda: pytest.fail("end anchor sampled while dumpcap was still running"),
+    )
+
+    with pytest.raises(RuntimeError, match="requires stopped dumpcap"):
+        orchestrator.capture_engine._capture_clock_anchors_after_stop(
+            {
+                "monotonic_ns": 1_000_000_000,
+                "realtime_unix_ns": 10_000_000_000,
+                "pairing_uncertainty_ns": 100,
+            },
+            process,
+        )
+
+
+def test_capture_clock_post_stop_anchor_rejects_settle_tail_wall_clock_step(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    process = SimpleNamespace(poll=lambda: 0)
+    monkeypatch.setattr(
+        orchestrator.capture_engine,
+        "_clock_anchor",
+        lambda: {
+            "monotonic_ns": 2_000_000_000,
+            "realtime_unix_ns": 11_050_000_000,
+            "pairing_uncertainty_ns": 100,
+        },
+    )
+    anchors = orchestrator.capture_engine._capture_clock_anchors_after_stop(
+        {
+            "monotonic_ns": 1_000_000_000,
+            "realtime_unix_ns": 10_000_000_000,
+            "pairing_uncertainty_ns": 100,
+        },
+        process,
+    )
+    capture = {
+        "primary": True,
+        "capture_clock_anchors": anchors,
+        "direct_runner_reconciliation": {
+            "direct_clock_model": "constant-offset",
+            "direct_clock_segment_count": 1,
+            "direct_clock_segments": [{"index": 0}],
+            "direct_clock_step_count": 0,
+            "direct_clock_steps": [],
+            "direct_runner_reconciled": True,
+            "evidence_eligible": True,
+            "direct_timestamp_error_max_ns": 0,
+            "direct_timestamp_tolerance_ns": 10_000_000,
+        },
+    }
+
+    with pytest.raises(ValueError, match="elapsed difference exceeds 10 ms"):
+        orchestrator.capture_engine.validate_primary_capture_clock_integrity(
+            capture,
+            require_pairing_uncertainty=True,
+        )
 
 
 def _runtime_chaff_fixture(tmp_path: Path) -> tuple[Path, dict[str, object]]:
@@ -1638,6 +1745,65 @@ def test_collection_success_with_pacing_miss_is_quarantined_then_retried(
     with pytest.raises(ValueError, match="research-prepared workloads and qualified chaff"):
         run_campaign(path, tmp_path / "results")
     assert not (tmp_path / "results").exists()
+
+
+def test_collection_success_with_clock_step_is_quarantined_then_retried(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = _configuration(tmp_path, max_attempts=2)
+    calls = 0
+
+    def collect(
+        attempt: Path,
+        _manifest: Path,
+        workload_id: str,
+        defense: Any,
+        _seed: int,
+        _campaign: Any,
+    ) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        result = _write_successful_attempt(attempt, workload_id, defense.name)
+        if calls == 1:
+            reconciliation = result["views"][0]["direct_runner_reconciliation"]
+            reconciliation.update(
+                direct_clock_model="positive-abrupt-steps",
+                direct_clock_segment_count=2,
+                direct_clock_segments=[{"index": 0}, {"index": 1}],
+                direct_clock_step_count=1,
+                direct_clock_steps=[{"index": 0}],
+            )
+        return result
+
+    monkeypatch.setattr(orchestrator.capture_engine, "_collect_attempt", collect)
+
+    root = run_campaign(path, tmp_path / "results")
+    experiment = verify_result(root).experiment
+    [sample] = experiment["samples"]
+    assert sample["state"] == "accepted"
+    assert sample["eligible"] is True
+    assert sample["attempts"] == 2
+    retained = load_json(root / "failures" / sample["sample_id"] / "attempt-001/attempt.json")
+    assert retained["failure"]["type"] == "StrictCaptureClockIntegrityFailure"
+    assert "constant-offset" in retained["failure"]["details"][0]["error"]
+
+
+def test_collection_success_with_multiple_primary_views_is_quarantined(
+    tmp_path: Path,
+) -> None:
+    attempt = tmp_path / "attempt"
+    result = _write_successful_attempt(attempt, "alpha", "undefended")
+    result["views"].append(dict(result["views"][0]))
+
+    failure = orchestrator._intrinsic_fidelity_failure(
+        {"sample_id": "sample", "defense": "undefended", "runtime_kind": "none"},
+        result,
+        attempt,
+    )
+
+    assert failure is not None
+    assert failure["type"] == "StrictCaptureClockIntegrityFailure"
+    assert "exactly one primary" in failure["details"][0]["error"]
 
 
 def test_all_collection_successes_with_fidelity_misses_end_terminally_without_promotion(

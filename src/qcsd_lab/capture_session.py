@@ -30,7 +30,7 @@ from .capture import (
     udp_ceiling_evidence,
     write_normalized_trace,
 )
-from .fidelity import reconcile_direct_runner_artifacts
+from .fidelity import reconcile_direct_runner_artifacts, validate_primary_capture_clock_integrity
 from .manifest import https_origin
 from .parameters import (
     PARAMETER_ARTIFACT_NAME,
@@ -130,6 +130,7 @@ class CaptureContext(Protocol):
 class _CaptureView:
     id: str
     interface: str
+    timestamp_type: str
     link_type: str
     length_basis: str
     primary: bool
@@ -143,10 +144,13 @@ class _CaptureView:
 _DIRECT_CAPTURE_VIEW = _CaptureView(
     id="direct-quic",
     interface="eth0",
+    timestamp_type="host",
     link_type="Ethernet",
     length_basis="frame.len",
     primary=True,
 )
+
+_CLOCK_ANCHOR_PAIRING_SAMPLES = 5
 
 
 def slug(value: str) -> str:
@@ -168,11 +172,41 @@ def stable_digest(*parts: object) -> str:
 
 
 def _clock_anchor() -> dict[str, int]:
-    """Sample the two host clocks bracketing one runner invocation."""
+    """Pair Linux realtime with the midpoint of its narrowest monotonic bracket."""
 
+    candidates: list[tuple[int, int, int, int]] = []
+    for _ in range(_CLOCK_ANCHOR_PAIRING_SAMPLES):
+        monotonic_before_ns = time.monotonic_ns()
+        realtime_unix_ns = time.time_ns()
+        monotonic_after_ns = time.monotonic_ns()
+        width_ns = monotonic_after_ns - monotonic_before_ns
+        if width_ns < 0:
+            raise RuntimeError("Linux monotonic clock moved backwards while pairing clocks")
+        candidates.append((width_ns, monotonic_before_ns, realtime_unix_ns, monotonic_after_ns))
+    width_ns, monotonic_before_ns, realtime_unix_ns, monotonic_after_ns = min(candidates)
     return {
-        "monotonic_ns": time.monotonic_ns(),
-        "realtime_unix_ns": time.time_ns(),
+        "monotonic_ns": (monotonic_before_ns + monotonic_after_ns) // 2,
+        "realtime_unix_ns": realtime_unix_ns,
+        "pairing_uncertainty_ns": (width_ns + 1) // 2,
+    }
+
+
+def _capture_clock_anchors_after_stop(
+    clock_start: dict[str, int],
+    process: subprocess.Popen[str],
+) -> dict[str, int]:
+    """Close the Linux clock envelope only after dumpcap can retain no more packets."""
+
+    if process.poll() is None:
+        raise RuntimeError("capture clock end anchor requires stopped dumpcap")
+    clock_end = _clock_anchor()
+    return {
+        "start_realtime_unix_ns": clock_start["realtime_unix_ns"],
+        "start_monotonic_ns": clock_start["monotonic_ns"],
+        "end_realtime_unix_ns": clock_end["realtime_unix_ns"],
+        "end_monotonic_ns": clock_end["monotonic_ns"],
+        "start_pairing_uncertainty_ns": clock_start["pairing_uncertainty_ns"],
+        "end_pairing_uncertainty_ns": clock_end["pairing_uncertainty_ns"],
     }
 
 
@@ -297,6 +331,8 @@ def _collect_attempt(
             "-q",
             "-i",
             view.interface,
+            "--time-stamp-type",
+            view.timestamp_type,
             "-f",
             "udp",
             "-w",
@@ -328,13 +364,6 @@ def _collect_attempt(
             log=diagnostics / "neqo-client.log",
             configured_timeout_seconds=context.limits.timeout_seconds,
         )
-        clock_end = _clock_anchor()
-        capture_clock_anchors = {
-            "start_realtime_unix_ns": clock_start["realtime_unix_ns"],
-            "start_monotonic_ns": clock_start["monotonic_ns"],
-            "end_realtime_unix_ns": clock_end["realtime_unix_ns"],
-            "end_monotonic_ns": clock_end["monotonic_ns"],
-        }
         if neqo.is_dir():
             _copy_defense_parameter_artifacts(defense, neqo)
         if context.limits.settle_seconds:
@@ -349,6 +378,10 @@ def _collect_attempt(
             process.terminate()
             process.wait(timeout=5)
         handle.close()
+
+    # The authoritative interval includes the settle tail and closes only once
+    # dumpcap can no longer add a packet to the retained capture.
+    capture_clock_anchors = _capture_clock_anchors_after_stop(clock_start, process)
 
     run_json = neqo / "run.json"
     runner_output_error: str | None = None
@@ -408,6 +441,10 @@ def _collect_attempt(
 
     direct_runner_reconciliation_valid = False
     direct_runner_reconciliation: dict[str, Any] | None = None
+    capture_clock_integrity: dict[str, Any] = {
+        "valid": False,
+        "error": "direct/runner reconciliation is unavailable",
+    }
     if runner_complete and trace_path.is_file():
         try:
             reconciliation = reconcile_direct_runner_artifacts(
@@ -422,6 +459,20 @@ def _collect_attempt(
                 "evidence_eligible": reconciliation.evidence_eligible,
                 "limitations": list(reconciliation.limitations),
             }
+            try:
+                integrity = validate_primary_capture_clock_integrity(
+                    {
+                        "primary": view.primary,
+                        "timestamp_type": view.timestamp_type,
+                        "capture_clock_anchors": capture_clock_anchors,
+                        "direct_runner_reconciliation": direct_runner_reconciliation,
+                    },
+                    require_pairing_uncertainty=True,
+                    require_timestamp_type=True,
+                )
+                capture_clock_integrity = {**integrity, "valid": True, "error": None}
+            except ValueError as error:
+                capture_clock_integrity = {"valid": False, "error": str(error)}
         except (OSError, ValueError) as error:
             failures.append(
                 {
@@ -460,6 +511,7 @@ def _collect_attempt(
         and offloads_valid
         and ceiling_evidence["valid"]
         and direct_runner_reconciliation_valid
+        and capture_clock_integrity["valid"]
     )
     if not valid:
         failures.append(
@@ -476,6 +528,8 @@ def _collect_attempt(
                 "capture_offloads_valid": offloads_valid,
                 "udp_payload_ceiling_valid": ceiling_evidence["valid"],
                 "direct_runner_reconciliation_valid": direct_runner_reconciliation_valid,
+                "capture_clock_integrity_valid": capture_clock_integrity["valid"],
+                "capture_clock_integrity_error": capture_clock_integrity["error"],
             }
         )
 
@@ -496,6 +550,7 @@ def _collect_attempt(
         "capture_offload_evidence": offloads[0],
         "capture_clock_anchors": capture_clock_anchors,
         "direct_runner_reconciliation": direct_runner_reconciliation,
+        "capture_clock_integrity": capture_clock_integrity,
         "valid": valid,
     }
     success = (

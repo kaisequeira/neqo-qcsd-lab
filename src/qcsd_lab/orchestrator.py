@@ -23,7 +23,11 @@ from .experiment import (
     resolved_sample_directory,
     validate_planned_sample_identity,
 )
-from .fidelity import _schedule_realization_metrics, fidelity_eligible
+from .fidelity import (
+    _schedule_realization_metrics,
+    fidelity_eligible,
+    validate_primary_capture_clock_integrity,
+)
 from .manifest import (
     canonical_bytes,
     https_origin,
@@ -1741,7 +1745,7 @@ def _sanitize_failed_attempt(attempt: Path) -> None:
 
 
 def _success_diagnostics(result: dict[str, Any]) -> dict[str, Any]:
-    capture = dict(result.get("views", [{}])[0])
+    capture = dict(_primary_capture_view(result))
     capture["capture_path"] = "capture.pcapng"
     capture.pop("trace_path", None)
     capture.pop("trace_sha256", None)
@@ -1756,12 +1760,40 @@ def _success_diagnostics(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _primary_capture_view(result: Mapping[str, Any]) -> Mapping[str, Any]:
+    views = result.get("views")
+    if not isinstance(views, list):
+        raise ValueError("collection result lacks capture views")
+    primaries = [
+        view for view in views if isinstance(view, Mapping) and view.get("primary") is True
+    ]
+    if len(primaries) != 1:
+        raise ValueError("collection result must contain exactly one primary capture view")
+    return primaries[0]
+
+
 def _intrinsic_fidelity_failure(
     sample: dict[str, Any],
     result: dict[str, Any],
     attempt: Path,
 ) -> dict[str, Any] | None:
     """Reject a collected defense realization before it becomes immutable evidence."""
+
+    try:
+        primary = _primary_capture_view(result)
+        validate_primary_capture_clock_integrity(
+            primary,
+            label=f"sample {sample.get('sample_id')}",
+            require_pairing_uncertainty=True,
+            require_timestamp_type=True,
+        )
+    except ValueError as error:
+        return {
+            "stage": "fidelity",
+            "type": "StrictCaptureClockIntegrityFailure",
+            "message": "collection artifacts failed Linux capture-clock integrity gates",
+            "details": [{"error": str(error)}],
+        }
 
     schedule = _schedule_realization_metrics(attempt)
     defense_metrics = result.get("defense_diagnostics")
@@ -1985,6 +2017,16 @@ def _recover_pending_promotion(root: Path, experiment: dict[str, Any]) -> bool:
     promotion = diagnostics.get("promotion") if isinstance(diagnostics, dict) else None
     if not isinstance(promotion, dict) or set(promotion) != {"attempt", "artifacts"}:
         return False
+    capture = diagnostics.get("capture")
+    try:
+        validate_primary_capture_clock_integrity(
+            capture,
+            label=f"pending promotion {sample.get('sample_id')}",
+            require_pairing_uncertainty=True,
+            require_timestamp_type=True,
+        )
+    except ValueError as error:
+        raise ValueError("pending promotion capture clock integrity is invalid") from error
     expected_attempt = resolved_attempt_directory(root, sample)
     if promotion["attempt"] != expected_attempt.relative_to(root).as_posix():
         raise ValueError("pending promotion attempt binding is invalid")

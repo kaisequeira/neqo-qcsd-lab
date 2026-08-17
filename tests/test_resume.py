@@ -256,6 +256,41 @@ def test_resume_promotes_completed_success_left_before_promotion_checkpoint(
     assert not attempt.exists()
 
 
+def test_resume_rejects_completed_clock_stepped_attempt_before_promotion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, experiment = _interrupted_result(tmp_path, monkeypatch)
+    running = next(sample for sample in experiment["samples"] if sample["state"] == "running")
+    attempt = root / "failures" / running["sample_id"] / f"attempt-{running['attempts']:03d}"
+    (attempt / "unpromoted.tmp").unlink()
+    receipt = _write_successful_attempt(attempt, running["workload_id"], running["defense"])
+    receipt["views"][0]["direct_runner_reconciliation"].update(
+        direct_clock_model="positive-abrupt-steps",
+        direct_clock_segment_count=2,
+        direct_clock_segments=[{"index": 0}, {"index": 1}],
+        direct_clock_step_count=1,
+        direct_clock_steps=[{"index": 0}],
+    )
+    atomic_json(attempt / "attempt.json", receipt)
+    resumed = _ResumeCollector()
+    monkeypatch.setattr(orchestrator.capture_engine, "_collect_attempt", resumed)
+
+    assert resume_campaign(root) == root
+
+    verified = verify_result(root)
+    recovered = next(
+        sample
+        for sample in verified.experiment["samples"]
+        if sample["sample_id"] == running["sample_id"]
+    )
+    assert recovered["state"] == "accepted"
+    assert recovered["attempts"] == 2
+    assert len(resumed.calls) == 1
+    retained = load_json(attempt / "attempt.json")
+    assert retained["success"] is False
+    assert retained["failure"]["type"] == "StrictCaptureClockIntegrityFailure"
+
+
 def test_defended_pacing_miss_is_recorded_as_a_fidelity_failure(tmp_path: Path) -> None:
     attempt = tmp_path / "attempt"
     receipt = _write_successful_attempt(attempt, "alpha", "front")
@@ -374,6 +409,37 @@ def test_resume_finishes_validated_attempt_interrupted_before_atomic_promotion(
     assert resumed.calls == []
     assert not attempt.exists()
     assert verified.experiment["summary"]["passed"] is True
+
+
+def test_resume_revalidates_clock_before_finishing_pending_promotion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    campaign = _resume_configuration(tmp_path, max_attempts=2)
+    collector = _ResumeCollector()
+    monkeypatch.setattr(orchestrator.capture_engine, "_collect_attempt", collector)
+    promote = orchestrator._promote_attempt
+    promotions = 0
+
+    def crash_before_second_promotion(root: Path, sample: dict[str, Any], attempt: Path) -> None:
+        nonlocal promotions
+        promotions += 1
+        if promotions == 2:
+            raise KeyboardInterrupt("controlled crash before promotion")
+        promote(root, sample, attempt)
+
+    monkeypatch.setattr(orchestrator, "_promote_attempt", crash_before_second_promotion)
+    with pytest.raises(KeyboardInterrupt, match="controlled crash before promotion"):
+        run_campaign(campaign, tmp_path / "results")
+
+    [root] = (tmp_path / "results" / "contract-test").iterdir()
+    experiment = load_experiment(root)
+    running = next(sample for sample in experiment["samples"] if sample["state"] == "running")
+    running["diagnostics"]["capture"]["timestamp_type"] = "adapter_unsynced"
+    atomic_json(root / "experiment.json", experiment)
+
+    monkeypatch.setattr(orchestrator, "_promote_attempt", promote)
+    with pytest.raises(ValueError, match="pending promotion capture clock integrity is invalid"):
+        resume_campaign(root)
 
 
 def test_resume_seals_terminal_complete_checkpoint_without_recollection(

@@ -417,11 +417,17 @@ eligible. Inputs are read-only; the exporter verifies each evidence seal before
 copying anything and rejects duplicate sample IDs, mismatched block cohorts,
 symlinks, or an existing destination.
 
-Export also applies a stricter timing gate than ordinary result eligibility.
-Every primary direct capture must use one reconciled, evidence-eligible
-constant-offset clock segment with zero steps and bounded timestamp residuals;
-its wrapper realtime and monotonic elapsed durations may differ by at most
-10 ms. A timing-repaired or anchor-drifted trace is not handed to a classifier.
+Attempt acceptance and export apply the same Linux-local timing gate. Every
+primary direct capture must use one reconciled, evidence-eligible
+constant-offset clock segment with zero steps and timestamp residuals no larger
+than 10 ms. The collector brackets each Linux realtime reading with repeated
+Linux monotonic readings and charges both pairing uncertainties against the
+same 10 ms elapsed-difference budget. A timing-repaired or anchor-drifted
+attempt is retained as a bounded retry failure and is never promoted.
+Fresh captures must record the `host` timestamp type and both endpoint pairing
+uncertainties. The exporter retains read compatibility for historical sealed
+four-anchor results that predate those fields; an explicit non-`host`
+timestamp type is always rejected.
 
 The handoff is self-contained:
 
@@ -974,12 +980,24 @@ start dumpcap -> start Neqo -> application completes -> defence tail
   -> settle interval -> stop dumpcap -> filter to Neqo endpoint tuples
 ```
 
+The collection image is Linux-native and explicitly requests dumpcap's
+`host` timestamp type on its container `eth0`. Packet evidence is compared
+only with the Rust runner's Linux monotonic timeline. Windows QPC, W32Time,
+PowerShell, WSL status flags, and any other outer-host clock are not capture
+inputs or admission requirements. The same contract therefore runs on native
+Linux and Linux container hosts; a different CPU architecture rebuilds the
+image from the pinned commits and then follows the normal qualification and
+rehearsal lineage.
+
 An attempt is promoted only after direct-capture validation, endpoint-count
 validation, response completion, interface GRO/GSO/TSO/USO evidence,
 profile-wide UDP-payload-ceiling checks, and bounded runner/PCAP reconciliation.
-The paired visit then adds response-identity and defence-realization checks.
-Failed attempts stay under `failures/`; a successful attempt is moved once to
-the canonical sample path and is not duplicated.
+That reconciliation must have one constant-offset segment, zero clock steps,
+packet residuals no larger than 10 ms, and a bracket-uncertainty-aware Linux
+realtime/monotonic elapsed difference no larger than 10 ms. The paired visit
+then adds response-identity and defence-realization checks. Failed attempts
+stay under `failures/`; a successful attempt is moved once to the canonical
+sample path and is not duplicated.
 
 `experiment.json` is checkpointed atomically. Accepted files are independently
 bound by hashes before the terminal seal is written. A successful attempt's

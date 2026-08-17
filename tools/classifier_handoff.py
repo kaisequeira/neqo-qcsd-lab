@@ -20,6 +20,7 @@ from typing import Any, Mapping, Sequence
 
 from qcsd_lab.capture import ObserverPacket, extract_trace
 from qcsd_lab.experiment import resolved_sample_directory, validate_planned_sample_identity
+from qcsd_lab.fidelity import validate_primary_capture_clock_integrity
 from qcsd_lab.orchestrator import (
     FULL_CHAFF_SCOPE,
     RESPONSE_ONLY_CHAFF_SCOPE,
@@ -163,7 +164,6 @@ CLIENT_PORT = 49_152
 SERVER_PORT = 443
 CLIENT_MAC = bytes.fromhex("020000000001")
 SERVER_MAC = bytes.fromhex("020000000002")
-MAX_CLOCK_ANCHOR_ELAPSED_DELTA_NS = 10_000_000
 EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 _POC5_SOURCE_KEYS = {
     "image_digest",
@@ -599,63 +599,12 @@ def _validate_primary_capture_clock(sample: Mapping[str, Any]) -> None:
     """Reject accepted evidence whose direct-capture timing needed clock-step repair."""
 
     sample_id = sample.get("sample_id")
-    prefix = f"classifier handoff rejects timing-contaminated sample {sample_id}:"
     diagnostics = sample.get("diagnostics")
     capture = diagnostics.get("capture") if isinstance(diagnostics, Mapping) else None
-    if not isinstance(capture, Mapping) or capture.get("primary") is not True:
-        raise ValueError(f"{prefix} primary capture diagnostics are missing")
-    reconciliation = capture.get("direct_runner_reconciliation")
-    if not isinstance(reconciliation, Mapping):
-        raise ValueError(f"{prefix} direct/runner reconciliation is missing")
-    if reconciliation.get("direct_clock_model") != "constant-offset":
-        raise ValueError(f"{prefix} direct clock model is not constant-offset")
-
-    segments = reconciliation.get("direct_clock_segments")
-    if (
-        reconciliation.get("direct_clock_segment_count") != 1
-        or not isinstance(segments, list)
-        or len(segments) != 1
-    ):
-        raise ValueError(f"{prefix} direct clock must contain exactly one segment")
-    steps = reconciliation.get("direct_clock_steps")
-    if reconciliation.get("direct_clock_step_count") != 0 or not isinstance(steps, list) or steps:
-        raise ValueError(f"{prefix} direct clock must contain zero steps")
-    if (
-        reconciliation.get("direct_runner_reconciled") is not True
-        or reconciliation.get("evidence_eligible") is not True
-    ):
-        raise ValueError(f"{prefix} direct/runner reconciliation is not evidence-eligible")
-
-    maximum_error = reconciliation.get("direct_timestamp_error_max_ns")
-    tolerance = reconciliation.get("direct_timestamp_tolerance_ns")
-    if (
-        type(maximum_error) is not int
-        or maximum_error < 0
-        or type(tolerance) is not int
-        or tolerance < 0
-        or maximum_error > tolerance
-    ):
-        raise ValueError(f"{prefix} direct timestamp error exceeds its tolerance")
-
-    anchors = capture.get("capture_clock_anchors")
-    anchor_fields = (
-        "start_monotonic_ns",
-        "end_monotonic_ns",
-        "start_realtime_unix_ns",
-        "end_realtime_unix_ns",
+    validate_primary_capture_clock_integrity(
+        capture,
+        label=f"classifier handoff rejects timing-contaminated sample {sample_id}",
     )
-    if not isinstance(anchors, Mapping) or any(
-        type(anchors.get(field)) is not int for field in anchor_fields
-    ):
-        raise ValueError(f"{prefix} wrapper clock anchors are missing")
-    monotonic_elapsed = anchors["end_monotonic_ns"] - anchors["start_monotonic_ns"]
-    realtime_elapsed = anchors["end_realtime_unix_ns"] - anchors["start_realtime_unix_ns"]
-    if (
-        monotonic_elapsed < 0
-        or realtime_elapsed < 0
-        or abs(realtime_elapsed - monotonic_elapsed) > MAX_CLOCK_ANCHOR_ELAPSED_DELTA_NS
-    ):
-        raise ValueError(f"{prefix} wrapper realtime/monotonic elapsed difference exceeds 10 ms")
 
 
 def _validate_pilot_collection(

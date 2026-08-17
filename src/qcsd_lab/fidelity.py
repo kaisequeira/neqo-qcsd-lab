@@ -37,6 +37,11 @@ CLOCK_ANCHOR_FIELDS = {
     "end_realtime_unix_ns",
     "end_monotonic_ns",
 }
+CLOCK_ANCHOR_UNCERTAINTY_FIELDS = {
+    "start_pairing_uncertainty_ns",
+    "end_pairing_uncertainty_ns",
+}
+MAX_CAPTURE_CLOCK_ERROR_NS = 10_000_000
 RECONCILIATION_LIMITATIONS = (
     (
         "Encrypted direct PCAP proves datagram timing, direction, and wire length, but cannot "
@@ -57,12 +62,13 @@ RECONCILIATION_LIMITATIONS = (
         "the runner monotonic clock and capture clock is therefore unobservable."
     ),
     (
-        "Abrupt capture wall-clock corrections are accepted only as positive 50--100 ms "
-        "steps with consecutive packet support, well-supported constant-offset epochs, and "
-        "a 25--35 s cadence when steps repeat. A final positive step whose terminal epoch "
-        "lacks the ordinary packet/span support additionally requires independently sealed "
-        "realtime/monotonic wrapper anchors; "
-        "negative steps and drift remain ineligible."
+        "Abrupt capture wall-clock corrections can be modeled for failed-attempt diagnostics "
+        "only as positive 50--100 ms steps with consecutive packet support, well-supported "
+        "constant-offset epochs, and a 25--35 s cadence when steps repeat. A final positive "
+        "step whose terminal epoch lacks the ordinary packet/span support additionally "
+        "requires independently sealed realtime/monotonic wrapper anchors. Promotion still "
+        "requires one constant-offset segment with zero steps; negative steps and drift are "
+        "ineligible even for the diagnostic model."
     ),
     (
         "Ethernet frame-to-UDP conversion assumes the declared untagged Ethernet, "
@@ -94,6 +100,113 @@ class _RunnerPacket:
     direction: str
     udp_length: int
     expected_frame_length: int
+
+
+def validate_primary_capture_clock_integrity(
+    capture: Mapping[str, Any],
+    *,
+    label: str = "primary capture",
+    require_pairing_uncertainty: bool = False,
+    require_timestamp_type: bool = False,
+) -> dict[str, Any]:
+    """Validate the Linux clocks that produced one primary capture.
+
+    Packet timestamps come from the Linux capture clock while runner packet
+    timestamps come from Linux ``CLOCK_MONOTONIC``. This is the authoritative
+    admission check for their relationship; no external host clock is part of
+    the evidence contract.
+    """
+
+    prefix = f"{label}:"
+    if not isinstance(capture, Mapping) or capture.get("primary") is not True:
+        raise ValueError(f"{prefix} primary capture diagnostics are missing")
+    timestamp_type = capture.get("timestamp_type")
+    if timestamp_type is not None and timestamp_type != "host":
+        raise ValueError(f"{prefix} capture timestamp type is not host")
+    if require_timestamp_type and timestamp_type != "host":
+        raise ValueError(f"{prefix} capture timestamp type is missing")
+    reconciliation = capture.get("direct_runner_reconciliation")
+    if not isinstance(reconciliation, Mapping):
+        raise ValueError(f"{prefix} direct/runner reconciliation is missing")
+    if reconciliation.get("direct_clock_model") != "constant-offset":
+        raise ValueError(f"{prefix} direct clock model is not constant-offset")
+
+    segments = reconciliation.get("direct_clock_segments")
+    if (
+        reconciliation.get("direct_clock_segment_count") != 1
+        or not isinstance(segments, list)
+        or len(segments) != 1
+    ):
+        raise ValueError(f"{prefix} direct clock must contain exactly one segment")
+    steps = reconciliation.get("direct_clock_steps")
+    if reconciliation.get("direct_clock_step_count") != 0 or not isinstance(steps, list) or steps:
+        raise ValueError(f"{prefix} direct clock must contain zero steps")
+    if (
+        reconciliation.get("direct_runner_reconciled") is not True
+        or reconciliation.get("evidence_eligible") is not True
+    ):
+        raise ValueError(f"{prefix} direct/runner reconciliation is not evidence-eligible")
+
+    maximum_error = reconciliation.get("direct_timestamp_error_max_ns")
+    tolerance = reconciliation.get("direct_timestamp_tolerance_ns")
+    if (
+        type(maximum_error) is not int
+        or maximum_error < 0
+        or type(tolerance) is not int
+        or not 0 <= tolerance <= MAX_CAPTURE_CLOCK_ERROR_NS
+        or maximum_error > tolerance
+    ):
+        raise ValueError(f"{prefix} direct timestamp error exceeds the 10 ms limit")
+
+    anchors = capture.get("capture_clock_anchors")
+    if not isinstance(anchors, Mapping):
+        raise ValueError(f"{prefix} wrapper clock anchors are missing")
+    anchor_fields = set(anchors)
+    supported_fields = (
+        CLOCK_ANCHOR_FIELDS,
+        CLOCK_ANCHOR_FIELDS | CLOCK_ANCHOR_UNCERTAINTY_FIELDS,
+    )
+    if anchor_fields not in supported_fields:
+        raise ValueError(f"{prefix} wrapper clock anchors have invalid fields")
+    if require_pairing_uncertainty and not CLOCK_ANCHOR_UNCERTAINTY_FIELDS <= anchor_fields:
+        raise ValueError(f"{prefix} wrapper clock pairing uncertainty is missing")
+
+    values: dict[str, int] = {}
+    for field in CLOCK_ANCHOR_FIELDS:
+        value = anchors.get(field)
+        if type(value) is not int or value < 0:
+            raise ValueError(f"{prefix} wrapper clock anchor {field} is invalid")
+        values[field] = value
+    uncertainties: dict[str, int] = {}
+    for field in CLOCK_ANCHOR_UNCERTAINTY_FIELDS:
+        value = anchors.get(field, 0)
+        if type(value) is not int or value < 0:
+            raise ValueError(f"{prefix} wrapper clock anchor {field} is invalid")
+        uncertainties[field] = value
+
+    monotonic_elapsed = values["end_monotonic_ns"] - values["start_monotonic_ns"]
+    realtime_elapsed = values["end_realtime_unix_ns"] - values["start_realtime_unix_ns"]
+    if monotonic_elapsed <= 0 or realtime_elapsed < 0:
+        raise ValueError(f"{prefix} wrapper clock elapsed duration is invalid")
+    elapsed_delta = realtime_elapsed - monotonic_elapsed
+    elapsed_error_bound = (
+        abs(elapsed_delta)
+        + uncertainties["start_pairing_uncertainty_ns"]
+        + uncertainties["end_pairing_uncertainty_ns"]
+    )
+    if elapsed_error_bound > MAX_CAPTURE_CLOCK_ERROR_NS:
+        raise ValueError(f"{prefix} wrapper realtime/monotonic elapsed difference exceeds 10 ms")
+    return {
+        "clock_domain": "linux-kernel",
+        "capture_timestamp_type": timestamp_type,
+        "clock_model": "constant-offset",
+        "direct_timestamp_error_max_ns": maximum_error,
+        "direct_timestamp_tolerance_ns": tolerance,
+        "realtime_monotonic_elapsed_delta_ns": elapsed_delta,
+        "realtime_monotonic_elapsed_error_bound_ns": elapsed_error_bound,
+        "maximum_elapsed_error_ns": MAX_CAPTURE_CLOCK_ERROR_NS,
+        "pairing_uncertainty_recorded": bool(CLOCK_ANCHOR_UNCERTAINTY_FIELDS <= anchor_fields),
+    }
 
 
 def reconcile_direct_runner_artifacts(
@@ -481,7 +594,10 @@ def _reconcile_clock_epochs(
 def _clock_adjustment_ns(clock_anchors: Mapping[str, Any] | None) -> int | None:
     if clock_anchors is None:
         return None
-    if set(clock_anchors) != CLOCK_ANCHOR_FIELDS:
+    if set(clock_anchors) not in (
+        CLOCK_ANCHOR_FIELDS,
+        CLOCK_ANCHOR_FIELDS | CLOCK_ANCHOR_UNCERTAINTY_FIELDS,
+    ):
         raise ValueError("capture clock anchors have invalid fields")
     values: dict[str, int] = {}
     for field in CLOCK_ANCHOR_FIELDS:

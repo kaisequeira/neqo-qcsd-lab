@@ -110,10 +110,20 @@ connection tuples.
 ## Observer and capture boundary
 
 Every defence uses the same observer: Ethernet capture on the collection
-container's `eth0`. The retained measurement is `frame.len`, packet time, and
-direction relative to Neqo's local endpoint tuple. The PCAP also contains the
-ordinary encrypted-protocol and endpoint metadata visible at that boundary and
-must be handled as research evidence rather than a sanitized release.
+container's `eth0`, with dumpcap's `host` timestamp type selected explicitly.
+The retained measurement is `frame.len`, packet time, and direction relative
+to Neqo's local endpoint tuple. The PCAP also contains the ordinary
+encrypted-protocol and endpoint metadata visible at that boundary and must be
+handled as research evidence rather than a sanitized release.
+
+Both evidence clocks belong to the Linux execution environment. Dumpcap
+records the Linux packet-capture clock and the Rust runner records elapsed
+Linux monotonic time. Windows QPC, W32Time, PowerShell, WSL synchronization
+status, and other outer-host clocks are neither evidence inputs nor admission
+gates. This makes the instrument directly usable on native Linux and on Linux
+container hosts. Image binaries remain platform-specific, so a machine with a
+different architecture rebuilds from the pinned commits and must complete the
+same qualification and excluded rehearsal before acquisition.
 
 Capture follows one fixed sequence:
 
@@ -149,15 +159,20 @@ An attempt is operationally acceptable only when all relevant checks pass:
 - every retained packet belongs to a reported endpoint tuple;
 - interface-offload evidence is valid before and after disablement;
 - every observed UDP payload respects the selected profile's ceiling;
-- Neqo's packet record reconciles with the direct PCAP under the bounded clock
-  alignment;
+- Neqo's packet record reconciles with the direct PCAP as one constant-offset
+  segment, with zero modeled clock steps and at most 10 ms timestamp error;
+- repeated monotonic brackets around the start/end realtime readings establish
+  a worst-case elapsed-clock disagreement, including pairing uncertainty, no
+  larger than 10 ms;
 - the runtime's bounded padding-event guard did not fire.
 
 The reconciliation does not replace the independent observer. It establishes
 that transport datagrams recorded by the runner correspond to direct captured
 frames, with one uniform clock offset and at most the configured residual. A
 clock discontinuity or unexplained datagram is a failed attempt, not something
-silently corrected after collection.
+silently corrected after collection. Step modeling remains in the failed
+attempt diagnostics to explain a rejection, but cannot make an attempt
+promotable. The classifier exporter independently revalidates the same gate.
 
 After every defence in a paired visit has run, delivered response identity is
 compared using resource ID, HTTP status, delivered byte count, body SHA-256,
@@ -870,13 +885,16 @@ defences were qualified. It accepts only complete sealed results for which all
 planned samples are accepted and eligible, re-verifies every evidence index,
 and publishes a create-only handoff atomically. The handoff's `SHA256SUMS`
 closes the derived inventory but does not replace the source result seals.
-Before export, every sample's primary direct capture must additionally have a
-single constant-offset reconciliation segment, zero modeled clock steps,
-evidence-eligible exact runner reconciliation, and a maximum timestamp error
-within its sealed tolerance. The elapsed durations independently calculated
-from the wrapper's realtime and monotonic anchors may differ by no more than
-10 ms. Thus a trace that required accepted clock-step modeling is still
-excluded from classifier input.
+Before export, every sample's primary direct capture is rechecked against the
+same promotion gate: a single constant-offset reconciliation segment, zero
+modeled clock steps, evidence-eligible exact runner reconciliation, a maximum
+timestamp error no larger than 10 ms, and a bracket-uncertainty-aware wrapper
+realtime/monotonic elapsed difference no larger than 10 ms. Thus a trace that
+required clock-step modeling cannot be promoted or enter classifier input.
+Fresh captures must include the selected `host` timestamp type and both
+pairing-uncertainty fields. Historical sealed four-anchor results remain
+readable under their prior schema, but an explicit non-`host` timestamp type is
+rejected.
 
 For each sample, the handoff contains two explicitly different views:
 

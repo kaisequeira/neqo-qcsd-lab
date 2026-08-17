@@ -9,7 +9,96 @@ from qcsd_lab.fidelity import (
     _schedule_realization_metrics,
     fidelity_eligible,
     reconcile_direct_runner_artifacts,
+    validate_primary_capture_clock_integrity,
 )
+
+
+def test_primary_capture_clock_integrity_accepts_bounded_linux_clock_evidence() -> None:
+    capture = _primary_capture_clock()
+
+    result = validate_primary_capture_clock_integrity(
+        capture,
+        require_pairing_uncertainty=True,
+    )
+
+    assert result == {
+        "clock_domain": "linux-kernel",
+        "capture_timestamp_type": "host",
+        "clock_model": "constant-offset",
+        "direct_timestamp_error_max_ns": 1_000,
+        "direct_timestamp_tolerance_ns": 10_000_000,
+        "realtime_monotonic_elapsed_delta_ns": 9_000_000,
+        "realtime_monotonic_elapsed_error_bound_ns": 9_000_200,
+        "maximum_elapsed_error_ns": 10_000_000,
+        "pairing_uncertainty_recorded": True,
+    }
+
+
+def test_primary_capture_clock_integrity_requires_host_timestamp_for_fresh_capture() -> None:
+    capture = _primary_capture_clock()
+    del capture["timestamp_type"]
+
+    with pytest.raises(ValueError, match="capture timestamp type is missing"):
+        validate_primary_capture_clock_integrity(
+            capture,
+            require_timestamp_type=True,
+        )
+
+    capture["timestamp_type"] = "adapter_unsynced"
+    with pytest.raises(ValueError, match="capture timestamp type is not host"):
+        validate_primary_capture_clock_integrity(capture)
+
+
+def test_primary_capture_clock_integrity_rejects_step_repaired_capture() -> None:
+    capture = _primary_capture_clock()
+    reconciliation = capture["direct_runner_reconciliation"]
+    reconciliation.update(
+        direct_clock_model="positive-abrupt-steps",
+        direct_clock_segment_count=2,
+        direct_clock_segments=[{"index": 0}, {"index": 1}],
+        direct_clock_step_count=1,
+        direct_clock_steps=[{"index": 0}],
+    )
+
+    with pytest.raises(ValueError, match="clock model is not constant-offset"):
+        validate_primary_capture_clock_integrity(capture)
+
+
+def test_primary_capture_clock_integrity_counts_pairing_uncertainty_against_budget() -> None:
+    capture = _primary_capture_clock()
+    anchors = capture["capture_clock_anchors"]
+    anchors["end_realtime_unix_ns"] += 999_900
+
+    with pytest.raises(ValueError, match="elapsed difference exceeds 10 ms"):
+        validate_primary_capture_clock_integrity(
+            capture,
+            require_pairing_uncertainty=True,
+        )
+
+
+def test_primary_capture_clock_integrity_rejects_relaxed_packet_tolerance() -> None:
+    capture = _primary_capture_clock()
+    capture["direct_runner_reconciliation"]["direct_timestamp_tolerance_ns"] = 10_000_001
+
+    with pytest.raises(ValueError, match="timestamp error exceeds the 10 ms limit"):
+        validate_primary_capture_clock_integrity(capture)
+
+
+def test_primary_capture_clock_integrity_requires_new_pairing_evidence_before_promotion() -> None:
+    capture = _primary_capture_clock()
+    anchors = capture["capture_clock_anchors"]
+    del anchors["start_pairing_uncertainty_ns"]
+    del anchors["end_pairing_uncertainty_ns"]
+
+    with pytest.raises(ValueError, match="pairing uncertainty is missing"):
+        validate_primary_capture_clock_integrity(
+            capture,
+            require_pairing_uncertainty=True,
+        )
+
+    assert (
+        validate_primary_capture_clock_integrity(capture)["pairing_uncertainty_recorded"] is False
+    )
 
 
 def test_direct_runner_reconciliation_preserves_packet_and_tail_evidence(tmp_path):
@@ -627,4 +716,30 @@ def _clock_anchors(adjustment_ns: int) -> dict[str, int]:
         "start_monotonic_ns": start_monotonic,
         "end_realtime_unix_ns": start_realtime + monotonic_elapsed + adjustment_ns,
         "end_monotonic_ns": start_monotonic + monotonic_elapsed,
+    }
+
+
+def _primary_capture_clock() -> dict[str, object]:
+    return {
+        "primary": True,
+        "timestamp_type": "host",
+        "capture_clock_anchors": {
+            "start_realtime_unix_ns": 10_000_000_000,
+            "start_monotonic_ns": 1_000_000_000,
+            "end_realtime_unix_ns": 11_009_000_000,
+            "end_monotonic_ns": 2_000_000_000,
+            "start_pairing_uncertainty_ns": 100,
+            "end_pairing_uncertainty_ns": 100,
+        },
+        "direct_runner_reconciliation": {
+            "direct_clock_model": "constant-offset",
+            "direct_clock_segment_count": 1,
+            "direct_clock_segments": [{"index": 0}],
+            "direct_clock_step_count": 0,
+            "direct_clock_steps": [],
+            "direct_runner_reconciled": True,
+            "evidence_eligible": True,
+            "direct_timestamp_error_max_ns": 1_000,
+            "direct_timestamp_tolerance_ns": 10_000_000,
+        },
     }
