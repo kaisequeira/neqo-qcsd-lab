@@ -599,12 +599,52 @@ consume fitted corpus artifacts. The current recovery contract instead uses
 one create-only five-file transaction under
 `config/chaff-response-qualification-store/v2/`. Application requests retain
 their prepared headers. The distinct chaff-only namespace copies `Accept` and
-`Accept-Language` exactly and forces `Accept-Encoding: identity`. The most
-recent exact-five cohort was qualified from clean Q3 and clean Neqo F3
-`6aceaac85243d6e0e34354108e010705d3c83088`; it is now historical because the
-Lab acquisition implementation changed. Canonical v2 is intentionally absent
-until the replacement lineage completes one new atomic exact-five
-qualification.
+`Accept-Language` exactly and forces `Accept-Encoding: identity`. The active
+exact-five cohort was qualified atomically from clean Lab Q5
+`af3403d60f5be008dc88cc52c6ce8ec5a34bc47c`, tree
+`7110eebb2e4763a9e197d3c5be8f6b55b0b2feb9`, and clean Neqo F3
+`6aceaac85243d6e0e34354108e010705d3c83088`. Q5 is the documentation
+acquisition child of the test-only controlled-fixture repair
+`32f8f4d816cf05ebc483cc547732d146225493c9`; the production Linux-local
+capture-integrity implementation remains
+`47c91bb36dcddd3943253ee16141febbaf9041e8`. The qualification collection and
+prepare/actual images were respectively
+`sha256:73c2530d0c14bd272e88a3dff147018fd30d4aa5e848988f3714fb7b1484b990`
+and
+`sha256:cd238e21e89706e257de75dd94282224bb40ebe70cbc0615511be4072eab2e7a`,
+under build tag suffix
+`q-af3403d60f5b-6aceaac85243-20260817T171051Z`. Their `source.json` SHA-256 was
+`2847eea1cd0988cbb51f3b5086cb4e326011ebfe1bb68136a5b9143501063f35`,
+their raw implementation-receipt SHA-256 was
+`4db3b6448e988c4674e94c0a7584b63b352fd1115d4dfb8124f6e1b7845c80d9`,
+and every sidecar binds implementation-receipt aggregate
+`4d96ca1ce6d0711ae8ca4e1c125b8b83451daab683e626c90c95b5c39c37afbb`.
+The exact image passed all 731 local prerequisite tests before qualification.
+
+The deterministic first candidate (`candidate_index: 0`) qualified for all
+five workloads without a rejected candidate. Across 15 independent connection
+epochs, 600 stable identity completions produced 61,726 packet observations:
+54,454 incoming and 7,272 outgoing. All 120 request waves completed; the ten
+within-workload inter-epoch gaps ranged from 30.013367067 to 30.062120752
+seconds, the maximum observed UDP payload was 1,200 bytes, and no oversized
+packet was observed. The active sidecar and derived-manifest hashes are:
+
+| Workload | Sidecar SHA-256 | Derived schema-4 manifest SHA-256 |
+|---|---|---|
+| `getbootstrap-home-r3` | `cbc90b4f4f1021fc51140cfe23d133dbce17e1f81d34eaa70639be42370ad4ca` | `9a3e3bc6648a91ca0c6ebc884aaa2bfd271c64d1efab087d4594e71a28e785c9` |
+| `cloudflare-quiche-r3` | `2506c96d3aee4b145e3ba816f3ee64fe47e2e71df65f3d75d40126694aa01c1e` | `cff7a5fcfddb4d4419efdd80a85b1172942a4c2c8ffa4fc558cc4f2672416589` |
+| `hyper-basic-client-r1` | `aee4f47953c89026e4583e2cfd8db1bc78ffa1bfcd6af1f0e9813b2b31a37f51` | `b9407104892141af34581b138aa81d6a58353c1e66fa0a3023ab5c3589d90ef5` |
+| `serde-home-r1` | `773f4e4a0c9ecfc50ed59a7787e9102e58b25941fdae874c53d43da4b798903b` | `165436bf45941105d2f29d1b3193564cb416b3e4a3bad4ab441a1819163480b9` |
+| `rfc9114-text-r1` | `b77dd117607ce698bcc4ad7da12367621a12baafbc7805f5ff13cf11557eee6c` | `2bb2bf65644172d338496eadba17524d9a5521bf4dff130c42f3482c3081a600` |
+
+P5 publishes these exact files as the active canonical response cohort. Its
+non-self-referential commit hash is intentionally pending at this documented
+boundary. Clean final collection and preparation image IDs and the fresh
+excluded 30/30 rehearsal and interface handoff are also pending; no formal
+capture or classifier export has yet been run.
+
+The immediately preceding Q3/F3 exact-five cohort is historical because the
+Lab acquisition implementation changed.
 
 For each class, known-valid same-origin resources with at least 1,200 prepared
 body bytes form a deterministic candidate prefix ordered by descending body
@@ -700,10 +740,10 @@ public qualification or acquisition traffic followed. Commit
 `32f8f4d816cf05ebc483cc547732d146225493c9`, tree
 `d713ca9f665935a4dd953e242a636d2063ffc784`, repairs only that controlled
 fixture and its matching prefix specification; production capture semantics
-and Neqo F3 are unchanged. Q5 is the documentation acquisition child of that
-repair, its self-hash is intentionally pending, and canonical v2 remains
-absent until a clean Q5/F3 image passes `test live` and one new atomic
-exact-five qualification succeeds.
+and Neqo F3 are unchanged. Q5
+`af3403d60f5be008dc88cc52c6ce8ec5a34bc47c` is the documentation acquisition
+child of that repair. Its clean image passed all 731 local prerequisite tests,
+and its atomic exact-five qualification is the active cohort published by P5.
 
 The immediately preceding transaction succeeded atomically from clean Lab
 qualification source `fcc6af4394b2b2f7dee5f8b1a214cd7673a9e0e8` (Q2), clean
@@ -785,16 +825,15 @@ Its historical sidecar and derived-manifest hashes are:
 
 Those exact files remain recoverable from Lab publication commit
 `d5543406359528b1382222d8ef3d3cffd67b7d4d` and frozen sealed results.
-All four prior response-store v2 transactions are historical. Canonical v2 is
-intentionally absent in Q5; Q5/F3 is the next qualification source. Commit
+All four prior response-store v2 transactions are historical. Canonical v2 now
+contains only the active Q5/F3 exact-five cohort published by P5. Commit
 `47c91bb36dcddd3943253ee16141febbaf9041e8` remains the causal production
 implementation change; `32f8f4d816cf05ebc483cc547732d146225493c9` repairs
 only the controlled schema-six live fixture.
 No historical sidecar, implementation receipt, image, rehearsal, formal
-sample, or export may be mixed into the replacement lineage. One fresh atomic
-exact-five qualification, a clean publication/final-image build, an excluded
-30/30 rehearsal, and a verified interface handoff are required before any
-restarted formal sample.
+sample, or export may be mixed into the active lineage. A clean P5/F3
+final-image build, an excluded 30/30 rehearsal, and a verified interface
+handoff are required before any restarted formal sample.
 Qualification traffic is diagnostic evidence and never a classifier
 observation. “No fitting” therefore does not mean unqualified or unchecked
 execution.
@@ -919,10 +958,10 @@ replacement Lab capture-integrity implementation at
 `47c91bb36dcddd3943253ee16141febbaf9041e8` makes those historically valid
 sidecars ineligible under the current-implementation contract. Q4 kept
 canonical v2 absent and launched no public qualification after its local live
-fixture failed. Q5 likewise leaves canonical v2 absent until a new atomic
-exact-five Q5/F3 qualification. Its eventual exact final collection image must
-pass a fresh excluded 30/30 rehearsal and verified interface handoff before
-formal acquisition can restart
+fixture failed. Q5 passed its repaired live prerequisite, completed the new
+atomic exact-five Q5/F3 qualification, and P5 published that active cohort.
+The clean P5/F3 final collection image must pass a fresh excluded 30/30
+rehearsal and verified interface handoff before formal acquisition can restart
 from baseline-01 under one homogeneous source receipt.
 The earlier
 `20260815T103924.969402Z`, `20260814T150747.615059Z`, and
