@@ -131,6 +131,47 @@ advances to the next candidate; transport, DNS, timeout, or protocol failures
 abort the transaction. Publication is atomic, and no v2 sidecar hash exists
 until that exact five-file transaction succeeds from a clean build.
 
+The active exact-five cohort was qualified atomically from clean Lab Q6
+`0d0b1984c1d87b0502899cc451f1ed6ab6463d03`, tree
+`2c44a2d00473676776eafbbd7883e4ed739d16de`, and clean Neqo F3
+`6aceaac85243d6e0e34354108e010705d3c83088`. The qualification collection and
+prepare/actual images were respectively
+`sha256:91151da64ead1aff662f207107aa06fa2d16c62378f2989043193beca22a24ac`
+and
+`sha256:e5f1c8153b4238700f06339d94c046ca3d8f5aad14375ae6642ea7785b792881`,
+under build tag suffix
+`q6-0d0b1984c1d8-6aceaac85243-20260817T191330Z`. Their `source.json` SHA-256
+was `a82950c006023d11972913021fd14ad88332c8a8ff028f223472e31d3bd164f0`,
+their raw implementation-receipt SHA-256 was
+`ebf2eadf174d2fbc43156907b4fd76d3dcf5f2f1f13af606ead404a3d2168a27`,
+and every sidecar binds implementation-receipt aggregate
+`4137ed63d23c52b897f47c26ed62f1c97e13f0a173b51438c4bcf20979adc5d5`.
+The exact Q6 collection image completed its deterministic prerequisite suite
+with 732 passed and two environment-gated skips, then passed all three
+Linux-local live prerequisites before qualification.
+
+The deterministic first candidate (`candidate_index: 0`) qualified for all
+five workloads without a rejected candidate. Across 15 independent connection
+epochs, 600 stable identity completions produced 61,277 packet observations:
+54,444 incoming and 6,833 outgoing. All 120 request waves completed; the ten
+within-workload inter-epoch gaps ranged from 30.030177204 to 30.065013514
+seconds, the maximum observed UDP payload was 1,200 bytes, and no oversized
+packet was observed. The active sidecar and derived-manifest hashes are:
+
+| Workload | Sidecar SHA-256 | Derived schema-4 manifest SHA-256 |
+|---|---|---|
+| `getbootstrap-home-r3` | `60ff5642bac12a73d0efcfbf74728946cb42d58aae5c18a4d0e9efa6641c899b` | `dd44865c7a0452c2e603c0bfa07994a054a4c1753a08045273f7d542167b4a12` |
+| `cloudflare-quiche-r3` | `895c31ce388cf20ace53afeba2abd2f7a03f85054bf3bed37a47db389f8b45ac` | `0c8dab88862df196d303d5f69b177bde8553b978e6acc72d091772540cd6eb1c` |
+| `hyper-basic-client-r2` | `24996a0978cda7a9858f39fef720abe3ebc5243cec5eb52943acadcfe79f0468` | `ab36ef6920b106c4f8bd625c8b5e9dc40f7fbca1ab7cb315a224f8b00219bd57` |
+| `serde-home-r1` | `7367ef8b340bb5e4624b213f9d78e1008ad2f8e61f3939ab87c504e622d23d52` | `96a361270e81631f0fd50eb676e37cb33aae915319396766f16cc3cf2e198a7f` |
+| `rfc9114-text-r1` | `8d35815100de1b1ab8b5beb2c819ba5fdf5d032e3c144d553df911cec62d74ac` | `ad5faeebb1cc186c5b79df01d66315481ba18f623a4afdb65a8ec06fa1709b58` |
+
+P6 publishes these exact files as the active canonical response cohort. Its
+non-self-referential commit hash is intentionally pending at this documented
+boundary. Clean final collection and preparation image IDs, the fresh excluded
+30/30 rehearsal, and the verified interface handoff are also pending. No
+formal capture or classifier export has yet been run from Q6/P6.
+
 The now-historical P5 exact-five cohort was qualified atomically from clean Lab Q5
 `af3403d60f5be008dc88cc52c6ce8ec5a34bc47c`, tree
 `7110eebb2e4763a9e197d3c5be8f6b55b0b2feb9`, and clean Neqo F3
@@ -204,19 +245,18 @@ The create-only replacement `config/workloads/hyper-basic-client-r2.json`
 has SHA-256
 `11baf7f3fe0db6f9c86af51fbc4100b2b5f1683385f7f9d30fefd33349569d6f`
 and records three stable preparation runs at the new 5,917-byte identity,
-with 1,200-byte maximum UDP payloads and zero oversized packets. Q6
-prospectively changes only the active POC5 Hyper binding to r2 and keeps Neqo
-F3 unchanged. Because the workload ID is an input to deterministic defence
-ordering and to every Hyper sample seed and ID, Q6 also reselects the ten
-paired campaign seeds prospectively from
+with 1,200-byte maximum UDP payloads and zero oversized packets. Q6 changed
+only the active POC5 Hyper binding to r2 and kept Neqo F3 unchanged. Because
+the workload ID is an input to deterministic defence ordering and to every
+Hyper sample seed and ID, Q6 also reselected the ten paired campaign seeds
+prospectively from
 `2026082001..2026092000` using plan expansion only. The 2,500-sample plan has
 unique sample IDs and seeds, every class/defence/position cell occurs 32--35
 times, and only three of 45 cells fall outside 33--34. Canonical response-store
-v2 is deliberately absent at the Q6
-acquisition boundary. A fresh atomic exact-five Q6/F3 qualification,
-publication build, excluded 30/30 rehearsal, and verified interface handoff
-are required before formal acquisition restarts from baseline-01. No P5-bound
-interface handoff, formal capture, or classifier export was run.
+v2 now contains only the active Q6/F3 exact-five cohort published by P6. A
+clean P6/F3 final-image build, excluded 30/30 rehearsal, and verified interface
+handoff are required before formal acquisition restarts from baseline-01. No
+P5-bound interface handoff, formal capture, or classifier export was run.
 
 The immediately preceding, now-historical exact-five cohort was qualified
 atomically from clean Lab Q3
@@ -384,16 +424,16 @@ Its historical hashes are:
 
 Those exact files remain recoverable from Lab commit
 `88569f268260b36f0c4ccfc36681f7a42887b66c` and from frozen sealed results.
-All five recorded response-store v2 transactions, including Q5/P5, are
-historical only. Canonical v2 is deliberately absent in Q6.
+All five previously recorded response-store v2 transactions, including Q5/P5,
+are historical only. Canonical v2 contains only the active Q6/F3 cohort
+published by P6.
 Commit `47c91bb36dcddd3943253ee16141febbaf9041e8` remains the causal production
 implementation change, while `32f8f4d816cf05ebc483cc547732d146225493c9`
 repairs only the prerequisite's controlled schema-six fixture.
 No historical sidecar, implementation receipt, image, rehearsal, formal
-sample, or export may be mixed into the prospective Q6 lineage. A fresh
-atomic Q6/F3 exact-five qualification, P6 publication and final-image build,
-an excluded 30/30 rehearsal, and a verified interface handoff are required
-before formal acquisition may restart.
+sample, or export may be mixed into the active Q6/P6 lineage. A clean P6/F3
+final-image build, an excluded 30/30 rehearsal, and a verified interface
+handoff are required before formal acquisition may restart.
 
 Each response-store v2 file is sidecar schema 2 and derives a schema-4
 `qcsd-qualified-chaff-manifest` with `qualification_scope: response-only` and
@@ -952,8 +992,8 @@ names. The earlier catalogue cohort's `-r2` manifests then predated absolute
 whole-run UDP qualification: their application traffic used a 1200-byte
 configuration, but their receipts did not prove that every handshake and
 application datagram respected that ceiling. Those two earlier generations
-remain historical preparation evidence only; the prospective Hyper r2
-replacement has a current whole-run UDP receipt.
+remain historical preparation evidence only; the separately prepared POC5
+Hyper r2 replacement has a current whole-run UDP receipt.
 
 The frozen research adaptation cohort was therefore prepared from the clean,
 corrected image as six new `-r3` workloads. Each preparation passed three
@@ -1193,14 +1233,16 @@ seeds; the POC neither consumes nor refits the Traffic-Morphing, WTF-PAD, or
 Walkie-Talkie artifacts. The current recovery contract requires five
 response-store v2 sidecars (schema 2) deriving schema-4 runtime manifests,
 with no prefix-pack or fitted-data dependency. All previous v2 transactions
-are superseded, and canonical v2 is deliberately absent in Q6. The historical
-Q5 image, incorporating Linux-local capture integrity commit
+are superseded, and canonical v2 contains only the active Q6/F3 cohort
+published by P6. The historical Q5 image, incorporating Linux-local capture
+integrity commit
 `47c91bb36dcddd3943253ee16141febbaf9041e8`, passed all 731 local prerequisite
 tests before its atomic
 qualification, and the P5 final images then passed their image and campaign
 preflights; the excluded rehearsal nevertheless rejected the stale Hyper r1
-identity as recorded above. A fresh Q6/F3 qualification and P6 final image
-must pass a new excluded 30/30 rehearsal and verified interface handoff.
+identity as recorded above. The completed Q6/F3 qualification is published by
+P6; its clean final image must pass a new excluded 30/30 rehearsal and verified
+interface handoff.
 Historical v1/schema-3 evidence remains readable only for its frozen
 compatibility role.
 
@@ -1334,12 +1376,13 @@ fixture failed. Q5 passed its repaired live prerequisite, completed the new
 atomic exact-five Q5/F3 qualification, and P5 published that now-historical
 cohort. Its `20260817T181058.212792Z` rehearsal sealed incomplete because the
 frozen Hyper r1 response had drifted, even though every retained attempt
-passed the Linux-local capture-integrity gate. Q6 replaces the active binding
-with the independently prepared Hyper r2 graph and deliberately removes the
-canonical v2 cohort. A clean Q6/F3 exact-five qualification and P6 final image
-must pass a wholly new excluded 30/30 rehearsal and verified interface handoff
-before formal acquisition restarts from baseline-01 under one homogeneous
-source receipt. The earlier `20260815T103924.969402Z`,
+passed the Linux-local capture-integrity gate. Q6 changed the active binding
+to the independently prepared Hyper r2 graph and removed the prior canonical
+v2 cohort at its acquisition boundary. Its completed exact-five Q6/F3
+qualification is published by P6. Clean P6/F3 final images must pass a wholly
+new excluded 30/30 rehearsal and verified interface handoff before formal
+acquisition restarts from baseline-01 under one homogeneous source receipt.
+The earlier `20260815T103924.969402Z`,
 `20260814T150747.615059Z`, and `20260814T110741.344914Z` rehearsals and all
 their retries remain permanently excluded as well.
 
@@ -1359,12 +1402,12 @@ qualification diagnostics are likewise never POC5 classifier samples.
 
 These POC5 campaign files, the offline exporter, tests, and documentation are
 outside the qualification implementation-file inventory, but the clean Lab
-commit remains part of source provenance. Canonical response-store v2 is
-deliberately absent in Q6 after the P5 rehearsal exposed stale Hyper r1
-response identity. Formal acquisition and classifier export remain blocked
-until a newly qualified P6/F3 final collection image passes a fresh excluded
-rehearsal with exactly 30/30 accepted and eligible samples plus a verified
-interface handoff. Formal capture then restarts from baseline-01.
+commit remains part of source provenance. Canonical response-store v2 contains
+only the active Q6/F3 cohort published by P6 after the P5 rehearsal exposed
+stale Hyper r1 response identity. Formal acquisition and classifier export
+remain blocked until a clean P6/F3 final collection image passes a fresh
+excluded rehearsal with exactly 30/30 accepted and eligible samples plus a
+verified interface handoff. Formal capture then restarts from baseline-01.
 Keep the historical response-store v1/schema-3 evidence
 frozen-compatible; do not regenerate the separate historical full-v2
 sidecars, prefix specs, fitting result, or sealed `research-1200` bundle.
