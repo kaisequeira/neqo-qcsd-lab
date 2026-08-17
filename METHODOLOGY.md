@@ -677,11 +677,33 @@ That cohort remains valid historical evidence, but is ineligible for current
 execution because the qualification receipt inventories every
 `src/qcsd_lab/*.py` file and the Linux capture-integrity implementation commit
 `47c91bb36dcddd3943253ee16141febbaf9041e8` changed `capture_session.py`,
-`fidelity.py`, and `orchestrator.py`. Q4 is the documentation/deletion child of
-that implementation commit; its self-hash is intentionally pending at this
-boundary and Neqo remains clean F3. Q4 intentionally has no canonical
-response-store v2. One new atomic exact-five Q4/F3 qualification from its
-uniquely tagged images must succeed before capture can resume.
+`fidelity.py`, and `orchestrator.py`. Q4
+`570851923bfaa24aa967f947c38f305138145776`, tree
+`11f6946091247f17520958ab29014b7aa04dee1f`, is the documentation/deletion
+child of that implementation commit and intentionally has no canonical
+response-store v2. Its qualification collection/prepare images were
+`sha256:ef2e6a6b9464c34d80657c787d0b1fb15eb8ee03539db141c8cb4b7bcf5cc236`
+and
+`sha256:228fe4b3a8cf1287dc0d6fdc9a1ba627e1f6393f9d456de105c506f4111a9c88`,
+under suffix `q-570851923bfa-6aceaac85243-20260817T164038Z`. The source, raw
+implementation-receipt, and aggregate SHA-256 values were respectively
+`3d7448fc0025aa20d741ee6cffadca3b5b9312bd327853cfc47619b18819f43f`,
+`a45875a057a495d5f5a6c30de7fd697bedc28dc856248e1eb3bdfbd2511d873f`,
+and `6c1f190c8e5bfbf7951ea8aba081bb44ada4ffdc264089ff640fad89dca8a050`.
+
+Q4 passed 729 deterministic tests with the two live tests gated. Its first
+local-only `test live` passed the canonical capture path but stopped on a
+controlled Walkie-Talkie fixture that relabelled a historical schema-five
+profile as schema six without deriving the sender-framing cell. Neqo correctly
+rejected the inconsistent configuration before clock reconciliation. No
+public qualification or acquisition traffic followed. Commit
+`32f8f4d816cf05ebc483cc547732d146225493c9`, tree
+`d713ca9f665935a4dd953e242a636d2063ffc784`, repairs only that controlled
+fixture and its matching prefix specification; production capture semantics
+and Neqo F3 are unchanged. Q5 is the documentation acquisition child of that
+repair, its self-hash is intentionally pending, and canonical v2 remains
+absent until a clean Q5/F3 image passes `test live` and one new atomic
+exact-five qualification succeeds.
 
 The immediately preceding transaction succeeded atomically from clean Lab
 qualification source `fcc6af4394b2b2f7dee5f8b1a214cd7673a9e0e8` (Q2), clean
@@ -764,9 +786,10 @@ Its historical sidecar and derived-manifest hashes are:
 Those exact files remain recoverable from Lab publication commit
 `d5543406359528b1382222d8ef3d3cffd67b7d4d` and frozen sealed results.
 All four prior response-store v2 transactions are historical. Canonical v2 is
-intentionally absent in Q4; Q4/F3 is the next qualification source, and
-`47c91bb36dcddd3943253ee16141febbaf9041e8` is its causal implementation
-parent rather than the qualification source itself.
+intentionally absent in Q5; Q5/F3 is the next qualification source. Commit
+`47c91bb36dcddd3943253ee16141febbaf9041e8` remains the causal production
+implementation change; `32f8f4d816cf05ebc483cc547732d146225493c9` repairs
+only the controlled schema-six live fixture.
 No historical sidecar, implementation receipt, image, rehearsal, formal
 sample, or export may be mixed into the replacement lineage. One fresh atomic
 exact-five qualification, a clean publication/final-image build, an excluded
@@ -894,10 +917,12 @@ cohort and built the clean final images recorded above. No P3 rehearsal,
 interface handoff, formal capture, or classifier export was launched. The
 replacement Lab capture-integrity implementation at
 `47c91bb36dcddd3943253ee16141febbaf9041e8` makes those historically valid
-sidecars ineligible under the current-implementation contract. Q4 therefore
-leaves canonical v2 absent until a new atomic exact-five Q4/F3 qualification.
-Its eventual exact final collection image must pass a fresh excluded 30/30
-rehearsal and verified interface handoff before formal acquisition can restart
+sidecars ineligible under the current-implementation contract. Q4 kept
+canonical v2 absent and launched no public qualification after its local live
+fixture failed. Q5 likewise leaves canonical v2 absent until a new atomic
+exact-five Q5/F3 qualification. Its eventual exact final collection image must
+pass a fresh excluded 30/30 rehearsal and verified interface handoff before
+formal acquisition can restart
 from baseline-01 under one homogeneous source receipt.
 The earlier
 `20260815T103924.969402Z`, `20260814T150747.615059Z`, and
