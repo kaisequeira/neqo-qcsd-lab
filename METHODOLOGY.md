@@ -599,11 +599,12 @@ consume fitted corpus artifacts. The current recovery contract instead uses
 one create-only five-file transaction under
 `config/chaff-response-qualification-store/v2/`. Application requests retain
 their prepared headers. The distinct chaff-only namespace copies `Accept` and
-`Accept-Language` exactly and forces `Accept-Encoding: identity`. Canonical v2
-is now the active exact-five cohort qualified from clean Q3 and clean Neqo F3
-`6aceaac85243d6e0e34354108e010705d3c83088`. Its publication does not yet
-authorize formal capture or classifier export: the clean final images and a
-fresh excluded rehearsal and interface handoff remain pending.
+`Accept-Language` exactly and forces `Accept-Encoding: identity`. The most
+recent exact-five cohort was qualified from clean Q3 and clean Neqo F3
+`6aceaac85243d6e0e34354108e010705d3c83088`; it is now historical because the
+Lab acquisition implementation changed. Canonical v2 is intentionally absent
+until the replacement lineage completes one new atomic exact-five
+qualification.
 
 For each class, known-valid same-origin resources with at least 1,200 prepared
 body bytes form a deterministic candidate prefix ordered by descending body
@@ -633,6 +634,8 @@ collection image was
 `sha256:bea517984b866d0c413ccc3d7c381e07a586a86eac5660717a9b8a809b4da382`;
 preparation produced, and the qualification actually used,
 `sha256:227a931f5ae410fe298285d69a1d5d7b403ba026970949e5b30723d86b66b68a`.
+The qualification build tag suffix was
+`q-06cacddc21ab-6aceaac85243-20260815T211610Z`.
 Every sidecar binds implementation-receipt aggregate
 `558705bb0560ee3a87140670de7140ac087e9a0bf5ab13c1215f214f618f5ea4`.
 The deterministic first candidate (`candidate_index: 0`) qualified for all
@@ -640,7 +643,7 @@ five workloads. Across 15 independent connection epochs, 600 stable identity
 completions produced 61,875 packet observations: 54,573 incoming and 7,302
 outgoing. Within every workload, consecutive epochs retained at least the
 required 30-second gaps, the maximum observed UDP payload was 1,200 bytes, and
-no oversized packet was observed. The active hashes are:
+no oversized packet was observed. Its now-historical hashes are:
 
 | Workload | Sidecar SHA-256 | Derived schema-4 manifest SHA-256 |
 |---|---|---|
@@ -650,11 +653,35 @@ no oversized packet was observed. The active hashes are:
 | `serde-home-r1` | `19fa46e8da00b6af47090ae9857335b9db966a3b55dc9c0592059cdceb2eafc4` | `d463076c6baf2a01fd94d534fae8015f99d523a54ebd4a9dc9d95d4109cf1f11` |
 | `rfc9114-text-r1` | `f43285364a01de0f5024632995b83f034911c5d3c7c5770396b240f07c5fcf62` | `0152f1137aa31e5371ad4792829485710cb9218192cf115bc7bbdfa0a26ae797` |
 
-P3 publishes these exact files as the active canonical response cohort. Its
-non-self-referential commit hash is intentionally pending at this documented
-boundary. Clean final collection and preparation image IDs and the fresh
-excluded rehearsal are also pending; no formal capture or classifier export
-has been run or is yet authorized.
+P3 `507cb04c38babcdc0050ddb064007a962efee0a2`, tree
+`a600c16c2ef71852ec4002c10f1a09ac03f84280` and parent Q3, published these
+exact files without alteration. Its clean final collection and preparation
+images were respectively
+`sha256:361ab7d677b1399bd0140f75d6cf7a9a30d350a7232fbd5529c1b2b9ddc000bd`
+and
+`sha256:db75500ff909ffae9fef32967820ec335fc880fb436c96f0db3a120a8911bce1`,
+under build tag suffix
+`p-507cb04c38ba-6aceaac85243-20260815T215336Z`. Their source receipt
+`source.json` had SHA-256
+`590b4a856f7d8420329c90aba1d026edfcfbc75767ad9dc27fe75954c59f61dd`;
+the raw implementation receipt had SHA-256
+`c998823eb1b065e161e9397d079ff10155d0d55870580afe5efd058f9b03c1c4`
+and final execution implementation-receipt aggregate
+`1115efbaca78ef8eab8bdf5551a598250a82af3812d3a23a2bee820ee600c1a6`.
+No rehearsal, interface handoff, formal capture, or classifier export was
+launched from P3.
+The five historical files remain byte-exact recoverable from P3 and frozen
+evidence.
+
+That cohort remains valid historical evidence, but is ineligible for current
+execution because the qualification receipt inventories every
+`src/qcsd_lab/*.py` file and the Linux capture-integrity implementation commit
+`47c91bb36dcddd3943253ee16141febbaf9041e8` changed `capture_session.py`,
+`fidelity.py`, and `orchestrator.py`. Q4 is the documentation/deletion child of
+that implementation commit; its self-hash is intentionally pending at this
+boundary and Neqo remains clean F3. Q4 intentionally has no canonical
+response-store v2. One new atomic exact-five Q4/F3 qualification from its
+uniquely tagged images must succeed before capture can resume.
 
 The immediately preceding transaction succeeded atomically from clean Lab
 qualification source `fcc6af4394b2b2f7dee5f8b1a214cd7673a9e0e8` (Q2), clean
@@ -736,13 +763,15 @@ Its historical sidecar and derived-manifest hashes are:
 
 Those exact files remain recoverable from Lab publication commit
 `d5543406359528b1382222d8ef3d3cffd67b7d4d` and frozen sealed results.
-All three prior response-store v2 transactions are historical. The active
-canonical cohort is the exact Q3/F3 five-file publication recorded above. No
-historical sidecar, implementation receipt, image, rehearsal, formal sample,
-or export may be mixed into it. Publication does not authorize capture by
-itself: the active evidence must be included in a fresh clean final collection
-build, and that exact build must pass a fresh excluded 30/30 rehearsal and
-verified interface handoff before any restarted formal sample.
+All four prior response-store v2 transactions are historical. Canonical v2 is
+intentionally absent in Q4; Q4/F3 is the next qualification source, and
+`47c91bb36dcddd3943253ee16141febbaf9041e8` is its causal implementation
+parent rather than the qualification source itself.
+No historical sidecar, implementation receipt, image, rehearsal, formal
+sample, or export may be mixed into the replacement lineage. One fresh atomic
+exact-five qualification, a clean publication/final-image build, an excluded
+30/30 rehearsal, and a verified interface handoff are required before any
+restarted formal sample.
 Qualification traffic is diagnostic evidence and never a classifier
 observation. “No fitting” therefore does not mean unqualified or unchecked
 execution.
@@ -772,8 +801,9 @@ undefended-trained classifier to defended traffic; it does not test an attacker
 retrained on defended traces.
 
 Before any formal block, `classifier-poc5-rehearsal.yml` collects two visits per
-class and condition: 30 samples. It is a clean-clock operational and receiver
-ingestion gate and is permanently excluded from the 2,500. The incomplete
+class and condition: 30 samples. It is a Linux-local capture-integrity
+operational and receiver-ingestion gate and is permanently excluded from the
+2,500. The incomplete
 six-class diagnostic result at
 `results/research-classifier-pilot-01-1200/20260814T064655.275845Z` also
 contributes no POC5 samples. Its ATS response drift and FRONT/Tamaraw fidelity
@@ -858,12 +888,18 @@ All four result roots above remain immutable diagnostic evidence. The earlier
 passing rehearsal no longer authorizes a replacement image, baseline-01
 contributes no sample to the replacement corpus, and no accepted row from
 either incomplete result may be reused. P2 produced no formal campaign result
-and no classifier export. Q3 has now completed the atomic exact-five F3
-qualification and P3 publishes that cohort; the P3 identifier and clean final
-images remain pending. The eventual exact collection image must pass a fresh
-excluded 30/30 rehearsal and verified interface handoff before formal
-acquisition can restart from baseline-01 under one homogeneous source
-receipt. The earlier
+and no classifier export. Q3 completed the atomic exact-five F3 qualification,
+and P3 `507cb04c38babcdc0050ddb064007a962efee0a2` published that historical
+cohort and built the clean final images recorded above. No P3 rehearsal,
+interface handoff, formal capture, or classifier export was launched. The
+replacement Lab capture-integrity implementation at
+`47c91bb36dcddd3943253ee16141febbaf9041e8` makes those historically valid
+sidecars ineligible under the current-implementation contract. Q4 therefore
+leaves canonical v2 absent until a new atomic exact-five Q4/F3 qualification.
+Its eventual exact final collection image must pass a fresh excluded 30/30
+rehearsal and verified interface handoff before formal acquisition can restart
+from baseline-01 under one homogeneous source receipt.
+The earlier
 `20260815T103924.969402Z`, `20260814T150747.615059Z`, and
 `20260814T110741.344914Z` rehearsals and all their retries remain excluded
 evidence.
