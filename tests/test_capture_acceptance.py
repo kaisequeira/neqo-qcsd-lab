@@ -19,7 +19,12 @@ import qcsd_lab.chaff_qualification as chaff_qualification
 import qcsd_lab.capture_session as capture_session
 from qcsd_lab.analysis import analyze_result
 from qcsd_lab.capture import extract_trace
-from qcsd_lab.fitting_walkie_talkie import receiver_continuation_contract
+from qcsd_lab.fitting_walkie_talkie import (
+    BurstPair,
+    mold,
+    mold_padding_cost,
+    receiver_continuation_contract,
+)
 from qcsd_lab.manifest import (
     canonical_bytes,
     https_origin,
@@ -69,7 +74,14 @@ def test_controlled_schema_six_wire_fixture_is_explicit_and_non_authoritative(
     runtime.write_bytes(canonical_bytes(runtime_manifest(prepared)))
     receipt = _synthetic_response_observation(source, prepared["resources"][0])
     prefix_spec = tmp_path / "simple-prefix-spec.json"
-    _write_controlled_prefix_spec(prefix_spec, workload_id, [{"outgoing": 3, "incoming": 129}])
+    historical = load_json(
+        Path(__file__).parents[1] / "config/defense-params/walkie-talkie-live.json"
+    )
+    source_profiles = {profile["real"]: profile for profile in historical["profiles"]}
+    controlled_profile = _current_controlled_walkie_talkie_profile(
+        source_profiles[workload_id], historical["packet_size"]
+    )
+    _write_controlled_prefix_spec(prefix_spec, workload_id, controlled_profile["bursts"])
     chaff_manifest = tmp_path / "simple-chaff.json"
     _write_controlled_chaff_manifest(
         chaff_manifest,
@@ -114,6 +126,9 @@ def test_controlled_schema_six_wire_fixture_is_explicit_and_non_authoritative(
     assert molded["schema_version"] == 6
     assert molded["generated_by"] == "controlled-live-test-only"
     assert molded["receiver_continuation"] == receiver_continuation_contract()
+    assert molded["profiles"][0]["bursts"] == [{"outgoing": 4, "incoming": 129}]
+    assert molded["profiles"][0]["matching_cost_packets"] == 23
+    assert molded["profiles"][0]["total_scheduled_bytes"] == 159_600
     assert selected == {
         "workload_id": workload_id,
         "chaff_qualification_sidecar_sha256": sha256_file(sidecar),
@@ -398,8 +413,9 @@ def _write_controlled_walkie_talkie(
     profiles: list[dict[str, Any]] = []
     bindings: list[dict[str, Any]] = []
     for index, (workload_id, (sidecar, spec, manifest)) in enumerate(inputs.items()):
-        profile = deepcopy(
-            source_profiles.get(workload_id, value["profiles"][index % len(value["profiles"])])
+        profile = _current_controlled_walkie_talkie_profile(
+            source_profiles.get(workload_id, value["profiles"][index % len(value["profiles"])]),
+            value["packet_size"],
         )
         decoy = f"acceptance-decoy-local-{workload_id}"
         profile["real"] = workload_id
@@ -451,6 +467,38 @@ def _write_controlled_walkie_talkie(
         }
     )
     path.write_bytes(canonical_bytes(value))
+
+
+def _current_controlled_walkie_talkie_profile(
+    historical: dict[str, Any], packet_size: int
+) -> dict[str, Any]:
+    """Derive the current schema-six mold from a historical source envelope."""
+
+    profile = deepcopy(historical)
+
+    def source_envelope(side: str) -> tuple[BurstPair, ...]:
+        batch_ends = set(profile["batch_ends"][side])
+        return tuple(
+            BurstPair(
+                outgoing=burst["outgoing"],
+                incoming=burst["incoming"],
+                batch_end=index in batch_ends,
+            )
+            for index, burst in enumerate(profile["source_envelopes"][side])
+        )
+
+    real = source_envelope("real")
+    decoy = source_envelope("decoy")
+    molded = tuple(mold(real, decoy))
+    profile["bursts"] = [
+        {"outgoing": burst.outgoing, "incoming": burst.incoming} for burst in molded
+    ]
+    profile["molded_batch_ends"] = [index for index, burst in enumerate(molded) if burst.batch_end]
+    profile["matching_cost_packets"] = mold_padding_cost(real, decoy)
+    profile["total_scheduled_bytes"] = (
+        sum(burst.outgoing + burst.incoming for burst in molded) * packet_size
+    )
+    return profile
 
 
 def _qualify_controlled_live_inputs(
@@ -509,7 +557,9 @@ def _qualify_controlled_live_inputs(
                 f"({completed.returncode}): {completed.stdout}"
             )
         receipt = load_json(output / "qualification.json")
-        profile = profiles[workload_id]
+        profile = _current_controlled_walkie_talkie_profile(
+            profiles[workload_id], historical["packet_size"]
+        )
         spec = prefix_root / f"{workload_id}.json"
         _write_controlled_prefix_spec(spec, workload_id, profile["bursts"])
         manifest = manifest_root / f"{workload_id}.json"
