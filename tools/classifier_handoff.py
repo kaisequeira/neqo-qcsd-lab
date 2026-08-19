@@ -192,6 +192,81 @@ MULTIORIGIN5_CAMPAIGN_FILES = tuple(
 MULTIORIGIN5_REHEARSAL_RESULT_NAME = f"research-{MULTIORIGIN5_COHORT}-rehearsal-1200"
 MULTIORIGIN5_REHEARSAL_CAMPAIGN_FILE = f"{MULTIORIGIN5_COHORT}-rehearsal.yml"
 
+MULTIORIGIN5_V2_COHORT = "classifier-multiorigin5-v2"
+MULTIORIGIN5_V2_QUALIFICATION_SET = MULTIORIGIN5_V2_COHORT
+MULTIORIGIN5_V2_CLASSES = (
+    "getbootstrap-home-r4",
+    "cloudflare-quiche-r4",
+    "hyper-basic-client-r3",
+    "serde-home-r2",
+    "rfc9114-text-r2",
+)
+MULTIORIGIN5_V2_CLASS_LABELS = {
+    "getbootstrap-home-r4": "getbootstrap.com",
+    "cloudflare-quiche-r4": "cloudflare-quic.com",
+    "hyper-basic-client-r3": "hyper.rs",
+    "serde-home-r2": "serde.rs",
+    "rfc9114-text-r2": "www.rfc-editor.org",
+}
+MULTIORIGIN5_V2_DEFENSES = ("undefended", "front", "tamaraw")
+MULTIORIGIN5_V2_RUNTIME = {
+    "undefended": ("none", True),
+    "front": ("front", False),
+    "tamaraw": ("tamaraw", False),
+}
+MULTIORIGIN5_V2_TEMPORAL_SPLITS = (
+    "train",
+    "train",
+    "train",
+    "train",
+    "train",
+    "train",
+    "train",
+    "train",
+    "validation",
+    "test",
+)
+MULTIORIGIN5_V2_BASELINE_RESULT_NAMES = tuple(
+    f"research-{MULTIORIGIN5_V2_COHORT}-baseline-{block:02d}-1200" for block in range(1, 11)
+)
+MULTIORIGIN5_V2_PAIRED_RESULT_NAMES = tuple(
+    f"research-{MULTIORIGIN5_V2_COHORT}-paired-{block:02d}-1200" for block in range(1, 11)
+)
+MULTIORIGIN5_V2_RESULT_NAMES = tuple(
+    name
+    for block in range(10)
+    for name in (
+        MULTIORIGIN5_V2_BASELINE_RESULT_NAMES[block],
+        MULTIORIGIN5_V2_PAIRED_RESULT_NAMES[block],
+    )
+)
+MULTIORIGIN5_V2_BASELINE_CAMPAIGN_FILES = tuple(
+    f"{MULTIORIGIN5_V2_COHORT}-baseline-{block:02d}.yml" for block in range(1, 11)
+)
+MULTIORIGIN5_V2_PAIRED_CAMPAIGN_FILES = tuple(
+    f"{MULTIORIGIN5_V2_COHORT}-paired-{block:02d}.yml" for block in range(1, 11)
+)
+MULTIORIGIN5_V2_CAMPAIGN_FILES = tuple(
+    name
+    for block in range(10)
+    for name in (
+        MULTIORIGIN5_V2_BASELINE_CAMPAIGN_FILES[block],
+        MULTIORIGIN5_V2_PAIRED_CAMPAIGN_FILES[block],
+    )
+)
+MULTIORIGIN5_V2_REHEARSAL_RESULT_NAME = f"research-{MULTIORIGIN5_V2_COHORT}-rehearsal-1200"
+MULTIORIGIN5_V2_REHEARSAL_CAMPAIGN_FILE = f"{MULTIORIGIN5_V2_COHORT}-rehearsal.yml"
+_SCHEMA_V2_RESULT_NAMES = frozenset(
+    (
+        *POC5_RESULT_NAMES,
+        POC5_REHEARSAL_RESULT_NAME,
+        *MULTIORIGIN5_RESULT_NAMES,
+        MULTIORIGIN5_REHEARSAL_RESULT_NAME,
+        *MULTIORIGIN5_V2_RESULT_NAMES,
+        MULTIORIGIN5_V2_REHEARSAL_RESULT_NAME,
+    )
+)
+
 
 @dataclass(frozen=True)
 class PilotContract:
@@ -213,6 +288,14 @@ class Poc5CollectionPlan:
 @dataclass(frozen=True)
 class Multiorigin5CollectionPlan:
     """Per-result split policies for the fresh multi-origin cohort."""
+
+    sample_splits: tuple[Mapping[str, str], ...]
+    protocol: str
+
+
+@dataclass(frozen=True)
+class Multiorigin5V2CollectionPlan:
+    """Per-result split policies for the repaired multi-origin cohort."""
 
     sample_splits: tuple[Mapping[str, str], ...]
     protocol: str
@@ -433,7 +516,10 @@ def export_classifier_handoff(
     collection_plan = _validate_pilot_collection(verified, splits)
     schema_v2_plan = (
         collection_plan
-        if isinstance(collection_plan, (Poc5CollectionPlan, Multiorigin5CollectionPlan))
+        if isinstance(
+            collection_plan,
+            (Poc5CollectionPlan, Multiorigin5CollectionPlan, Multiorigin5V2CollectionPlan),
+        )
         else None
     )
     schema_version = POC5_SCHEMA_VERSION if schema_v2_plan is not None else SCHEMA_VERSION
@@ -441,6 +527,8 @@ def export_classifier_handoff(
         _validate_poc5_export_environment(verified)
     elif isinstance(schema_v2_plan, Multiorigin5CollectionPlan):
         _validate_multiorigin5_export_environment(verified)
+    elif isinstance(schema_v2_plan, Multiorigin5V2CollectionPlan):
+        _validate_multiorigin5_v2_export_environment(verified)
 
     candidate = Path(tempfile.mkdtemp(prefix=f".{destination.name}.qcsd-handoff-", dir=parent))
     try:
@@ -689,8 +777,10 @@ def _validate_primary_capture_clock(sample: Mapping[str, Any]) -> None:
 
 
 def _schema_v2_class_labels(
-    plan: Poc5CollectionPlan | Multiorigin5CollectionPlan,
+    plan: Poc5CollectionPlan | Multiorigin5CollectionPlan | Multiorigin5V2CollectionPlan,
 ) -> Mapping[str, str]:
+    if isinstance(plan, Multiorigin5V2CollectionPlan):
+        return MULTIORIGIN5_V2_CLASS_LABELS
     if isinstance(plan, Multiorigin5CollectionPlan):
         return MULTIORIGIN5_CLASS_LABELS
     return POC5_CLASS_LABELS
@@ -698,18 +788,31 @@ def _schema_v2_class_labels(
 
 def _validate_pilot_collection(
     receipts: Sequence[Any], splits: Sequence[str | None]
-) -> Poc5CollectionPlan | Multiorigin5CollectionPlan | None:
+) -> Poc5CollectionPlan | Multiorigin5CollectionPlan | Multiorigin5V2CollectionPlan | None:
     names = tuple(receipt.experiment["name"] for receipt in receipts)
+    if names == (MULTIORIGIN5_V2_REHEARSAL_RESULT_NAME,):
+        return _validate_multiorigin5_v2_rehearsal_collection(receipts[0], splits)
     if names == (MULTIORIGIN5_REHEARSAL_RESULT_NAME,):
         return _validate_multiorigin5_rehearsal_collection(receipts[0], splits)
     if names == (POC5_REHEARSAL_RESULT_NAME,):
         return _validate_poc5_rehearsal_collection(receipts[0], splits)
-    if POC5_REHEARSAL_RESULT_NAME in names or MULTIORIGIN5_REHEARSAL_RESULT_NAME in names:
+    if (
+        POC5_REHEARSAL_RESULT_NAME in names
+        or MULTIORIGIN5_REHEARSAL_RESULT_NAME in names
+        or MULTIORIGIN5_V2_REHEARSAL_RESULT_NAME in names
+    ):
         raise ValueError("classifier rehearsal cannot mix with another handoff lineage")
     has_poc5 = any(name.startswith("research-classifier-poc5-") for name in names)
     has_multiorigin5 = any(name.startswith(f"research-{MULTIORIGIN5_COHORT}-") for name in names)
+    has_multiorigin5_v2 = any(
+        name.startswith(f"research-{MULTIORIGIN5_V2_COHORT}-") for name in names
+    )
     if has_poc5 and has_multiorigin5:
         raise ValueError("classifier handoff cannot mix POC5 and multi-origin lineages")
+    if sum((has_poc5, has_multiorigin5, has_multiorigin5_v2)) > 1:
+        raise ValueError("classifier handoff cannot mix POC5, v1, and v2 result lineages")
+    if has_multiorigin5_v2:
+        return _validate_multiorigin5_v2_collection(receipts, splits)
     if has_multiorigin5:
         return _validate_multiorigin5_collection(receipts, splits)
     if has_poc5:
@@ -1039,6 +1142,146 @@ def _validate_multiorigin5_rehearsal_collection(
     )
 
 
+def _validate_multiorigin5_v2_collection(
+    receipts: Sequence[Any], splits: Sequence[str | None]
+) -> Multiorigin5V2CollectionPlan:
+    """Validate the repaired 20-result, 2,500-capture multi-origin lineage."""
+
+    names = tuple(receipt.experiment["name"] for receipt in receipts)
+    if names != MULTIORIGIN5_V2_RESULT_NAMES:
+        raise ValueError(
+            "complete classifier multi-origin v2 cohort requires 20 ordered "
+            "baseline/paired results for blocks 01--10"
+        )
+    if any(split is not None for split in splits):
+        raise ValueError(
+            "classifier multi-origin v2 sample splits are assigned automatically by protocol"
+        )
+
+    lab_root = _lab_root()
+    policies: list[Mapping[str, str]] = []
+    for result_index, (receipt, campaign_file) in enumerate(
+        zip(receipts, MULTIORIGIN5_V2_CAMPAIGN_FILES, strict=True)
+    ):
+        experiment = receipt.experiment
+        block_index = result_index // 2
+        temporal_split = MULTIORIGIN5_V2_TEMPORAL_SPLITS[block_index]
+        baseline_result = result_index % 2 == 0
+        if baseline_result:
+            expected = Counter(
+                (
+                    workload_id,
+                    "undefended",
+                    "as-defined",
+                    visit,
+                    "none",
+                    True,
+                )
+                for workload_id in MULTIORIGIN5_V2_CLASSES
+                for visit in range(20)
+            )
+            policies.append({"undefended": temporal_split})
+            expected_count = 100
+        else:
+            expected = Counter(
+                (
+                    workload_id,
+                    defense,
+                    "as-defined",
+                    visit,
+                    MULTIORIGIN5_V2_RUNTIME[defense][0],
+                    MULTIORIGIN5_V2_RUNTIME[defense][1],
+                )
+                for workload_id in MULTIORIGIN5_V2_CLASSES
+                for defense in MULTIORIGIN5_V2_DEFENSES
+                for visit in range(10)
+            )
+            policies.append(
+                {
+                    "undefended": temporal_split,
+                    "front": "inference",
+                    "tamaraw": "inference",
+                }
+            )
+            expected_count = 150
+        actual = Counter(
+            (
+                sample["workload_id"],
+                sample["defense"],
+                sample["request_policy"],
+                sample["visit"],
+                sample["runtime_kind"],
+                sample["baseline"],
+            )
+            for sample in experiment["samples"]
+        )
+        if experiment["purpose"] != "evaluation" or actual != expected:
+            raise ValueError(
+                f"classifier multi-origin v2 result is not the exact {expected_count}-sample cohort"
+            )
+        campaign = lab_root / "config/campaigns" / campaign_file
+        _validate_multiorigin5_v2_configuration(
+            experiment,
+            campaign,
+            qualification_set=(None if baseline_result else MULTIORIGIN5_V2_QUALIFICATION_SET),
+        )
+    _validate_multiorigin5_v2_temporal_intervals(
+        [
+            (receipt.experiment["started_at"], receipt.experiment["completed_at"])
+            for receipt in receipts
+        ]
+    )
+    _validate_multiorigin5_v2_execution_sources(
+        [receipt.experiment["source"] for receipt in receipts]
+    )
+    return Multiorigin5V2CollectionPlan(tuple(policies), "formal")
+
+
+def _validate_multiorigin5_v2_rehearsal_collection(
+    receipt: Any, splits: Sequence[str | None]
+) -> Multiorigin5V2CollectionPlan:
+    if tuple(splits) != ("interface",):
+        raise ValueError("classifier multi-origin v2 rehearsal requires the interface split")
+    experiment = receipt.experiment
+    expected = Counter(
+        (
+            workload_id,
+            defense,
+            "as-defined",
+            visit,
+            MULTIORIGIN5_V2_RUNTIME[defense][0],
+            MULTIORIGIN5_V2_RUNTIME[defense][1],
+        )
+        for workload_id in MULTIORIGIN5_V2_CLASSES
+        for defense in MULTIORIGIN5_V2_DEFENSES
+        for visit in range(2)
+    )
+    actual = Counter(
+        (
+            sample["workload_id"],
+            sample["defense"],
+            sample["request_policy"],
+            sample["visit"],
+            sample["runtime_kind"],
+            sample["baseline"],
+        )
+        for sample in experiment["samples"]
+    )
+    if experiment["purpose"] != "evaluation" or actual != expected:
+        raise ValueError("classifier multi-origin v2 rehearsal is not the exact 30-sample cohort")
+    campaign = _lab_root() / "config/campaigns" / MULTIORIGIN5_V2_REHEARSAL_CAMPAIGN_FILE
+    _validate_multiorigin5_v2_configuration(
+        experiment,
+        campaign,
+        qualification_set=MULTIORIGIN5_V2_QUALIFICATION_SET,
+    )
+    _validate_multiorigin5_v2_execution_sources([experiment["source"]])
+    return Multiorigin5V2CollectionPlan(
+        ({defense: "interface" for defense in MULTIORIGIN5_V2_DEFENSES},),
+        "rehearsal",
+    )
+
+
 def _validate_poc5_response_only_binding(workload: Any) -> None:
     """Require the active POC to bind sustained identity-response evidence.
 
@@ -1352,6 +1595,146 @@ def _validate_multiorigin5_configuration(
         ) from error
 
 
+@lru_cache(maxsize=21)
+def _cached_multiorigin5_v2_configuration(campaign_path: Path) -> tuple[Any, str]:
+    paired_files = {
+        *MULTIORIGIN5_V2_PAIRED_CAMPAIGN_FILES,
+        MULTIORIGIN5_V2_REHEARSAL_CAMPAIGN_FILE,
+    }
+    if campaign_path.name in MULTIORIGIN5_V2_BASELINE_CAMPAIGN_FILES:
+        qualification_set = None
+    elif campaign_path.name in paired_files:
+        qualification_set = MULTIORIGIN5_V2_QUALIFICATION_SET
+    else:
+        raise ValueError("classifier multi-origin v2 campaign path is outside its exact contract")
+
+    campaign = load_campaign(campaign_path)
+    if campaign.chaff_qualification_set != qualification_set:
+        raise ValueError("classifier multi-origin v2 campaign qualification-set binding is invalid")
+
+    workload_records: list[dict[str, Any]] = []
+    for workload in campaign.workloads:
+        record: dict[str, Any] = {
+            "id": workload.id,
+            "visits": workload.visits,
+            "manifest": f"inputs/workloads/{workload.id}.json",
+            "sha256": workload.sha256,
+            "resource_count": workload.resource_count,
+            "origin_count": workload.origin_count,
+        }
+        if workload.chaff_qualification_path is not None:
+            common_values = (
+                workload.chaff_qualification_sha256,
+                workload.chaff_manifest_sha256,
+                workload.runtime_sha256,
+            )
+            scope = workload.chaff_qualification_scope
+            if any(not _valid_sha256(value) for value in common_values) or scope not in {
+                RESPONSE_ONLY_CHAFF_SCOPE,
+                FULL_CHAFF_SCOPE,
+            }:
+                raise ValueError(
+                    "classifier multi-origin v2 checked-in chaff binding is incomplete"
+                )
+            record.update(
+                chaff_qualification=f"inputs/chaff-qualifications/{workload.id}.json",
+                chaff_qualification_sha256=workload.chaff_qualification_sha256,
+                chaff_manifest=f"inputs/chaff-manifests/{workload.id}.json",
+                chaff_manifest_sha256=workload.chaff_manifest_sha256,
+                runtime_manifest=f"inputs/runtime-workloads/{workload.id}.json",
+                runtime_manifest_sha256=workload.runtime_sha256,
+            )
+            if scope == RESPONSE_ONLY_CHAFF_SCOPE:
+                if (
+                    workload.chaff_prefix_spec_path is not None
+                    or workload.chaff_prefix_spec_sha256 is not None
+                ):
+                    raise ValueError(
+                        "classifier multi-origin v2 response-only chaff binding "
+                        "unexpectedly has a prefix spec"
+                    )
+                _validate_poc5_response_only_binding(workload)
+                record["chaff_qualification_scope"] = RESPONSE_ONLY_CHAFF_SCOPE
+            else:
+                if workload.chaff_prefix_spec_path is None or not _valid_sha256(
+                    workload.chaff_prefix_spec_sha256
+                ):
+                    raise ValueError(
+                        "classifier multi-origin v2 checked-in chaff binding is incomplete"
+                    )
+                record.update(
+                    chaff_prefix_spec=f"inputs/chaff-prefix-specs/{workload.id}.json",
+                    chaff_prefix_spec_sha256=workload.chaff_prefix_spec_sha256,
+                )
+        workload_records.append(record)
+
+    defense_records: list[dict[str, Any]] = []
+    for defense in campaign.defenses:
+        if defense.schedule_path is not None or defense.parameters_path is not None:
+            raise ValueError(
+                "classifier multi-origin v2 defense unexpectedly consumes an external artifact"
+            )
+        defense_records.append(
+            {
+                "name": defense.name,
+                "kind": defense.kind,
+                "baseline": defense.baseline,
+            }
+        )
+    expected = {
+        "campaign_sha256": sha256_file(campaign_path),
+        "profile": campaign.profile,
+        "request_policies": list(campaign.request_policies),
+        "workloads": workload_records,
+        "defenses": defense_records,
+        "limits": campaign.limits.as_dict(),
+    }
+    if qualification_set is not None:
+        expected["chaff_qualification_set"] = qualification_set
+    return campaign, json.dumps(expected, sort_keys=True, separators=(",", ":"))
+
+
+def _expected_multiorigin5_v2_configuration(campaign_path: Path) -> tuple[Any, dict[str, Any]]:
+    """Return a fresh v2 configuration from one immutable cached snapshot."""
+
+    campaign, encoded = _cached_multiorigin5_v2_configuration(campaign_path)
+    value = json.loads(encoded)
+    if not isinstance(value, dict):  # pragma: no cover - construction above is closed
+        raise AssertionError("cached classifier multi-origin v2 configuration is not an object")
+    return campaign, value
+
+
+def _validate_multiorigin5_v2_configuration(
+    experiment: Mapping[str, Any],
+    campaign_path: Path,
+    *,
+    qualification_set: str | None,
+) -> None:
+    """Bind one v2 result to its exact campaign, inputs, plan, and qualification set."""
+
+    campaign, expected = _expected_multiorigin5_v2_configuration(campaign_path)
+    if campaign.chaff_qualification_set != qualification_set:
+        raise ValueError("classifier multi-origin v2 result qualification-set binding is invalid")
+    configuration = experiment.get("configuration")
+    if not isinstance(configuration, Mapping) or dict(configuration) != expected:
+        raise ValueError(
+            "classifier multi-origin v2 result does not bind its exact "
+            "checked-in campaign/input configuration"
+        )
+    if ("chaff_qualification_set" in configuration) != (qualification_set is not None):
+        raise ValueError("classifier multi-origin v2 result qualification-set presence is invalid")
+    if qualification_set is not None and (
+        configuration["chaff_qualification_set"] != qualification_set
+    ):
+        raise ValueError("classifier multi-origin v2 result qualification-set binding is invalid")
+    try:
+        validate_planned_sample_identity(experiment, plan_campaign(campaign))
+    except ValueError as error:
+        raise ValueError(
+            "classifier multi-origin v2 result planned sample identity/order mismatch"
+        ) from error
+
+
 def _validate_poc5_execution_sources(sources: Sequence[Any]) -> None:
     """Require one exact clean Lab/Neqo/image lineage for a POC5 collection."""
 
@@ -1538,6 +1921,106 @@ def _validate_multiorigin5_temporal_intervals(
             if max(baseline[1], paired[1]) > min(next_pair[0][0], next_pair[1][0]):
                 raise ValueError(
                     "classifier multi-origin acquisition blocks are not temporally ordered"
+                )
+
+
+def _validate_multiorigin5_v2_execution_sources(sources: Sequence[Any]) -> None:
+    """Require one clean Lab/Neqo/image lineage for the repaired collection."""
+
+    if not sources or any(not isinstance(source, Mapping) for source in sources):
+        raise ValueError("classifier multi-origin v2 execution source receipt is invalid")
+    first = sources[0]
+    if any(source != first for source in sources[1:]):
+        raise ValueError("classifier multi-origin v2 requires one identical execution source")
+    if set(first) != _POC5_SOURCE_KEYS:
+        raise ValueError("classifier multi-origin v2 execution source receipt is invalid")
+    image_digest = first["image_digest"]
+    lab_commit = first["lab_commit"]
+    neqo_commit = first["neqo_commit"]
+    pinned_commit = first["neqo_pinned_commit"]
+    if (
+        not isinstance(image_digest, str)
+        or not image_digest.startswith("sha256:")
+        or not _valid_sha256(image_digest.removeprefix("sha256:"))
+        or not isinstance(lab_commit, str)
+        or len(lab_commit) != 40
+        or any(character not in "0123456789abcdef" for character in lab_commit)
+        or not isinstance(neqo_commit, str)
+        or len(neqo_commit) != 40
+        or any(character not in "0123456789abcdef" for character in neqo_commit)
+        or pinned_commit != neqo_commit
+        or first["lab_dirty"] is not False
+        or first["neqo_dirty"] is not False
+        or first["lab_patch_sha256"] != EMPTY_SHA256
+        or first["neqo_patch_sha256"] != EMPTY_SHA256
+    ):
+        raise ValueError("classifier multi-origin v2 requires one clean immutable execution source")
+
+
+def _validate_multiorigin5_v2_export_environment(receipts: Sequence[Any]) -> None:
+    """Require v2 export from the clean collection checkout and image."""
+
+    source = receipts[0].experiment["source"]
+    exporter = _exporter_source_receipt()
+    companion = exporter["companion"]
+    if (
+        companion["lab_dirty"] is not False
+        or companion["lab_commit"] != source["lab_commit"]
+        or exporter["execution_image"] != source
+    ):
+        raise ValueError(
+            "classifier multi-origin v2 export requires its clean capture checkout "
+            "and collection image"
+        )
+
+
+def _validate_multiorigin5_v2_exporter_lineage(
+    dataset: Mapping[str, Any], source: Mapping[str, Any]
+) -> None:
+    exporter = dataset["exporter_source"]
+    companion = exporter["companion"]
+    if (
+        exporter["execution_image"] != source
+        or companion["lab_commit"] != source["lab_commit"]
+        or companion["lab_dirty"] is not False
+    ):
+        raise ValueError("classifier multi-origin v2 handoff exporter lineage is invalid")
+
+
+def _validate_multiorigin5_v2_temporal_intervals(
+    intervals: Sequence[tuple[Any, Any]],
+) -> None:
+    """Require ten ordered v2 pairs with alternating within-pair acquisition order."""
+
+    if len(intervals) != 20:
+        raise ValueError(
+            "classifier multi-origin v2 temporal protocol requires 20 result intervals"
+        )
+    parsed: list[tuple[datetime, datetime]] = []
+    for started_at, completed_at in intervals:
+        try:
+            start = datetime.fromisoformat(str(started_at).replace("Z", "+00:00"))
+            completed = datetime.fromisoformat(str(completed_at).replace("Z", "+00:00"))
+        except ValueError as error:
+            raise ValueError("classifier multi-origin v2 result timestamp is invalid") from error
+        if start.utcoffset() is None or completed.utcoffset() is None or completed < start:
+            raise ValueError("classifier multi-origin v2 result interval is invalid")
+        parsed.append((start, completed))
+
+    for acquisition_block in range(10):
+        baseline, paired = parsed[acquisition_block * 2 : acquisition_block * 2 + 2]
+        baseline_first = acquisition_block % 2 == 0
+        if (baseline_first and baseline[1] > paired[0]) or (
+            not baseline_first and paired[1] > baseline[0]
+        ):
+            raise ValueError(
+                "classifier multi-origin v2 within-block capture order does not alternate"
+            )
+        if acquisition_block < 9:
+            next_pair = parsed[(acquisition_block + 1) * 2 : (acquisition_block + 1) * 2 + 2]
+            if max(baseline[1], paired[1]) > min(next_pair[0][0], next_pair[1][0]):
+                raise ValueError(
+                    "classifier multi-origin v2 acquisition blocks are not temporally ordered"
                 )
 
 
@@ -1913,6 +2396,11 @@ def _validate_dataset_rows(
     if not isinstance(block_records, list) or not block_records:
         raise ValueError("classifier handoff block receipts are invalid")
     block_splits = _validate_block_records(block_records, schema_version=schema_version)
+    result_names = [block["result_name"] for block in block_records]
+    if schema_version != POC5_SCHEMA_VERSION and any(
+        name in _SCHEMA_V2_RESULT_NAMES for name in result_names
+    ):
+        raise ValueError("classifier schema-v2 result lineage requires schema version 2")
     _validate_exporter_source(dataset)
 
     expected_inventory = {"README.md", "dataset.json", "samples.jsonl", "SHA256SUMS"}
@@ -1988,7 +2476,6 @@ def _validate_dataset_rows(
     if dataset["counts_by_split"] != dict(sorted(split_counts.items())):
         raise ValueError("classifier handoff split counts mismatch")
     if schema_version == POC5_SCHEMA_VERSION:
-        result_names = [block["result_name"] for block in dataset["blocks"]]
         if result_names == list(POC5_RESULT_NAMES):
             _validate_poc5_handoff_protocol(dataset, rows)
         elif result_names == [POC5_REHEARSAL_RESULT_NAME]:
@@ -1997,6 +2484,10 @@ def _validate_dataset_rows(
             _validate_multiorigin5_handoff_protocol(dataset, rows)
         elif result_names == [MULTIORIGIN5_REHEARSAL_RESULT_NAME]:
             _validate_multiorigin5_rehearsal_handoff_protocol(dataset, rows)
+        elif result_names == list(MULTIORIGIN5_V2_RESULT_NAMES):
+            _validate_multiorigin5_v2_handoff_protocol(dataset, rows)
+        elif result_names == [MULTIORIGIN5_V2_REHEARSAL_RESULT_NAME]:
+            _validate_multiorigin5_v2_rehearsal_handoff_protocol(dataset, rows)
         else:
             poc5_names = {*POC5_RESULT_NAMES, POC5_REHEARSAL_RESULT_NAME}
             multiorigin_names = {
@@ -2006,6 +2497,16 @@ def _validate_dataset_rows(
             if any(name in poc5_names for name in result_names) and any(
                 name in multiorigin_names for name in result_names
             ):
+                raise ValueError("classifier handoff cannot mix schema-v2 result lineages")
+            multiorigin_v2_names = {
+                *MULTIORIGIN5_V2_RESULT_NAMES,
+                MULTIORIGIN5_V2_REHEARSAL_RESULT_NAME,
+            }
+            represented_lineages = sum(
+                any(name in lineage for name in result_names)
+                for lineage in (poc5_names, multiorigin_names, multiorigin_v2_names)
+            )
+            if represented_lineages > 1:
                 raise ValueError("classifier handoff cannot mix schema-v2 result lineages")
             raise ValueError("classifier schema-v2 handoff result lineage is invalid")
 
@@ -2384,6 +2885,197 @@ def _validate_multiorigin5_rehearsal_handoff_protocol(
         or dataset["counts_by_split"] != {"interface": 30}
     ):
         raise ValueError("classifier multi-origin rehearsal aggregate counts are invalid")
+
+
+def _validate_multiorigin5_v2_handoff_protocol(
+    dataset: Mapping[str, Any], rows: Sequence[Mapping[str, Any]]
+) -> None:
+    """Enforce the formal repaired five-domain multi-origin collection design."""
+
+    blocks = dataset["blocks"]
+    if [block["result_name"] for block in blocks] != list(MULTIORIGIN5_V2_RESULT_NAMES):
+        raise ValueError("classifier multi-origin v2 handoff result lineage is invalid")
+    _validate_multiorigin5_v2_temporal_intervals(
+        [(block["started_at"], block["completed_at"]) for block in blocks]
+    )
+    _validate_multiorigin5_v2_execution_sources([block["source"] for block in blocks])
+    _validate_multiorigin5_v2_exporter_lineage(dataset, blocks[0]["source"])
+
+    expected_rows: Counter[tuple[Any, ...]] = Counter()
+    for result_index in range(len(MULTIORIGIN5_V2_RESULT_NAMES)):
+        acquisition_block = result_index // 2
+        temporal_split = MULTIORIGIN5_V2_TEMPORAL_SPLITS[acquisition_block]
+        baseline_result = result_index % 2 == 0
+        expected_policy = (
+            {"undefended": temporal_split}
+            if baseline_result
+            else {
+                "front": "inference",
+                "tamaraw": "inference",
+                "undefended": temporal_split,
+            }
+        )
+        block = blocks[result_index]
+        expected_acquisition_id = f"acquisition-block-{acquisition_block + 1:03d}"
+        if (
+            block["split"] is not None
+            or block["sample_splits"] != expected_policy
+            or block["acquisition_block_index"] != acquisition_block
+            or block["acquisition_block_id"] != expected_acquisition_id
+        ):
+            raise ValueError("classifier multi-origin v2 handoff sample-split policy is invalid")
+        defenses = ("undefended",) if baseline_result else MULTIORIGIN5_V2_DEFENSES
+        visits = range(20) if baseline_result else range(10)
+        for workload_id in MULTIORIGIN5_V2_CLASSES:
+            for defense in defenses:
+                runtime_kind, baseline = MULTIORIGIN5_V2_RUNTIME[defense]
+                role = "baseline" if baseline else "inference-only"
+                for visit in visits:
+                    expected_rows[
+                        (
+                            result_index,
+                            f"block-{result_index + 1:03d}",
+                            acquisition_block,
+                            expected_acquisition_id,
+                            workload_id,
+                            MULTIORIGIN5_V2_CLASS_LABELS[workload_id],
+                            defense,
+                            role,
+                            runtime_kind,
+                            baseline,
+                            "as-defined",
+                            visit,
+                            expected_policy[defense],
+                        )
+                    ] += 1
+
+    actual_rows = Counter(
+        (
+            row["block_index"],
+            row["block_id"],
+            row["acquisition_block_index"],
+            row["acquisition_block_id"],
+            row["workload_id"],
+            row["class_label"],
+            row["defense"],
+            row["defense_role"],
+            row["runtime_kind"],
+            row["baseline"],
+            row["request_policy"],
+            row["visit"],
+            row["split"],
+        )
+        for row in rows
+    )
+    if actual_rows != expected_rows:
+        raise ValueError(
+            "classifier multi-origin v2 handoff is not the exact 2,500-sample protocol"
+        )
+
+    for row in rows:
+        expected_pair = (
+            f"{row['block_id']}/{row['workload_id']}/{row['request_policy']}/"
+            f"visit-{row['visit']:03d}"
+        )
+        if row["paired_visit_id"] != expected_pair:
+            raise ValueError("classifier multi-origin v2 paired-visit binding is invalid")
+
+    expected_class_counts = {label: 500 for label in sorted(MULTIORIGIN5_V2_CLASS_LABELS.values())}
+    expected_defense_counts = {"front": 500, "tamaraw": 500, "undefended": 1_500}
+    expected_split_counts = {
+        "inference": 1_000,
+        "test": 150,
+        "train": 1_200,
+        "validation": 150,
+    }
+    if (
+        dataset["sample_count"] != 2_500
+        or dataset["classes"] != sorted(MULTIORIGIN5_V2_CLASS_LABELS.values())
+        or dataset["counts_by_class"] != expected_class_counts
+        or dataset["counts_by_defense"] != expected_defense_counts
+        or dataset["counts_by_split"] != expected_split_counts
+    ):
+        raise ValueError("classifier multi-origin v2 aggregate counts are invalid")
+
+
+def _validate_multiorigin5_v2_rehearsal_handoff_protocol(
+    dataset: Mapping[str, Any], rows: Sequence[Mapping[str, Any]]
+) -> None:
+    """Validate the repaired lineage's separate 30-sample schema-v2 importer gate."""
+
+    blocks = dataset["blocks"]
+    policy = {defense: "interface" for defense in MULTIORIGIN5_V2_DEFENSES}
+    if (
+        len(blocks) != 1
+        or blocks[0]["result_name"] != MULTIORIGIN5_V2_REHEARSAL_RESULT_NAME
+        or blocks[0]["split"] != "interface"
+        or blocks[0]["sample_splits"] != policy
+        or blocks[0]["acquisition_block_index"] != 0
+        or blocks[0]["acquisition_block_id"] != "acquisition-block-001"
+    ):
+        raise ValueError("classifier multi-origin v2 rehearsal block contract is invalid")
+    _validate_multiorigin5_v2_execution_sources([blocks[0]["source"]])
+    _validate_multiorigin5_v2_exporter_lineage(dataset, blocks[0]["source"])
+
+    expected = Counter(
+        (
+            0,
+            "block-001",
+            0,
+            "acquisition-block-001",
+            workload_id,
+            MULTIORIGIN5_V2_CLASS_LABELS[workload_id],
+            defense,
+            "baseline" if MULTIORIGIN5_V2_RUNTIME[defense][1] else "inference-only",
+            MULTIORIGIN5_V2_RUNTIME[defense][0],
+            MULTIORIGIN5_V2_RUNTIME[defense][1],
+            "as-defined",
+            visit,
+            "interface",
+        )
+        for workload_id in MULTIORIGIN5_V2_CLASSES
+        for defense in MULTIORIGIN5_V2_DEFENSES
+        for visit in range(2)
+    )
+    actual = Counter(
+        (
+            row["block_index"],
+            row["block_id"],
+            row["acquisition_block_index"],
+            row["acquisition_block_id"],
+            row["workload_id"],
+            row["class_label"],
+            row["defense"],
+            row["defense_role"],
+            row["runtime_kind"],
+            row["baseline"],
+            row["request_policy"],
+            row["visit"],
+            row["split"],
+        )
+        for row in rows
+    )
+    if actual != expected:
+        raise ValueError(
+            "classifier multi-origin v2 rehearsal is not the exact 30-sample interface gate"
+        )
+    for row in rows:
+        expected_pair = (
+            f"{row['block_id']}/{row['workload_id']}/{row['request_policy']}/"
+            f"visit-{row['visit']:03d}"
+        )
+        if row["paired_visit_id"] != expected_pair:
+            raise ValueError("classifier multi-origin v2 rehearsal paired-visit binding is invalid")
+
+    expected_class_counts = {label: 6 for label in sorted(MULTIORIGIN5_V2_CLASS_LABELS.values())}
+    if (
+        dataset["sample_count"] != 30
+        or dataset["classes"] != sorted(MULTIORIGIN5_V2_CLASS_LABELS.values())
+        or dataset["counts_by_class"] != expected_class_counts
+        or dataset["counts_by_defense"] != {"front": 10, "tamaraw": 10, "undefended": 10}
+        or dataset["counts_by_split"] != {"interface": 30}
+    ):
+        raise ValueError("classifier multi-origin v2 rehearsal aggregate counts are invalid")
 
 
 def _validate_block_records(

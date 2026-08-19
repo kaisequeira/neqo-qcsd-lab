@@ -14,12 +14,13 @@ Usage:
 
 NAME is a single safe directory name created under handoffs/. RESULT must be a
 sealed result directory under results/. Schema-1 pilots accept an explicit
-block split list. The exact POC5 and classifier-multiorigin5-v1 contracts derive
-sample-level train/validation/test/inference roles and must omit --splits.
-Supply either contract's twenty formal results in canonical baseline-01,
+block split list. The exact POC5 and classifier-multiorigin5-v1 contracts, plus
+the classifier-multiorigin5-v2 contract, derive sample-level
+train/validation/test/inference roles and must omit --splits. Supply any one
+contract's twenty formal results in canonical baseline-01,
 paired-01, ... baseline-10, paired-10 order; their sealed timestamps must show
 baseline-first capture in odd blocks and paired-first capture in even blocks.
-Either contract's separate rehearsal alone requires --splits interface.
+Each contract's separate rehearsal alone requires --splits interface.
 EOF
 }
 

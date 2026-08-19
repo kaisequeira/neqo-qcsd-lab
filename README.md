@@ -149,25 +149,46 @@ advances to the next candidate; transport, DNS, timeout, or protocol failures
 abort the transaction. Publication is atomic, and no v2 sidecar hash exists
 until that exact five-file transaction succeeds from a clean build.
 
-The unqualified command above is the immutable legacy route to `v2`. A new
-cohort instead uses an explicit safe set name and a campaign binding:
+The unqualified command above is the immutable legacy route to the canonical
+set directory named `v2`. The fresh classifier lineage instead uses an
+explicit safe set name and a campaign binding:
 
 ```shell
-./qcsd-lab qualify-response-chaff --set classifier-multiorigin5-v1 \
-  <workload-1> <workload-2> <workload-3> <workload-4> <workload-5>
+./qcsd-lab qualify-response-chaff --set classifier-multiorigin5-v2 \
+  getbootstrap-home-r4 cloudflare-quiche-r4 hyper-basic-client-r3 \
+  serde-home-r2 rfc9114-text-r2
 ```
 
 This publishes create-only under
-`config/chaff-response-qualification-store/sets/classifier-multiorigin5-v1/`;
+`config/chaff-response-qualification-store/sets/classifier-multiorigin5-v2/`;
 the parent `sets/` directory is tracked so a clean clone never creates it as an
 unreviewed side effect. Each consuming FRONT/Tamaraw campaign must declare
-`chaff_qualification_set: classifier-multiorigin5-v1`. The selected five
+`chaff_qualification_set: classifier-multiorigin5-v2`. The selected five
 sidecars are copied into the result's frozen `inputs/chaff-qualifications/`
 tree, so resume and verification never consult the live set. Omitting the
 campaign field preserves the exact legacy `v2` lookup.
 
-The active exact-five cohort was qualified atomically from clean Lab Q6
-`0d0b1984c1d87b0502899cc451f1ed6ab6463d03`, tree
+The fresh `classifier-multiorigin5-v2` set was qualified from clean Lab
+`44d19f3cf787ef9b0c1eaa121758874fa6e49a67` and clean Neqo
+`6aceaac85243d6e0e34354108e010705d3c83088` using preparation image
+`sha256:5b4f8268118dbfb37d0c520510a616ff8e24b67b7ceb2b394f97c353be7d9ff5`.
+Its audited five-file aggregate SHA-256 is
+`9df4d34dc0a7b767e6fb3b2429bd8638ec33914da95ab05733d99b02a38488f8`:
+
+| Workload | v2 set sidecar SHA-256 |
+|---|---|
+| `getbootstrap-home-r4` | `a3274a15e7c74554fc91efbe71c3d22e0e94843c1008105339bf30cd03309a0a` |
+| `cloudflare-quiche-r4` | `5fa1b048aec8294d28086942045829ac2efa6db69aa74eccfb7045949d0c9b84` |
+| `hyper-basic-client-r3` | `7d95b91a38530db1d5db3e6bfbbe7019aff0b8ed705292b9db05ee46daa42327` |
+| `serde-home-r2` | `d4f71ecc7782d395c711af06fb9f2cfc407dd0c60a35aaffc024f39acf41165c` |
+| `rfc9114-text-r2` | `bd528f882ff471fee5bb6e9a21fea44c2d13d46faa863f784b3b67ea10f55f7d` |
+
+That image is qualification provenance, not the final acquisition collection
+image. The exact final image for the rehearsal and 2,500 formal captures is
+still pending.
+
+The historical legacy POC5 exact-five cohort was qualified atomically from
+clean Lab Q6 `0d0b1984c1d87b0502899cc451f1ed6ab6463d03`, tree
 `2c44a2d00473676776eafbbd7883e4ed739d16de`, and clean Neqo F3
 `6aceaac85243d6e0e34354108e010705d3c83088`. The qualification collection and
 prepare/actual images were respectively
@@ -191,7 +212,8 @@ epochs, 600 stable identity completions produced 61,277 packet observations:
 54,444 incoming and 6,833 outgoing. All 120 request waves completed; the ten
 within-workload inter-epoch gaps ranged from 30.030177204 to 30.065013514
 seconds, the maximum observed UDP payload was 1,200 bytes, and no oversized
-packet was observed. The active sidecar and derived-manifest hashes are:
+packet was observed. Its historical legacy sidecar and derived-manifest hashes
+are:
 
 | Workload | Sidecar SHA-256 | Derived schema-4 manifest SHA-256 |
 |---|---|---|
@@ -201,11 +223,10 @@ packet was observed. The active sidecar and derived-manifest hashes are:
 | `serde-home-r1` | `7367ef8b340bb5e4624b213f9d78e1008ad2f8e61f3939ab87c504e622d23d52` | `96a361270e81631f0fd50eb676e37cb33aae915319396766f16cc3cf2e198a7f` |
 | `rfc9114-text-r1` | `8d35815100de1b1ab8b5beb2c819ba5fdf5d032e3c144d553df911cec62d74ac` | `ad5faeebb1cc186c5b79df01d66315481ba18f623a4afdb65a8ec06fa1709b58` |
 
-P6 publishes these exact files as the active canonical response cohort. Its
-non-self-referential commit hash is intentionally pending at this documented
-boundary. Clean final collection and preparation image IDs, the fresh excluded
-30/30 rehearsal, and the verified interface handoff are also pending. No
-formal capture or classifier export has yet been run from Q6/P6.
+P6 published these exact files as the canonical legacy POC5 response cohort
+under `config/chaff-response-qualification-store/v2/`. They remain frozen
+compatibility evidence and are not the fresh `classifier-multiorigin5-v2` set
+or acquisition provenance.
 
 The now-historical P5 exact-five cohort was qualified atomically from clean Lab Q5
 `af3403d60f5be008dc88cc52c6ce8ec5a34bc47c`, tree
@@ -287,11 +308,12 @@ Hyper sample seed and ID, Q6 also reselected the ten paired campaign seeds
 prospectively from
 `2026082001..2026092000` using plan expansion only. The 2,500-sample plan has
 unique sample IDs and seeds, every class/defence/position cell occurs 32--35
-times, and only three of 45 cells fall outside 33--34. Canonical response-store
-v2 now contains only the active Q6/F3 exact-five cohort published by P6. A
-clean P6/F3 final-image build, excluded 30/30 rehearsal, and verified interface
-handoff are required before formal acquisition restarts from baseline-01. No
-P5-bound interface handoff, formal capture, or classifier export was run.
+times, and only three of 45 cells fall outside 33--34. At that POC5 boundary,
+canonical legacy response-store `v2` contained only the Q6/F3 exact-five cohort
+published by P6. A clean P6/F3 final-image build, excluded 30/30 rehearsal, and
+verified interface handoff were required before its formal acquisition could
+restart from baseline-01. No P5-bound interface handoff, formal capture, or
+classifier export was run.
 
 The immediately preceding, now-historical exact-five cohort was qualified
 atomically from clean Lab Q3
@@ -460,15 +482,16 @@ Its historical hashes are:
 Those exact files remain recoverable from Lab commit
 `88569f268260b36f0c4ccfc36681f7a42887b66c` and from frozen sealed results.
 All five previously recorded response-store v2 transactions, including Q5/P5,
-are historical only. Canonical v2 contains only the active Q6/F3 cohort
+are historical only. Canonical legacy `v2` retains only the POC5 Q6/F3 cohort
 published by P6.
 Commit `47c91bb36dcddd3943253ee16141febbaf9041e8` remains the causal production
 implementation change, while `32f8f4d816cf05ebc483cc547732d146225493c9`
 repairs only the prerequisite's controlled schema-six fixture.
 No historical sidecar, implementation receipt, image, rehearsal, formal
-sample, or export may be mixed into the active Q6/P6 lineage. A clean P6/F3
-final-image build, an excluded 30/30 rehearsal, and a verified interface
-handoff are required before formal acquisition may restart.
+sample, or export could be mixed into that legacy POC5 Q6/P6 lineage. At that
+boundary, a clean P6/F3 final-image build, an excluded 30/30 rehearsal, and a
+verified interface handoff were required before formal acquisition could
+restart.
 
 Each response-store v2 file is sidecar schema 2 and derives a schema-4
 `qcsd-qualified-chaff-manifest` with `qualification_scope: response-only` and
@@ -1216,9 +1239,17 @@ profile-wide UDP-payload-ceiling checks, and bounded runner/PCAP reconciliation.
 That reconciliation must have one constant-offset segment, zero clock steps,
 packet residuals no larger than 10 ms, and a bracket-uncertainty-aware Linux
 realtime/monotonic elapsed difference no larger than 10 ms. The paired visit
-then adds response-identity and defence-realization checks. Failed attempts
-stay under `failures/`; a successful attempt is moved once to the canonical
-sample path and is not duplicated.
+then adds response-identity and defence-realization checks.
+
+When a prepared workload freezes `expected_responses`, every otherwise
+successful attempt must also match the exact prepared response signature:
+resource ID, HTTP status, delivered byte count, body SHA-256, and successful
+outcome. This gate runs before promotion. Drift is retained as the retryable
+fidelity failure `StrictPreparedResponseIdentityFailure`, not promoted as an
+accepted-but-ineligible sample. Crash recovery applies the same gate to a
+successful terminal attempt before completing an interrupted promotion, so a
+restart cannot bypass it. Failed attempts stay under `failures/`; a successful
+attempt is moved once to the canonical sample path and is not duplicated.
 
 `experiment.json` is checkpointed atomically. Accepted files are independently
 bound by hashes before the terminal seal is written. A successful attempt's
@@ -1265,19 +1296,19 @@ The POC5 workload/class bindings are exactly
 `http3-explained-en-r1` is not used by the rehearsal, formal campaigns, or
 handoff. FRONT and Tamaraw use their fixed research-profile algorithms and
 seeds; the POC neither consumes nor refits the Traffic-Morphing, WTF-PAD, or
-Walkie-Talkie artifacts. The current recovery contract requires five
+Walkie-Talkie artifacts. The legacy POC5 recovery contract requires five
 response-store v2 sidecars (schema 2) deriving schema-4 runtime manifests,
 with no prefix-pack or fitted-data dependency. All previous v2 transactions
-are superseded, and canonical v2 contains only the active Q6/F3 cohort
+are superseded, and canonical legacy `v2` contains only the POC5 Q6/F3 cohort
 published by P6. The historical Q5 image, incorporating Linux-local capture
 integrity commit
 `47c91bb36dcddd3943253ee16141febbaf9041e8`, passed all 731 local prerequisite
 tests before its atomic
 qualification, and the P5 final images then passed their image and campaign
 preflights; the excluded rehearsal nevertheless rejected the stale Hyper r1
-identity as recorded above. The completed Q6/F3 qualification is published by
-P6; its clean final image must pass a new excluded 30/30 rehearsal and verified
-interface handoff.
+identity as recorded above. The completed Q6/F3 qualification remains
+published by P6 as legacy POC5 compatibility evidence; it is not qualification
+or image provenance for `classifier-multiorigin5-v2`.
 Historical v1/schema-3 evidence remains readable only for its frozen
 compatibility role.
 
@@ -1332,15 +1363,17 @@ authorizes only the exact image, workloads, and campaign commit that it ran;
 any rebuild, source or workload repair, parameter change, or class replacement
 requires a new excluded 30-sample rehearsal before formal acquisition.
 
-### Fresh approved-origin multi-origin cohort
+### Fresh approved-origin multi-origin v2 cohort
 
-`classifier-multiorigin5-v1` is a wholly new 2,500-capture cohort. It does not
-reuse any POC5 capture, seed, sample ID, response sidecar, campaign namespace,
-or handoff row. It measures a frozen approved-origin HTTPS `GET` graph rather
-than claiming to reproduce an exact browser render or every third-party page
-request. The five class labels remain the primary page domains; secondary
-origins contribute encrypted traffic to that class and are never separate
-labels.
+`classifier-multiorigin5-v2` is a wholly fresh 2,500-capture lineage. It does
+not reuse any POC5 or `classifier-multiorigin5-v1` capture, seed, sample ID,
+response sidecar, campaign namespace, analysis, or handoff row. It measures a
+fixed approved-origin HTTPS `GET` graph. This is a page-like replay of every
+resource admitted to that frozen graph, including approved cross-origin
+resources; it is not a full browser page load, render, cache model, or record
+of every third-party request on the public site. The five class labels remain
+the primary page domains. Secondary origins contribute encrypted traffic to
+that class and are never separate labels.
 
 The frozen workload graphs are:
 
@@ -1356,54 +1389,88 @@ Cloudflare uses `cloudflare-quic.com`,
 `blog-cloudflare-com-assets.storage.googleapis.com`, and
 `blog.cloudflare.com`; Hyper additionally uses `cdn.jsdelivr.net`. Chromium
 discovers and admission-filters the graph during preparation only. Collection
-replays it with Neqo: one QUIC/H3 connection per approved origin, one request
-stream per ready resource, all connections and streams progressing in the same
-sample event loop, and their exact endpoint-tuple union retained in one PCAP.
+replays it with Neqo: one QUIC/H3 connection per approved origin and one
+request stream per resource when its dependencies are ready. Multiple resource
+streams on the same origin share that origin's connection; streams and origin
+connections can progress concurrently in the same sample event loop. Their
+exact endpoint-tuple union is retained in one PCAP.
 
-Defended campaigns bind the create-only response qualification set
-`classifier-multiorigin5-v1`. Baseline campaigns intentionally omit the set
-because they contain no response-only defence. Run the excluded rehearsal
-first with the exact final collection image:
+The five-file response qualification set
+`config/chaff-response-qualification-store/sets/classifier-multiorigin5-v2/`
+has been published as a create-only transaction. Defended campaigns bind
+`chaff_qualification_set: classifier-multiorigin5-v2`; baseline campaigns
+intentionally omit the set because they contain no response-only defence. Run
+the excluded rehearsal first with the exact final collection image:
 
 ```shell
 QCSD_LAB_COLLECTION_IMAGE=sha256:<exact-final-image> \
   ./qcsd-lab verify \
-  config/campaigns/classifier-multiorigin5-v1-rehearsal.yml
+  config/campaigns/classifier-multiorigin5-v2-rehearsal.yml
 QCSD_LAB_COLLECTION_IMAGE=sha256:<exact-final-image> \
   ./qcsd-lab run \
-  config/campaigns/classifier-multiorigin5-v1-rehearsal.yml
+  config/campaigns/classifier-multiorigin5-v2-rehearsal.yml
 QCSD_LAB_COLLECTION_IMAGE=sha256:<exact-final-image> \
   ./qcsd-lab verify \
-  results/research-classifier-multiorigin5-v1-rehearsal-1200/<run-id>
+  results/research-classifier-multiorigin5-v2-rehearsal-1200/<run-id>
+QCSD_LAB_COLLECTION_IMAGE=sha256:<exact-final-image> \
+  ./qcsd-lab analyze \
+  results/research-classifier-multiorigin5-v2-rehearsal-1200/<run-id>
+./classifier-pilot export classifier-multiorigin5-v2-rehearsal \
+  results/research-classifier-multiorigin5-v2-rehearsal-1200/<run-id> \
+  --splits interface
+./classifier-pilot verify classifier-multiorigin5-v2-rehearsal
 ```
 
 The rehearsal is five workloads times two visits times three conditions: 30
-captures, permanently excluded. Proceed only after all 30 are accepted,
-eligible, sealed, and independently checked for multi-endpoint capture,
-responses, clocks, schedules, credits, offloads, and the 1200-byte UDP ceiling.
-Any subsequent source, image, workload, qualification, campaign, or defence
-change invalidates it.
+captures, permanently excluded from training and evaluation. Proceed only
+after all 30 are accepted, eligible, sealed, verified, analyzed, independently
+checked for multi-endpoint capture, responses, clocks, schedules, credits,
+offloads, and the 1200-byte UDP ceiling, and exported to the verified
+interface-only handoff `handoffs/classifier-multiorigin5-v2-rehearsal/`. Any
+subsequent source, image, workload, qualification, campaign, or defence change
+invalidates it.
 
 The formal files are
-`classifier-multiorigin5-v1-{baseline,paired}-NN.yml`. Each of ten temporal
+`classifier-multiorigin5-v2-{baseline,paired}-NN.yml`. Each of ten temporal
 blocks contributes 100 baseline captures and 150 paired captures, for 500
 captures per class and 2,500 total. The exact totals are 1,500 undefended, 500
-FRONT, and 500 Tamaraw. Capture baseline then paired in odd blocks and paired
-then baseline in even blocks; never begin the next block until both current
-results are complete, sealed, verified, and analyzed. Pass roots to the
-exporter later in canonical baseline-01, paired-01, ..., baseline-10,
-paired-10 order; their sealed timestamps must prove the alternating acquisition
-chronology.
+FRONT, and 500 Tamaraw. The exact acquisition chronology is:
 
-After each formal result verifies, run `./qcsd-lab analyze
-results/<campaign>/<run-id>` to generate `summary.csv`, `report.html`, paired
-trace SVGs, and aggregate latency/overhead SVGs. After all twenty results pass,
-export the separate create-only handoff `classifier-multiorigin5-v1` and verify
-it. Josh should normally train from `traces/` or `stripped/`; `raw/` PCAPNG,
-classic PCAP, and run receipts are restricted audit inputs because they retain
-real endpoint, timing, QUIC Initial, URL, and request metadata. Use only
-undefended blocks 01--08 for training, block 09 for validation, and block 10
-for the clean test. FRONT and Tamaraw remain inference-only.
+```text
+B01, P01, P02, B02, B03, P03, P04, B04, B05, P05,
+P06, B06, B07, P07, P08, B08, B09, P09, P10, B10
+```
+
+That is baseline then paired in odd blocks and paired then baseline in even
+blocks. Never begin the next block until both current results are complete,
+sealed, verified, and analyzed. Pass roots to the exporter later in canonical
+baseline-01, paired-01, ..., baseline-10, paired-10 argument order; their
+sealed timestamps must prove the acquisition chronology above.
+
+After each sealed campaign, including the rehearsal and every formal result,
+run `./qcsd-lab verify` and then `./qcsd-lab analyze
+results/<campaign>/<run-id>` before continuing. Analysis generates
+`summary.csv`, `report.html`, paired trace SVGs, and aggregate latency/overhead
+SVGs. After all twenty formal results pass, export the separate create-only
+handoff `classifier-multiorigin5-v2` and verify it; the destination is
+`handoffs/classifier-multiorigin5-v2/`. Josh should normally train from
+`traces/` or `stripped/`; `raw/` PCAPNG, classic PCAP, and run receipts are
+restricted audit inputs because they retain real endpoint, timing, QUIC
+Initial, URL, and request metadata. Use only undefended blocks 01--08 for
+training, block 09 for validation, and block 10 for the clean test. FRONT and
+Tamaraw remain inference-only.
+
+Status: the repaired pre-promotion implementation and the create-only v2
+response qualification set are ready. The exact final acquisition image, the
+excluded v2 rehearsal, all 2,500 formal v2 captures, their per-campaign
+analyses, and both v2 handoffs are still pending. This documentation does not
+claim that v2 acquisition is complete.
+
+The entire `classifier-multiorigin5-v1` acquisition lineage is retained only
+as superseded diagnostic evidence. Its excluded rehearsal, B01, P01, and P02
+must never be mixed into v2. P02 exposed live Cloudflare response-identity
+drift, was stopped at a sample boundary, and remains deliberately unsealed;
+none of its accepted files is a v2 sample or handoff row.
 
 The superseded clean source receipt—Lab
 `d5543406359528b1382222d8ef3d3cffd67b7d4d`, Neqo
@@ -1484,12 +1551,13 @@ fixture failed. Q5 passed its repaired live prerequisite, completed the new
 atomic exact-five Q5/F3 qualification, and P5 published that now-historical
 cohort. Its `20260817T181058.212792Z` rehearsal sealed incomplete because the
 frozen Hyper r1 response had drifted, even though every retained attempt
-passed the Linux-local capture-integrity gate. Q6 changed the active binding
+passed the Linux-local capture-integrity gate. Q6 changed the then-active POC5 binding
 to the independently prepared Hyper r2 graph and removed the prior canonical
 v2 cohort at its acquisition boundary. Its completed exact-five Q6/F3
-qualification is published by P6. Clean P6/F3 final images must pass a wholly
-new excluded 30/30 rehearsal and verified interface handoff before formal
-acquisition restarts from baseline-01 under one homogeneous source receipt.
+qualification remains published by P6 as legacy evidence. At that boundary,
+clean P6/F3 final images were required to pass a wholly new excluded 30/30
+rehearsal and verified interface handoff before formal acquisition could
+restart from baseline-01 under one homogeneous source receipt.
 The earlier `20260815T103924.969402Z`,
 `20260814T150747.615059Z`, and `20260814T110741.344914Z` rehearsals and all
 their retries remain permanently excluded as well.
@@ -1510,12 +1578,12 @@ qualification diagnostics are likewise never POC5 classifier samples.
 
 These POC5 campaign files, the offline exporter, tests, and documentation are
 outside the qualification implementation-file inventory, but the clean Lab
-commit remains part of source provenance. Canonical response-store v2 contains
-only the active Q6/F3 cohort published by P6 after the P5 rehearsal exposed
-stale Hyper r1 response identity. Formal acquisition and classifier export
-remain blocked until a clean P6/F3 final collection image passes a fresh
-excluded rehearsal with exactly 30/30 accepted and eligible samples plus a
-verified interface handoff. Formal capture then restarts from baseline-01.
+commit remains part of source provenance. Canonical legacy response-store
+`v2` retains only the POC5 Q6/F3 cohort published by P6 after the P5 rehearsal
+exposed stale Hyper r1 response identity. At that POC5 boundary, formal
+acquisition and classifier export required a clean P6/F3 final collection
+image, a fresh excluded rehearsal with exactly 30/30 accepted and eligible
+samples, and a verified interface handoff before restarting from baseline-01.
 Keep the historical response-store v1/schema-3 evidence
 frozen-compatible; do not regenerate the separate historical full-v2
 sidecars, prefix specs, fitting result, or sealed `research-1200` bundle.
