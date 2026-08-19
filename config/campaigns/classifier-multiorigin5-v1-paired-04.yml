@@ -1,0 +1,32 @@
+schema: 1
+name: research-classifier-multiorigin5-v1-paired-04-1200
+purpose: evaluation
+seed: 2026111173
+profile: research-1200
+chaff_qualification_set: classifier-multiorigin5-v1
+
+# Frozen multi-origin classifier cohort, temporal block 04 of 10.
+# The baseline and paired campaigns in this block use the same workload order.
+workloads:
+  serde-home-r2: 10
+  rfc9114-text-r2: 10
+  getbootstrap-home-r4: 10
+  cloudflare-quiche-r4: 10
+  hyper-basic-client-r3: 10
+
+request_policies:
+  - as-defined
+
+defenses:
+  - undefended
+  - front
+  - tamaraw
+
+limits:
+  timeout_seconds: 120
+  max_response_bytes: 1048576
+  capture_seconds: 180
+  capture_megabytes: 64
+  max_attempts: 3
+  per_origin_cooldown_seconds: 30
+  settle_seconds: 1

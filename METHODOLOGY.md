@@ -1115,6 +1115,45 @@ ledgers, or defence parameters as features. In POC5, `class_label` is the
 approved origin hostname, `workload_id` is provenance, and the defence is an
 evaluation condition.
 
+### Approved-origin multi-origin replacement cohort
+
+The `classifier-multiorigin5-v1` cohort is an independent replacement study,
+not an extension of POC5 and not a mixture with its accepted samples. It uses
+fresh manifests, response qualification, campaign seeds, sample IDs, captures,
+result namespaces, analyses, and handoff. Its five primary labels and frozen
+graphs contain 9 Bootstrap resources over one origin, 6 Cloudflare resources
+over three origins, 7 Hyper resources over two origins, 20 Serde resources
+over one origin, and 2 RFC resources over one origin.
+
+Its construct is the complete *approved-origin frozen HTTPS GET graph* observed
+under the preparation policy. Discovery blocks service workers and pauses each
+request before transmission; only approved HTTPS GETs are continued. Strict
+coverage admission requires every approved origin to contribute a resource and
+every unique approved rendered URL to pass the Neqo HTTP/3 stability gate.
+Unapproved origins, non-GET requests, data URLs, and requests never revealed
+because an intentionally blocked script did not execute remain outside the
+construct. Therefore the cohort is a stronger page-like multi-origin replay,
+but it is not an exact browser page load, renderer state, cache model, or claim
+about every third-party dependency on the public site.
+
+During measurement, one sample creates one Neqo QUIC/H3 connection for each
+distinct approved origin and one application request stream for each resource
+whose dependencies are ready. Connections share the event loop and may overlap;
+multiple resources on one origin use multiple streams on that origin's single
+connection. The accepted direct PCAP is the exact union of all Neqo endpoint
+tuples. This retains multi-origin packet shape while excluding unrelated host
+UDP traffic from the authoritative trace.
+
+The experimental design repeats all five classes from scratch in ten temporal
+blocks. Each block has 20 undefended baseline visits per class and ten paired
+visits per class under undefended, FRONT, and Tamaraw. This yields 2,500
+captures: 500 per class, with 1,500 undefended, 500 FRONT, and 500 Tamaraw.
+Odd blocks run baseline before paired; even blocks reverse the order. Blocks
+01--08, 09, and 10 provide undefended train, validation, and clean-test rows;
+all defended rows are locked inference-only. The excluded 30-sample rehearsal
+must pass under the exact final source/image/configuration before any formal
+block. No old POC5 row is eligible for substitution after a failure.
+
 ## Scope and limitations
 
 - Internet responses and path conditions can vary between separately captured
@@ -1128,6 +1167,10 @@ evaluation condition.
   a descriptive five-way closed-world comparison for these pages, not
   website-population generalization, open-world false-positive claims, or
   security against a classifier retrained on defended samples.
+- The multi-origin replacement improves graph and endpoint realism for
+  Cloudflare and Hyper, but remains a five-graph closed-world experiment under
+  an explicit approved-origin policy. It does not establish browser-wide or
+  open-world generalization.
 - FRONT and Tamaraw use fixed research-profile algorithms and do not consume a
   fitted artifact. Their client-only QCSD adaptations still require qualified
   chaff and strict runtime fidelity; "no fitting" does not waive those gates.

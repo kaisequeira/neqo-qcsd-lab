@@ -1,0 +1,29 @@
+schema: 1
+name: research-classifier-multiorigin5-v1-baseline-08-1200
+purpose: evaluation
+seed: 2026081908
+profile: research-1200
+
+# Frozen multi-origin classifier cohort, temporal block 08 of 10.
+# The baseline and paired campaigns in this block use the same workload order.
+workloads:
+  hyper-basic-client-r3: 20
+  serde-home-r2: 20
+  rfc9114-text-r2: 20
+  getbootstrap-home-r4: 20
+  cloudflare-quiche-r4: 20
+
+request_policies:
+  - as-defined
+
+defenses:
+  - undefended
+
+limits:
+  timeout_seconds: 120
+  max_response_bytes: 1048576
+  capture_seconds: 180
+  capture_megabytes: 64
+  max_attempts: 3
+  per_origin_cooldown_seconds: 30
+  settle_seconds: 1

@@ -1332,6 +1332,79 @@ authorizes only the exact image, workloads, and campaign commit that it ran;
 any rebuild, source or workload repair, parameter change, or class replacement
 requires a new excluded 30-sample rehearsal before formal acquisition.
 
+### Fresh approved-origin multi-origin cohort
+
+`classifier-multiorigin5-v1` is a wholly new 2,500-capture cohort. It does not
+reuse any POC5 capture, seed, sample ID, response sidecar, campaign namespace,
+or handoff row. It measures a frozen approved-origin HTTPS `GET` graph rather
+than claiming to reproduce an exact browser render or every third-party page
+request. The five class labels remain the primary page domains; secondary
+origins contribute encrypted traffic to that class and are never separate
+labels.
+
+The frozen workload graphs are:
+
+| workload | class label | approved origins | resources |
+| --- | --- | ---: | ---: |
+| `getbootstrap-home-r4` | `getbootstrap.com` | 1 | 9 |
+| `cloudflare-quiche-r4` | `cloudflare-quic.com` | 3 | 6 |
+| `hyper-basic-client-r3` | `hyper.rs` | 2 | 7 |
+| `serde-home-r2` | `serde.rs` | 1 | 20 |
+| `rfc9114-text-r2` | `www.rfc-editor.org` | 1 | 2 |
+
+Cloudflare uses `cloudflare-quic.com`,
+`blog-cloudflare-com-assets.storage.googleapis.com`, and
+`blog.cloudflare.com`; Hyper additionally uses `cdn.jsdelivr.net`. Chromium
+discovers and admission-filters the graph during preparation only. Collection
+replays it with Neqo: one QUIC/H3 connection per approved origin, one request
+stream per ready resource, all connections and streams progressing in the same
+sample event loop, and their exact endpoint-tuple union retained in one PCAP.
+
+Defended campaigns bind the create-only response qualification set
+`classifier-multiorigin5-v1`. Baseline campaigns intentionally omit the set
+because they contain no response-only defence. Run the excluded rehearsal
+first with the exact final collection image:
+
+```shell
+QCSD_LAB_COLLECTION_IMAGE=sha256:<exact-final-image> \
+  ./qcsd-lab verify \
+  config/campaigns/classifier-multiorigin5-v1-rehearsal.yml
+QCSD_LAB_COLLECTION_IMAGE=sha256:<exact-final-image> \
+  ./qcsd-lab run \
+  config/campaigns/classifier-multiorigin5-v1-rehearsal.yml
+QCSD_LAB_COLLECTION_IMAGE=sha256:<exact-final-image> \
+  ./qcsd-lab verify \
+  results/research-classifier-multiorigin5-v1-rehearsal-1200/<run-id>
+```
+
+The rehearsal is five workloads times two visits times three conditions: 30
+captures, permanently excluded. Proceed only after all 30 are accepted,
+eligible, sealed, and independently checked for multi-endpoint capture,
+responses, clocks, schedules, credits, offloads, and the 1200-byte UDP ceiling.
+Any subsequent source, image, workload, qualification, campaign, or defence
+change invalidates it.
+
+The formal files are
+`classifier-multiorigin5-v1-{baseline,paired}-NN.yml`. Each of ten temporal
+blocks contributes 100 baseline captures and 150 paired captures, for 500
+captures per class and 2,500 total. The exact totals are 1,500 undefended, 500
+FRONT, and 500 Tamaraw. Capture baseline then paired in odd blocks and paired
+then baseline in even blocks; never begin the next block until both current
+results are complete, sealed, verified, and analyzed. Pass roots to the
+exporter later in canonical baseline-01, paired-01, ..., baseline-10,
+paired-10 order; their sealed timestamps must prove the alternating acquisition
+chronology.
+
+After each formal result verifies, run `./qcsd-lab analyze
+results/<campaign>/<run-id>` to generate `summary.csv`, `report.html`, paired
+trace SVGs, and aggregate latency/overhead SVGs. After all twenty results pass,
+export the separate create-only handoff `classifier-multiorigin5-v1` and verify
+it. Josh should normally train from `traces/` or `stripped/`; `raw/` PCAPNG,
+classic PCAP, and run receipts are restricted audit inputs because they retain
+real endpoint, timing, QUIC Initial, URL, and request metadata. Use only
+undefended blocks 01--08 for training, block 09 for validation, and block 10
+for the clean test. FRONT and Tamaraw remain inference-only.
+
 The superseded clean source receipt—Lab
 `d5543406359528b1382222d8ef3d3cffd67b7d4d`, Neqo
 `867246557ec719fc34552b60abf624895be2706c`, and collection image
