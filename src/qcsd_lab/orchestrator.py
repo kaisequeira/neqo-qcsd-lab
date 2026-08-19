@@ -1733,6 +1733,8 @@ def _execute(root: Path, campaign: Campaign, experiment: dict[str, Any]) -> Path
                 if result.get("success") is True:
                     fidelity_failure = _intrinsic_fidelity_failure(sample, result, attempt)
                     if fidelity_failure is None:
+                        fidelity_failure = _prepared_response_identity_failure(workload, attempt)
+                    if fidelity_failure is None:
                         diagnostics = _success_diagnostics(result)
                         diagnostics["promotion"] = _promotion_receipt(root, sample, attempt)
                         transition_sample(
@@ -1876,6 +1878,56 @@ def _intrinsic_fidelity_failure(
                 "defense": defense,
                 "schedule": schedule,
                 "defense_diagnostics": defense_metrics,
+            }
+        ],
+    }
+
+
+def _prepared_response_identity_failure(
+    workload: Workload,
+    attempt: Path,
+) -> dict[str, Any] | None:
+    """Reject prepared-response drift before an attempt becomes immutable evidence."""
+
+    expected = _prepared_response_signature(workload.data)
+    if expected is None:
+        return None
+    observed = response_signature(attempt)
+    if observed == expected:
+        return None
+
+    expected_by_id: dict[Any, list[tuple[Any, ...]]] = {}
+    observed_by_id: dict[Any, list[tuple[Any, ...]]] = {}
+    for entry in expected:
+        expected_by_id.setdefault(entry[0], []).append(entry)
+    for entry in observed or []:
+        observed_by_id.setdefault(entry[0], []).append(entry)
+    differing_resource_ids = sorted(
+        (
+            resource_id
+            for resource_id in expected_by_id.keys() | observed_by_id.keys()
+            if expected_by_id.get(resource_id) != observed_by_id.get(resource_id)
+        ),
+        key=str,
+    )
+    return {
+        "stage": "fidelity",
+        "type": "StrictPreparedResponseIdentityFailure",
+        "message": "application responses differ from the frozen prepared identity",
+        "details": [
+            {
+                "workload_id": workload.id,
+                "expected_response_count": len(expected),
+                "observed_response_count": len(observed or []),
+                "expected_response_signature_sha256": sha256_bytes(
+                    json.dumps(expected, sort_keys=True).encode()
+                ),
+                "observed_response_signature_sha256": (
+                    sha256_bytes(json.dumps(observed, sort_keys=True).encode())
+                    if observed is not None
+                    else None
+                ),
+                "differing_resource_ids": differing_resource_ids,
             }
         ],
     }
@@ -2129,7 +2181,11 @@ def _recover_pending_promotion(root: Path, experiment: dict[str, Any]) -> bool:
     return True
 
 
-def _recover_completed_attempt(root: Path, experiment: dict[str, Any]) -> bool:
+def _recover_completed_attempt(
+    root: Path,
+    experiment: dict[str, Any],
+    campaign: Campaign,
+) -> bool:
     """Checkpoint a terminal attempt receipt left before its state checkpoint."""
 
     from .experiment import transition_sample
@@ -2153,6 +2209,11 @@ def _recover_completed_attempt(root: Path, experiment: dict[str, Any]) -> bool:
             raise ValueError("running attempt has an invalid terminal receipt")
         if result["success"] is True:
             fidelity_failure = _intrinsic_fidelity_failure(sample, result, attempt)
+            if fidelity_failure is None:
+                workload = next(
+                    item for item in campaign.workloads if item.id == sample["workload_id"]
+                )
+                fidelity_failure = _prepared_response_identity_failure(workload, attempt)
             if fidelity_failure is None:
                 diagnostics = _success_diagnostics(result)
                 diagnostics["promotion"] = _promotion_receipt(root, sample, attempt)
@@ -2207,10 +2268,10 @@ def resume_campaign(root: Path) -> Path:
                 expected_source=source_metadata(),
                 experiment=terminal,
             )
-            validate_frozen_experiment_contract(root, terminal)
+            campaign = validate_frozen_experiment_contract(root, terminal)
             validate_accepted_samples(root, terminal, allow_running_artifacts=True)
             _recover_pending_promotion(root, terminal)
-            _recover_completed_attempt(root, terminal)
+            _recover_completed_attempt(root, terminal, campaign)
         elif terminal["status"] in {"complete", "incomplete"}:
             validate_resume_fingerprints(
                 root,

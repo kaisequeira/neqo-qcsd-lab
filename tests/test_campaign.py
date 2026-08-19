@@ -2016,6 +2016,64 @@ def test_collection_success_with_multiple_primary_views_is_quarantined(
     assert "exactly one primary" in failure["details"][0]["error"]
 
 
+def test_prepared_response_identity_drift_is_quarantined_then_retried(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = _configuration(tmp_path, max_attempts=2)
+    expected_signature = [(0, 200, 64, "a" * 64, "succeeded")]
+    monkeypatch.setattr(
+        orchestrator,
+        "_prepared_response_signature",
+        lambda _manifest: expected_signature,
+    )
+    calls = 0
+
+    def collect(
+        attempt: Path,
+        _manifest: Path,
+        workload_id: str,
+        defense: Any,
+        _seed: int,
+        _campaign: Any,
+    ) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        return _write_successful_attempt(
+            attempt,
+            workload_id,
+            defense.name,
+            body_sha256=("b" if calls == 1 else "a") * 64,
+        )
+
+    monkeypatch.setattr(orchestrator.capture_engine, "_collect_attempt", collect)
+
+    root = run_campaign(path, tmp_path / "results")
+
+    verified = verify_result(root)
+    [sample] = verified.experiment["samples"]
+    assert sample["state"] == "accepted"
+    assert sample["eligible"] is True
+    assert sample["attempts"] == 2
+    retained_path = root / "failures" / sample["sample_id"] / "attempt-001" / "attempt.json"
+    retained = load_json(retained_path)
+    assert retained["success"] is False
+    assert retained["failure"]["stage"] == "fidelity"
+    assert retained["failure"]["type"] == "StrictPreparedResponseIdentityFailure"
+    assert retained["failure"]["details"][0]["differing_resource_ids"] == [0]
+    assert retained_path.relative_to(root).as_posix() in verified.checksums
+
+
+def test_prepared_response_identity_gate_is_absent_for_legacy_workloads(
+    tmp_path: Path,
+) -> None:
+    attempt = tmp_path / "attempt"
+    _write_successful_attempt(attempt, "alpha", "undefended", body_sha256="b" * 64)
+    workload = SimpleNamespace(id="alpha", data={})
+
+    assert orchestrator._prepared_response_identity_failure(workload, attempt) is None
+
+
 def test_all_collection_successes_with_fidelity_misses_end_terminally_without_promotion(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -291,6 +291,47 @@ def test_resume_rejects_completed_clock_stepped_attempt_before_promotion(
     assert retained["failure"]["type"] == "StrictCaptureClockIntegrityFailure"
 
 
+def test_resume_rejects_completed_response_drift_before_promotion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, experiment = _interrupted_result(tmp_path, monkeypatch)
+    running = next(sample for sample in experiment["samples"] if sample["state"] == "running")
+    attempt = root / "failures" / running["sample_id"] / f"attempt-{running['attempts']:03d}"
+    (attempt / "unpromoted.tmp").unlink()
+    receipt = _write_successful_attempt(
+        attempt,
+        running["workload_id"],
+        running["defense"],
+        body_sha256="b" * 64,
+    )
+    atomic_json(attempt / "attempt.json", receipt)
+    monkeypatch.setattr(
+        orchestrator,
+        "_prepared_response_signature",
+        lambda _manifest: [(0, 200, 64, "a" * 64, "succeeded")],
+    )
+    resumed = _ResumeCollector()
+    monkeypatch.setattr(orchestrator.capture_engine, "_collect_attempt", resumed)
+
+    assert resume_campaign(root) == root
+
+    verified = verify_result(root)
+    recovered = next(
+        sample
+        for sample in verified.experiment["samples"]
+        if sample["sample_id"] == running["sample_id"]
+    )
+    assert recovered["state"] == "accepted"
+    assert recovered["eligible"] is True
+    assert recovered["attempts"] == 2
+    assert len(resumed.calls) == 1
+    retained = load_json(attempt / "attempt.json")
+    assert retained["success"] is False
+    assert retained["failure"]["type"] == "StrictPreparedResponseIdentityFailure"
+    assert attempt.relative_to(root).as_posix() + "/attempt.json" in verified.checksums
+
+
 def test_defended_pacing_miss_is_recorded_as_a_fidelity_failure(tmp_path: Path) -> None:
     attempt = tmp_path / "attempt"
     receipt = _write_successful_attempt(attempt, "alpha", "front")
