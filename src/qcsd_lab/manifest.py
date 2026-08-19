@@ -73,9 +73,18 @@ PREPARATION_KEYS = {
     "lab_source",
     "prepare_image_digest",
     "udp_payload_qualification",
+    "coverage_admission",
 }
-LEGACY_OPTIONAL_PREPARATION_KEYS = {"udp_payload_qualification"}
+LEGACY_OPTIONAL_PREPARATION_KEYS = {"udp_payload_qualification", "coverage_admission"}
 EXPECTED_RESPONSE_KEYS = {"resource_id", "status", "bytes", "body_sha256"}
+COMPLETE_COVERAGE_POLICY = "all-approved-origins-and-rendered-resources"
+COVERAGE_ADMISSION_KEYS = {
+    "schema_version",
+    "policy",
+    "required_origins",
+    "required_resources",
+}
+COVERAGE_ADMISSION_RESOURCE_KEYS = {"id", "url"}
 UDP_PAYLOAD_QUALIFICATION_KEYS = {
     "schema_version",
     "configured_udp_payload_ceiling",
@@ -416,9 +425,9 @@ def _validate_preparation(
                 or parts.fragment
             ):
                 raise ValueError(f"manifest preparation {key} contains an invalid HTTPS origin")
-    # Approved origins are an allow-list, not an assertion that every optional
-    # content origin appeared in one Chromium load.  The final page origin and
-    # every frozen resource remain constrained to this list below.
+    # Approved origins are normally an allow-list, not an assertion that every
+    # optional content origin appeared in one Chromium load.  A preparation can
+    # opt into the complete-coverage admission contract validated below.
     approved = set(value["approved_origins"])
     if https_origin(value["source_url"]) not in approved:
         raise ValueError("manifest preparation source URL origin must be approved")
@@ -487,6 +496,13 @@ def _validate_preparation(
         for item in exclusions
     ):
         raise ValueError("manifest preparation exclusions require url and reason")
+    if "coverage_admission" in value:
+        _validate_coverage_admission(
+            value["coverage_admission"],
+            approved_origins=value["approved_origins"],
+            resources=resources,
+            exclusions=exclusions,
+        )
     responses = value["expected_responses"]
     if not isinstance(responses, list) or len(responses) != len(resource_ids):
         raise ValueError("manifest preparation requires one expected response per resource")
@@ -519,6 +535,57 @@ def _validate_preparation(
         response_ids.add(resource_id)
     if response_ids != resource_ids or len(response_ids) != len(responses):
         raise ValueError("manifest preparation expected response IDs must match resources")
+
+
+def _validate_coverage_admission(
+    value: Any,
+    *,
+    approved_origins: list[str],
+    resources: list[dict[str, Any]],
+    exclusions: list[dict[str, str]],
+) -> None:
+    if not isinstance(value, dict) or set(value) != COVERAGE_ADMISSION_KEYS:
+        raise ValueError(
+            "manifest preparation coverage admission requires exact schema, policy, origins, "
+            "and resource IDs"
+        )
+    if value["schema_version"] != 1 or isinstance(value["schema_version"], bool):
+        raise ValueError("manifest preparation coverage admission schema is invalid")
+    if value["policy"] != COMPLETE_COVERAGE_POLICY:
+        raise ValueError("manifest preparation coverage admission policy is invalid")
+    if value["required_origins"] != approved_origins:
+        raise ValueError(
+            "manifest preparation coverage admission must require every approved origin"
+        )
+    required_resources = value["required_resources"]
+    if (
+        not isinstance(required_resources, list)
+        or any(
+            not isinstance(item, dict)
+            or set(item) != COVERAGE_ADMISSION_RESOURCE_KEYS
+            or not isinstance(item["id"], int)
+            or isinstance(item["id"], bool)
+            or not isinstance(item["url"], str)
+            for item in required_resources
+        )
+        or required_resources
+        != [{"id": resource["id"], "url": resource["url"]} for resource in resources]
+    ):
+        raise ValueError(
+            "manifest preparation coverage admission must bind every rendered resource ID/URL"
+        )
+    retained_origins = {https_origin(resource["url"]) for resource in resources}
+    if missing := set(approved_origins) - retained_origins:
+        raise ValueError(
+            "manifest preparation coverage admission has no retained resource for approved "
+            "origins: " + ", ".join(sorted(missing))
+        )
+    unavailable_reasons = {"HTTP/3 preflight unavailable", "HTTP/3 dependency unavailable"}
+    if unavailable := [item for item in exclusions if item["reason"] in unavailable_reasons]:
+        raise ValueError(
+            "manifest preparation coverage admission cannot contain HTTP/3-unavailable or "
+            "orphaned exclusions: " + ", ".join(sorted({item["url"] for item in unavailable}))
+        )
 
 
 def _validate_udp_payload_qualification(value: Any, *, stability_runs: int) -> None:

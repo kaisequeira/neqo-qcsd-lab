@@ -18,7 +18,8 @@ import qcsd_lab.parameters as parameters
 import qcsd_lab.chaff_qualification as chaff_qualification
 import qcsd_lab.capture_session as capture_session
 from qcsd_lab.analysis import analyze_result
-from qcsd_lab.capture import extract_trace
+from qcsd_lab.capture import extract_trace, split_endpoint
+from qcsd_lab.fidelity import _schedule_realization_metrics
 from qcsd_lab.fitting_walkie_talkie import (
     BurstPair,
     mold,
@@ -90,6 +91,12 @@ def test_controlled_schema_six_wire_fixture_is_explicit_and_non_authoritative(
         response_receipt=receipt,
         prefix_spec=prefix_spec,
     )
+    response_only_chaff = tmp_path / "simple-response-only-chaff.json"
+    _write_controlled_response_only_chaff_manifest(
+        response_only_chaff,
+        application_source=source,
+        response_receipt=receipt,
+    )
     sidecar = tmp_path / "simple-sidecar.json"
     sidecar.write_bytes(
         canonical_bytes(
@@ -116,6 +123,29 @@ def test_controlled_schema_six_wire_fixture_is_explicit_and_non_authoritative(
         prefix_spec
     )
     assert load_json(runtime) == runtime_manifest(prepared)
+    response_only = load_json(response_only_chaff)
+    assert response_only["schema_version"] == 4
+    assert response_only["qualification_scope"] == "response-only"
+    assert response_only["application_workload_sha256"] == sha256_file(source)
+    assert response_only["resources"][0]["headers"] == CONTROLLED_AEL_HEADERS
+    assert response_only["resources"][0]["chaff_qualification"] == {
+        "schema_version": 4,
+        "qualification_scope": "response-only",
+        "method": "GET",
+        "request_header_primitive": chaff_qualification.response_only_request_header_primitive(),
+        "request_stream_bytes": 163,
+        "qualified_parallel_chaff_streams": 5,
+        "qualified_completion_count": 120,
+        "expected_response": {
+            "status": 200,
+            "content_encoding": "identity",
+            "body_bytes": 4_096,
+            "body_sha256": hashlib.sha256(b"\0" * 4_096).hexdigest(),
+        },
+        "response_qualification_sha256": chaff_qualification.qualification_digest(
+            "qcsd-controlled-live-response-only-observation-v1", [receipt]
+        ),
+    }
 
     molded = load_json(walkie_talkie)
     selected = next(
@@ -401,6 +431,52 @@ def _write_controlled_chaff_manifest(
         ],
     }
     path.write_bytes(canonical_bytes(value))
+
+
+def _write_controlled_response_only_chaff_manifest(
+    path: Path,
+    *,
+    application_source: Path,
+    response_receipt: dict[str, Any],
+) -> None:
+    """Project one observed local response into a nonauthoritative schema-four fixture."""
+
+    application = load_json(application_source)
+    root = next(resource for resource in application["resources"] if resource["id"] == 0)
+    headers = chaff_qualification.project_identity_chaff_headers(root)
+    identity, request_bytes, *_ = chaff_qualification._validate_response_receipt(
+        response_receipt,
+        application_manifest_sha256=sha256_file(application_source),
+        application_resource_id=root["id"],
+        selected_chaff_resource_id=root["id"],
+        qualified_parallel_chaff_streams=5,
+        url=root["url"],
+        headers=headers,
+    )
+    status, content_encoding, body_bytes, body_sha256 = identity
+    response_digest = chaff_qualification.qualification_digest(
+        "qcsd-controlled-live-response-only-observation-v1", [response_receipt]
+    )
+    manifest = chaff_qualification.derive_response_only_chaff_manifest_v2(
+        {
+            "base_manifest": {"sha256": sha256_file(application_source)},
+            "application_resource_id": root["id"],
+            "selected_chaff_resource_id": root["id"],
+        },
+        root,
+        {
+            "headers": headers,
+            "request_stream_bytes": request_bytes,
+            "expected_response": {
+                "status": status,
+                "content_encoding": content_encoding,
+                "body_bytes": body_bytes,
+                "body_sha256": body_sha256,
+            },
+            "response_qualification_sha256": response_digest,
+        },
+    )
+    path.write_bytes(canonical_bytes(manifest))
 
 
 def _write_controlled_walkie_talkie(
@@ -711,6 +787,133 @@ def test_controlled_local_capture_uses_the_canonical_sealed_workflow(
     not CAPTURE_GATE,
     reason="direct container-edge capture acceptance is launcher-provisioned",
 )
+def test_controlled_multi_origin_front_and_tamaraw_use_primary_origin_chaff(
+    tmp_path: Path,
+) -> None:
+    """Exercise both response-only defenses across two application origins."""
+
+    address = os.environ["QCSD_CAPTURE_SERVER_ADDRESS"]
+    port = int(os.environ["QCSD_CAPTURE_SERVER_PORT"])
+    second_address = os.environ["QCSD_CAPTURE_SERVER_TWO_ADDRESS"]
+    second_port = int(os.environ["QCSD_CAPTURE_SERVER_TWO_PORT"])
+    prepared = _controlled_complex_manifest(address, port, second_address, second_port)
+    source = tmp_path / "complex-prepared.json"
+    source.write_bytes(canonical_bytes(prepared))
+    runtime = tmp_path / "complex-runtime.json"
+    runtime.write_bytes(canonical_bytes(runtime_manifest(prepared)))
+    controlled = _qualify_controlled_live_inputs(tmp_path, {"complex": source})
+    _, sidecar, _, _ = controlled["complex"]
+    chaff_manifest = tmp_path / "controlled-live/chaff-manifests/complex-response-only.json"
+    _write_controlled_response_only_chaff_manifest(
+        chaff_manifest,
+        application_source=source,
+        response_receipt=load_json(sidecar)["response_receipt"],
+    )
+
+    qualified = load_json(chaff_manifest)
+    root = prepared["resources"][0]
+    assert qualified["schema_version"] == 4
+    assert qualified["qualification_scope"] == "response-only"
+    assert qualified["application_workload_sha256"] == sha256_file(source)
+    assert qualified["application_resource_id"] == root["id"]
+    assert qualified["selected_chaff_resource_id"] == root["id"]
+    assert len(qualified["resources"]) == 1
+    assert qualified["resources"][0]["url"] == root["url"]
+    assert qualified["resources"][0]["headers"] == CONTROLLED_AEL_HEADERS
+    qualification = qualified["resources"][0]["chaff_qualification"]
+    assert qualification["schema_version"] == 4
+    assert qualification["qualification_scope"] == "response-only"
+    assert qualification["request_header_primitive"] == (
+        chaff_qualification.response_only_request_header_primitive()
+    )
+
+    context = SimpleNamespace(
+        qcsd_profile="live",
+        request_policy="as-defined",
+        limits=capture_session.Limits(
+            timeout_seconds=120,
+            max_response_bytes=2_097_152,
+            capture_seconds=180,
+            capture_megabytes=64,
+            max_attempts=1,
+            per_origin_cooldown_seconds=0,
+            settle_seconds=1,
+        ),
+        udp_payload_ceiling=1_200,
+    )
+    signatures: list[list[tuple[Any, ...]]] = []
+    for seed_offset, kind in enumerate(("front", "tamaraw")):
+        defense = capture_session.Defense(name=kind, kind=kind, baseline=False)
+        attempt = tmp_path / f"attempt-{kind}"
+        result = capture_session._collect_attempt(
+            attempt,
+            runtime,
+            chaff_manifest,
+            "complex",
+            defense,
+            20_260_819 + seed_offset,
+            context,
+            application_workload_source=source,
+        )
+        assert result["success"] is True
+        assert (
+            _intrinsic_fidelity_failure(
+                {"sample_id": f"complex-{kind}", "defense": kind, "runtime_kind": kind},
+                result,
+                attempt,
+            )
+            is None
+        )
+
+        run = load_json(attempt / "neqo/run.json")
+        assert run["completion_status"] == "complete"
+        assert run["workload_hash_sha256"] == sha256_file(runtime)
+        assert run["application_workload_source_hash_sha256"] == sha256_file(source)
+        assert run["chaff_manifest_hash_sha256"] == sha256_file(chaff_manifest)
+        assert run["resolved_configuration"]["defense"]["kind"] == kind
+        assert run["defense_parameters"] is None
+        assert {https_origin(endpoint["origin"]) for endpoint in run["endpoints"]} == {
+            https_origin(resource["url"]) for resource in prepared["resources"]
+        }
+        assert len(run["endpoints"]) == 2
+        assert all(endpoint["negotiated_protocol"] == "h3" for endpoint in run["endpoints"])
+        assert all(
+            endpoint["tuple"]
+            == {
+                "protocol": "udp",
+                "local": endpoint["local_address"],
+                "remote": endpoint["remote_address"],
+            }
+            for endpoint in run["endpoints"]
+        )
+        _assert_exact_application_responses(prepared, run)
+        _assert_primary_origin_chaff(attempt, prepared, qualified, run)
+        _assert_defense_schedule_and_credit(attempt, run)
+
+        capture = result["views"][0]
+        capture_path = attempt / capture["capture_path"]
+        trace = extract_trace(capture_path, run["endpoints"])
+        assert trace
+        _assert_live_capture_evidence(capture, run, trace)
+        _assert_direct_destination_isolation(
+            capture_path,
+            run,
+            address,
+            second_address,
+        )
+        _assert_direct_tuple_union(capture_path, run)
+        _assert_two_origins_share_the_same_sample(attempt, run)
+        signature = response_signature(attempt)
+        assert signature is not None
+        signatures.append(signature)
+
+    assert len({tuple(signature) for signature in signatures}) == 1
+
+
+@pytest.mark.skipif(
+    not CAPTURE_GATE,
+    reason="direct container-edge capture acceptance is launcher-provisioned",
+)
 def test_controlled_schema_six_walkie_talkie_uses_real_a_r_c_wire_path(
     tmp_path: Path,
 ) -> None:
@@ -878,19 +1081,10 @@ def _configuration(
     workload_dir = directory / "config/workloads"
     campaign_dir.mkdir(parents=True)
     workload_dir.mkdir()
-    first_origin = f"https://{address}:{port}"
-    second_origin = f"https://{second_address}:{second_port}"
     simple = _controlled_prepared_manifest(
-        [_resource(0, f"{first_origin}/131072", "Document", 131_072)]
+        [_resource(0, f"https://{address}:{port}/131072", "Document", 131_072)]
     )
-    complex_workload = _controlled_prepared_manifest(
-        [
-            _resource(0, f"{first_origin}/131072", "Document", 131_072),
-            _resource(1, f"{first_origin}/1024", "Script", 1_024, depends_on=[0]),
-            _resource(2, f"{second_origin}/4096", "Script", 4_096, depends_on=[0]),
-            _resource(3, f"{second_origin}/2048", "Image", 2_048, depends_on=[2]),
-        ]
-    )
+    complex_workload = _controlled_complex_manifest(address, port, second_address, second_port)
     atomic_json(workload_dir / "simple.json", simple)
     atomic_json(workload_dir / "complex.json", complex_workload)
 
@@ -916,6 +1110,24 @@ def _configuration(
     path = campaign_dir / "campaign.yml"
     path.write_text(yaml.safe_dump(campaign, sort_keys=False), encoding="utf-8")
     return path
+
+
+def _controlled_complex_manifest(
+    address: str,
+    port: int,
+    second_address: str,
+    second_port: int,
+) -> dict[str, Any]:
+    first_origin = f"https://{address}:{port}"
+    second_origin = f"https://{second_address}:{second_port}"
+    return _controlled_prepared_manifest(
+        [
+            _resource(0, f"{first_origin}/131072", "Document", 131_072),
+            _resource(1, f"{first_origin}/1024", "Script", 1_024, depends_on=[0]),
+            _resource(2, f"{second_origin}/4096", "Script", 4_096, depends_on=[0]),
+            _resource(3, f"{second_origin}/2048", "Image", 2_048, depends_on=[2]),
+        ]
+    )
 
 
 def _resource(
@@ -975,14 +1187,22 @@ def _assert_direct_destination_isolation(
 
 def _assert_capture_contract(sample: dict[str, Any], run: dict[str, Any], trace: list[Any]) -> None:
     capture = sample["diagnostics"]["capture"]
+    _assert_live_capture_evidence(capture, run, trace)
+    assert capture["capture_path"] == "capture.pcapng"
+    assert "trace_path" not in capture
+    assert "trace_sha256" not in capture
+
+
+def _assert_live_capture_evidence(
+    capture: dict[str, Any], run: dict[str, Any], trace: list[Any]
+) -> None:
+    assert capture["primary"] is True
     assert capture["valid"] is True
     assert capture["capture_active_through_settle"] is True
     assert capture["link_type"] == "Ethernet"
     assert capture["length_basis"] == "frame.len"
+    assert capture["timestamp_type"] == "host"
     assert capture["packet_count"] == len(trace)
-    assert capture["capture_path"] == "capture.pcapng"
-    assert "trace_path" not in capture
-    assert "trace_sha256" not in capture
     ceiling = capture["udp_payload_ceiling_evidence"]
     assert ceiling["configured_udp_payload_ceiling"] == 1_200
     assert ceiling["runner_resolved_udp_payload_ceiling"] == 1_200
@@ -997,6 +1217,148 @@ def _assert_capture_contract(sample: dict[str, Any], run: dict[str, Any], trace:
         "uso": "off",
     }
     assert offload["verified"] is True
+    reconciliation = capture["direct_runner_reconciliation"]
+    assert reconciliation["direct_runner_reconciled"] is True
+    assert reconciliation["evidence_eligible"] is True
+    assert reconciliation["direct_matched_packets"] == reconciliation["direct_runner_packets"]
+    assert reconciliation["direct_clock_model"] == "constant-offset"
+    assert reconciliation["direct_clock_segment_count"] == 1
+    assert reconciliation["direct_clock_step_count"] == 0
+    clock = capture["capture_clock_integrity"]
+    assert clock["valid"] is True
+    assert clock["capture_timestamp_type"] == "host"
+    assert clock["clock_domain"] == "linux-kernel"
+    assert clock["clock_model"] == "constant-offset"
+    assert clock["pairing_uncertainty_recorded"] is True
+
+
+def _assert_exact_application_responses(prepared: dict[str, Any], run: dict[str, Any]) -> None:
+    resources = {resource["id"]: resource for resource in prepared["resources"]}
+    identities = {
+        response["resource_id"]: response
+        for response in prepared["preparation"]["expected_responses"]
+    }
+    responses = {response["resource_id"]: response for response in run["responses"]}
+    assert set(responses) == set(resources) == set(identities)
+    for identifier, response in responses.items():
+        assert response["url"] == resources[identifier]["url"]
+        assert response["request_headers"] == resources[identifier]["headers"]
+        assert response["status"] == identities[identifier]["status"] == 200
+        assert response["bytes"] == identities[identifier]["bytes"]
+        assert response["body_sha256"] == identities[identifier]["body_sha256"]
+        assert response["request_stream_bytes"] > 0
+        assert response["complete"] is True
+        assert response["outcome"] == "succeeded"
+
+
+def _assert_primary_origin_chaff(
+    attempt: Path,
+    prepared: dict[str, Any],
+    qualified: dict[str, Any],
+    run: dict[str, Any],
+) -> None:
+    resource = qualified["resources"][0]
+    primary_origin = https_origin(prepared["resources"][0]["url"])
+    assert primary_origin is not None
+    assert https_origin(resource["url"]) == primary_origin
+    primary_endpoint = next(
+        endpoint
+        for endpoint in run["endpoints"]
+        if https_origin(endpoint["origin"]) == primary_origin
+    )
+    receipts = run["chaff_responses"]
+    assert receipts
+    assert len({receipt["request_id"] for receipt in receipts}) == len(receipts)
+    assert any(receipt["bytes"] > 0 for receipt in receipts)
+    assert all(
+        receipt["resource_id"] == resource["id"]
+        and receipt["url"] == resource["url"]
+        and receipt["request_headers"] == resource["headers"]
+        and receipt["request_stream_bytes"]
+        == receipt["expected_request_stream_bytes"]
+        == resource["chaff_qualification"]["request_stream_bytes"]
+        and receipt["outcome"] in {"succeeded", "incomplete", "reset", "endpoint_closed"}
+        for receipt in receipts
+    )
+    with (attempt / "neqo/events.csv").open(newline="", encoding="utf-8") as source:
+        rows = list(csv.DictReader(source))
+    actions = []
+    for row in rows:
+        if row["event"] != "action" or row["outcome"] != "applied":
+            continue
+        details = json.loads(row["details"])
+        if details.get("type") == "request_chaff":
+            actions.append((row, details))
+    assert actions
+    assert {int(row["connection"]) for row, _ in actions} == {primary_endpoint["id"]}
+    assert {details["endpoint"] for _, details in actions} == {primary_endpoint["id"]}
+    assert all(https_origin(details["resource"]["url"]) == primary_origin for _, details in actions)
+
+
+def _assert_defense_schedule_and_credit(attempt: Path, run: dict[str, Any]) -> None:
+    schedule = _schedule_realization_metrics(attempt)
+    assert schedule["scheduled_events"] > 0
+    assert schedule["scheduled_outgoing_events"] > 0
+    assert schedule["scheduled_incoming_events"] > 0
+    assert schedule["satisfied_events"] == schedule["scheduled_events"]
+    assert schedule["missed_events"] == 0
+    assert schedule["missed_event_reasons"] == {}
+    assert schedule["outgoing_size_mismatch_events"] == 0
+    assert schedule["outgoing_size_absolute_error_bytes"] == 0
+    with (attempt / "neqo/schedule.csv").open(newline="", encoding="utf-8") as source:
+        rows = list(csv.DictReader(source))
+    scheduled_connections = {int(row["connection"]) for row in rows if row["connection"]}
+    assert scheduled_connections
+    assert scheduled_connections <= {endpoint["id"] for endpoint in run["endpoints"]}
+    assert all(int(row["size"]) == 1_200 for row in rows)
+    diagnostics = run["defense_diagnostics"]
+    assert diagnostics["scheduled_incoming_requested_bytes"] > 0
+    assert (
+        diagnostics["scheduled_incoming_requested_bytes"]
+        == diagnostics["scheduled_incoming_consumed_bytes"]
+    )
+    assert diagnostics["scheduled_incoming_retired_bytes"] == 0
+    assert diagnostics["scheduled_incoming_unresolved_bytes"] == 0
+
+
+def _assert_direct_tuple_union(capture: Path, run: dict[str, Any]) -> None:
+    completed = subprocess.run(
+        [
+            "tshark",
+            "-r",
+            str(capture),
+            "-T",
+            "fields",
+            "-e",
+            "ip.src",
+            "-e",
+            "ipv6.src",
+            "-e",
+            "ip.dst",
+            "-e",
+            "ipv6.dst",
+            "-e",
+            "udp.srcport",
+            "-e",
+            "udp.dstport",
+        ],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        check=True,
+    )
+    observed: set[tuple[str, int, str, int]] = set()
+    for row in csv.reader(completed.stdout.splitlines(), delimiter="\t"):
+        if len(row) != 6 or not row[4] or not row[5]:
+            continue
+        observed.add((row[0] or row[1], int(row[4]), row[2] or row[3], int(row[5])))
+    expected: set[tuple[str, int, str, int]] = set()
+    for endpoint in run["endpoints"]:
+        local_address, local_port = split_endpoint(endpoint["local_address"])
+        remote_address, remote_port = split_endpoint(endpoint["remote_address"])
+        expected.add((local_address, local_port, remote_address, remote_port))
+        expected.add((remote_address, remote_port, local_address, local_port))
+    assert observed == expected
 
 
 def _assert_parameter_binding(

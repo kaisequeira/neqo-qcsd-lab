@@ -74,6 +74,7 @@ RESPONSE_ONLY_COMPLETIONS_PER_CANDIDATE = QUALIFICATION_RUNS * RESPONSE_ONLY_REQ
 RESPONSE_ONLY_EPOCH_SPACING_SECONDS = 30
 RESPONSE_ONLY_WAVE_SPACING_MILLISECONDS = 0
 UDP_PAYLOAD_CEILING = 1_200
+QUALIFICATION_SET_PATTERN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 MAX_STREAM_DATA_EXCESS = 1_000
 MAX_WALKIE_TALKIE_COMPONENT_CELLS = 2**32 - 1
 SENDER_FRAMING_CELLS = 1
@@ -2256,10 +2257,11 @@ def qualify_all_response_chaff(
     *,
     workload_root: Path | None = None,
     qualification_store: Path | None = None,
+    qualification_set: str | None = None,
     timeout_seconds: int = 30,
     interval_seconds: int = 30,
 ) -> tuple[QualifiedChaffOutput, ...]:
-    """Qualify an explicit five-workload response cohort and publish immutable v2."""
+    """Qualify and atomically publish one explicit five-workload response cohort."""
 
     cohort = tuple(workload_ids)
     if (
@@ -2274,12 +2276,20 @@ def qualify_all_response_chaff(
         raise ValueError("response qualification requires exactly five unique workload IDs")
     store_input = qualification_store or LAB_ROOT / "config/chaff-response-qualification-store"
     store = _regular_directory_without_symlinks(store_input, "response qualification store")
-    destination = store / "v2"
+    if qualification_set is None:
+        publication_root = store
+        destination_name = "v2"
+    else:
+        destination_name = validate_qualification_set(qualification_set)
+        publication_root = _regular_directory_without_symlinks(
+            store / "sets", "response qualification sets root"
+        )
+    destination = publication_root / destination_name
     if destination.exists() or destination.is_symlink():
         raise FileExistsError(
             f"{destination} already exists; batch response qualification is create-only"
         )
-    stale = sorted(store.glob(".v2.qcsd-batch-*"))
+    stale = sorted(publication_root.glob(f".{destination_name}.qcsd-batch-*"))
     if stale:
         raise ValueError("response qualification store contains a stale unpublished batch")
     workloads = _regular_directory_without_symlinks(
@@ -2305,7 +2315,9 @@ def qualify_all_response_chaff(
     if len(primary_origins) != 5:
         raise ValueError("response qualification requires five distinct primary HTTPS origins")
     execution_context = _qualification_execution_context()
-    candidate = Path(tempfile.mkdtemp(prefix=".v2.qcsd-batch-", dir=store))
+    candidate = Path(
+        tempfile.mkdtemp(prefix=f".{destination_name}.qcsd-batch-", dir=publication_root)
+    )
     try:
         outputs = [
             qualify_response_chaff_v2(
@@ -2344,7 +2356,7 @@ def qualify_all_response_chaff(
         finally:
             os.close(directory_fd)
         _rename_noreplace(candidate, destination)
-        store_fd = os.open(store, os.O_RDONLY | os.O_DIRECTORY)
+        store_fd = os.open(publication_root, os.O_RDONLY | os.O_DIRECTORY)
         try:
             os.fsync(store_fd)
         finally:
@@ -2360,6 +2372,16 @@ def qualify_all_response_chaff(
         )
         for output in outputs
     )
+
+
+def validate_qualification_set(value: object) -> str:
+    """Return one unambiguous create-only qualification-set path component."""
+
+    if not isinstance(value, str) or QUALIFICATION_SET_PATTERN.fullmatch(value) is None:
+        raise ValueError(
+            "chaff qualification set must be a lowercase hyphenated filesystem-safe slug"
+        )
+    return value
 
 
 def qualify_chaff(

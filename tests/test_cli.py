@@ -88,6 +88,30 @@ def test_run_resume_and_verify_have_no_mode_flags():
     response = command_parsers["qualify-response-chaff"]
     workload_ids = next(action for action in response._actions if action.dest == "workload_ids")
     assert workload_ids.nargs == 5
+    qualification_set = next(
+        action for action in response._actions if action.dest == "qualification_set"
+    )
+    assert qualification_set.option_strings == ["--set"]
+
+
+def test_prepare_complete_coverage_is_explicit_and_opt_in():
+    legacy = cli.parser().parse_args(
+        ["prepare", "example", "https://page.test/", "https://page.test"]
+    )
+    strict = cli.parser().parse_args(
+        [
+            "prepare",
+            "example-r2",
+            "https://page.test/",
+            "https://page.test",
+            "https://cdn.test",
+            "--require-complete-coverage",
+        ]
+    )
+
+    assert legacy.require_complete_coverage is False
+    assert strict.require_complete_coverage is True
+    assert strict.approved_origins == ["https://page.test", "https://cdn.test"]
 
 
 def test_launcher_routes_only_consolidated_public_commands():
@@ -215,23 +239,41 @@ def test_qualification_store_delta_validator_executes_publication_states(tmp_pat
 
 
 def test_launcher_response_qualification_is_exact_five_and_least_privilege() -> None:
-    launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
+    root = Path(__file__).parents[1]
+    launcher = (root / "qcsd-lab").read_text(encoding="utf-8")
+    sets_marker = root / "config/chaff-response-qualification-store/sets/.gitkeep"
+    assert sets_marker.is_file() and not sets_marker.is_symlink()
     assert "qualify-response-chaff requires exactly five workload IDs" in launcher
     assert '"${ROOT}/config/chaff-response-qualification-store"' in launcher
     assert "config/chaff-response-qualification-store/v2" in launcher
     mounts = launcher.split(
         'if [[ "${1:-}" == "qualify-response-chaff" ]]; then\n  container+=(', 1
-    )[-1].split("\nfi", 1)[0]
+    )[-1].split('if [[ "${1:-}" == "fit" ]]; then', 1)[0]
     assert '--volume "${ROOT}/config/workloads:/lab/config/workloads:ro"' in mounts
     assert (
         '--volume "${ROOT}/config/chaff-response-qualification-store:'
         '/lab/config/chaff-response-qualification-store:rw"' in mounts
     )
     assert (
+        '--volume "${ROOT}/config/chaff-response-qualification-store:'
+        '/lab/config/chaff-response-qualification-store:ro"' in mounts
+    )
+    assert (
+        '--volume "${response_qualification_sets_root}:'
+        '/lab/config/chaff-response-qualification-store/sets:rw"' in mounts
+    )
+    assert (
         '--volume "${response_qualification_child}:'
         '/lab/config/chaff-response-qualification-store/${response_qualification_name}:ro"'
         in mounts
     )
+    assert (
+        '--volume "${existing_response_set}:'
+        '/lab/config/chaff-response-qualification-store/sets/${existing_response_set_name}:ro"'
+        in mounts
+    )
+    assert "response_qualification_set_explicit" in launcher
+    assert "requires absent set target" in launcher
     assert "validate_response_qualification_store_delta" in launcher
 
 
@@ -246,7 +288,9 @@ def test_response_qualification_delta_validator_enforces_dynamic_exact_five(
         f"v2/{workload}.json": {"type": "file", "sha256": "b" * 64} for workload in ids
     }
 
-    published = _run_embedded_python(tmp_path, validator, existing, existing | cohort, "0", *ids)
+    published = _run_embedded_python(
+        tmp_path, validator, existing, existing | cohort, "0", "legacy", "", *ids
+    )
     assert published.returncode == 0, published.stderr
 
     candidate = {
@@ -256,7 +300,9 @@ def test_response_qualification_delta_validator_enforces_dynamic_exact_five(
             "sha256": "c" * 64,
         },
     }
-    retained = _run_embedded_python(tmp_path, validator, existing, existing | candidate, "7", *ids)
+    retained = _run_embedded_python(
+        tmp_path, validator, existing, existing | candidate, "7", "legacy", "", *ids
+    )
     assert retained.returncode == 0, retained.stderr
 
     partial = _run_embedded_python(
@@ -265,16 +311,76 @@ def test_response_qualification_delta_validator_enforces_dynamic_exact_five(
         existing,
         existing | {"v2": {"type": "directory"}},
         "0",
+        "legacy",
+        "",
         *ids,
     )
     assert partial.returncode != 0
     assert "outside the exact schema-two cohort" in partial.stderr
 
     duplicate_ids = _run_embedded_python(
-        tmp_path, validator, existing, existing, "7", *ids[:4], ids[0]
+        tmp_path,
+        validator,
+        existing,
+        existing,
+        "7",
+        "legacy",
+        "",
+        *ids[:4],
+        ids[0],
     )
     assert duplicate_ids.returncode != 0
     assert "workload cohort is invalid" in duplicate_ids.stderr
+
+    named_existing = existing | {"sets": {"type": "directory"}}
+    named_target = {"sets/cohort-v1": {"type": "directory"}} | {
+        f"sets/cohort-v1/{workload}.json": {"type": "file", "sha256": "d" * 64} for workload in ids
+    }
+    named_published = _run_embedded_python(
+        tmp_path,
+        validator,
+        named_existing,
+        named_existing | named_target,
+        "0",
+        "set",
+        "cohort-v1",
+        *ids,
+    )
+    assert named_published.returncode == 0, named_published.stderr
+
+    named_candidate = {
+        "sets/.cohort-v1.qcsd-batch-proof": {"type": "directory"},
+        "sets/.cohort-v1.qcsd-batch-proof/response-0.log": {
+            "type": "file",
+            "sha256": "e" * 64,
+        },
+    }
+    named_retained = _run_embedded_python(
+        tmp_path,
+        validator,
+        named_existing,
+        named_existing | named_candidate,
+        "7",
+        "set",
+        "cohort-v1",
+        *ids,
+    )
+    assert named_retained.returncode == 0, named_retained.stderr
+
+    mixed_target = dict(named_target)
+    mixed_target["sets/other-v1/alpha.json"] = {"type": "file", "sha256": "f" * 64}
+    mixed = _run_embedded_python(
+        tmp_path,
+        validator,
+        named_existing,
+        named_existing | mixed_target,
+        "0",
+        "set",
+        "cohort-v1",
+        *ids,
+    )
+    assert mixed.returncode != 0
+    assert "outside the exact schema-two cohort" in mixed.stderr
 
 
 def test_launcher_audits_the_exact_prefix_derivation_config_delta():
@@ -466,6 +572,33 @@ def test_incomplete_run_exits_cleanly_with_one_result_path(monkeypatch, capsys):
     captured = capsys.readouterr()
     assert captured.err == f"campaign incomplete; evidence retained at {root}\n"
     assert captured.out == f"{root}\n"
+
+
+def test_response_qualification_cli_forwards_named_set(monkeypatch, capsys):
+    import qcsd_lab.chaff_qualification as qualification
+
+    observed = {}
+
+    def qualify(workload_ids, **kwargs):
+        observed["workload_ids"] = tuple(workload_ids)
+        observed.update(kwargs)
+        return ()
+
+    monkeypatch.setattr(qualification, "qualify_all_response_chaff", qualify)
+    workload_ids = ("alpha", "bravo", "charlie", "delta", "echo")
+
+    cli.main(
+        [
+            "qualify-response-chaff",
+            "--set",
+            "classifier-multiorigin5-v1",
+            *workload_ids,
+        ]
+    )
+
+    assert observed["workload_ids"] == workload_ids
+    assert observed["qualification_set"] == "classifier-multiorigin5-v1"
+    assert json.loads(capsys.readouterr().out) == {}
 
 
 def test_verify_routes_yaml_to_preflight(monkeypatch, capsys, tmp_path):

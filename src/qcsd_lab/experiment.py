@@ -27,6 +27,7 @@ ACCEPTED_ARTIFACTS = {
 
 _DIGEST = re.compile(r"[0-9a-f]{64}")
 _PATH_COMPONENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+_QUALIFICATION_SET = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 _EXPERIMENT_KEYS = {
     "schema_version",
     "name",
@@ -49,6 +50,7 @@ _CONFIGURATION_KEYS = {
     "defenses",
     "limits",
 }
+_OPTIONAL_CONFIGURATION_KEYS = {"chaff_qualification_set"}
 _SAMPLE_KEYS = {
     "sample_id",
     "workload_id",
@@ -541,7 +543,12 @@ def _initial_sample(value: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _validate_configuration(value: object) -> None:
-    if not isinstance(value, Mapping) or set(value) != _CONFIGURATION_KEYS:
+    if not isinstance(value, Mapping):
+        raise ValueError("experiment configuration schema is invalid")
+    keys = set(value)
+    if not _CONFIGURATION_KEYS <= keys or not (
+        keys - _CONFIGURATION_KEYS <= _OPTIONAL_CONFIGURATION_KEYS
+    ):
         raise ValueError("experiment configuration schema is invalid")
     if not _is_digest(value["campaign_sha256"]):
         raise ValueError("configuration campaign_sha256 is invalid")
@@ -557,6 +564,11 @@ def _validate_configuration(value: object) -> None:
         raise ValueError("configuration defenses are invalid")
     if not isinstance(value["limits"], Mapping):
         raise ValueError("configuration limits are invalid")
+    if "chaff_qualification_set" in value and (
+        not isinstance(value["chaff_qualification_set"], str)
+        or _QUALIFICATION_SET.fullmatch(value["chaff_qualification_set"]) is None
+    ):
+        raise ValueError("configuration chaff_qualification_set is invalid")
 
 
 def _validate_sample(value: object) -> None:

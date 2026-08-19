@@ -375,6 +375,61 @@ def test_preparation_approved_origins_are_an_allow_list():
     validate_research_preparation(value, workload_id="prepared-site")
 
 
+def test_complete_coverage_admission_binds_all_approved_origins_and_resources():
+    value = prepared_manifest()
+    value["preparation"]["coverage_admission"] = {
+        "schema_version": 1,
+        "policy": "all-approved-origins-and-rendered-resources",
+        "required_origins": ["https://example.com"],
+        "required_resources": [
+            {"id": 0, "url": "https://example.com/"},
+            {"id": 1, "url": "https://example.com/1"},
+        ],
+    }
+
+    validate_manifest(value)
+
+    value["preparation"]["approved_origins"].append("https://optional.test")
+    value["preparation"]["coverage_admission"]["required_origins"].append("https://optional.test")
+    with pytest.raises(ValueError, match="no retained resource.*optional.test"):
+        validate_manifest(value)
+
+
+def test_complete_coverage_admission_rejects_partial_resource_identity():
+    value = prepared_manifest()
+    value["preparation"]["coverage_admission"] = {
+        "schema_version": 1,
+        "policy": "all-approved-origins-and-rendered-resources",
+        "required_origins": ["https://example.com"],
+        "required_resources": [{"id": 0, "url": "https://example.com/"}],
+    }
+
+    with pytest.raises(ValueError, match="bind every rendered resource ID/URL"):
+        validate_manifest(value)
+
+
+def test_complete_coverage_admission_rejects_h3_unavailable_exclusions():
+    value = prepared_manifest()
+    value["preparation"]["coverage_admission"] = {
+        "schema_version": 1,
+        "policy": "all-approved-origins-and-rendered-resources",
+        "required_origins": ["https://example.com"],
+        "required_resources": [
+            {"id": 0, "url": "https://example.com/"},
+            {"id": 1, "url": "https://example.com/1"},
+        ],
+    }
+    value["preparation"]["exclusions"].append(
+        {
+            "url": "https://example.com/dropped.js",
+            "reason": "HTTP/3 preflight unavailable",
+        }
+    )
+
+    with pytest.raises(ValueError, match="cannot contain HTTP/3-unavailable"):
+        validate_manifest(value)
+
+
 @pytest.mark.parametrize("location", ["source_url", "final_url"])
 def test_preparation_page_origins_must_be_approved(location):
     value = prepared_manifest()

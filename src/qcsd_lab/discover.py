@@ -33,6 +33,44 @@ class DiscoveryResult:
     resources: list[dict[str, Any]]
 
 
+@dataclass
+class _RequestAdmission:
+    """Record and enforce the discovery request policy before network I/O."""
+
+    approved_origins: set[str]
+    observed_request_count: int = 0
+    observed_origins: set[str] = field(default_factory=set)
+    exclusions: dict[tuple[str, str], dict[str, str]] = field(default_factory=dict)
+
+    def exclude(self, url: str, reason: str) -> None:
+        self.exclusions[(url, reason)] = {"url": url, "reason": reason}
+
+    def enforce(self, session: Any, event: dict[str, Any]) -> None:
+        """Continue an approved HTTPS GET or fail it while still request-stage paused."""
+
+        request_id = str(event.get("requestId", ""))
+        if not request_id:
+            raise RuntimeError("Chromium request interception omitted its request identifier")
+        request = event.get("request", {})
+        url = str(request.get("url", ""))
+        method = str(request.get("method", ""))
+        self.observed_request_count += 1
+        request_origin = origin(url)
+        if request_origin:
+            self.observed_origins.add(request_origin)
+        reason = exclusion_reason(method, url, self.approved_origins)
+        if reason:
+            # Record before failing so an interception error cannot erase the
+            # audit reason for a request that was denied network admission.
+            self.exclude(url, reason)
+            session.send(
+                "Fetch.failRequest",
+                {"requestId": request_id, "errorReason": "BlockedByClient"},
+            )
+            return
+        session.send("Fetch.continueRequest", {"requestId": request_id})
+
+
 def origin(url: str) -> str | None:
     return https_origin(url)
 
@@ -57,10 +95,8 @@ def discover_page(
     except ImportError as error:
         raise RuntimeError("discovery requires the discovery Docker image") from error
 
+    admission = _RequestAdmission(set(approved))
     discovered: dict[str, DiscoveredRequest] = {}
-    observed_origins: set[str] = set()
-    exclusions: dict[tuple[str, str], dict[str, str]] = {}
-    observed_request_count = 0
     final_url = url
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(
@@ -69,28 +105,25 @@ def discover_page(
             args=["--disable-quic=false", "--enable-quic", "--no-sandbox"],
         )
         chromium_version = browser.version
-        context = browser.new_context(ignore_https_errors=False)
+        # Fetch interception does not see frame-owned requests already handled
+        # by a service worker.  Blocking registration makes the request-stage
+        # policy the only path from this fresh context to the network.
+        context = browser.new_context(ignore_https_errors=False, service_workers="block")
         page = context.new_page()
         session = context.new_cdp_session(page)
-        session.send("Network.enable")
         request_urls: dict[str, str] = {}
         pending_extra_headers: dict[str, dict[str, str]] = {}
 
-        def exclude(url: str, reason: str) -> None:
-            exclusions[(url, reason)] = {"url": url, "reason": reason}
-
         def request_seen(event: dict[str, Any]) -> None:
-            nonlocal observed_request_count
-            observed_request_count += 1
             request = event.get("request", {})
             url = str(request.get("url", ""))
             method = str(request.get("method", ""))
-            request_origin = origin(url)
-            if request_origin:
-                observed_origins.add(request_origin)
-            reason = exclusion_reason(method, url, set(approved))
+            reason = exclusion_reason(method, url, admission.approved_origins)
             if reason:
-                exclude(url, reason)
+                # Network.requestWillBeSent can precede Fetch.requestPaused.
+                # Keep this defensive record, while Fetch remains the only
+                # callback that decides whether bytes may leave Chromium.
+                admission.exclude(url, reason)
                 return
             initiator = event.get("initiator", {})
             initiators = {
@@ -139,6 +172,12 @@ def discover_page(
 
         session.on("Network.requestWillBeSent", request_seen)
         session.on("Network.requestWillBeSentExtraInfo", extra_headers_seen)
+        session.on("Fetch.requestPaused", lambda event: admission.enforce(session, event))
+        session.send("Network.enable")
+        session.send(
+            "Fetch.enable",
+            {"patterns": [{"urlPattern": "*", "requestStage": "Request"}]},
+        )
         page.goto(url, wait_until="load", timeout=timeout_ms)
         page.wait_for_timeout(SETTLE_MS)
         final_url = page.url
@@ -155,10 +194,12 @@ def discover_page(
         final_url=final_url,
         chromium_version=chromium_version,
         settle_ms=SETTLE_MS,
-        observed_request_count=observed_request_count,
-        observed_origins=sorted(observed_origins),
+        observed_request_count=admission.observed_request_count,
+        observed_origins=sorted(admission.observed_origins),
         approved_origins=approved,
-        exclusions=sorted(exclusions.values(), key=lambda item: (item["url"], item["reason"])),
+        exclusions=sorted(
+            admission.exclusions.values(), key=lambda item: (item["url"], item["reason"])
+        ),
         resources=resources,
     )
 

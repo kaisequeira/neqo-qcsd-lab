@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -584,9 +585,218 @@ def test_response_only_loader_requires_no_prefix_spec(
     assert not (result / "inputs/chaff-prefix-specs").exists()
     assert runtime.workloads[0].chaff_prefix_spec_path is None
     frozen = configuration["workloads"][0]
+    assert "chaff_qualification_set" not in configuration
     assert frozen["chaff_qualification_scope"] == "response-only"
     assert "chaff_prefix_spec" not in frozen
     assert "chaff_prefix_spec_sha256" not in frozen
+
+
+def test_explicit_response_qualification_set_routes_and_freezes_selected_sidecar(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    campaign_path = _configuration(tmp_path)
+    workload = load_campaign(campaign_path).workloads[0]
+    value = yaml.safe_load(campaign_path.read_text(encoding="utf-8"))
+    value["chaff_qualification_set"] = "cohort-v1"
+    value["defenses"] = ["undefended", "front"]
+    campaign_path.write_text(yaml.safe_dump(value, sort_keys=False), encoding="utf-8")
+    selected = tmp_path / "config/chaff-response-qualification-store/sets/cohort-v1"
+    selected.mkdir(parents=True)
+    sidecar = selected / "alpha.json"
+    atomic_json(sidecar, {"response-only": "named-set"})
+    manifest = {
+        "schema_version": 4,
+        "qualification_scope": "response-only",
+        "resources": workload.data["resources"],
+    }
+    calls: list[tuple[Path, bool]] = []
+
+    def load_response(
+        sidecar_path: Path,
+        *,
+        workload_id: str,
+        base_manifest_path: Path,
+        expected_sidecar_schema_version: int | None,
+        require_current_implementation: bool = True,
+    ) -> SimpleNamespace:
+        assert workload_id == "alpha"
+        assert base_manifest_path.name == "alpha.json"
+        assert expected_sidecar_schema_version == 2
+        calls.append((sidecar_path, require_current_implementation))
+        return SimpleNamespace(
+            sidecar_sha256=sha256_file(sidecar_path),
+            manifest_sha256=sha256_bytes(canonical_bytes(manifest)),
+            manifest=manifest,
+        )
+
+    monkeypatch.setattr(chaff_qualification, "load_response_qualified_chaff", load_response)
+    qualified = orchestrator._load_qualified_chaff_inputs(
+        campaign_path,
+        (workload,),
+        frozen_inputs=None,
+        qualification_scope=orchestrator.RESPONSE_ONLY_CHAFF_SCOPE,
+        qualification_set="cohort-v1",
+    )[0]
+    assert qualified.chaff_qualification_path == sidecar.resolve()
+    assert calls == [(sidecar.resolve(), True)]
+
+    campaign = orchestrator.Campaign(
+        path=campaign_path,
+        source_bytes=campaign_path.read_bytes(),
+        name="named-set-materialization",
+        purpose="smoke",
+        seed=7,
+        profile="live",
+        workloads=(qualified,),
+        request_policies=("as-defined",),
+        defenses=(
+            Defense("undefended", "none", True),
+            Defense("front", "front", False),
+        ),
+        limits=Limits(),
+        chaff_qualification_set="cohort-v1",
+    )
+    result = tmp_path / "named-set-result"
+    runtime, configuration = orchestrator._materialize_inputs(result, campaign, {})
+
+    frozen_sidecar = result / "inputs/chaff-qualifications/alpha.json"
+    assert frozen_sidecar.read_bytes() == sidecar.read_bytes()
+    assert configuration["chaff_qualification_set"] == "cohort-v1"
+    assert (
+        yaml.safe_load((result / "inputs/campaign.yml").read_text(encoding="utf-8"))[
+            "chaff_qualification_set"
+        ]
+        == "cohort-v1"
+    )
+
+    sidecar.unlink()
+    selected.rmdir()
+    frozen = orchestrator._load_qualified_chaff_inputs(
+        result / "inputs/campaign.yml",
+        runtime.workloads,
+        frozen_inputs=result / "inputs",
+        qualification_scope=orchestrator.RESPONSE_ONLY_CHAFF_SCOPE,
+        qualification_set="cohort-v1",
+    )[0]
+    assert frozen.chaff_qualification_path == frozen_sidecar.resolve()
+    assert calls[-1] == (frozen_sidecar.resolve(), False)
+
+
+def test_explicit_response_qualification_set_rejects_missing_symlinked_or_mixed_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    campaign_path = _configuration(tmp_path)
+    workload = load_campaign(campaign_path).workloads[0]
+    sets = tmp_path / "config/chaff-response-qualification-store/sets"
+
+    with pytest.raises(ValueError, match="selected response qualification set is not"):
+        orchestrator._load_qualified_chaff_inputs(
+            campaign_path,
+            (workload,),
+            frozen_inputs=None,
+            qualification_scope=orchestrator.RESPONSE_ONLY_CHAFF_SCOPE,
+            qualification_set="cohort-v1",
+        )
+
+    sets.mkdir(parents=True)
+    external = tmp_path / "external-set"
+    external.mkdir()
+    (sets / "cohort-v1").symlink_to(external, target_is_directory=True)
+    with pytest.raises(ValueError, match="selected response qualification set is not"):
+        orchestrator._load_qualified_chaff_inputs(
+            campaign_path,
+            (workload,),
+            frozen_inputs=None,
+            qualification_scope=orchestrator.RESPONSE_ONLY_CHAFF_SCOPE,
+            qualification_set="cohort-v1",
+        )
+    (sets / "cohort-v1").unlink()
+
+    selected = sets / "cohort-v1"
+    selected.mkdir()
+    atomic_json(selected / "alpha.json", {"response-only": True})
+    atomic_json(selected / "foreign.json", {"response-only": True})
+    monkeypatch.setattr(
+        chaff_qualification,
+        "load_response_qualified_chaff",
+        lambda *_args, **_kwargs: pytest.fail("mixed set reached a sidecar loader"),
+    )
+    with pytest.raises(ValueError, match="exact campaign workload cohort"):
+        orchestrator._load_qualified_chaff_inputs(
+            campaign_path,
+            (workload,),
+            frozen_inputs=None,
+            qualification_scope=orchestrator.RESPONSE_ONLY_CHAFF_SCOPE,
+            qualification_set="cohort-v1",
+        )
+
+
+@pytest.mark.parametrize(
+    "qualification_set",
+    [None, "", "../escape", "two/levels", ".hidden", "Mixed-Case"],
+)
+def test_campaign_rejects_present_invalid_qualification_set(
+    tmp_path: Path, qualification_set: object
+) -> None:
+    campaign_path = _configuration(tmp_path)
+    value = yaml.safe_load(campaign_path.read_text(encoding="utf-8"))
+    value["chaff_qualification_set"] = qualification_set
+    campaign_path.write_text(yaml.safe_dump(value, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="filesystem-safe slug"):
+        load_campaign(campaign_path)
+
+
+def test_campaign_passes_named_set_only_to_response_only_loader(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    campaign_path = _configuration(tmp_path)
+    workload = replace(
+        load_campaign(campaign_path).workloads[0],
+        data={"preparation": {}, "resources": [_resource(0, "https://alpha.test/")]},
+    )
+    value = yaml.safe_load(campaign_path.read_text(encoding="utf-8"))
+    value["chaff_qualification_set"] = "cohort-v1"
+    value["defenses"] = ["undefended", "front"]
+    campaign_path.write_text(yaml.safe_dump(value, sort_keys=False), encoding="utf-8")
+    defenses = (
+        Defense("undefended", "none", True),
+        Defense("front", "front", False),
+    )
+    observed: list[str | None] = []
+    monkeypatch.setattr(orchestrator, "_load_workloads", lambda *_args, **_kwargs: (workload,))
+    monkeypatch.setattr(
+        orchestrator,
+        "_load_defenses",
+        lambda _base, raw, *_args, **_kwargs: (
+            defenses if "front" in raw else (Defense("undefended", "none", True),)
+        ),
+    )
+
+    def load_qualified(
+        _path: Path,
+        workloads: tuple[orchestrator.Workload, ...],
+        *,
+        frozen_inputs: Path | None,
+        qualification_scope: str,
+        qualification_set: str | None,
+    ) -> tuple[orchestrator.Workload, ...]:
+        assert frozen_inputs is None
+        assert qualification_scope == orchestrator.RESPONSE_ONLY_CHAFF_SCOPE
+        observed.append(qualification_set)
+        return workloads
+
+    monkeypatch.setattr(orchestrator, "_load_qualified_chaff_inputs", load_qualified)
+    campaign = load_campaign(campaign_path)
+
+    assert campaign.chaff_qualification_set == "cohort-v1"
+    assert preflight_campaign(campaign_path)["chaff_qualification_set"] == "cohort-v1"
+    assert observed == ["cohort-v1", "cohort-v1"]
+
+    value["defenses"] = ["undefended"]
+    campaign_path.write_text(yaml.safe_dump(value, sort_keys=False), encoding="utf-8")
+    with pytest.raises(ValueError, match="requires a response-only"):
+        load_campaign(campaign_path)
 
 
 def test_frozen_pre_response_front_result_keeps_full_v2_and_structural_validation(

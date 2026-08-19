@@ -93,19 +93,51 @@ if [[ "${1:-}" == "qualify-chaff" ]]; then
   fi
 fi
 if [[ "${1:-}" == "qualify-response-chaff" ]]; then
-  if (( $# != 6 )); then
-    echo "qualify-response-chaff requires exactly five workload IDs" >&2
-    exit 2
-  fi
+  response_qualification_set=""
+  response_qualification_set_explicit=0
+  response_qualification_expect_set=0
+  response_qualification_workloads=()
   declare -A response_workload_ids=()
-  for workload_id in "${@:2}"; do
+  for argument in "${@:2}"; do
+    if (( response_qualification_expect_set )); then
+      if [[ ! "${argument}" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]]; then
+        echo "qualify-response-chaff --set requires a lowercase hyphenated safe slug" >&2
+        exit 2
+      fi
+      response_qualification_set="${argument}"
+      response_qualification_expect_set=0
+      continue
+    fi
+    if [[ "${argument}" == "--set" ]]; then
+      if (( response_qualification_set_explicit )); then
+        echo "qualify-response-chaff accepts --set exactly once" >&2
+        exit 2
+      fi
+      response_qualification_set_explicit=1
+      response_qualification_expect_set=1
+      continue
+    fi
+    if [[ "${argument}" == --* ]]; then
+      echo "qualify-response-chaff rejects unsupported option: ${argument}" >&2
+      exit 2
+    fi
+    workload_id="${argument}"
     if [[ ! "${workload_id}" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]] ||
        [[ -n "${response_workload_ids[${workload_id}]:-}" ]]; then
       echo "qualify-response-chaff requires five unique safe workload IDs" >&2
       exit 2
     fi
     response_workload_ids["${workload_id}"]=1
+    response_qualification_workloads+=("${workload_id}")
   done
+  if (( response_qualification_expect_set )); then
+    echo "qualify-response-chaff --set requires a value" >&2
+    exit 2
+  fi
+  if (( ${#response_qualification_workloads[@]} != 5 )); then
+    echo "qualify-response-chaff requires exactly five workload IDs" >&2
+    exit 2
+  fi
   for required_directory in \
     "${ROOT}/config/workloads" \
     "${ROOT}/config/chaff-response-qualification-store"; do
@@ -114,10 +146,27 @@ if [[ "${1:-}" == "qualify-response-chaff" ]]; then
       exit 1
     fi
   done
-  if [[ -e "${ROOT}/config/chaff-response-qualification-store/v2" ||
-        -L "${ROOT}/config/chaff-response-qualification-store/v2" ]]; then
-    echo "qualify-response-chaff requires absent config/chaff-response-qualification-store/v2" >&2
-    exit 1
+  if (( response_qualification_set_explicit )); then
+    response_qualification_mode="set"
+    response_qualification_sets_root="${ROOT}/config/chaff-response-qualification-store/sets"
+    if [[ ! -d "${response_qualification_sets_root}" ||
+          -L "${response_qualification_sets_root}" ]]; then
+      echo "qualify-response-chaff --set requires an existing non-symlink sets root" >&2
+      exit 1
+    fi
+    response_qualification_target="${response_qualification_sets_root}/${response_qualification_set}"
+    if [[ -e "${response_qualification_target}" || -L "${response_qualification_target}" ]]; then
+      echo "qualify-response-chaff requires absent set target: ${response_qualification_set}" >&2
+      exit 1
+    fi
+  else
+    response_qualification_mode="legacy"
+    response_qualification_target="${ROOT}/config/chaff-response-qualification-store/v2"
+    if [[ -e "${response_qualification_target}" ||
+          -L "${response_qualification_target}" ]]; then
+      echo "qualify-response-chaff requires absent config/chaff-response-qualification-store/v2" >&2
+      exit 1
+    fi
   fi
 fi
 if [[ "${1:-}" == "derive-chaff-prefix-specs" ]]; then
@@ -282,17 +331,44 @@ fi
 if [[ "${1:-}" == "qualify-response-chaff" ]]; then
   container+=(
     --volume "${ROOT}/config/workloads:/lab/config/workloads:ro"
-    --volume "${ROOT}/config/chaff-response-qualification-store:/lab/config/chaff-response-qualification-store:rw"
   )
+  if (( response_qualification_set_explicit )); then
+    container+=(
+      --volume "${ROOT}/config/chaff-response-qualification-store:/lab/config/chaff-response-qualification-store:ro"
+      --volume "${response_qualification_sets_root}:/lab/config/chaff-response-qualification-store/sets:rw"
+    )
+  else
+    container+=(
+      --volume "${ROOT}/config/chaff-response-qualification-store:/lab/config/chaff-response-qualification-store:rw"
+    )
+  fi
   while IFS= read -r -d '' response_qualification_child; do
     response_qualification_name="${response_qualification_child##*/}"
     if [[ ! "${response_qualification_name}" =~ ^[A-Za-z0-9._-]+$ ]]; then
       echo "qualify-response-chaff rejects unsafe store child name: ${response_qualification_name}" >&2
       exit 1
     fi
-    container+=(
-      --volume "${response_qualification_child}:/lab/config/chaff-response-qualification-store/${response_qualification_name}:ro"
-    )
+    if (( response_qualification_set_explicit )) &&
+       [[ "${response_qualification_name}" == "sets" ]]; then
+      if [[ ! -d "${response_qualification_child}" || -L "${response_qualification_child}" ]]; then
+        echo "qualify-response-chaff sets root must be a non-symlink directory" >&2
+        exit 1
+      fi
+      while IFS= read -r -d '' existing_response_set; do
+        existing_response_set_name="${existing_response_set##*/}"
+        if [[ ! "${existing_response_set_name}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+          echo "qualify-response-chaff rejects unsafe set child name: ${existing_response_set_name}" >&2
+          exit 1
+        fi
+        container+=(
+          --volume "${existing_response_set}:/lab/config/chaff-response-qualification-store/sets/${existing_response_set_name}:ro"
+        )
+      done < <(find "${response_qualification_child}" -mindepth 1 -maxdepth 1 -print0)
+    else
+      container+=(
+        --volume "${response_qualification_child}:/lab/config/chaff-response-qualification-store/${response_qualification_name}:ro"
+      )
+    fi
   done < <(
     find "${ROOT}/config/chaff-response-qualification-store" -mindepth 1 -maxdepth 1 -print0
   )
@@ -506,19 +582,33 @@ from pathlib import Path
 before = json.loads(Path(sys.argv[1]).read_text())
 after = json.loads(Path(sys.argv[2]).read_text())
 status = int(sys.argv[3])
-ids = tuple(sys.argv[4:])
+mode = sys.argv[4]
+set_name = sys.argv[5]
+ids = tuple(sys.argv[6:])
 if (
     len(ids) != 5
     or len(set(ids)) != 5
     or any(re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", item) is None for item in ids)
 ):
     raise SystemExit("qualify-response-chaff workload cohort is invalid")
+if mode == "legacy":
+    if set_name:
+        raise SystemExit("legacy qualify-response-chaff must not carry a set name")
+    target = "v2"
+    candidate_pattern = r"[.]v2[.]qcsd-batch-[A-Za-z0-9_-]+"
+elif mode == "set":
+    if re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", set_name) is None:
+        raise SystemExit("qualify-response-chaff set slug is invalid")
+    target = f"sets/{set_name}"
+    candidate_pattern = rf"sets/[.]{re.escape(set_name)}[.]qcsd-batch-[A-Za-z0-9_-]+"
+else:
+    raise SystemExit("qualify-response-chaff publication mode is invalid")
 if any(after.get(path) != record for path, record in before.items()):
     raise SystemExit("qualify-response-chaff changed pre-existing qualification evidence")
 added = set(after) - set(before)
 if status == 0:
-    expected = {"v2": "directory"}
-    expected.update({f"v2/{workload}.json": "file" for workload in ids})
+    expected = {target: "directory"}
+    expected.update({f"{target}/{workload}.json": "file" for workload in ids})
     if added != set(expected):
         raise SystemExit(
             "qualify-response-chaff changed files outside the exact schema-two cohort"
@@ -528,19 +618,20 @@ if status == 0:
 else:
     if not added:
         raise SystemExit(0)
-    roots = {path.split("/", 1)[0] for path in added}
+    root_depth = 1 if mode == "legacy" else 2
+    roots = {"/".join(path.split("/")[:root_depth]) for path in added}
     if len(roots) != 1:
         raise SystemExit(
             "failed qualify-response-chaff created more than one diagnostic candidate"
         )
     root = roots.pop()
-    if not re.fullmatch(r"[.]v2[.]qcsd-batch-[A-Za-z0-9_-]+", root):
+    if not re.fullmatch(candidate_pattern, root):
         raise SystemExit(
             "failed qualify-response-chaff changed files outside one hidden candidate"
         )
     if after.get(root, {}).get("type") != "directory":
         raise SystemExit("failed qualify-response-chaff candidate is not a directory")
-' "$1" "$2" "$3" "${@:4}"
+' "$1" "$2" "$3" "$4" "$5" "${@:6}"
 }
 
 if [[ "${1:-}" == "qualify-response-chaff" ]]; then
@@ -561,7 +652,9 @@ if [[ "${1:-}" == "qualify-response-chaff" ]]; then
     "${ROOT}/config/chaff-response-qualification-store" \
     "qualify-response-chaff store" >"${after_snapshot}"
   validate_response_qualification_store_delta \
-    "${before_snapshot}" "${after_snapshot}" "${status}" "${@:2}"
+    "${before_snapshot}" "${after_snapshot}" "${status}" \
+    "${response_qualification_mode}" \
+    "${response_qualification_set}" "${response_qualification_workloads[@]}"
   exit "${status}"
 fi
 

@@ -2502,6 +2502,146 @@ def test_response_batch_publishes_explicit_five_in_caller_order(
     assert not list(store.glob(".v2.qcsd-batch-*"))
 
 
+def test_response_batch_publishes_named_set_without_touching_legacy_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workload_ids, workloads, store = _response_batch_inputs(tmp_path)
+    sets = store / "sets"
+    sets.mkdir()
+    legacy = store / "v2"
+    legacy.mkdir()
+    atomic_json(legacy / "historical.json", {"preserved": True})
+    legacy_sha256 = sha256_file(legacy / "historical.json")
+    monkeypatch.setattr(qualification, "qualify_response_chaff_v2", _fake_qualification)
+    monkeypatch.setattr(
+        qualification,
+        "_qualification_execution_context",
+        lambda: _test_execution_context(tmp_path),
+    )
+
+    outputs = qualification.qualify_all_response_chaff(
+        workload_ids,
+        workload_root=workloads,
+        qualification_store=store,
+        qualification_set="classifier-multiorigin5-v1",
+        interval_seconds=0,
+    )
+
+    destination = sets / "classifier-multiorigin5-v1"
+    assert [output.path.parent for output in outputs] == [destination] * 5
+    assert {path.name for path in destination.iterdir()} == {
+        f"{workload_id}.json" for workload_id in workload_ids
+    }
+    assert sha256_file(legacy / "historical.json") == legacy_sha256
+    assert not list(sets.glob(".classifier-multiorigin5-v1.qcsd-batch-*"))
+
+
+@pytest.mark.parametrize("set_name", ["../escape", "two/levels", ".hidden", "Mixed-Case", ""])
+def test_response_batch_rejects_unsafe_named_set_before_network(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    set_name: str,
+) -> None:
+    workload_ids, workloads, store = _response_batch_inputs(tmp_path)
+    (store / "sets").mkdir()
+    called = False
+
+    def execution() -> tuple[dict[str, object], dict[str, object], str]:
+        nonlocal called
+        called = True
+        return {}, {}, "test"
+
+    monkeypatch.setattr(qualification, "_qualification_execution_context", execution)
+    with pytest.raises(ValueError, match="filesystem-safe slug"):
+        qualification.qualify_all_response_chaff(
+            workload_ids,
+            workload_root=workloads,
+            qualification_store=store,
+            qualification_set=set_name,
+        )
+    assert called is False
+    assert list((store / "sets").iterdir()) == []
+
+
+def test_response_batch_named_set_requires_safe_parent_and_absent_target_before_network(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workload_ids, workloads, store = _response_batch_inputs(tmp_path)
+    called = False
+
+    def execution() -> tuple[dict[str, object], dict[str, object], str]:
+        nonlocal called
+        called = True
+        return {}, {}, "test"
+
+    monkeypatch.setattr(qualification, "_qualification_execution_context", execution)
+    with pytest.raises(ValueError, match="sets root is not a regular directory"):
+        qualification.qualify_all_response_chaff(
+            workload_ids,
+            workload_root=workloads,
+            qualification_store=store,
+            qualification_set="cohort-v1",
+        )
+
+    external = tmp_path / "external-sets"
+    external.mkdir()
+    (store / "sets").symlink_to(external, target_is_directory=True)
+    with pytest.raises(ValueError, match="contains a symbolic link"):
+        qualification.qualify_all_response_chaff(
+            workload_ids,
+            workload_root=workloads,
+            qualification_store=store,
+            qualification_set="cohort-v1",
+        )
+    (store / "sets").unlink()
+    (store / "sets/cohort-v1").mkdir(parents=True)
+    with pytest.raises(FileExistsError, match="create-only"):
+        qualification.qualify_all_response_chaff(
+            workload_ids,
+            workload_root=workloads,
+            qualification_store=store,
+            qualification_set="cohort-v1",
+        )
+    assert called is False
+
+
+def test_response_batch_named_set_failure_retains_only_its_hidden_candidate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workload_ids, workloads, store = _response_batch_inputs(tmp_path)
+    sets = store / "sets"
+    sets.mkdir()
+    calls = 0
+
+    def qualify(
+        workload_id: str, *, qualification_root: Path, **kwargs: object
+    ) -> QualifiedChaffOutput:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("synthetic named-set failure")
+        return _fake_qualification(workload_id, qualification_root=qualification_root, **kwargs)
+
+    monkeypatch.setattr(qualification, "qualify_response_chaff_v2", qualify)
+    monkeypatch.setattr(
+        qualification,
+        "_qualification_execution_context",
+        lambda: _test_execution_context(tmp_path),
+    )
+    with pytest.raises(RuntimeError, match="named-set failure"):
+        qualification.qualify_all_response_chaff(
+            workload_ids,
+            workload_root=workloads,
+            qualification_store=store,
+            qualification_set="cohort-v1",
+            interval_seconds=0,
+        )
+
+    assert not (sets / "cohort-v1").exists()
+    assert len(list(sets.glob(".cohort-v1.qcsd-batch-*"))) == 1
+    assert not (store / "v2").exists()
+
+
 def test_response_batch_requires_exactly_five_unique_ids_before_network(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

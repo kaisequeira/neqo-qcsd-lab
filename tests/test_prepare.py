@@ -190,6 +190,7 @@ def test_prepare_writes_one_policy_free_frozen_workload(tmp_path, monkeypatch):
     assert value["preparation"]["stability_profile"] == "live"
     assert value["preparation"]["stability_defense"] == "none"
     assert value["preparation"]["timeout_seconds"] == 120
+    assert "coverage_admission" not in value["preparation"]
     qualification = value["preparation"]["udp_payload_qualification"]
     assert qualification == {
         "schema_version": 1,
@@ -229,6 +230,61 @@ def test_prepare_writes_one_policy_free_frozen_workload(tmp_path, monkeypatch):
         1,
     ]
     assert not list(tmp_path.glob(".*-prepare-*"))
+
+
+def test_prepare_complete_coverage_freezes_multi_origin_admission(tmp_path, monkeypatch):
+    install_fake_preparation(monkeypatch)
+
+    result = prepare.prepare_workload(
+        "complete-coverage",
+        "https://page.test/",
+        ["https://page.test", "https://cdn.test"],
+        output_root=tmp_path,
+        stability_interval_seconds=0,
+        require_complete_coverage=True,
+    )
+
+    value = json.loads(result.path.read_text())
+    validate_manifest(value)
+    assert value["preparation"]["coverage_admission"] == {
+        "schema_version": 1,
+        "policy": "all-approved-origins-and-rendered-resources",
+        "required_origins": ["https://cdn.test", "https://page.test"],
+        "required_resources": [
+            {"id": 0, "url": "https://page.test/"},
+            {"id": 1, "url": "https://cdn.test/app.js"},
+        ],
+    }
+    assert result.resource_count == 2
+    assert result.origin_count == 2
+
+
+def test_prepare_complete_coverage_requires_a_rendered_get_from_every_approved_origin(
+    tmp_path,
+    monkeypatch,
+):
+    discovery = discovered()
+    discovery.resources = discovery.resources[:1]
+    monkeypatch.setattr(prepare, "discover_page", lambda *_args, **_kwargs: discovery)
+    monkeypatch.setattr(
+        prepare,
+        "run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("probe used")),
+    )
+
+    with pytest.raises(
+        prepare.PreparationError,
+        match=r"browser-rendered HTTPS GET.*missing origins: https://cdn\.test",
+    ):
+        prepare.prepare_workload(
+            "missing-approved-origin",
+            "https://page.test/",
+            ["https://page.test", "https://cdn.test"],
+            output_root=tmp_path,
+            require_complete_coverage=True,
+        )
+
+    assert not (tmp_path / "missing-approved-origin.json").exists()
 
 
 def test_prepare_canonicalizes_stale_probe_lengths_from_stable_get_evidence(
@@ -487,6 +543,16 @@ def test_probe_filter_prunes_unavailable_dependency_closure_without_rewriting_ed
         "url": "https://cdn.test/image.png",
         "reason": "HTTP/3 dependency unavailable",
     } in exclusions
+
+    with pytest.raises(
+        prepare.PreparationError,
+        match=r"every browser-rendered resource.*1 \(https://cdn\.test/app\.js\)",
+    ):
+        prepare.resolve_probe_output(
+            discovery,
+            resolved,
+            require_complete_coverage=True,
+        )
 
 
 def test_probe_filter_rejects_an_unavailable_navigation_document():

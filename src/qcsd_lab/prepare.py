@@ -13,6 +13,7 @@ from typing import Any
 
 from .discover import DiscoveryResult, discover_page, origin
 from .manifest import (
+    COMPLETE_COVERAGE_POLICY,
     canonical_bytes,
     project_stable_response_lengths,
     runtime_manifest,
@@ -74,6 +75,7 @@ def prepare_workload(
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
     stability_runs: int = DEFAULT_STABILITY_RUNS,
     stability_interval_seconds: int = DEFAULT_STABILITY_INTERVAL_SECONDS,
+    require_complete_coverage: bool = False,
 ) -> PreparedWorkload:
     """Discover, probe, stability-check, and freeze one replay workload.
 
@@ -91,6 +93,7 @@ def prepare_workload(
         timeout_seconds=timeout_seconds,
         stability_runs=stability_runs,
         stability_interval_seconds=stability_interval_seconds,
+        require_complete_coverage=require_complete_coverage,
     )
     root = output_root or (LAB_ROOT / "config" / "workloads")
     output = root / f"{workload_id}.json"
@@ -101,6 +104,9 @@ def prepare_workload(
         source_url,
         allow_origins=approved_origins,
         timeout_ms=timeout_ms,
+    )
+    coverage_admission = (
+        _complete_coverage_admission(discovery) if require_complete_coverage else None
     )
     root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=f".{workload_id}-prepare-", dir=root) as temporary:
@@ -113,7 +119,11 @@ def prepare_workload(
             max_response_bytes=max_response_bytes,
             timeout_seconds=timeout_seconds,
         )
-        resources, exclusions = resolve_probe_output(discovery, probe_output)
+        resources, exclusions = resolve_probe_output(
+            discovery,
+            probe_output,
+            require_complete_coverage=require_complete_coverage,
+        )
         resolved = {"resources": resources}
         evidence, runs, udp_payload_qualification = _probe_response_stability(
             resolved,
@@ -158,6 +168,9 @@ def prepare_workload(
             "stability_defense": STABILITY_DEFENSE,
             "stability_seed": STABILITY_SEED,
             "udp_payload_qualification": udp_payload_qualification,
+            **(
+                {"coverage_admission": coverage_admission} if coverage_admission is not None else {}
+            ),
             **provenance,
             "expected_responses": evidence["expected_responses"],
         },
@@ -182,6 +195,7 @@ def _validate_arguments(
     timeout_seconds: int,
     stability_runs: int,
     stability_interval_seconds: int,
+    require_complete_coverage: bool,
 ) -> None:
     if not isinstance(workload_id, str) or not WORKLOAD_ID.fullmatch(workload_id):
         raise ValueError("workload ID must contain lowercase letters, digits, and single hyphens")
@@ -189,6 +203,8 @@ def _validate_arguments(
         raise ValueError(f"source URL is not absolute HTTPS: {source_url}")
     if not isinstance(approved_origins, list) or not approved_origins:
         raise ValueError("workload preparation requires at least one approved origin")
+    if not isinstance(require_complete_coverage, bool):
+        raise ValueError("complete coverage admission must be boolean")
     values = {
         "discovery timeout": timeout_ms,
         "maximum response bytes": max_response_bytes,
@@ -252,9 +268,13 @@ def _probe(
 def resolve_probe_output(
     discovery: DiscoveryResult,
     resolved: dict[str, Any],
+    *,
+    require_complete_coverage: bool = False,
 ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
     """Retain the fetchable dependency closure without rewriting graph edges."""
 
+    if not isinstance(require_complete_coverage, bool):
+        raise ValueError("complete coverage admission must be boolean")
     source_by_id = {resource["id"]: resource for resource in discovery.resources}
     resolved_by_id = {resource["id"]: resource for resource in resolved["resources"]}
     if set(source_by_id) != set(resolved_by_id):
@@ -270,6 +290,15 @@ def resolve_probe_output(
     unavailable = [
         resource for resource in resolved["resources"] if resource.get("known_valid") is not True
     ]
+    if require_complete_coverage and unavailable:
+        details = ", ".join(
+            f"{resource['id']} ({resource['url']})"
+            for resource in sorted(unavailable, key=lambda item: item["id"])
+        )
+        raise PreparationError(
+            "complete coverage requires every browser-rendered resource to pass the HTTP/3 "
+            f"preflight; unavailable resource IDs/URLs: {details}"
+        )
     retained_ids = {
         resource["id"] for resource in resolved["resources"] if resource.get("known_valid") is True
     }
@@ -317,6 +346,26 @@ def resolve_probe_output(
     prepared = {"resources": resources}
     validate_manifest(prepared)
     return resources, exclusions
+
+
+def _complete_coverage_admission(discovery: DiscoveryResult) -> dict[str, Any]:
+    """Bind an opt-in requirement covering every approved origin and rendered GET."""
+
+    retained_origins = {origin(resource["url"]) for resource in discovery.resources}
+    missing = set(discovery.approved_origins) - retained_origins
+    if missing:
+        raise PreparationError(
+            "complete coverage requires a browser-rendered HTTPS GET from every approved "
+            "origin; missing origins: " + ", ".join(sorted(missing))
+        )
+    return {
+        "schema_version": 1,
+        "policy": COMPLETE_COVERAGE_POLICY,
+        "required_origins": list(discovery.approved_origins),
+        "required_resources": [
+            {"id": resource["id"], "url": resource["url"]} for resource in discovery.resources
+        ],
+    }
 
 
 def _probe_response_stability(

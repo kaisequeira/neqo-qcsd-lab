@@ -43,6 +43,14 @@ checkout is not clean.
 ./qcsd-lab prepare example https://example.com/ https://example.com
 ```
 
+For a cohort that must retain its complete approved multi-origin render graph:
+
+```shell
+./qcsd-lab prepare example-r2 https://example.com/ \
+  https://example.com https://static.example.com \
+  --require-complete-coverage
+```
+
 The arguments are a new workload ID, a page URL, and one or more explicitly
 approved HTTPS origins. Preparation:
 
@@ -52,6 +60,16 @@ approved HTTPS origins. Preparation:
 4. checks repeated status, byte count, and body identity;
 5. freezes the concrete request headers and dependency graph in
    `config/workloads/<id>.json`.
+
+Discovery pauses every request before transmission. Only explicitly approved
+HTTPS `GET` requests are continued; other methods and origins are aborted and
+recorded as exclusions. `--require-complete-coverage` additionally requires at
+least one rendered resource from every approved origin and rejects preparation
+if any approved rendered resource is unavailable over HTTP/3. Its frozen
+coverage-admission receipt makes that stricter contract auditable. Without the
+flag, the historical behavior remains: HTTP/3-unavailable resources and their
+orphaned dependency closure may be excluded when the navigation root remains
+valid.
 
 Preparation refuses to overwrite an existing ID. Chromium is not used during
 measurement. There is no runtime header-policy switch: the exact safe headers
@@ -130,6 +148,23 @@ body length, and body SHA-256. Only an explicit identity or capacity rejection
 advances to the next candidate; transport, DNS, timeout, or protocol failures
 abort the transaction. Publication is atomic, and no v2 sidecar hash exists
 until that exact five-file transaction succeeds from a clean build.
+
+The unqualified command above is the immutable legacy route to `v2`. A new
+cohort instead uses an explicit safe set name and a campaign binding:
+
+```shell
+./qcsd-lab qualify-response-chaff --set classifier-multiorigin5-v1 \
+  <workload-1> <workload-2> <workload-3> <workload-4> <workload-5>
+```
+
+This publishes create-only under
+`config/chaff-response-qualification-store/sets/classifier-multiorigin5-v1/`;
+the parent `sets/` directory is tracked so a clean clone never creates it as an
+unreviewed side effect. Each consuming FRONT/Tamaraw campaign must declare
+`chaff_qualification_set: classifier-multiorigin5-v1`. The selected five
+sidecars are copied into the result's frozen `inputs/chaff-qualifications/`
+tree, so resume and verification never consult the live set. Omitting the
+campaign field preserves the exact legacy `v2` lookup.
 
 The active exact-five cohort was qualified atomically from clean Lab Q6
 `0d0b1984c1d87b0502899cc451f1ed6ab6463d03`, tree

@@ -30,6 +30,14 @@ def parser() -> argparse.ArgumentParser:
     prepare.add_argument("id")
     prepare.add_argument("url")
     prepare.add_argument("approved_origins", nargs="+")
+    prepare.add_argument(
+        "--require-complete-coverage",
+        action="store_true",
+        help=(
+            "require every approved origin and browser-rendered HTTPS GET to survive "
+            "HTTP/3 preparation"
+        ),
+    )
 
     commands.add_parser(
         "qualify-chaff",
@@ -38,6 +46,11 @@ def parser() -> argparse.ArgumentParser:
     response_qualification = commands.add_parser(
         "qualify-response-chaff",
         help="atomically response-qualify an explicit five-workload FRONT/Tamaraw cohort",
+    )
+    response_qualification.add_argument(
+        "--set",
+        dest="qualification_set",
+        help="publish under config/chaff-response-qualification-store/sets/SET",
     )
     response_qualification.add_argument("workload_ids", nargs=5)
 
@@ -79,6 +92,7 @@ def main(argv: list[str] | None = None) -> None:
                 output_root=Path(
                     os.environ.get("QCSD_WORKLOAD_ROOT", str(LAB_ROOT / "config/workloads"))
                 ),
+                require_complete_coverage=args.require_complete_coverage,
             )
         except (FileExistsError, OSError, PreparationError, RuntimeError, ValueError) as error:
             _fail(error)
@@ -129,6 +143,7 @@ def main(argv: list[str] | None = None) -> None:
         try:
             qualified = qualify_all_response_chaff(
                 args.workload_ids,
+                qualification_set=args.qualification_set,
                 workload_root=Path(
                     os.environ.get("QCSD_WORKLOAD_ROOT", str(LAB_ROOT / "config/workloads"))
                 ),

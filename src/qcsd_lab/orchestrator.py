@@ -61,6 +61,7 @@ CAMPAIGN_KEYS = {
     "purpose",
     "seed",
     "profile",
+    "chaff_qualification_set",
     "workloads",
     "request_policies",
     "defenses",
@@ -135,6 +136,7 @@ class Campaign:
     request_policies: tuple[str, ...]
     defenses: tuple[capture_engine.Defense, ...]
     limits: capture_engine.Limits
+    chaff_qualification_set: str | None = None
 
     @property
     def udp_payload_ceiling(self) -> int:
@@ -214,6 +216,12 @@ def _load_campaign(
         raise ValueError(f"campaign is missing: {', '.join(sorted(missing))}")
     if value["schema"] != SCHEMA_VERSION:
         raise ValueError(f"campaign schema must be {SCHEMA_VERSION}")
+    if "chaff_qualification_set" not in value:
+        qualification_set = None
+    else:
+        from .chaff_qualification import validate_qualification_set
+
+        qualification_set = validate_qualification_set(value["chaff_qualification_set"])
     purpose = value["purpose"]
     if not isinstance(purpose, str):
         raise ValueError("campaign purpose must be a string")
@@ -253,6 +261,8 @@ def _load_campaign(
     )
     has_defended_run = any(not defense.baseline for defense in defenses)
     qualification_scope = _required_chaff_qualification_scope(defenses)
+    if qualification_set is not None and qualification_scope != RESPONSE_ONLY_CHAFF_SCOPE:
+        raise ValueError("chaff_qualification_set requires a response-only FRONT/Tamaraw campaign")
     current_prepared_inputs = all(
         isinstance(workload.data.get("preparation"), Mapping) for workload in workloads
     )
@@ -282,6 +292,7 @@ def _load_campaign(
             workloads,
             frozen_inputs=frozen_inputs,
             qualification_scope=qualification_scope,
+            qualification_set=qualification_set,
         )
     _validate_loaded_qualification_bindings(defenses, workloads)
     if any(_uses_schema_six_walkie_talkie(defense) for defense in defenses):
@@ -304,6 +315,7 @@ def _load_campaign(
         request_policies=tuple(policies),
         defenses=defenses,
         limits=limits,
+        chaff_qualification_set=qualification_set,
     )
     if purpose == "fitting":
         _validate_fitting_campaign(campaign, raw_limits=raw_limits)
@@ -340,6 +352,7 @@ def _load_qualified_chaff_inputs(
     *,
     frozen_inputs: Path | None,
     qualification_scope: str = FULL_CHAFF_SCOPE,
+    qualification_set: str | None = None,
 ) -> tuple[Workload, ...]:
     """Bind the selected immutable sidecar contract and derived manifest."""
 
@@ -354,7 +367,26 @@ def _load_qualified_chaff_inputs(
     if frozen_inputs is None:
         config_root = campaign_path.parent.parent
         if qualification_scope == RESPONSE_ONLY_CHAFF_SCOPE:
-            qualification_root = config_root / "chaff-response-qualification-store/v2"
+            if qualification_set is None:
+                qualification_root = config_root / "chaff-response-qualification-store/v2"
+            else:
+                from .chaff_qualification import validate_qualification_set
+
+                qualification_set = validate_qualification_set(qualification_set)
+                qualification_root = _trusted_regular_directory(
+                    config_root / "chaff-response-qualification-store" / "sets" / qualification_set,
+                    root=config_root,
+                    label="selected response qualification set",
+                )
+                expected_names = {f"{workload.id}.json" for workload in workloads}
+                entries = list(qualification_root.iterdir())
+                if {entry.name for entry in entries} != expected_names or any(
+                    entry.is_symlink() or not entry.is_file() for entry in entries
+                ):
+                    raise ValueError(
+                        "selected response qualification set does not contain the exact "
+                        "campaign workload cohort"
+                    )
             prefix_root: Path | None = None
         elif qualification_scope == FULL_CHAFF_SCOPE:
             qualification_root = config_root / "chaff-qualification-store/v2"
@@ -506,6 +538,29 @@ def _trusted_regular_input(path: Path, *, root: Path, label: str) -> Path:
         raise ValueError(f"trusted campaign input root is not a regular directory: {boundary}")
     if candidate.is_symlink() or not candidate.is_file():
         raise ValueError(f"{label} is not a regular file: {candidate}")
+    cursor = candidate.parent
+    while cursor != boundary and cursor != cursor.parent:
+        if cursor.is_symlink():
+            raise ValueError(f"{label} contains a symbolic-link component: {cursor}")
+        cursor = cursor.parent
+    if cursor != boundary:
+        raise ValueError(f"{label} escapes the trusted campaign input root: {candidate}")
+    resolved_root = boundary.resolve()
+    resolved = candidate.resolve()
+    if resolved_root not in resolved.parents:
+        raise ValueError(f"{label} escapes the trusted campaign input root: {candidate}")
+    return resolved
+
+
+def _trusted_regular_directory(path: Path, *, root: Path, label: str) -> Path:
+    """Reject a symlink or escape before resolving a trusted campaign directory."""
+
+    candidate = Path(path)
+    boundary = Path(root)
+    if boundary.is_symlink() or not boundary.is_dir():
+        raise ValueError(f"trusted campaign input root is not a regular directory: {boundary}")
+    if candidate.is_symlink() or not candidate.is_dir():
+        raise ValueError(f"{label} is not a regular directory: {candidate}")
     cursor = candidate.parent
     while cursor != boundary and cursor != cursor.parent:
         if cursor.is_symlink():
@@ -1151,7 +1206,7 @@ def preflight_campaign(path: Path) -> dict[str, Any]:
     if campaign.purpose == "fitting":
         _validate_fitting_capture_source(source_metadata())
     samples = plan_campaign(campaign)
-    return {
+    result = {
         "valid": True,
         "name": campaign.name,
         "purpose": campaign.purpose,
@@ -1185,6 +1240,9 @@ def preflight_campaign(path: Path) -> dict[str, Any]:
             for sample in samples
         ],
     }
+    if campaign.chaff_qualification_set is not None:
+        result["chaff_qualification_set"] = campaign.chaff_qualification_set
+    return result
 
 
 def run_campaign(path: Path, results_root: Path = Path("/lab/results")) -> Path:
@@ -2267,7 +2325,7 @@ def _frozen_configuration(root: Path, campaign: Campaign) -> dict[str, Any]:
                 input_policy=defense.parameters_input_policy,
             )
         defense_records.append(record)
-    return {
+    configuration = {
         "campaign_sha256": sha256_file(campaign.path),
         "profile": campaign.profile,
         "request_policies": list(campaign.request_policies),
@@ -2275,6 +2333,9 @@ def _frozen_configuration(root: Path, campaign: Campaign) -> dict[str, Any]:
         "defenses": defense_records,
         "limits": campaign.limits.as_dict(),
     }
+    if campaign.chaff_qualification_set is not None:
+        configuration["chaff_qualification_set"] = campaign.chaff_qualification_set
+    return configuration
 
 
 def _frozen_workload_record(root: Path, workload: Workload) -> dict[str, Any]:
