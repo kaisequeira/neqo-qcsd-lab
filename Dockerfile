@@ -379,7 +379,7 @@ COPY pyproject.toml uv.lock README.md ./
 COPY src/ ./src/
 RUN uv lock --check && \
     uv sync --frozen --no-dev --no-editable && \
-    ln -s /opt/qcsd-venv/bin/qcsd-lab-internal /usr/local/bin/qcsd-lab-internal
+    install -m 0755 /opt/qcsd-venv/bin/qcsd-lab-internal /usr/local/bin/qcsd-lab-internal
 
 FROM lab-runtime AS collection
 RUN apt-get update && apt-get install -y --no-install-recommends \
