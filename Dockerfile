@@ -1,10 +1,18 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
+ARG DOCKERFILE_FRONTEND=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 ARG RUST_IMAGE=docker.io/library/rust:1.90-bookworm@sha256:3914072ca0c3b8aad871db9169a651ccfce30cf58303e5d6f2db16d1d8a7e58f
 ARG DEBIAN_IMAGE=docker.io/library/debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818
+ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.10.7@sha256:edd1fd89f3e5b005814cc8f777610445d7b7e3ed05361f9ddfae67bebfe8456a
+
+# Copy the uv executable from an immutable multi-platform image.  Every
+# Python environment below is synchronized directly from uv.lock.
+FROM ${UV_IMAGE} AS uv-bin
 
 # Inspect the local parent checkout and submodule. This stage is also the
 # source of the immutable provenance copied into both runtime images.
 FROM ${DEBIAN_IMAGE} AS source-metadata
+ARG RUST_IMAGE
+ARG DEBIAN_IMAGE
 RUN apt-get update && apt-get install -y --no-install-recommends git python3 && \
     rm -rf /var/lib/apt/lists/*
 WORKDIR /source
@@ -31,10 +39,18 @@ RUN set -eu; \
     printf '{"image_digest":null,"lab_commit":"%s","lab_dirty":%s,"lab_patch_sha256":"%s","neqo_commit":"%s","neqo_pinned_commit":"%s","neqo_dirty":%s,"neqo_patch_sha256":"%s"}\n' \
       "${lab_commit}" "${lab_dirty}" "${lab_patch_sha256}" \
       "${neqo_commit}" "${neqo_pinned_commit}" "${neqo_dirty}" "${neqo_patch_sha256}" \
-      > /source-metadata.json
+      > /source-metadata.json; \
+    uv_lock_sha256="$(sha256sum uv.lock | cut -d ' ' -f 1)"; \
+    cargo_lock_sha256="$(sha256sum neqo-qcsd/Cargo.lock | cut -d ' ' -f 1)"; \
+    printf '{"artifact_type":"qcsd-study-build-inputs","cargo_lock_sha256":"%s","debian_base_image":"%s","rust_base_image":"%s","schema_version":1,"uv_lock_sha256":"%s"}\n' \
+      "${cargo_lock_sha256}" "${DEBIAN_IMAGE}" "${RUST_IMAGE}" "${uv_lock_sha256}" \
+      > /study-build-inputs.json
 
-# Hash the complete Python/source surface.  The final runtime stage adds hashes
-# of the installed modules, generated entrypoint, and Neqo client executable.
+# Hash the exact response-qualification execution surface.  BuFLO study,
+# reference, evaluator, and native-tool sources are bound separately by the
+# versioned study evidence rather than changing the sealed qualification
+# receipt contract.  The final runtime stage adds hashes of the installed
+# modules, generated entrypoint, and Neqo client executable.
 RUN python3 - <<'PY'
 import hashlib
 import json
@@ -49,12 +65,69 @@ paths = [
     "qcsd-lab",
     "uv.lock",
 ]
-paths += [path.relative_to(root).as_posix() for path in sorted((root / "src/qcsd_lab").rglob("*.py"))]
+paths += [
+    "src/qcsd_lab/__init__.py",
+    "src/qcsd_lab/analysis.py",
+    "src/qcsd_lab/capture.py",
+    "src/qcsd_lab/capture_session.py",
+    "src/qcsd_lab/chaff_qualification.py",
+    "src/qcsd_lab/cli.py",
+    "src/qcsd_lab/defenses.py",
+    "src/qcsd_lab/discover.py",
+    "src/qcsd_lab/experiment.py",
+    "src/qcsd_lab/fidelity.py",
+    "src/qcsd_lab/fitting.py",
+    "src/qcsd_lab/fitting_morphing.py",
+    "src/qcsd_lab/fitting_trace.py",
+    "src/qcsd_lab/fitting_walkie_talkie.py",
+    "src/qcsd_lab/fitting_wtfpad.py",
+    "src/qcsd_lab/manifest.py",
+    "src/qcsd_lab/orchestrator.py",
+    "src/qcsd_lab/parameters.py",
+    "src/qcsd_lab/plotting.py",
+    "src/qcsd_lab/prepare.py",
+    "src/qcsd_lab/profiles.py",
+    "src/qcsd_lab/report.py",
+    "src/qcsd_lab/util.py",
+    "src/qcsd_lab/verification.py",
+]
 files = {path: hashlib.sha256((root / path).read_bytes()).hexdigest() for path in paths}
 Path("/qualification-source-files.json").write_text(
     json.dumps(files, indent=2, sort_keys=True) + "\n", encoding="utf-8"
 )
 PY
+
+FROM ${DEBIAN_IMAGE} AS osad-builder
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev && \
+    rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY tools/qcsd_osad.c ./qcsd_osad.c
+RUN mkdir -p /out/usr/local/lib/qcsd && \
+    cc -O3 -std=c11 -fPIC -shared -Wall -Wextra -Werror \
+      qcsd_osad.c -o /out/usr/local/lib/qcsd/libqcsd_osad.so
+
+# Fetch the exact Weka 3.7.5 VNG++ runtime declared by the pinned reference
+# receipt.  Formal evaluation verifies these hashes again before execution.
+FROM ${DEBIAN_IMAGE} AS weka-builder
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && \
+    rm -rf /var/lib/apt/lists/*
+RUN mkdir -p /out/opt/qcsd/weka && \
+    curl --fail --location --retry 3 \
+      https://repo1.maven.org/maven2/nz/ac/waikato/cms/weka/weka-dev/3.7.5/weka-dev-3.7.5.jar \
+      -o /out/opt/qcsd/weka/weka-dev-3.7.5.jar && \
+    curl --fail --location --retry 3 \
+      https://repo1.maven.org/maven2/org/pentaho/pentaho-commons/pentaho-package-manager/0.9.9/pentaho-package-manager-0.9.9.jar \
+      -o /out/opt/qcsd/weka/pentaho-package-manager-0.9.9.jar && \
+    curl --fail --location --retry 3 \
+      https://repo1.maven.org/maven2/net/sf/squirrel-sql/thirdparty-non-maven/java-cup/0.11a/java-cup-0.11a.jar \
+      -o /out/opt/qcsd/weka/java-cup-0.11a.jar && \
+    printf '%s  %s\n' \
+      4d20516c9d32e3433b402f8898a2430cb4b519734ba4877c39726878c18ec4ad \
+      /out/opt/qcsd/weka/weka-dev-3.7.5.jar \
+      a336161c0e868d8334449eb5d695bc16c961fc545a51bae60ac091af1e5722ca \
+      /out/opt/qcsd/weka/pentaho-package-manager-0.9.9.jar \
+      9afcfd0996dcc9a933e66749988428ad964d8c1b678107fe688a6fa55325e17e \
+      /out/opt/qcsd/weka/java-cup-0.11a.jar | sha256sum -c -
 
 # Build NSS once from Mozilla's checksum-pinned combined NSS/NSPR release.
 # No Neqo repository is cloned in this image.
@@ -82,13 +155,195 @@ RUN set -eux; \
     if [ "${TARGETARCH}" = arm64 ]; then set -- "$@" --target=arm64; fi; \
     cd "${NSS_DIR}"; \
     bash ./build.sh "$@"
+RUN rustup component add --toolchain 1.90.0 rustfmt clippy
 
-# Release artifacts are built only from the local submodule working tree.
-FROM neqo-toolchain AS neqo-builder
+# Run every mandatory Rust gate against the same clean, gitlink-matched source
+# snapshot from which the release executables are built.  A failing gate makes
+# the collection target unbuildable.  Logs and their self-hashed receipt are
+# copied into the final image as immutable build evidence.
+FROM neqo-toolchain AS neqo-code-gate
 ARG TARGETARCH
+ARG RUST_IMAGE
+ARG UV_IMAGE
+ARG DOCKERFILE_FRONTEND
+ENV CARGO_TERM_COLOR=never
 WORKDIR /src
 COPY neqo-qcsd/ ./
 COPY --from=source-metadata /source-metadata.json /tmp/source-metadata.json
+COPY --from=source-metadata /study-build-inputs.json /tmp/study-build-inputs.json
+RUN RUST_IMAGE="${RUST_IMAGE}" python3 - <<'PY'
+import hashlib
+import json
+import os
+import re
+from pathlib import Path
+
+empty_sha256 = hashlib.sha256(b"").hexdigest()
+source_path = Path("/tmp/source-metadata.json")
+inputs_path = Path("/tmp/study-build-inputs.json")
+source = json.loads(source_path.read_text(encoding="utf-8"))
+inputs = json.loads(inputs_path.read_text(encoding="utf-8"))
+
+expected_source_keys = {
+    "image_digest",
+    "lab_commit",
+    "lab_dirty",
+    "lab_patch_sha256",
+    "neqo_commit",
+    "neqo_pinned_commit",
+    "neqo_dirty",
+    "neqo_patch_sha256",
+}
+if set(source) != expected_source_keys:
+    raise SystemExit("unexpected source-metadata schema")
+if source["image_digest"] is not None:
+    raise SystemExit("build-time source metadata must not claim an image digest")
+for field in ("lab_commit", "neqo_commit", "neqo_pinned_commit"):
+    if not re.fullmatch(r"[0-9a-f]{40}", source[field]):
+        raise SystemExit(f"invalid {field}")
+if source["lab_dirty"] or source["neqo_dirty"]:
+    raise SystemExit("Rust code gate requires clean Lab and Neqo checkouts")
+if source["lab_patch_sha256"] != empty_sha256:
+    raise SystemExit("clean Lab checkout has a non-empty patch hash")
+if source["neqo_patch_sha256"] != empty_sha256:
+    raise SystemExit("clean Neqo checkout has a non-empty patch hash")
+if source["neqo_commit"] != source["neqo_pinned_commit"]:
+    raise SystemExit("Neqo HEAD does not match the Lab gitlink")
+
+expected_input_keys = {
+    "artifact_type",
+    "cargo_lock_sha256",
+    "debian_base_image",
+    "rust_base_image",
+    "schema_version",
+    "uv_lock_sha256",
+}
+if set(inputs) != expected_input_keys:
+    raise SystemExit("unexpected study-build-inputs schema")
+if inputs["artifact_type"] != "qcsd-study-build-inputs" or inputs["schema_version"] != 1:
+    raise SystemExit("unexpected study-build-inputs identity")
+if inputs["rust_base_image"] != os.environ["RUST_IMAGE"]:
+    raise SystemExit("Rust base-image receipt differs from the code-gate image")
+cargo_lock_sha256 = hashlib.sha256(Path("Cargo.lock").read_bytes()).hexdigest()
+if inputs["cargo_lock_sha256"] != cargo_lock_sha256:
+    raise SystemExit("Cargo.lock differs from the source-metadata receipt")
+PY
+RUN --mount=type=cache,id=qcsd-cargo-registry-${TARGETARCH},target=/usr/local/cargo/registry \
+    --mount=type=cache,id=qcsd-cargo-git-${TARGETARCH},target=/usr/local/cargo/git \
+    bash -euxo pipefail -c '\
+      mkdir -p /out/rust-code-gate/logs; \
+      run_gate() { \
+        gate_name="$1"; shift; \
+        { \
+          printf "gate=%s\n" "${gate_name}"; \
+          printf "command="; printf "%q " "$@"; printf "\n"; \
+          "$@"; \
+          printf "status=passed\n"; \
+        } 2>&1 | tee "/out/rust-code-gate/logs/${gate_name}.log"; \
+      }; \
+      run_gate cargo-fmt cargo fmt --check; \
+      run_gate neqo-csdef-tests cargo test -p neqo-csdef --locked; \
+      run_gate neqo-transport-tests cargo test -p neqo-transport --features qcsd --locked; \
+      run_gate neqo-http3-tests cargo test -p neqo-http3 --features qcsd --locked; \
+      run_gate neqo-bin-tests cargo test -p neqo-bin --features qcsd --locked; \
+      run_gate workspace-clippy cargo clippy --workspace --all-targets --features qcsd --locked -- -D warnings; \
+    '
+RUN TARGETARCH="${TARGETARCH}" \
+    RUST_IMAGE="${RUST_IMAGE}" \
+    UV_IMAGE="${UV_IMAGE}" \
+    DOCKERFILE_FRONTEND="${DOCKERFILE_FRONTEND}" \
+    python3 - <<'PY'
+import hashlib
+import json
+import os
+import subprocess
+from pathlib import Path
+
+domain = "qcsd-rust-code-gate-v1"
+root = Path("/out/rust-code-gate")
+source_path = Path("/tmp/source-metadata.json")
+inputs_path = Path("/tmp/study-build-inputs.json")
+commands = [
+    {"gate": "cargo-fmt", "argv": ["cargo", "fmt", "--check"]},
+    {
+        "gate": "neqo-csdef-tests",
+        "argv": ["cargo", "test", "-p", "neqo-csdef", "--locked"],
+    },
+    {
+        "gate": "neqo-transport-tests",
+        "argv": ["cargo", "test", "-p", "neqo-transport", "--features", "qcsd", "--locked"],
+    },
+    {
+        "gate": "neqo-http3-tests",
+        "argv": ["cargo", "test", "-p", "neqo-http3", "--features", "qcsd", "--locked"],
+    },
+    {
+        "gate": "neqo-bin-tests",
+        "argv": ["cargo", "test", "-p", "neqo-bin", "--features", "qcsd", "--locked"],
+    },
+    {
+        "gate": "workspace-clippy",
+        "argv": [
+            "cargo",
+            "clippy",
+            "--workspace",
+            "--all-targets",
+            "--features",
+            "qcsd",
+            "--locked",
+            "--",
+            "-D",
+            "warnings",
+        ],
+    },
+]
+logs = {}
+for command in commands:
+    path = root / "logs" / f"{command['gate']}.log"
+    data = path.read_bytes()
+    if not data.endswith(b"status=passed\n"):
+        raise SystemExit(f"gate log has no terminal pass marker: {path}")
+    logs[command["gate"]] = {
+        "path": f"logs/{path.name}",
+        "bytes": len(data),
+        "sha256": hashlib.sha256(data).hexdigest(),
+    }
+
+def version(*argv):
+    return subprocess.check_output(argv, text=True).strip()
+
+receipt = {
+    "schema_version": 1,
+    "artifact_type": "qcsd-rust-code-gate",
+    "domain": domain,
+    "passed": True,
+    "target_arch": os.environ["TARGETARCH"],
+    "dockerfile_frontend": os.environ["DOCKERFILE_FRONTEND"],
+    "rust_base_image": os.environ["RUST_IMAGE"],
+    "uv_image": os.environ["UV_IMAGE"],
+    "source_metadata": json.loads(source_path.read_text(encoding="utf-8")),
+    "source_metadata_sha256": hashlib.sha256(source_path.read_bytes()).hexdigest(),
+    "study_build_inputs": json.loads(inputs_path.read_text(encoding="utf-8")),
+    "study_build_inputs_sha256": hashlib.sha256(inputs_path.read_bytes()).hexdigest(),
+    "commands": commands,
+    "logs": logs,
+    "tool_versions": {
+        "cargo": version("cargo", "--version"),
+        "clippy": version("cargo", "clippy", "--version"),
+        "rustc": version("rustc", "--version", "--verbose"),
+        "rustfmt": version("cargo", "fmt", "--version"),
+    },
+}
+payload = json.dumps(receipt, sort_keys=True, separators=(",", ":")).encode()
+receipt["sha256"] = hashlib.sha256(domain.encode() + b"\0" + payload).hexdigest()
+(root / "receipt.json").write_text(
+    json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+)
+PY
+
+# Release artifacts are built only from the source that passed every gate.
+FROM neqo-code-gate AS neqo-builder
+ARG TARGETARCH
 RUN --mount=type=cache,id=qcsd-cargo-registry-${TARGETARCH},target=/usr/local/cargo/registry \
     --mount=type=cache,id=qcsd-cargo-git-${TARGETARCH},target=/usr/local/cargo/git \
     neqo_commit="$(python3 -c 'import json; print(json.load(open("/tmp/source-metadata.json"))["neqo_commit"])')"; \
@@ -108,25 +363,39 @@ RUN --mount=type=cache,id=qcsd-cargo-registry-${TARGETARCH},target=/usr/local/ca
 # final targets.
 FROM ${DEBIAN_IMAGE} AS lab-runtime
 ENV DEBIAN_FRONTEND=noninteractive \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    UV_LINK_MODE=copy \
+    UV_NO_CACHE=1 \
+    UV_PROJECT_ENVIRONMENT=/opt/qcsd-venv \
+    UV_PYTHON_DOWNLOADS=never \
+    PATH=/opt/qcsd-venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates python3 python3-pip tini && \
+    ca-certificates python3 tini && \
     rm -rf /var/lib/apt/lists/*
+COPY --from=uv-bin /uv /uvx /usr/local/bin/
 WORKDIR /opt/qcsd-lab
-COPY pyproject.toml README.md ./
+COPY pyproject.toml uv.lock README.md ./
 COPY src/ ./src/
-RUN python3 -m pip install --break-system-packages .
+RUN uv lock --check && \
+    uv sync --frozen --no-dev --no-editable && \
+    ln -s /opt/qcsd-venv/bin/qcsd-lab-internal /usr/local/bin/qcsd-lab-internal
 
 FROM lab-runtime AS collection
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ethtool tshark util-linux wireshark-common && \
-    rm -rf /var/lib/apt/lists/* && \
-    python3 -m pip install --break-system-packages '.[test]'
+    default-jre-headless ethtool iproute2 time tshark util-linux wireshark-common && \
+    rm -rf /var/lib/apt/lists/*
+RUN uv lock --check && \
+    uv sync --frozen --no-dev --no-editable --extra test --extra evaluation
 COPY --from=neqo-builder /out/bin/ /usr/local/bin/
 COPY --from=neqo-builder /out/nss/ /opt/nss/
+COPY --from=neqo-code-gate /out/rust-code-gate/ \
+    /usr/share/qcsd-lab/rust-code-gate/
+COPY --from=osad-builder /out/usr/local/lib/qcsd/ /usr/local/lib/qcsd/
+COPY --from=weka-builder /out/opt/qcsd/weka/ /opt/qcsd/weka/
 COPY --from=source-metadata /source-metadata.json /usr/share/qcsd-lab/source.json
+COPY --from=source-metadata /study-build-inputs.json \
+    /usr/share/qcsd-lab/study-build-inputs.json
 COPY --from=source-metadata /qualification-source-files.json /tmp/qualification-source-files.json
 COPY --chmod=0755 docker/collection-entrypoint /usr/local/bin/
 RUN python3 - <<'PY'
@@ -185,13 +454,27 @@ LABEL org.opencontainers.image.title="neqo-qcsd-lab collection" \
       org.opencontainers.image.nspr.version="4.38.2"
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/collection-entrypoint"]
 
+# The pinned author implementation is mounted read-only only into this
+# network-isolated target.  It is never copied into the collection image.
+FROM lab-runtime AS reference
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    autoconf build-essential libssl-dev zlib1g-dev && \
+    rm -rf /var/lib/apt/lists/*
+COPY --from=source-metadata /source-metadata.json /usr/share/qcsd-lab/source.json
+ENV QCSD_LAB_SOURCE_METADATA=/usr/share/qcsd-lab/source.json
+COPY tools/qcsd_csbuflo_author_harness.c \
+    /usr/local/share/qcsd-lab/qcsd_csbuflo_author_harness.c
+ENTRYPOINT ["qcsd-lab-internal"]
+
 # Workload preparation is one public operation. This image contains both the
 # browser discovery stack and the exact Neqo binary used for HTTP/3 preflight.
 FROM collection AS prepare
 RUN apt-get update && apt-get install -y --no-install-recommends \
     chromium fonts-liberation && \
-    rm -rf /var/lib/apt/lists/* && \
-    python3 -m pip install --break-system-packages '.[discovery]'
+    rm -rf /var/lib/apt/lists/*
+RUN uv lock --check && \
+    uv sync --frozen --no-dev --no-editable \
+      --extra test --extra evaluation --extra discovery
 ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 LABEL org.opencontainers.image.title="neqo-qcsd-lab prepare" \
       org.opencontainers.image.source="https://github.com/kaisequeira/neqo-qcsd-lab"

@@ -1,0 +1,26 @@
+schema: 1
+name: buflo-study-v1-formal-09-1200
+purpose: evaluation
+seed: 2027115003
+profile: research-1200
+chaff_qualification_set: buflo-study-public5-v1
+defense_order: {scheme: cyclic-latin-square, block: 8}
+workloads:
+  serde-home-r2: 10
+  rfc9114-text-r2: 10
+  getbootstrap-home-r4: 10
+  cloudflare-quiche-r4: 10
+  hyper-basic-client-r3: 10
+request_policies: [as-defined]
+defenses:
+  - undefended
+  - {name: buflo, kind: buflo, parameters: ../defense-params/buflo-live.json}
+  - {name: cs-buflo, kind: cs_buflo, parameters: ../defense-params/cs-buflo-ctsp-live.json}
+limits: &formal_limits
+  timeout_seconds: 120
+  max_response_bytes: 1048576
+  capture_seconds: 180
+  capture_megabytes: 64
+  max_attempts: 3
+  per_origin_cooldown_seconds: 30
+  settle_seconds: 1

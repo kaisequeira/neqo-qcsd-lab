@@ -1,0 +1,66 @@
+{
+  "artifact_type": "qcsd-classifier-primary-reference",
+  "author_artifact": {
+    "arff_missing_value_policy": "absent sparse feature names become numeric zero",
+    "arff_vocabulary": "union of training and testing feature names",
+    "commit": "372ced4c84b867086394cbd736b089e5cad4969b",
+    "panchenko": {
+      "classifier": "Weka LibSVM RBF",
+      "parameters": {
+        "c": 131072,
+        "gamma": 0.0000019073486328125,
+        "kernel": "RBF"
+      },
+      "runtime_resolution": {
+        "status": "clean-room-backend-required",
+        "reason": "the pinned author tree supplies Python 2 feature code but not a checksum-pinned Weka LibSVM package/runtime; the author ARFF helper also derives its vocabulary from the train-plus-test union, which is inadmissible for the temporal holdout",
+        "replacement": "exact receipted author feature definitions with scikit-learn's libsvm-compatible RBF SVC at the published C and gamma"
+      }
+    },
+    "runtime": "Python 2 classifier feature code and Weka 3.7.5",
+    "vngplusplus": {
+      "classifier": "weka.classifiers.bayes.NaiveBayes",
+      "parameters": [
+        "-K"
+      ],
+      "weka_semantics": "numeric-attribute kernel density estimators rather than Gaussian estimators"
+    }
+  },
+  "feature_semantics": {
+    "common": {
+      "directional_packet_order": true,
+      "rounding": "Python 2 round() at zero digits; half-way values away from zero",
+      "trace_time": "maximum of per-packet times quantized by pcapparser.py as int(round((ts-start)*1000,0)) under Python 2 (non-negative half-way values round up)"
+    },
+    "panchenko": [
+      "direction-and-length packet histogram",
+      "directional burst-byte markers rounded to 600 bytes",
+      "directional burst-count markers with the published 4/5, 7/8, and 10-13 buckets",
+      "initial incoming HTML-byte marker rounded to 600 bytes",
+      "directional unique-size counts rounded to 2",
+      "directional packet percentages rounded to 5",
+      "directional packet counts rounded to 15",
+      "directional bandwidth markers rounded to 10000 bytes"
+    ],
+    "vngplusplus": [
+      "directional burst-byte markers rounded to 600 bytes",
+      "exact directional bandwidth totals",
+      "maximum packet time in milliseconds"
+    ]
+  },
+  "qcsd_adaptation": {
+    "classifier_protocol": "five-class temporal and paper-style views are contextual rather than reproductions of the original 120-site experiment",
+    "feature_vocabulary": "training-only; unlike the author ARFF helper, held-out feature names do not influence model dimensionality",
+    "observation_layer": "identifier-free Ethernet observer-frame timestamp, direction, and length",
+    "panchenko_backend": "clean-room features with scikit-learn's libsvm-compatible RBF SVC using the pinned author parameters",
+    "vngplusplus_backend": "clean-room features passed to hash-pinned Weka 3.7.5 NaiveBayes -K"
+  },
+  "reference_id": "panchenko-vngpp-sp-2012-v1",
+  "schema_version": 1,
+  "validation_gates": [
+    "Formal VNG++ evaluation fails closed unless all Weka 3.7.5 runtime JAR hashes match.",
+    "Held-out samples never contribute feature names, labels, tuning choices, or fitted values.",
+    "The evaluation receipt records the classifier reference, Weka dependencies, Java runtime, model parameters, protocol, and predictions.",
+    "Accuracy proximity is contextual and cannot establish paper equivalence across transport, observation layer, class count, or split protocol."
+  ]
+}

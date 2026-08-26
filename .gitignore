@@ -3,6 +3,7 @@
 /artifacts/*
 !/artifacts/README.md
 /handoffs/
+/config/chaff-response-qualification-store/sets/buflo-study-public5-v*/
 /.cache/
 /.pytest_cache/
 /.ruff_cache/

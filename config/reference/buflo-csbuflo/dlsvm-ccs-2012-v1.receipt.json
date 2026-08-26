@@ -1,0 +1,68 @@
+{
+  "artifact_type": "qcsd-primary-reference-receipt",
+  "clean_room": true,
+  "reference_file": {
+    "path": "dlsvm-ccs-2012-v1.json",
+    "sha256": "f1f51ed1228e9599cbac05dbef75300f319885d32c2e9a4c9d16c57d2e0dc4a6"
+  },
+  "reference_id": "dlsvm-ccs-2012-v1",
+  "schema_version": 1,
+  "sources": [
+    {
+      "kind": "primary-paper",
+      "sha256": "737432f7d90b986422f562de208ba22a34fccbfb41b3cb14e2ea2b2a9397c3f6",
+      "source_id": "cai-ccs-2012-paper-pdf",
+      "url": "https://www.freehaven.net/anonbib/cache/ccs2012-fingerprinting.pdf"
+    },
+    {
+      "kind": "primary-author-follow-up",
+      "sha256": "65082d841773d50654e569c84482188769739cefddb54bd212ebf200c4e6f86e",
+      "source_id": "wang-goldberg-wpes-2013-report-pdf",
+      "url": "https://cacr.uwaterloo.ca/techreports/2013/cacr2013-10.pdf"
+    },
+    {
+      "kind": "author-follow-up-artifact-index",
+      "retrieved_on": "2026-08-27",
+      "sha256": "c59838daa128184cb3fe8ed1d6df2cf1895aa0305efbf2de258294f82eef2a1b",
+      "source_id": "wang-osad-repository-index",
+      "url": "https://www.cs.sfu.ca/~taowang/wf/attacks/"
+    },
+    {
+      "etag": "cd8-5ca43639775d3",
+      "kind": "author-follow-up-reference-code",
+      "last_modified": "2021-08-24T00:41:06Z",
+      "sha256": "a7de59ac2b45bff6ecdc19a9b29bbd0e5b65fa19119b1ae0b71eb3befa999ec8",
+      "source_id": "wang-ca-osad-wrapper",
+      "url": "https://www.cs.sfu.ca/~taowang/wf/attacks/Ca-OSAD.py"
+    },
+    {
+      "etag": "41cb-5b404e8088925",
+      "kind": "author-follow-up-reference-code",
+      "last_modified": "2020-11-13T22:54:09Z",
+      "sha256": "be6a33a07f037c8f5fb292b5cb6b695a1e854238988049960b33b196a068fd68",
+      "source_id": "wang-cllev-cpp",
+      "url": "https://www.cs.sfu.ca/~taowang/wf/attacks/clLev.cpp"
+    },
+    {
+      "etag": "edd-5b404e80846af",
+      "kind": "author-follow-up-reference-code",
+      "last_modified": "2020-11-13T22:54:09Z",
+      "sha256": "5a8ef5eb62f8d5989b4dfad99e8ffb6da9dbaa953c8b26fc01feb36fc2b0c8bf",
+      "source_id": "wang-clgen-stratify-cpp",
+      "url": "https://www.cs.sfu.ca/~taowang/wf/attacks/clgen_stratify.cpp"
+    },
+    {
+      "kind": "author-follow-up-reference-dependency",
+      "last_modified": "2021-08-23T23:38:13Z",
+      "sha256": "bbb0201bec7a94f06dd736998ccc326399975573310f443b6c1b7db11f69d819",
+      "source_id": "wang-loaders-py",
+      "url": "https://www.cs.sfu.ca/~taowang/wf/attacks/loaders.py"
+    },
+    {
+      "kind": "author-follow-up-reference-config",
+      "sha256": "0e4bf274e9140afcccb4dd83fc4cc1d1b74724abaee44ba0b2694f0f78a44aaf",
+      "source_id": "wang-options-template",
+      "url": "https://www.cs.sfu.ca/~taowang/wf/attacks/options-temp"
+    }
+  ]
+}

@@ -49,6 +49,7 @@ def test_internal_cli_contains_only_container_workflow_boundaries():
         "verify",
         "analyze",
         "fit",
+        "buflo-study",
         "test",
     }
 
@@ -114,13 +115,38 @@ def test_prepare_complete_coverage_is_explicit_and_opt_in():
     assert strict.approved_origins == ["https://page.test", "https://cdn.test"]
 
 
+def test_buflo_cohort_version_is_positive_unique_and_defaults_to_one():
+    assert cli.parser().parse_args(["buflo-study", "reference"]).cohort_version == 1
+    assert (
+        cli.parser().parse_args(
+            ["buflo-study", "reference", "--cohort-version=2"]
+        ).cohort_version
+        == 2
+    )
+    for arguments in (
+        ["buflo-study", "reference", "--cohort-version", "0"],
+        ["buflo-study", "reference", "--cohort-version=-1"],
+        ["buflo-study", "reference", "--cohort-version", "01"],
+        [
+            "buflo-study",
+            "reference",
+            "--cohort-version",
+            "2",
+            "--cohort-version=3",
+        ],
+    ):
+        with pytest.raises(SystemExit) as exit_status:
+            cli.parser().parse_args(arguments)
+        assert exit_status.value.code == 2
+
+
 def test_launcher_routes_only_consolidated_public_commands():
     launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
     assert (
-        "{build|prepare|derive-chaff-prefix-specs|qualify-chaff|qualify-response-chaff|run|resume|verify|analyze|fit|test}"
+        "{build|prepare|derive-chaff-prefix-specs|qualify-chaff|qualify-response-chaff|run|resume|verify|analyze|fit|buflo-study|test}"
         in launcher
     )
-    assert 'run|resume|verify|analyze|fit|test) image="${COLLECTION_IMAGE}"' in launcher
+    assert 'run|resume|verify|analyze|fit|buflo-study|test) image="${COLLECTION_IMAGE}"' in launcher
     assert launcher.count("start_capture_acceptance_server") == 3
     assert "ethtool -K eth0 gro off gso off tso off tx-udp-segmentation off" in launcher
     assert "--cap-drop ALL" in launcher

@@ -1043,6 +1043,7 @@ def test_controlled_schema_six_walkie_talkie_uses_real_a_r_c_wire_path(
     assert diagnostics["scheduled_incoming_requested_bytes"] > 0
     assert (
         diagnostics["scheduled_incoming_requested_bytes"]
+        == diagnostics["scheduled_incoming_advertised_bytes"]
         == diagnostics["scheduled_incoming_consumed_bytes"]
     )
     assert diagnostics["scheduled_incoming_retired_bytes"] == 0
@@ -1315,6 +1316,7 @@ def _assert_defense_schedule_and_credit(attempt: Path, run: dict[str, Any]) -> N
     assert diagnostics["scheduled_incoming_requested_bytes"] > 0
     assert (
         diagnostics["scheduled_incoming_requested_bytes"]
+        == diagnostics["scheduled_incoming_advertised_bytes"]
         == diagnostics["scheduled_incoming_consumed_bytes"]
     )
     assert diagnostics["scheduled_incoming_retired_bytes"] == 0

@@ -26,6 +26,199 @@ below. The classifier handoff exporter is a separate offline tool so adding or
 changing it cannot alter the implementation receipt already bound by the
 qualified defences.
 
+### BuFLO/CS-BuFLO candidate study
+
+`buflo` and `cs-buflo` are client-only QUIC adaptations. They use ordinary
+HTTP/3 servers and standard QUIC traffic; they are not bilateral or
+paper-equivalent implementations. Until a typed
+`validation-attestation.json` independently verifies every gate, the project
+status is **five validated defences plus two candidates** (nine selectable
+modes including `undefended` and `static`).
+
+The versioned coordinator exposes nine fail-closed actions: `reference`,
+`qualify`, `historical-snapshot`, `freeze-cohort`, `code-gate`, `capture`,
+`export`, `evaluate`, and `verify`. The following Bash sequence is the complete
+evidence workflow. It assumes the fixed create-only destinations do not yet
+exist and that `REFERENCE_ROOT` names the absolute directory containing the
+pinned external paper, author-source, and archive inputs.
+
+```bash
+set -euo pipefail
+REFERENCE_ROOT=/absolute/pinned-reference-inputs
+COHORT_VERSION=1
+REFERENCE="artifacts/buflo-study/reference-execution-v${COHORT_VERSION}.json"
+QUALIFICATION="artifacts/buflo-study/qualification-v${COHORT_VERSION}.json"
+CONTROLLED_ROOT="results/buflo-study-controlled-v${COHORT_VERSION}"
+REGRESSION_ROOT="results/buflo-study-regression-v${COHORT_VERSION}"
+CODE_GATE="artifacts/buflo-study/code-gate-v${COHORT_VERSION}.json"
+
+# Builds all three targets with --pull --no-cache and creates the immutable
+# artifacts/buflo-study/build-execution-v${COHORT_VERSION}.json receipt.
+./qcsd-lab build --cohort-version "$COHORT_VERSION"
+./qcsd-lab buflo-study reference \
+  --reference-root "$REFERENCE_ROOT" --destination "$REFERENCE" \
+  --cohort-version "$COHORT_VERSION"
+
+# Test-only local captures. The wrapper provisions bilateral qdiscs and holds
+# the study-wide acquisition lock.
+./qcsd-lab buflo-study capture --stage controlled \
+  --cohort-version "$COHORT_VERSION" --destination "$CONTROLLED_ROOT"
+./qcsd-lab buflo-study capture --stage regression \
+  --cohort-version "$COHORT_VERSION" --destination "$REGRESSION_ROOT"
+
+mapfile -t CONTROLLED < <(python3 -c '
+import json,sys
+v=json.load(open(sys.argv[1], encoding="utf-8"))
+for key in sorted(v["profiles"]): print(v["profiles"][key])
+' "$CONTROLLED_ROOT/controlled-results.json")
+mapfile -t REGRESSION < <(python3 -c '
+import json,sys
+v=json.load(open(sys.argv[1], encoding="utf-8"))
+for key in sorted(v["campaigns"]): print(v["campaigns"][key])
+' "$REGRESSION_ROOT/regression-results.json")
+CONTROLLED_ARGS=()
+for root in "${CONTROLLED[@]}"; do
+  CONTROLLED_ARGS+=(--controlled-result "$root")
+done
+REGRESSION_ARGS=()
+for root in "${REGRESSION[@]}"; do
+  REGRESSION_ARGS+=(--result "$root")
+done
+
+# This one action first revalidates controlled160, creates or resumes the exact
+# public5 sustained-chaff set, verifies it, then publishes the typed receipt.
+./qcsd-lab buflo-study qualify "${CONTROLLED_ARGS[@]}" \
+  --cohort-version "$COHORT_VERSION" --destination "$QUALIFICATION"
+
+./qcsd-lab buflo-study code-gate "${REGRESSION_ARGS[@]}" \
+  --cohort-version "$COHORT_VERSION" --destination "$CODE_GATE"
+
+SMOKE="$(
+  ./qcsd-lab buflo-study capture --stage smoke \
+    --cohort-version "$COHORT_VERSION" \
+    --reference-receipt "$REFERENCE" \
+    --qualification-receipt "$QUALIFICATION" \
+    "${REGRESSION_ARGS[@]}" \
+    --destination "artifacts/buflo-study/smoke-admission-v${COHORT_VERSION}.json" |
+  python3 -c 'import json,sys; print(json.load(sys.stdin)["details"]["captured_results"][0])'
+)"
+REHEARSAL="$(
+  ./qcsd-lab buflo-study capture --stage rehearsal \
+    --cohort-version "$COHORT_VERSION" \
+    --reference-receipt "$REFERENCE" \
+    --qualification-receipt "$QUALIFICATION" \
+    "${REGRESSION_ARGS[@]}" --result "$SMOKE" \
+    --destination "artifacts/buflo-study/rehearsal-admission-v${COHORT_VERSION}.json" |
+  python3 -c 'import json,sys; print(json.load(sys.stdin)["details"]["captured_results"][0])'
+)"
+
+PRE="artifacts/buflo-study/historical-pre-formal-v${COHORT_VERSION}.json"
+COHORT="artifacts/buflo-study/formal-cohort-v${COHORT_VERSION}.json"
+./qcsd-lab buflo-study historical-snapshot --snapshot-phase pre-formal \
+  --cohort-version "$COHORT_VERSION" --destination "$PRE"
+./qcsd-lab buflo-study freeze-cohort \
+  --cohort-version "$COHORT_VERSION" --cohort-id "buflo-formal-v${COHORT_VERSION}" \
+  --historical-pre-snapshot "$PRE" --destination "$COHORT"
+
+mapfile -t FORMAL < <(
+  ./qcsd-lab buflo-study capture --stage formal \
+    --cohort-version "$COHORT_VERSION" \
+    --reference-receipt "$REFERENCE" \
+    --qualification-receipt "$QUALIFICATION" \
+    "${REGRESSION_ARGS[@]}" --result "$SMOKE" --result "$REHEARSAL" \
+    --historical-pre-snapshot "$PRE" --formal-cohort "$COHORT" \
+    --formal-window-hours 12.5 \
+    --destination "artifacts/buflo-study/formal-admission-v${COHORT_VERSION}.json" |
+  python3 -c '
+import json,sys
+for root in json.load(sys.stdin)["details"]["captured_results"]: print(root)
+'
+)
+
+POST_ARGS=()
+FORMAL_ARGS=()
+for root in "${FORMAL[@]}"; do
+  POST_ARGS+=(--result "$root")
+  FORMAL_ARGS+=(--formal-result "$root")
+done
+POST="artifacts/buflo-study/historical-post-formal-v${COHORT_VERSION}.json"
+./qcsd-lab buflo-study historical-snapshot --snapshot-phase post-formal \
+  --cohort-version "$COHORT_VERSION" \
+  --historical-pre-snapshot "$PRE" "${POST_ARGS[@]}" --destination "$POST"
+
+HANDOFF="handoffs/buflo-study-formal-v${COHORT_VERSION}"
+EVALUATION="artifacts/buflo-study/evaluation-formal-v${COHORT_VERSION}.json"
+./qcsd-lab buflo-study export --formal "${POST_ARGS[@]}" \
+  --cohort-version "$COHORT_VERSION" --destination "$HANDOFF"
+./qcsd-lab buflo-study evaluate --formal --handoff "$HANDOFF" \
+  --cohort-version "$COHORT_VERSION" \
+  --dlsvm-wall-seconds 45000 --destination "$EVALUATION"
+```
+
+Formal evaluation deliberately pauses for a human comparison review. Create
+`artifacts/buflo-study/comparison-review-vN.json` with the exact schema enforced
+by `validate_comparison_review`: it must hash-bind every QCSD comparison row,
+classify each discrepancy as `expected` or `resolved`, explain it, and retain
+`paper_equivalent: false`. Then the only promotion command is:
+
+```bash
+REVIEW="artifacts/buflo-study/comparison-review-v${COHORT_VERSION}.json"
+ATTESTATION="artifacts/buflo-study/validation-attestation-v${COHORT_VERSION}.json"
+REGRESSION_VERIFY_ARGS=()
+for root in "${REGRESSION[@]}"; do
+  REGRESSION_VERIFY_ARGS+=(--regression-result "$root")
+done
+
+./qcsd-lab buflo-study verify --formal --destination "$ATTESTATION" \
+  --cohort-version "$COHORT_VERSION" \
+  --reference-receipt "$REFERENCE" \
+  --code-gate-receipt "$CODE_GATE" \
+  --qualification-receipt "$QUALIFICATION" \
+  "${REGRESSION_VERIFY_ARGS[@]}" "${CONTROLLED_ARGS[@]}" \
+  --smoke-result "$SMOKE" --rehearsal-result "$REHEARSAL" \
+  "${FORMAL_ARGS[@]}" \
+  --capture-admission "artifacts/buflo-study/formal-admission-v${COHORT_VERSION}.json" \
+  --formal-cohort "$COHORT" --handoff "$HANDOFF" \
+  --evaluation-receipt "$EVALUATION" --comparison-review "$REVIEW" \
+  --historical-pre-snapshot "$PRE" --historical-post-snapshot "$POST"
+./qcsd-lab buflo-study verify --cohort-version "$COHORT_VERSION" \
+  --attestation "$ATTESTATION"
+```
+
+Omitting `--cohort-version` preserves the version-1 command contract. A code,
+parameter, workload, chaff, or acceptance-rule change after rehearsal instead
+starts a new positive version: first run
+`./qcsd-lab build --cohort-version N`, then pass the same option to every
+`buflo-study` action. Each build creates, and never replaces,
+`artifacts/buflo-study/build-execution-vN.json`. Qualification sets, rendered
+campaign inputs, reference execution, freeze/admission receipts, captures, and
+final verification are all checked against that exact receipt and its
+collection, prepare, and reference image IDs. A direct public `run` derives N
+from its capture admission; `resume` derives it only from the frozen
+`inputs/capture-admission.json`, so neither command can be redirected to a
+different cohort. Keep all earlier versioned evidence.
+
+The exact result arguments are the immutable result roots reported by the
+preceding stage; the coordinator rejects missing, extra, relabelled, or
+source-mismatched roots. The staged matrix is 18 test-only nine-mode regression
+samples, 160 controlled qualification samples, 20 public smoke samples, 40
+public rehearsal samples, then ten formal blocks totalling 1,500 focused
+samples. Formal admission additionally requires one exact clean no-cache image,
+the executed isolated reference receipt, at least 12.5 declared hours, and
+three times the storage projected from the verified smoke and rehearsal data.
+`experiment.json` is the only resume checkpoint. The coordinator automatically
+resumes the one prospectively selected root, preserves failed/interrupted
+physical-launch accounting, caps each study sample at three total launches,
+and never rewrites accepted samples. Rerun the same `capture` command with its
+existing `--capture-admission` instead of its `--destination` after an
+interruption.
+
+The reference image runs with networking disabled and checks the pinned paper,
+author-source, and CPSP archive bytes. The collection image never contains the
+author implementations. The dedicated handoff and evaluator do not modify the
+sealed `classifier-multiorigin5-v2` corpus, and classifiers receive only
+identifier-free timestamp, direction, and observer-frame length.
+
 ### `build`
 
 ```shell
@@ -1200,8 +1393,14 @@ Every remaining file has one job:
 - `neqo/schedule.csv` records one terminal row per scheduled slot and its
   observed realization. `target_time_us` is the defence's requested time;
   `action_time_us` is the first adapter action issued for that slot, including
-  an owned parser-liveness lease, while the terminal event remains available
-  in `events.csv`. It provides plot overlays and fidelity metrics.
+  an owned parser-liveness lease. For current incoming fixed opportunities,
+  `credit_advertised_at_us` is the complete local on-wire `MAX_STREAM_DATA`
+  boundary that rearms cadence, while `credit_consumed_at_us` is the distinct
+  later peer stream-offset-consumption boundary that terminalizes the slot;
+  both delay columns are measured from `action_time_us`. None of these fields
+  claims scheduled server-datagram timing or size. The same versioned nullable
+  suffix is present in `packets.csv` and `events.csv`. These records provide
+  plot overlays and fidelity metrics.
 - `failures/<sample-id>/attempt-NNN/` retains logs, partial captures, runner
   output, and other diagnostics produced by a completed failed attempt. The
   exact contents depend on the failure stage; the structured current failure

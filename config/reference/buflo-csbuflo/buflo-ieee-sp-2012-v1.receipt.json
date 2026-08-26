@@ -1,0 +1,60 @@
+{
+  "artifact_type": "qcsd-primary-reference-receipt",
+  "clean_room": true,
+  "reference_file": {
+    "path": "buflo-ieee-sp-2012-v1.json",
+    "sha256": "e00d9d233b56a7b60d5f204deef3061d13d19935c71d05ffeab078278e4c390f"
+  },
+  "reference_id": "buflo-ieee-sp-2012-v1",
+  "schema_version": 1,
+  "sources": [
+    {
+      "kind": "primary-paper",
+      "sha256": "a68dd316e37bc749cfd0f5becdb9b2faa77e7f6fdb575d3e067da2d9018297cc",
+      "source_id": "dyer-paper-pdf",
+      "url": "https://rist.tech.cornell.edu/papers/trafanal.pdf"
+    },
+    {
+      "git_commit": "372ced4c84b867086394cbd736b089e5cad4969b",
+      "kind": "author-reference-code",
+      "sha256": "d49c6475e079ca3f8d62acd739008a270d7130d41fc8f24cf239aa273aee85c3",
+      "source_id": "dyer-folklore-py",
+      "url": "https://raw.githubusercontent.com/kpdyer/website-fingerprinting/372ced4c84b867086394cbd736b089e5cad4969b/countermeasures/Folklore.py"
+    },
+    {
+      "git_commit": "372ced4c84b867086394cbd736b089e5cad4969b",
+      "kind": "author-reference-dependency",
+      "sha256": "7f96377ec570485d7df14e24d0199e359582f1eea62eeaf2ede5c0e1581c0139",
+      "source_id": "dyer-config-py",
+      "url": "https://raw.githubusercontent.com/kpdyer/website-fingerprinting/372ced4c84b867086394cbd736b089e5cad4969b/config.py"
+    },
+    {
+      "git_commit": "372ced4c84b867086394cbd736b089e5cad4969b",
+      "kind": "author-reference-dependency",
+      "sha256": "f91ab32df77845e01b076b07557fb4709251eb1ce6b8846a5129a563ea01f7b5",
+      "source_id": "dyer-packet-py",
+      "url": "https://raw.githubusercontent.com/kpdyer/website-fingerprinting/372ced4c84b867086394cbd736b089e5cad4969b/Packet.py"
+    },
+    {
+      "git_commit": "372ced4c84b867086394cbd736b089e5cad4969b",
+      "kind": "author-reference-dependency",
+      "sha256": "b5a76d0dc56a6275c754e716bdf5f5abcf27fbec6572c4ae51a929c39eef1336",
+      "source_id": "dyer-trace-py",
+      "url": "https://raw.githubusercontent.com/kpdyer/website-fingerprinting/372ced4c84b867086394cbd736b089e5cad4969b/Trace.py"
+    },
+    {
+      "git_commit": "372ced4c84b867086394cbd736b089e5cad4969b",
+      "kind": "author-reference-dependency",
+      "sha256": "cd5ac223ad9fca42a3b9ef321f28eec96dbbba44f8c1f8404373339ecc581878",
+      "source_id": "dyer-webpage-py",
+      "url": "https://raw.githubusercontent.com/kpdyer/website-fingerprinting/372ced4c84b867086394cbd736b089e5cad4969b/Webpage.py"
+    },
+    {
+      "git_commit": "372ced4c84b867086394cbd736b089e5cad4969b",
+      "kind": "author-reference-code",
+      "sha256": "1f6d593276ca36e006399fb7bfaed67cbef59528b85fe60840241cb2dc1f0996",
+      "source_id": "dyer-overhead-parser-py",
+      "url": "https://raw.githubusercontent.com/kpdyer/website-fingerprinting/372ced4c84b867086394cbd736b089e5cad4969b/parseResultsFile.py"
+    }
+  ]
+}

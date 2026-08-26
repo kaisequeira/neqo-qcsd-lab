@@ -147,4 +147,7 @@ def test_collection_client_adds_host_grace_and_preserves_timeout_diagnostics(
         "log": tmp_path / "client.log",
         "check": False,
         "timeout": 50.0,
+        "terminate_process_group": True,
     }
+    assert observed["command"][:2] == ["/usr/bin/time", "--quiet"]
+    assert observed["command"][-3:] == ["--", "neqo", "run"]

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import signal
 import subprocess
 import tempfile
 from pathlib import Path
@@ -30,6 +31,26 @@ SOURCE_METADATA_KEYS = {
     "neqo_dirty",
     "neqo_patch_sha256",
 }
+
+
+def require_disjoint_path(
+    destination: Path,
+    protected: list[Path] | tuple[Path, ...],
+    *,
+    label: str,
+) -> Path:
+    """Reject equality or ancestor/descendant overlap before an output is created."""
+
+    candidate = Path(destination).absolute().resolve(strict=False)
+    for value in protected:
+        boundary = Path(value).absolute().resolve(strict=False)
+        if (
+            candidate == boundary
+            or candidate.is_relative_to(boundary)
+            or boundary.is_relative_to(candidate)
+        ):
+            raise ValueError(f"{label} overlaps protected input: {boundary}")
+    return candidate
 
 
 class ProcessTimeoutError(TimeoutError):
@@ -133,9 +154,19 @@ def run(
     log: Path | None = None,
     check: bool = True,
     timeout: float | None = None,
+    terminate_process_group: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     if timeout is not None:
-        return _run_bounded(command, cwd=cwd, log=log, check=check, timeout=timeout)
+        return _run_bounded(
+            command,
+            cwd=cwd,
+            log=log,
+            check=check,
+            timeout=timeout,
+            terminate_process_group=terminate_process_group,
+        )
+    if terminate_process_group:
+        raise ValueError("process-group termination requires a bounded command")
     result = subprocess.run(
         command,
         cwd=cwd or (LAB_ROOT if LAB_ROOT.is_dir() else None),
@@ -173,6 +204,7 @@ def _run_bounded(
     log: Path | None,
     check: bool,
     timeout: float,
+    terminate_process_group: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     if timeout <= 0:
         raise ValueError("host timeout must be positive")
@@ -182,16 +214,23 @@ def _run_bounded(
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
+        start_new_session=terminate_process_group,
     )
     try:
         stdout, _stderr = process.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
-        process.terminate()
+        if terminate_process_group:
+            os.killpg(process.pid, signal.SIGTERM)
+        else:
+            process.terminate()
         killed = False
         try:
             stdout, _stderr = process.communicate(timeout=PROCESS_TERMINATE_GRACE_SECONDS)
         except subprocess.TimeoutExpired:
-            process.kill()
+            if terminate_process_group:
+                os.killpg(process.pid, signal.SIGKILL)
+            else:
+                process.kill()
             killed = True
             stdout, _stderr = process.communicate()
         action = "killed after terminate grace" if killed else "terminated"
@@ -290,6 +329,11 @@ def padding_event_guard_triggered(run_data: dict[str, Any]) -> bool:
     """Return whether the runtime's bounded-padding safety guard fired."""
 
     diagnostics = run_data.get("defense_diagnostics")
-    return (
-        isinstance(diagnostics, dict) and diagnostics.get("padding_event_guard_triggered") is True
+    return isinstance(diagnostics, dict) and any(
+        diagnostics.get(key) is True
+        for key in (
+            "padding_event_guard_triggered",
+            "buflo_event_guard_triggered",
+            "cs_buflo_event_guard_triggered",
+        )
     )

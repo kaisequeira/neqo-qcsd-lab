@@ -1,0 +1,117 @@
+{
+  "artifact_type": "qcsd-classifier-primary-reference",
+  "ccs_2012_specification": {
+    "ack_filter": {
+      "ssh_drop_packet_sizes_at_most_bytes": 84,
+      "tor_drop_packet_sizes_bytes": [
+        40,
+        52
+      ]
+    },
+    "distance": {
+      "code_review_resolution": "restricted-optimal-string-alignment-distance-not-unrestricted-damerau-levenshtein",
+      "insertion_cost": 2.0,
+      "normalization": "distance/min(packet-count-left,packet-count-right)",
+      "published_absolute_cost_ambiguity": "CCS-2012 states only that transpositions are twenty times cheaper; WPES-2013 Table 1 records the reviewed Cai-code costs used here",
+      "substitution_cost": 2.0,
+      "transposition_cost": 0.1,
+      "transpositions": "adjacent-restricted",
+      "deletion_cost": 2.0
+    },
+    "kernel": {
+      "formula": "exp(-gamma*normalized_distance**2)",
+      "gamma": 1.0,
+      "svm_c": 4.0,
+      "svm_multiclass": "libsvm-one-against-one"
+    },
+    "preprocessing": {
+      "default_trace_element": "signed-packet-size-bytes",
+      "direction_sign": {
+        "incoming": "negative",
+        "outgoing": "positive"
+      },
+      "packet_order_preserved": true,
+      "packet_size_ablation": "replace-each-packet-with-directional-plus-or-minus-one",
+      "tor_packet_size_rule": "round-up-to-a-multiple-of-600-bytes"
+    }
+  },
+  "formal_qcsd_scaling": {
+    "clean_room_exact_route": [
+      "compute restricted weighted OSA in compiled native code with three rolling rows",
+      "parallelize independent upper-triangle entries",
+      "hash each ordered trace and persist one symmetric distance matrix per defense",
+      "slice the cached matrix for every temporal and historical fold",
+      "compute only the four cross-defense undefended-train to defended-validation/test rectangles",
+      "validate native outputs against small exhaustive clean-room cases and the isolated pinned artifact on its common sign-only domain"
+    ],
+    "current_recomputed_pair_count": 4320450,
+    "exact_unique_pair_count": 455750,
+    "formal_samples": 1500,
+    "metric_complexity": "Theta(m*n)-time-per-trace-pair",
+    "notes": [
+      "The 1,500-sample cohort contains 500 traces per defense.",
+      "Three full within-defense upper triangles require 375,750 distances; the four non-duplicate temporal validation/test transfer rectangles require another 80,000.",
+      "The primary follow-up computed one full matrix once and sliced it for all ten folds.",
+      "The linear-time Fast Levenshtein-like metric is a different attack and must not replace DLSVM in a faithful comparison."
+    ]
+  },
+  "official_follow_up_artifact": {
+    "classification": "runnable-author-follow-up-lineage-not-byte-exact-CCS-2012-end-to-end-backend",
+    "compiler_runtime": [
+      "MPI C++ compiler and mpirun with at least one worker rank",
+      "LIBSVM precomputed-kernel train and predict binaries",
+      "Python 2 compatibility for the hosted Ca-OSAD.py wrapper"
+    ],
+    "hosted_variant": {
+      "distance": "LEV_METHOD=1 uses restricted OSA with insertion/deletion/substitution 2 and adjacent transposition 0.1",
+      "kernel": "clgen_stratify.cpp applies exp(-2*normalized_distance**2)",
+      "preprocessing": "clLev.cpp converts every nonzero input length to its sign and caps each trace at 5000 observations",
+      "svm_c": 1024.0
+    },
+    "non_equivalences_to_ccs_2012": [
+      "sign-only hosted input versus the CCS-2012 default signed packet-size representation",
+      "kernel coefficient 2 versus CCS-2012 gamma 1",
+      "SVM C 1024 versus CCS-2012 C 4",
+      "hosted sentinel and 5000-observation cap are not specified by CCS-2012"
+    ],
+    "repository_index": "https://www.cs.sfu.ca/~taowang/wf/attacks/",
+    "run_order": [
+      "compile and run clLev.cpp with LEV_METHOD=1 to generate pairwise distances",
+      "compile and run clgen_stratify.cpp to generate ten precomputed-kernel folds",
+      "run Ca-OSAD.py with the matching options and LIBSVM binaries"
+    ]
+  },
+  "performance_context": {
+    "official_repository_warning": "the hosted backend recommends more than 100 cores even for a relatively small data set",
+    "wpes_2013": {
+      "combined_osad_kernel_cpu_seconds": 608000,
+      "fast_levenshtein_like_kernel_cpu_seconds": 283,
+      "maximum_parallel_cores": 200,
+      "scope": "100 sites by 40 instances; combined OSAD and Fast-Levenshtein comparison, not a timing band for Cai OSAD or QCSD"
+    }
+  },
+  "qcsd_adaptation_limits": [
+    "QUIC ACK frames are encrypted, so the TCP/Tor fixed-size ACK filters cannot be reproduced from the observer trace.",
+    "QCSD signed Ethernet frame lengths are an explicit observer-layer adaptation, not the CCS-2012 TCP/Tor packet representation.",
+    "Five-class QUIC accuracy is not an absolute reproduction of the 100-site CCS-2012 or 120/200-site CS-BuFLO experiments.",
+    "Published attack percentages are contextual reference points only unless protocol, site count, preprocessing, split, code variant, and kernel parameters all match."
+  ],
+  "reference_id": "dlsvm-ccs-2012-v1",
+  "schema_version": 1,
+  "source_basis": [
+    "cai-ccs-2012-paper-pdf",
+    "wang-goldberg-wpes-2013-report-pdf",
+    "wang-osad-repository-index",
+    "wang-ca-osad-wrapper",
+    "wang-cllev-cpp",
+    "wang-clgen-stratify-cpp",
+    "wang-loaders-py",
+    "wang-options-template"
+  ],
+  "validation_gates": [
+    "Do not accept a DLSVM result produced with unit insertion/deletion/substitution and transposition 0.05 at gamma 1 as author-code-equivalent.",
+    "Do not accept the hosted follow-up backend as CCS-2012-equivalent without overriding and recording preprocessing, gamma, and C differences.",
+    "Do not start a formal exact run until a measured trace-length census and pair-throughput benchmark demonstrate bounded completion time.",
+    "Record trace hashes, distance-engine hash, parameter tuple, matrix hash, fold indices, LIBSVM version, and predictions in the evaluation receipt."
+  ]
+}

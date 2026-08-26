@@ -6,9 +6,16 @@ import html
 import re
 from collections import defaultdict
 from statistics import median
+from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from .defenses import DEFENSE_LABELS, DEFENSE_ORDER, canonical_defense
+from .defenses import (
+    DEFENSE_ADAPTATIONS,
+    DEFENSE_LABELS,
+    DEFENSE_ORDER,
+    DEFENSE_VARIANT_LABELS,
+    canonical_defense,
+)
 
 
 def _escape(value: object) -> str:
@@ -48,8 +55,16 @@ def _defense_display(record: Mapping[str, Any]) -> str:
     label = DEFENSE_LABELS.get(defense, defense)
     variant = record.get("defense_variant")
     if isinstance(variant, str) and variant and canonical_defense(variant) != defense:
-        return f"{label} ({variant})"
+        return DEFENSE_VARIANT_LABELS.get(canonical_defense(variant), f"{label} ({variant})")
     return label
+
+
+def _defense_status(record: Mapping[str, Any], *, study_validated: bool = False) -> str:
+    defense = canonical_defense(str(record.get("defense", "")))
+    if study_validated and defense in {"buflo", "cs-buflo"}:
+        return "validated client-only QCSD adaptation"
+    adaptation = DEFENSE_ADAPTATIONS.get(defense)
+    return adaptation.implementation_status if adaptation is not None else "custom"
 
 
 def _inline_svg(value: str, namespace: str = "figure") -> str:
@@ -78,10 +93,19 @@ def render_report(
     experiment: Mapping[str, Any],
     records: Sequence[Mapping[str, Any]],
     figures: Sequence[Mapping[str, str]],
+    *,
+    validation_attestation: Path | None = None,
 ) -> str:
     """Render a static report with all derived figures embedded inline."""
 
     status = str(experiment.get("status", "unknown"))
+    study_validated = False
+    attestation_binding: Mapping[str, Any] | None = None
+    if validation_attestation is not None:
+        from .buflo_study import validate_validation_attestation
+
+        attestation_binding = validate_validation_attestation(validation_attestation)
+        study_validated = True
     summary = experiment.get("summary")
     if not isinstance(summary, Mapping):
         summary = {}
@@ -112,6 +136,7 @@ def render_report(
         defense_rows.append(
             "<tr>"
             f"<td>{_escape(_defense_display(members[0]))}</td>"
+            f"<td>{_escape(_defense_status(members[0], study_validated=study_validated))}</td>"
             f"<td>{len(accepted)}/{len(members)}</td>"
             f"<td>{len(eligible)}</td>"
             f"<td>{_percent(median(overheads) if overheads else None)}</td>"
@@ -177,6 +202,31 @@ def render_report(
         if incomplete_rows
         else ""
     )
+    candidate_treatments = sorted(
+        {
+            _defense_display(record)
+            for record in records
+            if _defense_status(record, study_validated=study_validated) == "candidate"
+        }
+    )
+    candidate_section = (
+        '<p class="warning"><strong>Candidate implementations:</strong> '
+        + _escape(", ".join(candidate_treatments))
+        + ". Their captures are study evidence, not a claim of paper-equivalent or "
+        "appropriately implemented operation. Promotion requires every versioned BuFLO "
+        "study gate to pass. Current research status: five validated defenses plus two "
+        "candidates.</p>"
+        if candidate_treatments
+        else ""
+    )
+    validated_section = (
+        '<p class="validation"><strong>Validated study promotion:</strong> seven validated '
+        "research defenses / nine total modes. BuFLO and CS-BuFLO are each a validated "
+        "client-only QCSD adaptation; neither is bilateral or paper-equivalent. "
+        f"Attestation SHA-256: <code>{_escape(attestation_binding['sha256'])}</code>.</p>"
+        if study_validated and attestation_binding is not None
+        else ""
+    )
 
     css = """
     :root { color-scheme: light; font-family: system-ui, sans-serif; color: #222; }
@@ -192,6 +242,7 @@ def render_report(
     figcaption { margin-top: .5rem; color: #444; }
     code { background: #f4f4f4; padding: .05rem .25rem; }
     .warning { border-left: .3rem solid #b36b00; padding: .7rem; background: #fff8e8; }
+    .validation { border-left: .3rem solid #18794e; padding: .7rem; background: #eefbf5; }
     """
     return (
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
@@ -210,8 +261,11 @@ def render_report(
         '<p class="warning">This report is derived output. The sealed PCAP and Neqo '
         "files are authoritative; delete <code>derived/</code> and rerun analysis to "
         "reproduce this report.</p>"
-        "<h2>Defence coverage</h2><table><thead><tr><th>Defence</th>"
-        "<th>Accepted</th><th>Eligible</th><th>Median paired wire overhead</th>"
+        + candidate_section
+        + validated_section
+        + "<h2>Defence coverage</h2><table><thead><tr><th>Defence</th>"
+        "<th>Implementation status</th><th>Accepted</th><th>Eligible</th>"
+        "<th>Median paired wire overhead</th>"
         "<th>Median application time (s)</th><th>Missed slots</th>"
         "</tr></thead><tbody>"
         + "".join(defense_rows)

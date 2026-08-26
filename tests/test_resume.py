@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import shutil
 from pathlib import Path
 from typing import Any
@@ -7,6 +8,7 @@ from typing import Any
 import pytest
 
 import qcsd_lab.orchestrator as orchestrator
+import qcsd_lab.buflo_study as buflo_study
 from qcsd_lab.experiment import input_digest, load_experiment
 from qcsd_lab.orchestrator import resume_campaign, run_campaign
 from qcsd_lab.util import atomic_json, load_json
@@ -97,6 +99,40 @@ def _resume_configuration(tmp_path: Path, *, max_attempts: int = 2) -> Path:
     )
 
 
+def _buflo_resume_configuration(tmp_path: Path, *, max_attempts: int = 3) -> Path:
+    path = _resume_configuration(tmp_path, max_attempts=max_attempts)
+    # Campaigns are YAML; retain the common fixture's exact fields while giving
+    # this prospective result the study identity that activates physical-launch
+    # accounting.
+    import yaml
+
+    campaign = yaml.safe_load(path.read_text(encoding="utf-8"))
+    campaign["name"] = "buflo-study-v1-regression-attempt-accounting-1200"
+    path.write_text(yaml.safe_dump(campaign, sort_keys=False), encoding="utf-8")
+    return path
+
+
+def _allow_synthetic_study_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(
+        "QCSD_STUDY_ENVIRONMENT_B64",
+        base64.b64encode(b"{}").decode("ascii"),
+    )
+    monkeypatch.setattr(
+        buflo_study,
+        "validate_study_environment_receipt",
+        lambda _value, *, expected_image_digest=None: {"passed": True},
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "_redirect_attestation",
+        lambda _workload, _sample_path: {
+            "prepared_redirect_sequence": [],
+            "final_redirect_sequence": [],
+            "passed": True,
+        },
+    )
+
+
 def _interrupted_result(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> tuple[Path, dict[str, Any]]:
@@ -176,6 +212,68 @@ def test_resume_keeps_accepted_samples_and_discards_only_interrupted_attempt(
     assert not stale_attempt.exists()
     assert after["status"] == "complete"
     assert after["summary"]["passed"] is True
+
+
+def test_buflo_resume_counts_and_receipts_a_hard_interruption_as_a_physical_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    campaign = _buflo_resume_configuration(tmp_path, max_attempts=3)
+    _allow_synthetic_study_environment(monkeypatch)
+    results_root = tmp_path / "results"
+    results_root.mkdir()
+    interrupted = _InterruptAfterOneAccepted()
+    monkeypatch.setattr(orchestrator.capture_engine, "_collect_attempt", interrupted)
+
+    with pytest.raises(KeyboardInterrupt, match="controlled interruption"):
+        run_campaign(campaign, results_root)
+
+    [root] = (results_root / "buflo-study-v1-regression-attempt-accounting-1200").iterdir()
+    before = load_experiment(root)
+    running = next(sample for sample in before["samples"] if sample["state"] == "running")
+    assert running["attempts"] == 1
+
+    resumed = _ResumeCollector()
+    monkeypatch.setattr(orchestrator.capture_engine, "_collect_attempt", resumed)
+    assert resume_campaign(root) == root
+
+    after = verify_result(root).experiment
+    retried = next(
+        sample for sample in after["samples"] if sample["sample_id"] == running["sample_id"]
+    )
+    assert retried["attempts"] == 2
+    tombstone = root / "failures" / running["sample_id"] / "attempt-001/failure.json"
+    assert load_json(tombstone) == {
+        "stage": "interruption",
+        "type": "HardInterruption",
+        "message": "collector process stopped after the physical launch checkpoint",
+        "physical_attempt": 1,
+    }
+
+
+def test_buflo_resume_cannot_exceed_total_launch_cap_after_hard_interruption(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    campaign = _buflo_resume_configuration(tmp_path, max_attempts=1)
+    _allow_synthetic_study_environment(monkeypatch)
+    results_root = tmp_path / "results"
+    results_root.mkdir()
+    interrupted = _InterruptAfterOneAccepted()
+    monkeypatch.setattr(orchestrator.capture_engine, "_collect_attempt", interrupted)
+
+    with pytest.raises(KeyboardInterrupt, match="controlled interruption"):
+        run_campaign(campaign, results_root)
+
+    [root] = (results_root / "buflo-study-v1-regression-attempt-accounting-1200").iterdir()
+    resumed = _ResumeCollector()
+    monkeypatch.setattr(orchestrator.capture_engine, "_collect_attempt", resumed)
+    with pytest.raises(orchestrator.CampaignIncomplete):
+        resume_campaign(root)
+
+    assert resumed.calls == []
+    after = verify_result(root).experiment
+    exhausted = next(sample for sample in after["samples"] if sample["state"] != "accepted")
+    assert exhausted["attempts"] == 1
+    assert exhausted["failure"]["type"] == "HardInterruption"
 
 
 def test_resume_discards_only_recognizable_uncommitted_atomic_write_files(

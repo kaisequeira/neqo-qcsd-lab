@@ -50,7 +50,12 @@ _CONFIGURATION_KEYS = {
     "defenses",
     "limits",
 }
-_OPTIONAL_CONFIGURATION_KEYS = {"chaff_qualification_set"}
+_OPTIONAL_CONFIGURATION_KEYS = {
+    "chaff_qualification_set",
+    "study_environment_sha256",
+    "capture_admission_sha256",
+    "formal_cohort_sha256",
+}
 _SAMPLE_KEYS = {
     "sample_id",
     "workload_id",
@@ -208,7 +213,10 @@ def transition_sample(
         "planned": {"running"},
         "running": {"accepted", "failed", "interrupted"},
         "failed": {"running"},
-        "interrupted": {"running"},
+        # Resume may classify a prospectively budgeted physical launch as a
+        # durable failed attempt before deciding whether another launch fits
+        # within the campaign cap.
+        "interrupted": {"running", "failed"},
         "accepted": set(),
     }
     if state != previous and state not in allowed[previous]:
@@ -569,6 +577,10 @@ def _validate_configuration(value: object) -> None:
         or _QUALIFICATION_SET.fullmatch(value["chaff_qualification_set"]) is None
     ):
         raise ValueError("configuration chaff_qualification_set is invalid")
+    if "study_environment_sha256" in value and not _is_digest(
+        value["study_environment_sha256"]
+    ):
+        raise ValueError("configuration study_environment_sha256 is invalid")
 
 
 def _validate_sample(value: object) -> None:

@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import base64
+import fcntl
 import json
 import math
+import os
 import random
 import re
 import shutil
+import stat
 import tempfile
 import time
 from collections.abc import Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -36,12 +41,16 @@ from .manifest import (
     validate_research_preparation,
 )
 from .parameters import (
+    BUFLO_STUDY_PARAMETER_KINDS,
+    CONTROLLED_REGRESSION_ARTIFACT_TYPE,
+    SEALED_RESEARCH_PARAMETER_KINDS,
     parameter_provenance_path,
     validate_frozen_parameter_artifact,
     validate_parameter_artifact,
 )
 from .profiles import UDP_PAYLOAD_CEILING_BY_PROFILE
 from .util import (
+    LAB_ROOT,
     SOURCE_METADATA_KEYS,
     atomic_json,
     discard_atomic_write_temps,
@@ -62,10 +71,12 @@ CAMPAIGN_KEYS = {
     "seed",
     "profile",
     "chaff_qualification_set",
+    "defense_order",
     "workloads",
     "request_policies",
     "defenses",
     "limits",
+    "study_controlled",
 }
 LIMIT_KEYS = {
     "timeout_seconds",
@@ -79,7 +90,9 @@ LIMIT_KEYS = {
 DEFENSE_KEYS = {"name", "kind", "schedule", "mode", "parameters"}
 EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 WALKIE_TALKIE_RECEIVER_RAW_HEADROOM_BYTES = 1_200
-RESPONSE_ONLY_CHAFF_DEFENSE_KINDS = frozenset({"front", "tamaraw"})
+RESPONSE_ONLY_CHAFF_DEFENSE_KINDS = frozenset(
+    {"front", "tamaraw", *BUFLO_STUDY_PARAMETER_KINDS}
+)
 RESPONSE_ONLY_CHAFF_SCOPE = "response-only"
 FULL_CHAFF_SCOPE = "full"
 RESPONSE_ONLY_MANIFEST_TO_SIDECAR_SCHEMA = {3: 1, 4: 2}
@@ -137,6 +150,9 @@ class Campaign:
     defenses: tuple[capture_engine.Defense, ...]
     limits: capture_engine.Limits
     chaff_qualification_set: str | None = None
+    defense_order_scheme: str = "seeded-shuffle"
+    defense_order_block: int | None = None
+    study_controlled: Mapping[str, Any] | None = None
 
     @property
     def udp_payload_ceiling(self) -> int:
@@ -244,14 +260,24 @@ def _load_campaign(
         or any(policy not in REQUEST_POLICIES for policy in policies)
     ):
         raise ValueError("request_policies must contain unique as-defined/half-duplex values")
+    defense_order_scheme, defense_order_block = _load_defense_order(value.get("defense_order"))
+    study_controlled = None
+    if "study_controlled" in value:
+        from .buflo_study import validate_controlled_campaign_receipt
+
+        study_controlled = validate_controlled_campaign_receipt(value["study_controlled"])
+        if purpose != "smoke":
+            raise ValueError("controlled study metadata is valid only for smoke campaigns")
+    config_root = _campaign_config_root(path, frozen_inputs=frozen_inputs)
     workloads = _load_workloads(
         path,
         value["workloads"],
         purpose=purpose,
         frozen_inputs=frozen_inputs,
+        config_root=config_root,
     )
     defenses = _load_defenses(
-        path.parent,
+        config_root / "campaigns",
         value["defenses"],
         purpose,
         profile,
@@ -262,7 +288,7 @@ def _load_campaign(
     has_defended_run = any(not defense.baseline for defense in defenses)
     qualification_scope = _required_chaff_qualification_scope(defenses)
     if qualification_set is not None and qualification_scope != RESPONSE_ONLY_CHAFF_SCOPE:
-        raise ValueError("chaff_qualification_set requires a response-only FRONT/Tamaraw campaign")
+        raise ValueError("chaff_qualification_set requires a response-only defended runtime")
     current_prepared_inputs = all(
         isinstance(workload.data.get("preparation"), Mapping) for workload in workloads
     )
@@ -293,6 +319,7 @@ def _load_campaign(
             frozen_inputs=frozen_inputs,
             qualification_scope=qualification_scope,
             qualification_set=qualification_set,
+            config_root=config_root,
         )
     _validate_loaded_qualification_bindings(defenses, workloads)
     if any(_uses_schema_six_walkie_talkie(defense) for defense in defenses):
@@ -316,6 +343,9 @@ def _load_campaign(
         defenses=defenses,
         limits=limits,
         chaff_qualification_set=qualification_set,
+        defense_order_scheme=defense_order_scheme,
+        defense_order_block=defense_order_block,
+        study_controlled=study_controlled,
     )
     if purpose == "fitting":
         _validate_fitting_campaign(campaign, raw_limits=raw_limits)
@@ -353,6 +383,7 @@ def _load_qualified_chaff_inputs(
     frozen_inputs: Path | None,
     qualification_scope: str = FULL_CHAFF_SCOPE,
     qualification_set: str | None = None,
+    config_root: Path | None = None,
 ) -> tuple[Workload, ...]:
     """Bind the selected immutable sidecar contract and derived manifest."""
 
@@ -365,7 +396,7 @@ def _load_qualified_chaff_inputs(
             defense_derived_scope=qualification_scope,
         )
     if frozen_inputs is None:
-        config_root = campaign_path.parent.parent
+        config_root = campaign_path.parent.parent if config_root is None else config_root
         if qualification_scope == RESPONSE_ONLY_CHAFF_SCOPE:
             if qualification_set is None:
                 qualification_root = config_root / "chaff-response-qualification-store/v2"
@@ -614,6 +645,27 @@ def _validate_loaded_qualification_bindings(
         if defense.parameters_provenance_path is None:
             continue
         provenance = load_json(defense.parameters_provenance_path)
+        if provenance.get("artifact_type") == CONTROLLED_REGRESSION_ARTIFACT_TYPE:
+            if defense.parameters_path is None:
+                raise ValueError("controlled regression defense has no parameter file")
+            parameter = load_json(defense.parameters_path)
+            raw_bindings = parameter.get("qualification_bindings")
+            if not isinstance(raw_bindings, list):
+                raise ValueError("controlled regression lacks qualification bindings")
+            bindings = {
+                record.get("workload_id"): dict(record)
+                for record in raw_bindings
+                if isinstance(record, Mapping)
+                and isinstance(record.get("workload_id"), str)
+            }
+            if any(
+                bindings.get(workload_id) != record
+                for workload_id, record in expected.items()
+            ):
+                raise ValueError(
+                    "controlled regression parameters do not match loaded chaff qualifications"
+                )
+            continue
         contract = provenance.get("fitting_contract")
         if not isinstance(contract, Mapping) or contract.get("contract_version") != 6:
             continue
@@ -788,17 +840,43 @@ def _workload_root(campaign_path: Path) -> Path:
     return campaign_path.parent.parent / "workloads"
 
 
+def _campaign_config_root(path: Path, *, frozen_inputs: Path | None) -> Path:
+    if frozen_inputs is not None:
+        return frozen_inputs
+    generated = (LAB_ROOT / "artifacts/buflo-study/cohort-inputs").resolve()
+    if path.is_relative_to(generated):
+        relative = path.relative_to(generated)
+        if (
+            len(relative.parts) != 3
+            or re.fullmatch(r"v[1-9][0-9]*", relative.parts[0]) is None
+            or relative.parts[1] != "campaigns"
+            or re.fullmatch(
+                r"buflo-study-v1-(?:smoke|rehearsal|formal-[0-9]{2})[.]yml",
+                relative.parts[2],
+            )
+            is None
+        ):
+            raise ValueError("resolved cohort campaign path is invalid")
+        return (LAB_ROOT / "config").resolve()
+    return path.parent.parent
+
+
 def _load_workloads(
     path: Path,
     raw: Any,
     *,
     purpose: str,
     frozen_inputs: Path | None = None,
+    config_root: Path | None = None,
 ) -> tuple[Workload, ...]:
     value = _object(raw, "workloads")
     if not value:
         raise ValueError("campaign requires at least one workload")
-    root = frozen_inputs / "workloads" if frozen_inputs is not None else _workload_root(path)
+    root = (
+        frozen_inputs / "workloads"
+        if frozen_inputs is not None
+        else (config_root or path.parent.parent) / "workloads"
+    )
     result: list[Workload] = []
     seen: set[str] = set()
     for identifier, raw_visits in value.items():
@@ -812,7 +890,7 @@ def _load_workloads(
             raise ValueError("workload visit counts must be positive integers")
         manifest_path = _trusted_regular_input(
             root / f"{workload_id}.json",
-            root=(frozen_inputs if frozen_inputs is not None else path.parent.parent),
+            root=(frozen_inputs if frozen_inputs is not None else (config_root or path.parent.parent)),
             label="workload manifest",
         )
         try:
@@ -891,6 +969,19 @@ def _load_limits(raw: Any) -> capture_engine.Limits:
     if limits.capture_seconds < limits.timeout_seconds + limits.settle_seconds + 1:
         raise ValueError("capture_seconds must cover timeout, settle, and collector startup")
     return limits
+
+
+def _load_defense_order(raw: Any) -> tuple[str, int | None]:
+    if raw is None:
+        return "seeded-shuffle", None
+    value = _object(raw, "defense_order")
+    _reject_unknown(value, {"scheme", "block"}, "defense_order")
+    if set(value) != {"scheme", "block"}:
+        raise ValueError("defense_order requires scheme and block")
+    block = value.get("block")
+    if value.get("scheme") != "cyclic-latin-square" or type(block) is not int or block < 0:
+        raise ValueError("defense_order must select a non-negative cyclic-latin-square block")
+    return "cyclic-latin-square", block
 
 
 def _integer_limit(value: dict[str, Any], name: str, default: int) -> int:
@@ -994,7 +1085,9 @@ def _load_defenses(
                 provenance_path = parameter_provenance_path(parameters_path)
             else:
                 research_dir = frozen_inputs / "defense-parameters" / "research-1200"
-                if purpose == "evaluation" or (research_dir / original_name).is_file():
+                if kind in SEALED_RESEARCH_PARAMETER_KINDS and (
+                    purpose == "evaluation" or (research_dir / original_name).is_file()
+                ):
                     parameters_path = (research_dir / original_name).resolve()
                     provenance_path = (research_dir / "provenance.json").resolve()
                 else:
@@ -1002,7 +1095,7 @@ def _load_defenses(
                     parameters_path = (artifact_dir / "parameters.json").resolve()
                     provenance_path = (artifact_dir / "provenance.json").resolve()
 
-            if purpose == "evaluation":
+            if purpose == "evaluation" and kind in SEALED_RESEARCH_PARAMETER_KINDS:
                 from .fitting import (
                     BUNDLE_FILES,
                     _verify_current_artifact_bundle_at,
@@ -1051,6 +1144,10 @@ def _load_defenses(
                     provenance_path=provenance_path,
                     expected_kind=kind,
                     allow_reviewed_fixture=purpose == "smoke",
+                    allow_study_candidate=(
+                        purpose in {"smoke", "evaluation"}
+                        and kind in BUFLO_STUDY_PARAMETER_KINDS
+                    ),
                     expected_qcsd_profile=profile,
                     expected_udp_payload_ceiling=UDP_PAYLOAD_CEILING_BY_PROFILE[profile],
                     expected_workloads=workloads,
@@ -1063,6 +1160,10 @@ def _load_defenses(
                     original_parameter_name=Path(parameters).name,
                     expected_kind=kind,
                     allow_reviewed_fixture=purpose == "smoke",
+                    allow_study_candidate=(
+                        purpose in {"smoke", "evaluation"}
+                        and kind in BUFLO_STUDY_PARAMETER_KINDS
+                    ),
                     expected_qcsd_profile=profile,
                     expected_udp_payload_ceiling=UDP_PAYLOAD_CEILING_BY_PROFILE[profile],
                     expected_workloads=workloads,
@@ -1158,13 +1259,24 @@ def plan_campaign(campaign: Campaign) -> list[dict[str, Any]]:
     """Expand the deterministic sequential sample plan."""
 
     samples: list[dict[str, Any]] = []
+    workload_ranks = {
+        workload_id: index for index, workload_id in enumerate(sorted(w.id for w in campaign.workloads))
+    }
     for workload in campaign.workloads:
         for policy in campaign.request_policies:
             for visit in range(workload.visits):
                 defenses = list(campaign.defenses)
-                random.Random(
-                    _stable_seed("defense-order", campaign.seed, workload.id, policy, visit)
-                ).shuffle(defenses)
+                if campaign.defense_order_scheme == "cyclic-latin-square":
+                    if campaign.defense_order_block is None:
+                        raise ValueError("Latin-square campaign has no acquisition block")
+                    phase = (
+                        campaign.defense_order_block + workload_ranks[workload.id] + visit
+                    ) % len(defenses)
+                    defenses = defenses[phase:] + defenses[:phase]
+                else:
+                    random.Random(
+                        _stable_seed("defense-order", campaign.seed, workload.id, policy, visit)
+                    ).shuffle(defenses)
                 for defense in defenses:
                     seed = _stable_seed(
                         "sample-seed",
@@ -1242,19 +1354,91 @@ def preflight_campaign(path: Path) -> dict[str, Any]:
     }
     if campaign.chaff_qualification_set is not None:
         result["chaff_qualification_set"] = campaign.chaff_qualification_set
+    if campaign.defense_order_scheme != "seeded-shuffle":
+        result["defense_order"] = {
+            "scheme": campaign.defense_order_scheme,
+            "block": campaign.defense_order_block,
+        }
     return result
 
 
+@contextmanager
+def _study_capture_lock(results_root: Path):
+    """Hold one non-blocking cross-process lock for all study acquisition."""
+
+    root_value = results_root.absolute()
+    if root_value.is_symlink():
+        raise ValueError("study results root cannot be a symlink")
+    root = root_value.resolve()
+    if not root.is_dir():
+        raise ValueError("study results root must already exist")
+    path = root / ".buflo-study-v1.capture.lock"
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags, 0o600)
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise ValueError("study capture lock is not a regular file")
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise RuntimeError("another BuFLO-study capture or resume holds the global lock") from error
+        payload = f"pid={os.getpid()}\n"
+        os.ftruncate(descriptor, 0)
+        os.write(descriptor, payload.encode("ascii"))
+        os.fsync(descriptor)
+        yield path
+    finally:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+        finally:
+            os.close(descriptor)
+
+
+def _public_buflo_campaign(name: str) -> bool:
+    return (
+        re.fullmatch(
+            r"buflo-study-v1-(?:public-(?:smoke|rehearsal)|formal-[0-9]{2})-1200",
+            name,
+        )
+        is not None
+    )
+
+
 def run_campaign(path: Path, results_root: Path = Path("/lab/results")) -> Path:
+    campaign = load_campaign(path)
+    if campaign.name.startswith("buflo-study-v1-") and os.environ.get(
+        "QCSD_BUFLO_CAPTURE_LOCK_HELD"
+    ) != "1":
+        with _study_capture_lock(results_root):
+            return _run_loaded_campaign(campaign, results_root)
+    return _run_loaded_campaign(campaign, results_root)
+
+
+def _run_loaded_campaign(campaign: Campaign, results_root: Path) -> Path:
     from .experiment import initialize_experiment, result_path
 
-    campaign = load_campaign(path)
     source = source_metadata()
     if campaign.purpose == "fitting":
         _validate_fitting_capture_source(source)
     started = datetime.now(timezone.utc)
-    run_id = started.strftime("%Y%m%dT%H%M%S.%fZ")
-    root = result_path(results_root, campaign.name, run_id)
+    if _public_buflo_campaign(campaign.name):
+        admission_value = os.environ.get("QCSD_BUFLO_CAPTURE_ADMISSION")
+        if not admission_value:
+            raise ValueError("public BuFLO-study run requires a typed capture admission")
+        from .buflo_study import admitted_result_root
+
+        root = admitted_result_root(
+            Path(admission_value), campaign.path, require_sequence=True
+        )
+        expected_results_root = root.parents[1]
+        if expected_results_root != results_root.resolve():
+            raise ValueError("capture admission selected a different results root")
+        run_id = root.name
+        if result_path(results_root, campaign.name, run_id) != root.resolve():
+            raise ValueError("capture admission result root is not canonical")
+    else:
+        run_id = started.strftime("%Y%m%dT%H%M%S.%fZ")
+        root = result_path(results_root, campaign.name, run_id)
     root.mkdir(parents=True, exist_ok=False)
     runtime_campaign, configuration = _materialize_inputs(root, campaign, source)
     samples = plan_campaign(runtime_campaign)
@@ -1301,6 +1485,8 @@ def _materialize_inputs(
         chaff_manifests_dir.mkdir()
         if any(workload.chaff_prefix_spec_path is not None for workload in campaign.workloads):
             chaff_prefix_specs_dir.mkdir()
+    _materialize_study_environment(inputs, campaign, source)
+    _materialize_capture_admission(root, inputs, campaign, source)
     # ``load_campaign`` parsed these exact bytes.  Writing the snapshot instead
     # of reopening the mutable source closes the campaign resolution/copy race.
     frozen_campaign = inputs / "campaign.yml"
@@ -1459,6 +1645,10 @@ def _materialize_inputs(
                 original_parameter_name=Path(defense.parameters).name,
                 expected_kind=defense.kind,
                 allow_reviewed_fixture=campaign.purpose == "smoke",
+                allow_study_candidate=(
+                    campaign.purpose in {"smoke", "evaluation"}
+                    and defense.kind in BUFLO_STUDY_PARAMETER_KINDS
+                ),
                 expected_qcsd_profile=campaign.profile,
                 expected_udp_payload_ceiling=campaign.udp_payload_ceiling,
                 expected_workloads={
@@ -1487,6 +1677,67 @@ def _materialize_inputs(
         defenses=tuple(runtime_defenses),
     )
     return runtime_campaign, _frozen_configuration(root, runtime_campaign)
+
+
+def _materialize_study_environment(
+    inputs: Path, campaign: Campaign, source: Mapping[str, Any]
+) -> None:
+    encoded = os.environ.get("QCSD_STUDY_ENVIRONMENT_B64")
+    is_study = campaign.name.startswith("buflo-study-v1-")
+    if not is_study:
+        if encoded is not None:
+            raise ValueError("study environment receipt cannot be applied to a non-study campaign")
+        return
+    if not encoded:
+        raise ValueError("BuFLO study campaign requires a host Docker environment receipt")
+    try:
+        raw = base64.b64decode(encoded, validate=True)
+        value = json.loads(raw.decode("utf-8"))
+    except (UnicodeError, ValueError, json.JSONDecodeError) as error:
+        raise ValueError("BuFLO study Docker environment receipt is malformed") from error
+    from .buflo_study import validate_study_environment_receipt
+
+    validate_study_environment_receipt(
+        value,
+        expected_image_digest=source.get("image_digest"),
+    )
+    destination = inputs / "study-environment.json"
+    destination.write_bytes(raw)
+    if load_json(destination) != value:
+        raise ValueError("BuFLO study Docker environment changed during materialization")
+
+
+def _materialize_capture_admission(
+    root: Path,
+    inputs: Path,
+    campaign: Campaign,
+    source: Mapping[str, Any],
+) -> None:
+    admission_value = os.environ.get("QCSD_BUFLO_CAPTURE_ADMISSION")
+    is_public = _public_buflo_campaign(campaign.name)
+    if not is_public:
+        if admission_value is not None:
+            raise ValueError("capture admission cannot be applied to a non-public study campaign")
+        return
+    if not admission_value:
+        raise ValueError("public BuFLO-study campaign requires a capture admission")
+    from .buflo_study import admitted_result_root, validate_capture_admission
+
+    admission_path = Path(admission_value).resolve()
+    admission = validate_capture_admission(admission_path)
+    if admission["source"] != source or admitted_result_root(admission_path, campaign.path) != root:
+        raise ValueError("capture admission source or selected result root is invalid")
+    destination = inputs / "capture-admission.json"
+    destination.write_bytes(admission_path.read_bytes())
+    if sha256_file(destination) != sha256_file(admission_path):
+        raise ValueError("capture admission changed during frozen input materialization")
+    cohort = admission.get("formal_cohort")
+    if cohort is not None:
+        cohort_path = Path(cohort["path"]).resolve()
+        cohort_destination = inputs / "formal-cohort.json"
+        cohort_destination.write_bytes(cohort_path.read_bytes())
+        if sha256_file(cohort_destination) != cohort["sha256"]:
+            raise ValueError("formal cohort changed during frozen input materialization")
 
 
 def _materialize_schema_six_qualification_evidence(
@@ -1650,7 +1901,14 @@ def _execute(root: Path, campaign: Campaign, experiment: dict[str, Any]) -> Path
             workload = workload_by_id[sample["workload_id"]]
             defense = defense_by_name[sample["defense"]]
             attempts_this_execution = 0
-            while attempts_this_execution < campaign.limits.max_attempts:
+            # BuFLO-study ``sample["attempts"]`` is the durable, cross-resume
+            # budget.  Preserve the historical generic campaign contract while
+            # preventing a resumed study cell from acquiring another three
+            # traces after already exhausting its prospective total cap.
+            while attempts_this_execution < campaign.limits.max_attempts and (
+                not campaign.name.startswith("buflo-study-v1-")
+                or sample["attempts"] < campaign.limits.max_attempts
+            ):
                 attempts_this_execution += 1
                 runtime_workload = runtime_manifest(workload.data)
                 capture_engine._respect_origin_cooldown(
@@ -1736,6 +1994,9 @@ def _execute(root: Path, campaign: Campaign, experiment: dict[str, Any]) -> Path
                         fidelity_failure = _prepared_response_identity_failure(workload, attempt)
                     if fidelity_failure is None:
                         diagnostics = _success_diagnostics(result)
+                        controlled_cell = _controlled_study_cell(campaign, sample)
+                        if controlled_cell is not None:
+                            diagnostics["buflo_study_controlled_cell"] = controlled_cell
                         diagnostics["promotion"] = _promotion_receipt(root, sample, attempt)
                         transition_sample(
                             experiment,
@@ -1812,11 +2073,46 @@ def _success_diagnostics(result: dict[str, Any]) -> dict[str, Any]:
     return {
         "capture": capture,
         "offloads": result.get("offloads", []),
+        "network_condition": result.get("network_condition"),
         "endpoint_count": result.get("endpoint_count"),
         "endpoint_count_valid": result.get("endpoint_count_valid"),
         "runner_binding_valid": result.get("runner_binding_valid", True),
         "operationally_valid": result.get("operationally_valid", True),
         "defense": result.get("defense_diagnostics") or {},
+    }
+
+
+def _controlled_study_cell(
+    campaign: Campaign, sample: Mapping[str, Any]
+) -> dict[str, Any] | None:
+    """Bind one exact prospective local-study cell into accepted diagnostics."""
+
+    receipt = campaign.study_controlled
+    if receipt is None:
+        return None
+    stage = receipt["stage"]
+    treatment = str(sample["defense"])
+    treatments = tuple(receipt["treatment_order"])
+    workload_ids = sorted(workload.id for workload in campaign.workloads)
+    workload_rank = workload_ids.index(str(sample["workload_id"]))
+    if stage == "controlled":
+        phase = (int(receipt["netem_rank"]) + workload_rank + int(sample["visit"])) % len(
+            treatments
+        )
+        position = (treatments.index(treatment) - phase) % len(treatments)
+    elif stage == "regression":
+        position = (treatments.index(treatment) - workload_rank) % len(treatments)
+    else:
+        raise ValueError("controlled campaign has an unsupported study stage")
+    workload_aliases = receipt["workload_aliases"]
+    return {
+        "workload": workload_aliases[str(sample["workload_id"])],
+        "visit": int(sample["visit"]),
+        "treatment": treatment,
+        "treatment_position": position,
+        "netem_profile": receipt["netem_profile"],
+        "client_qdisc": receipt["client_qdisc"],
+        "server_qdisc": receipt["server_qdisc"],
     }
 
 
@@ -1866,6 +2162,7 @@ def _intrinsic_fidelity_failure(
         sample_eligible=True,
         missed_events=schedule.get("missed_events"),
         outgoing_size_mismatches=schedule.get("outgoing_size_mismatch_events"),
+        schedule_metrics=schedule,
     )
     if eligible:
         return None
@@ -2040,6 +2337,11 @@ def _compare_group(
         signature = response_signature(sample_path)
         response_match = signature is not None and (reference is None or signature == reference)
         diagnostics = sample["diagnostics"]
+        if (root / "inputs/study-environment.json").is_file():
+            diagnostics["redirect_attestation"] = _redirect_attestation(
+                workload,
+                sample_path,
+            )
         capture_valid = diagnostics.get("capture", {}).get("valid") is True
         operational = diagnostics.get("operationally_valid") is True
         schedule = _schedule_realization_metrics(sample_path)
@@ -2054,6 +2356,7 @@ def _compare_group(
             sample_eligible=base_eligible,
             missed_events=schedule.get("missed_events"),
             outgoing_size_mismatches=schedule.get("outgoing_size_mismatch_events"),
+            schedule_metrics=schedule,
         )
         diagnostics.update(
             response_match=response_match,
@@ -2072,6 +2375,88 @@ def _compare_group(
             fidelity_eligible=eligible,
         )
         sample["eligible"] = eligible
+
+
+def _redirect_attestation(workload: Workload, sample_path: Path) -> dict[str, Any]:
+    """Prove that prepared and final application resources contain no redirects."""
+
+    preparation = workload.data.get("preparation")
+    resources = workload.data.get("resources")
+    run_data = load_json(sample_path / "neqo/run.json")
+    responses = run_data.get("responses") if isinstance(run_data, Mapping) else None
+    expected_responses = (
+        preparation.get("expected_responses") if isinstance(preparation, Mapping) else None
+    )
+    if (
+        not isinstance(preparation, Mapping)
+        or preparation.get("source_url") != preparation.get("final_url")
+        or not isinstance(resources, list)
+        or not isinstance(expected_responses, list)
+        or not isinstance(responses, list)
+    ):
+        raise ValueError("prepared/final redirect evidence is unavailable")
+    expected = {
+        item.get("resource_id"): item
+        for item in expected_responses
+        if isinstance(item, Mapping)
+    }
+    observed = {
+        item.get("resource_id"): item for item in responses if isinstance(item, Mapping)
+    }
+    prepared_resources = {
+        item.get("id"): item for item in resources if isinstance(item, Mapping)
+    }
+    if (
+        len(expected) != len(expected_responses)
+        or len(observed) != len(responses)
+        or len(prepared_resources) != len(resources)
+        or set(expected) != set(observed)
+        or set(expected) != set(prepared_resources)
+    ):
+        raise ValueError("prepared/final resource identities cannot prove empty redirects")
+    records = []
+    for identifier in sorted(expected):
+        prepared = prepared_resources[identifier]
+        expected_response = expected[identifier]
+        response = observed[identifier]
+        prepared_status = expected_response.get("status")
+        final_status = response.get("status")
+        prepared_url = prepared.get("url")
+        if (
+            type(identifier) is not int
+            or not isinstance(prepared_url, str)
+            or response.get("url") != prepared_url
+            or type(prepared_status) is not int
+            or type(final_status) is not int
+            or 300 <= prepared_status < 400
+            or 300 <= final_status < 400
+            or response.get("complete") is not True
+            or response.get("outcome") != "succeeded"
+        ):
+            raise ValueError("prepared/final resource contains redirect evidence")
+        records.append(
+            {
+                "resource_id": identifier,
+                "prepared_url": prepared_url,
+                "prepared_status": prepared_status,
+                "prepared_redirect_sequence": [],
+                "final_url": response["url"],
+                "final_status": final_status,
+                "final_redirect_sequence": [],
+            }
+        )
+    return {
+        "schema_version": 1,
+        "artifact_type": "qcsd-buflo-study-empty-redirect-attestation",
+        "workload_id": workload.id,
+        "navigation": {
+            "source_url": preparation["source_url"],
+            "final_url": preparation["final_url"],
+            "redirect_sequence": [],
+        },
+        "resources": records,
+        "all_redirect_sequences_empty": True,
+    }
 
 
 def _prepared_response_signature(manifest: dict[str, Any]) -> list[tuple[Any, ...]] | None:
@@ -2216,6 +2601,9 @@ def _recover_completed_attempt(
                 fidelity_failure = _prepared_response_identity_failure(workload, attempt)
             if fidelity_failure is None:
                 diagnostics = _success_diagnostics(result)
+                controlled_cell = _controlled_study_cell(campaign, sample)
+                if controlled_cell is not None:
+                    diagnostics["buflo_study_controlled_cell"] = controlled_cell
                 diagnostics["promotion"] = _promotion_receipt(root, sample, attempt)
                 transition_sample(
                     experiment,
@@ -2247,7 +2635,29 @@ def _recover_completed_attempt(
 
 def resume_campaign(root: Path) -> Path:
     root = root.resolve()
-    from .experiment import load_experiment, validate_accepted_samples, validate_resume_fingerprints
+    experiment_path = root / "experiment.json"
+    value = load_json(experiment_path)
+    name = value.get("name") if isinstance(value, Mapping) else None
+    if (
+        isinstance(name, str)
+        and name.startswith("buflo-study-v1-")
+        and os.environ.get("QCSD_BUFLO_CAPTURE_LOCK_HELD") != "1"
+    ):
+        if len(root.parents) < 2:
+            raise ValueError("study result root has no canonical results ancestor")
+        with _study_capture_lock(root.parents[1]):
+            return _resume_campaign_locked(root)
+    return _resume_campaign_locked(root)
+
+
+def _resume_campaign_locked(root: Path) -> Path:
+    root = root.resolve()
+    from .experiment import (
+        load_experiment,
+        transition_sample,
+        validate_accepted_samples,
+        validate_resume_fingerprints,
+    )
     from .verification import prepare_resume, seal_result, verify_result
 
     # A hard stop can leave only a recognizably named, uncommitted sibling of
@@ -2287,10 +2697,13 @@ def resume_campaign(root: Path) -> Path:
         validate_frozen_experiment_contract(root, verify_result(root).experiment)
 
     experiment = prepare_resume(root, expected_source=source_metadata())
-    # A running checkpoint means the process stopped before promotion.  That
-    # one partial attempt is neither accepted evidence nor a failed attempt, so
-    # discard it and let the retry reuse the attempt number.  All completed
-    # failed attempts and every accepted sample remain untouched.
+    # A running checkpoint means the process stopped before promotion.  The
+    # established generic campaign contract discards that partial attempt and
+    # reuses its number.  Prospective BuFLO-study campaigns instead count every
+    # physical collector launch against the durable three-attempt ceiling: a
+    # hard interruption becomes a small immutable failure tombstone before a
+    # later launch receives the next attempt number.
+    study_attempt_budget = experiment["name"].startswith("buflo-study-v1-")
     for sample in experiment["samples"]:
         if sample["state"] != "interrupted":
             continue
@@ -2299,11 +2712,28 @@ def resume_campaign(root: Path) -> Path:
             if attempt.is_symlink() or not attempt.is_dir():
                 raise ValueError(f"interrupted attempt path is unsafe: {attempt}")
             shutil.rmtree(attempt)
-        try:
-            attempt.parent.rmdir()
-        except OSError:
-            pass
-        sample["attempts"] -= 1
+        if study_attempt_budget:
+            attempt.mkdir(parents=True)
+            failure = {
+                "stage": "interruption",
+                "type": "HardInterruption",
+                "message": "collector process stopped after the physical launch checkpoint",
+                "physical_attempt": sample["attempts"],
+            }
+            atomic_json(attempt / "failure.json", failure)
+            transition_sample(
+                experiment,
+                sample["sample_id"],
+                "failed",
+                failure=failure,
+                eligible=False,
+            )
+        else:
+            try:
+                attempt.parent.rmdir()
+            except OSError:
+                pass
+            sample["attempts"] -= 1
     _checkpoint(root, experiment)
     campaign = validate_frozen_experiment_contract(root, experiment)
     for sample in experiment["samples"]:
@@ -2337,6 +2767,11 @@ def validate_frozen_experiment_contract(
     validate_planned_sample_identity(experiment, plan_campaign(campaign))
     for sample in experiment["samples"]:
         resolved_sample_directory(root, sample)
+        if (
+            campaign.name.startswith("buflo-study-v1-")
+            and sample["attempts"] > campaign.limits.max_attempts
+        ):
+            raise ValueError("sample exceeds the campaign's total persisted attempt cap")
         if sample["attempts"] > 0:
             resolved_attempt_directory(root, sample)
     return campaign
@@ -2396,6 +2831,52 @@ def _frozen_configuration(root: Path, campaign: Campaign) -> dict[str, Any]:
     }
     if campaign.chaff_qualification_set is not None:
         configuration["chaff_qualification_set"] = campaign.chaff_qualification_set
+    if campaign.defense_order_scheme != "seeded-shuffle":
+        configuration["defense_order"] = {
+            "scheme": campaign.defense_order_scheme,
+            "block": campaign.defense_order_block,
+        }
+    study_environment = root / "inputs/study-environment.json"
+    if campaign.name.startswith("buflo-study-v1-"):
+        from .buflo_study import validate_study_environment_receipt
+
+        if study_environment.is_symlink() or not study_environment.is_file():
+            raise ValueError("BuFLO study campaign has no frozen environment receipt")
+        validate_study_environment_receipt(
+            load_json(study_environment),
+            expected_image_digest=load_json(root / "inputs/source.json")["image_digest"],
+        )
+        configuration["study_environment_sha256"] = sha256_file(study_environment)
+        admission = root / "inputs/capture-admission.json"
+        if _public_buflo_campaign(campaign.name):
+            from .buflo_study import validate_capture_admission
+
+            if admission.is_symlink() or not admission.is_file():
+                raise ValueError("public BuFLO study campaign has no frozen capture admission")
+            admitted = validate_capture_admission(admission)
+            selected = [
+                row
+                for row in admitted["allowed_campaigns"]
+                if row["campaign_name"] == campaign.name
+                and row["campaign_sha256"] == sha256_file(campaign.path)
+            ]
+            if len(selected) != 1 or Path(selected[0]["result_root"]) != root:
+                raise ValueError("frozen capture admission does not select this result root")
+            configuration["capture_admission_sha256"] = sha256_file(admission)
+            cohort = root / "inputs/formal-cohort.json"
+            if campaign.name.startswith("buflo-study-v1-formal-"):
+                from .buflo_study import validate_formal_cohort_manifest
+
+                if cohort.is_symlink() or not cohort.is_file():
+                    raise ValueError("formal BuFLO study campaign has no frozen cohort manifest")
+                validate_formal_cohort_manifest(cohort)
+                configuration["formal_cohort_sha256"] = sha256_file(cohort)
+            elif cohort.exists() or cohort.is_symlink():
+                raise ValueError("non-formal public campaign has an unexpected cohort manifest")
+        elif admission.exists() or admission.is_symlink():
+            raise ValueError("local study campaign has an unexpected capture admission")
+    elif study_environment.exists() or study_environment.is_symlink():
+        raise ValueError("non-study campaign has an unexpected study environment receipt")
     return configuration
 
 

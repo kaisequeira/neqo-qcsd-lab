@@ -15,6 +15,12 @@ from .util import LAB_ROOT, load_json, sha256_file
 PROVENANCE_SCHEMA_VERSION = 1
 REVIEWED_PARAMETER_INPUT_POLICY = "reviewed-engineering-fixture"
 REVIEWED_FIXTURE_STATUS = "reviewed-smoke-fixture"
+BUFLO_STUDY_PARAMETER_INPUT_POLICY = "reviewed-buflo-study-candidate-v1"
+BUFLO_STUDY_ARTIFACT_TYPE = "qcsd-buflo-study-parameters"
+BUFLO_STUDY_CANDIDATE_STATUS = "candidate-validation-required"
+BUFLO_STUDY_ID = "buflo-csbuflo-qcsd-v1"
+CONTROLLED_REGRESSION_ARTIFACT_TYPE = "qcsd-controlled-regression-parameters"
+CONTROLLED_REGRESSION_INPUT_POLICY = "controlled-regression-test-only-v1"
 PARAMETER_ARTIFACT_NAME = "defense-parameters.json"
 PARAMETER_PROVENANCE_ARTIFACT_NAME = "defense-parameters.provenance.json"
 
@@ -29,8 +35,52 @@ _PROVENANCE_KEYS = {
     "parameter_file",
 }
 _WALKIE_TALKIE_PROVENANCE_KEYS = _PROVENANCE_KEYS | {"workload_sha256"}
+_BUFLO_STUDY_PROVENANCE_KEYS = _PROVENANCE_KEYS | {
+    "study_id",
+    "implementation_status",
+    "implementation_scope",
+    "paper_variant",
+    "paper_equivalent",
+    "parameter_semantics",
+    "reference_artifact",
+    "reference_receipt",
+    "validation_requirements",
+}
+_CS_BUFLO_SEMANTICS_KEYS = {
+    "source_semantics",
+    "live_semantics",
+    "rate_boundary_translation_version",
+    "rate_boundary_counter_semantics",
+    "author_rate_boundary_counter_semantics",
+    "translation_classification",
+    "early_termination_semantics",
+    "expected_difference",
+}
 _PARAMETER_FILE_KEYS = {"path", "sha256"}
-_PARAMETERIZED_KINDS = {"traffic_morphing", "wtf_pad", "walkie_talkie"}
+SEALED_RESEARCH_PARAMETER_KINDS = frozenset(
+    {"traffic_morphing", "wtf_pad", "walkie_talkie"}
+)
+BUFLO_STUDY_PARAMETER_KINDS = frozenset({"buflo", "cs_buflo"})
+_PARAMETERIZED_KINDS = set(SEALED_RESEARCH_PARAMETER_KINDS)
+_BUFLO_STUDY_VALIDATION_REQUIREMENTS = (
+    "reference-oracle-comparison",
+    "deterministic-unit-and-property-tests",
+    "docker-netem-controlled-capture",
+    "public-smoke-and-rehearsal",
+    "formal-paired-capture",
+    "client-correctness-and-fidelity",
+    "paper-overhead-comparison",
+)
+_BUFLO_STUDY_REFERENCE_FILES = {
+    "buflo": (
+        "config/reference/buflo-csbuflo/buflo-ieee-sp-2012-v1.json",
+        "config/reference/buflo-csbuflo/buflo-ieee-sp-2012-v1.receipt.json",
+    ),
+    "cs_buflo": (
+        "config/reference/buflo-csbuflo/csbuflo-wpes-2014-v1.json",
+        "config/reference/buflo-csbuflo/csbuflo-wpes-2014-v1.receipt.json",
+    ),
+}
 _WTF_PAD_INFINITY_TOKEN_FORMULAS = {
     "burst": "k_inf = (1 - p_fake) / p_fake * K",
     "gap": "k_inf = (K - mean_burst_length + 1) / (mean_burst_length - 1)",
@@ -138,6 +188,7 @@ def validate_parameter_artifact(
     provenance_path: Path | None = None,
     expected_kind: str | None = None,
     allow_reviewed_fixture: bool = False,
+    allow_study_candidate: bool = False,
     expected_qcsd_profile: str | None = None,
     expected_udp_payload_ceiling: int | None = None,
     expected_workloads: Mapping[str, object] | Collection[str] | None = None,
@@ -155,6 +206,7 @@ def validate_parameter_artifact(
         provenance_path=provenance_path,
         expected_kind=expected_kind,
         allow_reviewed_fixture=allow_reviewed_fixture,
+        allow_study_candidate=allow_study_candidate,
         expected_qcsd_profile=expected_qcsd_profile,
         expected_udp_payload_ceiling=expected_udp_payload_ceiling,
         expected_workloads=expected_workloads,
@@ -173,6 +225,7 @@ def validate_frozen_parameter_artifact(
     original_parameter_name: str,
     expected_kind: str,
     allow_reviewed_fixture: bool,
+    allow_study_candidate: bool = False,
     expected_qcsd_profile: str,
     expected_udp_payload_ceiling: int,
     expected_workloads: Mapping[str, object] | Collection[str],
@@ -196,6 +249,7 @@ def validate_frozen_parameter_artifact(
         provenance_path=provenance_path,
         expected_kind=expected_kind,
         allow_reviewed_fixture=allow_reviewed_fixture,
+        allow_study_candidate=allow_study_candidate,
         expected_qcsd_profile=expected_qcsd_profile,
         expected_udp_payload_ceiling=expected_udp_payload_ceiling,
         expected_workloads=expected_workloads,
@@ -213,6 +267,7 @@ def _validate_parameter_artifact(
     provenance_path: Path | None,
     expected_kind: str | None,
     allow_reviewed_fixture: bool,
+    allow_study_candidate: bool,
     expected_qcsd_profile: str | None,
     expected_udp_payload_ceiling: int | None,
     expected_workloads: Mapping[str, object] | Collection[str] | None,
@@ -270,6 +325,32 @@ def _validate_parameter_artifact(
             provenance_path=receipt_path,
             provenance_sha256=provenance_sha256,
             input_policy=input_policy,
+        )
+    if receipt.get("artifact_type") == BUFLO_STUDY_ARTIFACT_TYPE:
+        return _validate_buflo_study_parameter_artifact(
+            parameter,
+            receipt,
+            parameter_path=parameter_path,
+            receipt_path=receipt_path,
+            receipt_parameter_name=receipt_parameter_name,
+            require_checked_in_fixture=require_checked_in_fixture,
+            allow_study_candidate=allow_study_candidate,
+            expected_kind=expected_kind,
+            expected_qcsd_profile=expected_qcsd_profile,
+            expected_udp_payload_ceiling=expected_udp_payload_ceiling,
+        )
+    if receipt.get("artifact_type") == CONTROLLED_REGRESSION_ARTIFACT_TYPE:
+        return _validate_controlled_regression_parameter(
+            parameter,
+            receipt,
+            parameter_path=parameter_path,
+            receipt_path=receipt_path,
+            receipt_parameter_name=receipt_parameter_name,
+            allow_reviewed_fixture=allow_reviewed_fixture,
+            expected_kind=expected_kind,
+            expected_qcsd_profile=expected_qcsd_profile,
+            expected_udp_payload_ceiling=expected_udp_payload_ceiling,
+            expected_workloads=expected_workloads,
         )
     reviewed_kind = receipt.get("defense_kind")
     if reviewed_kind == "walkie_talkie" and "workload_sha256" not in receipt:
@@ -357,6 +438,213 @@ def _validate_parameter_artifact(
     )
 
 
+def _validate_buflo_study_parameter_artifact(
+    parameter: Mapping[str, Any],
+    receipt: Mapping[str, Any],
+    *,
+    parameter_path: Path,
+    receipt_path: Path,
+    receipt_parameter_name: str | None,
+    require_checked_in_fixture: bool,
+    allow_study_candidate: bool,
+    expected_kind: str | None,
+    expected_qcsd_profile: str | None,
+    expected_udp_payload_ceiling: int | None,
+) -> ParameterArtifact:
+    """Validate a paper-bound but deliberately non-promoted BuFLO study input."""
+
+    receipt_kind = receipt.get("defense_kind")
+    expected_receipt_keys = _BUFLO_STUDY_PROVENANCE_KEYS | (
+        _CS_BUFLO_SEMANTICS_KEYS if receipt_kind == "cs_buflo" else set()
+    )
+    _require_exact_keys(receipt, expected_receipt_keys, "BuFLO study provenance")
+    if receipt.get("schema_version") != PROVENANCE_SCHEMA_VERSION:
+        raise ValueError(f"unsupported BuFLO study provenance schema: {receipt_path}")
+    if (
+        receipt.get("artifact_type") != BUFLO_STUDY_ARTIFACT_TYPE
+        or receipt.get("status") != BUFLO_STUDY_CANDIDATE_STATUS
+        or receipt.get("production_ready") is not False
+        or receipt.get("implementation_status") != "candidate"
+        or receipt.get("implementation_scope") != "client_only_quic"
+        or receipt.get("paper_equivalent") is not False
+        or receipt.get("study_id") != BUFLO_STUDY_ID
+    ):
+        raise ValueError(
+            f"BuFLO study provenance must remain an explicit non-production candidate: "
+            f"{receipt_path}"
+        )
+    if not allow_study_candidate:
+        raise ValueError(
+            "BuFLO study candidate parameters require an explicit study-campaign admission"
+        )
+    if list(receipt.get("validation_requirements", ())) != list(
+        _BUFLO_STUDY_VALIDATION_REQUIREMENTS
+    ):
+        raise ValueError(f"BuFLO study validation requirements are incomplete: {receipt_path}")
+    if require_checked_in_fixture:
+        _require_checked_in_fixture(parameter_path, receipt_path)
+
+    parameter_sha256 = sha256_file(parameter_path)
+    recorded_file = _mapping(receipt.get("parameter_file"), "parameter_file metadata")
+    _require_exact_keys(recorded_file, _PARAMETER_FILE_KEYS, "parameter_file metadata")
+    expected_parameter_name = receipt_parameter_name or parameter_path.name
+    if recorded_file.get("path") != expected_parameter_name:
+        raise ValueError(f"BuFLO study provenance filename mismatch: {receipt_path}")
+    if recorded_file.get("sha256") != parameter_sha256:
+        raise ValueError(f"BuFLO study provenance SHA-256 mismatch: {receipt_path}")
+
+    kind = receipt.get("defense_kind")
+    if kind not in BUFLO_STUDY_PARAMETER_KINDS:
+        raise ValueError(f"unsupported BuFLO study defense kind: {receipt_path}")
+    if expected_kind is not None and kind != expected_kind:
+        raise ValueError(f"BuFLO study defense kind does not match campaign: {receipt_path}")
+    profile = receipt.get("qcsd_profile")
+    ceiling = receipt.get("udp_payload_ceiling")
+    if (
+        profile != "research-1200"
+        or ceiling != UDP_PAYLOAD_CEILING_BY_PROFILE["research-1200"]
+    ):
+        raise ValueError(f"BuFLO study parameters require research-1200: {receipt_path}")
+    if expected_qcsd_profile not in {None, profile}:
+        raise ValueError(f"BuFLO study QCSD profile does not match campaign: {receipt_path}")
+    if expected_udp_payload_ceiling not in {None, ceiling}:
+        raise ValueError(f"BuFLO study UDP ceiling does not match campaign: {receipt_path}")
+
+    reference_artifact, reference_receipt = _BUFLO_STUDY_REFERENCE_FILES[str(kind)]
+    if (
+        receipt.get("reference_artifact") != reference_artifact
+        or receipt.get("reference_receipt") != reference_receipt
+    ):
+        raise ValueError(f"BuFLO study provenance references the wrong oracle: {receipt_path}")
+
+    if kind == "buflo":
+        _validate_buflo(parameter, int(ceiling), receipt_path)
+        expected_variant = "QCSD-BuFLO-udp1200-rho20-tau10"
+        expected_semantics = "qcsd-udp1200-adaptation-with-120-second-event-guard"
+    else:
+        _validate_cs_buflo(parameter, int(ceiling), receipt_path)
+        if (
+            receipt.get("source_semantics")
+            != (
+                "author-oracle-advances-16KiB-boundaries-on-actually-transmitted-"
+                "real-plus-junk-bytes-per-endpoint-and-direction"
+            )
+            or receipt.get("live_semantics")
+            != (
+                "qcsd-live-advances-16KiB-boundaries-on-exact-fresh-application-"
+                "stream-bytes-outgoing-excludes-retransmission-and-defense-added-"
+                "bytes-and-uses-consumed-application-offsets-incoming"
+            )
+            or receipt.get("rate_boundary_translation_version") != 2
+            or receipt.get("rate_boundary_counter_semantics")
+            != (
+                "client_only_quic_fresh_application_stream_bytes_outgoing_"
+                "retransmission_excluded_and_consumed_application_offsets_incoming"
+            )
+            or receipt.get("author_rate_boundary_counter_semantics")
+            != "per_direction_actually_transmitted_real_plus_junk_bytes"
+            or receipt.get("translation_classification")
+            != "expected-client-only-qcsd-adaptation-difference"
+            or receipt.get("early_termination_semantics")
+            != "udp_client_only_observed_udp_power_of_two_crossing"
+            or receipt.get("expected_difference")
+            != (
+                "adaptation-boundary-crossings-and-rate-transition-times-may-differ-"
+                "from-the-author-artifact"
+            )
+        ):
+            raise ValueError(
+                f"CS-BuFLO source/live estimator divergence is not explicit: {receipt_path}"
+            )
+        expected_variant = (
+            "CTSP" if parameter["outgoing_padding_mode"] == "total" else "CPSP"
+        )
+        expected_semantics = "paper-source-values-mapped-to-quic-udp-payload"
+    if (
+        receipt.get("paper_variant") != expected_variant
+        or receipt.get("parameter_semantics") != expected_semantics
+    ):
+        raise ValueError(f"BuFLO study paper-variant binding is invalid: {receipt_path}")
+
+    return ParameterArtifact(
+        path=parameter_path,
+        sha256=parameter_sha256,
+        provenance_path=receipt_path,
+        provenance_sha256=sha256_file(receipt_path),
+        input_policy=BUFLO_STUDY_PARAMETER_INPUT_POLICY,
+    )
+
+
+def _validate_controlled_regression_parameter(
+    parameter: Mapping[str, Any],
+    receipt: Mapping[str, Any],
+    *,
+    parameter_path: Path,
+    receipt_path: Path,
+    receipt_parameter_name: str | None,
+    allow_reviewed_fixture: bool,
+    expected_kind: str | None,
+    expected_qcsd_profile: str | None,
+    expected_udp_payload_ceiling: int | None,
+    expected_workloads: Mapping[str, object] | Collection[str] | None,
+) -> ParameterArtifact:
+    """Admit one workload-bound, explicitly non-formal local regression fixture."""
+
+    keys = _PROVENANCE_KEYS | {"evidence_class", "workload_sha256"}
+    _require_exact_keys(receipt, keys, "controlled regression provenance")
+    if (
+        receipt.get("schema_version") != PROVENANCE_SCHEMA_VERSION
+        or receipt.get("artifact_type") != CONTROLLED_REGRESSION_ARTIFACT_TYPE
+        or receipt.get("status") != "controlled-test-only"
+        or receipt.get("production_ready") is not False
+        or receipt.get("evidence_class") != "nonformal-regression"
+        or receipt.get("defense_kind") != "walkie_talkie"
+        or receipt.get("qcsd_profile") != "live"
+        or receipt.get("udp_payload_ceiling") != 1_200
+        or not allow_reviewed_fixture
+        or expected_kind not in {None, "walkie_talkie"}
+        or expected_qcsd_profile not in {None, "live"}
+        or expected_udp_payload_ceiling not in {None, 1_200}
+    ):
+        raise ValueError(f"controlled regression provenance is invalid: {receipt_path}")
+    recorded = _mapping(receipt.get("parameter_file"), "parameter_file metadata")
+    _require_exact_keys(recorded, _PARAMETER_FILE_KEYS, "parameter_file metadata")
+    expected_name = receipt_parameter_name or parameter_path.name
+    parameter_sha256 = sha256_file(parameter_path)
+    if recorded != {"path": expected_name, "sha256": parameter_sha256}:
+        raise ValueError(f"controlled regression parameter binding is invalid: {receipt_path}")
+    bindings = receipt.get("workload_sha256")
+    if not isinstance(bindings, Mapping) or not bindings:
+        raise ValueError(f"controlled regression workload binding is missing: {receipt_path}")
+    if expected_workloads is not None:
+        if not isinstance(expected_workloads, Mapping) or dict(bindings) != dict(
+            expected_workloads
+        ):
+            raise ValueError(
+                f"controlled regression parameter does not bind exact workloads: {receipt_path}"
+            )
+    _validate_runtime_shape(
+        parameter,
+        "walkie_talkie",
+        1_200,
+        receipt_path,
+        expected_schema_version=6,
+    )
+    _validate_workload_coverage(
+        parameter,
+        "walkie_talkie",
+        expected_workloads,
+        receipt_path,
+    )
+    return ParameterArtifact(
+        path=parameter_path,
+        sha256=parameter_sha256,
+        provenance_path=receipt_path,
+        provenance_sha256=sha256_file(receipt_path),
+        input_policy=CONTROLLED_REGRESSION_INPUT_POLICY,
+    )
+
+
 def _validate_reviewed_workload_binding(
     receipt: Mapping[str, Any],
     kind: str,
@@ -440,7 +728,7 @@ def _require_checked_in_fixture(parameter_path: Path, receipt_path: Path) -> Non
     if not parameter_path.is_relative_to(fixture_root) or not receipt_path.is_relative_to(
         fixture_root
     ):
-        raise ValueError(f"reviewed smoke fixtures must be checked in under {fixture_root}")
+        raise ValueError(f"reviewed parameter fixtures must be checked in under {fixture_root}")
     if receipt_path != parameter_provenance_path(parameter_path):
         raise ValueError("parameter provenance receipt must be adjacent to its parameter file")
 
@@ -473,6 +761,96 @@ def _validate_runtime_shape(
             receipt_path,
             expected_schema_version=expected_schema_version,
         )
+
+
+def _validate_buflo(parameter: Mapping[str, Any], ceiling: int, receipt_path: Path) -> None:
+    fields = {
+        "schema_version",
+        "interval_us",
+        "minimum_duration_us",
+        "packet_size",
+        "max_events",
+        "implementation_scope",
+        "paper_equivalent",
+    }
+    _require_exact_keys(parameter, fields, "BuFLO runtime parameters")
+    integer_fields = fields - {"schema_version", "implementation_scope", "paper_equivalent"}
+    values = {field: parameter.get(field) for field in integer_fields}
+    if (
+        parameter.get("schema_version") != 1
+        or parameter.get("implementation_scope") != "client_only_quic"
+        or parameter.get("paper_equivalent") is not False
+        or any(type(value) is not int or value <= 0 for value in values.values())
+        or int(values["packet_size"]) > ceiling
+        or int(values["minimum_duration_us"]) < int(values["interval_us"])
+        or int(values["max_events"])
+        < int(values["minimum_duration_us"]) // int(values["interval_us"]) + 1
+        # The runtime counter is per direction.  Ten thousand therefore proves
+        # a hard combined ceiling of twenty thousand scheduled opportunities.
+        or int(values["max_events"]) > 10_000
+        or int(values["max_events"]) * int(values["interval_us"]) > 120_000_000
+    ):
+        raise ValueError(f"buflo parameter runtime shape is invalid: {receipt_path}")
+
+
+def _validate_cs_buflo(
+    parameter: Mapping[str, Any], ceiling: int, receipt_path: Path
+) -> None:
+    fields = {
+        "schema_version",
+        "packet_size",
+        "initial_interval_us",
+        "minimum_interval_us",
+        "maximum_interval_us",
+        "initial_adaptation_boundary_bytes",
+        "quiet_time_us",
+        "outgoing_padding_mode",
+        "incoming_padding_mode",
+        "timing_sample_limit",
+        "jitter_denominator",
+        "jitter_max_numerator",
+        "early_termination",
+        "max_events",
+        "implementation_scope",
+        "paper_equivalent",
+    }
+    _require_exact_keys(parameter, fields, "CS-BuFLO runtime parameters")
+    integer_fields = fields - {
+        "schema_version",
+        "outgoing_padding_mode",
+        "incoming_padding_mode",
+        "early_termination",
+        "implementation_scope",
+        "paper_equivalent",
+    }
+    values = {field: parameter.get(field) for field in integer_fields}
+    if (
+        parameter.get("schema_version") != 1
+        or parameter.get("implementation_scope") != "client_only_quic"
+        or parameter.get("paper_equivalent") is not False
+        or any(type(value) is not int or value <= 0 for value in values.values())
+        or int(values["packet_size"]) > ceiling
+        or not int(values["minimum_interval_us"])
+        <= int(values["initial_interval_us"])
+        <= int(values["maximum_interval_us"])
+        or parameter.get("outgoing_padding_mode") not in {"payload", "total"}
+        or parameter.get("incoming_padding_mode") != "payload"
+        or parameter.get("early_termination") != "local"
+        or values["timing_sample_limit"] != 1_000
+        or values["jitter_denominator"] != 100
+        or values["jitter_max_numerator"] != 200
+        or int(values["quiet_time_us"]) < int(values["maximum_interval_us"])
+    ):
+        raise ValueError(f"cs_buflo parameter runtime shape is invalid: {receipt_path}")
+    for field in (
+        "initial_interval_us",
+        "minimum_interval_us",
+        "maximum_interval_us",
+        "initial_adaptation_boundary_bytes",
+    ):
+        value = int(values[field])
+        if value & (value - 1):
+            raise ValueError(f"cs_buflo {field} must be a power of two: {receipt_path}")
 
 
 def _validate_traffic_morphing(

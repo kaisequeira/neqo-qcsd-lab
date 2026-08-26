@@ -780,8 +780,10 @@ def test_campaign_passes_named_set_only_to_response_only_loader(
         frozen_inputs: Path | None,
         qualification_scope: str,
         qualification_set: str | None,
+        config_root: Path | None,
     ) -> tuple[orchestrator.Workload, ...]:
         assert frozen_inputs is None
+        assert config_root == tmp_path / "config"
         assert qualification_scope == orchestrator.RESPONSE_ONLY_CHAFF_SCOPE
         observed.append(qualification_set)
         return workloads
@@ -1536,6 +1538,20 @@ def test_runner_receipt_is_bound_to_frozen_launch_inputs(tmp_path: Path) -> None
         "request_policy": "as-defined",
         "workload_hash_sha256": sha256_file(manifest),
         "max_response_bytes": 4096,
+        "client_resource_usage": {
+            "schema_version": 1,
+            "source": "test-fixture",
+            "user_cpu_seconds": 0.1,
+            "system_cpu_seconds": 0.05,
+            "wall_time_seconds": 0.2,
+            "maximum_rss_bytes": 4_096,
+            "voluntary_context_switches": 1,
+            "involuntary_context_switches": 0,
+            "timer_wakeups": None,
+            "timer_wakeups_unavailable_reason": "not measured in unit test",
+            "rapl_energy_joules": None,
+            "rapl_unavailable_reason": "not measured in unit test",
+        },
         "resolved_configuration": {
             "max_udp_payload_size": 1200,
             "defense": {"kind": "none"},
@@ -1560,6 +1576,54 @@ def test_runner_receipt_is_bound_to_frozen_launch_inputs(tmp_path: Path) -> None
             seed=7,
             context=context,
         )
+
+
+def test_controlled_regression_parameters_bind_loaded_chaff_evidence(tmp_path: Path) -> None:
+    parameter = tmp_path / "walkie-talking-controlled.json"
+    provenance = tmp_path / "walkie-talking-controlled.json.provenance.json"
+    binding = {
+        "workload_id": "simple",
+        "chaff_qualification_sidecar_sha256": "a" * 64,
+        "prefix_pack_spec_sha256": "b" * 64,
+        "qualified_chaff_manifest_sha256": "c" * 64,
+        "application_resource_id": 0,
+        "selected_chaff_resource_id": 1,
+        "qualified_parallel_chaff_streams": 5,
+        "walkie_talkie_required_chaff_streams": 2,
+    }
+    atomic_json(parameter, {"qualification_bindings": [binding]})
+    atomic_json(
+        provenance,
+        {"artifact_type": "qcsd-controlled-regression-parameters"},
+    )
+    defense = SimpleNamespace(
+        parameters_path=parameter,
+        parameters_provenance_path=provenance,
+    )
+    workload = SimpleNamespace(
+        id="simple",
+        chaff_qualification_sha256="a" * 64,
+        chaff_prefix_spec_sha256="b" * 64,
+        chaff_manifest_sha256="c" * 64,
+        chaff_manifest_data={
+            "application_resource_id": 0,
+            "selected_chaff_resource_id": 1,
+            "qualified_parallel_chaff_streams": 5,
+            "walkie_talkie_required_chaff_streams": 2,
+        },
+    )
+
+    orchestrator._validate_loaded_qualification_bindings((defense,), (workload,))
+    atomic_json(
+        parameter,
+        {
+            "qualification_bindings": [
+                {**binding, "qualified_chaff_manifest_sha256": "d" * 64}
+            ]
+        },
+    )
+    with pytest.raises(ValueError, match="loaded chaff qualifications"):
+        orchestrator._validate_loaded_qualification_bindings((defense,), (workload,))
 
 
 @pytest.mark.parametrize(

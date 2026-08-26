@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "artifact_type": "qcsd-buflo-study-parameters",
+  "status": "candidate-validation-required",
+  "production_ready": false,
+  "implementation_status": "candidate",
+  "implementation_scope": "client_only_quic",
+  "study_id": "buflo-csbuflo-qcsd-v1",
+  "defense_kind": "buflo",
+  "qcsd_profile": "research-1200",
+  "udp_payload_ceiling": 1200,
+  "paper_variant": "QCSD-BuFLO-udp1200-rho20-tau10",
+  "paper_equivalent": false,
+  "parameter_semantics": "qcsd-udp1200-adaptation-with-120-second-event-guard",
+  "reference_artifact": "config/reference/buflo-csbuflo/buflo-ieee-sp-2012-v1.json",
+  "reference_receipt": "config/reference/buflo-csbuflo/buflo-ieee-sp-2012-v1.receipt.json",
+  "parameter_file": {
+    "path": "buflo-live.json",
+    "sha256": "8ba1b822d512e87382b25d83460e0cfe1ecf1f47aa66c17ee9dabb28999596e2"
+  },
+  "validation_requirements": [
+    "reference-oracle-comparison",
+    "deterministic-unit-and-property-tests",
+    "docker-netem-controlled-capture",
+    "public-smoke-and-rehearsal",
+    "formal-paired-capture",
+    "client-correctness-and-fidelity",
+    "paper-overhead-comparison"
+  ]
+}

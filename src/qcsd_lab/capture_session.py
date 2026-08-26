@@ -9,6 +9,7 @@ that single attempt.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -30,7 +31,11 @@ from .capture import (
     udp_ceiling_evidence,
     write_normalized_trace,
 )
-from .fidelity import reconcile_direct_runner_artifacts, validate_primary_capture_clock_integrity
+from .fidelity import (
+    new_defense_terminal_receipts_valid,
+    reconcile_direct_runner_artifacts,
+    validate_primary_capture_clock_integrity,
+)
 from .manifest import https_origin
 from .parameters import (
     PARAMETER_ARTIFACT_NAME,
@@ -53,6 +58,8 @@ PARAMETER_FLAG_BY_KIND = {
     "traffic_morphing": "--morphing-matrix",
     "wtf_pad": "--wtf-pad-histograms",
     "walkie_talkie": "--walkie-talkie-molded",
+    "buflo": "--buflo-parameters",
+    "cs_buflo": "--cs-buflo-parameters",
 }
 SUPPORTED_DEFENSE_KINDS = {
     "none",
@@ -65,7 +72,45 @@ RUNNER_KIND_BY_KIND = {
     "traffic_morphing": "traffic-morphing",
     "wtf_pad": "wtf-pad",
     "walkie_talkie": "walkie-talkie",
+    "buflo": "buflo",
+    "cs_buflo": "cs-buflo",
 }
+_CLIENT_RESOURCE_USAGE_KEYS = {
+    "schema_version",
+    "source",
+    "user_cpu_seconds",
+    "system_cpu_seconds",
+    "wall_time_seconds",
+    "maximum_rss_bytes",
+    "voluntary_context_switches",
+    "involuntary_context_switches",
+    "timer_wakeups",
+    "timer_wakeups_unavailable_reason",
+    "rapl_energy_joules",
+    "rapl_unavailable_reason",
+}
+_RUNNER_WAKEUP_METRICS_KEYS = {
+    "schema_version",
+    "semantics",
+    "wait_returns",
+    "socket_readiness_wakeups",
+    "timer_wakeups",
+    "controller_deadline_timer_wakeups",
+    "other_timer_wakeups",
+}
+_RUNNER_WAKEUP_METRICS_SEMANTICS = (
+    "actual_select_return_source; socket_wins_simultaneous_readiness; "
+    "controller_subset_is_effective_earliest_deadline; scheduled_cells_are_not_wakeups"
+)
+_GNU_TIME_FORMAT = "\n".join(
+    (
+        "user_cpu_seconds=%U",
+        "system_cpu_seconds=%S",
+        "maximum_rss_kib=%M",
+        "voluntary_context_switches=%w",
+        "involuntary_context_switches=%c",
+    )
+)
 
 
 @dataclass(frozen=True)
@@ -258,6 +303,49 @@ def _offload_metadata(interface: str) -> dict[str, Any]:
     return evidence
 
 
+def _public_study_network_condition(
+    interface: str, offload: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Receipt the absence of local netem on public-study collection traffic."""
+
+    condition = os.environ.get("QCSD_STUDY_NETWORK_CONDITION")
+    if condition is None:
+        return None
+    if condition != "public-docker-bridge-no-netem":
+        raise ValueError("unsupported public study network condition")
+    observed = run(
+        ["tc", "-details", "-j", "qdisc", "show", "dev", interface],
+        check=False,
+    )
+    try:
+        qdisc = json.loads(observed.stdout)
+    except json.JSONDecodeError as error:
+        raise ValueError("public study qdisc observation is not JSON") from error
+    if not isinstance(qdisc, list):
+        raise ValueError("public study qdisc observation is not an array")
+    netem_present = any(
+        isinstance(row, dict) and row.get("kind") == "netem" for row in qdisc
+    )
+    receipt = {
+        "schema_version": 1,
+        "artifact_type": "qcsd-buflo-study-network-condition",
+        "condition": condition,
+        "docker_network_mode": "bridge",
+        "interface": interface,
+        "applied_netem": False,
+        "qdisc_query_returncode": observed.returncode,
+        "observed_qdisc": qdisc,
+        "netem_present": netem_present,
+        "capture_offloads_verified": offload.get("verified") is True,
+    }
+    receipt["valid"] = bool(
+        observed.returncode == 0
+        and not netem_present
+        and receipt["capture_offloads_verified"]
+    )
+    return receipt
+
+
 def _collect_attempt(
     attempt: Path,
     manifest: Path,
@@ -322,6 +410,10 @@ def _collect_attempt(
     offloads_valid = all(
         offload_evidence_is_valid(item, interface=view.interface) for item in offloads
     )
+    public_network_condition = _public_study_network_condition(view.interface, offloads[0])
+    public_network_valid = (
+        public_network_condition is None or public_network_condition["valid"] is True
+    )
     raw = diagnostics / f"{view.id}-raw.pcapng"
     capture_log = diagnostics / f"dumpcap-{view.id}.log"
     handle = capture_log.open("w", encoding="utf-8")
@@ -364,6 +456,7 @@ def _collect_attempt(
             log=diagnostics / "neqo-client.log",
             configured_timeout_seconds=context.limits.timeout_seconds,
         )
+        client_resource_usage = getattr(client, "client_resource_usage", None)
         if neqo.is_dir():
             _copy_defense_parameter_artifacts(defense, neqo)
         if context.limits.settle_seconds:
@@ -394,6 +487,29 @@ def _collect_attempt(
         runner_output_error = f"run.json was incomplete after the host timeout: {error}"
     if runner_timed_out and not run_json.exists():
         runner_output_error = "run.json was not produced before the host timeout"
+    if run_data:
+        if not _client_resource_usage_valid(client_resource_usage):
+            runner_output_error = (
+                runner_output_error
+                or "client resource usage was not produced by the measured Neqo process"
+            )
+        else:
+            client_resource_usage = _merge_runner_wakeup_metrics(
+                client_resource_usage,
+                run_data.get("runner_wakeup_metrics"),
+                required=(
+                    defense.kind in {"buflo", "cs_buflo"}
+                    and run_data.get("completion_status") == "complete"
+                ),
+            )
+            existing_resource_usage = run_data.get("client_resource_usage")
+            if (
+                existing_resource_usage is not None
+                and existing_resource_usage != client_resource_usage
+            ):
+                raise ValueError("runner emitted conflicting client resource usage")
+            run_data["client_resource_usage"] = client_resource_usage
+            atomic_json(run_json, run_data)
     manifest_data = load_json(manifest)
     expected_resource_ids = {resource["id"] for resource in manifest_data["resources"]}
     endpoints = run_data.get("endpoints", [])
@@ -509,6 +625,7 @@ def _collect_attempt(
         and capture_active_through_settle
         and link_valid
         and offloads_valid
+        and public_network_valid
         and ceiling_evidence["valid"]
         and direct_runner_reconciliation_valid
         and capture_clock_integrity["valid"]
@@ -526,6 +643,7 @@ def _collect_attempt(
                 "capture_active_through_settle": capture_active_through_settle,
                 "link_type_valid": link_valid,
                 "capture_offloads_valid": offloads_valid,
+                "public_network_condition_valid": public_network_valid,
                 "udp_payload_ceiling_valid": ceiling_evidence["valid"],
                 "direct_runner_reconciliation_valid": direct_runner_reconciliation_valid,
                 "capture_clock_integrity_valid": capture_clock_integrity["valid"],
@@ -556,6 +674,7 @@ def _collect_attempt(
     success = (
         not runner_timed_out
         and client.returncode == 0
+        and _client_resource_usage_valid(client_resource_usage)
         and runner_complete
         and runner_binding_valid
         and endpoint_count_valid
@@ -568,6 +687,7 @@ def _collect_attempt(
         "runner_host_timeout_seconds": runner_host_timeout_seconds,
         "runner_output_error": runner_output_error,
         "runner_completion_status": completion_status,
+        "client_resource_usage": client_resource_usage,
         "runner_complete": runner_complete,
         "runner_binding_valid": runner_binding_valid,
         "endpoint_count": len(endpoints),
@@ -575,6 +695,7 @@ def _collect_attempt(
         "endpoint_count_valid": endpoint_count_valid,
         "views": [record],
         "offloads": offloads,
+        "network_condition": public_network_condition,
         "defense_diagnostics": run_data.get("defense_diagnostics"),
         "operationally_valid": not guard_triggered,
         "failure": (
@@ -601,11 +722,12 @@ def _collect_attempt(
                         "runner_host_timeout_seconds": runner_host_timeout_seconds,
                         "runner_output_error": runner_output_error,
                         "completion_status": completion_status,
+                        "client_resource_usage": client_resource_usage,
                         "runner_binding_error": (
                             None if runner_binding_valid else runner_binding_error
                         ),
                         "operational_failure": (
-                            "wtf_pad_padding_event_guard_triggered" if guard_triggered else None
+                            "defense_event_guard_triggered" if guard_triggered else None
                         ),
                         "defense_diagnostics": run_data.get("defense_diagnostics"),
                         "incomplete_resources": [
@@ -630,14 +752,172 @@ def _run_neqo_client(
     log: Path,
     configured_timeout_seconds: int,
 ) -> tuple[subprocess.CompletedProcess[str], bool, float]:
-    """Run the collector client under an independent host-side deadline."""
+    """Run exactly one measured collector client under a host-side deadline."""
 
     host_timeout = neqo_host_timeout(configured_timeout_seconds)
+    resource_log = log.with_name(f"{log.stem}-resource-usage.txt")
+    wrapped_command = [
+        "/usr/bin/time",
+        "--quiet",
+        "--output",
+        str(resource_log),
+        "--format",
+        _GNU_TIME_FORMAT,
+        "--",
+        *command,
+    ]
+    started = time.monotonic()
     try:
-        result = run(command, log=log, check=False, timeout=host_timeout)
+        result = run(
+            wrapped_command,
+            log=log,
+            check=False,
+            timeout=host_timeout,
+            terminate_process_group=True,
+        )
     except ProcessTimeoutError as error:
+        setattr(error.result, "client_resource_usage", None)
         return error.result, True, host_timeout
+    usage = _parse_client_resource_usage(resource_log, time.monotonic() - started)
+    setattr(result, "client_resource_usage", usage)
     return result, False, host_timeout
+
+
+def _parse_client_resource_usage(path: Path, wall_time_seconds: float) -> dict[str, Any]:
+    """Parse one GNU-time receipt without folding in dumpcap or other children."""
+
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError as error:
+        raise ValueError(f"cannot read GNU time client resource receipt: {path}") from error
+    raw: dict[str, str] = {}
+    for line in lines:
+        key, separator, value = line.partition("=")
+        if not separator or not key or key in raw:
+            raise ValueError(f"malformed GNU time client resource receipt: {path}")
+        raw[key] = value
+    expected = {
+        "user_cpu_seconds",
+        "system_cpu_seconds",
+        "maximum_rss_kib",
+        "voluntary_context_switches",
+        "involuntary_context_switches",
+    }
+    if set(raw) != expected:
+        raise ValueError(f"incomplete GNU time client resource receipt: {path}")
+    try:
+        usage = {
+            "schema_version": 1,
+            "source": "gnu-time-and-python-monotonic-v1",
+            "user_cpu_seconds": float(raw["user_cpu_seconds"]),
+            "system_cpu_seconds": float(raw["system_cpu_seconds"]),
+            "wall_time_seconds": float(wall_time_seconds),
+            "maximum_rss_bytes": int(raw["maximum_rss_kib"]) * 1_024,
+            "voluntary_context_switches": int(raw["voluntary_context_switches"]),
+            "involuntary_context_switches": int(raw["involuntary_context_switches"]),
+            "timer_wakeups": None,
+            "timer_wakeups_unavailable_reason": (
+                "perf timer/wakeup counters are not available to the unprivileged "
+                "collection container and may be unsupported by WSL"
+            ),
+            "rapl_energy_joules": None,
+            "rapl_unavailable_reason": (
+                "RAPL energy counters are not exposed to the collection container "
+                "and are ordinarily unavailable under WSL"
+            ),
+        }
+    except ValueError as error:
+        raise ValueError(f"invalid GNU time client resource receipt: {path}") from error
+    if not _client_resource_usage_valid(usage):
+        raise ValueError(f"invalid client resource usage values: {path}")
+    return usage
+
+
+def _client_resource_usage_valid(value: Any) -> bool:
+    if not isinstance(value, dict) or set(value) != _CLIENT_RESOURCE_USAGE_KEYS:
+        return False
+    if value.get("schema_version") != 1 or not isinstance(value.get("source"), str):
+        return False
+    if not value["source"]:
+        return False
+    numeric = (
+        "user_cpu_seconds",
+        "system_cpu_seconds",
+        "wall_time_seconds",
+        "maximum_rss_bytes",
+        "voluntary_context_switches",
+        "involuntary_context_switches",
+    )
+    if any(
+        isinstance(value[key], bool)
+        or not isinstance(value[key], (int, float))
+        or value[key] < 0
+        for key in numeric
+    ):
+        return False
+    for metric, reason in (
+        ("timer_wakeups", "timer_wakeups_unavailable_reason"),
+        ("rapl_energy_joules", "rapl_unavailable_reason"),
+    ):
+        measured = value[metric]
+        unavailable = value[reason]
+        if measured is None:
+            if not isinstance(unavailable, str) or not unavailable:
+                return False
+        elif (
+            isinstance(measured, bool)
+            or not isinstance(measured, (int, float))
+            or measured < 0
+            or unavailable is not None
+        ):
+            return False
+    return True
+
+
+def _runner_wakeup_metrics_valid(value: Any) -> bool:
+    if not isinstance(value, dict) or set(value) != _RUNNER_WAKEUP_METRICS_KEYS:
+        return False
+    if (
+        value.get("schema_version") != 1
+        or value.get("semantics") != _RUNNER_WAKEUP_METRICS_SEMANTICS
+    ):
+        return False
+    count_keys = _RUNNER_WAKEUP_METRICS_KEYS - {"schema_version", "semantics"}
+    if any(
+        isinstance(value[key], bool) or not isinstance(value[key], int) or value[key] < 0
+        for key in count_keys
+    ):
+        return False
+    return (
+        value["wait_returns"]
+        == value["socket_readiness_wakeups"] + value["timer_wakeups"]
+        and value["timer_wakeups"]
+        == value["controller_deadline_timer_wakeups"] + value["other_timer_wakeups"]
+    )
+
+
+def _merge_runner_wakeup_metrics(
+    usage: dict[str, Any], value: Any, *, required: bool
+) -> dict[str, Any]:
+    """Bind Rust event-loop wakeups into the measured client resource receipt."""
+
+    if value is None:
+        if required:
+            raise ValueError("completed BuFLO study run lacks runner wakeup metrics")
+        return dict(usage)
+    if not _runner_wakeup_metrics_valid(value):
+        raise ValueError("runner wakeup metrics are invalid")
+    merged = dict(usage)
+    merged.update(
+        {
+            "source": "gnu-time-python-monotonic-and-runner-select-v1",
+            "timer_wakeups": value["timer_wakeups"],
+            "timer_wakeups_unavailable_reason": None,
+        }
+    )
+    if not _client_resource_usage_valid(merged):
+        raise ValueError("runner wakeup metrics produced invalid client resource usage")
+    return merged
 
 
 def _validate_run_binding(
@@ -655,11 +935,37 @@ def _validate_run_binding(
 
     resolved = run_data.get("resolved_configuration")
     resolved_defense = resolved.get("defense") if isinstance(resolved, dict) else None
+    resource_usage = run_data.get("client_resource_usage")
+    wakeup_metrics = run_data.get("runner_wakeup_metrics")
+    completed_new_buflo = (
+        defense.kind in {"buflo", "cs_buflo"}
+        and run_data.get("completion_status") == "complete"
+    )
     if (
         run_data.get("seed") != seed
         or run_data.get("request_policy") != context.request_policy
         or run_data.get("workload_hash_sha256") != sha256_file(manifest)
         or run_data.get("max_response_bytes") != context.limits.max_response_bytes
+        or not _client_resource_usage_valid(resource_usage)
+        or (
+            completed_new_buflo
+            and (
+                not _runner_wakeup_metrics_valid(wakeup_metrics)
+                or resource_usage.get("source")
+                != "gnu-time-python-monotonic-and-runner-select-v1"
+                or resource_usage.get("timer_wakeups")
+                != wakeup_metrics.get("timer_wakeups")
+                or resource_usage.get("timer_wakeups_unavailable_reason") is not None
+            )
+        )
+        or (
+            completed_new_buflo
+            and not new_defense_terminal_receipts_valid(
+                run_data,
+                defense.kind,
+                require_application_complete=True,
+            )
+        )
         or not isinstance(resolved, dict)
         or resolved.get("max_udp_payload_size") != context.udp_payload_ceiling
         or not isinstance(resolved_defense, dict)

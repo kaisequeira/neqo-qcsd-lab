@@ -111,9 +111,31 @@ IMPLEMENTATION_STATIC_FILES = (
     "qcsd-lab",
     "uv.lock",
 )
-IMPLEMENTATION_PYTHON_FILES = tuple(
-    path.relative_to(LAB_ROOT).as_posix()
-    for path in sorted((LAB_ROOT / "src/qcsd_lab").rglob("*.py"))
+IMPLEMENTATION_PYTHON_FILES = (
+    "src/qcsd_lab/__init__.py",
+    "src/qcsd_lab/analysis.py",
+    "src/qcsd_lab/capture.py",
+    "src/qcsd_lab/capture_session.py",
+    "src/qcsd_lab/chaff_qualification.py",
+    "src/qcsd_lab/cli.py",
+    "src/qcsd_lab/defenses.py",
+    "src/qcsd_lab/discover.py",
+    "src/qcsd_lab/experiment.py",
+    "src/qcsd_lab/fidelity.py",
+    "src/qcsd_lab/fitting.py",
+    "src/qcsd_lab/fitting_morphing.py",
+    "src/qcsd_lab/fitting_trace.py",
+    "src/qcsd_lab/fitting_walkie_talkie.py",
+    "src/qcsd_lab/fitting_wtfpad.py",
+    "src/qcsd_lab/manifest.py",
+    "src/qcsd_lab/orchestrator.py",
+    "src/qcsd_lab/parameters.py",
+    "src/qcsd_lab/plotting.py",
+    "src/qcsd_lab/prepare.py",
+    "src/qcsd_lab/profiles.py",
+    "src/qcsd_lab/report.py",
+    "src/qcsd_lab/util.py",
+    "src/qcsd_lab/verification.py",
 )
 IMPLEMENTATION_FILES = IMPLEMENTATION_STATIC_FILES + IMPLEMENTATION_PYTHON_FILES
 

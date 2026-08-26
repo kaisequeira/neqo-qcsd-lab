@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "packet_size": 600,
+  "initial_interval_us": 8192,
+  "minimum_interval_us": 4096,
+  "maximum_interval_us": 32768,
+  "initial_adaptation_boundary_bytes": 16384,
+  "quiet_time_us": 2000000,
+  "outgoing_padding_mode": "payload",
+  "incoming_padding_mode": "payload",
+  "timing_sample_limit": 1000,
+  "jitter_denominator": 100,
+  "jitter_max_numerator": 200,
+  "early_termination": "local",
+  "max_events": 1000000,
+  "implementation_scope": "client_only_quic",
+  "paper_equivalent": false
+}

@@ -1,0 +1,66 @@
+{
+  "artifact_type": "qcsd-primary-reference-receipt",
+  "clean_room": true,
+  "reference_file": {
+    "path": "csbuflo-wpes-2014-v1.json",
+    "sha256": "a4bb72b6d13b7ab38523ee57e79a047ba20734da68ed7c112b6739adaaddacf2"
+  },
+  "reference_id": "csbuflo-wpes-2014-v1",
+  "schema_version": 1,
+  "sources": [
+    {
+      "kind": "primary-paper",
+      "sha256": "200c8c58e8e8a6859f2baaa15299351fb0ad832bc3322b5553dfa88abcdab43d",
+      "source_id": "csbuflo-paper-pdf",
+      "url": "https://www.freehaven.net/anonbib/cache/wpes14-csbuflo.pdf"
+    },
+    {
+      "kind": "primary-preprint",
+      "sha256": "a2ae01af3bb41dc403d395b19b3a9e2bbcaaccce7530bf3749abf83e2908260f",
+      "source_id": "csbuflo-preprint-pdf",
+      "url": "https://arxiv.org/pdf/1401.6022"
+    },
+    {
+      "git_commit": "43252f6e463ba71c43490af3f5a63308134f3bbe",
+      "kind": "author-reference-code",
+      "sha256": "428ca512066b89641bc355764ba6943938f0eca0839ab2460c3500f0adb1c822",
+      "source_id": "csbuflo-misc-h",
+      "url": "https://raw.githubusercontent.com/xiang-cai/CSBuFLO/43252f6e463ba71c43490af3f5a63308134f3bbe/modified_openssh-5.9p1/misc.h"
+    },
+    {
+      "git_commit": "43252f6e463ba71c43490af3f5a63308134f3bbe",
+      "kind": "author-reference-code",
+      "sha256": "fedbe65ccd06e55465b71176ef1d625e18be49cc165d258fce9ce9814fd0924c",
+      "source_id": "csbuflo-misc-c",
+      "url": "https://raw.githubusercontent.com/xiang-cai/CSBuFLO/43252f6e463ba71c43490af3f5a63308134f3bbe/modified_openssh-5.9p1/misc.c"
+    },
+    {
+      "git_commit": "43252f6e463ba71c43490af3f5a63308134f3bbe",
+      "kind": "author-reference-code",
+      "sha256": "a3af77c131eccfe1fd0787cc1063870bebbf0e3fe0c2975e4143ed9c86b0cec0",
+      "source_id": "csbuflo-packet-c",
+      "url": "https://raw.githubusercontent.com/xiang-cai/CSBuFLO/43252f6e463ba71c43490af3f5a63308134f3bbe/modified_openssh-5.9p1/packet.c"
+    },
+    {
+      "git_commit": "43252f6e463ba71c43490af3f5a63308134f3bbe",
+      "kind": "author-reference-code",
+      "sha256": "6f0148c8891756e39980edf47f2d5fbc254d2da7b4a8096a678cf3bb7777a36e",
+      "source_id": "csbuflo-clientloop-c",
+      "url": "https://raw.githubusercontent.com/xiang-cai/CSBuFLO/43252f6e463ba71c43490af3f5a63308134f3bbe/modified_openssh-5.9p1/clientloop.c"
+    },
+    {
+      "git_commit": "43252f6e463ba71c43490af3f5a63308134f3bbe",
+      "kind": "author-reference-code",
+      "sha256": "abc798cecb918d5c89ccec825224d543862e95a9650334bb0b5d4dd99e17a3a9",
+      "source_id": "csbuflo-serverloop-c",
+      "url": "https://raw.githubusercontent.com/xiang-cai/CSBuFLO/43252f6e463ba71c43490af3f5a63308134f3bbe/modified_openssh-5.9p1/serverloop.c"
+    },
+    {
+      "git_commit": "43252f6e463ba71c43490af3f5a63308134f3bbe",
+      "kind": "author-reference-traces",
+      "sha256": "225bb69da7cc8fa8df0a60178cda877a2e528db58f80f01b9894dce25aeabf55",
+      "source_id": "csbuflo-cpsp-trace-archive",
+      "url": "https://raw.githubusercontent.com/xiang-cai/CSBuFLO/43252f6e463ba71c43490af3f5a63308134f3bbe/log_interval_tau_200_20_allmedian_2t_600_CMSM_paddingdone_pairs.tar.gz"
+    }
+  ]
+}

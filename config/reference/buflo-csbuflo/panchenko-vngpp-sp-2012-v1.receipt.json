@@ -1,0 +1,72 @@
+{
+  "artifact_type": "qcsd-primary-reference-receipt",
+  "clean_room": true,
+  "reference_file": {
+    "path": "panchenko-vngpp-sp-2012-v1.json",
+    "sha256": "474823778a1002a91eb0e60348974f317723e597d0c8f31827a6448d47157998"
+  },
+  "reference_id": "panchenko-vngpp-sp-2012-v1",
+  "schema_version": 1,
+  "sources": [
+    {
+      "kind": "primary-paper",
+      "sha256": "a68dd316e37bc749cfd0f5becdb9b2faa77e7f6fdb575d3e067da2d9018297cc",
+      "source_id": "dyer-paper-pdf",
+      "url": "https://rist.tech.cornell.edu/papers/trafanal.pdf"
+    },
+    {
+      "git_commit": "372ced4c84b867086394cbd736b089e5cad4969b",
+      "kind": "isolated-author-reference-code",
+      "sha256": "37caa5acbd3c541d5ac6f066e6b45616f9d4b235a4d494b3901c32fdc3a2838f",
+      "source_id": "dyer-panchenko-classifier-py",
+      "url": "https://raw.githubusercontent.com/kpdyer/website-fingerprinting/372ced4c84b867086394cbd736b089e5cad4969b/classifiers/PanchenkoClassifier.py"
+    },
+    {
+      "git_commit": "372ced4c84b867086394cbd736b089e5cad4969b",
+      "kind": "isolated-author-reference-code",
+      "sha256": "b6738fcc2585b085b6ca83f8fdf13e7027f9b786685b0e0e7547277d7af4de52",
+      "source_id": "dyer-vngplusplus-classifier-py",
+      "url": "https://raw.githubusercontent.com/kpdyer/website-fingerprinting/372ced4c84b867086394cbd736b089e5cad4969b/classifiers/VNGPlusPlusClassifier.py"
+    },
+    {
+      "git_commit": "372ced4c84b867086394cbd736b089e5cad4969b",
+      "kind": "isolated-author-reference-dependency",
+      "sha256": "67431b41903e4e78c3e01afbda2c05a43ce3ac42a248304fb886129a3870c20f",
+      "source_id": "dyer-arff-writer-py",
+      "url": "https://raw.githubusercontent.com/kpdyer/website-fingerprinting/372ced4c84b867086394cbd736b089e5cad4969b/arffWriter.py"
+    },
+    {
+      "git_commit": "372ced4c84b867086394cbd736b089e5cad4969b",
+      "kind": "isolated-author-reference-dependency",
+      "sha256": "41deff2dcee6f730d01fc989e858f116e2f6a767526f8f7e55b6344087ed6f62",
+      "source_id": "dyer-weka-api-py",
+      "url": "https://raw.githubusercontent.com/kpdyer/website-fingerprinting/372ced4c84b867086394cbd736b089e5cad4969b/classifiers/wekaAPI.py"
+    },
+    {
+      "git_commit": "372ced4c84b867086394cbd736b089e5cad4969b",
+      "kind": "isolated-author-reference-dependency",
+      "sha256": "f420bb8dee63a41475ef3fcc77fe988e0a1409a7624af6aefa4335e1146ebafe",
+      "source_id": "dyer-pcap-parser-py",
+      "url": "https://raw.githubusercontent.com/kpdyer/website-fingerprinting/372ced4c84b867086394cbd736b089e5cad4969b/pcapparser.py"
+    },
+    {
+      "kind": "pinned-reference-runtime",
+      "license": "GPL-3.0",
+      "sha256": "4d20516c9d32e3433b402f8898a2430cb4b519734ba4877c39726878c18ec4ad",
+      "source_id": "weka-dev-3.7.5-jar",
+      "url": "https://repo1.maven.org/maven2/nz/ac/waikato/cms/weka/weka-dev/3.7.5/weka-dev-3.7.5.jar"
+    },
+    {
+      "kind": "pinned-reference-runtime-dependency",
+      "sha256": "a336161c0e868d8334449eb5d695bc16c961fc545a51bae60ac091af1e5722ca",
+      "source_id": "pentaho-package-manager-0.9.9-jar",
+      "url": "https://repo1.maven.org/maven2/org/pentaho/pentaho-commons/pentaho-package-manager/0.9.9/pentaho-package-manager-0.9.9.jar"
+    },
+    {
+      "kind": "pinned-reference-runtime-dependency",
+      "sha256": "9afcfd0996dcc9a933e66749988428ad964d8c1b678107fe688a6fa55325e17e",
+      "source_id": "java-cup-0.11a-jar",
+      "url": "https://repo1.maven.org/maven2/net/sf/squirrel-sql/thirdparty-non-maven/java-cup/0.11a/java-cup-0.11a.jar"
+    }
+  ]
+}

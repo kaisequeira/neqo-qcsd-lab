@@ -98,7 +98,11 @@ def _trace_for_sample(sample: Path) -> list[ObserverPacket]:
     return plotting.trace_for_sample(sample)
 
 
-def analyze_result(root: Path | str) -> AnalysisResult:
+def analyze_result(
+    root: Path | str,
+    *,
+    validation_attestation: Path | None = None,
+) -> AnalysisResult:
     """Verify evidence and atomically regenerate the complete ``derived/`` tree."""
 
     result_root = Path(root).resolve()
@@ -130,7 +134,12 @@ def analyze_result(root: Path | str) -> AnalysisResult:
             for path, title, caption in figures
         ]
         (stage / "report.html").write_text(
-            render_report(experiment, records, report_figures),
+            render_report(
+                experiment,
+                records,
+                report_figures,
+                validation_attestation=validation_attestation,
+            ),
             encoding="utf-8",
         )
         _replace_derived(result_root, stage)

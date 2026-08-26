@@ -6,11 +6,101 @@ from copy import deepcopy
 import pytest
 
 from qcsd_lab.fidelity import (
+    SCHEDULE_QCSD_FIELDS,
     _schedule_realization_metrics,
+    _scheduled_incoming_diagnostics_match,
+    _validate_qcsd_trace_extension,
     fidelity_eligible,
     reconcile_direct_runner_artifacts,
     validate_primary_capture_clock_integrity,
 )
+
+
+def test_current_qcsd_trace_suffix_is_source_stable_v2() -> None:
+    assert SCHEDULE_QCSD_FIELDS[-4:] == (
+        "credit_advertised_at_us",
+        "credit_advertisement_delay_us",
+        "credit_consumed_at_us",
+        "credit_consumption_delay_us",
+    )
+
+
+def test_incoming_exact_terminal_is_receive_credit_not_udp_realization() -> None:
+    row = {field: "" for field in SCHEDULE_QCSD_FIELDS}
+    row.update(
+        {
+            "direction": "incoming",
+            "action_time_us": "0",
+            "qcsd_outcome_schema_version": "2",
+            "send_policy": "exact",
+            "desired_udp_bytes": "1200",
+            "credit_advertised_at_us": "100",
+            "credit_advertisement_delay_us": "100",
+            "credit_consumed_at_us": "500",
+            "credit_consumption_delay_us": "500",
+        }
+    )
+    _validate_qcsd_trace_extension(row, label="incoming schedule row")
+
+    credit = {
+        field: row[field]
+        for field in (
+            "credit_advertised_at_us",
+            "credit_advertisement_delay_us",
+            "credit_consumed_at_us",
+            "credit_consumption_delay_us",
+        )
+    }
+    row.update({field: "" for field in credit})
+    row["qcsd_outcome_schema_version"] = "1"
+    row["observed_udp_bytes"] = "1200"
+    _validate_qcsd_trace_extension(row, label="incoming observed packet row")
+
+    row["observed_udp_bytes"] = ""
+    row["qcsd_outcome_schema_version"] = "2"
+    row.update(credit)
+    row["application_stream_bytes"] = "1"
+    with pytest.raises(ValueError, match="receive-credit event UDP realization"):
+        _validate_qcsd_trace_extension(row, label="incoming schedule row")
+
+    row["application_stream_bytes"] = ""
+    row["credit_consumed_at_us"] = "99"
+    with pytest.raises(ValueError, match="consumption"):
+        _validate_qcsd_trace_extension(row, label="incoming schedule row")
+
+
+def test_incoming_diagnostics_version_advertisement_without_breaking_legacy() -> None:
+    legacy = _scheduled_incoming_diagnostics()
+    assert _scheduled_incoming_diagnostics_match(legacy)
+
+    current = {**legacy, "scheduled_incoming_advertised_bytes": 100}
+    assert _scheduled_incoming_diagnostics_match(current)
+    current["scheduled_incoming_advertised_bytes"] = 99
+    assert not _scheduled_incoming_diagnostics_match(current)
+
+
+def test_current_exact_packet_composition_is_distinct_from_terminal_schedule() -> None:
+    row = {field: "" for field in SCHEDULE_QCSD_FIELDS}
+    row.update(
+        {
+            "direction": "outgoing",
+            "qcsd_outcome_schema_version": "2",
+            "send_policy": "exact",
+            "desired_udp_bytes": "1200",
+            "observed_udp_bytes": "1200",
+            "application_stream_bytes": "800",
+            "retransmission_stream_bytes": "100",
+            "chaff_stream_bytes": "200",
+            "defense_control_bytes": "0",
+            "quic_padding_bytes": "50",
+            "other_quic_bytes": "50",
+            "lateness_us": "7",
+        }
+    )
+    _validate_qcsd_trace_extension(row, label="outgoing packet row")
+    row["other_quic_bytes"] = "49"
+    with pytest.raises(ValueError, match="composition"):
+        _validate_qcsd_trace_extension(row, label="outgoing packet row")
 
 
 def test_primary_capture_clock_integrity_accepts_bounded_linux_clock_evidence() -> None:
@@ -366,11 +456,94 @@ def test_schedule_metrics_report_exact_realization_errors(tmp_path):
         "missed_event_reasons": {"deadline": 1},
         "outgoing_size_mismatch_events": 1,
         "outgoing_size_absolute_error_bytes": 1,
+        "terminal_satisfactions": {"missed": 1, "satisfied": 3},
+        "terminal_slots_unique": True,
+        "duplicate_terminal_slots": 0,
+        "invalid_terminal_rows": 4,
+        "typed_congestion_reason_column": False,
+        "typed_credit_advertisement_columns": False,
+        "typed_credit_consumption_columns": False,
+        "invalid_congestion_reason_events": 0,
+        "congestion_reasons": {},
+        "terminal_desired_outgoing_bytes": 0,
+        "terminal_observed_outgoing_bytes": 0,
+        "catch_up_events": 0,
+        "invalid_typed_outcome_rows": 0,
+        "typed_composition_bytes": {
+            "application_stream_bytes": 0,
+            "retransmission_stream_bytes": 0,
+            "chaff_stream_bytes": 0,
+            "defense_control_bytes": 0,
+            "quic_padding_bytes": 0,
+            "other_quic_bytes": 0,
+        },
+        "typed_lateness_us_total": 0,
+        "typed_lateness_us_max": 0,
+        "typed_real_bearing_outgoing_bytes": 0,
+        "incoming_credit_advertised_events": 0,
+        "incoming_credit_consumed_events": 0,
+        "incoming_credit_missing_events": 0,
+        "incoming_credit_consumption_missing_events": 0,
+        "invalid_credit_advertisement_events": 0,
+        "invalid_credit_consumption_events": 0,
+        "incoming_credit_advertisement_delay_us_total": 0,
+        "incoming_credit_advertisement_delay_us_max": 0,
+        "incoming_credit_advertisement_delay_us_values": [],
+        "incoming_credit_consumption_delay_us_total": 0,
+        "incoming_credit_consumption_delay_us_max": 0,
+        "incoming_credit_consumption_delay_us_values": [],
+        "target_times_us_by_direction": {"outgoing": [], "incoming": []},
+        "scheduled_sizes_by_direction": {
+            "outgoing": [1_200, 1_200],
+            "incoming": [1_200, 1_200],
+        },
     }
 
 
 def test_missing_schedule_has_no_realization_claim(tmp_path):
     assert _schedule_realization_metrics(tmp_path) == {}
+
+
+def test_runner_packet_reader_accepts_exact_nullable_qcsd_extension(tmp_path):
+    run, packets, trace = _reconciliation_artifacts(tmp_path, tail_direction="incoming")
+    rows = packets.read_text(encoding="utf-8").splitlines()
+    extension = (
+        ",qcsd_outcome_schema_version,send_policy,desired_udp_bytes,observed_udp_bytes,"
+        "application_stream_bytes,retransmission_stream_bytes,chaff_stream_bytes,"
+        "defense_control_bytes,quic_padding_bytes,other_quic_bytes,lateness_us,"
+        "congestion_reason"
+    )
+    packets.write_text("\n".join([rows[0] + extension, *(row + "," * 12 for row in rows[1:])]) + "\n")
+
+    result = reconcile_direct_runner_artifacts(run, packets, trace)
+
+    assert result.evidence_eligible is True
+    assert result.metrics["direct_runner_packets"] == 2
+
+
+def test_runner_packet_reader_accepts_current_nullable_qcsd_extension(tmp_path):
+    run, packets, trace = _reconciliation_artifacts(tmp_path, tail_direction="incoming")
+    rows = packets.read_text(encoding="utf-8").splitlines()
+    header = rows[0] + "," + ",".join(SCHEDULE_QCSD_FIELDS)
+    empty_suffix = "," * len(SCHEDULE_QCSD_FIELDS)
+    packets.write_text(
+        "\n".join([header, *(row + empty_suffix for row in rows[1:])]) + "\n",
+        encoding="utf-8",
+    )
+
+    result = reconcile_direct_runner_artifacts(run, packets, trace)
+
+    assert result.evidence_eligible is True
+    assert result.metrics["direct_runner_packets"] == 2
+
+
+def test_runner_packet_reader_rejects_nonexact_qcsd_extension(tmp_path):
+    run, packets, trace = _reconciliation_artifacts(tmp_path, tail_direction="outgoing")
+    rows = packets.read_text(encoding="utf-8").splitlines()
+    packets.write_text("\n".join([rows[0] + ",unexpected", *(row + "," for row in rows[1:])]))
+
+    with pytest.raises(ValueError, match="invalid direct/runner evidence columns"):
+        reconcile_direct_runner_artifacts(run, packets, trace)
 
 
 def test_defended_sample_requires_exact_zero_miss_schedule_contract():

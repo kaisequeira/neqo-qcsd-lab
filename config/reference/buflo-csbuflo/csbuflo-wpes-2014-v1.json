@@ -1,0 +1,170 @@
+{
+  "algorithm_resolutions": {
+    "adaptation_counter": "total-actually-transmitted-real-plus-junk-bytes",
+    "adaptation_scope": "independent-per-endpoint-direction",
+    "author_commit_active_padding": "CPSP-payload-at-both-endpoints",
+    "author_commit_total_padding": "commented-inactive-source-expression-only",
+    "empty_rate_sample_paper": "retain-current-rho-per-algorithm-2",
+    "empty_rate_sample_pinned_artifact": "set-upper-rho",
+    "rate_quantization": "2**floor(log2(upper-integer-median-interval))",
+    "termination": "algorithm-4-buffer-idle-and-padding-done-or-power-of-two-crossing"
+  },
+  "artifact_defaults": {
+    "first_adaptation_boundary_bytes": 16384,
+    "initial_rho_us": 8192,
+    "jitter_grid_numerators_inclusive": [
+      0,
+      200
+    ],
+    "jitter_grid_scale_denominator": 100,
+    "lower_rho_us": 4096,
+    "max_rate_samples_per_direction": 1000,
+    "nominal_wire_packet_bytes": 600,
+    "quiet_time_us": 2000000,
+    "upper_rho_us": 32768,
+    "write_size_bytes": 548
+  },
+  "artifact_type": "qcsd-primary-reference",
+  "author_archive_reference": {
+    "bandwidth_ratio": 2.282792444255336,
+    "baseline_bytes": 3326013453,
+    "defended_bytes": 7592598380,
+    "included_records": 3824,
+    "padding_profile": "CPSP",
+    "sites": 200,
+    "source_id": "csbuflo-cpsp-trace-archive",
+    "total_records": 4000,
+    "trials_per_site": 20,
+    "zero_baseline_records": 176
+  },
+  "doi": "10.1145/2665943.2665949",
+  "early_termination_ablation": [
+    {
+      "bandwidth_ratio": 3.59,
+      "early_termination": true,
+      "latency_ratio": 3.91,
+      "padding_profile": "CTSP",
+      "sites": 50,
+      "vng_plus_plus_percent": 29.0
+    },
+    {
+      "bandwidth_ratio": 3.73,
+      "early_termination": false,
+      "latency_ratio": 3.51,
+      "padding_profile": "CTSP",
+      "sites": 50,
+      "vng_plus_plus_percent": 29.6
+    },
+    {
+      "bandwidth_ratio": 2.6,
+      "early_termination": true,
+      "latency_ratio": 2.87,
+      "padding_profile": "CPSP",
+      "sites": 50,
+      "vng_plus_plus_percent": 34.2
+    },
+    {
+      "bandwidth_ratio": 3.42,
+      "early_termination": false,
+      "latency_ratio": 3.52,
+      "padding_profile": "CPSP",
+      "sites": 50,
+      "vng_plus_plus_percent": 36.0
+    }
+  ],
+  "main_results": [
+    {
+      "bandwidth_ratio": 2.796,
+      "dlsvm_percent": 20.6,
+      "early_termination": true,
+      "latency_ratio": 3.271,
+      "padding_profile": "CTSP",
+      "panchenko_percent": 18.0,
+      "sites": 200,
+      "vng_plus_plus_percent": 13.0
+    },
+    {
+      "bandwidth_ratio": 2.289,
+      "dlsvm_percent": 34.3,
+      "early_termination": true,
+      "latency_ratio": 2.708,
+      "padding_profile": "CPSP",
+      "panchenko_percent": 24.2,
+      "sites": 200,
+      "vng_plus_plus_percent": 16.5
+    },
+    {
+      "bandwidth_ratio": 2.799,
+      "dlsvm_percent": 28.9,
+      "early_termination": true,
+      "latency_ratio": 3.444,
+      "padding_profile": "CTSP",
+      "panchenko_percent": 23.4,
+      "sites": 120,
+      "vng_plus_plus_percent": 20.9
+    },
+    {
+      "bandwidth_ratio": 2.3,
+      "dlsvm_percent": 40.5,
+      "early_termination": true,
+      "latency_ratio": 2.733,
+      "padding_profile": "CPSP",
+      "panchenko_percent": 30.6,
+      "sites": 120,
+      "vng_plus_plus_percent": 22.5
+    }
+  ],
+  "metric_conventions": {
+    "bandwidth_ratio": "ratio-of-expectations-not-mean-per-trace-ratio",
+    "latency_ratio": "ratio-of-expected-total-trace-duration"
+  },
+  "padding_profiles": {
+    "CPSP": {
+      "author_archive_available": true,
+      "client_padding": "payload",
+      "evaluated_in_main_results": true,
+      "server_padding": "payload"
+    },
+    "CPST": {
+      "author_archive_available": false,
+      "client_padding": "payload",
+      "evaluated_in_main_results": false,
+      "server_padding": "total"
+    },
+    "CTSP": {
+      "author_archive_available": false,
+      "client_padding": "total",
+      "evaluated_in_main_results": true,
+      "server_padding": "payload"
+    },
+    "CTST": {
+      "author_archive_available": false,
+      "client_padding": "total",
+      "evaluated_in_main_results": false,
+      "server_padding": "total"
+    }
+  },
+  "paper_internal_discrepancies": [
+    {
+      "classification": "known-internal-paper-prose-vs-algorithm-conflict",
+      "paper_algorithm_location": "Algorithm-2-lines-382-and-395-396",
+      "paper_algorithm_rule": "2**floor(log2(median-eligible-interval))",
+      "paper_prose_location": "WPES-2014-lines-450-455",
+      "paper_prose_rule": "round-up-rho-to-a-power-of-two",
+      "resolution_basis": "algorithm-pseudocode-and-formula-control-the-independent-oracle",
+      "resolved_rule": "2**floor(log2(upper-integer-median-interval))"
+    }
+  ],
+  "reference_id": "csbuflo-wpes-2014-v1",
+  "schema_version": 1,
+  "source_basis": [
+    "csbuflo-paper-pdf",
+    "csbuflo-preprint-pdf",
+    "csbuflo-misc-h",
+    "csbuflo-misc-c",
+    "csbuflo-packet-c",
+    "csbuflo-clientloop-c",
+    "csbuflo-serverloop-c",
+    "csbuflo-cpsp-trace-archive"
+  ]
+}

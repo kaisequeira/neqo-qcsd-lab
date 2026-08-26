@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "artifact_type": "qcsd-buflo-study-parameters",
+  "status": "candidate-validation-required",
+  "production_ready": false,
+  "implementation_status": "candidate",
+  "implementation_scope": "client_only_quic",
+  "study_id": "buflo-csbuflo-qcsd-v1",
+  "defense_kind": "cs_buflo",
+  "qcsd_profile": "research-1200",
+  "udp_payload_ceiling": 1200,
+  "paper_variant": "CPSP",
+  "paper_equivalent": false,
+  "parameter_semantics": "paper-source-values-mapped-to-quic-udp-payload",
+  "source_semantics": "author-oracle-advances-16KiB-boundaries-on-actually-transmitted-real-plus-junk-bytes-per-endpoint-and-direction",
+  "live_semantics": "qcsd-live-advances-16KiB-boundaries-on-exact-fresh-application-stream-bytes-outgoing-excludes-retransmission-and-defense-added-bytes-and-uses-consumed-application-offsets-incoming",
+  "rate_boundary_translation_version": 2,
+  "rate_boundary_counter_semantics": "client_only_quic_fresh_application_stream_bytes_outgoing_retransmission_excluded_and_consumed_application_offsets_incoming",
+  "author_rate_boundary_counter_semantics": "per_direction_actually_transmitted_real_plus_junk_bytes",
+  "translation_classification": "expected-client-only-qcsd-adaptation-difference",
+  "early_termination_semantics": "udp_client_only_observed_udp_power_of_two_crossing",
+  "expected_difference": "adaptation-boundary-crossings-and-rate-transition-times-may-differ-from-the-author-artifact",
+  "reference_artifact": "config/reference/buflo-csbuflo/csbuflo-wpes-2014-v1.json",
+  "reference_receipt": "config/reference/buflo-csbuflo/csbuflo-wpes-2014-v1.receipt.json",
+  "parameter_file": {
+    "path": "cs-buflo-cpsp-live.json",
+    "sha256": "e46036e50bcdef0f10b6711e8a730f9a452e56728da3f1f19288fcfb177839a7"
+  },
+  "validation_requirements": [
+    "reference-oracle-comparison",
+    "deterministic-unit-and-property-tests",
+    "docker-netem-controlled-capture",
+    "public-smoke-and-rehearsal",
+    "formal-paired-capture",
+    "client-correctness-and-fidelity",
+    "paper-overhead-comparison"
+  ]
+}

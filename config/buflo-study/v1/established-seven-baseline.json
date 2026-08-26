@@ -1,0 +1,98 @@
+{
+  "artifact_type": "qcsd-established-seven-baseline-oracle",
+  "baseline_commits": {
+    "lab": "8988a48a8e43cc9d47505cae12ee7758bc7fa5ee",
+    "neqo": "6aceaac85243d6e0e34354108e010705d3c83088"
+  },
+  "behavior_oracles": {
+    "byte_identical_golden_vectors": {
+      "neqo-csdef/tests/data/walkie-talkie-continuation.json": "6bd9dfdf54cfd5db5636b5c07fe6aec86ab17679cdf5e78df2efce7ffebacd12",
+      "neqo-csdef/tests/data/walkie-talkie-golden.json": "3396f5efa58d50f410c67b6e7b7667059e2fb53cda11a3710f14d2e56d335703",
+      "neqo-csdef/tests/data/wtf-pad-golden.json": "b89dd044a2f1a2e79e6a9f6da9bbe2be9632aff6ecce5c691adbbb2bc8ff81a4"
+    },
+    "byte_identical_rust_defenses": {
+      "neqo-csdef/src/defense/front.rs": "4aee5a900814743266110bf2add853731475faa03cedb97cbf412fc15dc7ff9a",
+      "neqo-csdef/src/defense/static_schedule.rs": "527fb65a370a7aa31ff07c92e8e8e2b520a21f113ddd064f69a50af2e3179ea2",
+      "neqo-csdef/src/defense/tamaraw.rs": "7bf2622ae6662fcead939928b9a0c335fdc28d2477397352e33f8e24bec12d79"
+    },
+    "live_regression": {
+      "campaign_name": "buflo-study-v1-regression-established-seven-1200",
+      "evidence_class": "controlled-test-only-nonformal",
+      "expected_samples": 14,
+      "required_treatments": [
+        "undefended",
+        "static",
+        "front",
+        "tamaraw",
+        "traffic-morphing",
+        "wtf-pad",
+        "walkie-talkie"
+      ],
+      "required_verdict": "14-of-14-response-correct-and-intrinsic-fidelity-eligible",
+      "rust_test_binding": "cargo test -p neqo-csdef --locked"
+    }
+  },
+  "defense_identity_projection": [
+    ["undefended", "none"],
+    ["static", "static"],
+    ["front", "front"],
+    ["tamaraw", "tamaraw"],
+    ["traffic-morphing", "traffic_morphing"],
+    ["wtf-pad", "wtf_pad"],
+    ["walkie-talkie", "walkie_talkie"]
+  ],
+  "derivation": {
+    "method": "git-show-raw-bytes-and-TOML-projection-from-the-two-clean-baseline-commits",
+    "status": "immutable-pre-change-oracle"
+  },
+  "live_profile_established_projection": {
+    "controller": {
+      "automatic_receive_window": 1048576,
+      "control_interval_us": 5000,
+      "drop_unsatisfied_events": true,
+      "initial_max_stream_data": 16,
+      "keep_alive_lead_time_us": 100000,
+      "low_watermark": 131072,
+      "max_chaff_streams": 5,
+      "max_stream_data_excess": 1000,
+      "max_udp_payload_size": 1200,
+      "tail_wait_us": 0,
+      "use_empty_resources": false
+    },
+    "front": {
+      "n_client_packets": 32,
+      "n_server_packets": 48,
+      "packet_size": 1200,
+      "peak_maximum_seconds": 1.0,
+      "peak_minimum_seconds": 0.1
+    },
+    "schema_version": 2,
+    "tamaraw": {
+      "incoming_interval_us": 10000,
+      "modulo": 20,
+      "outgoing_interval_us": 30000,
+      "packet_size": 1200
+    },
+    "traffic_morphing": {
+      "ingress_packet_size": 1200,
+      "max_ingress_deficit_bytes": 8000
+    },
+    "walkie_talkie": {
+      "packet_size": 1200
+    },
+    "wtf_pad": {
+      "max_padding_events": 10000,
+      "packet_size": 1200
+    }
+  },
+  "runtime_inputs": {
+    "config/defense-params/static-control-1200.csv": "d38a7d69bd221b5e113f1d3aacfc501a28aeff84c59bd9ab0e224391e9f35611",
+    "config/defense-params/traffic-morphing-live.json": "7010a465480fe2450fb97b987082108b0f3616c2f0287b92ef82e06837071d52",
+    "config/defense-params/traffic-morphing-live.json.provenance.json": "66ea0a621c4b83031b9f8761fbc25bb51e1500079c3f4fa4883dabe4ed202244",
+    "config/defense-params/walkie-talkie-live.json": "dbb050654ae87f2006fcdc39409dc41ca3f4988d6089bb4c3623119adecfc6c4",
+    "config/defense-params/walkie-talkie-live.json.provenance.json": "607ee84b02db39acf27cefdd351fa72f7f33a56660c9f89b62f2b2c9cbd20f38",
+    "config/defense-params/wtfpad-live.json": "e86aeaabd08c72977697943b1903f3258a884ec363c73d035ae6bd646c136e43",
+    "config/defense-params/wtfpad-live.json.provenance.json": "52d936ce07746d63a0fa10e32a53dac2fcfbc7aeff0cc3569c824d59e0abb4a2"
+  },
+  "schema_version": 1
+}

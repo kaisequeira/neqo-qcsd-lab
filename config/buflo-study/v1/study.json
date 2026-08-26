@@ -1,0 +1,201 @@
+{
+  "schema_version": 1,
+  "study_id": "buflo-csbuflo-qcsd-v1",
+  "default_cohort_version": 1,
+  "qualification_set_pattern": "buflo-study-public5-v{cohort_version}",
+  "implementation_status": "candidate",
+  "promotion_rule": "all-gates-pass-with-no-waivers",
+  "implementation_baselines": {
+    "lab_commit": "8988a48a8e43cc9d47505cae12ee7758bc7fa5ee",
+    "neqo_commit": "6aceaac85243d6e0e34354108e010705d3c83088"
+  },
+  "established_seven_baseline_oracle": {
+    "path": "config/buflo-study/v1/established-seven-baseline.json",
+    "sha256": "7705ee77b84f0ba4d7521bb8f63fdca69e4ea14580ecc4c41a603c835cfc73ca"
+  },
+  "profile": "research-1200",
+  "qualification_set": "buflo-study-public5-v1",
+  "workloads": [
+    "getbootstrap-home-r4",
+    "cloudflare-quiche-r4",
+    "hyper-basic-client-r3",
+    "serde-home-r2",
+    "rfc9114-text-r2"
+  ],
+  "treatments": [
+    {
+      "name": "undefended",
+      "kind": "none",
+      "scientific_identity": "undefended"
+    },
+    {
+      "name": "buflo",
+      "kind": "buflo",
+      "scientific_identity": "buflo",
+      "parameters": "../../defense-params/buflo-live.json"
+    },
+    {
+      "name": "cs-buflo-cpsp",
+      "kind": "cs_buflo",
+      "scientific_identity": "cs-buflo",
+      "paper_variant": "CPSP",
+      "parameters": "../../defense-params/cs-buflo-cpsp-live.json"
+    },
+    {
+      "name": "cs-buflo-ctsp",
+      "kind": "cs_buflo",
+      "scientific_identity": "cs-buflo",
+      "paper_variant": "CTSP",
+      "parameters": "../../defense-params/cs-buflo-ctsp-live.json"
+    },
+    {
+      "name": "cs-buflo",
+      "kind": "cs_buflo",
+      "scientific_identity": "cs-buflo",
+      "paper_variant": "CTSP",
+      "parameters": "../../defense-params/cs-buflo-ctsp-live.json"
+    }
+  ],
+  "controlled": {
+    "workloads": ["local-small", "local-large"],
+    "visits_per_cell": 5,
+    "expected_samples": 160,
+    "treatments": ["undefended", "buflo", "cs-buflo-cpsp", "cs-buflo-ctsp"],
+    "netem_profiles": [
+      {
+        "id": "clean",
+        "client_qdisc": "none",
+        "server_qdisc": "none"
+      },
+      {
+        "id": "symmetric-50ms-rtt",
+        "client_qdisc": "netem delay 25ms",
+        "server_qdisc": "netem delay 25ms"
+      },
+      {
+        "id": "symmetric-5mbit-50ms-rtt-100-packet-queue",
+        "client_qdisc": "netem delay 25ms rate 5mbit limit 100",
+        "server_qdisc": "netem delay 25ms rate 5mbit limit 100"
+      },
+      {
+        "id": "symmetric-1pct-loss-50ms-rtt",
+        "client_qdisc": "netem delay 25ms loss 1%",
+        "server_qdisc": "netem delay 25ms loss 1%"
+      }
+    ]
+  },
+  "regression": {
+    "workloads": ["local-small", "local-large"],
+    "visits_per_treatment": 1,
+    "expected_samples": 18,
+    "treatments": [
+      "undefended",
+      "static",
+      "front",
+      "tamaraw",
+      "traffic-morphing",
+      "wtf-pad",
+      "walkie-talkie",
+      "buflo",
+      "cs-buflo"
+    ],
+    "formal_evidence": false
+  },
+  "public_stages": {
+    "smoke": {
+      "blocks": 1,
+      "seeds": [2027082701],
+      "visits_per_workload": 1,
+      "expected_samples": 20,
+      "formal_evidence": false,
+      "treatments": ["undefended", "buflo", "cs-buflo-cpsp", "cs-buflo-ctsp"],
+      "campaigns": ["buflo-study-v1-smoke.yml"]
+    },
+    "rehearsal": {
+      "blocks": 1,
+      "seeds": [2027082702],
+      "visits_per_workload": 2,
+      "expected_samples": 40,
+      "formal_evidence": false,
+      "treatments": ["undefended", "buflo", "cs-buflo-cpsp", "cs-buflo-ctsp"],
+      "campaigns": ["buflo-study-v1-rehearsal.yml"]
+    },
+    "formal": {
+      "blocks": 10,
+      "seeds": [
+        2027110655,
+        2027111179,
+        2027111275,
+        2027111834,
+        2027113385,
+        2027113513,
+        2027114006,
+        2027114494,
+        2027115003,
+        2027115159
+      ],
+      "visits_per_workload": 10,
+      "expected_samples": 1500,
+      "formal_evidence": true,
+      "treatments": ["undefended", "buflo", "cs-buflo"],
+      "campaigns": [
+        "buflo-study-v1-formal-01.yml",
+        "buflo-study-v1-formal-02.yml",
+        "buflo-study-v1-formal-03.yml",
+        "buflo-study-v1-formal-04.yml",
+        "buflo-study-v1-formal-05.yml",
+        "buflo-study-v1-formal-06.yml",
+        "buflo-study-v1-formal-07.yml",
+        "buflo-study-v1-formal-08.yml",
+        "buflo-study-v1-formal-09.yml",
+        "buflo-study-v1-formal-10.yml"
+      ]
+    }
+  },
+  "capture_admission": {
+    "staged_prerequisites": {
+      "smoke": ["regression"],
+      "rehearsal": ["regression", "smoke"],
+      "formal": ["regression", "smoke", "rehearsal"]
+    },
+    "reference_gate": "isolated-create-only-conformance-receipt",
+    "source_lineage": "one-exact-clean-collection-image",
+    "formal_minimum_available_hours": 12.5,
+    "formal_disk_safety_multiplier": 3,
+    "formal_disk_projection_basis": "verified-smoke-plus-rehearsal-bytes-per-sample"
+  },
+  "hard_gates": [
+    "reference-receipts-and-clean-room-oracles-pass",
+    "runtime-unit-integration-and-parameter-binding-tests-pass",
+    "nine-mode-regression-is-18-of-18-correct-and-fidelity-eligible",
+    "controlled-clean-and-netem-matrix-is-160-of-160-correct-and-fidelity-eligible",
+    "event-guards-misses-shortfalls-size-errors-and-unresolved-incoming-bytes-are-zero",
+    "ctsp-and-cpsp-resolve-to-distinct-sealed-parameter-hashes-and-padding-modes",
+    "public-smoke-is-20-of-20-correct-and-fidelity-eligible",
+    "public-rehearsal-is-40-of-40-correct-and-fidelity-eligible",
+    "formal-campaigns-are-frozen-before-capture-and-produce-1500-of-1500-eligible-samples",
+    "paired-overhead-latency-tail-goodput-and-client-correctness-are-reported-with-95-percent-cluster-bootstrap-intervals",
+    "paper-metric-and-classifier-comparisons-are-reconciled-with-observation-layer-and-client-only-limitations",
+    "historical-corpus-guard-is-unchanged-and-sealed-results-handoff-evaluation-receipts-verify"
+  ],
+  "historical_corpus_guard": {
+    "root": "handoffs/classifier-multiorigin5-v2",
+    "validation": "closed-sha256-inventory-before-and-after-formal",
+    "files": {
+      "SHA256SUMS": "85bfd88be6c2105201ec7ff3eb87a743e378bd748a9c2097db2fb227875ec2d7",
+      "dataset.json": "46289f368912ee6e90314578814b821eb0dfeadcd794d3422c1af3599623317b",
+      "samples.jsonl": "5974ab9c582793501c558ec294bea4e3afb01bf57039f990fceba33fb0b1e15f"
+    },
+    "historical_exporter": {
+      "path": "tools/classifier_handoff.py",
+      "sha256": "f91964df8b6af3b1d89a8c2ff2de1997a59e9ffe36124fa8e20c694515152a72"
+    }
+  },
+  "immutability": {
+    "historical_campaigns_and_results": "read-only",
+    "smoke_rehearsal_and_controlled": "excluded-from-formal",
+    "formal_seed_selection": "prospective-plan-only",
+    "resume_checkpoint": "experiment.json",
+    "accepted_samples": "never-rewritten"
+  }
+}

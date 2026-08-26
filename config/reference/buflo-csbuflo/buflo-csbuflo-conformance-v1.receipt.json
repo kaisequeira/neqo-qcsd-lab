@@ -1,0 +1,333 @@
+{
+  "artifact_type": "qcsd-buflo-csbuflo-conformance-receipt",
+  "buflo_author_conformance": {
+    "golden_input_sha256": "4e62238d5ec6cc48f97cc4b2d6a318680f752098283fe2d4d8ab5acefa71ca38",
+    "live_order": [
+      "outgoing",
+      "incoming"
+    ],
+    "paper_bidirectional_order": "unspecified-independent-endpoints",
+    "profiles": [
+      {
+        "event_count": 8,
+        "live_order_sha256": "f3260704712dd3a434322ad858e8e6249bce649315afea222b0280b19774a510",
+        "profile": "tau-0-rho-40-d-1000",
+        "source_match": true,
+        "source_order_sha256": "a2387f6e7eab151058a069e3bcf982efd78420d23c66ba316e3316c1a9543870"
+      },
+      {
+        "event_count": 8,
+        "live_order_sha256": "fa63666128ac5b69d320ca0bff1a7021ccffe460d24bab43985b1de1ca56de02",
+        "profile": "tau-0-rho-40-d-1500",
+        "source_match": true,
+        "source_order_sha256": "557730eb7fb5dffafc67b7d21b45f430b73855fc0d8fed0fc6e0f8a2e0d87e3b"
+      },
+      {
+        "event_count": 12,
+        "live_order_sha256": "35852396bb0bf20664f09e162f9d4a125998c5255ae55a2c4421f026e2670126",
+        "profile": "tau-0-rho-20-d-1000",
+        "source_match": true,
+        "source_order_sha256": "fba53c8446398ebebac75be1b8cd420adb93a6a6cc53ad408a0bdeeac995129c"
+      },
+      {
+        "event_count": 12,
+        "live_order_sha256": "6b6c58888acaf6838f8e4ef1eb8c9b838c539792f4be894976d37a13053feea4",
+        "profile": "tau-0-rho-20-d-1500",
+        "source_match": true,
+        "source_order_sha256": "36fd72ff7ff8de25b40cd6cf08b5d7fd29e9a5e94819923192bb9b4bfc4d1077"
+      },
+      {
+        "event_count": 502,
+        "live_order_sha256": "0e68cb7840803226acc5955719066f7341f8910308aca33aa36daef2f40e7020",
+        "profile": "tau-10000-rho-40-d-1000",
+        "source_match": true,
+        "source_order_sha256": "01e5dd6037216e07962a48c928674b5431c0cda66f9989fe90644a18913c3efa"
+      },
+      {
+        "event_count": 502,
+        "live_order_sha256": "c4adc6dc09090b294a3a66127c32af15d8136c09a17f61f63d846a4a372549d8",
+        "profile": "tau-10000-rho-40-d-1500",
+        "source_match": true,
+        "source_order_sha256": "0dd8013d0f7414af9557b9ca30f0bf821a9981fcf0933b8e37f4528a8ff2f4ea"
+      },
+      {
+        "event_count": 1002,
+        "live_order_sha256": "ab71f2864406f53f2b4588797d939b5ee9b80907b090e881dd13a489c55dc0ef",
+        "profile": "tau-10000-rho-20-d-1000",
+        "source_match": true,
+        "source_order_sha256": "2b6a982e7e04d4321ecadafde1d7cb474916453b1218dab6b05935d272b394b5"
+      },
+      {
+        "event_count": 1002,
+        "live_order_sha256": "db6d6d6fcc79cc464e8942ded9c4773c8780f8792d9693ffb7de1fde4b8340ce",
+        "profile": "tau-10000-rho-20-d-1500",
+        "source_match": true,
+        "source_order_sha256": "f93fd1cb19e9136c62112f76612fbb2970938ff970ca1592a1a00c018c10d3ff"
+      }
+    ],
+    "source_order": [
+      "incoming",
+      "outgoing"
+    ],
+    "source_projection_sha256": "eebc48f3102ee79acfcb8f76f74eaf636adf0d623255b72033818c4ab20e33a8"
+  },
+  "clean_room": true,
+  "csbuflo_archive_conformance": {
+    "bandwidth_ratio": 2.282792444255336,
+    "baseline_bytes": 3326013453,
+    "defended_bytes": 7592598380,
+    "excluded_defended_bytes": 18656832,
+    "included_records": 3824,
+    "padding_profile": "CPSP",
+    "source_id": "csbuflo-cpsp-trace-archive",
+    "total_records": 4000,
+    "zero_baseline_records": 176
+  },
+  "csbuflo_author_conformance": {
+    "author_object_normalization": "objcopy --strip-debug --remove-section=.comment",
+    "author_object_sha256": "1883779697002b237e93a21388de287ac39753e685338cb89547996e6c7cc888",
+    "author_source_slice_object_sha256": "d16d82e5025d4b66a19fd4a628e2ff66559936ac808ee0d470cedf3a55a77c10",
+    "compiler": "cc (Debian 12.2.0-14+deb12u1) 12.2.0",
+    "golden_vectors": {
+      "early_termination": {
+        "client_buffered_mode": 0,
+        "client_idle_start_mode": 1,
+        "client_idle_start_us": 5000000,
+        "client_no_transcript_mode": 1,
+        "client_onload_mode": -1,
+        "client_queued_write_mode": 1,
+        "client_quiet_before_mode": 1,
+        "client_quiet_boundary_mode": -1,
+        "server_buffered_mode": 0,
+        "server_onload_mode": -1,
+        "server_quiet_boundary_mode": -1
+      },
+      "estimator": {
+        "clamped": 32768,
+        "empty": 32768,
+        "empty_next_boundary": 32768,
+        "pre_boundary": 8192,
+        "pre_boundary_next_boundary": 16384,
+        "upper_median": 8192
+      },
+      "jitter": {
+        "raw_0": 0,
+        "raw_1": 81,
+        "raw_100": 8192,
+        "raw_200": 16384,
+        "raw_201_modulo": 0,
+        "stmode_fixed": 8192
+      },
+      "padding": {
+        "client_payload_0_0": 0,
+        "client_payload_1000_1048": 2048,
+        "client_payload_1000_1100": 3072,
+        "client_total_0_0": 0,
+        "client_total_1000_1048": 2048,
+        "client_total_1000_1100": 4096,
+        "server_payload_1000_1100": 3072,
+        "server_total_1000_1100": 4096
+      },
+      "padding_done": {
+        "after_set": 1,
+        "after_unset": 0,
+        "initial": 0
+      },
+      "quiet": {
+        "buffered_resets_idle": 0,
+        "onload_idle": 1,
+        "quiet_after": 1,
+        "quiet_before": 0
+      },
+      "termination": {
+        "client_buffered_mode": 0,
+        "client_complete_mode": -1,
+        "client_exact_tolerance_mode": 0,
+        "server_buffered_mode": 0,
+        "server_buffered_padding_done": 1,
+        "server_complete_mode": -1,
+        "server_complete_padding_done": 0
+      }
+    },
+    "harness_sha256": "88aed9310d645616cc11d2fff9bd44dd7a494012a963eb201c03b37e34799aa7",
+    "independent_oracle_match": true,
+    "source_extraction": {
+      "active_padding_profile": "CPSP-payload-at-both-endpoints",
+      "client_padding_done_notification": "active-p",
+      "early_termination_quiet_comparison": "inclusive-elapsed-us>=2000000",
+      "early_termination_source_state_machine_executed": true,
+      "full_network_loop_executed": false,
+      "full_network_loop_status": "not-executed-requires-historical-bilateral-openssh-runtime-and-obsolete-crypto-abi",
+      "jitter_source_function_executed": true,
+      "padding_done_active_consumer_count": 0,
+      "padding_done_dispatch_paths_verified": [
+        "SSH1",
+        "SSH2"
+      ],
+      "padding_done_flag_author_object_executed": true,
+      "paper_algorithm4_power_crossing_validation": "independent-oracle-only-no-distinct-exported-author-helper",
+      "payload_padding_source_executed": true,
+      "quiet_function_author_object_executed": true,
+      "segment_sha256": {
+        "client_early_termination_branch": "1b06b7b1590634f8bd14ab80c306f5ef7394f4454466cd618b0cd412630ec3ab",
+        "client_padding_done_define": "efac678f1eafdd00fb1d7612604ea889e3c128872173b11d15904cf1dcf5fcb0",
+        "client_padding_done_notification": "0f7ca5e52466fc92feb486aa834095cd63bac5dfe9c3c323693256540f8f1e21",
+        "client_payload_padding": "0c1d036e906a28bee0ff87f3b804bef71390cbd3d2689c36408bf853d742e5a0",
+        "client_terminal_branch": "e4a1b22f2e8eee38d5dfabada56e2fa0970e92829344427da237661f788012c2",
+        "client_total_padding_inactive": "592c65cda56d38764777f51780462cb6c3b504ba9fca8a3777af45af00cbd1fd",
+        "jitter_function": "3d9003b7b04b5028f84d280e6605ddbf4a6a5edca9bfda4f88a035ee9efb3545",
+        "server_early_termination_branch": "a1e9dc76f8cc9749f8d16448c7712aab0061de7514eb9a17d4e577fa62a673a2",
+        "server_payload_padding": "0c1d036e906a28bee0ff87f3b804bef71390cbd3d2689c36408bf853d742e5a0",
+        "server_terminal_branch": "2b0695a61c87251c5ad5a8055c6689d96425532409bbdf484bc12ee4a57e9e7f",
+        "server_total_padding_inactive": "592c65cda56d38764777f51780462cb6c3b504ba9fca8a3777af45af00cbd1fd",
+        "target_queue_define": "6f3d0f693f5e7a1ed8afd9fe2f24f9e79e6af66b9d217f7a8316ae719877653a"
+      },
+      "server_padding_done_reset_executed": true,
+      "source_slice_transforms": [
+        "preprocessor-only-function-name-alias",
+        "clean-room-parameter-and-state-scaffolding",
+        "comment-prefix-removal-for-inactive-total-expression"
+      ],
+      "termination_predicates_and_state_actions_executed": true,
+      "total_padding_active_in_pinned_runtime": false,
+      "total_padding_source_expression_executed": true
+    },
+    "source_extraction_input_sha256": "9985684cbba5d3a260eb7ba08132aeea2b64e1bb5d79cf27a71e90921d89b8c3",
+    "source_match": true,
+    "source_prose_discrepancies": [
+      "empty author window selects upper rho; paper Algorithm 2 retains current rho",
+      "pinned clientloop/serverloop actively implement CPSP; CTSP survives only as a commented source expression",
+      "the pinned padding-done flag has SSH1/SSH2 setters and resetters but no active get_paddingdone_flag consumer in clientloop/serverloop/packet",
+      "pinned early termination is a transcript-end/zero-w2w state machine; the paper Algorithm 4 power-of-two predicate remains an independent oracle",
+      "pinned early-termination quiet exit is inclusive at 2000000 us while misc.c channel_idle uses a strict greater-than comparison"
+    ],
+    "source_prose_discrepancy": "empty author window selects upper rho; paper Algorithm 2 retains current rho",
+    "source_slice_translation_sha256": "2e0af6f23db280b6200b476e26c37c99058e8920b753537dfb82a6032e72bd87"
+  },
+  "csbuflo_estimator_contract": {
+    "adaptation_counter": "per-direction-actually-transmitted-real-plus-junk-bytes",
+    "direction_windows": [
+      "outgoing",
+      "incoming"
+    ],
+    "first_boundary_bytes": 16384,
+    "max_samples_per_direction": 1000,
+    "next_boundary_rule": "double-after-each-adaptation",
+    "rate_quantization": "2**floor(log2(upper-integer-median-interval))",
+    "rate_quantization_resolution": "paper-Algorithm-2-floor-formula"
+  },
+  "csbuflo_paper_internal_discrepancies": [
+    {
+      "classification": "known-internal-paper-prose-vs-algorithm-conflict",
+      "paper_algorithm_location": "Algorithm-2-lines-382-and-395-396",
+      "paper_algorithm_rule": "2**floor(log2(median-eligible-interval))",
+      "paper_prose_location": "WPES-2014-lines-450-455",
+      "paper_prose_rule": "round-up-rho-to-a-power-of-two",
+      "resolution_basis": "algorithm-pseudocode-and-formula-control-the-independent-oracle",
+      "resolved_rule": "2**floor(log2(upper-integer-median-interval))"
+    }
+  ],
+  "external_sources": [
+    {
+      "git_commit": "43252f6e463ba71c43490af3f5a63308134f3bbe",
+      "sha256": "6f0148c8891756e39980edf47f2d5fbc254d2da7b4a8096a678cf3bb7777a36e",
+      "source_id": "csbuflo-clientloop-c",
+      "url": "https://raw.githubusercontent.com/xiang-cai/CSBuFLO/43252f6e463ba71c43490af3f5a63308134f3bbe/modified_openssh-5.9p1/clientloop.c"
+    },
+    {
+      "git_commit": "43252f6e463ba71c43490af3f5a63308134f3bbe",
+      "sha256": "225bb69da7cc8fa8df0a60178cda877a2e528db58f80f01b9894dce25aeabf55",
+      "source_id": "csbuflo-cpsp-trace-archive",
+      "url": "https://raw.githubusercontent.com/xiang-cai/CSBuFLO/43252f6e463ba71c43490af3f5a63308134f3bbe/log_interval_tau_200_20_allmedian_2t_600_CMSM_paddingdone_pairs.tar.gz"
+    },
+    {
+      "git_commit": "43252f6e463ba71c43490af3f5a63308134f3bbe",
+      "sha256": "fedbe65ccd06e55465b71176ef1d625e18be49cc165d258fce9ce9814fd0924c",
+      "source_id": "csbuflo-misc-c",
+      "url": "https://raw.githubusercontent.com/xiang-cai/CSBuFLO/43252f6e463ba71c43490af3f5a63308134f3bbe/modified_openssh-5.9p1/misc.c"
+    },
+    {
+      "git_commit": "43252f6e463ba71c43490af3f5a63308134f3bbe",
+      "sha256": "428ca512066b89641bc355764ba6943938f0eca0839ab2460c3500f0adb1c822",
+      "source_id": "csbuflo-misc-h",
+      "url": "https://raw.githubusercontent.com/xiang-cai/CSBuFLO/43252f6e463ba71c43490af3f5a63308134f3bbe/modified_openssh-5.9p1/misc.h"
+    },
+    {
+      "git_commit": "43252f6e463ba71c43490af3f5a63308134f3bbe",
+      "sha256": "a3af77c131eccfe1fd0787cc1063870bebbf0e3fe0c2975e4143ed9c86b0cec0",
+      "source_id": "csbuflo-packet-c",
+      "url": "https://raw.githubusercontent.com/xiang-cai/CSBuFLO/43252f6e463ba71c43490af3f5a63308134f3bbe/modified_openssh-5.9p1/packet.c"
+    },
+    {
+      "sha256": "200c8c58e8e8a6859f2baaa15299351fb0ad832bc3322b5553dfa88abcdab43d",
+      "source_id": "csbuflo-paper-pdf",
+      "url": "https://www.freehaven.net/anonbib/cache/wpes14-csbuflo.pdf"
+    },
+    {
+      "sha256": "a2ae01af3bb41dc403d395b19b3a9e2bbcaaccce7530bf3749abf83e2908260f",
+      "source_id": "csbuflo-preprint-pdf",
+      "url": "https://arxiv.org/pdf/1401.6022"
+    },
+    {
+      "git_commit": "43252f6e463ba71c43490af3f5a63308134f3bbe",
+      "sha256": "abc798cecb918d5c89ccec825224d543862e95a9650334bb0b5d4dd99e17a3a9",
+      "source_id": "csbuflo-serverloop-c",
+      "url": "https://raw.githubusercontent.com/xiang-cai/CSBuFLO/43252f6e463ba71c43490af3f5a63308134f3bbe/modified_openssh-5.9p1/serverloop.c"
+    },
+    {
+      "git_commit": "372ced4c84b867086394cbd736b089e5cad4969b",
+      "sha256": "7f96377ec570485d7df14e24d0199e359582f1eea62eeaf2ede5c0e1581c0139",
+      "source_id": "dyer-config-py",
+      "url": "https://raw.githubusercontent.com/kpdyer/website-fingerprinting/372ced4c84b867086394cbd736b089e5cad4969b/config.py"
+    },
+    {
+      "git_commit": "372ced4c84b867086394cbd736b089e5cad4969b",
+      "sha256": "d49c6475e079ca3f8d62acd739008a270d7130d41fc8f24cf239aa273aee85c3",
+      "source_id": "dyer-folklore-py",
+      "url": "https://raw.githubusercontent.com/kpdyer/website-fingerprinting/372ced4c84b867086394cbd736b089e5cad4969b/countermeasures/Folklore.py"
+    },
+    {
+      "git_commit": "372ced4c84b867086394cbd736b089e5cad4969b",
+      "sha256": "1f6d593276ca36e006399fb7bfaed67cbef59528b85fe60840241cb2dc1f0996",
+      "source_id": "dyer-overhead-parser-py",
+      "url": "https://raw.githubusercontent.com/kpdyer/website-fingerprinting/372ced4c84b867086394cbd736b089e5cad4969b/parseResultsFile.py"
+    },
+    {
+      "git_commit": "372ced4c84b867086394cbd736b089e5cad4969b",
+      "sha256": "f91ab32df77845e01b076b07557fb4709251eb1ce6b8846a5129a563ea01f7b5",
+      "source_id": "dyer-packet-py",
+      "url": "https://raw.githubusercontent.com/kpdyer/website-fingerprinting/372ced4c84b867086394cbd736b089e5cad4969b/Packet.py"
+    },
+    {
+      "sha256": "a68dd316e37bc749cfd0f5becdb9b2faa77e7f6fdb575d3e067da2d9018297cc",
+      "source_id": "dyer-paper-pdf",
+      "url": "https://rist.tech.cornell.edu/papers/trafanal.pdf"
+    },
+    {
+      "git_commit": "372ced4c84b867086394cbd736b089e5cad4969b",
+      "sha256": "b5a76d0dc56a6275c754e716bdf5f5abcf27fbec6572c4ae51a929c39eef1336",
+      "source_id": "dyer-trace-py",
+      "url": "https://raw.githubusercontent.com/kpdyer/website-fingerprinting/372ced4c84b867086394cbd736b089e5cad4969b/Trace.py"
+    },
+    {
+      "git_commit": "372ced4c84b867086394cbd736b089e5cad4969b",
+      "sha256": "cd5ac223ad9fca42a3b9ef321f28eec96dbbba44f8c1f8404373339ecc581878",
+      "source_id": "dyer-webpage-py",
+      "url": "https://raw.githubusercontent.com/kpdyer/website-fingerprinting/372ced4c84b867086394cbd736b089e5cad4969b/Webpage.py"
+    }
+  ],
+  "passed": true,
+  "reference_documents": [
+    {
+      "receipt_sha256": "43a028bf2ffde5790fdbeabfdcaed68bc0012759724069b806460c0db962ab3e",
+      "reference_id": "buflo-ieee-sp-2012-v1",
+      "reference_sha256": "e00d9d233b56a7b60d5f204deef3061d13d19935c71d05ffeab078278e4c390f"
+    },
+    {
+      "receipt_sha256": "cfb0084255ec50a28f9ae3211e16b0661a9b2c05eb74701dbd67474649e7665c",
+      "reference_id": "csbuflo-wpes-2014-v1",
+      "reference_sha256": "a4bb72b6d13b7ab38523ee57e79a047ba20734da68ed7c112b6739adaaddacf2"
+    }
+  ],
+  "schema_version": 1
+}

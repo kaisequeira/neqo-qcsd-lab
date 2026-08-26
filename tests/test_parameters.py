@@ -515,6 +515,37 @@ def test_runner_parameter_receipt_binds_kind_hash_path_and_workload():
         validate_run_parameter_binding(run, kind="wtf_pad", sha256="a" * 64)
 
 
+def test_buflo_guard_requires_the_inclusive_exact_duration_opportunity() -> None:
+    value = {
+        "schema_version": 1,
+        "interval_us": 20_000,
+        "minimum_duration_us": 10_000_000,
+        "packet_size": 1_200,
+        "max_events": 500,
+        "implementation_scope": "client_only_quic",
+        "paper_equivalent": False,
+    }
+    with pytest.raises(ValueError, match="runtime shape is invalid"):
+        parameters._validate_buflo(value, 1_200, Path("buflo.json"))
+
+    value["max_events"] = 501
+    parameters._validate_buflo(value, 1_200, Path("buflo.json"))
+
+
+def test_buflo_guard_is_capped_per_direction_at_ten_thousand() -> None:
+    value = {
+        "schema_version": 1,
+        "interval_us": 10_000,
+        "minimum_duration_us": 10_000,
+        "packet_size": 1_200,
+        "max_events": 10_001,
+        "implementation_scope": "client_only_quic",
+        "paper_equivalent": False,
+    }
+    with pytest.raises(ValueError, match="runtime shape is invalid"):
+        parameters._validate_buflo(value, 1_200, Path("buflo.json"))
+
+
 def _copy_fixture(tmp_path, monkeypatch, name):
     monkeypatch.setattr(parameters, "LAB_ROOT", tmp_path)
     destination = tmp_path / "config/defense-params"

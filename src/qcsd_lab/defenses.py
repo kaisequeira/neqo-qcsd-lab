@@ -18,6 +18,8 @@ DEFENSE_ORDER = (
     "traffic-morphing",
     "wtf-pad",
     "walkie-talkie",
+    "buflo",
+    "cs-buflo",
 )
 DEFENSE_RUNTIME_KINDS = {
     "undefended": "none",
@@ -27,6 +29,8 @@ DEFENSE_RUNTIME_KINDS = {
     "traffic-morphing": "traffic_morphing",
     "wtf-pad": "wtf_pad",
     "walkie-talkie": "walkie_talkie",
+    "buflo": "buflo",
+    "cs-buflo": "cs_buflo",
 }
 RUNTIME_KIND_DEFENSES = {
     runtime_kind: defense for defense, runtime_kind in DEFENSE_RUNTIME_KINDS.items()
@@ -66,6 +70,7 @@ class DefenseAdaptation:
     validation_signal: str
     expected_interpretation: str
     paper_references: tuple[str, ...]
+    implementation_status: str = "validated"
 
 
 DEFENSE_ADAPTATIONS = {
@@ -176,9 +181,84 @@ DEFENSE_ADAPTATIONS = {
             "Website Fingerprinting Attacks, USENIX Security 2017",
         ),
     ),
+    "buflo": DefenseAdaptation(
+        label="BuFLO",
+        preserved_invariants=(
+            "fixed inter-packet interval",
+            "fixed packet-size target",
+            "minimum transmission duration",
+        ),
+        exact_client_mechanisms=(
+            "paced STREAM release",
+            "client-egress PING+PADDING",
+        ),
+        qcsd_approximations=(
+            "incoming slots use receiver credit and response-qualified chaff",
+            "paper packet-length parameters are mapped to QUIC UDP payload targets",
+            "a finite event cap is a QCSD safety guard",
+        ),
+        unavailable_peer_properties=(
+            "cooperating server-side BuFLO scheduler",
+            "scheduled server datagram timing and size; incoming cells are client receive-credit/chaff attempts",
+            "the paper's TCP packet-length accounting model",
+        ),
+        validation_signal=(
+            "Reference-oracle equality, exact interval/size/minimum-duration goldens, "
+            "guard status, response equality, direct PCAP, and controlled congestion tests."
+        ),
+        expected_interpretation=(
+            "A client-only QUIC adaptation that remains non-paper-equivalent; its implementation "
+            "status stays candidate until the versioned study validation gates pass."
+        ),
+        paper_references=(
+            "Dyer et al., Peek-a-Boo, I Still See You: Why Efficient Traffic Analysis "
+            "Countermeasures Fail, IEEE Symposium on Security and Privacy 2012",
+        ),
+        implementation_status="candidate",
+    ),
+    "cs-buflo": DefenseAdaptation(
+        label="CS-BuFLO",
+        preserved_invariants=(
+            "congestion-sensitive inter-packet interval",
+            "power-of-two adaptation boundaries",
+            "CTSP total-size and CPSP payload-size padding treatments",
+            "quiet-time completion rule",
+        ),
+        exact_client_mechanisms=(
+            "paced STREAM release",
+            "client-egress PING+PADDING",
+        ),
+        qcsd_approximations=(
+            "incoming slots use receiver credit and response-qualified chaff",
+            "paper TCP write and wire sizes are mapped to QUIC UDP payload targets",
+            "a finite event cap is a QCSD safety guard",
+        ),
+        unavailable_peer_properties=(
+            "cooperating server-side CS-BuFLO controller",
+            "scheduled server datagram timing and size; incoming cells are client receive-credit/chaff attempts",
+            "the paper's modified OpenSSH/TCP congestion observations",
+        ),
+        validation_signal=(
+            "Reference-oracle equality, CTSP/CPSP separation, rate-boundary and quiet-time "
+            "goldens, guard status, response equality, direct PCAP, and netem congestion tests."
+        ),
+        expected_interpretation=(
+            "Client-only QUIC CTSP/CPSP ablations that remain non-paper-equivalent; their "
+            "implementation status stays candidate until the versioned study validation gates pass."
+        ),
+        paper_references=(
+            "Cai et al., CS-BuFLO: A Congestion Sensitive Website Fingerprinting Defense, "
+            "ACM WPES 2014",
+        ),
+        implementation_status="candidate",
+    ),
 }
 
 DEFENSE_LABELS = {defense: adaptation.label for defense, adaptation in DEFENSE_ADAPTATIONS.items()}
+DEFENSE_VARIANT_LABELS = {
+    "cs-buflo-ctsp": "CS-BuFLO (CTSP)",
+    "cs-buflo-cpsp": "CS-BuFLO (CPSP)",
+}
 
 
 def canonical_defense(value: str) -> str:
@@ -205,8 +285,8 @@ def defense_from_runtime_identity(name: object, runtime_kind: object) -> str:
     return defense
 
 
-def adaptation_table_rows() -> tuple[tuple[str, str, str, str, str, str], ...]:
-    """Return report-ready rows in the canonical seven-selection order."""
+def adaptation_table_rows() -> tuple[tuple[str, str, str, str, str, str, str], ...]:
+    """Return report-ready rows in the append-only canonical selection order."""
 
     def sentence(parts: tuple[str, ...]) -> str:
         text = "; ".join(parts)
@@ -232,6 +312,7 @@ def adaptation_table_rows() -> tuple[tuple[str, str, str, str, str, str], ...]:
                 ),
                 adaptation.validation_signal,
                 adaptation.expected_interpretation,
+                adaptation.implementation_status,
             )
         )
     return tuple(rows)

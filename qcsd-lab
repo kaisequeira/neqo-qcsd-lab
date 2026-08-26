@@ -4,9 +4,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COLLECTION_IMAGE="${QCSD_LAB_COLLECTION_IMAGE:-neqo-qcsd-lab-collection:local}"
 PREPARE_IMAGE="${QCSD_LAB_PREPARE_IMAGE:-neqo-qcsd-lab-prepare:local}"
+REFERENCE_IMAGE="${QCSD_LAB_REFERENCE_IMAGE:-neqo-qcsd-lab-reference:local}"
 
 usage() {
-  echo "Usage: qcsd-lab {build|prepare|derive-chaff-prefix-specs|qualify-chaff|qualify-response-chaff|run|resume|verify|analyze|fit|test} [arguments...]" >&2
+  echo "Usage: qcsd-lab {build|prepare|derive-chaff-prefix-specs|qualify-chaff|qualify-response-chaff|run|resume|verify|analyze|fit|buflo-study|test} [arguments...]" >&2
 }
 
 require_submodule() {
@@ -28,26 +29,520 @@ fi
 require_submodule
 
 if [[ "${1:-}" == "build" ]]; then
-  if (( $# != 1 )); then
-    echo "build accepts no arguments" >&2
+  build_cohort_version=1
+  if (( $# == 3 )) && [[ "${2:-}" == "--cohort-version" ]]; then
+    build_cohort_version="${3}"
+  elif (( $# == 2 )) && [[ "${2:-}" == --cohort-version=* ]]; then
+    build_cohort_version="${2#--cohort-version=}"
+  elif (( $# != 1 )); then
+    echo "build accepts only one optional --cohort-version N" >&2
     exit 2
   fi
-  docker build --pull --target collection \
+  if [[ ! "${build_cohort_version}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "build cohort version must be a positive integer" >&2
+    exit 2
+  fi
+  build_receipt="${ROOT}/artifacts/buflo-study/build-execution-v${build_cohort_version}.json"
+  build_receipt_parent="$(dirname "${build_receipt}")"
+  if [[ -L "${build_receipt_parent}" || -L "${build_receipt}" ]]; then
+    echo "build receipt parent/destination cannot be a symlink" >&2
+    exit 1
+  fi
+  mkdir -p "${build_receipt_parent}"
+  build_receipt_parent="$(realpath "${build_receipt_parent}")"
+  build_receipt="${build_receipt_parent}/$(basename "${build_receipt}")"
+  if [[ -e "${build_receipt}" ]]; then
+    echo "build requires an absent create-only receipt: ${build_receipt}" >&2
+    exit 1
+  fi
+  build_started_unix_ns="$(date +%s%N)"
+  docker build --pull --no-cache --target collection \
     --tag "${COLLECTION_IMAGE}" --file "${ROOT}/Dockerfile" "${ROOT}"
-  docker build --pull --target prepare \
+  docker build --pull --no-cache --target prepare \
     --tag "${PREPARE_IMAGE}" --file "${ROOT}/Dockerfile" "${ROOT}"
+  docker build --pull --no-cache --target reference \
+    --tag "${REFERENCE_IMAGE}" --file "${ROOT}/Dockerfile" "${ROOT}"
+  build_finished_unix_ns="$(date +%s%N)"
+  collection_id="$(docker image inspect --format '{{.Id}}' "${COLLECTION_IMAGE}")"
+  prepare_id="$(docker image inspect --format '{{.Id}}' "${PREPARE_IMAGE}")"
+  reference_id="$(docker image inspect --format '{{.Id}}' "${REFERENCE_IMAGE}")"
+  build_source="$(
+    docker run --rm --entrypoint /bin/cat \
+      "${collection_id}" /usr/share/qcsd-lab/source.json
+  )"
+  build_inputs="$(
+    docker run --rm --entrypoint /bin/cat \
+      "${collection_id}" /usr/share/qcsd-lab/study-build-inputs.json
+  )"
+  build_docker_version="$(docker version --format '{{json .}}')"
+  COLLECTION_ID="${collection_id}" \
+  COLLECTION_REPO_DIGESTS="$(docker image inspect --format '{{json .RepoDigests}}' "${collection_id}")" \
+  PREPARE_ID="${prepare_id}" \
+  PREPARE_REPO_DIGESTS="$(docker image inspect --format '{{json .RepoDigests}}' "${prepare_id}")" \
+  REFERENCE_ID="${reference_id}" \
+  REFERENCE_REPO_DIGESTS="$(docker image inspect --format '{{json .RepoDigests}}' "${reference_id}")" \
+  BUILD_SOURCE="${build_source}" \
+  BUILD_INPUTS="${build_inputs}" \
+  BUILD_DOCKER_VERSION="${build_docker_version}" \
+  BUILD_STARTED_UNIX_NS="${build_started_unix_ns}" \
+  BUILD_FINISHED_UNIX_NS="${build_finished_unix_ns}" \
+  BUILD_RECEIPT="${build_receipt}" \
+  BUILD_COHORT_VERSION="${build_cohort_version}" \
+  BUILD_ROOT="${ROOT}" \
+  COLLECTION_TAG="${COLLECTION_IMAGE}" \
+  PREPARE_TAG="${PREPARE_IMAGE}" \
+  REFERENCE_TAG="${REFERENCE_IMAGE}" \
+  python3 - <<'PY'
+import datetime
+import hashlib
+import json
+import os
+from pathlib import Path
+
+root = Path(os.environ["BUILD_ROOT"]).resolve()
+destination = Path(os.environ["BUILD_RECEIPT"])
+started_ns = int(os.environ["BUILD_STARTED_UNIX_NS"])
+finished_ns = int(os.environ["BUILD_FINISHED_UNIX_NS"])
+version = json.loads(os.environ["BUILD_DOCKER_VERSION"])
+source = json.loads(os.environ["BUILD_SOURCE"])
+source["image_digest"] = os.environ["COLLECTION_ID"]
+images = {
+    "collection": {
+        "tag": os.environ["COLLECTION_TAG"],
+        "id": os.environ["COLLECTION_ID"],
+        "repo_digests": json.loads(os.environ["COLLECTION_REPO_DIGESTS"]),
+    },
+    "prepare": {
+        "tag": os.environ["PREPARE_TAG"],
+        "id": os.environ["PREPARE_ID"],
+        "repo_digests": json.loads(os.environ["PREPARE_REPO_DIGESTS"]),
+    },
+    "reference": {
+        "tag": os.environ["REFERENCE_TAG"],
+        "id": os.environ["REFERENCE_ID"],
+        "repo_digests": json.loads(os.environ["REFERENCE_REPO_DIGESTS"]),
+    },
+}
+commands = []
+for target in ("collection", "prepare", "reference"):
+    commands.append(
+        {
+            "target": target,
+            "argv": [
+                "docker", "build", "--pull", "--no-cache", "--target", target,
+                "--tag", images[target]["tag"], "--file", str(root / "Dockerfile"),
+                str(root),
+            ],
+            "exit_code": 0,
+            "image_id": images[target]["id"],
+        }
+    )
+
+def stamp(unix_ns):
+    return datetime.datetime.fromtimestamp(
+        unix_ns / 1_000_000_000, tz=datetime.timezone.utc
+    ).isoformat()
+
+value = {
+    "schema_version": 1,
+    "artifact_type": "qcsd-buflo-study-no-cache-build-execution",
+    "cohort_version": int(os.environ["BUILD_COHORT_VERSION"]),
+    "started_at": stamp(started_ns),
+    "finished_at": stamp(finished_ns),
+    "duration_seconds": (finished_ns - started_ns) / 1_000_000_000,
+    "docker": {
+        "client_version": version["Client"]["Version"],
+        "server_version": version["Server"]["Version"],
+    },
+    "commands": commands,
+    "images": images,
+    "source": source,
+    "build_inputs": json.loads(os.environ["BUILD_INPUTS"]),
+    "dockerfile_sha256": hashlib.sha256((root / "Dockerfile").read_bytes()).hexdigest(),
+    "cache_policy": {
+        "pull": True,
+        "no_cache": True,
+        "scope": "Docker-layer-cache-disabled;declared-BuildKit-dependency-cache-mounts-only",
+    },
+}
+payload = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+value["payload_sha256"] = hashlib.sha256(payload).hexdigest()
+encoded = (json.dumps(value, indent=2, sort_keys=True) + "\n").encode()
+with destination.open("xb") as output:
+    output.write(encoded)
+    output.flush()
+    os.fsync(output.fileno())
+directory = os.open(destination.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+try:
+    os.fsync(directory)
+finally:
+    os.close(directory)
+PY
+  echo "Created no-cache build receipt: ${build_receipt}"
   exit 0
+fi
+
+study_cohort_version=""
+study_cohort_version_seen=0
+study_campaign_name="${2##*/}"
+study_capture_admission_host=""
+study_capture_admission_container=""
+study_admission_build_path=""
+study_admission_build_sha256=""
+study_admission_collection_image=""
+study_resume_public=0
+study_resume_root=""
+
+if [[ "${1:-}" == "buflo-study" ]]; then
+  study_cohort_version=1
+  study_index=3
+  while (( study_index <= $# )); do
+    study_argument="${!study_index}"
+    case "${study_argument}" in
+      --cohort-version)
+        if (( study_cohort_version_seen )); then
+          echo "buflo-study accepts at most one --cohort-version value" >&2
+          exit 2
+        fi
+        study_next=$((study_index + 1))
+        if (( study_next > $# )); then
+          echo "--cohort-version requires a value" >&2
+          exit 2
+        fi
+        study_cohort_version="${!study_next}"
+        study_cohort_version_seen=1
+        study_index=$((study_index + 2))
+        continue
+        ;;
+      --cohort-version=*)
+        if (( study_cohort_version_seen )); then
+          echo "buflo-study accepts at most one --cohort-version value" >&2
+          exit 2
+        fi
+        study_cohort_version="${study_argument#--cohort-version=}"
+        study_cohort_version_seen=1
+        ;;
+    esac
+    study_index=$((study_index + 1))
+  done
+  if [[ ! "${study_cohort_version}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "buflo-study cohort version must be a positive integer" >&2
+    exit 2
+  fi
+fi
+
+read_capture_admission_binding() {
+  local admission="$1"
+  local -a fields=()
+  mapfile -t fields < <(
+    python3 -c '
+import json, re, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+value = json.loads(path.read_text(encoding="utf-8"))
+version = value.get("cohort_version")
+binding = value.get("build_execution_receipt")
+identity = value.get("build_execution")
+if (
+    type(version) is not int or version < 1
+    or not isinstance(binding, dict) or set(binding) != {"path", "sha256"}
+    or binding.get("path") != f"/lab/artifacts/buflo-study/build-execution-v{version}.json"
+    or re.fullmatch(r"[0-9a-f]{64}", str(binding.get("sha256"))) is None
+    or not isinstance(identity, dict)
+    or identity.get("cohort_version") != version
+    or identity.get("sha256") != binding.get("sha256")
+    or re.fullmatch(r"sha256:[0-9a-f]{64}", str(identity.get("collection_image"))) is None
+):
+    raise SystemExit("capture admission has no valid versioned build binding")
+print(version)
+print(binding["path"])
+print(binding["sha256"])
+print(identity["collection_image"])
+' "${admission}"
+  )
+  if (( ${#fields[@]} != 4 )); then
+    echo "capture admission has no valid versioned build binding" >&2
+    exit 1
+  fi
+  study_cohort_version="${fields[0]}"
+  study_admission_build_path="${fields[1]}"
+  study_admission_build_sha256="${fields[2]}"
+  study_admission_collection_image="${fields[3]}"
+}
+
+if [[ "${1:-}" == "run" &&
+      "${study_campaign_name}" =~ ^buflo-study-v1-(smoke|rehearsal|formal-[0-9]{2})\.yml$ ]]; then
+  if [[ -z "${QCSD_BUFLO_CAPTURE_ADMISSION:-}" ]]; then
+    echo "direct public BuFLO-study run requires QCSD_BUFLO_CAPTURE_ADMISSION" >&2
+    exit 1
+  fi
+  study_capture_admission_host="$(realpath -e -- "${QCSD_BUFLO_CAPTURE_ADMISSION}")"
+  if [[ -L "${QCSD_BUFLO_CAPTURE_ADMISSION}" ||
+        ! -f "${study_capture_admission_host}" ||
+        "${study_capture_admission_host}" != "${ROOT}/"* ]]; then
+    echo "QCSD_BUFLO_CAPTURE_ADMISSION must be a regular file inside the Lab root" >&2
+    exit 1
+  fi
+  study_capture_admission_container="/lab/${study_capture_admission_host#${ROOT}/}"
+  read_capture_admission_binding "${study_capture_admission_host}"
+fi
+
+if [[ "${1:-}" == "resume" ]]; then
+  study_resume_root="$(realpath -e -- "${2:-}")"
+  if [[ -L "${2:-}" || ! -d "${study_resume_root}" ||
+        "${study_resume_root}" != "${ROOT}/results/"* ]]; then
+    echo "resume requires a non-symlink result root under results/" >&2
+    exit 1
+  fi
+  study_resume_name="$(
+    python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["name"])' \
+      "${study_resume_root}/experiment.json"
+  )"
+  if [[ "${study_resume_name}" =~ ^buflo-study-v1-(public-(smoke|rehearsal)|formal-[0-9]{2})-1200$ ]]; then
+    study_resume_public=1
+    study_capture_admission_host="${study_resume_root}/inputs/capture-admission.json"
+    if [[ -L "${study_capture_admission_host}" ||
+          ! -f "${study_capture_admission_host}" ]]; then
+      echo "public BuFLO-study resume requires its frozen capture admission" >&2
+      exit 1
+    fi
+    study_capture_admission_container="/lab/results/${study_capture_admission_host#${ROOT}/results/}"
+    read_capture_admission_binding "${study_capture_admission_host}"
+  fi
+fi
+
+study_build_execution_path=""
+study_build_execution_sha256=""
+if [[ -n "${study_cohort_version}" ]]; then
+  study_build_execution_path="${ROOT}/artifacts/buflo-study/build-execution-v${study_cohort_version}.json"
+  if [[ -L "${study_build_execution_path}" || ! -f "${study_build_execution_path}" ]]; then
+    echo "BuFLO study cohort v${study_cohort_version} requires ${study_build_execution_path}" >&2
+    exit 1
+  fi
+  mapfile -t study_build_fields < <(
+    python3 -c '
+import hashlib, json, re, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+expected = int(sys.argv[2])
+raw = path.read_bytes()
+value = json.loads(raw)
+payload = dict(value)
+claimed = payload.pop("payload_sha256", None)
+actual = hashlib.sha256(
+    json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+).hexdigest()
+images = value.get("images")
+source = value.get("source")
+if (
+    value.get("schema_version") != 1
+    or value.get("artifact_type") != "qcsd-buflo-study-no-cache-build-execution"
+    or value.get("cohort_version") != expected
+    or claimed != actual
+    or not isinstance(images, dict) or set(images) != {"collection", "prepare", "reference"}
+    or not isinstance(source, dict)
+):
+    raise SystemExit("selected build receipt is invalid")
+ids = []
+for target in ("collection", "prepare", "reference"):
+    record = images[target]
+    image_id = record.get("id") if isinstance(record, dict) else None
+    if re.fullmatch(r"sha256:[0-9a-f]{64}", str(image_id)) is None:
+        raise SystemExit("selected build receipt image binding is invalid")
+    ids.append(image_id)
+if source.get("image_digest") != ids[0]:
+    raise SystemExit("selected build source differs from its collection image")
+print(hashlib.sha256(raw).hexdigest())
+print(*ids, sep="\n")
+' "${study_build_execution_path}" "${study_cohort_version}"
+  )
+  if (( ${#study_build_fields[@]} != 4 )); then
+    echo "selected build receipt is invalid" >&2
+    exit 1
+  fi
+  study_build_execution_sha256="${study_build_fields[0]}"
+  COLLECTION_IMAGE="${study_build_fields[1]}"
+  PREPARE_IMAGE="${study_build_fields[2]}"
+  REFERENCE_IMAGE="${study_build_fields[3]}"
+  if [[ -n "${study_admission_build_path}" ]] &&
+     { [[ "${study_admission_build_path}" != "/lab/artifacts/buflo-study/build-execution-v${study_cohort_version}.json" ]] ||
+       [[ "${study_admission_build_sha256}" != "${study_build_execution_sha256}" ]] ||
+       [[ "${study_admission_collection_image}" != "${COLLECTION_IMAGE}" ]]; }; then
+    echo "capture admission and selected cohort build receipt differ" >&2
+    exit 1
+  fi
 fi
 
 case "${1:-}" in
   prepare|derive-chaff-prefix-specs|qualify-chaff|qualify-response-chaff) image="${PREPARE_IMAGE}" ;;
-  run|resume|verify|analyze|fit|test) image="${COLLECTION_IMAGE}" ;;
+  run|resume|verify|analyze|fit|buflo-study|test) image="${COLLECTION_IMAGE}" ;;
   *) usage; exit 2 ;;
 esac
+if [[ "${1:-}" == "buflo-study" && "${2:-}" == "reference" ]]; then
+  image="${REFERENCE_IMAGE}"
+fi
 
 if ! docker image inspect "${image}" >/dev/null 2>&1; then
   echo "Missing image ${image}; run: ./qcsd-lab build" >&2
   exit 1
+fi
+if [[ "${1:-}" == "buflo-study" && "${2:-}" == "reference" ]]; then
+  reference_build_receipt="${study_build_execution_path}"
+  if [[ -L "${reference_build_receipt}" || ! -f "${reference_build_receipt}" ]]; then
+    echo "buflo-study reference requires the create-only no-cache build receipt" >&2
+    exit 1
+  fi
+fi
+
+if [[ "${1:-}" == "buflo-study" && "${2:-}" == "qualify" &&
+      "${QCSD_BUFLO_QUALIFY_VERIFY_ONLY:-0}" != "1" &&
+      "${QCSD_BUFLO_QUALIFY_CONTROLLED_ONLY:-0}" != "1" ]]; then
+  if ! docker image inspect "${PREPARE_IMAGE}" >/dev/null 2>&1; then
+    echo "Missing image ${PREPARE_IMAGE}; run: ./qcsd-lab build" >&2
+    exit 1
+  fi
+  qualification_expect=""
+  qualification_controlled_results=0
+  qualification_destinations=0
+  qualification_cohort_version=1
+  qualification_cohort_versions=0
+  for argument in "${@:3}"; do
+    if [[ -n "${qualification_expect}" ]]; then
+      if [[ "${qualification_expect}" == "controlled-result" ]]; then
+        qualification_controlled_results=$((qualification_controlled_results + 1))
+      elif [[ "${qualification_expect}" == "cohort-version" ]]; then
+        qualification_cohort_versions=$((qualification_cohort_versions + 1))
+        if [[ ${qualification_cohort_versions} -ne 1 ]]; then
+          echo "buflo-study qualify accepts at most one --cohort-version value" >&2
+          exit 2
+        fi
+        if [[ ! "${argument}" =~ ^[1-9][0-9]*$ ]]; then
+          echo "buflo-study qualify cohort version must be a positive integer" >&2
+          exit 2
+        fi
+        qualification_cohort_version="${argument}"
+      else
+        qualification_destinations=$((qualification_destinations + 1))
+      fi
+      qualification_expect=""
+      continue
+    fi
+    case "${argument}" in
+      --controlled-result) qualification_expect="controlled-result" ;;
+      --destination) qualification_expect="destination" ;;
+      --cohort-version) qualification_expect="cohort-version" ;;
+      --cohort-version=*)
+        qualification_cohort_versions=$((qualification_cohort_versions + 1))
+        if [[ ${qualification_cohort_versions} -ne 1 ]]; then
+          echo "buflo-study qualify accepts at most one --cohort-version value" >&2
+          exit 2
+        fi
+        qualification_cohort_version="${argument#--cohort-version=}"
+        if [[ ! "${qualification_cohort_version}" =~ ^[1-9][0-9]*$ ]]; then
+          echo "buflo-study qualify cohort version must be a positive integer" >&2
+          exit 2
+        fi
+        ;;
+      *)
+        echo "buflo-study qualify accepts repeated --controlled-result, one --destination, and one --cohort-version" >&2
+        exit 2
+        ;;
+    esac
+  done
+  if [[ -n "${qualification_expect}" || ${qualification_controlled_results} -eq 0 ||
+        ${qualification_destinations} -ne 1 ]]; then
+    echo "buflo-study qualify requires controlled roots and exactly one --destination" >&2
+    exit 2
+  fi
+  QCSD_BUFLO_QUALIFY_CONTROLLED_ONLY=1 "${ROOT}/qcsd-lab" "$@"
+  qualification_set="buflo-study-public5-v${qualification_cohort_version}"
+  qualification_target="${ROOT}/config/chaff-response-qualification-store/sets/${qualification_set}"
+  if [[ -L "${qualification_target}" ||
+        ( -e "${qualification_target}" && ! -d "${qualification_target}" ) ]]; then
+    echo "buflo-study qualify existing public5 evidence must be a non-symlink directory" >&2
+    exit 1
+  fi
+  if [[ ! -e "${qualification_target}" ]]; then
+    QCSD_LAB_PREPARE_IMAGE="${PREPARE_IMAGE}" \
+    "${ROOT}/qcsd-lab" qualify-response-chaff \
+      --set "${qualification_set}" \
+      getbootstrap-home-r4 cloudflare-quiche-r4 hyper-basic-client-r3 \
+      serde-home-r2 rfc9114-text-r2
+  fi
+  QCSD_BUFLO_QUALIFY_VERIFY_ONLY=1 "${ROOT}/qcsd-lab" "$@"
+  exit $?
+fi
+
+reference_root=""
+reference_destination=""
+reference_cohort_inputs=""
+reference_container_args=()
+if [[ "${1:-}" == "buflo-study" && "${2:-}" == "reference" ]]; then
+  index=3
+  while (( index <= $# )); do
+    argument="${!index}"
+    case "${argument}" in
+      --reference-root|--destination|--cohort-version)
+        next=$((index + 1))
+        if (( next > $# )); then
+          echo "${argument} requires a value" >&2
+          exit 2
+        fi
+        value="${!next}"
+        if [[ "${argument}" == "--reference-root" ]]; then
+          reference_root="${value}"
+        elif [[ "${argument}" == "--destination" ]]; then
+          reference_destination="${value}"
+        fi
+        index=$((index + 2))
+        ;;
+      --cohort-version=*)
+        index=$((index + 1))
+        ;;
+      *)
+        echo "isolated buflo-study reference accepts only --reference-root, --destination, and --cohort-version" >&2
+        exit 2
+        ;;
+    esac
+  done
+  if [[ -z "${reference_root}" || -z "${reference_destination}" ]]; then
+    echo "buflo-study reference requires --reference-root and --destination" >&2
+    exit 2
+  fi
+  reference_root_input="${reference_root}"
+  reference_parent_input="$(dirname "${reference_destination}")"
+  if [[ -L "${reference_root_input}" || -L "${reference_parent_input}" ]]; then
+    echo "reference input/output roots cannot be symlinks" >&2
+    exit 1
+  fi
+  reference_root="$(realpath "${reference_root_input}")"
+  reference_parent="$(realpath "${reference_parent_input}")"
+  reference_name="$(basename "${reference_destination}")"
+  reference_destination="${reference_parent}/${reference_name}"
+  if [[ ! -d "${reference_root}" || -L "${reference_root}" ]]; then
+    echo "reference root must be an existing non-symlink directory" >&2
+    exit 1
+  fi
+  if [[ ! -d "${reference_parent}" || -L "${reference_parent}" ||
+        -e "${reference_destination}" || -L "${reference_destination}" ||
+        ! "${reference_name}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    echo "reference destination must be an absent safe child of an existing directory" >&2
+    exit 1
+  fi
+  reference_cohort_inputs="${ROOT}/artifacts/buflo-study/cohort-inputs"
+  if [[ -L "${ROOT}/artifacts" || -L "${ROOT}/artifacts/buflo-study" ||
+        -L "${reference_cohort_inputs}" ]]; then
+    echo "reference cohort-input artifact path cannot contain symlinks" >&2
+    exit 1
+  fi
+  mkdir -p "${reference_cohort_inputs}"
+  reference_cohort_inputs="$(realpath "${reference_cohort_inputs}")"
+  reference_container_args=(
+    buflo-study reference
+    --reference-root /reference-input
+    --destination "/reference-output/${reference_name}"
+    --cohort-version "${study_cohort_version}"
+  )
 fi
 
 if [[ "${1:-}" == "derive-chaff-prefix-specs" ||
@@ -74,6 +569,133 @@ else
   mkdir -p "${ROOT}/results" "${ROOT}/artifacts" "${ROOT}/config/workloads"
 fi
 image_id="$(docker image inspect --format '{{.Id}}' "${image}")"
+buflo_host_lock_fd=""
+if [[ ( "${1:-}" == "buflo-study" && "${2:-}" == "capture" ) ||
+      ( "${1:-}" == "run" &&
+        "${study_campaign_name}" =~ ^buflo-study-v1-(smoke|rehearsal|formal-[0-9]{2})\.yml$ ) ||
+      "${study_resume_public}" == "1" ]]; then
+  command -v flock >/dev/null 2>&1 || {
+    echo "buflo-study capture requires flock on the host" >&2
+    exit 1
+  }
+  buflo_lock_path="${ROOT}/results/.buflo-study-v1.capture.lock"
+  if [[ -L "${buflo_lock_path}" ]]; then
+    echo "buflo-study capture lock cannot be a symlink" >&2
+    exit 1
+  fi
+  exec {buflo_host_lock_fd}>"${buflo_lock_path}"
+  if ! flock -n "${buflo_host_lock_fd}"; then
+    echo "another BuFLO-study capture or resume holds the global lock" >&2
+    exit 1
+  fi
+fi
+study_environment_b64=""
+if [[ ( "${1:-}" == "run" &&
+        "${study_campaign_name}" =~ ^buflo-study-v1-(smoke|rehearsal|formal-[0-9]{2})\.yml$ ) ||
+      ( "${1:-}" == "buflo-study" && "${2:-}" == "capture" ) ]]; then
+  if [[ -L "${study_build_execution_path}" || ! -f "${study_build_execution_path}" ]]; then
+    echo "public BuFLO study capture requires the create-only no-cache build receipt" >&2
+    exit 1
+  fi
+  study_build_execution="$(/bin/cat "${study_build_execution_path}")"
+  study_docker_version="$(docker version --format '{{json .}}')"
+  study_docker_info="$(docker info --format '{{json .}}')"
+  study_build_inputs="$(
+    docker run --rm --entrypoint /bin/cat \
+      "${image_id}" /usr/share/qcsd-lab/study-build-inputs.json
+  )"
+  study_container_clock="$(
+    docker run --rm --network none --entrypoint /usr/bin/python3 \
+      "${image_id}" -c '
+import json, time
+print(json.dumps({
+    "source": "python-clock-gettime-inside-collection-image",
+    "synchronized": None,
+    "status_evidence": None,
+    "unavailable_reason": (
+        "container shares the host kernel clock and has no independent NTP service"
+    ),
+    "realtime_unix_ns": time.time_ns(),
+    "monotonic_ns": time.monotonic_ns(),
+}, sort_keys=True, separators=(",", ":")))
+'
+  )"
+  study_repo_digests="$(docker image inspect --format '{{json .RepoDigests}}' "${image_id}")"
+  study_environment_b64="$(
+    QCSD_STUDY_DOCKER_VERSION="${study_docker_version}" \
+    QCSD_STUDY_DOCKER_INFO="${study_docker_info}" \
+    QCSD_STUDY_BUILD_INPUTS="${study_build_inputs}" \
+    QCSD_STUDY_BUILD_EXECUTION="${study_build_execution}" \
+    QCSD_STUDY_BUILD_EXECUTION_SHA256="${study_build_execution_sha256}" \
+    QCSD_STUDY_CONTAINER_CLOCK="${study_container_clock}" \
+    QCSD_STUDY_REPO_DIGESTS="${study_repo_digests}" \
+    QCSD_STUDY_IMAGE_ID="${image_id}" \
+    python3 -c '
+import base64, json, os, subprocess, time
+version = json.loads(os.environ["QCSD_STUDY_DOCKER_VERSION"])
+info = json.loads(os.environ["QCSD_STUDY_DOCKER_INFO"])
+try:
+    query = subprocess.run(
+        ["timedatectl", "show", "--property", "NTPSynchronized", "--value"],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=2,
+        check=False,
+    )
+except (FileNotFoundError, subprocess.TimeoutExpired) as error:
+    host_synchronized = None
+    host_evidence = None
+    host_reason = f"timedatectl unavailable: {type(error).__name__}"
+else:
+    answer = query.stdout.strip().lower()
+    if query.returncode == 0 and answer in {"yes", "no"}:
+        host_synchronized = answer == "yes"
+        host_evidence = f"NTPSynchronized={answer}"
+        host_reason = None
+    else:
+        host_synchronized = None
+        host_evidence = None
+        host_reason = f"timedatectl returned status {query.returncode}"
+value = {
+    "schema_version": 1,
+    "artifact_type": "qcsd-buflo-study-environment",
+    "docker": {
+        "client_version": version["Client"]["Version"],
+        "server_version": version["Server"]["Version"],
+        "server_os": info["OSType"],
+        "server_arch": info["Architecture"],
+        "ncpu": info["NCPU"],
+        "mem_total_bytes": info["MemTotal"],
+        "storage_driver": info["Driver"],
+    },
+    "collection_image": {
+        "id": os.environ["QCSD_STUDY_IMAGE_ID"],
+        "repo_digests": json.loads(os.environ["QCSD_STUDY_REPO_DIGESTS"]),
+    },
+    "build_inputs": json.loads(os.environ["QCSD_STUDY_BUILD_INPUTS"]),
+    "build_execution": {
+        "sha256": os.environ["QCSD_STUDY_BUILD_EXECUTION_SHA256"],
+        "receipt": json.loads(os.environ["QCSD_STUDY_BUILD_EXECUTION"]),
+    },
+    "clock_status": {
+        "relationship": "container-shares-host-kernel-realtime-clock",
+        "host": {
+            "source": "timedatectl-NTPSynchronized-and-python-clock-gettime",
+            "synchronized": host_synchronized,
+            "status_evidence": host_evidence,
+            "unavailable_reason": host_reason,
+            "realtime_unix_ns": time.time_ns(),
+            "monotonic_ns": time.monotonic_ns(),
+        },
+        "container": json.loads(os.environ["QCSD_STUDY_CONTAINER_CLOCK"]),
+    },
+}
+encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+print(base64.b64encode(encoded).decode())
+'
+  )"
+fi
 
 if [[ "${1:-}" == "qualify-chaff" ]]; then
   for required_directory in \
@@ -194,8 +816,9 @@ if [[ "${1:-}" == "fit" ]] &&
 fi
 
 verify_qualification_checkout() {
+  local operation="${1:-qualification/capture}"
   command -v python3 >/dev/null 2>&1 || {
-    echo "qualify-chaff requires python3 on the host for source verification" >&2
+    echo "${operation} requires python3 on the host for source verification" >&2
     exit 1
   }
   local metadata
@@ -219,7 +842,7 @@ verify_qualification_checkout() {
      [[ "${image_source[4]}" != "${neqo_pin}" ]] ||
      [[ "${image_source[5]}" != "false" ]] ||
      [[ "${image_source[6]}" != "${empty_sha}" ]]; then
-    echo "qualify-chaff requires the exact clean Lab/Neqo checkout embedded in the image" >&2
+    echo "${operation} requires the exact clean Lab/Neqo checkout embedded in the image" >&2
     exit 1
   fi
 }
@@ -259,17 +882,39 @@ verify_fit_neqo_checkout() {
 }
 
 if [[ "${1:-}" == "qualify-chaff" || "${1:-}" == "qualify-response-chaff" ]]; then
-  verify_qualification_checkout
+  verify_qualification_checkout "${1}"
+fi
+if [[ "${1:-}" == "buflo-study" && "${2:-}" == "capture" ]]; then
+  verify_qualification_checkout "buflo-study capture"
+fi
+if [[ "${1:-}" == "run" &&
+      "${study_campaign_name}" =~ ^buflo-study-v1-(smoke|rehearsal|formal-[0-9]{2})\.yml$ ]]; then
+  verify_qualification_checkout "buflo study campaign run"
+fi
+if [[ "${study_resume_public}" == "1" ]]; then
+  verify_qualification_checkout "buflo study campaign resume"
+  docker run --rm --network none \
+    --security-opt no-new-privileges --cap-drop ALL \
+    --env "QCSD_LAB_IMAGE_DIGEST=${image_id}" \
+    --volume "${ROOT}:/lab:ro" --workdir /lab \
+    --entrypoint /usr/local/bin/python3 "${image_id}" -c \
+    'import sys; from pathlib import Path; from qcsd_lab.buflo_study import validate_capture_admission; validate_capture_admission(Path(sys.argv[1]))' \
+    "${study_capture_admission_container}"
+fi
+if [[ "${1:-}" == "buflo-study" && "${2:-}" == "qualify" ]]; then
+  verify_qualification_checkout "buflo-study qualify"
 fi
 if [[ "${1:-}" == "fit" ]]; then
   verify_fit_neqo_checkout
 fi
 runtime=(--rm --security-opt no-new-privileges)
 network_mode="bridge"
-if [[ "${1:-}" == "fit" || "${1:-}" == "derive-chaff-prefix-specs" ]]; then
+if [[ "${1:-}" == "fit" || "${1:-}" == "derive-chaff-prefix-specs" ||
+      ( "${1:-}" == "buflo-study" && "${2:-}" == "reference" ) ]]; then
   network_mode="none"
 fi
 if [[ "${1:-}" == "prepare" || "${1:-}" == "derive-chaff-prefix-specs" ||
+      ( "${1:-}" == "buflo-study" && "${2:-}" == "reference" ) ||
       "${1:-}" == "qualify-chaff" || "${1:-}" == "qualify-response-chaff" ]]; then
   runtime+=(--user "$(id -u):$(id -g)")
 else
@@ -290,8 +935,73 @@ container=(
   --env "QCSD_LAB_IMAGE_DIGEST=${image_id}"
   --volume "${ROOT}:/lab:ro"
 )
+if [[ -n "${study_environment_b64}" ]]; then
+  container+=(--env "QCSD_STUDY_ENVIRONMENT_B64=${study_environment_b64}")
+fi
+if [[ -n "${study_capture_admission_container}" ]]; then
+  container+=(--env "QCSD_BUFLO_CAPTURE_ADMISSION=${study_capture_admission_container}")
+fi
+if [[ -n "${buflo_host_lock_fd}" ]]; then
+  container+=(--env "QCSD_BUFLO_CAPTURE_LOCK_HELD=1")
+fi
+if [[ "${QCSD_BUFLO_QUALIFY_CONTROLLED_ONLY:-0}" == "1" ]]; then
+  container+=(--env "QCSD_BUFLO_QUALIFY_CONTROLLED_ONLY=1")
+fi
+if [[ "${QCSD_BUFLO_QUALIFY_VERIFY_ONLY:-0}" == "1" ]]; then
+  container+=(--env "QCSD_BUFLO_QUALIFY_VERIFY_ONLY=1")
+fi
+if [[ -n "${QCSD_DLSVM_AVAILABLE_WALL_SECONDS:-}" ]]; then
+  container+=(--env "QCSD_DLSVM_AVAILABLE_WALL_SECONDS=${QCSD_DLSVM_AVAILABLE_WALL_SECONDS}")
+fi
+if [[ -n "${QCSD_OSAD_WORKERS:-}" ]]; then
+  container+=(--env "QCSD_OSAD_WORKERS=${QCSD_OSAD_WORKERS}")
+fi
+if [[ "${1:-}" == "run" &&
+      "${study_campaign_name}" =~ ^buflo-study-v1-(smoke|rehearsal|formal-[0-9]{2})\.yml$ ]]; then
+  container+=(--env "QCSD_STUDY_NETWORK_CONDITION=public-docker-bridge-no-netem")
+fi
+if [[ ( "${1:-}" == "buflo-study" && "${2:-}" == "capture" ) ||
+      "${study_resume_public}" == "1" ]]; then
+  container+=(--env "QCSD_STUDY_NETWORK_CONDITION=public-docker-bridge-no-netem")
+fi
+if [[ "${1:-}" == "buflo-study" && "${2:-}" == "reference" ]]; then
+  container+=(
+    --env "QCSD_REFERENCE_ISOLATED=1"
+    --env "QCSD_REFERENCE_NETWORK_MODE=none"
+    --volume "${reference_root}:/reference-input:ro"
+    --volume "${reference_parent}:/reference-output:rw"
+    --volume "${reference_cohort_inputs}:/lab/artifacts/buflo-study/cohort-inputs:rw"
+  )
+fi
 if [[ "${1:-}" == "run" || "${1:-}" == "resume" || "${1:-}" == "analyze" ]]; then
   container+=(--volume "${ROOT}/results:/lab/results:rw")
+fi
+if [[ "${1:-}" == "buflo-study" && "${2:-}" == "capture" ]]; then
+  buflo_results_mount="${ROOT}/results:/lab/results:rw"
+  container+=(
+    --volume "${buflo_results_mount}"
+    --volume "${ROOT}/artifacts:/lab/artifacts:rw"
+  )
+fi
+if [[ "${1:-}" == "buflo-study" &&
+      ( "${2:-}" == "qualify" || "${2:-}" == "historical-snapshot" ||
+        "${2:-}" == "freeze-cohort" || "${2:-}" == "code-gate" ||
+        "${2:-}" == "export" || "${2:-}" == "evaluate" ||
+        "${2:-}" == "verify" ) ]]; then
+  for study_output_root in "${ROOT}/handoffs" "${ROOT}/artifacts"; do
+    if [[ ! -d "${study_output_root}" || -L "${study_output_root}" ]]; then
+      echo "buflo-study output root must be an existing non-symlink directory: ${study_output_root}" >&2
+      exit 1
+    fi
+  done
+  if [[ "${2:-}" == "evaluate" || "${2:-}" == "verify" ]]; then
+    container+=(--volume "${ROOT}/handoffs:/lab/handoffs:ro")
+  else
+    container+=(--volume "${ROOT}/handoffs:/lab/handoffs:rw")
+  fi
+  container+=(
+    --volume "${ROOT}/artifacts:/lab/artifacts:rw"
+  )
 fi
 if [[ "${1:-}" == "prepare" ]]; then
   container+=(--volume "${ROOT}/config/workloads:/lab/config/workloads:rw")
@@ -406,6 +1116,110 @@ start_capture_acceptance_server() {
     "${image_id}" -eu -c \
     'ethtool -K eth0 gro off gso off tso off tx-udp-segmentation off
 exec /usr/local/bin/neqo-server "0.0.0.0:${QCSD_ACCEPTANCE_SERVER_PORT}"'
+}
+
+start_buflo_controlled_server() {
+  local server_name="$1"
+  local server_alias="$2"
+  local server_port="$3"
+  local network_name="$4"
+  docker run --detach --name "${server_name}" \
+    --network "${network_name}" --network-alias "${server_alias}" \
+    --security-opt no-new-privileges \
+    --cap-drop ALL --cap-add NET_ADMIN \
+    --env "QCSD_CONTROLLED_SERVER_PORT=${server_port}" \
+    --entrypoint /bin/sh \
+    "${image_id}" -eu -c \
+    'ethtool -K eth0 gro off gso off tso off tx-udp-segmentation off
+exec /usr/local/bin/neqo-server "0.0.0.0:${QCSD_CONTROLLED_SERVER_PORT}"'
+}
+
+configure_buflo_qdisc() {
+  local container_name="$1"
+  local profile="$2"
+  case "${profile}" in
+    clean)
+      docker exec "${container_name}" /bin/sh -eu -c \
+        'tc qdisc del dev eth0 root 2>/dev/null || true'
+      ;;
+    symmetric-50ms-rtt)
+      docker exec "${container_name}" \
+        tc qdisc replace dev eth0 root netem delay 25ms
+      ;;
+    symmetric-5mbit-50ms-rtt-100-packet-queue)
+      docker exec "${container_name}" \
+        tc qdisc replace dev eth0 root netem delay 25ms rate 5mbit limit 100
+      ;;
+    symmetric-1pct-loss-50ms-rtt)
+      docker exec "${container_name}" \
+        tc qdisc replace dev eth0 root netem delay 25ms loss 1%
+      ;;
+    *)
+      echo "unsupported controlled netem profile: ${profile}" >&2
+      return 2
+      ;;
+  esac
+}
+
+buflo_qdisc_base64() {
+  docker exec "$1" tc -details -j qdisc show dev eth0 | base64 -w0
+}
+
+run_buflo_controlled_profile() {
+  local stage="$1"
+  local profile="$2"
+  local network_name="$3"
+  local first_server="$4"
+  local second_server="$5"
+  local destination="$6"
+  local first_qdisc second_qdisc
+  local controlled_results_mount="${ROOT}/results:/lab/results:rw"
+  local -a study_environment_argument=()
+  if [[ -n "${study_environment_b64}" ]]; then
+    study_environment_argument=(
+      --env "QCSD_STUDY_ENVIRONMENT_B64=${study_environment_b64}"
+    )
+  fi
+  configure_buflo_qdisc "${first_server}" "${profile}"
+  configure_buflo_qdisc "${second_server}" "${profile}"
+  first_qdisc="$(buflo_qdisc_base64 "${first_server}")"
+  second_qdisc="$(buflo_qdisc_base64 "${second_server}")"
+  docker run --rm \
+    --network "${network_name}" \
+    --security-opt no-new-privileges \
+    --cap-drop ALL --cap-add NET_RAW --cap-add NET_ADMIN \
+    --cap-add SETUID --cap-add SETGID --cap-add SETPCAP \
+    --env "HOME=/tmp/qcsd-home" \
+    --env "MPLCONFIGDIR=/tmp/matplotlib" \
+    --env "QCSD_LAB_IMAGE_DIGEST=${image_id}" \
+    --env "QCSD_LAB_UID=$(id -u)" \
+    --env "QCSD_LAB_GID=$(id -g)" \
+    --env "QCSD_BUFLO_NETEM_PROFILE=${profile}" \
+    --env "QCSD_BUFLO_CAPTURE_LOCK_HELD=1" \
+    "${study_environment_argument[@]}" \
+    --volume "${ROOT}:/lab:ro" \
+    --volume "${controlled_results_mount}" \
+    --workdir /lab \
+    --entrypoint /bin/sh \
+    "${image_id}" -eu -c '
+case "${QCSD_BUFLO_NETEM_PROFILE}" in
+  clean) tc qdisc del dev eth0 root 2>/dev/null || true ;;
+  symmetric-50ms-rtt) tc qdisc replace dev eth0 root netem delay 25ms ;;
+  symmetric-5mbit-50ms-rtt-100-packet-queue)
+    tc qdisc replace dev eth0 root netem delay 25ms rate 5mbit limit 100 ;;
+  symmetric-1pct-loss-50ms-rtt)
+    tc qdisc replace dev eth0 root netem delay 25ms loss 1% ;;
+  *) exit 2 ;;
+esac
+exec /usr/local/bin/collection-entrypoint "$@"
+' sh \
+    buflo-study capture --stage "${stage}" \
+    --cohort-version "${study_cohort_version}" \
+    --destination "${destination}" \
+    --local-netem-profile "${profile}" \
+    --network-name "${network_name}" \
+    --server-one-qdisc-b64 "${first_qdisc}" \
+    --server-two-qdisc-b64 "${second_qdisc}"
 }
 
 snapshot_regular_tree() {
@@ -676,6 +1490,121 @@ if [[ "${1:-}" == "fit" ]]; then
   exit "${status}"
 fi
 
+if [[ "${1:-}" == "buflo-study" && "${2:-}" == "capture" ]]; then
+  controlled_stage=""
+  capture_arguments=("${@:3}")
+  capture_index=0
+  while (( capture_index < ${#capture_arguments[@]} )); do
+    if [[ "${capture_arguments[capture_index]}" == "--stage" ]]; then
+      capture_index=$((capture_index + 1))
+      if (( capture_index >= ${#capture_arguments[@]} )); then
+        echo "--stage requires a value" >&2
+        exit 2
+      fi
+      controlled_stage="${capture_arguments[capture_index]}"
+    fi
+    capture_index=$((capture_index + 1))
+  done
+  if [[ "${controlled_stage}" == "controlled" ||
+        "${controlled_stage}" == "regression" ]]; then
+  controlled_destination_name="buflo-study-controlled-v${study_cohort_version}"
+  controlled_expect=""
+  for argument in "${@:3}"; do
+    if [[ -n "${controlled_expect}" ]]; then
+      if [[ "${controlled_expect}" == "stage" ]]; then
+        controlled_stage="${argument}"
+      elif [[ "${controlled_expect}" == "destination" ]]; then
+        if [[ "${argument}" =~ ^results/([A-Za-z0-9][A-Za-z0-9._-]*)$ ]]; then
+          controlled_destination_name="${BASH_REMATCH[1]}"
+        elif [[ "${argument}" =~ ^${ROOT}/results/([A-Za-z0-9][A-Za-z0-9._-]*)$ ]]; then
+          controlled_destination_name="${BASH_REMATCH[1]}"
+        else
+          echo "controlled destination must be one safe direct child of results/" >&2
+          exit 2
+        fi
+      elif [[ "${argument}" != "${study_cohort_version}" ]]; then
+        echo "local capture cohort version differs from the selected build" >&2
+        exit 2
+      fi
+      controlled_expect=""
+      continue
+    fi
+    case "${argument}" in
+      --stage) controlled_expect="stage" ;;
+      --destination) controlled_expect="destination" ;;
+      --cohort-version) controlled_expect="cohort-version" ;;
+      --cohort-version=*)
+        if [[ "${argument#--cohort-version=}" != "${study_cohort_version}" ]]; then
+          echo "local capture cohort version differs from the selected build" >&2
+          exit 2
+        fi
+        ;;
+      *)
+        echo "local buflo-study capture accepts only --stage, --destination, and --cohort-version" >&2
+        exit 2
+        ;;
+    esac
+  done
+  if [[ -n "${controlled_expect}" ]]; then
+    echo "local buflo-study capture option requires a value" >&2
+    exit 2
+  fi
+    command -v base64 >/dev/null 2>&1 || {
+      echo "controlled capture requires base64 on the host" >&2
+      exit 1
+    }
+    if [[ "${controlled_stage}" == "regression" &&
+          "${controlled_destination_name}" == "buflo-study-controlled-v${study_cohort_version}" ]]; then
+      controlled_destination_name="buflo-study-regression-v${study_cohort_version}"
+    fi
+    controlled_destination="${ROOT}/results/${controlled_destination_name}"
+    if [[ -L "${ROOT}/results" || -L "${controlled_destination}" ]]; then
+      echo "controlled result roots cannot be symbolic links" >&2
+      exit 1
+    fi
+    mkdir -p "${controlled_destination}"
+    controlled_network="qcsd-buflo-study-v${study_cohort_version}"
+    if docker network inspect "${controlled_network}" >/dev/null 2>&1; then
+      echo "controlled Docker network already exists; remove stale ${controlled_network}" >&2
+      exit 1
+    fi
+    first_server="qcsd-buflo-server-one"
+    second_server="qcsd-buflo-server-two"
+    if docker container inspect "${first_server}" >/dev/null 2>&1 ||
+       docker container inspect "${second_server}" >/dev/null 2>&1; then
+      echo "controlled server container name already exists; remove stale sidecars" >&2
+      exit 1
+    fi
+    docker network create --driver bridge "${controlled_network}" >/dev/null
+    sidecars+=("${first_server}" "${second_server}")
+    cleanup_buflo_controlled() {
+      cleanup_sidecars
+      docker network rm "${controlled_network}" >/dev/null 2>&1 || true
+    }
+    trap cleanup_buflo_controlled EXIT INT TERM
+    start_buflo_controlled_server \
+      "${first_server}" qcsd-buflo-server-one 4433 "${controlled_network}" >/dev/null
+    start_buflo_controlled_server \
+      "${second_server}" qcsd-buflo-server-two 4434 "${controlled_network}" >/dev/null
+    sleep 1
+    profiles=(clean)
+    if [[ "${controlled_stage}" == "controlled" ]]; then
+      profiles+=(
+        symmetric-50ms-rtt
+        symmetric-5mbit-50ms-rtt-100-packet-queue
+        symmetric-1pct-loss-50ms-rtt
+      )
+    fi
+    for profile in "${profiles[@]}"; do
+      run_buflo_controlled_profile \
+        "${controlled_stage}" "${profile}" "${controlled_network}" \
+        "${first_server}" "${second_server}" \
+        "/lab/results/${controlled_destination_name}"
+    done
+    exit 0
+  fi
+fi
+
 if [[ "${1:-}" == "test" && "${2:-}" == "live" ]]; then
   if (( $# != 2 )); then
     echo "test live accepts no additional arguments" >&2
@@ -702,6 +1631,10 @@ if [[ "${1:-}" == "test" && "${2:-}" == "live" ]]; then
   status=$?
   set -e
   exit "${status}"
+fi
+
+if [[ "${1:-}" == "buflo-study" && "${2:-}" == "reference" ]]; then
+  exec "${container[@]}" "${image_id}" "${reference_container_args[@]}"
 fi
 
 exec "${container[@]}" "${image_id}" "$@"

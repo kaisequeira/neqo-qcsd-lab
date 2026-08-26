@@ -23,6 +23,39 @@ RUNNER_PACKET_FIELDS = (
     "satisfaction",
     "slot_id",
 )
+SCHEDULE_PREFIX_FIELDS = (
+    "target_time_us",
+    "direction",
+    "size",
+    "connection",
+    "action_time_us",
+    "satisfaction",
+    "observed_size",
+    "miss_reason",
+    "slot_id",
+)
+LEGACY_SCHEDULE_QCSD_FIELDS = (
+    "qcsd_outcome_schema_version",
+    "send_policy",
+    "desired_udp_bytes",
+    "observed_udp_bytes",
+    "application_stream_bytes",
+    "retransmission_stream_bytes",
+    "chaff_stream_bytes",
+    "defense_control_bytes",
+    "quic_padding_bytes",
+    "other_quic_bytes",
+    "lateness_us",
+    "congestion_reason",
+)
+ADVERTISEMENT_SCHEDULE_QCSD_FIELDS = LEGACY_SCHEDULE_QCSD_FIELDS + (
+    "credit_advertised_at_us",
+    "credit_advertisement_delay_us",
+)
+SCHEDULE_QCSD_FIELDS = ADVERTISEMENT_SCHEDULE_QCSD_FIELDS + (
+    "credit_consumed_at_us",
+    "credit_consumption_delay_us",
+)
 DEFAULT_TIMESTAMP_TOLERANCE_NS = 10_000_000
 CLOCK_STEP_MIN_NS = 50_000_000
 CLOCK_STEP_MAX_NS = 100_000_000
@@ -328,12 +361,19 @@ def _read_runner_packets(
     path: Path,
     endpoint_overheads: Mapping[int, int],
 ) -> list[_RunnerPacket]:
-    rows = _read_exact_csv(path, RUNNER_PACKET_FIELDS)
+    rows = _read_compatible_csv(
+        path,
+        RUNNER_PACKET_FIELDS,
+        RUNNER_PACKET_FIELDS + LEGACY_SCHEDULE_QCSD_FIELDS,
+        RUNNER_PACKET_FIELDS + ADVERTISEMENT_SCHEDULE_QCSD_FIELDS,
+        RUNNER_PACKET_FIELDS + SCHEDULE_QCSD_FIELDS,
+    )
     if not rows:
         raise ValueError("runner packet trace is empty")
     packets = []
     previous_time: dict[tuple[int, str], int] = {}
     for index, row in enumerate(rows):
+        _validate_qcsd_trace_extension(row, label=f"runner packet {index}")
         monotonic_us = _unsigned(row.get("monotonic_us"), "runner packet time")
         connection = _unsigned(row.get("connection"), "runner connection")
         if connection not in endpoint_overheads:
@@ -624,6 +664,122 @@ def _read_exact_csv(path: Path, fields: tuple[str, ...]) -> list[dict[str, str]]
     return rows
 
 
+def _read_compatible_csv(path: Path, *field_schemas: tuple[str, ...]) -> list[dict[str, str]]:
+    try:
+        with path.open(newline="", encoding="utf-8") as source:
+            reader = csv.DictReader(source)
+            rows = list(reader)
+    except OSError as error:
+        raise ValueError(f"cannot read direct/runner evidence {path}") from error
+    if tuple(reader.fieldnames or ()) not in set(field_schemas):
+        raise ValueError(f"invalid direct/runner evidence columns in {path}")
+    return rows
+
+
+def _validate_qcsd_trace_extension(row: Mapping[str, str], *, label: str) -> None:
+    if "qcsd_outcome_schema_version" not in row:
+        return
+    values = {field: row.get(field, "") for field in SCHEDULE_QCSD_FIELDS}
+    if not values["qcsd_outcome_schema_version"]:
+        if any(values.values()):
+            raise ValueError(f"{label} has typed QCSD values without a schema version")
+        return
+    schema = values["qcsd_outcome_schema_version"]
+    if schema not in {"1", "2"}:
+        raise ValueError(f"{label} has an unsupported QCSD outcome schema")
+    advertisement_fields = (
+        "credit_advertised_at_us",
+        "credit_advertisement_delay_us",
+    )
+    consumption_fields = ("credit_consumed_at_us", "credit_consumption_delay_us")
+    advertisement_present = any(values[field] for field in advertisement_fields)
+    consumption_present = any(values[field] for field in consumption_fields)
+    advertisement_complete = all(
+        values[field].isdecimal() for field in advertisement_fields
+    )
+    consumption_complete = all(values[field].isdecimal() for field in consumption_fields)
+    if advertisement_present and not advertisement_complete:
+        raise ValueError(f"{label} has incomplete receive-credit advertisement evidence")
+    if consumption_present and not consumption_complete:
+        raise ValueError(f"{label} has incomplete receive-credit consumption evidence")
+    if consumption_present and (schema != "2" or not advertisement_complete):
+        raise ValueError(f"{label} has unbound receive-credit consumption evidence")
+    if not values["send_policy"]:
+        if any(values[field] for field in LEGACY_SCHEDULE_QCSD_FIELDS[1:]):
+            raise ValueError(f"{label} has credit-only metadata mixed with an outcome")
+        if schema != "2" or not advertisement_complete or consumption_present:
+            raise ValueError(f"{label} has a schema-only row without typed evidence")
+        return
+    if values["send_policy"] not in {"exact", "congestion_sensitive", "unscheduled"}:
+        raise ValueError(f"{label} has an invalid QCSD send policy")
+    if not values["desired_udp_bytes"].isdecimal():
+        raise ValueError(f"{label} has invalid QCSD size evidence")
+    if int(values["desired_udp_bytes"]) <= 0:
+        raise ValueError(f"{label} has a non-positive QCSD desired size")
+    incoming_credit_terminal = (
+        row.get("direction") == "incoming"
+        and values["send_policy"] == "exact"
+        and not values["observed_udp_bytes"]
+        and advertisement_complete
+    )
+    observed_present = bool(values["observed_udp_bytes"])
+    outcome_suffix = (*LEGACY_SCHEDULE_QCSD_FIELDS[4:11], "congestion_reason")
+    if not observed_present and not incoming_credit_terminal:
+        if any(
+            values[field]
+            for field in (*outcome_suffix, *advertisement_fields, *consumption_fields)
+        ):
+            raise ValueError(f"{label} has terminal evidence before an observed size")
+        # Serialized action rows carry their typed policy and desired size
+        # before transport produces the terminal observation.
+        return
+    if observed_present and not values["observed_udp_bytes"].isdecimal():
+        raise ValueError(f"{label} has invalid QCSD size evidence")
+    optional_numbers = (
+        *LEGACY_SCHEDULE_QCSD_FIELDS[4:11],
+        *advertisement_fields,
+        *consumption_fields,
+    )
+    if any(value and not value.isdecimal() for value in (values[key] for key in optional_numbers)):
+        raise ValueError(f"{label} has invalid QCSD composition evidence")
+    components = LEGACY_SCHEDULE_QCSD_FIELDS[4:10]
+    populated_components = [bool(values[key]) for key in components]
+    if incoming_credit_terminal and any(
+        values[key] for key in (*components, "lateness_us", "congestion_reason")
+    ):
+        raise ValueError(f"{label} gives an incoming receive-credit event UDP realization")
+    if consumption_present and not incoming_credit_terminal:
+        raise ValueError(f"{label} attaches peer-consumption timing to a non-incoming slot")
+    if incoming_credit_terminal and row.get("action_time_us") not in {None, ""}:
+        action_time = row["action_time_us"]
+        if not isinstance(action_time, str) or not action_time.isdecimal():
+            raise ValueError(f"{label} has invalid receive-credit action timing")
+        action = int(action_time)
+        advertised = int(values["credit_advertised_at_us"])
+        advertised_delay = int(values["credit_advertisement_delay_us"])
+        if advertised < action or advertised_delay != advertised - action:
+            raise ValueError(f"{label} has invalid receive-credit advertisement timing")
+        if consumption_present:
+            consumed = int(values["credit_consumed_at_us"])
+            consumed_delay = int(values["credit_consumption_delay_us"])
+            if consumed < advertised or consumed_delay != consumed - action:
+                raise ValueError(f"{label} has invalid receive-credit consumption timing")
+    if any(populated_components) and (
+        not all(populated_components)
+        or sum(int(values[key]) for key in components) != int(values["observed_udp_bytes"])
+    ):
+        raise ValueError(f"{label} has inconsistent QCSD byte composition")
+    if values["congestion_reason"] not in {"", "congestion_limited", "pacing_limited"}:
+        raise ValueError(f"{label} has an invalid QCSD congestion reason")
+    if values["send_policy"] == "exact" and any(populated_components):
+        if schema != "2" or not values["lateness_us"].isdecimal():
+            raise ValueError(f"{label} has incomplete exact packet composition evidence")
+    elif values["send_policy"] == "exact" and values["lateness_us"]:
+        raise ValueError(f"{label} gives an exact outcome unexplained lateness")
+    if values["send_policy"] in {"exact", "unscheduled"} and values["congestion_reason"]:
+        raise ValueError(f"{label} gives an exact send a congestion reason")
+
+
 def _percentile_95(sorted_values: list[int]) -> int:
     if not sorted_values:
         return 0
@@ -667,16 +823,65 @@ def _positive(value: Any, label: str) -> int:
 
 
 def _schedule_realization_metrics(sample: Path) -> dict[str, Any]:
-    path = sample / "neqo/schedule.csv"
+    return _schedule_realization_metrics_from_path(sample / "neqo/schedule.csv")
+
+
+def _schedule_realization_metrics_from_path(path: Path) -> dict[str, Any]:
     if not path.is_file():
         return {}
     with path.open(newline="", encoding="utf-8") as source:
-        rows = list(csv.DictReader(source))
+        reader = csv.DictReader(source)
+        rows = list(reader)
+        fieldnames = tuple(reader.fieldnames or ())
     satisfactions: dict[str, int] = {}
     miss_reasons: dict[str, int] = {}
     directions: dict[str, int] = {}
     outgoing_size_mismatches = 0
     outgoing_size_error_bytes = 0
+    invalid_rows = 0
+    invalid_congestion_reasons = 0
+    terminal_slots: set[int] = set()
+    duplicate_terminal_slots = 0
+    action_times: set[tuple[str, int]] = set()
+    catch_up_events = 0
+    terminal_desired_bytes = 0
+    terminal_observed_bytes = 0
+    typed_real_bearing_outgoing_bytes = 0
+    congestion_reasons: dict[str, int] = {}
+    target_times: dict[str, list[int]] = {"outgoing": [], "incoming": []}
+    scheduled_sizes: dict[str, list[int]] = {"outgoing": [], "incoming": []}
+    typed_schema = fieldnames in {
+        SCHEDULE_PREFIX_FIELDS + LEGACY_SCHEDULE_QCSD_FIELDS,
+        SCHEDULE_PREFIX_FIELDS + ADVERTISEMENT_SCHEDULE_QCSD_FIELDS,
+        SCHEDULE_PREFIX_FIELDS + SCHEDULE_QCSD_FIELDS,
+    }
+    advertisement_schema = fieldnames in {
+        SCHEDULE_PREFIX_FIELDS + ADVERTISEMENT_SCHEDULE_QCSD_FIELDS,
+        SCHEDULE_PREFIX_FIELDS + SCHEDULE_QCSD_FIELDS,
+    }
+    current_schema = fieldnames == SCHEDULE_PREFIX_FIELDS + SCHEDULE_QCSD_FIELDS
+    typed_composition_bytes = {
+        key: 0
+        for key in (
+            "application_stream_bytes",
+            "retransmission_stream_bytes",
+            "chaff_stream_bytes",
+            "defense_control_bytes",
+            "quic_padding_bytes",
+            "other_quic_bytes",
+        )
+    }
+    typed_lateness_total = 0
+    typed_lateness_max = 0
+    invalid_typed_rows = 0
+    advertised_incoming = 0
+    consumed_incoming = 0
+    missing_incoming_advertisements = 0
+    missing_incoming_consumptions = 0
+    invalid_credit_advertisements = 0
+    invalid_credit_consumptions = 0
+    credit_advertisement_delays: list[int] = []
+    credit_consumption_delays: list[int] = []
     for row in rows:
         satisfaction = str(row.get("satisfaction", ""))
         direction = str(row.get("direction", ""))
@@ -685,7 +890,162 @@ def _schedule_realization_metrics(sample: Path) -> dict[str, Any]:
         reason = str(row.get("miss_reason", ""))
         if reason:
             miss_reasons[reason] = miss_reasons.get(reason, 0) + 1
-        if direction == "outgoing" and satisfaction == "satisfied":
+        try:
+            slot = int(row["slot_id"])
+            action_time = int(row["action_time_us"])
+            target_time = int(row["target_time_us"])
+            if min(slot, action_time, target_time) < 0:
+                raise ValueError
+        except (KeyError, TypeError, ValueError):
+            invalid_rows += 1
+        else:
+            target_times.setdefault(direction, []).append(target_time)
+            if slot in terminal_slots:
+                duplicate_terminal_slots += 1
+            terminal_slots.add(slot)
+            action_key = (direction, action_time)
+            if action_key in action_times:
+                catch_up_events += 1
+            action_times.add(action_key)
+        if direction not in {"outgoing", "incoming"} or satisfaction not in {
+            "satisfied",
+            "missed",
+            "full",
+            "partial",
+            "suppressed",
+        }:
+            invalid_rows += 1
+        else:
+            try:
+                scheduled_sizes[direction].append(_csv_uint(row, "size"))
+            except (KeyError, TypeError, ValueError):
+                invalid_rows += 1
+        typed_reason = str(row.get("congestion_reason", ""))
+        if satisfaction in {"partial", "suppressed"}:
+            congestion_reasons[typed_reason] = congestion_reasons.get(typed_reason, 0) + 1
+            if typed_reason not in {"congestion_limited", "pacing_limited"}:
+                invalid_congestion_reasons += 1
+            expected_debug_reason = {
+                "congestion_limited": "CongestionLimited",
+                "pacing_limited": "PacingLimited",
+            }.get(typed_reason)
+            if reason != expected_debug_reason:
+                invalid_congestion_reasons += 1
+        elif typed_reason:
+            invalid_congestion_reasons += 1
+        if advertisement_schema:
+            advertised = row.get("credit_advertised_at_us", "")
+            advertisement_delay = row.get("credit_advertisement_delay_us", "")
+            consumed = row.get("credit_consumed_at_us", "")
+            consumption_delay = row.get("credit_consumption_delay_us", "")
+            if direction == "outgoing":
+                if advertised or advertisement_delay or consumed or consumption_delay:
+                    invalid_credit_advertisements += 1
+            elif direction == "incoming":
+                if satisfaction == "missed":
+                    if consumed or consumption_delay:
+                        invalid_credit_consumptions += 1
+                    if bool(advertised) != bool(advertisement_delay):
+                        invalid_credit_advertisements += 1
+                    continue
+                if not advertised or not advertisement_delay:
+                    missing_incoming_advertisements += 1
+                else:
+                    try:
+                        advertised_at_us = _csv_uint(row, "credit_advertised_at_us")
+                        delay_us = _csv_uint(row, "credit_advertisement_delay_us")
+                        action_time_us = _csv_uint(row, "action_time_us")
+                        if (
+                            advertised_at_us < action_time_us
+                            or delay_us != advertised_at_us - action_time_us
+                        ):
+                            raise ValueError
+                    except (KeyError, TypeError, ValueError):
+                        invalid_credit_advertisements += 1
+                    else:
+                        advertised_incoming += 1
+                        credit_advertisement_delays.append(delay_us)
+                if current_schema:
+                    if not consumed or not consumption_delay:
+                        missing_incoming_consumptions += 1
+                    else:
+                        try:
+                            consumed_at_us = _csv_uint(row, "credit_consumed_at_us")
+                            consumed_delay_us = _csv_uint(
+                                row, "credit_consumption_delay_us"
+                            )
+                            action_time_us = _csv_uint(row, "action_time_us")
+                            advertised_at_us = _csv_uint(
+                                row, "credit_advertised_at_us"
+                            )
+                            if (
+                                consumed_at_us < advertised_at_us
+                                or consumed_delay_us != consumed_at_us - action_time_us
+                            ):
+                                raise ValueError
+                        except (KeyError, TypeError, ValueError):
+                            invalid_credit_consumptions += 1
+                        else:
+                            consumed_incoming += 1
+                            credit_consumption_delays.append(consumed_delay_us)
+        if typed_schema and satisfaction != "missed":
+            try:
+                desired = _csv_uint(row, "desired_udp_bytes")
+                size = _csv_uint(row, "size")
+                expected_schema = (
+                    "2"
+                    if current_schema
+                    and direction == "incoming"
+                    and satisfaction == "satisfied"
+                    else "1"
+                )
+                if row["qcsd_outcome_schema_version"] != expected_schema or desired != size:
+                    raise ValueError
+                if satisfaction == "satisfied":
+                    if row["send_policy"] != "exact":
+                        raise ValueError
+                    if direction == "outgoing":
+                        observed = _csv_uint(row, "observed_udp_bytes")
+                        observed_size = _csv_uint(row, "observed_size")
+                        if observed != observed_size or observed != desired:
+                            raise ValueError
+                    elif row["observed_udp_bytes"] or row["observed_size"]:
+                        # An incoming fixed opportunity is locally realized at
+                        # MAX_STREAM_DATA advertisement and terminalized only
+                        # after peer stream-offset consumption. It never claims
+                        # a corresponding server datagram's UDP size.
+                        raise ValueError
+                    if any(row[field] for field in SCHEDULE_QCSD_FIELDS[4:11]):
+                        raise ValueError
+                elif satisfaction in {"full", "partial", "suppressed"}:
+                    if row["send_policy"] != "congestion_sensitive":
+                        raise ValueError
+                    observed = _csv_uint(row, "observed_udp_bytes")
+                    components = {
+                        key: _csv_uint(row, key) for key in typed_composition_bytes
+                    }
+                    if sum(components.values()) != observed:
+                        raise ValueError
+                    if satisfaction == "suppressed":
+                        if observed != 0 or row["observed_size"]:
+                            raise ValueError
+                    else:
+                        if observed != _csv_uint(row, "observed_size"):
+                            raise ValueError
+                    lateness = _csv_uint(row, "lateness_us")
+                    typed_lateness_total += lateness
+                    typed_lateness_max = max(typed_lateness_max, lateness)
+                    if direction == "outgoing" and components["application_stream_bytes"] > 0:
+                        typed_real_bearing_outgoing_bytes += components[
+                            "application_stream_bytes"
+                        ]
+                    for key, value in components.items():
+                        typed_composition_bytes[key] += value
+                else:
+                    raise ValueError
+            except (KeyError, TypeError, ValueError):
+                invalid_typed_rows += 1
+        if direction == "outgoing" and satisfaction in {"satisfied", "full"}:
             try:
                 requested = int(row["size"])
                 observed = int(row["observed_size"])
@@ -695,6 +1055,16 @@ def _schedule_realization_metrics(sample: Path) -> dict[str, Any]:
             if requested != observed:
                 outgoing_size_mismatches += 1
                 outgoing_size_error_bytes += abs(requested - observed)
+        if direction == "outgoing" and satisfaction in {"full", "partial", "suppressed"}:
+            try:
+                terminal_desired_bytes += int(row["size"])
+                terminal_observed_bytes += (
+                    _csv_uint(row, "observed_udp_bytes")
+                    if satisfaction == "suppressed"
+                    else int(row["observed_size"])
+                )
+            except (KeyError, TypeError, ValueError):
+                invalid_rows += 1
     return {
         "scheduled_events": len(rows),
         "scheduled_outgoing_events": directions.get("outgoing", 0),
@@ -704,19 +1074,203 @@ def _schedule_realization_metrics(sample: Path) -> dict[str, Any]:
         "missed_event_reasons": dict(sorted(miss_reasons.items())),
         "outgoing_size_mismatch_events": outgoing_size_mismatches,
         "outgoing_size_absolute_error_bytes": outgoing_size_error_bytes,
+        "terminal_satisfactions": dict(sorted(satisfactions.items())),
+        "terminal_slots_unique": duplicate_terminal_slots == 0,
+        "duplicate_terminal_slots": duplicate_terminal_slots,
+        "invalid_terminal_rows": invalid_rows,
+        "typed_congestion_reason_column": current_schema,
+        "typed_credit_advertisement_columns": advertisement_schema,
+        "typed_credit_consumption_columns": current_schema,
+        "invalid_congestion_reason_events": invalid_congestion_reasons,
+        "congestion_reasons": dict(sorted(congestion_reasons.items())),
+        "terminal_desired_outgoing_bytes": terminal_desired_bytes,
+        "terminal_observed_outgoing_bytes": terminal_observed_bytes,
+        "catch_up_events": catch_up_events,
+        "invalid_typed_outcome_rows": invalid_typed_rows,
+        "typed_composition_bytes": typed_composition_bytes,
+        "typed_lateness_us_total": typed_lateness_total,
+        "typed_lateness_us_max": typed_lateness_max,
+        "typed_real_bearing_outgoing_bytes": typed_real_bearing_outgoing_bytes,
+        "incoming_credit_advertised_events": advertised_incoming,
+        "incoming_credit_consumed_events": consumed_incoming,
+        "incoming_credit_missing_events": missing_incoming_advertisements,
+        "incoming_credit_consumption_missing_events": missing_incoming_consumptions,
+        "invalid_credit_advertisement_events": invalid_credit_advertisements,
+        "invalid_credit_consumption_events": invalid_credit_consumptions,
+        "incoming_credit_advertisement_delay_us_total": sum(
+            credit_advertisement_delays
+        ),
+        "incoming_credit_advertisement_delay_us_max": max(
+            credit_advertisement_delays, default=0
+        ),
+        "incoming_credit_advertisement_delay_us_values": credit_advertisement_delays,
+        "incoming_credit_consumption_delay_us_total": sum(credit_consumption_delays),
+        "incoming_credit_consumption_delay_us_max": max(
+            credit_consumption_delays, default=0
+        ),
+        "incoming_credit_consumption_delay_us_values": credit_consumption_delays,
+        "target_times_us_by_direction": target_times,
+        "scheduled_sizes_by_direction": scheduled_sizes,
     }
+
+
+def _csv_uint(row: Mapping[str, Any], field: str) -> int:
+    value = row[field]
+    if not isinstance(value, str) or not value or not value.isdecimal():
+        raise ValueError(f"schedule field {field} is not an unsigned integer")
+    return int(value)
 
 
 _INTEGER = "integer"
 _BOOLEAN = "boolean"
+_STRING = "string"
 _BURST_VECTOR = "burst-vector"
-_SCHEDULED_INCOMING_CONTRACT = {
+_CS_RATE_TRANSITION_VECTOR = "cs-rate-transition-vector"
+CS_BUFLO_EARLY_TERMINATION_SEMANTICS = (
+    "udp_client_only_observed_udp_power_of_two_crossing"
+)
+CS_BUFLO_INCOMING_CADENCE_BOUNDARY = (
+    "complete_local_on_wire_max_stream_data_advertisement"
+)
+CS_BUFLO_INCOMING_TERMINAL_BOUNDARY = "eventual_peer_stream_offset_consumption"
+CS_BUFLO_INCOMING_BOUNDARY_SEPARATION = (
+    "advertisement_rearms_cadence_but_does_not_claim_peer_datagram_or_consumption"
+)
+CS_BUFLO_RATE_BOUNDARY_TRANSLATION_VERSION = 2
+CS_BUFLO_RATE_BOUNDARY_COUNTER_SEMANTICS = (
+    "client_only_quic_fresh_application_stream_bytes_outgoing_retransmission_"
+    "excluded_and_consumed_application_offsets_incoming"
+)
+CS_BUFLO_AUTHOR_RATE_BOUNDARY_COUNTER_SEMANTICS = (
+    "per_direction_actually_transmitted_real_plus_junk_bytes"
+)
+RUNNER_WAKEUP_SEMANTICS = (
+    "actual_select_return_source; socket_wins_simultaneous_readiness; "
+    "controller_subset_is_effective_earliest_deadline; "
+    "scheduled_cells_are_not_wakeups"
+)
+_LEGACY_SCHEDULED_INCOMING_CONTRACT = {
     "scheduled_incoming_requested_bytes": _INTEGER,
     "scheduled_incoming_consumed_bytes": _INTEGER,
     "scheduled_incoming_retired_bytes": _INTEGER,
     "scheduled_incoming_unresolved_bytes": _INTEGER,
 }
+_SCHEDULED_INCOMING_CONTRACT = {
+    **_LEGACY_SCHEDULED_INCOMING_CONTRACT,
+    "scheduled_incoming_advertised_bytes": _INTEGER,
+}
 _DIAGNOSTIC_CONTRACTS: dict[str, dict[str, str]] = {
+    "buflo": {
+        **{
+            key: _INTEGER
+            for key in (
+                "buflo_scheduled_outgoing_cells",
+                "buflo_scheduled_incoming_cells",
+                "buflo_full_outgoing_cells",
+                "buflo_partial_outgoing_cells",
+                "buflo_suppressed_outgoing_cells",
+                "buflo_missed_outgoing_cells",
+                "buflo_missed_incoming_cells",
+                "buflo_outgoing_unresolved_cells",
+                "buflo_incoming_unresolved_cells",
+                "buflo_catch_up_outgoing_cells",
+                "buflo_catch_up_incoming_cells",
+            )
+        },
+        "buflo_paper_equivalent": _BOOLEAN,
+        "buflo_client_only": _BOOLEAN,
+        "buflo_egress_backlog_pending": _BOOLEAN,
+        "buflo_application_complete": _BOOLEAN,
+        "buflo_minimum_duration_reached": _BOOLEAN,
+        "buflo_event_guard_triggered": _BOOLEAN,
+    },
+    "cs-buflo": {
+        **{
+            key: _INTEGER
+            for key in (
+                "cs_buflo_scheduled_outgoing_cells",
+                "cs_buflo_scheduled_incoming_cells",
+                "cs_buflo_full_outgoing_cells",
+                "cs_buflo_partial_outgoing_cells",
+                "cs_buflo_suppressed_outgoing_cells",
+                "cs_buflo_missed_outgoing_cells",
+                "cs_buflo_missed_incoming_cells",
+                "cs_buflo_desired_udp_bytes",
+                "cs_buflo_realized_udp_bytes",
+                "cs_buflo_application_stream_bytes",
+                "cs_buflo_retransmission_stream_bytes",
+                "cs_buflo_chaff_stream_bytes",
+                "cs_buflo_defense_control_bytes",
+                "cs_buflo_quic_padding_bytes",
+                "cs_buflo_other_quic_bytes",
+                "cs_buflo_lateness_us_total",
+                "cs_buflo_lateness_us_max",
+                "cs_buflo_natural_outgoing_bytes",
+                "cs_buflo_natural_incoming_bytes",
+                "cs_buflo_cover_outgoing_bytes",
+                "cs_buflo_cover_incoming_bytes",
+                "cs_buflo_real_bearing_outgoing_bytes",
+                "cs_buflo_real_bearing_incoming_bytes",
+                "cs_buflo_realized_incoming_credit_bytes",
+                "cs_buflo_outgoing_padding_basis_natural_bytes",
+                "cs_buflo_incoming_padding_basis_natural_bytes",
+                "cs_buflo_outgoing_padding_basis_cover_bytes",
+                "cs_buflo_incoming_padding_basis_cover_bytes",
+                "cs_buflo_outgoing_padding_basis_total_bytes",
+                "cs_buflo_incoming_padding_basis_total_bytes",
+                "cs_buflo_reference_tcp_write_size_bytes",
+                "cs_buflo_reference_nominal_tcp_packet_size_bytes",
+                "cs_buflo_runtime_udp_packet_size_bytes",
+                "cs_buflo_outgoing_termination_accounted_bytes",
+                "cs_buflo_incoming_termination_accounted_bytes",
+                "cs_buflo_outgoing_last_termination_increment_bytes",
+                "cs_buflo_incoming_last_termination_increment_bytes",
+                "cs_buflo_outgoing_padding_target_bytes",
+                "cs_buflo_incoming_padding_target_bytes",
+                "cs_buflo_outgoing_interval_us",
+                "cs_buflo_incoming_interval_us",
+                "cs_buflo_outgoing_rate_adaptations",
+                "cs_buflo_incoming_rate_adaptations",
+                "cs_buflo_rate_boundary_translation_version",
+                "cs_buflo_local_et_pending_request_cancellations",
+                "cs_buflo_local_et_stream_cancellations",
+                "cs_buflo_next_outgoing_adaptation_boundary_bytes",
+                "cs_buflo_next_incoming_adaptation_boundary_bytes",
+                "cs_buflo_outgoing_estimator_samples",
+                "cs_buflo_incoming_estimator_samples",
+                "cs_buflo_outgoing_minimum_interval_opportunities",
+                "cs_buflo_incoming_minimum_interval_opportunities",
+                "cs_buflo_incoming_minimum_interval_local_realized",
+                "cs_buflo_outgoing_minimum_interval_terminal",
+                "cs_buflo_incoming_minimum_interval_terminal",
+                "cs_buflo_outgoing_minimum_interval_full",
+                "cs_buflo_incoming_minimum_interval_full",
+                "cs_buflo_incoming_local_realized_cells",
+                "cs_buflo_outgoing_unresolved_cells",
+                "cs_buflo_incoming_unresolved_cells",
+            )
+        },
+        **{
+            key: _BOOLEAN
+            for key in (
+                "cs_buflo_paper_equivalent",
+                "cs_buflo_client_only",
+                "cs_buflo_payload_padding",
+                "cs_buflo_total_padding",
+                "cs_buflo_outgoing_power_of_two_crossed",
+                "cs_buflo_incoming_power_of_two_crossed",
+                "cs_buflo_egress_backlog_pending",
+                "cs_buflo_application_complete",
+                "cs_buflo_quiet_time_reached",
+                "cs_buflo_local_termination_latched",
+                "cs_buflo_event_guard_triggered",
+            )
+        },
+        "cs_buflo_early_termination_semantics": _STRING,
+        "cs_buflo_rate_boundary_counter_semantics": _STRING,
+        "cs_buflo_author_rate_boundary_counter_semantics": _STRING,
+        "cs_buflo_rate_transitions": _CS_RATE_TRANSITION_VECTOR,
+    },
     "traffic-morphing": {
         **{
             key: _INTEGER
@@ -797,6 +1351,7 @@ _DIAGNOSTIC_CONTRACTS: dict[str, dict[str, str]] = {
 
 
 def _diagnostics_match_contract(defense: str, diagnostics: dict[str, Any]) -> bool:
+    defense = _canonical_fidelity_defense(defense)
     contract = _DIAGNOSTIC_CONTRACTS.get(defense)
     if contract is None:
         return True
@@ -818,11 +1373,17 @@ def _diagnostics_match_contract(defense: str, diagnostics: dict[str, Any]) -> bo
                 "suppressed_cover_feedback",
             }
         }
-    else:
+    elif defense == "walkie-talkie":
         selected = {
             key: value
             for key, value in diagnostics.items()
             if key.startswith("walkie_talkie_") or key == "retried_outgoing_events"
+        }
+    elif defense == "buflo":
+        selected = {key: value for key, value in diagnostics.items() if key.startswith("buflo_")}
+    else:
+        selected = {
+            key: value for key, value in diagnostics.items() if key.startswith("cs_buflo_")
         }
     if set(selected) != set(contract):
         return False
@@ -833,20 +1394,30 @@ def _scheduled_incoming_diagnostics_match(diagnostics: dict[str, Any]) -> bool:
     selected = {
         key: value for key, value in diagnostics.items() if key.startswith("scheduled_incoming_")
     }
-    if set(selected) != set(_SCHEDULED_INCOMING_CONTRACT):
+    selected_keys = frozenset(selected)
+    if selected_keys not in {
+        frozenset(_LEGACY_SCHEDULED_INCOMING_CONTRACT),
+        frozenset(_SCHEDULED_INCOMING_CONTRACT),
+    }:
         return False
     if not all(
         _diagnostic_value_matches(kind, selected[key])
-        for key, kind in _SCHEDULED_INCOMING_CONTRACT.items()
+        for key, kind in (
+            _SCHEDULED_INCOMING_CONTRACT.items()
+            if "scheduled_incoming_advertised_bytes" in selected
+            else _LEGACY_SCHEDULED_INCOMING_CONTRACT.items()
+        )
     ):
         return False
     requested = selected["scheduled_incoming_requested_bytes"]
+    advertised = selected.get("scheduled_incoming_advertised_bytes")
     consumed = selected["scheduled_incoming_consumed_bytes"]
     retired = selected["scheduled_incoming_retired_bytes"]
     unresolved = selected["scheduled_incoming_unresolved_bytes"]
     return (
         requested == consumed + retired + unresolved
         and requested == consumed
+        and (advertised is None or requested == advertised)
         and retired == 0
         and unresolved == 0
     )
@@ -857,6 +1428,10 @@ def _diagnostic_value_matches(kind: str, value: Any) -> bool:
         return type(value) is int and value >= 0
     if kind == _BOOLEAN:
         return type(value) is bool
+    if kind == _STRING:
+        return isinstance(value, str) and bool(value)
+    if kind == _CS_RATE_TRANSITION_VECTOR:
+        return _cs_buflo_rate_transition_vector_valid(value)
     if kind != _BURST_VECTOR or not isinstance(value, list) or not value:
         return False
     expected_fields = {
@@ -875,6 +1450,190 @@ def _diagnostic_value_matches(kind: str, value: Any) -> bool:
     )
 
 
+def _cs_buflo_rate_transition_vector_valid(value: Any) -> bool:
+    required = {
+        "schema_version",
+        "direction",
+        "at_us",
+        "boundary_bytes",
+        "real_bearing_bytes",
+        "eligible_samples",
+        "median_interval_us",
+        "previous_interval_us",
+        "resulting_interval_us",
+        "retained_current_interval",
+    }
+    if not isinstance(value, list):
+        return False
+    prior_time = -1
+    direction_counts = {"outgoing": 0, "incoming": 0}
+    for transition in value:
+        if not isinstance(transition, Mapping) or set(transition) != required:
+            return False
+        direction = transition.get("direction")
+        median = transition.get("median_interval_us")
+        integer_fields = (
+            "at_us",
+            "boundary_bytes",
+            "real_bearing_bytes",
+            "eligible_samples",
+            "previous_interval_us",
+            "resulting_interval_us",
+        )
+        if (
+            transition.get("schema_version") != 1
+            or direction not in direction_counts
+            or any(type(transition.get(field)) is not int or transition[field] < 0 for field in integer_fields)
+            or type(transition.get("retained_current_interval")) is not bool
+            or (median is not None and (type(median) is not int or median <= 0))
+            or transition["at_us"] < prior_time
+            or transition["eligible_samples"] > 1_000
+            or transition["boundary_bytes"]
+            != 16_384 << direction_counts[str(direction)]
+            or transition["real_bearing_bytes"] < transition["boundary_bytes"]
+            or transition["previous_interval_us"] not in {4_096, 8_192, 16_384, 32_768}
+            or transition["resulting_interval_us"] not in {4_096, 8_192, 16_384, 32_768}
+        ):
+            return False
+        retained = transition["retained_current_interval"]
+        if retained != (median is None):
+            return False
+        if median is None:
+            if transition["resulting_interval_us"] != transition["previous_interval_us"]:
+                return False
+        else:
+            selected = max(4_096, min(32_768, 1 << (median.bit_length() - 1)))
+            if transition["resulting_interval_us"] != selected:
+                return False
+        prior_time = transition["at_us"]
+        direction_counts[str(direction)] += 1
+    return True
+
+
+def new_defense_terminal_receipts_valid(
+    run: Mapping[str, Any],
+    defense_kind: str,
+    *,
+    require_application_complete: bool = False,
+) -> bool:
+    """Validate the versioned terminal summary bound to flat Rust diagnostics.
+
+    The schema validator permits CS-BuFLO's strict quiet-time fallback when
+    requested.  Successful study capture passes
+    ``require_application_complete=True`` so a missing local onLoad analogue
+    remains ineligible for the study cohort.
+    """
+
+    canonical = {"buflo": "buflo", "cs_buflo": "cs-buflo"}.get(defense_kind)
+    if canonical is None:
+        return False
+    resolved = run.get("resolved_configuration")
+    resolved_defense = resolved.get("defense") if isinstance(resolved, Mapping) else None
+    diagnostics = run.get("defense_diagnostics")
+    if (
+        run.get("completion_status") != "complete"
+        or run.get("error") is not None
+        or not isinstance(resolved, Mapping)
+        or resolved.get("schema_version") != 2
+        or not isinstance(resolved_defense, Mapping)
+        or resolved_defense.get("kind") != defense_kind
+        or not isinstance(diagnostics, dict)
+        or not _diagnostics_match_contract(canonical, diagnostics)
+        or not _runner_wakeup_metrics_valid(run.get("runner_wakeup_metrics"))
+    ):
+        return False
+    prefix = "buflo_" if defense_kind == "buflo" else "cs_buflo_"
+    selected = {key: value for key, value in diagnostics.items() if key.startswith(prefix)}
+    selected_key = "buflo_summary" if defense_kind == "buflo" else "cs_buflo_summary"
+    other_key = "cs_buflo_summary" if defense_kind == "buflo" else "buflo_summary"
+    summary = run.get(selected_key)
+    if other_key not in run or run[other_key] is not None or not isinstance(summary, Mapping):
+        return False
+    expected_fields = {
+        "schema_version",
+        "kind",
+        "implementation_scope",
+        "paper_equivalent",
+        "incoming_opportunity_semantics",
+        "unavailable_peer_properties",
+        "diagnostics",
+    }
+    if defense_kind == "cs_buflo":
+        expected_fields.update(
+            {
+                "early_termination_semantics",
+                "incoming_cadence_boundary",
+                "incoming_terminal_boundary",
+                "incoming_boundary_separation",
+            }
+        )
+    if (
+        set(summary) != expected_fields
+        or summary.get("schema_version") != (1 if defense_kind == "buflo" else 2)
+        or summary.get("kind") != defense_kind
+        or summary.get("implementation_scope") != "client_only_quic"
+        or summary.get("paper_equivalent") is not False
+        or summary.get("incoming_opportunity_semantics")
+        != "client_receive_credit_and_response_qualified_chaff_attempt"
+        or summary.get("unavailable_peer_properties")
+        != ["scheduled_server_datagram_timing", "scheduled_server_datagram_size"]
+        or summary.get("diagnostics") != diagnostics
+    ):
+        return False
+    if defense_kind == "buflo":
+        return selected["buflo_client_only"] is True and (
+            not require_application_complete or selected["buflo_application_complete"] is True
+        )
+    return (
+        summary.get("early_termination_semantics")
+        == CS_BUFLO_EARLY_TERMINATION_SEMANTICS
+        and summary.get("incoming_cadence_boundary")
+        == CS_BUFLO_INCOMING_CADENCE_BOUNDARY
+        and summary.get("incoming_terminal_boundary")
+        == CS_BUFLO_INCOMING_TERMINAL_BOUNDARY
+        and summary.get("incoming_boundary_separation")
+        == CS_BUFLO_INCOMING_BOUNDARY_SEPARATION
+        and selected["cs_buflo_early_termination_semantics"]
+        == CS_BUFLO_EARLY_TERMINATION_SEMANTICS
+        and selected["cs_buflo_client_only"] is True
+        and selected["cs_buflo_quiet_time_reached"] is True
+        and selected["cs_buflo_local_termination_latched"] is True
+        and (
+            not require_application_complete
+            or selected["cs_buflo_application_complete"] is True
+        )
+    )
+
+
+def _runner_wakeup_metrics_valid(value: Any) -> bool:
+    required = {
+        "schema_version",
+        "semantics",
+        "wait_returns",
+        "socket_readiness_wakeups",
+        "timer_wakeups",
+        "controller_deadline_timer_wakeups",
+        "other_timer_wakeups",
+    }
+    if (
+        not isinstance(value, Mapping)
+        or set(value) != required
+        or value.get("schema_version") != 1
+        or value.get("semantics") != RUNNER_WAKEUP_SEMANTICS
+    ):
+        return False
+    counters = tuple(required - {"schema_version", "semantics"})
+    if any(type(value.get(key)) is not int or value[key] < 0 for key in counters):
+        return False
+    return (
+        value["wait_returns"]
+        == value["socket_readiness_wakeups"] + value["timer_wakeups"]
+        and value["timer_wakeups"]
+        == value["controller_deadline_timer_wakeups"]
+        + value["other_timer_wakeups"]
+    )
+
+
 def fidelity_eligible(
     defense: str,
     diagnostics: dict[str, Any],
@@ -882,7 +1641,9 @@ def fidelity_eligible(
     sample_eligible: bool,
     missed_events: Any = None,
     outgoing_size_mismatches: Any = None,
+    schedule_metrics: Mapping[str, Any] | None = None,
 ) -> bool:
+    defense = _canonical_fidelity_defense(defense)
     if not sample_eligible:
         return False
     if (
@@ -939,4 +1700,401 @@ def fidelity_eligible(
                 for burst in diagnostics["walkie_talkie_burst_realization"]
             )
         )
+    if defense == "buflo":
+        zero_keys = (
+            "buflo_partial_outgoing_cells",
+            "buflo_suppressed_outgoing_cells",
+            "buflo_missed_outgoing_cells",
+            "buflo_missed_incoming_cells",
+            "buflo_outgoing_unresolved_cells",
+            "buflo_incoming_unresolved_cells",
+            "buflo_catch_up_outgoing_cells",
+            "buflo_catch_up_incoming_cells",
+        )
+        return (
+            all(diagnostics[key] == 0 for key in zero_keys)
+            and diagnostics["buflo_paper_equivalent"] is False
+            and diagnostics["buflo_client_only"] is True
+            and diagnostics["buflo_egress_backlog_pending"] is False
+            and diagnostics["buflo_application_complete"] is True
+            and diagnostics["buflo_minimum_duration_reached"] is True
+            and diagnostics["buflo_event_guard_triggered"] is False
+            and diagnostics["buflo_scheduled_outgoing_cells"]
+            == diagnostics["buflo_full_outgoing_cells"]
+            and isinstance(schedule_metrics, Mapping)
+            and diagnostics["buflo_scheduled_outgoing_cells"]
+            == schedule_metrics.get("scheduled_outgoing_events")
+            and diagnostics["buflo_scheduled_incoming_cells"]
+            == schedule_metrics.get("scheduled_incoming_events")
+            and diagnostics["buflo_scheduled_incoming_cells"]
+            == schedule_metrics.get("incoming_credit_advertised_events")
+            and diagnostics["buflo_scheduled_incoming_cells"]
+            == schedule_metrics.get("incoming_credit_consumed_events")
+            and schedule_metrics.get("incoming_credit_advertisement_delay_us_max", 5_001)
+            <= 5_000
+            and diagnostics["scheduled_incoming_requested_bytes"]
+            == diagnostics["buflo_scheduled_incoming_cells"] * 1_200
+            and diagnostics.get("scheduled_incoming_advertised_bytes")
+            == diagnostics["scheduled_incoming_requested_bytes"]
+            and _new_schedule_terminal_contract(schedule_metrics, congestion_sensitive=False)
+            and _buflo_schedule_matches_canonical_parameters(schedule_metrics)
+        )
+    if defense == "cs-buflo":
+        return _cs_buflo_fidelity_eligible(diagnostics, schedule_metrics)
     return True
+
+
+def _canonical_fidelity_defense(defense: str) -> str:
+    if defense in {"cs-buflo-ctsp", "cs-buflo-cpsp"}:
+        return "cs-buflo"
+    return defense
+
+
+def _new_schedule_terminal_contract(
+    schedule: Mapping[str, Any] | None, *, congestion_sensitive: bool
+) -> bool:
+    if not isinstance(schedule, Mapping):
+        return False
+    common = (
+        schedule.get("terminal_slots_unique") is True
+        and schedule.get("duplicate_terminal_slots") == 0
+        and schedule.get("invalid_terminal_rows") == 0
+        and schedule.get("typed_congestion_reason_column") is True
+        and schedule.get("typed_credit_advertisement_columns") is True
+        and schedule.get("typed_credit_consumption_columns") is True
+        and schedule.get("invalid_typed_outcome_rows") == 0
+        and schedule.get("incoming_credit_missing_events") == 0
+        and schedule.get("incoming_credit_consumption_missing_events") == 0
+        and schedule.get("invalid_credit_advertisement_events") == 0
+        and schedule.get("invalid_credit_consumption_events") == 0
+    )
+    if not common:
+        return False
+    if not congestion_sensitive:
+        return True
+    return (
+        schedule.get("invalid_congestion_reason_events") == 0
+    )
+
+
+def _buflo_schedule_matches_canonical_parameters(schedule: Mapping[str, Any]) -> bool:
+    targets = schedule.get("target_times_us_by_direction")
+    sizes = schedule.get("scheduled_sizes_by_direction")
+    terminal = schedule.get("terminal_satisfactions")
+    if not isinstance(targets, Mapping) or not isinstance(sizes, Mapping):
+        return False
+    total = 0
+    for direction in ("outgoing", "incoming"):
+        directional_targets = targets.get(direction)
+        directional_sizes = sizes.get(direction)
+        if (
+            not isinstance(directional_targets, list)
+            or not isinstance(directional_sizes, list)
+            or not directional_targets
+            or len(directional_targets) != len(directional_sizes)
+            or len(directional_targets) > 6_000
+            or directional_targets[0] != 0
+            or 10_000_000 not in directional_targets
+            or any(size != 1_200 for size in directional_sizes)
+            or any(
+                current - previous != 20_000
+                for previous, current in zip(
+                    directional_targets[:-1], directional_targets[1:], strict=True
+                )
+            )
+        ):
+            return False
+        total += len(directional_targets)
+    return total <= 12_000 and terminal == {"satisfied": total}
+
+
+def _cs_buflo_fidelity_eligible(
+    diagnostics: Mapping[str, Any], schedule: Mapping[str, Any] | None
+) -> bool:
+    if not _new_schedule_terminal_contract(schedule, congestion_sensitive=True):
+        return False
+    assert schedule is not None
+    if (
+        diagnostics["cs_buflo_paper_equivalent"] is not False
+        or diagnostics["cs_buflo_client_only"] is not True
+        or diagnostics["cs_buflo_payload_padding"]
+        == diagnostics["cs_buflo_total_padding"]
+        or diagnostics["cs_buflo_early_termination_semantics"]
+        != CS_BUFLO_EARLY_TERMINATION_SEMANTICS
+        or diagnostics["cs_buflo_rate_boundary_translation_version"]
+        != CS_BUFLO_RATE_BOUNDARY_TRANSLATION_VERSION
+        or diagnostics["cs_buflo_rate_boundary_counter_semantics"]
+        != CS_BUFLO_RATE_BOUNDARY_COUNTER_SEMANTICS
+        or diagnostics["cs_buflo_author_rate_boundary_counter_semantics"]
+        != CS_BUFLO_AUTHOR_RATE_BOUNDARY_COUNTER_SEMANTICS
+        or diagnostics["cs_buflo_reference_tcp_write_size_bytes"] != 548
+        or diagnostics["cs_buflo_reference_nominal_tcp_packet_size_bytes"] != 600
+        or diagnostics["cs_buflo_runtime_udp_packet_size_bytes"] != 600
+        or diagnostics["cs_buflo_egress_backlog_pending"] is not False
+        or diagnostics["cs_buflo_application_complete"] is not True
+        or diagnostics["cs_buflo_quiet_time_reached"] is not True
+        or diagnostics["cs_buflo_local_termination_latched"] is not True
+        or diagnostics["cs_buflo_event_guard_triggered"] is not False
+    ):
+        return False
+    zero_keys = (
+        "cs_buflo_missed_outgoing_cells",
+        "cs_buflo_missed_incoming_cells",
+        "cs_buflo_outgoing_unresolved_cells",
+        "cs_buflo_incoming_unresolved_cells",
+    )
+    if any(diagnostics[key] != 0 for key in zero_keys):
+        return False
+    for direction in ("outgoing", "incoming"):
+        opportunities = diagnostics[
+            f"cs_buflo_{direction}_minimum_interval_opportunities"
+        ]
+        terminal_at_minimum = diagnostics[
+            f"cs_buflo_{direction}_minimum_interval_terminal"
+        ]
+        full_at_minimum = diagnostics[f"cs_buflo_{direction}_minimum_interval_full"]
+        if opportunities != terminal_at_minimum or full_at_minimum > terminal_at_minimum:
+            return False
+        if direction == "incoming" and not (
+            opportunities
+            == diagnostics["cs_buflo_incoming_minimum_interval_local_realized"]
+            == terminal_at_minimum
+            == full_at_minimum
+        ):
+            return False
+    terminal = schedule.get("terminal_satisfactions")
+    if not isinstance(terminal, Mapping):
+        return False
+    if (
+        diagnostics["cs_buflo_scheduled_outgoing_cells"]
+        != diagnostics["cs_buflo_full_outgoing_cells"]
+        + diagnostics["cs_buflo_partial_outgoing_cells"]
+        + diagnostics["cs_buflo_suppressed_outgoing_cells"]
+        or diagnostics["cs_buflo_full_outgoing_cells"] != terminal.get("full", 0)
+        or diagnostics["cs_buflo_partial_outgoing_cells"] != terminal.get("partial", 0)
+        or diagnostics["cs_buflo_suppressed_outgoing_cells"] != terminal.get("suppressed", 0)
+        or diagnostics["cs_buflo_scheduled_outgoing_cells"]
+        != schedule.get("scheduled_outgoing_events")
+        or diagnostics["cs_buflo_scheduled_incoming_cells"]
+        != schedule.get("scheduled_incoming_events")
+        or diagnostics["cs_buflo_scheduled_incoming_cells"]
+        != terminal.get("satisfied", 0)
+        or diagnostics["cs_buflo_incoming_local_realized_cells"]
+        != diagnostics["cs_buflo_scheduled_incoming_cells"]
+        or diagnostics["cs_buflo_desired_udp_bytes"]
+        != schedule.get("terminal_desired_outgoing_bytes")
+        or diagnostics["cs_buflo_realized_udp_bytes"]
+        != schedule.get("terminal_observed_outgoing_bytes")
+        or diagnostics["cs_buflo_real_bearing_outgoing_bytes"]
+        != schedule.get("typed_real_bearing_outgoing_bytes")
+        or diagnostics["cs_buflo_real_bearing_incoming_bytes"]
+        != diagnostics["cs_buflo_natural_incoming_bytes"]
+        or diagnostics["scheduled_incoming_requested_bytes"]
+        != diagnostics["cs_buflo_scheduled_incoming_cells"] * 600
+        or diagnostics.get("scheduled_incoming_advertised_bytes")
+        != diagnostics["scheduled_incoming_requested_bytes"]
+        or diagnostics["cs_buflo_realized_incoming_credit_bytes"]
+        != diagnostics["scheduled_incoming_consumed_bytes"]
+        or diagnostics["cs_buflo_scheduled_incoming_cells"]
+        != schedule.get("incoming_credit_advertised_events")
+        or diagnostics["cs_buflo_scheduled_incoming_cells"]
+        != schedule.get("incoming_credit_consumed_events")
+    ):
+        return False
+    composition = sum(
+        diagnostics[key]
+        for key in (
+            "cs_buflo_application_stream_bytes",
+            "cs_buflo_retransmission_stream_bytes",
+            "cs_buflo_chaff_stream_bytes",
+            "cs_buflo_defense_control_bytes",
+            "cs_buflo_quic_padding_bytes",
+            "cs_buflo_other_quic_bytes",
+        )
+    )
+    if (
+        composition != diagnostics["cs_buflo_realized_udp_bytes"]
+        or diagnostics["cs_buflo_desired_udp_bytes"]
+        < diagnostics["cs_buflo_realized_udp_bytes"]
+        or diagnostics["cs_buflo_lateness_us_max"]
+        > diagnostics["cs_buflo_lateness_us_total"]
+    ):
+        return False
+    typed_composition = schedule.get("typed_composition_bytes")
+    if not isinstance(typed_composition, Mapping) or any(
+        typed_composition.get(key) != diagnostics[f"cs_buflo_{key}"]
+        for key in (
+            "application_stream_bytes",
+            "retransmission_stream_bytes",
+            "chaff_stream_bytes",
+            "defense_control_bytes",
+            "quic_padding_bytes",
+            "other_quic_bytes",
+        )
+    ):
+        return False
+    if (
+        schedule.get("typed_lateness_us_total") != diagnostics["cs_buflo_lateness_us_total"]
+        or schedule.get("typed_lateness_us_max") != diagnostics["cs_buflo_lateness_us_max"]
+    ):
+        return False
+    if not _cs_buflo_padding_targets_match(diagnostics):
+        return False
+    transitions = diagnostics["cs_buflo_rate_transitions"]
+    if not _cs_buflo_rate_transition_vector_valid(transitions):
+        return False
+    for direction in ("outgoing", "incoming"):
+        interval = diagnostics[f"cs_buflo_{direction}_interval_us"]
+        adaptations = diagnostics[f"cs_buflo_{direction}_rate_adaptations"]
+        next_boundary = diagnostics[f"cs_buflo_next_{direction}_adaptation_boundary_bytes"]
+        samples = diagnostics[f"cs_buflo_{direction}_estimator_samples"]
+        real_bearing = diagnostics[f"cs_buflo_real_bearing_{direction}_bytes"]
+        directional_transitions = [
+            transition for transition in transitions if transition["direction"] == direction
+        ]
+        if (
+            interval not in {4_096, 8_192, 16_384, 32_768}
+            or samples > 1_000
+            or next_boundary != 16_384 << adaptations
+            or real_bearing >= next_boundary
+            or (adaptations > 0 and real_bearing < (16_384 << (adaptations - 1)))
+            or len(directional_transitions) != adaptations
+            or (
+                directional_transitions
+                and directional_transitions[-1]["resulting_interval_us"] != interval
+            )
+            or (not directional_transitions and interval != 8_192)
+            or any(
+                transition["real_bearing_bytes"] > real_bearing
+                for transition in directional_transitions
+            )
+        ):
+            return False
+    return True
+
+
+def _ceiling_power_of_two(value: Any) -> int:
+    if type(value) is not int or value <= 0:
+        return 0
+    maximum = (1 << 64) - 1
+    if value > maximum:
+        return 0
+    candidate = 1 << ((value - 1).bit_length())
+    return candidate if candidate <= maximum else maximum
+
+
+def _cs_buflo_power_of_two_crossed(total: Any, increment: Any) -> bool:
+    """Recompute the Algorithm-4 crossing from one realized UDP increment."""
+
+    return (
+        type(total) is int
+        and type(increment) is int
+        and 0 < increment <= total
+        and (total - increment).bit_length() < total.bit_length()
+    )
+
+
+def _cs_buflo_payload_padding_target(natural: Any, cover: Any) -> int:
+    """Recompute the pinned CPSP target from its frozen directional basis."""
+
+    maximum = (1 << 64) - 1
+    if (
+        type(natural) is not int
+        or type(cover) is not int
+        or natural < 0
+        or cover < 0
+        or natural > maximum
+        or cover > maximum
+    ):
+        return -1
+    current = min(natural + cover, maximum)
+    if current == 0:
+        return 0
+    quantum = _ceiling_power_of_two(max(natural, 1))
+    if quantum <= 0:
+        return -1
+    return min(((current + quantum - 1) // quantum) * quantum, maximum)
+
+
+def _cs_buflo_padding_targets_match(diagnostics: Mapping[str, Any]) -> bool:
+    """Validate frozen CTSP/CPSP bases without substituting terminal counters.
+
+    The live cover and realized-byte counters may continue increasing after
+    ApplicationComplete freezes the padding decision.  They therefore prove
+    that the frozen basis was observed, while the six explicit basis counters
+    are the only sound inputs for exact target recomputation.
+    """
+
+    for direction in ("outgoing", "incoming"):
+        frozen_natural = diagnostics[
+            f"cs_buflo_{direction}_padding_basis_natural_bytes"
+        ]
+        frozen_cover = diagnostics[f"cs_buflo_{direction}_padding_basis_cover_bytes"]
+        if (
+            diagnostics[f"cs_buflo_natural_{direction}_bytes"] != frozen_natural
+            or diagnostics[f"cs_buflo_cover_{direction}_bytes"] < frozen_cover
+        ):
+            return False
+    if (
+        diagnostics["cs_buflo_outgoing_termination_accounted_bytes"]
+        != diagnostics["cs_buflo_realized_udp_bytes"]
+        or diagnostics["cs_buflo_incoming_termination_accounted_bytes"]
+        != diagnostics["cs_buflo_realized_incoming_credit_bytes"]
+        or diagnostics["cs_buflo_outgoing_power_of_two_crossed"]
+        != _cs_buflo_power_of_two_crossed(
+            diagnostics["cs_buflo_outgoing_termination_accounted_bytes"],
+            diagnostics["cs_buflo_outgoing_last_termination_increment_bytes"],
+        )
+        or diagnostics["cs_buflo_incoming_power_of_two_crossed"]
+        != _cs_buflo_power_of_two_crossed(
+            diagnostics["cs_buflo_incoming_termination_accounted_bytes"],
+            diagnostics["cs_buflo_incoming_last_termination_increment_bytes"],
+        )
+        or
+        diagnostics["cs_buflo_realized_udp_bytes"]
+        < diagnostics["cs_buflo_outgoing_padding_basis_total_bytes"]
+        or diagnostics["cs_buflo_realized_incoming_credit_bytes"]
+        < diagnostics["cs_buflo_incoming_padding_basis_total_bytes"]
+    ):
+        return False
+
+    incoming_expected = _cs_buflo_payload_padding_target(
+        diagnostics["cs_buflo_incoming_padding_basis_natural_bytes"],
+        diagnostics["cs_buflo_incoming_padding_basis_cover_bytes"],
+    )
+    if diagnostics["cs_buflo_payload_padding"]:
+        outgoing_expected = _cs_buflo_payload_padding_target(
+            diagnostics["cs_buflo_outgoing_padding_basis_natural_bytes"],
+            diagnostics["cs_buflo_outgoing_padding_basis_cover_bytes"],
+        )
+    else:
+        outgoing_expected = _ceiling_power_of_two(
+            diagnostics["cs_buflo_outgoing_padding_basis_total_bytes"]
+        )
+    targets_match = (
+        outgoing_expected >= 0
+        and incoming_expected >= 0
+        and diagnostics["cs_buflo_outgoing_padding_target_bytes"] == outgoing_expected
+        and diagnostics["cs_buflo_incoming_padding_target_bytes"] == incoming_expected
+    )
+    outgoing_progress = (
+        diagnostics["cs_buflo_natural_outgoing_bytes"]
+        + diagnostics["cs_buflo_cover_outgoing_bytes"]
+        if diagnostics["cs_buflo_payload_padding"]
+        else diagnostics["cs_buflo_realized_udp_bytes"]
+    )
+    incoming_progress = (
+        diagnostics["cs_buflo_natural_incoming_bytes"]
+        + diagnostics["cs_buflo_cover_incoming_bytes"]
+    )
+    return (
+        targets_match
+        and (
+            outgoing_progress >= outgoing_expected
+            or diagnostics["cs_buflo_outgoing_power_of_two_crossed"] is True
+        )
+        and (
+            incoming_progress >= incoming_expected
+            or diagnostics["cs_buflo_incoming_power_of_two_crossed"] is True
+        )
+    )
