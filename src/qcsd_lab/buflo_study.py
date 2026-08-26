@@ -4664,8 +4664,9 @@ def _validate_build_execution_value(
     if not isinstance(commands, list) or len(commands) != 3:
         raise ValueError("study no-cache build command inventory is incomplete")
     expected_targets = ("collection", "prepare", "reference")
+    recorded_build_root: Path | None = None
     for target, command in zip(expected_targets, commands, strict=True):
-        expected_argv = [
+        expected_prefix = [
             "docker",
             "build",
             "--pull",
@@ -4675,18 +4676,41 @@ def _validate_build_execution_value(
             "--tag",
             images[target]["tag"],
             "--file",
-            str((LAB_ROOT / "Dockerfile").resolve()),
-            str(LAB_ROOT.resolve()),
         ]
+        argv = command.get("argv") if isinstance(command, Mapping) else None
+        path_arguments_valid = (
+            isinstance(argv, list)
+            and len(argv) == 11
+            and isinstance(argv[-2], str)
+            and isinstance(argv[-1], str)
+        )
+        dockerfile = Path(argv[-2]) if path_arguments_valid else None
+        build_root = Path(argv[-1]) if path_arguments_valid else None
         if (
             not isinstance(command, Mapping)
             or set(command) != {"target", "argv", "exit_code", "image_id"}
             or command.get("target") != target
-            or command.get("argv") != expected_argv
+            or not isinstance(argv, list)
+            or argv[:-2] != expected_prefix
+            or dockerfile is None
+            or build_root is None
+            or not dockerfile.is_absolute()
+            or not build_root.is_absolute()
+            or argv[-2].startswith("//")
+            or argv[-1].startswith("//")
+            or str(dockerfile) != argv[-2]
+            or str(build_root) != argv[-1]
+            or ".." in dockerfile.parts
+            or ".." in build_root.parts
+            or build_root.parent == build_root
+            or dockerfile.name != "Dockerfile"
+            or dockerfile.parent != build_root
+            or (recorded_build_root is not None and build_root != recorded_build_root)
             or command.get("exit_code") != 0
             or command.get("image_id") != images[target]["id"]
         ):
             raise ValueError("study build commands do not prove --pull --no-cache execution")
+        recorded_build_root = build_root
     if value["cache_policy"] != {
         "pull": True,
         "no_cache": True,

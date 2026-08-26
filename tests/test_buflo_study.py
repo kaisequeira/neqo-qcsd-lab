@@ -1501,6 +1501,58 @@ def test_build_execution_receipt_rejects_semantically_rehashed_cache_enabled_com
         buflo_study._validate_build_execution_value(value)
 
 
+def test_build_execution_receipt_accepts_consistent_host_paths_from_container() -> None:
+    value = json.loads(json.dumps(_build_execution_value()))
+    for command in value["commands"]:
+        command["argv"][-2] = "/host-checkout/neqo-qcsd-lab/Dockerfile"
+        command["argv"][-1] = "/host-checkout/neqo-qcsd-lab"
+    payload = dict(value)
+    del payload["payload_sha256"]
+    value["payload_sha256"] = buflo_study._canonical_digest(payload)
+
+    assert buflo_study._validate_build_execution_value(value)["cohort_version"] == 1
+
+    value["commands"][0]["argv"][-1] = "/different-build-context"
+    payload = dict(value)
+    del payload["payload_sha256"]
+    value["payload_sha256"] = buflo_study._canonical_digest(payload)
+    with pytest.raises(ValueError, match="--pull --no-cache"):
+        buflo_study._validate_build_execution_value(value)
+
+    value = json.loads(json.dumps(_build_execution_value()))
+    value["commands"][1]["argv"][-2] = "/other-host-checkout/Dockerfile"
+    value["commands"][1]["argv"][-1] = "/other-host-checkout"
+    payload = dict(value)
+    del payload["payload_sha256"]
+    value["payload_sha256"] = buflo_study._canonical_digest(payload)
+    with pytest.raises(ValueError, match="--pull --no-cache"):
+        buflo_study._validate_build_execution_value(value)
+
+
+@pytest.mark.parametrize(
+    ("dockerfile", "build_root"),
+    [
+        ("/Dockerfile", "/"),
+        ("//host/repo/Dockerfile", "//host/repo"),
+        ("/host/a/../repo/Dockerfile", "/host/a/../repo"),
+        ("relative/repo/Dockerfile", "relative/repo"),
+    ],
+)
+def test_build_execution_receipt_rejects_noncanonical_or_unsafe_build_roots(
+    dockerfile: str, build_root: str
+) -> None:
+    value = json.loads(json.dumps(_build_execution_value()))
+    for command in value["commands"]:
+        command["argv"][-2] = dockerfile
+        command["argv"][-1] = build_root
+    payload = dict(value)
+    del payload["payload_sha256"]
+    value["payload_sha256"] = buflo_study._canonical_digest(payload)
+
+    with pytest.raises(ValueError, match="--pull --no-cache"):
+        buflo_study._validate_build_execution_value(value)
+
+
 @pytest.mark.parametrize(
     "name",
     [
