@@ -1796,6 +1796,7 @@ def _qualify_local_full_chaff(
             prefix_root / f"{workload_id}.json",
             workload_id,
             profile["bursts"],
+            application_manifest=load_json(workload_root / f"{workload_id}.json"),
         )
         destination = qualification_root / f"{workload_id}.json"
         if destination.is_file() and not destination.is_symlink():
@@ -1810,27 +1811,25 @@ def _qualify_local_full_chaff(
 
 
 def _write_regression_prefix_spec(
-    path: Path, workload_id: str, bursts: list[dict[str, int]]
+    path: Path,
+    workload_id: str,
+    bursts: list[dict[str, int]],
+    *,
+    application_manifest: Mapping[str, Any],
 ) -> None:
-    from .chaff_qualification import PREFIX_SPEC_ARTIFACT_TYPE
+    from .chaff_qualification import prefix_pack_spec
 
-    numeric_profile = {"packet_size": 1_200, "bursts": bursts}
-    numeric = json.dumps(numeric_profile, sort_keys=True, separators=(",", ":")).encode()
     historical = LAB_ROOT / "config/defense-params/walkie-talkie-live.json"
-    value = {
-        "schema_version": 1,
-        "artifact_type": PREFIX_SPEC_ARTIFACT_TYPE,
-        "workload_id": workload_id,
-        "packet_size": 1_200,
-        "max_stream_data_excess": 1_000,
-        "maximum_receiver_continuation_reserve_horizon": 1,
-        "required_chaff_survivors": 2,
-        "numeric_profile_sha256": hashlib.sha256(
-            b"qcsd-walkie-talkie-numeric-profile-v1\0" + numeric
-        ).hexdigest(),
-        "source_walkie_talkie_artifact_sha256": sha256_file(historical),
-        "numeric_profile": numeric_profile,
-    }
+    value = prefix_pack_spec(
+        workload_id,
+        load_json(historical),
+        source_walkie_talkie_artifact_sha256=sha256_file(historical),
+        application_manifest=application_manifest,
+    )
+    if value["numeric_profile"] != {"packet_size": 1_200, "bursts": bursts}:
+        raise ValueError(
+            f"local regression prefix specification differs from runtime mould: {workload_id}"
+        )
     _create_or_verify_bytes(
         path,
         (json.dumps(value, indent=2, sort_keys=True) + "\n").encode(),

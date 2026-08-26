@@ -82,6 +82,10 @@ SOURCE_WALKIE_TALKIE_SHA256 = "16dc343e233f7531277d96fd914d177202e7a508a50f7becd
 SCHEMA_FIVE_WALKIE_TALKIE_ARCHIVE = Path(
     "artifacts/research-1200-superseded-schema5-0a141768/walkie-talkie.json"
 )
+LOCAL_REGRESSION_WALKIE_TALKIE_SOURCE = Path(
+    "config/defense-params/walkie-talkie-live.json"
+)
+LOCAL_REGRESSION_WORKLOAD_IDS = ("simple", "complex")
 SEALED_WORKLOAD_IDS = (
     "getbootstrap-home-r3",
     "bootstrap-introduction-r3",
@@ -1131,6 +1135,14 @@ def validate_prefix_pack_spec(
         "numeric_profile",
     }
     spec = _exact_mapping(value, keys, "prefix-pack specification")
+    local_source: dict[str, Any] | None = None
+    local_source_sha256: str | None = None
+    if spec["source_walkie_talkie_artifact_sha256"] != SOURCE_WALKIE_TALKIE_SHA256:
+        local_source, local_source_sha256 = _read_local_regression_walkie_talkie_source()
+    local_regression_source = application_manifest is not None and (
+        spec["workload_id"] in LOCAL_REGRESSION_WORKLOAD_IDS
+        and spec["source_walkie_talkie_artifact_sha256"] == local_source_sha256
+    )
     if (
         spec["schema_version"] != SCHEMA_VERSION
         or spec["artifact_type"] != PREFIX_SPEC_ARTIFACT_TYPE
@@ -1145,7 +1157,11 @@ def validate_prefix_pack_spec(
         or type(spec["selected_chaff_body_bytes"]) is not int
         or spec["selected_chaff_body_bytes"] < UDP_PAYLOAD_CEILING
         or not _digest(spec["numeric_profile_sha256"])
-        or spec["source_walkie_talkie_artifact_sha256"] != SOURCE_WALKIE_TALKIE_SHA256
+        or (
+            spec["source_walkie_talkie_artifact_sha256"]
+            != SOURCE_WALKIE_TALKIE_SHA256
+            and not local_regression_source
+        )
     ):
         raise ValueError("prefix-pack specification binding is invalid")
     numeric = _exact_mapping(
@@ -1272,6 +1288,18 @@ def validate_prefix_pack_spec(
                 or stage["application_body_floor_bytes"] != floor
             ):
                 raise ValueError("prefix stage differs from frozen prepared body identities")
+    if local_regression_source:
+        assert local_source is not None and local_source_sha256 is not None
+        expected = prefix_pack_spec(
+            spec["workload_id"],
+            local_source,
+            source_walkie_talkie_artifact_sha256=local_source_sha256,
+            application_manifest=application_manifest,
+        )
+        if canonical_bytes(spec) != canonical_bytes(expected):
+            raise ValueError(
+                "local regression prefix specification differs from its exact live source"
+            )
     return dict(spec)
 
 
@@ -1369,6 +1397,62 @@ def _read_sealed_schema_five_walkie_talkie(source: Path) -> dict[str, Any]:
         raise ValueError("schema-five Walkie-Talkie artifact is not valid JSON") from error
     _validate_schema_five_walkie_talkie_oracle(artifact)
     return artifact
+
+
+def _read_local_regression_walkie_talkie_source() -> tuple[dict[str, Any], str]:
+    """Read one exact current local-regression source snapshot."""
+
+    source = LAB_ROOT / LOCAL_REGRESSION_WALKIE_TALKIE_SOURCE
+    if source.is_symlink() or not source.is_file():
+        raise ValueError("local regression Walkie-Talkie source is not a regular file")
+    source_bytes = source.read_bytes()
+    source_sha256 = sha256_bytes(source_bytes)
+    try:
+        parsed = json.loads(source_bytes)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("local regression Walkie-Talkie source is not valid JSON") from error
+    artifact = _exact_mapping(
+        parsed,
+        {
+            "adaptation",
+            "burst_definition",
+            "cell_byte_domain",
+            "schema_version",
+            "generated_by",
+            "matching_algorithm",
+            "paper_equivalent",
+            "packet_size",
+            "receiver_continuation",
+            "profiles",
+        },
+        "local regression Walkie-Talkie source",
+    )
+    profiles = artifact["profiles"]
+    if (
+        artifact["schema_version"] != 5
+        or artifact["adaptation"] != "qcsd-client-only"
+        or artifact["paper_equivalent"] is not False
+        or artifact["packet_size"] != UDP_PAYLOAD_CEILING
+        or not isinstance(profiles, list)
+        or len(profiles) != 4
+    ):
+        raise ValueError("local regression Walkie-Talkie source is invalid")
+    from .fitting import _validate_walkie_profile_schema
+
+    for profile in profiles:
+        _validate_walkie_profile_schema(profile)
+    for workload_id in LOCAL_REGRESSION_WORKLOAD_IDS:
+        matches = [
+            profile
+            for profile in profiles
+            if isinstance(profile, Mapping)
+            and workload_id in {profile.get("real"), profile.get("decoy")}
+        ]
+        if len(matches) != 1 or matches[0].get("real") != workload_id:
+            raise ValueError(
+                "local regression Walkie-Talkie source does not bind the exact cohort"
+            )
+    return artifact, source_sha256
 
 
 def _validate_schema_five_walkie_talkie_oracle(value: object) -> None:

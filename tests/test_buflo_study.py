@@ -618,6 +618,179 @@ def test_controlled_driver_does_not_change_regression_manifests(
     )
 
 
+def _regression_prefix_manifest(workload_id: str) -> dict[str, object]:
+    resources = [
+        buflo_study._local_resource(
+            0,
+            "https://qcsd-buflo-server-one:4433/131072",
+            "Document",
+            131_072,
+        )
+    ]
+    if workload_id == "complex":
+        resources.extend(
+            [
+                buflo_study._local_resource(
+                    1,
+                    "https://qcsd-buflo-server-one:4433/1024",
+                    "Script",
+                    1_024,
+                    depends_on=[0],
+                ),
+                buflo_study._local_resource(
+                    2,
+                    "https://qcsd-buflo-server-two:4434/4096",
+                    "Script",
+                    4_096,
+                    depends_on=[0],
+                ),
+                buflo_study._local_resource(
+                    3,
+                    "https://qcsd-buflo-server-two:4434/2048",
+                    "Image",
+                    2_048,
+                    depends_on=[2],
+                ),
+            ]
+        )
+    return {
+        "preparation": {
+            "source_url": resources[0]["url"],
+            "final_url": resources[0]["url"],
+            "approved_origins": [
+                "https://qcsd-buflo-server-one:4433",
+                "https://qcsd-buflo-server-two:4434",
+            ],
+            "expected_responses": [
+                {
+                    "resource_id": resource["id"],
+                    "status": 200,
+                    "bytes": resource["data_length"],
+                    "body_sha256": f"{resource['id'] + 1:x}" * 64,
+                }
+                for resource in resources
+            ],
+        },
+        "resources": resources,
+    }
+
+
+@pytest.mark.parametrize(
+    ("workload_id", "horizon", "survivors", "required_streams"),
+    (("simple", 1, 2, 2), ("complex", 3, 4, 4)),
+)
+def test_regression_prefix_spec_uses_current_full_capacity_schema(
+    tmp_path: Path,
+    workload_id: str,
+    horizon: int,
+    survivors: int,
+    required_streams: int,
+) -> None:
+    from qcsd_lab.chaff_qualification import validate_prefix_pack_spec
+
+    manifest = _regression_prefix_manifest(workload_id)
+    historical = json.loads(
+        (LAB_ROOT / "config/defense-params/walkie-talkie-live.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    profile = buflo_study._current_regression_walkie_talkie_profile(
+        next(
+            profile
+            for profile in historical["profiles"]
+            if profile["real"] == workload_id
+        ),
+        historical["packet_size"],
+    )
+    destination = tmp_path / f"{workload_id}.json"
+
+    buflo_study._write_regression_prefix_spec(
+        destination,
+        workload_id,
+        profile["bursts"],
+        application_manifest=manifest,
+    )
+
+    value = json.loads(destination.read_text(encoding="utf-8"))
+    validated = validate_prefix_pack_spec(
+        value,
+        workload_id=workload_id,
+        application_manifest=manifest,
+    )
+    assert validated["numeric_profile"]["bursts"] == profile["bursts"]
+    assert validated["application_resource_id"] == 0
+    assert validated["selected_chaff_resource_id"] == 0
+    assert validated["maximum_receiver_continuation_reserve_horizon"] == horizon
+    assert validated["required_chaff_survivors"] == survivors
+    assert validated["required_chaff_streams"] == required_streams
+    assert len(validated["stream_activation_stages"]) == len(profile["bursts"])
+
+
+def test_regression_prefix_spec_rejects_runtime_mould_drift(tmp_path: Path) -> None:
+    manifest = _regression_prefix_manifest("simple")
+
+    with pytest.raises(ValueError, match="differs from runtime mould"):
+        buflo_study._write_regression_prefix_spec(
+            tmp_path / "simple.json",
+            "simple",
+            [{"outgoing": 5, "incoming": 129}],
+            application_manifest=manifest,
+        )
+
+
+def test_local_regression_prefix_spec_source_policy_is_fail_closed(tmp_path: Path) -> None:
+    from qcsd_lab.chaff_qualification import validate_prefix_pack_spec
+
+    manifest = _regression_prefix_manifest("simple")
+    historical = json.loads(
+        (LAB_ROOT / "config/defense-params/walkie-talkie-live.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    profile = buflo_study._current_regression_walkie_talkie_profile(
+        next(profile for profile in historical["profiles"] if profile["real"] == "simple"),
+        historical["packet_size"],
+    )
+    destination = tmp_path / "simple.json"
+    buflo_study._write_regression_prefix_spec(
+        destination,
+        "simple",
+        profile["bursts"],
+        application_manifest=manifest,
+    )
+    value = json.loads(destination.read_text(encoding="utf-8"))
+
+    with pytest.raises(ValueError, match="binding is invalid"):
+        validate_prefix_pack_spec(value, workload_id="simple")
+
+    outside = json.loads(json.dumps(value))
+    outside["workload_id"] = "outside-local-regression"
+    with pytest.raises(ValueError, match="binding is invalid"):
+        validate_prefix_pack_spec(
+            outside,
+            workload_id="outside-local-regression",
+            application_manifest=manifest,
+        )
+
+    source_tamper = json.loads(json.dumps(value))
+    source_tamper["source_walkie_talkie_artifact_sha256"] = "f" * 64
+    with pytest.raises(ValueError, match="binding is invalid"):
+        validate_prefix_pack_spec(
+            source_tamper,
+            workload_id="simple",
+            application_manifest=manifest,
+        )
+
+    numeric_tamper = json.loads(json.dumps(value))
+    numeric_tamper["numeric_profile"]["bursts"][0]["outgoing"] += 1
+    with pytest.raises(ValueError, match="numeric derivation is invalid"):
+        validate_prefix_pack_spec(
+            numeric_tamper,
+            workload_id="simple",
+            application_manifest=manifest,
+        )
+
+
 def test_controlled_and_regression_generators_are_exact_and_unique() -> None:
     controlled = generated_stage_cells("controlled")
     regression = generated_stage_cells("regression")
