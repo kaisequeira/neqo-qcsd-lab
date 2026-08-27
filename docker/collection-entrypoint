@@ -3,6 +3,26 @@ set -eu
 
 uid="${QCSD_LAB_UID:?QCSD_LAB_UID is required}"
 gid="${QCSD_LAB_GID:?QCSD_LAB_GID is required}"
+scheduler_contract="${QCSD_CAPTURE_SCHEDULER_CONTRACT:-}"
+
+case "${scheduler_contract}" in
+  "") ;;
+  qcsd-client-rr1-cpu10-v1)
+    exec setpriv \
+      --reuid "${uid}" \
+      --regid "${gid}" \
+      --clear-groups \
+      --bounding-set=-all,+net_raw,+net_admin \
+      --inh-caps=+net_raw,+net_admin \
+      --ambient-caps=+net_raw,+net_admin \
+      --no-new-privs \
+      taskset --cpu-list 11 qcsd-lab-internal "$@"
+    ;;
+  *)
+    echo "unsupported capture scheduler contract: ${scheduler_contract}" >&2
+    exit 1
+    ;;
+esac
 
 exec setpriv \
   --reuid "${uid}" \

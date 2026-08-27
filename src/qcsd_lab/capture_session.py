@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import re
+import resource
 import shutil
 import signal
 import subprocess
@@ -101,6 +102,27 @@ _RUNNER_WAKEUP_METRICS_KEYS = {
 _RUNNER_WAKEUP_METRICS_SEMANTICS = (
     "actual_select_return_source; socket_wins_simultaneous_readiness; "
     "controller_subset_is_effective_earliest_deadline; scheduled_cells_are_not_wakeups"
+)
+_CAPTURE_SCHEDULER_CONTRACT = "qcsd-client-rr1-cpu10-v1"
+_CAPTURE_ORCHESTRATOR_CPU = 11
+_CAPTURE_CLIENT_CPU = 10
+_PROCESS_SCHEDULER_KEYS = {
+    "schema_version",
+    "source",
+    "policy",
+    "priority",
+    "affinity_cpus",
+    "rlimit_rtprio",
+    "no_new_privileges",
+    "effective_capabilities_hex",
+    "cgroup_effective_cpuset",
+    "affinity_scope",
+    "contract",
+    "contract_valid",
+}
+_PROCESS_SCHEDULER_SOURCE = "linux-sched-and-procfs-v1"
+_PROCESS_SCHEDULER_AFFINITY_SCOPE = (
+    "qcsd_container_affinity_partition_not_physical_cpu_isolation"
 )
 _GNU_TIME_FORMAT = "\n".join(
     (
@@ -487,6 +509,11 @@ def _collect_attempt(
         runner_output_error = f"run.json was incomplete after the host timeout: {error}"
     if runner_timed_out and not run_json.exists():
         runner_output_error = "run.json was not produced before the host timeout"
+    scheduler_required = _capture_scheduler_contract() is not None
+    process_scheduler = run_data.get("process_scheduler") if run_data else None
+    process_scheduler_valid = (
+        _process_scheduler_valid(process_scheduler) if scheduler_required else None
+    )
     if run_data:
         if not _client_resource_usage_valid(client_resource_usage):
             runner_output_error = (
@@ -690,6 +717,12 @@ def _collect_attempt(
         "client_resource_usage": client_resource_usage,
         "runner_complete": runner_complete,
         "runner_binding_valid": runner_binding_valid,
+        "process_scheduler_receipt_path": (
+            "neqo/run.json" if run_json.is_file() else None
+        ),
+        "process_scheduler": process_scheduler,
+        "process_scheduler_required": scheduler_required,
+        "process_scheduler_valid": process_scheduler_valid,
         "endpoint_count": len(endpoints),
         "expected_endpoint_count": expected_endpoint_count,
         "endpoint_count_valid": endpoint_count_valid,
@@ -756,6 +789,7 @@ def _run_neqo_client(
 
     host_timeout = neqo_host_timeout(configured_timeout_seconds)
     resource_log = log.with_name(f"{log.stem}-resource-usage.txt")
+    scheduler_prefix = _capture_scheduler_launch_prefix()
     wrapped_command = [
         "/usr/bin/time",
         "--quiet",
@@ -764,6 +798,7 @@ def _run_neqo_client(
         "--format",
         _GNU_TIME_FORMAT,
         "--",
+        *scheduler_prefix,
         *command,
     ]
     started = time.monotonic()
@@ -781,6 +816,72 @@ def _run_neqo_client(
     usage = _parse_client_resource_usage(resource_log, time.monotonic() - started)
     setattr(result, "client_resource_usage", usage)
     return result, False, host_timeout
+
+
+def _capture_scheduler_contract() -> str | None:
+    """Return the one supported measured-client scheduler contract, if selected."""
+
+    value = os.environ.get("QCSD_CAPTURE_SCHEDULER_CONTRACT")
+    if value in {None, ""}:
+        return None
+    if value != _CAPTURE_SCHEDULER_CONTRACT:
+        raise ValueError(f"unsupported capture scheduler contract: {value}")
+    return value
+
+
+def _capture_scheduler_launch_prefix() -> list[str]:
+    """Fail closed on the container partition before elevating only the client."""
+
+    if _capture_scheduler_contract() is None:
+        return []
+    affinity = os.sched_getaffinity(0)
+    if affinity != {_CAPTURE_ORCHESTRATOR_CPU}:
+        raise ValueError(
+            "capture scheduler parent must be confined to orchestrator CPU 11"
+        )
+    rtprio = resource.getrlimit(resource.RLIMIT_RTPRIO)
+    if rtprio != (1, 1):
+        raise ValueError("capture scheduler requires RLIMIT_RTPRIO soft/hard 1")
+    return [
+        "/usr/bin/taskset",
+        "--cpu-list",
+        str(_CAPTURE_CLIENT_CPU),
+        "/usr/bin/chrt",
+        "--rr",
+        "1",
+        "/usr/bin/setpriv",
+        "--bounding-set=-all",
+        "--inh-caps=-all",
+        "--ambient-caps=-all",
+        "--no-new-privs",
+        "--",
+    ]
+
+
+def _process_scheduler_valid(value: Any) -> bool:
+    """Validate the Linux runtime receipt emitted by the measured Neqo process."""
+
+    if not isinstance(value, dict) or set(value) != _PROCESS_SCHEDULER_KEYS:
+        return False
+    rtprio = value.get("rlimit_rtprio")
+    capabilities = value.get("effective_capabilities_hex")
+    return bool(
+        value.get("schema_version") == 1
+        and value.get("source") == _PROCESS_SCHEDULER_SOURCE
+        and value.get("policy") == "SCHED_RR"
+        and value.get("priority") == 1
+        and value.get("affinity_cpus") == [_CAPTURE_CLIENT_CPU]
+        and isinstance(rtprio, dict)
+        and set(rtprio) == {"soft", "hard"}
+        and rtprio == {"soft": 1, "hard": 1}
+        and value.get("no_new_privileges") is True
+        and isinstance(capabilities, str)
+        and capabilities == "0000000000000000"
+        and value.get("cgroup_effective_cpuset") == "10-11"
+        and value.get("affinity_scope") == _PROCESS_SCHEDULER_AFFINITY_SCOPE
+        and value.get("contract") == _CAPTURE_SCHEDULER_CONTRACT
+        and value.get("contract_valid") is True
+    )
 
 
 def _parse_client_resource_usage(path: Path, wall_time_seconds: float) -> dict[str, Any]:
@@ -941,6 +1042,8 @@ def _validate_run_binding(
         defense.kind in {"buflo", "cs_buflo"}
         and run_data.get("completion_status") == "complete"
     )
+    scheduler_required = _capture_scheduler_contract() is not None
+    process_scheduler = run_data.get("process_scheduler")
     if (
         run_data.get("seed") != seed
         or run_data.get("request_policy") != context.request_policy
@@ -970,6 +1073,9 @@ def _validate_run_binding(
         or resolved.get("max_udp_payload_size") != context.udp_payload_ceiling
         or not isinstance(resolved_defense, dict)
         or resolved_defense.get("kind") != defense.kind
+        or (
+            scheduler_required and not _process_scheduler_valid(process_scheduler)
+        )
     ):
         raise ValueError("runner receipt does not match the frozen sample inputs")
     expected_chaff_hash = (

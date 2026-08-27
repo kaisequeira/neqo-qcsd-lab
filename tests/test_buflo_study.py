@@ -1527,6 +1527,24 @@ def test_launcher_requires_clean_capture_image_and_no_cache_build() -> None:
     assert '"build_execution": {' in launcher
 
 
+def test_launcher_applies_least_privilege_rr1_capture_partition() -> None:
+    launcher = (LAB_ROOT / "qcsd-lab").read_text(encoding="utf-8")
+    entrypoint = (LAB_ROOT / "docker/collection-entrypoint").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'study_capture_scheduler_contract="qcsd-client-rr1-cpu10-v1"' in launcher
+    assert 'runtime+=(--cpuset-cpus "10-11" --ulimit "rtprio=1:1")' in launcher
+    assert "--cpuset-cpus 10-11" in launcher
+    assert "--ulimit rtprio=1:1" in launcher
+    assert launcher.count("--cpuset-cpus 0-9") == 2
+    assert "SYS_NICE" not in launcher
+    assert "--cpu-rt-runtime" not in launcher
+    assert "unsupported capture scheduler contract" in entrypoint
+    assert "taskset --cpu-list 11 qcsd-lab-internal" in entrypoint
+    assert "+sys_nice" not in entrypoint
+
+
 def test_versioned_build_receipts_coexist_and_reject_path_or_request_mismatch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1940,6 +1958,24 @@ def test_study_environment_receipt_binds_minimized_docker_bases_and_locks() -> N
         ]
         == "sha256:" + "a" * 64
     )
+    scheduled = json.loads(json.dumps(value))
+    scheduled["schema_version"] = 2
+    scheduled["docker"]["ncpu"] = 12
+    scheduled["capture_scheduler"] = (
+        buflo_study._capture_scheduler_environment_contract()
+    )
+    validated = validate_study_environment_receipt(
+        scheduled, expected_image_digest="sha256:" + "a" * 64
+    )
+    assert validated["capture_scheduler"]["client_affinity_cpus"] == [10]
+    wrong_topology = json.loads(json.dumps(scheduled))
+    wrong_topology["docker"]["ncpu"] = 16
+    with pytest.raises(ValueError, match="exact 12-CPU topology"):
+        validate_study_environment_receipt(wrong_topology)
+    wrong_partition = json.loads(json.dumps(scheduled))
+    wrong_partition["capture_scheduler"]["client_affinity_cpus"] = [9]
+    with pytest.raises(ValueError, match="scheduler environment"):
+        validate_study_environment_receipt(wrong_partition)
     changed = json.loads(json.dumps(value))
     changed["build_inputs"]["uv_lock_sha256"] = "0" * 64
     with pytest.raises(ValueError, match="base image or lockfile"):

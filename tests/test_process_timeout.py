@@ -151,3 +151,77 @@ def test_collection_client_adds_host_grace_and_preserves_timeout_diagnostics(
     }
     assert observed["command"][:2] == ["/usr/bin/time", "--quiet"]
     assert observed["command"][-3:] == ["--", "neqo", "run"]
+
+
+def test_collection_client_applies_rr1_only_after_gnu_time(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    observed: dict[str, Any] = {}
+    timeout_result = subprocess.CompletedProcess(["neqo", "run"], -15, "timeout\n")
+
+    def timed_out(command: list[str], **options: Any) -> subprocess.CompletedProcess[str]:
+        observed.update(command=command, options=options)
+        raise util.ProcessTimeoutError(timeout_result, 50, killed=False)
+
+    monkeypatch.setenv(
+        "QCSD_CAPTURE_SCHEDULER_CONTRACT", "qcsd-client-rr1-cpu10-v1"
+    )
+    monkeypatch.setattr(capture_session.os, "sched_getaffinity", lambda _pid: {11})
+    monkeypatch.setattr(
+        capture_session.resource,
+        "getrlimit",
+        lambda limit: (1, 1)
+        if limit == capture_session.resource.RLIMIT_RTPRIO
+        else pytest.fail("unexpected resource limit"),
+    )
+    monkeypatch.setattr(capture_session, "run", timed_out)
+
+    result, did_time_out, host_timeout = capture_session._run_neqo_client(
+        ["neqo", "run"],
+        log=tmp_path / "client.log",
+        configured_timeout_seconds=45,
+    )
+
+    assert result is timeout_result
+    assert did_time_out is True
+    assert host_timeout == 50.0
+    separator = observed["command"].index("--")
+    assert observed["command"][separator + 1 :] == [
+        "/usr/bin/taskset",
+        "--cpu-list",
+        "10",
+        "/usr/bin/chrt",
+        "--rr",
+        "1",
+        "/usr/bin/setpriv",
+        "--bounding-set=-all",
+        "--inh-caps=-all",
+        "--ambient-caps=-all",
+        "--no-new-privs",
+        "--",
+        "neqo",
+        "run",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("affinity", "rtprio", "message"),
+    [
+        ({10, 11}, (1, 1), "orchestrator CPU 11"),
+        ({11}, (0, 0), "RLIMIT_RTPRIO"),
+    ],
+)
+def test_collection_client_scheduler_contract_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    affinity: set[int],
+    rtprio: tuple[int, int],
+    message: str,
+) -> None:
+    monkeypatch.setenv(
+        "QCSD_CAPTURE_SCHEDULER_CONTRACT", "qcsd-client-rr1-cpu10-v1"
+    )
+    monkeypatch.setattr(capture_session.os, "sched_getaffinity", lambda _pid: affinity)
+    monkeypatch.setattr(capture_session.resource, "getrlimit", lambda _limit: rtprio)
+
+    with pytest.raises(ValueError, match=message):
+        capture_session._capture_scheduler_launch_prefix()

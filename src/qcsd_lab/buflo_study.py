@@ -3075,6 +3075,22 @@ def _capture_admission_value(
     build_environments.extend(
         record["environment"] for record in staged["public"].values()
     )
+    capture_scheduler = None
+    if version >= 9:
+        expected_scheduler = _capture_scheduler_environment_contract()
+        if any(
+            environment.get("schema_version") != 2
+            or environment.get("capture_scheduler") != expected_scheduler
+            or environment.get("docker", {}).get("ncpu") != 12
+            for environment in build_environments
+        ):
+            raise ValueError(
+                "capture admission requires one exact 12-CPU RR1 affinity contract"
+            )
+        capture_scheduler = {
+            "docker_ncpu": 12,
+            **expected_scheduler,
+        }
     build_execution = _one_build_execution_identity(build_environments)
     expected_build_execution = {
         "cohort_version": version,
@@ -3168,8 +3184,8 @@ def _capture_admission_value(
         for row in allowed
     ):
         raise ValueError("capture admission selected result root escapes its bound results root")
-    return {
-        "schema_version": 1,
+    value = {
+        "schema_version": 2 if capture_scheduler is not None else 1,
         "artifact_type": CAPTURE_ADMISSION_ARTIFACT_TYPE,
         "stage": stage,
         "cohort_version": version,
@@ -3198,6 +3214,9 @@ def _capture_admission_value(
         "resume_policy": "resume-only-the-selected-experiment-json-root;never-create-a-replacement",
         "passed": True,
     }
+    if capture_scheduler is not None:
+        value["capture_scheduler"] = capture_scheduler
+    return value
 
 
 def create_capture_admission(
@@ -4788,12 +4807,32 @@ def validate_build_execution_receipt(
     return {"path": binding["path"], "sha256": binding["sha256"], **validated}
 
 
+def _capture_scheduler_environment_contract() -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "contract": "qcsd-client-rr1-cpu10-v1",
+        "scope": "all_measured_neqo_clients",
+        "collection_cpuset_cpus": [10, 11],
+        "orchestrator_affinity_cpus": [11],
+        "client_affinity_cpus": [10],
+        "sidecar_affinity_cpus": list(range(10)),
+        "policy": "SCHED_RR",
+        "priority": 1,
+        "rlimit_rtprio": {"soft": 1, "hard": 1},
+        "cap_sys_nice": False,
+        "docker_cpu_rt_runtime_configured": False,
+        "affinity_scope": (
+            "qcsd_container_affinity_partition_not_physical_cpu_isolation"
+        ),
+    }
+
+
 def validate_study_environment_receipt(
     value: Any, *, expected_image_digest: str | None = None
 ) -> dict[str, Any]:
     """Validate the minimized, non-sensitive Docker/build environment receipt."""
 
-    if not isinstance(value, Mapping) or set(value) != {
+    base_keys = {
         "schema_version",
         "artifact_type",
         "docker",
@@ -4801,9 +4840,15 @@ def validate_study_environment_receipt(
         "build_inputs",
         "build_execution",
         "clock_status",
-    }:
+    }
+    if not isinstance(value, Mapping) or value.get("schema_version") not in {1, 2}:
         raise ValueError("study environment receipt schema is invalid")
-    if value["schema_version"] != 1 or value["artifact_type"] != "qcsd-buflo-study-environment":
+    expected_keys = base_keys | (
+        {"capture_scheduler"} if value["schema_version"] == 2 else set()
+    )
+    if set(value) != expected_keys:
+        raise ValueError("study environment receipt schema is invalid")
+    if value["artifact_type"] != "qcsd-buflo-study-environment":
         raise ValueError("study environment receipt identity is invalid")
     docker = value["docker"]
     if not isinstance(docker, Mapping) or set(docker) != {
@@ -4828,6 +4873,8 @@ def validate_study_environment_receipt(
     for key in ("ncpu", "mem_total_bytes"):
         if not isinstance(docker[key], int) or isinstance(docker[key], bool) or docker[key] <= 0:
             raise ValueError(f"study Docker capacity field is invalid: {key}")
+    if value["schema_version"] == 2 and docker["ncpu"] != 12:
+        raise ValueError("study capture scheduler requires the exact 12-CPU topology")
 
     image = value["collection_image"]
     if not isinstance(image, Mapping) or set(image) != {"id", "repo_digests"}:
@@ -4929,8 +4976,12 @@ def validate_study_environment_receipt(
             raise ValueError(f"study {label} clock synchronization status is malformed")
     if abs(clock["host"]["realtime_unix_ns"] - clock["container"]["realtime_unix_ns"]) > 60_000_000_000:
         raise ValueError("study host/container realtime samples differ by more than 60 seconds")
-    return {
-        "schema_version": 1,
+    capture_scheduler = value.get("capture_scheduler")
+    expected_capture_scheduler = _capture_scheduler_environment_contract()
+    if value["schema_version"] == 2 and capture_scheduler != expected_capture_scheduler:
+        raise ValueError("study capture scheduler environment receipt is invalid")
+    validated = {
+        "schema_version": value["schema_version"],
         "image_id": image_id,
         "docker": dict(docker),
         "build_inputs": dict(build),
@@ -4944,6 +4995,9 @@ def validate_study_environment_receipt(
             "container": dict(clock["container"]),
         },
     }
+    if value["schema_version"] == 2:
+        validated["capture_scheduler"] = dict(expected_capture_scheduler)
+    return validated
 
 
 def _one_build_execution_identity(

@@ -17,6 +17,7 @@ from qcsd_lab.capture_session import (
     Defense,
     Limits,
     _client_command,
+    _process_scheduler_valid,
     _runner_result_complete,
     _validate_chaff_response_receipts,
     _validate_run_binding,
@@ -1525,7 +1526,9 @@ def test_partial_runtime_chaff_receipts_reject_raw_identity_contradictions(
         _validate_chaff_response_receipts({"chaff_responses": [receipt]}, manifest)
 
 
-def test_runner_receipt_is_bound_to_frozen_launch_inputs(tmp_path: Path) -> None:
+def test_runner_receipt_is_bound_to_frozen_launch_inputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     manifest = tmp_path / "workload.json"
     manifest.write_text('{"resources":[]}\n', encoding="utf-8")
     context = SimpleNamespace(
@@ -1566,6 +1569,73 @@ def test_runner_receipt_is_bound_to_frozen_launch_inputs(tmp_path: Path) -> None
         seed=7,
         context=context,
     )
+    run["process_scheduler"] = {
+        "schema_version": 1,
+        "contract": None,
+        "contract_valid": True,
+    }
+    _validate_run_binding(
+        run,
+        manifest=manifest,
+        workload_id="site",
+        defense=Defense("undefended", "none", True),
+        seed=7,
+        context=context,
+    )
+    run.pop("process_scheduler")
+    monkeypatch.setenv(
+        "QCSD_CAPTURE_SCHEDULER_CONTRACT", "qcsd-client-rr1-cpu10-v1"
+    )
+    with pytest.raises(ValueError, match="frozen sample inputs"):
+        _validate_run_binding(
+            run,
+            manifest=manifest,
+            workload_id="site",
+            defense=Defense("undefended", "none", True),
+            seed=7,
+            context=context,
+        )
+    scheduler = {
+        "schema_version": 1,
+        "source": "linux-sched-and-procfs-v1",
+        "policy": "SCHED_RR",
+        "priority": 1,
+        "affinity_cpus": [10],
+        "rlimit_rtprio": {"soft": 1, "hard": 1},
+        "no_new_privileges": True,
+        "effective_capabilities_hex": "0000000000000000",
+        "cgroup_effective_cpuset": "10-11",
+        "affinity_scope": (
+            "qcsd_container_affinity_partition_not_physical_cpu_isolation"
+        ),
+        "contract": "qcsd-client-rr1-cpu10-v1",
+        "contract_valid": True,
+    }
+    assert _process_scheduler_valid(scheduler)
+    run["process_scheduler"] = scheduler
+    _validate_run_binding(
+        run,
+        manifest=manifest,
+        workload_id="site",
+        defense=Defense("undefended", "none", True),
+        seed=7,
+        context=context,
+    )
+    run["process_scheduler"] = {
+        **scheduler,
+        "effective_capabilities_hex": "0000000000003000",
+    }
+    assert not _process_scheduler_valid(run["process_scheduler"])
+    with pytest.raises(ValueError, match="frozen sample inputs"):
+        _validate_run_binding(
+            run,
+            manifest=manifest,
+            workload_id="site",
+            defense=Defense("undefended", "none", True),
+            seed=7,
+            context=context,
+        )
+    run["process_scheduler"] = scheduler
     run["workload_hash_sha256"] = "0" * 64
     with pytest.raises(ValueError, match="frozen sample inputs"):
         _validate_run_binding(

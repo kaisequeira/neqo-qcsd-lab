@@ -570,10 +570,12 @@ else
 fi
 image_id="$(docker image inspect --format '{{.Id}}' "${image}")"
 buflo_host_lock_fd=""
+study_capture_scheduler_contract=""
 if [[ ( "${1:-}" == "buflo-study" && "${2:-}" == "capture" ) ||
       ( "${1:-}" == "run" &&
         "${study_campaign_name}" =~ ^buflo-study-v1-(smoke|rehearsal|formal-[0-9]{2})\.yml$ ) ||
       "${study_resume_public}" == "1" ]]; then
+  study_capture_scheduler_contract="qcsd-client-rr1-cpu10-v1"
   command -v flock >/dev/null 2>&1 || {
     echo "buflo-study capture requires flock on the host" >&2
     exit 1
@@ -630,6 +632,7 @@ print(json.dumps({
     QCSD_STUDY_CONTAINER_CLOCK="${study_container_clock}" \
     QCSD_STUDY_REPO_DIGESTS="${study_repo_digests}" \
     QCSD_STUDY_IMAGE_ID="${image_id}" \
+    QCSD_STUDY_CAPTURE_SCHEDULER_CONTRACT="${study_capture_scheduler_contract}" \
     python3 -c '
 import base64, json, os, subprocess, time
 version = json.loads(os.environ["QCSD_STUDY_DOCKER_VERSION"])
@@ -658,7 +661,7 @@ else:
         host_evidence = None
         host_reason = f"timedatectl returned status {query.returncode}"
 value = {
-    "schema_version": 1,
+    "schema_version": 2,
     "artifact_type": "qcsd-buflo-study-environment",
     "docker": {
         "client_version": version["Client"]["Version"],
@@ -689,6 +692,23 @@ value = {
             "monotonic_ns": time.monotonic_ns(),
         },
         "container": json.loads(os.environ["QCSD_STUDY_CONTAINER_CLOCK"]),
+    },
+    "capture_scheduler": {
+        "schema_version": 1,
+        "contract": os.environ["QCSD_STUDY_CAPTURE_SCHEDULER_CONTRACT"],
+        "scope": "all_measured_neqo_clients",
+        "collection_cpuset_cpus": [10, 11],
+        "orchestrator_affinity_cpus": [11],
+        "client_affinity_cpus": [10],
+        "sidecar_affinity_cpus": list(range(10)),
+        "policy": "SCHED_RR",
+        "priority": 1,
+        "rlimit_rtprio": {"soft": 1, "hard": 1},
+        "cap_sys_nice": False,
+        "docker_cpu_rt_runtime_configured": False,
+        "affinity_scope": (
+            "qcsd_container_affinity_partition_not_physical_cpu_isolation"
+        ),
     },
 }
 encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
@@ -926,6 +946,9 @@ else
     --env "QCSD_LAB_GID=$(id -g)"
   )
 fi
+if [[ -n "${study_capture_scheduler_contract}" ]]; then
+  runtime+=(--cpuset-cpus "10-11" --ulimit "rtprio=1:1")
+fi
 
 container=(
   docker run "${runtime[@]}"
@@ -935,6 +958,11 @@ container=(
   --env "QCSD_LAB_IMAGE_DIGEST=${image_id}"
   --volume "${ROOT}:/lab:ro"
 )
+if [[ -n "${study_capture_scheduler_contract}" ]]; then
+  container+=(
+    --env "QCSD_CAPTURE_SCHEDULER_CONTRACT=${study_capture_scheduler_contract}"
+  )
+fi
 if [[ -n "${study_environment_b64}" ]]; then
   container+=(--env "QCSD_STUDY_ENVIRONMENT_B64=${study_environment_b64}")
 fi
@@ -1109,6 +1137,7 @@ start_capture_acceptance_server() {
   local server_port="$2"
   docker run --detach --name "${server_name}" \
     --network bridge \
+    --cpuset-cpus 0-9 \
     --security-opt no-new-privileges \
     --cap-drop ALL --cap-add NET_ADMIN \
     --env "QCSD_ACCEPTANCE_SERVER_PORT=${server_port}" \
@@ -1125,6 +1154,7 @@ start_buflo_controlled_server() {
   local network_name="$4"
   docker run --detach --name "${server_name}" \
     --network "${network_name}" --network-alias "${server_alias}" \
+    --cpuset-cpus 0-9 \
     --security-opt no-new-privileges \
     --cap-drop ALL --cap-add NET_ADMIN \
     --env "QCSD_CONTROLLED_SERVER_PORT=${server_port}" \
@@ -1186,6 +1216,8 @@ run_buflo_controlled_profile() {
   second_qdisc="$(buflo_qdisc_base64 "${second_server}")"
   docker run --rm \
     --network "${network_name}" \
+    --cpuset-cpus 10-11 \
+    --ulimit rtprio=1:1 \
     --security-opt no-new-privileges \
     --cap-drop ALL --cap-add NET_RAW --cap-add NET_ADMIN \
     --cap-add SETUID --cap-add SETGID --cap-add SETPCAP \
@@ -1194,6 +1226,7 @@ run_buflo_controlled_profile() {
     --env "QCSD_LAB_IMAGE_DIGEST=${image_id}" \
     --env "QCSD_LAB_UID=$(id -u)" \
     --env "QCSD_LAB_GID=$(id -g)" \
+    --env "QCSD_CAPTURE_SCHEDULER_CONTRACT=qcsd-client-rr1-cpu10-v1" \
     --env "QCSD_BUFLO_NETEM_PROFILE=${profile}" \
     --env "QCSD_BUFLO_CAPTURE_LOCK_HELD=1" \
     "${study_environment_argument[@]}" \
