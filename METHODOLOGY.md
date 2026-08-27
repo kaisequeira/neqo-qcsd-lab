@@ -109,6 +109,29 @@ Thus “multi-origin” does not mean several campaign samples or several PCAPs.
 It means one sample whose single PCAP contains the exact union of multiple Neqo
 connection tuples.
 
+### Candidate timing realization
+
+Canonical BuFLO uses exact 20 ms cells with a strict half-open 5 ms transport
+realization window. Runner-wakeup schema 3 reserves that whole window and
+actively waits until the release boundary. Once the outgoing cell reaches its
+socket handoff, the runner immediately drives each other endpoint only when
+transport proves that accepted scheduled receive credit still lacks its first
+physical `MAX_STREAM_DATA` encoding. This preserves outgoing-before-incoming
+ordering across origins without treating already encoded, in-flight, or
+unrelated control as work to flush. A release or credit advertisement at or
+after its deadline terminalizes the opportunity as `DeadlineExpired`; later
+transport or byte-consumption evidence cannot turn it into a satisfied event.
+
+Schema 2 remains an exact historical reader for the former 250 microsecond
+active-wait tail, but it is not current capture evidence. The schema-3 policy
+can actively occupy roughly 5/20, or 25%, of one CPU while BuFLO is running.
+That implementation cost is therefore included in client CPU and wakeup
+reporting. The measured client is pinned to CPU 10 under `SCHED_RR` priority 1,
+with collection sidecars confined away from that CPU; the receipt explicitly
+states that this is a container affinity partition rather than physical host
+CPU isolation. Live zero-miss gates remain authoritative for residual host,
+hypervisor, and interrupt jitter.
+
 ## Observer and capture boundary
 
 Every defence uses the same observer: Ethernet capture on the collection

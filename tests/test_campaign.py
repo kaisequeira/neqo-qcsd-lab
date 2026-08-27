@@ -1711,6 +1711,147 @@ def test_runner_receipt_is_bound_to_frozen_launch_inputs(
         )
 
 
+@pytest.mark.parametrize(
+    ("defense_name", "runtime_kind"),
+    [("buflo", "buflo"), ("cs-buflo", "cs_buflo")],
+)
+def test_completed_candidate_binding_requires_current_wakeup_schema(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    defense_name: str,
+    runtime_kind: str,
+) -> None:
+    manifest = tmp_path / "workload.json"
+    chaff_manifest = tmp_path / "chaff.json"
+    application_source = tmp_path / "prepared.json"
+    manifest.write_text('{"resources":[]}\n', encoding="utf-8")
+    chaff_manifest.write_text('{"resources":[]}\n', encoding="utf-8")
+    application_source.write_text('{"resources":[]}\n', encoding="utf-8")
+    context = SimpleNamespace(
+        request_policy="as-defined",
+        udp_payload_ceiling=1_200,
+        limits=Limits(max_response_bytes=4_096),
+    )
+    v1_semantics = (
+        "actual_select_return_source; socket_wins_simultaneous_readiness; "
+        "controller_subset_is_effective_earliest_deadline; "
+        "scheduled_cells_are_not_wakeups"
+    )
+    wakeup_v2 = {
+        "schema_version": 2,
+        "semantics": (
+            f"{v1_semantics}; "
+            "buflo_exact_release_guard_reserves_candidate_window; "
+            "buflo_exact_release_active_wait_tail_us=250; "
+            "buflo_exact_release_guards_are_separately_receipted_active_waits; "
+            "buflo_active_defense_socket_drains_are_single_batch; "
+            "buflo_active_defense_http_drains_are_single_event; "
+            "buflo_output_is_interrupted_at_guard"
+        ),
+        "wait_returns": 12,
+        "socket_readiness_wakeups": 7,
+        "timer_wakeups": 5,
+        "controller_deadline_timer_wakeups": 4,
+        "other_timer_wakeups": 1,
+        "buflo_exact_release_guard_entries": 0,
+        "buflo_exact_release_guard_wait_nanoseconds": 0,
+        "buflo_exact_release_active_wait_nanoseconds": 0,
+        "buflo_exact_release_max_passive_wake_lateness_nanoseconds": 0,
+        "buflo_exact_release_max_guard_exit_lateness_nanoseconds": 0,
+    }
+    run = {
+        "seed": 7,
+        "request_policy": "as-defined",
+        "workload_hash_sha256": sha256_file(manifest),
+        "max_response_bytes": 4_096,
+        "completion_status": "complete",
+        "client_resource_usage": {
+            "schema_version": 1,
+            "source": "gnu-time-python-monotonic-and-runner-select-v1",
+            "user_cpu_seconds": 0.1,
+            "system_cpu_seconds": 0.05,
+            "wall_time_seconds": 0.2,
+            "maximum_rss_bytes": 4_096,
+            "voluntary_context_switches": 1,
+            "involuntary_context_switches": 0,
+            "timer_wakeups": 5,
+            "timer_wakeups_unavailable_reason": None,
+            "rapl_energy_joules": None,
+            "rapl_unavailable_reason": "not measured in unit test",
+        },
+        "runner_wakeup_metrics": wakeup_v2,
+        "resolved_configuration": {
+            "schema_version": 2,
+            "max_udp_payload_size": 1_200,
+            "defense": {"kind": runtime_kind},
+        },
+        "chaff_manifest_hash_sha256": sha256_file(chaff_manifest),
+        "application_workload_source_hash_sha256": sha256_file(application_source),
+        "chaff_responses": [],
+        "defense_parameters": None,
+    }
+    terminal_validation_calls: list[tuple[str, bool, bool, int]] = []
+
+    def terminal_receipts_valid(
+        candidate: dict[str, Any],
+        kind: str,
+        *,
+        require_application_complete: bool,
+        require_current_schema: bool,
+    ) -> bool:
+        schema = candidate["runner_wakeup_metrics"]["schema_version"]
+        terminal_validation_calls.append(
+            (kind, require_application_complete, require_current_schema, schema)
+        )
+        return require_current_schema and schema == 3
+
+    monkeypatch.setattr(
+        orchestrator.capture_engine,
+        "new_defense_terminal_receipts_valid",
+        terminal_receipts_valid,
+    )
+    monkeypatch.setattr(
+        orchestrator.capture_engine,
+        "_validate_chaff_response_receipts",
+        lambda *_args, **_kwargs: None,
+    )
+    defense = Defense(defense_name, runtime_kind, False)
+    with pytest.raises(ValueError, match="frozen sample inputs"):
+        _validate_run_binding(
+            run,
+            manifest=manifest,
+            chaff_manifest=chaff_manifest,
+            application_workload_source=application_source,
+            workload_id="site",
+            defense=defense,
+            seed=7,
+            context=context,
+        )
+
+    run["runner_wakeup_metrics"] = {
+        **wakeup_v2,
+        "schema_version": 3,
+        "semantics": str(wakeup_v2["semantics"]).replace(
+            "buflo_exact_release_active_wait_tail_us=250",
+            "buflo_exact_release_active_wait_tail_us=5000",
+        ),
+    }
+    _validate_run_binding(
+        run,
+        manifest=manifest,
+        chaff_manifest=chaff_manifest,
+        application_workload_source=application_source,
+        workload_id="site",
+        defense=defense,
+        seed=7,
+        context=context,
+    )
+    assert terminal_validation_calls == [
+        (runtime_kind, True, True, 2),
+        (runtime_kind, True, True, 3),
+    ]
+
+
 def test_controlled_regression_parameters_bind_loaded_chaff_evidence(tmp_path: Path) -> None:
     parameter = tmp_path / "walkie-talking-controlled.json"
     provenance = tmp_path / "walkie-talking-controlled.json.provenance.json"
@@ -2211,6 +2352,52 @@ def test_collection_success_with_multiple_primary_views_is_quarantined(
     assert failure is not None
     assert failure["type"] == "StrictCaptureClockIntegrityFailure"
     assert "exactly one primary" in failure["details"][0]["error"]
+
+
+def test_buflo_fidelity_failure_names_late_incoming_credit_slot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    attempt = tmp_path / "attempt"
+    result = _write_successful_attempt(attempt, "alpha", "buflo")
+    (attempt / "neqo/schedule.csv").write_text(
+        "target_time_us,direction,size,connection,action_time_us,satisfaction,"
+        "observed_size,miss_reason,slot_id,credit_advertised_at_us,"
+        "credit_advertisement_delay_us\n"
+        "6260000,incoming,1200,0,6310336,satisfied,,,627,6319486,9150\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "_schedule_realization_metrics",
+        lambda _attempt: {"incoming_credit_advertisement_delay_us_max": 9_150},
+    )
+    monkeypatch.setattr(orchestrator, "fidelity_eligible", lambda *_args, **_kwargs: False)
+
+    failure = orchestrator._intrinsic_fidelity_failure(
+        {"sample_id": "sample", "defense": "buflo", "runtime_kind": "buflo"},
+        result,
+        attempt,
+    )
+
+    assert failure is not None
+    assert failure["type"] == "StrictDefenseFidelityFailure"
+    [predicate] = failure["details"][0]["failed_predicates"]
+    assert predicate == {
+        "name": "buflo_incoming_credit_advertisement_delay_window",
+        "predicate": "incoming_credit_advertisement_delay_us_max < 5000",
+        "limit_us": 5_000,
+        "observed_max_us": 9_150,
+        "violating_slots": [
+            {
+                "slot_id": 627,
+                "connection": 0,
+                "target_time_us": 6_260_000,
+                "action_time_us": 6_310_336,
+                "credit_advertised_at_us": 6_319_486,
+                "credit_advertisement_delay_us": 9_150,
+            }
+        ],
+    }
 
 
 def test_prepared_response_identity_drift_is_quarantined_then_retried(

@@ -111,6 +111,7 @@ _RUNNER_WAKEUP_METRICS_V2_KEYS = _RUNNER_WAKEUP_METRICS_V1_KEYS | {
     "buflo_exact_release_max_passive_wake_lateness_nanoseconds",
     "buflo_exact_release_max_guard_exit_lateness_nanoseconds",
 }
+_RUNNER_WAKEUP_METRICS_V3_KEYS = _RUNNER_WAKEUP_METRICS_V2_KEYS
 _RUNNER_WAKEUP_METRICS_V1_SEMANTICS = (
     "actual_select_return_source; socket_wins_simultaneous_readiness; "
     "controller_subset_is_effective_earliest_deadline; scheduled_cells_are_not_wakeups"
@@ -119,6 +120,15 @@ _RUNNER_WAKEUP_METRICS_V2_SEMANTICS = (
     f"{_RUNNER_WAKEUP_METRICS_V1_SEMANTICS}; "
     "buflo_exact_release_guard_reserves_candidate_window; "
     "buflo_exact_release_active_wait_tail_us=250; "
+    "buflo_exact_release_guards_are_separately_receipted_active_waits; "
+    "buflo_active_defense_socket_drains_are_single_batch; "
+    "buflo_active_defense_http_drains_are_single_event; "
+    "buflo_output_is_interrupted_at_guard"
+)
+_RUNNER_WAKEUP_METRICS_V3_SEMANTICS = (
+    f"{_RUNNER_WAKEUP_METRICS_V1_SEMANTICS}; "
+    "buflo_exact_release_guard_reserves_candidate_window; "
+    "buflo_exact_release_active_wait_tail_us=5000; "
     "buflo_exact_release_guards_are_separately_receipted_active_waits; "
     "buflo_active_defense_socket_drains_are_single_batch; "
     "buflo_active_defense_http_drains_are_single_event; "
@@ -965,6 +975,9 @@ def _runner_wakeup_metrics_valid(value: Any) -> bool:
     elif schema_version == 2:
         required = _RUNNER_WAKEUP_METRICS_V2_KEYS
         semantics = _RUNNER_WAKEUP_METRICS_V2_SEMANTICS
+    elif schema_version == 3:
+        required = _RUNNER_WAKEUP_METRICS_V3_KEYS
+        semantics = _RUNNER_WAKEUP_METRICS_V3_SEMANTICS
     else:
         return False
     if set(value) != required or value.get("semantics") != semantics:
@@ -975,7 +988,7 @@ def _runner_wakeup_metrics_valid(value: Any) -> bool:
         for key in count_keys
     ):
         return False
-    if schema_version == 2:
+    if schema_version in {2, 3}:
         guard_measurements = (
             value["buflo_exact_release_guard_wait_nanoseconds"],
             value["buflo_exact_release_active_wait_nanoseconds"],

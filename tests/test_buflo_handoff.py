@@ -42,6 +42,44 @@ def _packet(relative_time_ns: int, direction: str, frame_len: int) -> ObserverPa
     )
 
 
+def _runner_wakeup_receipt(schema_version: int) -> dict[str, object]:
+    semantics = (
+        "actual_select_return_source; socket_wins_simultaneous_readiness; "
+        "controller_subset_is_effective_earliest_deadline; "
+        "scheduled_cells_are_not_wakeups"
+    )
+    receipt: dict[str, object] = {
+        "schema_version": schema_version,
+        "semantics": semantics,
+        "wait_returns": 0,
+        "socket_readiness_wakeups": 0,
+        "timer_wakeups": 0,
+        "controller_deadline_timer_wakeups": 0,
+        "other_timer_wakeups": 0,
+    }
+    if schema_version in {2, 3}:
+        receipt.update(
+            {
+                "semantics": (
+                    f"{semantics}; "
+                    "buflo_exact_release_guard_reserves_candidate_window; "
+                    "buflo_exact_release_active_wait_tail_us="
+                    f"{250 if schema_version == 2 else 5000}; "
+                    "buflo_exact_release_guards_are_separately_receipted_active_waits; "
+                    "buflo_active_defense_socket_drains_are_single_batch; "
+                    "buflo_active_defense_http_drains_are_single_event; "
+                    "buflo_output_is_interrupted_at_guard"
+                ),
+                "buflo_exact_release_guard_entries": 0,
+                "buflo_exact_release_guard_wait_nanoseconds": 0,
+                "buflo_exact_release_active_wait_nanoseconds": 0,
+                "buflo_exact_release_max_passive_wake_lateness_nanoseconds": 0,
+                "buflo_exact_release_max_guard_exit_lateness_nanoseconds": 0,
+            }
+        )
+    return receipt
+
+
 def _complete_buflo_run(
     *,
     scheduled_outgoing: int,
@@ -87,19 +125,7 @@ def _complete_buflo_run(
             "schema_version": 2,
             "defense": {"kind": "buflo"},
         },
-        "runner_wakeup_metrics": {
-            "schema_version": 1,
-            "semantics": (
-                "actual_select_return_source; socket_wins_simultaneous_readiness; "
-                "controller_subset_is_effective_earliest_deadline; "
-                "scheduled_cells_are_not_wakeups"
-            ),
-            "wait_returns": 0,
-            "socket_readiness_wakeups": 0,
-            "timer_wakeups": 0,
-            "controller_deadline_timer_wakeups": 0,
-            "other_timer_wakeups": 0,
-        },
+        "runner_wakeup_metrics": _runner_wakeup_receipt(3),
         "defense_diagnostics": diagnostics,
         "chaff_responses": [
             {"outcome": "buflo_terminal_subcell_tail_cancelled"}
@@ -265,15 +291,7 @@ def _complete_cs_buflo_run() -> dict[str, object]:
             "schema_version": 2,
             "defense": {"kind": "cs_buflo"},
         },
-        "runner_wakeup_metrics": {
-            "schema_version": 1,
-            "semantics": fidelity_module.RUNNER_WAKEUP_SEMANTICS,
-            "wait_returns": 0,
-            "socket_readiness_wakeups": 0,
-            "timer_wakeups": 0,
-            "controller_deadline_timer_wakeups": 0,
-            "other_timer_wakeups": 0,
-        },
+        "runner_wakeup_metrics": _runner_wakeup_receipt(3),
         "defense_diagnostics": diagnostics,
         "buflo_summary": None,
         "cs_buflo_summary": summary,
@@ -911,7 +929,22 @@ def test_buflo_algorithm_diagnostics_bind_typed_tail_action_and_control_packet(
         == 4
     )
 
+    current_summary_with_v2_wakeups = json.loads(json.dumps(run))
+    current_summary_with_v2_wakeups["runner_wakeup_metrics"] = (
+        _runner_wakeup_receipt(2)
+    )
+    with pytest.raises(ValueError, match="terminal-tail evidence is unavailable"):
+        _algorithm_diagnostics(
+            current_summary_with_v2_wakeups,
+            defense="buflo",
+            runtime_kind="buflo",
+            schedule_path=schedule,
+            events_path=events,
+            packets_path=packets,
+        )
+
     legacy_run = json.loads(json.dumps(run))
+    legacy_run["runner_wakeup_metrics"] = _runner_wakeup_receipt(2)
     legacy_run["buflo_summary"]["schema_version"] = 2
     legacy_run["defense_diagnostics"].pop(
         "buflo_terminal_subcell_pending_application_parser_boundaries_at_latch"
@@ -1298,6 +1331,7 @@ def test_cs_buflo_schema_four_handoff_reconstructs_stop_drain_and_preserves_lega
     )
 
     legacy_v2 = json.loads(json.dumps(legacy_v3))
+    legacy_v2["runner_wakeup_metrics"] = _runner_wakeup_receipt(2)
     legacy_v2["cs_buflo_summary"]["schema_version"] = 2
     for receipt in (
         legacy_v2["defense_diagnostics"],

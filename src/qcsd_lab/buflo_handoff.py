@@ -1714,7 +1714,10 @@ def _algorithm_diagnostics(
             not isinstance(summary, Mapping)
             or not required <= set(diagnostics)
             or not new_defense_terminal_receipts_valid(
-                run, "buflo", require_application_complete=True
+                run,
+                "buflo",
+                require_application_complete=True,
+                require_current_schema=require_current,
             )
         ):
             raise ValueError("study handoff BuFLO terminal-tail evidence is unavailable")

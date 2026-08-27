@@ -45,6 +45,19 @@ defense-control traffic is explicitly receipted and is an expected QCSD-only
 difference from the bilateral TCP study; it is never described as
 paper-equivalent or as a server padding-complete signal.
 
+Current BuFLO evidence uses runner-wakeup schema 3. The measured client remains
+actively runnable for the complete 5 ms realization window before every exact
+20 ms release; after the outgoing handoff it immediately drives only endpoints
+with accepted scheduled receive credit that has not yet produced a
+`MAX_STREAM_DATA` frame. The half-open deadline remains strict: a release or
+credit advertisement at or after the deadline is a typed hard failure and is
+never caught up. Historical schema 2 receipts retain their exact 250 microsecond
+active-wait semantics and remain readable, but cannot admit a fresh candidate
+capture. Full-window active waiting can consume approximately 25% of one CPU
+while canonical BuFLO is active, so active-wait nanoseconds and measured client
+CPU are retained as performance evidence rather than treated as unavailable
+infrastructure overhead.
+
 CS-BuFLO local early termination stops defense chaff and credit work, not the
 application. If it occurs before the local onLoad analogue, current receipts
 count the application receive streams, parser state, and send endpoints handed

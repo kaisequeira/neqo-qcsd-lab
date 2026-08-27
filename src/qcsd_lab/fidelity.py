@@ -58,6 +58,7 @@ SCHEDULE_QCSD_FIELDS = ADVERTISEMENT_SCHEDULE_QCSD_FIELDS + (
 )
 DEFAULT_TIMESTAMP_TOLERANCE_NS = 10_000_000
 CLOCK_STEP_MIN_NS = 50_000_000
+BUFLO_INCOMING_CREDIT_ADVERTISEMENT_DELAY_LIMIT_US = 5_000
 BUFLO_TERMINAL_SUBCELL_POLICY = (
     "drain_whole_cells_then_client_local_http3_cancel_"
     "unallocatable_reviewed_chaff_tail"
@@ -1477,6 +1478,15 @@ RUNNER_WAKEUP_V2_SEMANTICS = (
     "buflo_active_defense_http_drains_are_single_event; "
     "buflo_output_is_interrupted_at_guard"
 )
+RUNNER_WAKEUP_V3_SEMANTICS = (
+    f"{RUNNER_WAKEUP_SEMANTICS}; "
+    "buflo_exact_release_guard_reserves_candidate_window; "
+    "buflo_exact_release_active_wait_tail_us=5000; "
+    "buflo_exact_release_guards_are_separately_receipted_active_waits; "
+    "buflo_active_defense_socket_drains_are_single_batch; "
+    "buflo_active_defense_http_drains_are_single_event; "
+    "buflo_output_is_interrupted_at_guard"
+)
 _LEGACY_SCHEDULED_INCOMING_CONTRACT = {
     "scheduled_incoming_requested_bytes": _INTEGER,
     "scheduled_incoming_consumed_bytes": _INTEGER,
@@ -1908,7 +1918,9 @@ def new_defense_terminal_receipts_valid(
     ):
         return False
     wakeup_metrics = run["runner_wakeup_metrics"]
-    if wakeup_metrics["schema_version"] == 2 and defense_kind != "buflo":
+    if require_current_schema and wakeup_metrics["schema_version"] != 3:
+        return False
+    if wakeup_metrics["schema_version"] in {2, 3} and defense_kind != "buflo":
         if any(
             wakeup_metrics[key]
             for key in (
@@ -2094,7 +2106,7 @@ def _runner_wakeup_metrics_valid(value: Any) -> bool:
     if schema_version == 1:
         required = base_required
         semantics = RUNNER_WAKEUP_SEMANTICS
-    elif schema_version == 2:
+    elif schema_version in {2, 3}:
         required = base_required | {
             "buflo_exact_release_guard_entries",
             "buflo_exact_release_guard_wait_nanoseconds",
@@ -2102,7 +2114,11 @@ def _runner_wakeup_metrics_valid(value: Any) -> bool:
             "buflo_exact_release_max_passive_wake_lateness_nanoseconds",
             "buflo_exact_release_max_guard_exit_lateness_nanoseconds",
         }
-        semantics = RUNNER_WAKEUP_V2_SEMANTICS
+        semantics = (
+            RUNNER_WAKEUP_V2_SEMANTICS
+            if schema_version == 2
+            else RUNNER_WAKEUP_V3_SEMANTICS
+        )
     else:
         return False
     if set(value) != required or value.get("semantics") != semantics:
@@ -2110,7 +2126,7 @@ def _runner_wakeup_metrics_valid(value: Any) -> bool:
     counters = tuple(required - {"schema_version", "semantics"})
     if any(type(value.get(key)) is not int or value[key] < 0 for key in counters):
         return False
-    if schema_version == 2:
+    if schema_version in {2, 3}:
         guard_measurements = (
             value["buflo_exact_release_guard_wait_nanoseconds"],
             value["buflo_exact_release_active_wait_nanoseconds"],
@@ -2232,8 +2248,11 @@ def fidelity_eligible(
             == schedule_metrics.get("incoming_credit_advertised_events")
             and diagnostics["buflo_scheduled_incoming_cells"]
             == schedule_metrics.get("incoming_credit_consumed_events")
-            and schedule_metrics.get("incoming_credit_advertisement_delay_us_max", 5_001)
-            <= 5_000
+            and schedule_metrics.get(
+                "incoming_credit_advertisement_delay_us_max",
+                BUFLO_INCOMING_CREDIT_ADVERTISEMENT_DELAY_LIMIT_US,
+            )
+            < BUFLO_INCOMING_CREDIT_ADVERTISEMENT_DELAY_LIMIT_US
             and diagnostics["scheduled_incoming_requested_bytes"]
             == diagnostics["buflo_scheduled_incoming_cells"] * 1_200
             and diagnostics.get("scheduled_incoming_advertised_bytes")

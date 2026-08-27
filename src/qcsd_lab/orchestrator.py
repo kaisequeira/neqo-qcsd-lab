@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import csv
 import fcntl
 import json
 import math
@@ -29,6 +30,7 @@ from .experiment import (
     validate_planned_sample_identity,
 )
 from .fidelity import (
+    BUFLO_INCOMING_CREDIT_ADVERTISEMENT_DELAY_LIMIT_US,
     _schedule_realization_metrics,
     fidelity_eligible,
     validate_primary_capture_clock_integrity,
@@ -2128,6 +2130,60 @@ def _primary_capture_view(result: Mapping[str, Any]) -> Mapping[str, Any]:
     return primaries[0]
 
 
+def _buflo_incoming_credit_delay_failure(
+    attempt: Path, schedule: Mapping[str, Any]
+) -> dict[str, Any] | None:
+    """Describe the exact late incoming-credit slots behind the BuFLO gate."""
+
+    observed_max = schedule.get("incoming_credit_advertisement_delay_us_max")
+    if (
+        type(observed_max) is not int
+        or observed_max < BUFLO_INCOMING_CREDIT_ADVERTISEMENT_DELAY_LIMIT_US
+    ):
+        return None
+
+    violations: list[dict[str, int]] = []
+    path = attempt / "neqo/schedule.csv"
+    try:
+        with path.open(newline="", encoding="utf-8") as source:
+            rows = list(csv.DictReader(source))
+    except (OSError, UnicodeError, csv.Error):
+        rows = []
+    for row in rows:
+        if row.get("direction") != "incoming":
+            continue
+        try:
+            delay_us = int(row["credit_advertisement_delay_us"])
+            action_time_us = int(row["action_time_us"])
+            advertised_at_us = int(row["credit_advertised_at_us"])
+            violation = {
+                "slot_id": int(row["slot_id"]),
+                "connection": int(row["connection"]),
+                "target_time_us": int(row["target_time_us"]),
+                "action_time_us": action_time_us,
+                "credit_advertised_at_us": advertised_at_us,
+                "credit_advertisement_delay_us": delay_us,
+            }
+        except (KeyError, TypeError, ValueError):
+            continue
+        if (
+            delay_us >= BUFLO_INCOMING_CREDIT_ADVERTISEMENT_DELAY_LIMIT_US
+            and advertised_at_us - action_time_us == delay_us
+        ):
+            violations.append(violation)
+
+    return {
+        "name": "buflo_incoming_credit_advertisement_delay_window",
+        "predicate": (
+            "incoming_credit_advertisement_delay_us_max "
+            f"< {BUFLO_INCOMING_CREDIT_ADVERTISEMENT_DELAY_LIMIT_US}"
+        ),
+        "limit_us": BUFLO_INCOMING_CREDIT_ADVERTISEMENT_DELAY_LIMIT_US,
+        "observed_max_us": observed_max,
+        "violating_slots": violations,
+    }
+
+
 def _intrinsic_fidelity_failure(
     sample: dict[str, Any],
     result: dict[str, Any],
@@ -2166,17 +2222,20 @@ def _intrinsic_fidelity_failure(
     )
     if eligible:
         return None
+    details: dict[str, Any] = {
+        "defense": defense,
+        "schedule": schedule,
+        "defense_diagnostics": defense_metrics,
+    }
+    if defense == "buflo":
+        credit_delay_failure = _buflo_incoming_credit_delay_failure(attempt, schedule)
+        if credit_delay_failure is not None:
+            details["failed_predicates"] = [credit_delay_failure]
     return {
         "stage": "fidelity",
         "type": "StrictDefenseFidelityFailure",
         "message": "collection artifacts failed strict defense fidelity gates",
-        "details": [
-            {
-                "defense": defense,
-                "schedule": schedule,
-                "defense_diagnostics": defense_metrics,
-            }
-        ],
+        "details": [details],
     }
 
 
