@@ -563,6 +563,13 @@ def test_buflo_terminal_provenance_rejects_missing_changed_and_extra_keys(
     old_translation = json.loads(json.dumps(original))
     old_translation["terminal_translation_version"] = 1
     mutations.append(old_translation)
+    float_translation = json.loads(json.dumps(original))
+    float_translation["terminal_translation_version"] = 2.0
+    mutations.append(float_translation)
+    for invalid_schema in (True, 1.0):
+        confused_schema = json.loads(json.dumps(original))
+        confused_schema["schema_version"] = invalid_schema
+        mutations.append(confused_schema)
     unsafe_parser_contract = json.loads(json.dumps(original))
     unsafe_parser_contract["terminal_parser_safety"] = (
         "latch-requires-zero-live-parser-lease-bytes-and-zero-pending-parser-boundaries"
@@ -582,6 +589,74 @@ def test_buflo_terminal_provenance_rejects_missing_changed_and_extra_keys(
                 expected_qcsd_profile="research-1200",
                 expected_udp_payload_ceiling=1_200,
             )
+
+
+def test_cs_buflo_provenance_v2_is_exact_and_legacy_v1_remains_readable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parameter, provenance = _copy_fixture(
+        tmp_path, monkeypatch, "cs-buflo-ctsp-live.json"
+    )
+    options = {
+        "expected_kind": "cs_buflo",
+        "allow_study_candidate": True,
+        "expected_qcsd_profile": "research-1200",
+        "expected_udp_payload_ceiling": 1_200,
+    }
+    validate_parameter_artifact(parameter, **options)
+    current = json.loads(provenance.read_text(encoding="utf-8"))
+    assert current["schema_version"] == 2
+    assert current["paper_early_termination_semantics"] == (
+        "server-done-xmitting-requires-empty-output-buffer-and-onload-or-strict-"
+        "quiet-time-and-either-client-padding-done-or-current-write-real-plus-"
+        "junk-power-of-two-crossing"
+    )
+    assert current["pinned_author_padding_done_active_consumers"] == 0
+    assert current["live_early_termination_semantics"] == (
+        "stop-new-client-opportunities-at-first-eligible-frozen-padding-target-"
+        "or-directional-power-of-two-crossing-outgoing-by-observed-udp-and-"
+        "incoming-by-fully-consumed-scheduled-credit-then-drain-advertised-"
+        "credit-exactly-once"
+    )
+
+    for invalid_schema in (True, 1.0, 2.0):
+        invalid = json.loads(json.dumps(current))
+        invalid["schema_version"] = invalid_schema
+        atomic_json(provenance, invalid)
+        with pytest.raises(ValueError, match="provenance"):
+            validate_parameter_artifact(parameter, **options)
+    invalid_consumer_count = json.loads(json.dumps(current))
+    invalid_consumer_count["pinned_author_padding_done_active_consumers"] = False
+    atomic_json(provenance, invalid_consumer_count)
+    with pytest.raises(ValueError, match="translation divergence"):
+        validate_parameter_artifact(parameter, **options)
+    for field in (
+        "rate_boundary_translation_version",
+        "early_termination_translation_version",
+    ):
+        invalid_version = json.loads(json.dumps(current))
+        invalid_version[field] = 2.0
+        atomic_json(provenance, invalid_version)
+        with pytest.raises(ValueError, match="translation divergence"):
+            validate_parameter_artifact(parameter, **options)
+
+    legacy = json.loads(json.dumps(current))
+    legacy["schema_version"] = 1
+    legacy["early_termination_semantics"] = (
+        "udp_client_only_observed_udp_power_of_two_crossing"
+    )
+    for key in (
+        parameters._CS_BUFLO_SEMANTICS_V2_KEYS
+        - parameters._LEGACY_CS_BUFLO_SEMANTICS_V1_KEYS
+    ):
+        legacy.pop(key)
+    atomic_json(provenance, legacy)
+    validate_parameter_artifact(parameter, **options)
+
+    legacy["paper_early_termination_semantics"] = "unreceipted-v1-extension"
+    atomic_json(provenance, legacy)
+    with pytest.raises(ValueError, match="wrong fields"):
+        validate_parameter_artifact(parameter, **options)
 
 
 def _copy_fixture(tmp_path, monkeypatch, name):

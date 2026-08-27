@@ -87,6 +87,47 @@ CS_BUFLO_LOCAL_ET_V3_BOOLEAN_KEYS = frozenset(
 CS_BUFLO_LOCAL_ET_V3_KEYS = (
     CS_BUFLO_LOCAL_ET_V3_INTEGER_KEYS | CS_BUFLO_LOCAL_ET_V3_BOOLEAN_KEYS
 )
+CS_BUFLO_STOP_DRAIN_V4_INTEGER_KEYS = frozenset(
+    {
+        "cs_buflo_early_termination_translation_version",
+        "cs_buflo_outgoing_termination_stop_crossing_total_bytes",
+        "cs_buflo_incoming_termination_stop_crossing_total_bytes",
+        "cs_buflo_outgoing_termination_stop_crossing_increment_bytes",
+        "cs_buflo_incoming_termination_stop_crossing_increment_bytes",
+        "cs_buflo_outgoing_termination_stop_latched_at_us",
+        "cs_buflo_incoming_termination_stop_latched_at_us",
+        "cs_buflo_outgoing_termination_stop_scheduled_cells_at_stop",
+        "cs_buflo_incoming_termination_stop_scheduled_cells_at_stop",
+        "cs_buflo_outgoing_termination_stop_terminal_cells_at_stop",
+        "cs_buflo_incoming_termination_stop_terminal_cells_at_stop",
+        "cs_buflo_outgoing_termination_stop_progress_bytes_at_stop",
+        "cs_buflo_incoming_termination_stop_progress_bytes_at_stop",
+        "cs_buflo_outgoing_termination_stop_padding_target_bytes_at_stop",
+        "cs_buflo_incoming_termination_stop_padding_target_bytes_at_stop",
+        "cs_buflo_outgoing_termination_stop_provisional_invalidation_count",
+        "cs_buflo_incoming_termination_stop_provisional_invalidation_count",
+    }
+)
+CS_BUFLO_STOP_DRAIN_V4_BOOLEAN_KEYS = frozenset(
+    {
+        "cs_buflo_outgoing_termination_stop_latched",
+        "cs_buflo_incoming_termination_stop_latched",
+    }
+)
+CS_BUFLO_STOP_DRAIN_V4_STRING_KEYS = frozenset(
+    {
+        "cs_buflo_termination_stop_policy",
+        "cs_buflo_outgoing_termination_stop_reason",
+        "cs_buflo_incoming_termination_stop_reason",
+        "cs_buflo_outgoing_termination_stop_phase",
+        "cs_buflo_incoming_termination_stop_phase",
+    }
+)
+CS_BUFLO_STOP_DRAIN_V4_KEYS = (
+    CS_BUFLO_STOP_DRAIN_V4_INTEGER_KEYS
+    | CS_BUFLO_STOP_DRAIN_V4_BOOLEAN_KEYS
+    | CS_BUFLO_STOP_DRAIN_V4_STRING_KEYS
+)
 BUFLO_TERMINAL_STATE_V1_KEYS = frozenset(
     {
         "terminal_subcell_policy",
@@ -288,7 +329,6 @@ def cs_buflo_local_et_handoff_valid(
     before_application_complete = diagnostics[
         "cs_buflo_local_et_before_application_complete"
     ]
-    latch_at_us = diagnostics["cs_buflo_local_et_latched_at_us"]
     handoff_keys = (
         "cs_buflo_local_et_application_receive_streams_handed_off",
         "cs_buflo_local_et_application_parser_boundaries_handed_off",
@@ -299,8 +339,6 @@ def cs_buflo_local_et_handoff_valid(
         "cs_buflo_post_local_et_natural_outgoing_bytes",
         "cs_buflo_post_local_et_natural_incoming_bytes",
     )
-    if latch_at_us <= 0:
-        return False
     if before_application_complete:
         if not any(diagnostics[key] > 0 for key in handoff_keys):
             return False
@@ -1392,8 +1430,12 @@ _BOOLEAN = "boolean"
 _STRING = "string"
 _BURST_VECTOR = "burst-vector"
 _CS_RATE_TRANSITION_VECTOR = "cs-rate-transition-vector"
-CS_BUFLO_EARLY_TERMINATION_SEMANTICS = (
+CS_BUFLO_LEGACY_EARLY_TERMINATION_SEMANTICS = (
     "udp_client_only_observed_udp_power_of_two_crossing"
+)
+CS_BUFLO_EARLY_TERMINATION_SEMANTICS = (
+    "client_only_outgoing_observed_udp_and_incoming_consumed_credit_"
+    "power_of_two_crossing"
 )
 CS_BUFLO_INCOMING_CADENCE_BOUNDARY = (
     "complete_local_on_wire_max_stream_data_advertisement"
@@ -1409,6 +1451,17 @@ CS_BUFLO_RATE_BOUNDARY_COUNTER_SEMANTICS = (
 )
 CS_BUFLO_AUTHOR_RATE_BOUNDARY_COUNTER_SEMANTICS = (
     "per_direction_actually_transmitted_real_plus_junk_bytes"
+)
+CS_BUFLO_EARLY_TERMINATION_TRANSLATION_VERSION = 2
+CS_BUFLO_TERMINATION_STOP_POLICY = (
+    "stop_new_opportunities_at_first_eligible_padding_target_or_power_of_two_"
+    "crossing_then_drain_advertised_credit_exactly_once"
+)
+CS_BUFLO_TERMINATION_STOP_REASONS = frozenset(
+    {"padding_target_reached", "power_of_two_crossing"}
+)
+CS_BUFLO_TERMINATION_STOP_PHASES = frozenset(
+    {"application_complete", "strict_quiet"}
 )
 RUNNER_WAKEUP_SEMANTICS = (
     "actual_select_return_source; socket_wins_simultaneous_readiness; "
@@ -1533,6 +1586,7 @@ _DIAGNOSTIC_CONTRACTS: dict[str, dict[str, str]] = {
                 "cs_buflo_outgoing_unresolved_cells",
                 "cs_buflo_incoming_unresolved_cells",
                 *CS_BUFLO_LOCAL_ET_V3_INTEGER_KEYS,
+                *CS_BUFLO_STOP_DRAIN_V4_INTEGER_KEYS,
             )
         },
         **{
@@ -1550,9 +1604,11 @@ _DIAGNOSTIC_CONTRACTS: dict[str, dict[str, str]] = {
                 "cs_buflo_local_termination_latched",
                 "cs_buflo_event_guard_triggered",
                 *CS_BUFLO_LOCAL_ET_V3_BOOLEAN_KEYS,
+                *CS_BUFLO_STOP_DRAIN_V4_BOOLEAN_KEYS,
             )
         },
         "cs_buflo_early_termination_semantics": _STRING,
+        **{key: _STRING for key in CS_BUFLO_STOP_DRAIN_V4_STRING_KEYS},
         "cs_buflo_rate_boundary_counter_semantics": _STRING,
         "cs_buflo_author_rate_boundary_counter_semantics": _STRING,
         "cs_buflo_rate_transitions": _CS_RATE_TRANSITION_VECTOR,
@@ -1685,6 +1741,12 @@ def _diagnostics_match_contract(defense: str, diagnostics: dict[str, Any]) -> bo
         # Historical summary schema 2 predates the explicit application-state
         # passthrough and post-local-ET natural-byte accounting contract.
         expected -= CS_BUFLO_LOCAL_ET_V3_KEYS
+    if defense == "cs-buflo" and not (CS_BUFLO_STOP_DRAIN_V4_KEYS & set(selected)):
+        # Historical summary schemas 2 and 3 predate the asynchronous
+        # stop-new-opportunities/then-drain translation.  Partial version-4
+        # evidence remains invalid because the exact-key comparison below
+        # still requires the complete receipt.
+        expected -= CS_BUFLO_STOP_DRAIN_V4_KEYS
     if set(selected) != expected:
         return False
     return all(
@@ -1817,6 +1879,7 @@ def new_defense_terminal_receipts_valid(
     defense_kind: str,
     *,
     require_application_complete: bool = False,
+    require_current_schema: bool = False,
 ) -> bool:
     """Validate the versioned terminal summary bound to flat Rust diagnostics.
 
@@ -1890,10 +1953,22 @@ def new_defense_terminal_receipts_valid(
             }
         )
     summary_schema = summary.get("schema_version")
+    if defense_kind == "cs_buflo" and summary_schema == 4:
+        expected_fields.update(
+            {
+                "early_termination_translation_version",
+                "termination_stop_policy",
+            }
+        )
+    supported_summary_schemas = {2, 3} if defense_kind == "buflo" else {2, 3, 4}
     if (
         set(summary) != expected_fields
         or type(summary_schema) is not int
-        or summary_schema not in {2, 3}
+        or summary_schema not in supported_summary_schemas
+        or (
+            require_current_schema
+            and summary_schema != (3 if defense_kind == "buflo" else 4)
+        )
         or summary.get("kind") != defense_kind
         or summary.get("implementation_scope") != "client_only_quic"
         or summary.get("paper_equivalent") is not False
@@ -1941,10 +2016,29 @@ def new_defense_terminal_receipts_valid(
                 or selected["buflo_application_complete"] is True
             )
         )
-    current = summary_schema == 3
+    current = summary_schema in {3, 4}
+    stop_drain_current = summary_schema == 4
+    early_termination_semantics = (
+        CS_BUFLO_EARLY_TERMINATION_SEMANTICS
+        if stop_drain_current
+        else CS_BUFLO_LEGACY_EARLY_TERMINATION_SEMANTICS
+    )
     return (
         summary.get("early_termination_semantics")
-        == CS_BUFLO_EARLY_TERMINATION_SEMANTICS
+        == early_termination_semantics
+        and (
+            not stop_drain_current
+            or (
+                type(summary.get("early_termination_translation_version")) is int
+                and summary.get("early_termination_translation_version")
+                == CS_BUFLO_EARLY_TERMINATION_TRANSLATION_VERSION
+            )
+        )
+        and (
+            not stop_drain_current
+            or summary.get("termination_stop_policy")
+            == CS_BUFLO_TERMINATION_STOP_POLICY
+        )
         and summary.get("incoming_cadence_boundary")
         == CS_BUFLO_INCOMING_CADENCE_BOUNDARY
         and summary.get("incoming_terminal_boundary")
@@ -1952,11 +2046,21 @@ def new_defense_terminal_receipts_valid(
         and summary.get("incoming_boundary_separation")
         == CS_BUFLO_INCOMING_BOUNDARY_SEPARATION
         and selected["cs_buflo_early_termination_semantics"]
-        == CS_BUFLO_EARLY_TERMINATION_SEMANTICS
+        == early_termination_semantics
         and selected["cs_buflo_client_only"] is True
         and selected["cs_buflo_quiet_time_reached"] is True
         and selected["cs_buflo_local_termination_latched"] is True
         and current == CS_BUFLO_LOCAL_ET_V3_KEYS.issubset(selected)
+        and stop_drain_current
+        == CS_BUFLO_STOP_DRAIN_V4_KEYS.issubset(selected)
+        and (
+            not stop_drain_current
+            or (
+                selected["cs_buflo_outgoing_termination_stop_latched"] is True
+                and selected["cs_buflo_incoming_termination_stop_latched"] is True
+                and _cs_buflo_stop_drain_matches(selected)
+            )
+        )
         and cs_buflo_local_et_handoff_valid(
             selected, require_current=current
         )
@@ -2212,13 +2316,19 @@ def _cs_buflo_fidelity_eligible(
     if not _new_schedule_terminal_contract(schedule, congestion_sensitive=True):
         return False
     assert schedule is not None
+    stop_drain_current = CS_BUFLO_STOP_DRAIN_V4_KEYS.issubset(diagnostics)
+    expected_early_termination_semantics = (
+        CS_BUFLO_EARLY_TERMINATION_SEMANTICS
+        if stop_drain_current
+        else CS_BUFLO_LEGACY_EARLY_TERMINATION_SEMANTICS
+    )
     if (
         diagnostics["cs_buflo_paper_equivalent"] is not False
         or diagnostics["cs_buflo_client_only"] is not True
         or diagnostics["cs_buflo_payload_padding"]
         == diagnostics["cs_buflo_total_padding"]
         or diagnostics["cs_buflo_early_termination_semantics"]
-        != CS_BUFLO_EARLY_TERMINATION_SEMANTICS
+        != expected_early_termination_semantics
         or diagnostics["cs_buflo_rate_boundary_translation_version"]
         != CS_BUFLO_RATE_BOUNDARY_TRANSLATION_VERSION
         or diagnostics["cs_buflo_rate_boundary_counter_semantics"]
@@ -2415,6 +2525,112 @@ def _cs_buflo_payload_padding_target(natural: Any, cover: Any) -> int:
     return min(((current + quantum - 1) // quantum) * quantum, maximum)
 
 
+def _cs_buflo_stop_drain_matches(diagnostics: Mapping[str, Any]) -> bool:
+    """Validate version-4 asynchronous stop/drain evidence when present."""
+
+    present = CS_BUFLO_STOP_DRAIN_V4_KEYS & set(diagnostics)
+    if not present:
+        return True
+    if (
+        present != CS_BUFLO_STOP_DRAIN_V4_KEYS
+        or diagnostics["cs_buflo_early_termination_translation_version"]
+        != CS_BUFLO_EARLY_TERMINATION_TRANSLATION_VERSION
+        or diagnostics["cs_buflo_termination_stop_policy"]
+        != CS_BUFLO_TERMINATION_STOP_POLICY
+    ):
+        return False
+
+    for direction in ("outgoing", "incoming"):
+        latched = diagnostics[
+            f"cs_buflo_{direction}_termination_stop_latched"
+        ]
+        crossing_total = diagnostics[
+            f"cs_buflo_{direction}_termination_stop_crossing_total_bytes"
+        ]
+        crossing_increment = diagnostics[
+            f"cs_buflo_{direction}_termination_stop_crossing_increment_bytes"
+        ]
+        reason = diagnostics[f"cs_buflo_{direction}_termination_stop_reason"]
+        phase = diagnostics[f"cs_buflo_{direction}_termination_stop_phase"]
+        latched_at_us = diagnostics[
+            f"cs_buflo_{direction}_termination_stop_latched_at_us"
+        ]
+        scheduled_at_stop = diagnostics[
+            f"cs_buflo_{direction}_termination_stop_scheduled_cells_at_stop"
+        ]
+        terminal_at_stop = diagnostics[
+            f"cs_buflo_{direction}_termination_stop_terminal_cells_at_stop"
+        ]
+        progress_at_stop = diagnostics[
+            f"cs_buflo_{direction}_termination_stop_progress_bytes_at_stop"
+        ]
+        target_at_stop = diagnostics[
+            f"cs_buflo_{direction}_termination_stop_padding_target_bytes_at_stop"
+        ]
+        provisional_invalidations = diagnostics[
+            f"cs_buflo_{direction}_termination_stop_provisional_invalidation_count"
+        ]
+        final_total = diagnostics[
+            f"cs_buflo_{direction}_termination_accounted_bytes"
+        ]
+        target = diagnostics[f"cs_buflo_{direction}_padding_target_bytes"]
+        final_scheduled = diagnostics[f"cs_buflo_scheduled_{direction}_cells"]
+        unresolved = diagnostics[f"cs_buflo_{direction}_unresolved_cells"]
+        final_terminal = final_scheduled - unresolved
+        no_crossing_evidence = crossing_total == 0 and crossing_increment == 0
+        crossing_evidence = (
+            type(crossing_total) is int
+            and type(crossing_increment) is int
+            and 0 < crossing_total <= final_total
+            and crossing_total > crossing_increment
+            and _cs_buflo_power_of_two_crossed(
+                crossing_total, crossing_increment
+            )
+        )
+        if (
+            latched is not True
+            or not isinstance(reason, str)
+            or reason not in CS_BUFLO_TERMINATION_STOP_REASONS
+            or not isinstance(phase, str)
+            or phase not in CS_BUFLO_TERMINATION_STOP_PHASES
+            or any(
+                type(value) is not int or value < 0
+                for value in (
+                    latched_at_us,
+                    scheduled_at_stop,
+                    terminal_at_stop,
+                    progress_at_stop,
+                    target_at_stop,
+                    provisional_invalidations,
+                    final_scheduled,
+                    unresolved,
+                )
+            )
+            or latched_at_us > diagnostics["cs_buflo_local_et_latched_at_us"]
+            or target_at_stop != target
+            or scheduled_at_stop != final_scheduled
+            or terminal_at_stop > scheduled_at_stop
+            or final_terminal != final_scheduled
+            or terminal_at_stop > final_terminal
+            or not (no_crossing_evidence or crossing_evidence)
+            or (
+                direction == "incoming"
+                and crossing_evidence
+                and crossing_increment != diagnostics["cs_buflo_runtime_udp_packet_size_bytes"]
+            )
+            or (
+                reason == "padding_target_reached"
+                and (not no_crossing_evidence or progress_at_stop < target_at_stop)
+            )
+            or (
+                reason == "power_of_two_crossing"
+                and not crossing_evidence
+            )
+        ):
+            return False
+    return True
+
+
 def _cs_buflo_padding_targets_match(diagnostics: Mapping[str, Any]) -> bool:
     """Validate frozen CTSP/CPSP bases without substituting terminal counters.
 
@@ -2493,12 +2709,17 @@ def _cs_buflo_padding_targets_match(diagnostics: Mapping[str, Any]) -> bool:
     )
     return (
         targets_match
+        and _cs_buflo_stop_drain_matches(diagnostics)
         and (
             outgoing_progress >= outgoing_expected
             or diagnostics["cs_buflo_outgoing_power_of_two_crossed"] is True
+            or diagnostics.get("cs_buflo_outgoing_termination_stop_reason")
+            == "power_of_two_crossing"
         )
         and (
             incoming_progress >= incoming_expected
             or diagnostics["cs_buflo_incoming_power_of_two_crossed"] is True
+            or diagnostics.get("cs_buflo_incoming_termination_stop_reason")
+            == "power_of_two_crossing"
         )
     )

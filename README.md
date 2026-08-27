@@ -51,6 +51,18 @@ count the application receive streams, parser state, and send endpoints handed
 back to ordinary HTTP/3 processing. Natural application bytes after that latch
 remain in final accounting while the padding basis, estimator samples, rate
 transitions, and terminal interval stay frozen at the local-termination state.
+Summary schema 4 also binds the asynchronous client-only translation.  Its
+directional stop receipt records the application-complete or strict-quiet
+phase, target or crossing reason, stop time, progress and target, scheduled and
+terminal counters, and provisional invalidation count.  The handoff reconciles
+those counters and timestamps with every schedule row: no new opportunity may
+be scheduled after the stop, and each already-advertised receive-credit
+opportunity must terminalize exactly once before the local latch.  Outgoing
+crossings use observed UDP payload; incoming crossings use fully consumed
+scheduled credit and do not claim peer-datagram timing or size.  A resumed
+natural byte invalidates provisional stop evidence in the implementation, with
+the cumulative invalidation count retained in the final receipt.  This drain
+is not the paper's server padding-done signal.
 
 The versioned coordinator exposes nine fail-closed actions: `reference`,
 `qualify`, `historical-snapshot`, `freeze-cohort`, `code-gate`, `capture`,
@@ -1424,6 +1436,12 @@ Every remaining file has one job:
   claims scheduled server-datagram timing or size. The same versioned nullable
   suffix is present in `packets.csv` and `events.csv`. These records provide
   plot overlays and fidelity metrics.
+
+  For schema-4 CS-BuFLO stop/drain evidence, schedule reconstruction reports
+  terminal counts strictly before, exactly at, and at or before the stop
+  timestamp. The Rust snapshot must fall between the strict and inclusive
+  counts: controller observations sharing a timestamp have a stable production
+  order that cannot be inferred from timestamp comparison alone.
 - `failures/<sample-id>/attempt-NNN/` retains logs, partial captures, runner
   output, and other diagnostics produced by a completed failed attempt. The
   exact contents depend on the failure stage; the structured current failure

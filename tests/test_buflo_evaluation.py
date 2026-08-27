@@ -676,6 +676,7 @@ def test_algorithm_breakdown_retains_non_classifier_runner_strata() -> None:
         "cs_buflo_state": {
             "padding_variant": "CTSP",
             "early_termination_semantics": "udp_client_only_observed_udp_power_of_two_crossing",
+            "incoming_local_realized_cells": 9,
             "incoming_boundaries": {
                 "cadence": "complete_local_on_wire_max_stream_data_advertisement",
                 "terminal": "eventual_peer_stream_offset_consumption",
@@ -726,6 +727,16 @@ def test_algorithm_breakdown_retains_non_classifier_runner_strata() -> None:
     assert incoming["cs_buflo"]["minimum_interval_local_realized"] == 5
     assert incoming["cs_buflo"]["incoming_local_realized_cells"] == 9
     assert incoming["receive_credit_consumption"]["consumed_cells"] == 1
+    assert all(
+        row["cs_buflo"]["termination_stop_evidence"]
+        == {
+            "available": False,
+            "schema_version": None,
+            "samples_with_evidence": 0,
+            "historical_samples_without_evidence": 1,
+        }
+        for row in result["strata"]
+    )
 
     current = json.loads(json.dumps(diagnostics))
     current["schema_version"] = 3
@@ -749,6 +760,71 @@ def test_algorithm_breakdown_retains_non_classifier_runner_strata() -> None:
             post_local_et_natural_bytes=post,
         )
     assert evaluation._load_algorithm_diagnostics(current, defense="cs-buflo") == current
+    current_v4 = json.loads(json.dumps(current))
+    current_v4["schema_version"] = 4
+    current_v4["cs_buflo_state"]["early_termination_semantics"] = (
+        "client_only_outgoing_observed_udp_and_incoming_consumed_credit_"
+        "power_of_two_crossing"
+    )
+    current_v4["cs_buflo_state"]["early_termination_translation"] = {
+        "version": 2,
+        "stop_policy": (
+            "stop_new_opportunities_at_first_eligible_padding_target_or_power_of_two_"
+            "crossing_then_drain_advertised_credit_exactly_once"
+        ),
+    }
+    for direction_name in ("outgoing", "incoming"):
+        direction_metrics = current_v4["directions"][direction_name]
+        direction_metrics["scheduled_cells"] = 1
+        direction_metrics["satisfaction_counts"] = {"full": 1}
+        current_v4["cs_buflo_state"]["directions"][direction_name].update(
+            termination_accounted_bytes=2_048,
+            last_termination_increment_bytes=600,
+            termination_stop_latched=True,
+            termination_stop_crossing_total_bytes=1_200,
+            termination_stop_crossing_increment_bytes=600,
+            termination_stop_reason="power_of_two_crossing",
+            termination_stop_phase="application_complete",
+            termination_stop_latched_at_us=1_900_000,
+            termination_stop_scheduled_cells_at_stop=1,
+            termination_stop_terminal_cells_at_stop=1,
+            termination_stop_progress_bytes_at_stop=1_000,
+            termination_stop_padding_target_bytes_at_stop=1_024,
+            termination_stop_provisional_invalidation_count=0,
+            stop_drain_ledger={
+                "drained_cells_after_stop": 0,
+                "last_scheduled_target_us": 1_800_000,
+                "last_terminal_at_us": 1_900_000,
+                "terminal_cells_strictly_before_stop": 1,
+                "terminal_cells_at_or_before_stop": 1,
+                "terminal_cells_at_stop_timestamp": 0,
+            },
+        )
+    assert evaluation._load_algorithm_diagnostics(
+        current_v4, defense="cs-buflo"
+    ) == current_v4
+    invalid_translation_version = json.loads(json.dumps(current_v4))
+    invalid_translation_version["cs_buflo_state"]["early_termination_translation"][
+        "version"
+    ] = 2.0
+    with pytest.raises(ValueError, match="CS-BuFLO algorithm state"):
+        evaluation._load_algorithm_diagnostics(
+            invalid_translation_version, defense="cs-buflo"
+        )
+    invalid_reason_type = json.loads(json.dumps(current_v4))
+    invalid_reason_type["cs_buflo_state"]["directions"]["incoming"][
+        "termination_stop_reason"
+    ] = []
+    with pytest.raises(ValueError, match="CS-BuFLO algorithm state"):
+        evaluation._load_algorithm_diagnostics(
+            invalid_reason_type, defense="cs-buflo"
+        )
+    invalid_v4 = json.loads(json.dumps(current_v4))
+    invalid_v4["cs_buflo_state"]["directions"]["incoming"][
+        "termination_stop_crossing_total_bytes"
+    ] = 1_800
+    with pytest.raises(ValueError, match="CS-BuFLO algorithm state"):
+        evaluation._load_algorithm_diagnostics(invalid_v4, defense="cs-buflo")
     invalid_current = json.loads(json.dumps(current))
     invalid_current["cs_buflo_state"]["local_termination"][
         "application_receive_streams_handed_off"

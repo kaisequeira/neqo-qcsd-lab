@@ -11,6 +11,7 @@ import pytest
 import qcsd_lab.buflo_handoff as handoff
 import qcsd_lab.buflo_handoff as handoff_module
 import qcsd_lab.buflo_study as study_module
+import qcsd_lab.fidelity as fidelity_module
 from qcsd_lab.buflo_handoff import (
     FORMAL_RESULT_NAMES,
     _algorithm_diagnostics,
@@ -127,6 +128,155 @@ def _complete_buflo_run(
             "diagnostics": diagnostics,
         },
         "cs_buflo_summary": None,
+    }
+
+
+def _complete_cs_buflo_run() -> dict[str, object]:
+    """Build one exact schema-4 runner receipt for handoff-only tests."""
+
+    diagnostics: dict[str, object] = {}
+    for key, kind in fidelity_module._DIAGNOSTIC_CONTRACTS["cs-buflo"].items():
+        diagnostics[key] = (
+            0
+            if kind == fidelity_module._INTEGER
+            else False
+            if kind == fidelity_module._BOOLEAN
+            else []
+            if kind == fidelity_module._CS_RATE_TRANSITION_VECTOR
+            else "unused"
+        )
+    diagnostics.update(
+        {
+            "cs_buflo_paper_equivalent": False,
+            "cs_buflo_client_only": True,
+            "cs_buflo_payload_padding": True,
+            "cs_buflo_total_padding": False,
+            "cs_buflo_early_termination_semantics": (
+                fidelity_module.CS_BUFLO_EARLY_TERMINATION_SEMANTICS
+            ),
+            "cs_buflo_scheduled_outgoing_cells": 1,
+            "cs_buflo_scheduled_incoming_cells": 1,
+            "cs_buflo_full_outgoing_cells": 1,
+            "cs_buflo_desired_udp_bytes": 600,
+            "cs_buflo_realized_udp_bytes": 600,
+            "cs_buflo_chaff_stream_bytes": 600,
+            "cs_buflo_natural_outgoing_bytes": 500,
+            "cs_buflo_natural_incoming_bytes": 300,
+            "cs_buflo_cover_outgoing_bytes": 100,
+            "cs_buflo_cover_incoming_bytes": 300,
+            "cs_buflo_real_bearing_outgoing_bytes": 400,
+            "cs_buflo_real_bearing_incoming_bytes": 300,
+            "cs_buflo_realized_incoming_credit_bytes": 600,
+            "cs_buflo_outgoing_padding_basis_natural_bytes": 500,
+            "cs_buflo_incoming_padding_basis_natural_bytes": 300,
+            "cs_buflo_outgoing_padding_basis_cover_bytes": 100,
+            "cs_buflo_incoming_padding_basis_cover_bytes": 300,
+            "cs_buflo_outgoing_padding_basis_total_bytes": 600,
+            "cs_buflo_incoming_padding_basis_total_bytes": 600,
+            "cs_buflo_reference_tcp_write_size_bytes": 548,
+            "cs_buflo_reference_nominal_tcp_packet_size_bytes": 600,
+            "cs_buflo_runtime_udp_packet_size_bytes": 600,
+            "cs_buflo_outgoing_termination_accounted_bytes": 1_200,
+            "cs_buflo_incoming_termination_accounted_bytes": 600,
+            "cs_buflo_outgoing_last_termination_increment_bytes": 600,
+            "cs_buflo_incoming_last_termination_increment_bytes": 600,
+            "cs_buflo_outgoing_padding_target_bytes": 1_024,
+            "cs_buflo_incoming_padding_target_bytes": 600,
+            "cs_buflo_outgoing_power_of_two_crossed": True,
+            "cs_buflo_incoming_power_of_two_crossed": True,
+            "cs_buflo_outgoing_interval_us": 8_192,
+            "cs_buflo_incoming_interval_us": 8_192,
+            "cs_buflo_rate_boundary_translation_version": 2,
+            "cs_buflo_rate_boundary_counter_semantics": (
+                fidelity_module.CS_BUFLO_RATE_BOUNDARY_COUNTER_SEMANTICS
+            ),
+            "cs_buflo_author_rate_boundary_counter_semantics": (
+                fidelity_module.CS_BUFLO_AUTHOR_RATE_BOUNDARY_COUNTER_SEMANTICS
+            ),
+            "cs_buflo_rate_transitions": [],
+            "cs_buflo_next_outgoing_adaptation_boundary_bytes": 16_384,
+            "cs_buflo_next_incoming_adaptation_boundary_bytes": 16_384,
+            "cs_buflo_incoming_local_realized_cells": 1,
+            "cs_buflo_application_complete": True,
+            "cs_buflo_quiet_time_reached": True,
+            "cs_buflo_local_termination_latched": True,
+            "cs_buflo_local_et_latched_at_us": 300,
+            "cs_buflo_local_et_before_application_complete": False,
+            "cs_buflo_early_termination_translation_version": 2,
+            "cs_buflo_termination_stop_policy": (
+                fidelity_module.CS_BUFLO_TERMINATION_STOP_POLICY
+            ),
+            "cs_buflo_outgoing_termination_stop_latched": True,
+            "cs_buflo_incoming_termination_stop_latched": True,
+            "cs_buflo_outgoing_termination_stop_crossing_total_bytes": 1_200,
+            "cs_buflo_incoming_termination_stop_crossing_total_bytes": 0,
+            "cs_buflo_outgoing_termination_stop_crossing_increment_bytes": 600,
+            "cs_buflo_incoming_termination_stop_crossing_increment_bytes": 0,
+            "cs_buflo_outgoing_termination_stop_reason": "power_of_two_crossing",
+            "cs_buflo_incoming_termination_stop_reason": "padding_target_reached",
+            "cs_buflo_outgoing_termination_stop_phase": "application_complete",
+            "cs_buflo_incoming_termination_stop_phase": "application_complete",
+            "cs_buflo_outgoing_termination_stop_latched_at_us": 100,
+            "cs_buflo_incoming_termination_stop_latched_at_us": 100,
+            "cs_buflo_outgoing_termination_stop_scheduled_cells_at_stop": 1,
+            "cs_buflo_incoming_termination_stop_scheduled_cells_at_stop": 1,
+            "cs_buflo_outgoing_termination_stop_terminal_cells_at_stop": 0,
+            "cs_buflo_incoming_termination_stop_terminal_cells_at_stop": 0,
+            "cs_buflo_outgoing_termination_stop_progress_bytes_at_stop": 600,
+            "cs_buflo_incoming_termination_stop_progress_bytes_at_stop": 600,
+            "cs_buflo_outgoing_termination_stop_padding_target_bytes_at_stop": 1_024,
+            "cs_buflo_incoming_termination_stop_padding_target_bytes_at_stop": 600,
+            "cs_buflo_outgoing_termination_stop_provisional_invalidation_count": 0,
+            "cs_buflo_incoming_termination_stop_provisional_invalidation_count": 1,
+            "cs_buflo_egress_backlog_pending": False,
+            "cs_buflo_event_guard_triggered": False,
+        }
+    )
+    summary = {
+        "schema_version": 4,
+        "kind": "cs_buflo",
+        "implementation_scope": "client_only_quic",
+        "paper_equivalent": False,
+        "incoming_opportunity_semantics": (
+            "client_receive_credit_and_response_qualified_chaff_attempt"
+        ),
+        "unavailable_peer_properties": [
+            "scheduled_server_datagram_timing",
+            "scheduled_server_datagram_size",
+        ],
+        "early_termination_semantics": (
+            fidelity_module.CS_BUFLO_EARLY_TERMINATION_SEMANTICS
+        ),
+        "early_termination_translation_version": 2,
+        "termination_stop_policy": fidelity_module.CS_BUFLO_TERMINATION_STOP_POLICY,
+        "incoming_cadence_boundary": fidelity_module.CS_BUFLO_INCOMING_CADENCE_BOUNDARY,
+        "incoming_terminal_boundary": (
+            fidelity_module.CS_BUFLO_INCOMING_TERMINAL_BOUNDARY
+        ),
+        "incoming_boundary_separation": (
+            fidelity_module.CS_BUFLO_INCOMING_BOUNDARY_SEPARATION
+        ),
+        "diagnostics": diagnostics,
+    }
+    return {
+        "completion_status": "complete",
+        "error": None,
+        "resolved_configuration": {
+            "schema_version": 2,
+            "defense": {"kind": "cs_buflo"},
+        },
+        "runner_wakeup_metrics": {
+            "schema_version": 1,
+            "semantics": fidelity_module.RUNNER_WAKEUP_SEMANTICS,
+            "wait_returns": 0,
+            "socket_readiness_wakeups": 0,
+            "timer_wakeups": 0,
+            "controller_deadline_timer_wakeups": 0,
+            "other_timer_wakeups": 0,
+        },
+        "defense_diagnostics": diagnostics,
+        "buflo_summary": None,
+        "cs_buflo_summary": summary,
     }
 
 
@@ -914,6 +1064,306 @@ def test_buflo_algorithm_diagnostics_bind_typed_tail_action_and_control_packet(
                 packets_path=packets,
             )
 
+
+def test_cs_buflo_schema_four_handoff_reconstructs_stop_drain_and_preserves_legacy_shapes(
+    tmp_path: Path,
+) -> None:
+    schedule = tmp_path / "schedule.csv"
+    events = tmp_path / "events.csv"
+    packets = tmp_path / "packets.csv"
+
+    def write_rows(
+        path: Path, fields: tuple[str, ...], rows: list[dict[str, str]]
+    ) -> None:
+        with path.open("w", newline="", encoding="utf-8") as destination:
+            writer = csv.DictWriter(destination, fieldnames=fields)
+            writer.writeheader()
+            writer.writerows(rows)
+
+    schedule_fields = (*handoff.SCHEDULE_PREFIX_FIELDS, *SCHEDULE_QCSD_FIELDS)
+    outgoing = {field: "" for field in schedule_fields}
+    outgoing.update(
+        target_time_us="50",
+        direction="outgoing",
+        size="600",
+        connection="0",
+        action_time_us="150",
+        satisfaction="full",
+        observed_size="600",
+        slot_id="1",
+        qcsd_outcome_schema_version="1",
+        send_policy="congestion_sensitive",
+        desired_udp_bytes="600",
+        observed_udp_bytes="600",
+        application_stream_bytes="0",
+        retransmission_stream_bytes="0",
+        chaff_stream_bytes="600",
+        defense_control_bytes="0",
+        quic_padding_bytes="0",
+        other_quic_bytes="0",
+        lateness_us="100",
+    )
+    incoming = {field: "" for field in schedule_fields}
+    incoming.update(
+        target_time_us="50",
+        direction="incoming",
+        size="600",
+        connection="0",
+        action_time_us="50",
+        satisfaction="satisfied",
+        slot_id="2",
+        qcsd_outcome_schema_version="2",
+        send_policy="exact",
+        desired_udp_bytes="600",
+        credit_advertised_at_us="150",
+        credit_advertisement_delay_us="100",
+        credit_consumed_at_us="250",
+        credit_consumption_delay_us="200",
+    )
+    write_rows(schedule, schedule_fields, [outgoing, incoming])
+    write_rows(
+        events,
+        (*handoff._EVENT_PREFIX_FIELDS, *SCHEDULE_QCSD_FIELDS),
+        [],
+    )
+    write_rows(
+        packets,
+        (*handoff._PACKET_PREFIX_FIELDS, *SCHEDULE_QCSD_FIELDS),
+        [],
+    )
+
+    run = _complete_cs_buflo_run()
+    current = _algorithm_diagnostics(
+        run,
+        defense="cs-buflo",
+        runtime_kind="cs_buflo",
+        schedule_path=schedule,
+        events_path=events,
+        packets_path=packets,
+    )
+    reconstructed = _algorithm_diagnostics(
+        run,
+        defense="cs-buflo",
+        runtime_kind="cs_buflo",
+        schedule_path=schedule,
+        events_path=events,
+        packets_path=packets,
+    )
+    assert reconstructed == current
+    assert current["schema_version"] == 4
+    for direction, last_terminal in (("outgoing", 150), ("incoming", 250)):
+        state = current["cs_buflo_state"]["directions"][direction]
+        assert state["termination_stop_latched_at_us"] == 100
+        assert state["termination_stop_scheduled_cells_at_stop"] == 1
+        assert state["termination_stop_terminal_cells_at_stop"] == 0
+        assert state["stop_drain_ledger"] == {
+            "drained_cells_after_stop": 1,
+            "last_scheduled_target_us": 50,
+            "last_terminal_at_us": last_terminal,
+            "terminal_cells_strictly_before_stop": 0,
+            "terminal_cells_at_or_before_stop": 0,
+            "terminal_cells_at_stop_timestamp": 0,
+        }
+
+    tied_outgoing = dict(outgoing)
+    tied_outgoing["action_time_us"] = "100"
+    write_rows(schedule, schedule_fields, [tied_outgoing, incoming])
+    tied = _algorithm_diagnostics(
+        run,
+        defense="cs-buflo",
+        runtime_kind="cs_buflo",
+        schedule_path=schedule,
+        events_path=events,
+        packets_path=packets,
+    )
+    assert tied["cs_buflo_state"]["directions"]["outgoing"][
+        "stop_drain_ledger"
+    ] == {
+        "drained_cells_after_stop": 1,
+        "last_scheduled_target_us": 50,
+        "last_terminal_at_us": 100,
+        "terminal_cells_strictly_before_stop": 0,
+        "terminal_cells_at_or_before_stop": 1,
+        "terminal_cells_at_stop_timestamp": 1,
+    }
+    write_rows(schedule, schedule_fields, [outgoing, incoming])
+
+    after_stop = dict(outgoing)
+    after_stop["target_time_us"] = "101"
+    write_rows(schedule, schedule_fields, [after_stop, incoming])
+    with pytest.raises(ValueError, match="stop/drain schedule chronology"):
+        _algorithm_diagnostics(
+            run,
+            defense="cs-buflo",
+            runtime_kind="cs_buflo",
+            schedule_path=schedule,
+            events_path=events,
+            packets_path=packets,
+        )
+    write_rows(schedule, schedule_fields, [outgoing, incoming])
+
+    connection_start_crossing = json.loads(json.dumps(run))
+    for receipt in (
+        connection_start_crossing["defense_diagnostics"],
+        connection_start_crossing["cs_buflo_summary"]["diagnostics"],
+    ):
+        receipt["cs_buflo_outgoing_termination_stop_crossing_total_bytes"] = 600
+        receipt["cs_buflo_outgoing_termination_stop_crossing_increment_bytes"] = 600
+    with pytest.raises(ValueError, match="runner diagnostics are incomplete"):
+        _algorithm_diagnostics(
+            connection_start_crossing,
+            defense="cs-buflo",
+            runtime_kind="cs_buflo",
+            schedule_path=schedule,
+            events_path=events,
+            packets_path=packets,
+        )
+
+    legacy_v3 = json.loads(json.dumps(run))
+    legacy_v3["cs_buflo_summary"]["schema_version"] = 3
+    legacy_v3["cs_buflo_summary"].pop("early_termination_translation_version")
+    legacy_v3["cs_buflo_summary"].pop("termination_stop_policy")
+    for receipt in (
+        legacy_v3["defense_diagnostics"],
+        legacy_v3["cs_buflo_summary"]["diagnostics"],
+    ):
+        receipt["cs_buflo_early_termination_semantics"] = (
+            fidelity_module.CS_BUFLO_LEGACY_EARLY_TERMINATION_SEMANTICS
+        )
+        for key in fidelity_module.CS_BUFLO_STOP_DRAIN_V4_KEYS:
+            receipt.pop(key)
+    legacy_v3["cs_buflo_summary"]["early_termination_semantics"] = (
+        fidelity_module.CS_BUFLO_LEGACY_EARLY_TERMINATION_SEMANTICS
+    )
+    v3 = _algorithm_diagnostics(
+        legacy_v3,
+        defense="cs-buflo",
+        runtime_kind="cs_buflo",
+        schedule_path=schedule,
+        events_path=events,
+        packets_path=packets,
+        require_latest_cs=False,
+    )
+    expected_state_keys = {
+        "padding_variant",
+        "early_termination_semantics",
+        "incoming_boundaries",
+        "rate_boundary_translation",
+        "rate_transitions",
+        "local_termination",
+        "incoming_local_realized_cells",
+        "directions",
+    }
+    expected_v3_direction_keys = {
+        "natural_bytes",
+        "real_bearing_bytes",
+        "post_local_et_natural_bytes",
+        "terminal_interval_us",
+        "rate_adaptations",
+        "next_adaptation_boundary_bytes",
+        "estimator_samples",
+        "padding_basis_natural_bytes",
+        "padding_basis_cover_bytes",
+        "padding_basis_total_bytes",
+        "padding_target_bytes",
+        "power_of_two_crossed",
+        "minimum_interval_opportunities",
+        "minimum_interval_terminal",
+        "minimum_interval_full",
+        "minimum_interval_local_realized",
+        "incoming_local_realized_cells",
+        "rate_transitions",
+    }
+    assert v3["schema_version"] == 3
+    assert set(v3["cs_buflo_state"]) == expected_state_keys
+    assert set(v3["cs_buflo_state"]["local_termination"]) == {
+        "latched",
+        "pending_request_cancellations",
+        "stream_cancellations",
+        "latched_at_us",
+        "before_application_complete",
+        "application_receive_streams_handed_off",
+        "application_parser_boundaries_handed_off",
+        "application_parser_lease_bytes_handed_off",
+        "application_send_endpoints_released",
+        "post_local_et_natural_outgoing_bytes",
+        "post_local_et_natural_incoming_bytes",
+    }
+    assert all(
+        set(state) == expected_v3_direction_keys
+        and not any(key.startswith("termination_stop_") for key in state)
+        and "termination_accounted_bytes" not in state
+        and "last_termination_increment_bytes" not in state
+        for state in v3["cs_buflo_state"]["directions"].values()
+    )
+
+    legacy_v2 = json.loads(json.dumps(legacy_v3))
+    legacy_v2["cs_buflo_summary"]["schema_version"] = 2
+    for receipt in (
+        legacy_v2["defense_diagnostics"],
+        legacy_v2["cs_buflo_summary"]["diagnostics"],
+    ):
+        for key in fidelity_module.CS_BUFLO_LOCAL_ET_V3_KEYS:
+            receipt.pop(key)
+    v2 = _algorithm_diagnostics(
+        legacy_v2,
+        defense="cs-buflo",
+        runtime_kind="cs_buflo",
+        schedule_path=schedule,
+        events_path=events,
+        packets_path=packets,
+        require_current=False,
+        require_latest_cs=False,
+    )
+    expected_v2_direction_keys = expected_v3_direction_keys - {
+        "natural_bytes",
+        "real_bearing_bytes",
+        "post_local_et_natural_bytes",
+    }
+    assert v2["schema_version"] == 2
+    assert set(v2["cs_buflo_state"]) == expected_state_keys
+    assert set(v2["cs_buflo_state"]["local_termination"]) == {
+        "latched",
+        "pending_request_cancellations",
+        "stream_cancellations",
+    }
+    assert all(
+        set(state) == expected_v2_direction_keys
+        and not any(key.startswith("termination_stop_") for key in state)
+        and "termination_accounted_bytes" not in state
+        and "last_termination_increment_bytes" not in state
+        for state in v2["cs_buflo_state"]["directions"].values()
+    )
+
+
+def test_cs_buflo_stop_drain_ledger_accepts_zero_time_empty_vector() -> None:
+    diagnostics = {
+        "cs_buflo_local_et_latched_at_us": 0,
+        "cs_buflo_outgoing_termination_stop_latched_at_us": 0,
+        "cs_buflo_incoming_termination_stop_latched_at_us": 0,
+        "cs_buflo_outgoing_termination_stop_scheduled_cells_at_stop": 0,
+        "cs_buflo_incoming_termination_stop_scheduled_cells_at_stop": 0,
+        "cs_buflo_outgoing_termination_stop_terminal_cells_at_stop": 0,
+        "cs_buflo_incoming_termination_stop_terminal_cells_at_stop": 0,
+    }
+    assert handoff._cs_buflo_stop_drain_ledger(diagnostics, []) == {
+        "outgoing": {
+            "drained_cells_after_stop": 0,
+            "last_scheduled_target_us": 0,
+            "last_terminal_at_us": 0,
+            "terminal_cells_strictly_before_stop": 0,
+            "terminal_cells_at_or_before_stop": 0,
+            "terminal_cells_at_stop_timestamp": 0,
+        },
+        "incoming": {
+            "drained_cells_after_stop": 0,
+            "last_scheduled_target_us": 0,
+            "last_terminal_at_us": 0,
+            "terminal_cells_strictly_before_stop": 0,
+            "terminal_cells_at_or_before_stop": 0,
+            "terminal_cells_at_stop_timestamp": 0,
+        },
+    }
 
 def test_formal_result_names_are_ten_ordered_blocks() -> None:
     assert len(FORMAL_RESULT_NAMES) == 10

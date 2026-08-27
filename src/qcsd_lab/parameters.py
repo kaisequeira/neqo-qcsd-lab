@@ -50,7 +50,7 @@ _BUFLO_STUDY_PROVENANCE_KEYS = _PROVENANCE_KEYS | {
     "reference_receipt",
     "validation_requirements",
 }
-_CS_BUFLO_SEMANTICS_KEYS = {
+_LEGACY_CS_BUFLO_SEMANTICS_V1_KEYS = {
     "source_semantics",
     "live_semantics",
     "rate_boundary_translation_version",
@@ -59,6 +59,17 @@ _CS_BUFLO_SEMANTICS_KEYS = {
     "translation_classification",
     "early_termination_semantics",
     "expected_difference",
+}
+_CS_BUFLO_SEMANTICS_V2_KEYS = {
+    *_LEGACY_CS_BUFLO_SEMANTICS_V1_KEYS,
+    "early_termination_translation_version",
+    "paper_early_termination_semantics",
+    "pinned_author_source_early_termination_semantics",
+    "pinned_author_padding_done_active_consumers",
+    "paper_source_early_termination_discrepancy",
+    "live_early_termination_semantics",
+    "early_termination_translation_classification",
+    "early_termination_expected_difference",
 }
 _BUFLO_TERMINAL_SEMANTICS_KEYS = {
     "terminal_translation_version",
@@ -468,15 +479,26 @@ def _validate_buflo_study_parameter_artifact(
     """Validate a paper-bound but deliberately non-promoted BuFLO study input."""
 
     receipt_kind = receipt.get("defense_kind")
+    receipt_schema = receipt.get("schema_version")
+    cs_semantics_keys = (
+        _LEGACY_CS_BUFLO_SEMANTICS_V1_KEYS
+        if receipt_schema == 1
+        else _CS_BUFLO_SEMANTICS_V2_KEYS
+        if receipt_schema == 2
+        else set()
+    )
     expected_receipt_keys = _BUFLO_STUDY_PROVENANCE_KEYS | (
-        _CS_BUFLO_SEMANTICS_KEYS
+        cs_semantics_keys
         if receipt_kind == "cs_buflo"
         else _BUFLO_TERMINAL_SEMANTICS_KEYS
         if receipt_kind == "buflo"
         else set()
     )
     _require_exact_keys(receipt, expected_receipt_keys, "BuFLO study provenance")
-    if receipt.get("schema_version") != PROVENANCE_SCHEMA_VERSION:
+    if type(receipt_schema) is not int or not (
+        receipt_kind == "cs_buflo" and receipt_schema in {1, 2}
+        or receipt_kind == "buflo" and receipt_schema == PROVENANCE_SCHEMA_VERSION
+    ):
         raise ValueError(f"unsupported BuFLO study provenance schema: {receipt_path}")
     if (
         receipt.get("artifact_type") != BUFLO_STUDY_ARTIFACT_TYPE
@@ -538,7 +560,8 @@ def _validate_buflo_study_parameter_artifact(
     if kind == "buflo":
         _validate_buflo(parameter, int(ceiling), receipt_path)
         if (
-            receipt.get("terminal_translation_version") != 2
+            type(receipt.get("terminal_translation_version")) is not int
+            or receipt.get("terminal_translation_version") != 2
             or receipt.get("paper_termination_semantics")
             != "minimum-duration-then-continue-only-while-real-data-remains"
             or receipt.get("live_terminal_semantics")
@@ -571,7 +594,7 @@ def _validate_buflo_study_parameter_artifact(
         )
     else:
         _validate_cs_buflo(parameter, int(ceiling), receipt_path)
-        if (
+        common_invalid = (
             receipt.get("source_semantics")
             != (
                 "author-oracle-advances-16KiB-boundaries-on-actually-transmitted-"
@@ -583,6 +606,7 @@ def _validate_buflo_study_parameter_artifact(
                 "stream-bytes-outgoing-excludes-retransmission-and-defense-added-"
                 "bytes-and-uses-consumed-application-offsets-incoming"
             )
+            or type(receipt.get("rate_boundary_translation_version")) is not int
             or receipt.get("rate_boundary_translation_version") != 2
             or receipt.get("rate_boundary_counter_semantics")
             != (
@@ -593,16 +617,68 @@ def _validate_buflo_study_parameter_artifact(
             != "per_direction_actually_transmitted_real_plus_junk_bytes"
             or receipt.get("translation_classification")
             != "expected-client-only-qcsd-adaptation-difference"
-            or receipt.get("early_termination_semantics")
-            != "udp_client_only_observed_udp_power_of_two_crossing"
             or receipt.get("expected_difference")
             != (
                 "adaptation-boundary-crossings-and-rate-transition-times-may-differ-"
                 "from-the-author-artifact"
             )
-        ):
+        )
+        legacy_invalid = receipt_schema == 1 and (
+            receipt.get("early_termination_semantics")
+            != "udp_client_only_observed_udp_power_of_two_crossing"
+        )
+        current_invalid = receipt_schema == 2 and (
+            receipt.get("early_termination_semantics")
+            != (
+                "client_only_outgoing_observed_udp_and_incoming_consumed_credit_"
+                "power_of_two_crossing"
+            )
+            or type(receipt.get("early_termination_translation_version")) is not int
+            or receipt.get("early_termination_translation_version") != 2
+            or receipt.get("paper_early_termination_semantics")
+            != (
+                "server-done-xmitting-requires-empty-output-buffer-and-onload-or-"
+                "strict-quiet-time-and-either-client-padding-done-or-current-write-"
+                "real-plus-junk-power-of-two-crossing"
+            )
+            or receipt.get("pinned_author_source_early_termination_semantics")
+            != (
+                "transcript-end-and-zero-w2w-state-machine-with-onload-or-inclusive-"
+                "two-second-local-quiet-exit;client-padding-done-is-dispatched-and-"
+                "stored-but-has-zero-active-consumers;paper-algorithm-4-power-"
+                "crossing-is-not-an-active-source-stop-predicate"
+            )
+            or type(receipt.get("pinned_author_padding_done_active_consumers"))
+            is not int
+            or receipt.get("pinned_author_padding_done_active_consumers") != 0
+            or receipt.get("paper_source_early_termination_discrepancy")
+            != (
+                "paper Algorithm 4 makes padding-done or a current-write power-of-two "
+                "crossing an active bilateral server stop input; the pinned runtime "
+                "dispatches and stores padding-done but no active loop consumes it, and "
+                "active termination instead uses transcript-end/zero-w2w state with "
+                "onLoad or an inclusive two-second local quiet exit"
+            )
+            or receipt.get("live_early_termination_semantics")
+            != (
+                "stop-new-client-opportunities-at-first-eligible-frozen-padding-target-"
+                "or-directional-power-of-two-crossing-outgoing-by-observed-udp-and-"
+                "incoming-by-fully-consumed-scheduled-credit-then-drain-advertised-"
+                "credit-exactly-once"
+            )
+            or receipt.get("early_termination_translation_classification")
+            != "expected-client-only-qcsd-adaptation-difference"
+            or receipt.get("early_termination_expected_difference")
+            != (
+                "client-only-qcsd-has-no-peer-padding-done-signal-or-server-packet-"
+                "composition;outgoing-crossings-use-observed-udp-payload-while-incoming-"
+                "crossings-use-fully-consumed-scheduled-receive-credit-and-advertised-"
+                "credit-drains-exactly-once-before-local-termination"
+            )
+        )
+        if common_invalid or legacy_invalid or current_invalid:
             raise ValueError(
-                f"CS-BuFLO source/live estimator divergence is not explicit: {receipt_path}"
+                f"CS-BuFLO source/live translation divergence is not explicit: {receipt_path}"
             )
         expected_variant = (
             "CTSP" if parameter["outgoing_padding_mode"] == "total" else "CPSP"

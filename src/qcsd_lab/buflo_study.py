@@ -4981,6 +4981,7 @@ _MANDATORY_CSBUFLO_COMPARISON_DIFFERENCE_IDS = frozenset(
             "csbuflo-author-total-transmitted-vs-live-fresh-application-stream-"
             "byte-adaptation-counter"
         ),
+        "csbuflo-paper-source-and-client-only-early-termination-translation",
     }
 )
 _MANDATORY_BUFLO_COMPARISON_DIFFERENCE_IDS = frozenset(

@@ -34,9 +34,15 @@ from typing import Any
 import numpy as np
 
 from .fidelity import (
+    CS_BUFLO_EARLY_TERMINATION_SEMANTICS,
+    CS_BUFLO_EARLY_TERMINATION_TRANSLATION_VERSION,
     CS_BUFLO_INCOMING_BOUNDARY_SEPARATION,
     CS_BUFLO_INCOMING_CADENCE_BOUNDARY,
     CS_BUFLO_INCOMING_TERMINAL_BOUNDARY,
+    CS_BUFLO_LEGACY_EARLY_TERMINATION_SEMANTICS,
+    CS_BUFLO_TERMINATION_STOP_POLICY,
+    CS_BUFLO_TERMINATION_STOP_PHASES,
+    CS_BUFLO_TERMINATION_STOP_REASONS,
     buflo_terminal_state_valid,
 )
 from .util import LAB_ROOT, load_json, require_disjoint_path, sha256_file, source_metadata
@@ -758,7 +764,7 @@ def _load_algorithm_diagnostics(value: Any, *, defense: str) -> Mapping[str, Any
     if (
         not isinstance(value, dict)
         or type(value.get("schema_version")) is not int
-        or value.get("schema_version") not in {1, 2, 3}
+        or value.get("schema_version") not in {1, 2, 3, 4}
         or set(value)
         != (legacy_keys if value.get("schema_version") == 1 else current_keys)
         or value.get("mode") != defense
@@ -767,10 +773,12 @@ def _load_algorithm_diagnostics(value: Any, *, defense: str) -> Mapping[str, Any
         or set(value.get("directions", {})) != {"outgoing", "incoming"}
     ):
         raise ValueError("study handoff algorithm diagnostic schema is invalid")
-    if value["schema_version"] in {2, 3}:
+    if value["schema_version"] in {2, 3, 4}:
         runtime_kind = value.get("runtime_kind")
         buflo_state = value.get("buflo_state")
         cs_state = value.get("cs_buflo_state")
+        if value["schema_version"] == 4 and runtime_kind != "cs_buflo":
+            raise ValueError("algorithm diagnostic schema 4 is CS-BuFLO-specific")
         if runtime_kind == "buflo":
             expected_state_schema = 2 if value["schema_version"] == 3 else 1
             observed_state_schema = (
@@ -789,8 +797,16 @@ def _load_algorithm_diagnostics(value: Any, *, defense: str) -> Mapping[str, Any
                 buflo_state is not None
                 or not isinstance(cs_state, Mapping)
                 or (
-                    value["schema_version"] == 3
-                    and not _current_cs_buflo_state_valid(cs_state)
+                    value["schema_version"] in {3, 4}
+                    and not _current_cs_buflo_state_valid(
+                        cs_state, schema_version=value["schema_version"]
+                    )
+                )
+                or (
+                    value["schema_version"] == 4
+                    and not _current_cs_buflo_stop_drain_state_valid(
+                        cs_state, value["directions"]
+                    )
                 )
             ):
                 raise ValueError("study handoff CS-BuFLO algorithm state is invalid")
@@ -799,7 +815,84 @@ def _load_algorithm_diagnostics(value: Any, *, defense: str) -> Mapping[str, Any
     return value
 
 
-def _current_cs_buflo_state_valid(value: Mapping[str, Any]) -> bool:
+_CS_BUFLO_STATE_V3_KEYS = frozenset(
+    {
+        "padding_variant",
+        "early_termination_semantics",
+        "incoming_boundaries",
+        "rate_boundary_translation",
+        "rate_transitions",
+        "local_termination",
+        "incoming_local_realized_cells",
+        "directions",
+    }
+)
+_CS_BUFLO_DIRECTION_V3_KEYS = frozenset(
+    {
+        "natural_bytes",
+        "real_bearing_bytes",
+        "post_local_et_natural_bytes",
+        "terminal_interval_us",
+        "rate_adaptations",
+        "next_adaptation_boundary_bytes",
+        "estimator_samples",
+        "padding_basis_natural_bytes",
+        "padding_basis_cover_bytes",
+        "padding_basis_total_bytes",
+        "padding_target_bytes",
+        "power_of_two_crossed",
+        "minimum_interval_opportunities",
+        "minimum_interval_terminal",
+        "minimum_interval_full",
+        "minimum_interval_local_realized",
+        "incoming_local_realized_cells",
+        "rate_transitions",
+    }
+)
+_CS_BUFLO_STOP_DRAIN_LEDGER_KEYS = frozenset(
+    {
+        "drained_cells_after_stop",
+        "last_scheduled_target_us",
+        "last_terminal_at_us",
+        "terminal_cells_strictly_before_stop",
+        "terminal_cells_at_or_before_stop",
+        "terminal_cells_at_stop_timestamp",
+    }
+)
+_CS_BUFLO_DIRECTION_V4_KEYS = _CS_BUFLO_DIRECTION_V3_KEYS | {
+    "termination_accounted_bytes",
+    "last_termination_increment_bytes",
+    "termination_stop_latched",
+    "termination_stop_crossing_total_bytes",
+    "termination_stop_crossing_increment_bytes",
+    "termination_stop_reason",
+    "termination_stop_phase",
+    "termination_stop_latched_at_us",
+    "termination_stop_scheduled_cells_at_stop",
+    "termination_stop_terminal_cells_at_stop",
+    "termination_stop_progress_bytes_at_stop",
+    "termination_stop_padding_target_bytes_at_stop",
+    "termination_stop_provisional_invalidation_count",
+    "stop_drain_ledger",
+}
+
+
+def _current_cs_buflo_state_valid(
+    value: Mapping[str, Any], *, schema_version: int
+) -> bool:
+    expected_state_keys = _CS_BUFLO_STATE_V3_KEYS | (
+        {"early_termination_translation"} if schema_version == 4 else set()
+    )
+    expected_direction_keys = (
+        _CS_BUFLO_DIRECTION_V4_KEYS
+        if schema_version == 4
+        else _CS_BUFLO_DIRECTION_V3_KEYS
+    )
+    expected_semantics = (
+        CS_BUFLO_EARLY_TERMINATION_SEMANTICS
+        if schema_version == 4
+        else CS_BUFLO_LEGACY_EARLY_TERMINATION_SEMANTICS
+    )
     local = value.get("local_termination")
     expected_local_keys = {
         "latched",
@@ -819,12 +912,14 @@ def _current_cs_buflo_state_valid(value: Mapping[str, Any]) -> bool:
         "before_application_complete",
     }
     if (
-        not isinstance(local, Mapping)
+        set(value) != expected_state_keys
+        or value.get("early_termination_semantics") != expected_semantics
+        or not isinstance(local, Mapping)
         or set(local) != expected_local_keys
         or local.get("latched") is not True
         or type(local.get("before_application_complete")) is not bool
         or any(type(local.get(key)) is not int or local[key] < 0 for key in integer_local_keys)
-        or local["latched_at_us"] <= 0
+        or local["latched_at_us"] < 0
     ):
         return False
     handoff_keys = (
@@ -847,7 +942,7 @@ def _current_cs_buflo_state_valid(value: Mapping[str, Any]) -> bool:
         return False
     for direction in ("outgoing", "incoming"):
         state = directions[direction]
-        if not isinstance(state, Mapping):
+        if not isinstance(state, Mapping) or set(state) != expected_direction_keys:
             return False
         natural = state.get("natural_bytes")
         frozen = state.get("padding_basis_natural_bytes")
@@ -858,6 +953,137 @@ def _current_cs_buflo_state_valid(value: Mapping[str, Any]) -> bool:
             or natural != frozen + post
             or real_bearing > frozen
             or post != local[f"post_local_et_natural_{direction}_bytes"]
+        ):
+            return False
+    return True
+
+
+def _current_cs_buflo_stop_drain_state_valid(
+    value: Mapping[str, Any], algorithm_directions: Any
+) -> bool:
+    translation = value.get("early_termination_translation")
+    if (
+        not isinstance(translation, Mapping)
+        or set(translation) != {"version", "stop_policy"}
+        or type(translation.get("version")) is not int
+        or translation.get("version")
+        != CS_BUFLO_EARLY_TERMINATION_TRANSLATION_VERSION
+        or translation.get("stop_policy") != CS_BUFLO_TERMINATION_STOP_POLICY
+    ):
+        return False
+    directions = value.get("directions")
+    local = value.get("local_termination")
+    if (
+        not isinstance(directions, Mapping)
+        or set(directions) != {"outgoing", "incoming"}
+        or not isinstance(algorithm_directions, Mapping)
+        or set(algorithm_directions) != {"outgoing", "incoming"}
+        or not isinstance(local, Mapping)
+    ):
+        return False
+    local_latch_us = local.get("latched_at_us")
+    for direction in ("outgoing", "incoming"):
+        state = directions[direction]
+        metrics = algorithm_directions[direction]
+        if (
+            not isinstance(state, Mapping)
+            or not isinstance(metrics, Mapping)
+            or state.get("termination_stop_latched") is not True
+            or not isinstance(state.get("termination_stop_reason"), str)
+            or state.get("termination_stop_reason")
+            not in CS_BUFLO_TERMINATION_STOP_REASONS
+            or not isinstance(state.get("termination_stop_phase"), str)
+            or state.get("termination_stop_phase")
+            not in CS_BUFLO_TERMINATION_STOP_PHASES
+        ):
+            return False
+        crossing_total = state.get("termination_stop_crossing_total_bytes")
+        crossing_increment = state.get("termination_stop_crossing_increment_bytes")
+        final_total = state.get("termination_accounted_bytes")
+        last_increment = state.get("last_termination_increment_bytes")
+        stop_us = state.get("termination_stop_latched_at_us")
+        scheduled_at_stop = state.get(
+            "termination_stop_scheduled_cells_at_stop"
+        )
+        terminal_at_stop = state.get("termination_stop_terminal_cells_at_stop")
+        progress_at_stop = state.get("termination_stop_progress_bytes_at_stop")
+        target_at_stop = state.get(
+            "termination_stop_padding_target_bytes_at_stop"
+        )
+        invalidations = state.get(
+            "termination_stop_provisional_invalidation_count"
+        )
+        scheduled_final = metrics.get("scheduled_cells")
+        satisfactions = metrics.get("satisfaction_counts")
+        ledger = state.get("stop_drain_ledger")
+        if any(
+            type(item) is not int or item < 0
+            for item in (
+                crossing_total,
+                crossing_increment,
+                final_total,
+                last_increment,
+                stop_us,
+                scheduled_at_stop,
+                terminal_at_stop,
+                progress_at_stop,
+                target_at_stop,
+                invalidations,
+                scheduled_final,
+                local_latch_us,
+            )
+        ) or (
+            not isinstance(satisfactions, Mapping)
+            or any(type(item) is not int or item < 0 for item in satisfactions.values())
+            or sum(satisfactions.values()) != scheduled_final
+            or not isinstance(ledger, Mapping)
+            or set(ledger) != _CS_BUFLO_STOP_DRAIN_LEDGER_KEYS
+            or any(type(item) is not int or item < 0 for item in ledger.values())
+        ):
+            return False
+        no_crossing = crossing_total == 0 and crossing_increment == 0
+        crossing_valid = (
+            0 < crossing_increment <= crossing_total <= final_total
+            and crossing_total > crossing_increment
+            and (crossing_total - crossing_increment).bit_length()
+            < crossing_total.bit_length()
+        )
+        final_crossing = (
+            0 < last_increment <= final_total
+            and (final_total - last_increment).bit_length()
+            < final_total.bit_length()
+        )
+        reason = state["termination_stop_reason"]
+        if (
+            stop_us > local_latch_us
+            or scheduled_at_stop != scheduled_final
+            or terminal_at_stop > scheduled_at_stop
+            or state.get("termination_stop_padding_target_bytes_at_stop")
+            != state.get("padding_target_bytes")
+            or state.get("power_of_two_crossed") is not final_crossing
+            or not (no_crossing or crossing_valid)
+            or (
+                direction == "incoming"
+                and crossing_valid
+                and crossing_increment != 600
+            )
+            or (
+                reason == "padding_target_reached"
+                and (not no_crossing or progress_at_stop < target_at_stop)
+            )
+            or (reason == "power_of_two_crossing" and not crossing_valid)
+            or ledger["drained_cells_after_stop"]
+            != scheduled_at_stop - terminal_at_stop
+            or not (
+                ledger["terminal_cells_strictly_before_stop"]
+                <= terminal_at_stop
+                <= ledger["terminal_cells_at_or_before_stop"]
+            )
+            or ledger["terminal_cells_at_stop_timestamp"]
+            != ledger["terminal_cells_at_or_before_stop"]
+            - ledger["terminal_cells_strictly_before_stop"]
+            or ledger["last_scheduled_target_us"] > stop_us
+            or ledger["last_terminal_at_us"] > local_latch_us
         ):
             return False
     return True
@@ -1519,9 +1745,8 @@ def algorithm_breakdowns(samples: Sequence[StudySample]) -> dict[str, Any]:
     if any(type(version) is not int for version in diagnostic_version_values):
         raise ValueError("study handoff has an invalid algorithm diagnostic schema version")
     diagnostic_versions = set(diagnostic_version_values)
-    if len(diagnostic_versions) != 1:
+    if len(diagnostic_versions) != 1 and not diagnostic_versions <= {3, 4}:
         raise ValueError("study handoff mixes algorithm diagnostic schema versions")
-    diagnostic_version = next(iter(diagnostic_versions))
     groups: dict[tuple[str, str, int, str], list[Mapping[str, Any]]] = defaultdict(list)
     terminal_tail_groups: dict[tuple[str, str, int], list[Mapping[str, Any]]] = defaultdict(list)
     cs_local_et_groups: dict[tuple[str, str, int], list[Mapping[str, Any]]] = defaultdict(list)
@@ -1534,7 +1759,8 @@ def algorithm_breakdowns(samples: Sequence[StudySample]) -> dict[str, Any]:
             terminal_tail_groups[
                 (sample.defense, sample.workload_id, sample.acquisition_block_index)
             ].append(buflo_state)
-        if diagnostic_version == 3 and isinstance(cs_state, Mapping):
+        sample_diagnostic_version = sample.algorithm_diagnostics["schema_version"]
+        if sample_diagnostic_version in {3, 4} and isinstance(cs_state, Mapping):
             cs_local_et_groups[
                 (sample.defense, sample.workload_id, sample.acquisition_block_index)
             ].append(cs_state["local_termination"])
@@ -1550,6 +1776,7 @@ def algorithm_breakdowns(samples: Sequence[StudySample]) -> dict[str, Any]:
                 {
                     "direction": directions[direction],
                     "cs_buflo_state": sample.algorithm_diagnostics.get("cs_buflo_state"),
+                    "algorithm_schema_version": sample_diagnostic_version,
                 }
             )
     rows = []
@@ -1568,6 +1795,12 @@ def algorithm_breakdowns(samples: Sequence[StudySample]) -> dict[str, Any]:
             item["cs_buflo_state"]["directions"][direction]
             for item in group
             if isinstance(item["cs_buflo_state"], Mapping)
+        ]
+        cs_v4_rows = [
+            item["cs_buflo_state"]["directions"][direction]
+            for item in group
+            if item["algorithm_schema_version"] == 4
+            and isinstance(item["cs_buflo_state"], Mapping)
         ]
         variants = sorted(
             {
@@ -1700,6 +1933,90 @@ def algorithm_breakdowns(samples: Sequence[StudySample]) -> dict[str, Any]:
                         "power_of_two_crossed": sum(
                             item["power_of_two_crossed"] is True for item in cs_rows
                         ),
+                        "termination_stop_evidence": (
+                            {
+                                "available": True,
+                                "schema_version": 4,
+                                "samples_with_evidence": len(cs_v4_rows),
+                                "historical_samples_without_evidence": (
+                                    len(cs_rows) - len(cs_v4_rows)
+                                ),
+                                "latched": sum(
+                                    item["termination_stop_latched"] is True
+                                    for item in cs_v4_rows
+                                ),
+                                "reason_counts": dict(
+                                    sorted(
+                                        Counter(
+                                            str(item["termination_stop_reason"])
+                                            for item in cs_v4_rows
+                                        ).items()
+                                    )
+                                ),
+                                "phase_counts": dict(
+                                    sorted(
+                                        Counter(
+                                            str(item["termination_stop_phase"])
+                                            for item in cs_v4_rows
+                                        ).items()
+                                    )
+                                ),
+                                "crossing_samples": sum(
+                                    int(
+                                        item[
+                                            "termination_stop_crossing_total_bytes"
+                                        ]
+                                    )
+                                    > 0
+                                    for item in cs_v4_rows
+                                ),
+                                "crossing_total_bytes": (
+                                    _numeric_quantiles(
+                                        [
+                                            int(
+                                                item[
+                                                    "termination_stop_crossing_total_bytes"
+                                                ]
+                                            )
+                                            for item in cs_v4_rows
+                                            if int(
+                                                item[
+                                                    "termination_stop_crossing_total_bytes"
+                                                ]
+                                            )
+                                            > 0
+                                        ]
+                                    )
+                                    if any(
+                                        int(
+                                            item[
+                                                "termination_stop_crossing_total_bytes"
+                                            ]
+                                        )
+                                        > 0
+                                        for item in cs_v4_rows
+                                    )
+                                    else None
+                                ),
+                                "drained_cells_after_stop": _numeric_quantiles(
+                                    [
+                                        int(
+                                            item["stop_drain_ledger"][
+                                                "drained_cells_after_stop"
+                                            ]
+                                        )
+                                        for item in cs_v4_rows
+                                    ]
+                                ),
+                            }
+                            if cs_v4_rows
+                            else {
+                                "available": False,
+                                "schema_version": None,
+                                "samples_with_evidence": 0,
+                                "historical_samples_without_evidence": len(cs_rows),
+                            }
+                        ),
                         "minimum_interval_opportunities": sum(
                             int(item["minimum_interval_opportunities"])
                             for item in cs_rows
@@ -1780,7 +2097,10 @@ def algorithm_breakdowns(samples: Sequence[StudySample]) -> dict[str, Any]:
                         for item in group
                     )
                 }
-                if diagnostic_version == 3
+                if all(
+                    "pending_application_parser_boundaries_at_latch" in item
+                    for item in group
+                )
                 else {}
             ),
             "exact_capacity_bytes_cancelled": {
@@ -1845,8 +2165,8 @@ def algorithm_breakdowns(samples: Sequence[StudySample]) -> dict[str, Any]:
         "strata": rows,
         "buflo_terminal_tail_strata": terminal_tail_rows,
     }
-    if diagnostic_version == 3:
-        result["schema_version"] = 2
+    if diagnostic_versions & {3, 4}:
+        result["schema_version"] = 3 if 4 in diagnostic_versions else 2
         result["cs_buflo_local_termination_strata"] = cs_local_et_rows
     return result
 
@@ -3164,7 +3484,11 @@ def _qcsd_comparison_rows(
                 "CTSP adaptation: outgoing total, incoming payload, 600-byte desired UDP payload"
             )
             early_termination = (
-                "local ApplicationComplete analogue only; no padding-complete peer signal"
+                "client-only ApplicationComplete or strict-quiet phase; stop new opportunities "
+                "at the first eligible frozen padding target or directional power-of-two "
+                "crossing, using outgoing observed UDP payload and incoming fully consumed "
+                "scheduled credit, then drain already-advertised credit exactly once before "
+                "local termination; no peer padding-done signal"
             )
         else:
             padding_variant = "mode-specific; bound by the sample's resolved run receipt"
@@ -3295,6 +3619,21 @@ def _qcsd_comparison_rows(
                                 "slot only after eventual peer stream-offset consumption, and "
                                 "does not claim the paper's modified-server datagram or "
                                 "padding-complete timing"
+                            ),
+                        },
+                        {
+                            "difference": (
+                                "csbuflo-paper-source-and-client-only-early-"
+                                "termination-translation"
+                            ),
+                            "classification": "expected",
+                            "reason": (
+                                "paper Algorithm 4 uses an active bilateral padding-done or "
+                                "current-write crossing input, while the pinned source has zero "
+                                "active padding-done consumers and uses transcript-end/zero-w2w; "
+                                "the client-only QCSD adaptation instead stops local opportunities "
+                                "at a frozen target or directional crossing and drains already-"
+                                "advertised receive credit before local termination"
                             ),
                         },
                     ]

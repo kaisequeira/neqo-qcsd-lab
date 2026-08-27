@@ -47,6 +47,8 @@ from qcsd_lab.fidelity import (
     BUFLO_TERMINAL_CONTROL_EVIDENCE_SEMANTICS,
     BUFLO_TERMINAL_SUBCELL_OBSERVER_EFFECT,
     BUFLO_TERMINAL_SUBCELL_POLICY,
+    CS_BUFLO_STOP_DRAIN_V4_KEYS,
+    CS_BUFLO_TERMINATION_STOP_POLICY,
     SCHEDULE_PREFIX_FIELDS,
     SCHEDULE_QCSD_FIELDS,
     _cs_buflo_padding_targets_match,
@@ -319,7 +321,10 @@ def test_cs_buflo_provenance_explicitly_receipts_source_live_estimator_divergenc
             "per_direction_actually_transmitted_real_plus_junk_bytes"
         ),
         "translation_classification": "expected-client-only-qcsd-adaptation-difference",
-        "early_termination_semantics": ("udp_client_only_observed_udp_power_of_two_crossing"),
+        "early_termination_semantics": (
+            "client_only_outgoing_observed_udp_and_incoming_consumed_credit_"
+            "power_of_two_crossing"
+        ),
         "expected_difference": (
             "adaptation-boundary-crossings-and-rate-transition-times-may-differ-"
             "from-the-author-artifact"
@@ -3341,7 +3346,8 @@ def test_cs_buflo_fidelity_reconciles_typed_composition_and_rate_state() -> None
         "cs_buflo_payload_padding": True,
         "cs_buflo_total_padding": False,
         "cs_buflo_early_termination_semantics": (
-            "udp_client_only_observed_udp_power_of_two_crossing"
+            "client_only_outgoing_observed_udp_and_incoming_consumed_credit_"
+            "power_of_two_crossing"
         ),
         "cs_buflo_scheduled_outgoing_cells": 2,
         "cs_buflo_scheduled_incoming_cells": 1,
@@ -3358,25 +3364,49 @@ def test_cs_buflo_fidelity_reconciles_typed_composition_and_rate_state() -> None
         "cs_buflo_natural_outgoing_bytes": 500,
         "cs_buflo_natural_incoming_bytes": 300,
         "cs_buflo_cover_outgoing_bytes": 100,
-        "cs_buflo_cover_incoming_bytes": 0,
+        "cs_buflo_cover_incoming_bytes": 212,
         "cs_buflo_real_bearing_outgoing_bytes": 400,
         "cs_buflo_real_bearing_incoming_bytes": 300,
         "cs_buflo_realized_incoming_credit_bytes": 600,
         "cs_buflo_outgoing_padding_basis_natural_bytes": 500,
         "cs_buflo_incoming_padding_basis_natural_bytes": 300,
         "cs_buflo_outgoing_padding_basis_cover_bytes": 100,
-        "cs_buflo_incoming_padding_basis_cover_bytes": 0,
+        "cs_buflo_incoming_padding_basis_cover_bytes": 212,
         "cs_buflo_outgoing_padding_basis_total_bytes": 600,
-        "cs_buflo_incoming_padding_basis_total_bytes": 300,
+        "cs_buflo_incoming_padding_basis_total_bytes": 512,
         "cs_buflo_reference_tcp_write_size_bytes": 548,
         "cs_buflo_reference_nominal_tcp_packet_size_bytes": 600,
         "cs_buflo_runtime_udp_packet_size_bytes": 600,
         "cs_buflo_outgoing_termination_accounted_bytes": 1_100,
         "cs_buflo_incoming_termination_accounted_bytes": 600,
         "cs_buflo_outgoing_last_termination_increment_bytes": 100,
-        "cs_buflo_incoming_last_termination_increment_bytes": 100,
+        "cs_buflo_incoming_last_termination_increment_bytes": 600,
         "cs_buflo_outgoing_power_of_two_crossed": True,
         "cs_buflo_incoming_power_of_two_crossed": True,
+        "cs_buflo_early_termination_translation_version": 2,
+        "cs_buflo_termination_stop_policy": CS_BUFLO_TERMINATION_STOP_POLICY,
+        "cs_buflo_outgoing_termination_stop_latched": True,
+        "cs_buflo_incoming_termination_stop_latched": True,
+        "cs_buflo_outgoing_termination_stop_crossing_total_bytes": 1_100,
+        "cs_buflo_incoming_termination_stop_crossing_total_bytes": 0,
+        "cs_buflo_outgoing_termination_stop_crossing_increment_bytes": 100,
+        "cs_buflo_incoming_termination_stop_crossing_increment_bytes": 0,
+        "cs_buflo_outgoing_termination_stop_reason": "power_of_two_crossing",
+        "cs_buflo_incoming_termination_stop_reason": "padding_target_reached",
+        "cs_buflo_outgoing_termination_stop_phase": "application_complete",
+        "cs_buflo_incoming_termination_stop_phase": "application_complete",
+        "cs_buflo_outgoing_termination_stop_latched_at_us": 1_900_000,
+        "cs_buflo_incoming_termination_stop_latched_at_us": 1_800_000,
+        "cs_buflo_outgoing_termination_stop_scheduled_cells_at_stop": 2,
+        "cs_buflo_incoming_termination_stop_scheduled_cells_at_stop": 1,
+        "cs_buflo_outgoing_termination_stop_terminal_cells_at_stop": 2,
+        "cs_buflo_incoming_termination_stop_terminal_cells_at_stop": 1,
+        "cs_buflo_outgoing_termination_stop_progress_bytes_at_stop": 600,
+        "cs_buflo_incoming_termination_stop_progress_bytes_at_stop": 512,
+        "cs_buflo_outgoing_termination_stop_padding_target_bytes_at_stop": 1_024,
+        "cs_buflo_incoming_termination_stop_padding_target_bytes_at_stop": 512,
+        "cs_buflo_outgoing_termination_stop_provisional_invalidation_count": 0,
+        "cs_buflo_incoming_termination_stop_provisional_invalidation_count": 0,
         "cs_buflo_outgoing_padding_target_bytes": 1_024,
         "cs_buflo_incoming_padding_target_bytes": 512,
         "cs_buflo_outgoing_interval_us": 8_192,
@@ -3453,7 +3483,7 @@ def test_cs_buflo_fidelity_reconciles_typed_composition_and_rate_state() -> None
         "defense_diagnostics": diagnostics,
         "buflo_summary": None,
         "cs_buflo_summary": {
-            "schema_version": 3,
+            "schema_version": 4,
             "kind": "cs_buflo",
             "implementation_scope": "client_only_quic",
             "paper_equivalent": False,
@@ -3471,11 +3501,43 @@ def test_cs_buflo_fidelity_reconciles_typed_composition_and_rate_state() -> None
             "incoming_boundary_separation": (
                 "advertisement_rearms_cadence_but_does_not_claim_peer_datagram_or_consumption"
             ),
-            "early_termination_semantics": ("udp_client_only_observed_udp_power_of_two_crossing"),
+            "early_termination_semantics": (
+                "client_only_outgoing_observed_udp_and_incoming_consumed_credit_"
+                "power_of_two_crossing"
+            ),
+            "early_termination_translation_version": 2,
+            "termination_stop_policy": CS_BUFLO_TERMINATION_STOP_POLICY,
             "diagnostics": diagnostics,
         },
     }
     assert new_defense_terminal_receipts_valid(run, "cs_buflo", require_application_complete=True)
+    invalid_summary_version = json.loads(json.dumps(run))
+    invalid_summary_version["cs_buflo_summary"][
+        "early_termination_translation_version"
+    ] = 2.0
+    assert not new_defense_terminal_receipts_valid(
+        invalid_summary_version, "cs_buflo", require_application_complete=True
+    )
+    invalid_stop = json.loads(json.dumps(run))
+    invalid_stop["defense_diagnostics"][
+        "cs_buflo_incoming_termination_stop_latched"
+    ] = False
+    invalid_stop["cs_buflo_summary"]["diagnostics"][
+        "cs_buflo_incoming_termination_stop_latched"
+    ] = False
+    assert not new_defense_terminal_receipts_valid(
+        invalid_stop, "cs_buflo", require_application_complete=True
+    )
+    invalid_crossing = json.loads(json.dumps(run))
+    invalid_crossing["defense_diagnostics"][
+        "cs_buflo_incoming_termination_stop_crossing_total_bytes"
+    ] = 700
+    invalid_crossing["cs_buflo_summary"]["diagnostics"][
+        "cs_buflo_incoming_termination_stop_crossing_total_bytes"
+    ] = 700
+    assert not new_defense_terminal_receipts_valid(
+        invalid_crossing, "cs_buflo", require_application_complete=True
+    )
 
     current_wakeups = json.loads(json.dumps(run))
     current_wakeups["runner_wakeup_metrics"] = _runner_wakeup_receipt_v2()
@@ -3493,7 +3555,33 @@ def test_cs_buflo_fidelity_reconciles_typed_composition_and_rate_state() -> None
         invalid_wakeups, "cs_buflo", require_application_complete=True
     )
 
-    legacy = json.loads(json.dumps(run))
+    legacy_v3 = json.loads(json.dumps(run))
+    legacy_v3["cs_buflo_summary"]["schema_version"] = 3
+    legacy_v3["cs_buflo_summary"].pop("early_termination_translation_version")
+    legacy_v3["cs_buflo_summary"].pop("termination_stop_policy")
+    legacy_v3["defense_diagnostics"]["cs_buflo_early_termination_semantics"] = (
+        "udp_client_only_observed_udp_power_of_two_crossing"
+    )
+    legacy_v3["cs_buflo_summary"]["early_termination_semantics"] = (
+        "udp_client_only_observed_udp_power_of_two_crossing"
+    )
+    legacy_v3["cs_buflo_summary"]["diagnostics"][
+        "cs_buflo_early_termination_semantics"
+    ] = "udp_client_only_observed_udp_power_of_two_crossing"
+    for key in CS_BUFLO_STOP_DRAIN_V4_KEYS:
+        legacy_v3["defense_diagnostics"].pop(key)
+        legacy_v3["cs_buflo_summary"]["diagnostics"].pop(key)
+    assert new_defense_terminal_receipts_valid(
+        legacy_v3, "cs_buflo", require_application_complete=True
+    )
+    assert not new_defense_terminal_receipts_valid(
+        legacy_v3,
+        "cs_buflo",
+        require_application_complete=True,
+        require_current_schema=True,
+    )
+
+    legacy = json.loads(json.dumps(legacy_v3))
     legacy["cs_buflo_summary"]["schema_version"] = 2
     for key in (
         "cs_buflo_local_et_latched_at_us",
@@ -3828,6 +3916,12 @@ def test_comparison_review_cannot_omit_declared_csbuflo_incoming_boundary(
                     )
                 },
                 {"difference": "csbuflo-incoming-boundary-translation"},
+                {
+                    "difference": (
+                        "csbuflo-paper-source-and-client-only-early-"
+                        "termination-translation"
+                    )
+                },
             ],
         },
     ]

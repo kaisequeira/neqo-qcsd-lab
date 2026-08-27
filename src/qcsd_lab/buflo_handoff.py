@@ -44,13 +44,17 @@ from .fidelity import (
     BUFLO_TERMINAL_SUBCELL_OBSERVER_EFFECT,
     BUFLO_TERMINAL_SUBCELL_POLICY,
     CS_BUFLO_AUTHOR_RATE_BOUNDARY_COUNTER_SEMANTICS,
+    CS_BUFLO_EARLY_TERMINATION_TRANSLATION_VERSION,
     CS_BUFLO_EARLY_TERMINATION_SEMANTICS,
     CS_BUFLO_INCOMING_BOUNDARY_SEPARATION,
     CS_BUFLO_INCOMING_CADENCE_BOUNDARY,
     CS_BUFLO_INCOMING_TERMINAL_BOUNDARY,
+    CS_BUFLO_LEGACY_EARLY_TERMINATION_SEMANTICS,
     CS_BUFLO_LOCAL_ET_V3_KEYS,
     CS_BUFLO_RATE_BOUNDARY_COUNTER_SEMANTICS,
     CS_BUFLO_RATE_BOUNDARY_TRANSLATION_VERSION,
+    CS_BUFLO_STOP_DRAIN_V4_KEYS,
+    CS_BUFLO_TERMINATION_STOP_POLICY,
     LEGACY_SCHEDULE_QCSD_FIELDS,
     SCHEDULE_PREFIX_FIELDS,
     SCHEDULE_QCSD_FIELDS,
@@ -1512,6 +1516,75 @@ def _direction_algorithm_metrics(
     }
 
 
+def _cs_buflo_stop_drain_ledger(
+    diagnostics: Mapping[str, Any],
+    schedule_rows: Sequence[Mapping[str, str]],
+) -> dict[str, dict[str, int]]:
+    """Bind a schema-4 stop snapshot to the terminal schedule chronology."""
+
+    local_latch_us = diagnostics["cs_buflo_local_et_latched_at_us"]
+    evidence: dict[str, dict[str, int]] = {}
+    for direction in ("outgoing", "incoming"):
+        selected = [row for row in schedule_rows if row["direction"] == direction]
+        stop_us = diagnostics[
+            f"cs_buflo_{direction}_termination_stop_latched_at_us"
+        ]
+        scheduled_at_stop = diagnostics[
+            f"cs_buflo_{direction}_termination_stop_scheduled_cells_at_stop"
+        ]
+        terminal_at_stop = diagnostics[
+            f"cs_buflo_{direction}_termination_stop_terminal_cells_at_stop"
+        ]
+        target_times = [
+            _csv_unsigned(row["target_time_us"], label="schedule target time")
+            for row in selected
+        ]
+        terminal_times = [
+            _csv_unsigned(
+                (
+                    row["credit_consumed_at_us"]
+                    if direction == "incoming"
+                    else row["action_time_us"]
+                ),
+                label=f"{direction} terminal time",
+            )
+            for row in selected
+        ]
+        terminal_before_stop = sum(terminal < stop_us for terminal in terminal_times)
+        terminal_at_or_before_stop = sum(
+            terminal <= stop_us for terminal in terminal_times
+        )
+        if (
+            type(local_latch_us) is not int
+            or type(stop_us) is not int
+            or stop_us < 0
+            or stop_us > local_latch_us
+            or scheduled_at_stop != len(selected)
+            or not 0 <= terminal_at_stop <= scheduled_at_stop
+            or any(target > stop_us for target in target_times)
+            or not (
+                terminal_before_stop
+                <= terminal_at_stop
+                <= terminal_at_or_before_stop
+            )
+            or any(terminal > local_latch_us for terminal in terminal_times)
+        ):
+            raise ValueError(
+                "study handoff CS-BuFLO stop/drain schedule chronology is invalid"
+            )
+        evidence[direction] = {
+            "drained_cells_after_stop": scheduled_at_stop - terminal_at_stop,
+            "last_scheduled_target_us": max(target_times, default=0),
+            "last_terminal_at_us": max(terminal_times, default=0),
+            "terminal_cells_strictly_before_stop": terminal_before_stop,
+            "terminal_cells_at_or_before_stop": terminal_at_or_before_stop,
+            "terminal_cells_at_stop_timestamp": (
+                terminal_at_or_before_stop - terminal_before_stop
+            ),
+        }
+    return evidence
+
+
 def _algorithm_diagnostics(
     run: Any,
     *,
@@ -1521,7 +1594,10 @@ def _algorithm_diagnostics(
     events_path: Path,
     packets_path: Path,
     require_current: bool = True,
+    require_latest_cs: bool | None = None,
 ) -> dict[str, Any]:
+    if require_latest_cs is None:
+        require_latest_cs = require_current
     if not isinstance(run, Mapping):
         raise ValueError("study handoff runner receipt is invalid")
     schedule_rows = _read_extended_runner_csv(
@@ -1855,6 +1931,9 @@ def _algorithm_diagnostics(
         summary = run.get("cs_buflo_summary")
         if not isinstance(summary, Mapping):
             raise ValueError("study handoff CS-BuFLO summary is unavailable")
+        cs_summary_schema = summary.get("schema_version")
+        current_cs_summary = cs_summary_schema in {3, 4}
+        stop_drain_current = cs_summary_schema == 4
         required = {
             "cs_buflo_payload_padding",
             "cs_buflo_total_padding",
@@ -1893,19 +1972,45 @@ def _algorithm_diagnostics(
             "cs_buflo_local_et_pending_request_cancellations",
             "cs_buflo_local_et_stream_cancellations",
         }
-        if require_current:
+        if current_cs_summary:
             required.update(CS_BUFLO_LOCAL_ET_V3_KEYS)
+        if stop_drain_current:
+            required.update(
+                {
+                    *CS_BUFLO_STOP_DRAIN_V4_KEYS,
+                    "cs_buflo_outgoing_termination_accounted_bytes",
+                    "cs_buflo_incoming_termination_accounted_bytes",
+                    "cs_buflo_outgoing_last_termination_increment_bytes",
+                    "cs_buflo_incoming_last_termination_increment_bytes",
+                }
+            )
         if (
             not required <= set(diagnostics)
-            or summary.get("schema_version") != (3 if require_current else 2)
+            or (
+                require_current
+                and not current_cs_summary
+            )
+            or (
+                not require_current
+                and cs_summary_schema != 2
+            )
+            or (require_latest_cs and cs_summary_schema != 4)
             or not new_defense_terminal_receipts_valid(
-                run, "cs_buflo", require_application_complete=True
+                run,
+                "cs_buflo",
+                require_application_complete=True,
+                require_current_schema=require_latest_cs,
             )
             or not cs_buflo_local_et_handoff_valid(
-                diagnostics, require_current=require_current
+                diagnostics, require_current=current_cs_summary
             )
         ):
             raise ValueError("study handoff CS-BuFLO runner diagnostics are incomplete")
+        stop_drain_ledger = (
+            _cs_buflo_stop_drain_ledger(diagnostics, schedule_rows)
+            if stop_drain_current
+            else None
+        )
         cs_state = {
             "padding_variant": (
                 "CPSP"
@@ -1919,6 +2024,20 @@ def _algorithm_diagnostics(
             "early_termination_semantics": diagnostics[
                 "cs_buflo_early_termination_semantics"
             ],
+            **(
+                {
+                    "early_termination_translation": {
+                        "version": diagnostics[
+                            "cs_buflo_early_termination_translation_version"
+                        ],
+                        "stop_policy": diagnostics[
+                            "cs_buflo_termination_stop_policy"
+                        ],
+                    }
+                }
+                if stop_drain_current
+                else {}
+            ),
             "incoming_boundaries": {
                 "cadence": summary.get("incoming_cadence_boundary"),
                 "terminal": summary.get("incoming_terminal_boundary"),
@@ -2025,6 +2144,52 @@ def _algorithm_diagnostics(
                     "power_of_two_crossed": diagnostics[
                         f"cs_buflo_{direction}_power_of_two_crossed"
                     ],
+                    **(
+                        {
+                            "termination_accounted_bytes": diagnostics[
+                                f"cs_buflo_{direction}_termination_accounted_bytes"
+                            ],
+                            "last_termination_increment_bytes": diagnostics[
+                                f"cs_buflo_{direction}_last_termination_increment_bytes"
+                            ],
+                            "termination_stop_latched": diagnostics[
+                                f"cs_buflo_{direction}_termination_stop_latched"
+                            ],
+                            "termination_stop_crossing_total_bytes": diagnostics[
+                                f"cs_buflo_{direction}_termination_stop_crossing_total_bytes"
+                            ],
+                            "termination_stop_crossing_increment_bytes": diagnostics[
+                                f"cs_buflo_{direction}_termination_stop_crossing_increment_bytes"
+                            ],
+                            "termination_stop_reason": diagnostics[
+                                f"cs_buflo_{direction}_termination_stop_reason"
+                            ],
+                            "termination_stop_phase": diagnostics[
+                                f"cs_buflo_{direction}_termination_stop_phase"
+                            ],
+                            "termination_stop_latched_at_us": diagnostics[
+                                f"cs_buflo_{direction}_termination_stop_latched_at_us"
+                            ],
+                            "termination_stop_scheduled_cells_at_stop": diagnostics[
+                                f"cs_buflo_{direction}_termination_stop_scheduled_cells_at_stop"
+                            ],
+                            "termination_stop_terminal_cells_at_stop": diagnostics[
+                                f"cs_buflo_{direction}_termination_stop_terminal_cells_at_stop"
+                            ],
+                            "termination_stop_progress_bytes_at_stop": diagnostics[
+                                f"cs_buflo_{direction}_termination_stop_progress_bytes_at_stop"
+                            ],
+                            "termination_stop_padding_target_bytes_at_stop": diagnostics[
+                                f"cs_buflo_{direction}_termination_stop_padding_target_bytes_at_stop"
+                            ],
+                            "termination_stop_provisional_invalidation_count": diagnostics[
+                                f"cs_buflo_{direction}_termination_stop_provisional_invalidation_count"
+                            ],
+                            "stop_drain_ledger": stop_drain_ledger[direction],
+                        }
+                        if stop_drain_current
+                        else {}
+                    ),
                     "minimum_interval_opportunities": diagnostics[
                         f"cs_buflo_{direction}_minimum_interval_opportunities"
                     ],
@@ -2057,9 +2222,22 @@ def _algorithm_diagnostics(
         }
         if cs_state["padding_variant"] == "invalid":
             raise ValueError("study handoff CS-BuFLO padding variant is invalid")
+        expected_early_termination_semantics = (
+            CS_BUFLO_EARLY_TERMINATION_SEMANTICS
+            if stop_drain_current
+            else CS_BUFLO_LEGACY_EARLY_TERMINATION_SEMANTICS
+        )
         if (
             cs_state["early_termination_semantics"]
-            != CS_BUFLO_EARLY_TERMINATION_SEMANTICS
+            != expected_early_termination_semantics
+            or (
+                stop_drain_current
+                and cs_state.get("early_termination_translation")
+                != {
+                    "version": CS_BUFLO_EARLY_TERMINATION_TRANSLATION_VERSION,
+                    "stop_policy": CS_BUFLO_TERMINATION_STOP_POLICY,
+                }
+            )
             or cs_state["incoming_boundaries"]
             != {
                 "cadence": CS_BUFLO_INCOMING_CADENCE_BOUNDARY,
@@ -2086,7 +2264,15 @@ def _algorithm_diagnostics(
         ):
             raise ValueError("study handoff CS-BuFLO translation/termination state is invalid")
     return {
-        "schema_version": 3 if require_current else 2,
+        "schema_version": (
+            4
+            if runtime_kind == "cs_buflo"
+            and isinstance(cs_state, Mapping)
+            and "early_termination_translation" in cs_state
+            else 3
+            if require_current
+            else 2
+        ),
         "mode": defense,
         "runtime_kind": runtime_kind,
         "classifier_input": False,
@@ -2284,9 +2470,13 @@ def _validate_handoff_rows(
                 if isinstance(stored_diagnostics, Mapping)
                 else None
             )
-            if current_detailed and stored_schema != 3:
+            supported_stored_schemas = (
+                {3, 4} if row.get("runtime_kind") == "cs_buflo" else {3}
+            )
+            if current_detailed and stored_schema not in supported_stored_schemas:
                 raise ValueError(
-                    "current study handoff requires algorithm diagnostic schema 3"
+                    "current study handoff requires the current mode-specific "
+                    "algorithm diagnostic schema"
                 )
             expected_diagnostics = _algorithm_diagnostics(
                 run,
@@ -2295,7 +2485,8 @@ def _validate_handoff_rows(
                 schedule_path=root / str(row["runner_schedule_path"]),
                 events_path=root / str(row["runner_events_path"]),
                 packets_path=root / str(row["runner_packets_path"]),
-                require_current=stored_schema == 3,
+                require_current=stored_schema in {3, 4},
+                require_latest_cs=stored_schema == 4,
             )
             if row.get("algorithm_diagnostics") != expected_diagnostics:
                 raise ValueError("study handoff algorithm diagnostics do not match runner evidence")
@@ -3073,5 +3264,13 @@ distinguishes a post-onLoad latch from a pre-onLoad latch. The current schema
 counts application receive streams, parser state, and send endpoints handed
 back to ordinary HTTP/3, plus later natural bytes by direction. Those later
 bytes reconcile final accounting but do not update the frozen padding basis,
-estimator, rate transitions, or terminal interval.
+estimator, rate transitions, or terminal interval. Schema 4 additionally binds
+the phase, reason, timestamp, progress, target, and scheduled/terminal snapshot
+for the first eligible padding-target or directional power-of-two stop. The
+sealed schedule ledger proves that no later opportunity was scheduled and that
+every already-advertised receive-credit opportunity drained exactly once before
+the client-local latch. Strictly-before, same-timestamp, and at-or-before counts
+bound the Rust stop snapshot without imposing a false order on controller events
+that share one timestamp. Incoming crossings are consumed scheduled credit, not
+an observation of peer datagram timing or size.
 """

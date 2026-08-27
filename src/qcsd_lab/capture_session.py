@@ -1069,6 +1069,7 @@ def _validate_run_binding(
                 run_data,
                 defense.kind,
                 require_application_complete=True,
+                require_current_schema=True,
             )
         )
         or not isinstance(resolved, dict)
