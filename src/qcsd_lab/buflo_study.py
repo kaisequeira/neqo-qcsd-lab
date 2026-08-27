@@ -5965,6 +5965,10 @@ def _aggregate_controlled_buflo_terminal_subcells(
 ) -> dict[str, Any]:
     if not values or any(not _controlled_buflo_terminal_subcell_valid(value) for value in values):
         raise ValueError("controlled BuFLO terminal-subcell evidence is invalid")
+    state_versions = {int(value.get("schema_version", 1)) for value in values}
+    if len(state_versions) != 1:
+        raise ValueError("controlled BuFLO terminal-subcell evidence mixes schema versions")
+    state_version = next(iter(state_versions))
     capacities = [int(value["exact_capacity_bytes_cancelled"]) for value in values]
     streams = [int(value["stream_cancellations"]) for value in values]
     latch_times = [int(value["terminal_latched_at_us"]) for value in values]
@@ -5977,7 +5981,7 @@ def _aggregate_controlled_buflo_terminal_subcells(
         for value in values
     ]
     return {
-        "schema_version": 1,
+        "schema_version": 2 if state_version == 2 else 1,
         "samples": len(values),
         "terminal_subcell_policy": BUFLO_TERMINAL_SUBCELL_POLICY,
         "terminal_subcell_observer_effect": BUFLO_TERMINAL_SUBCELL_OBSERVER_EFFECT,
@@ -6003,7 +6007,19 @@ def _aggregate_controlled_buflo_terminal_subcells(
         ),
         "pending_request_cancellations": 0,
         "parser_lease_bytes_at_latch": 0,
-        "pending_parser_boundaries_at_latch": 0,
+        "pending_parser_boundaries_at_latch": sum(
+            int(value["pending_parser_boundaries_at_latch"]) for value in values
+        ),
+        **(
+            {
+                "pending_application_parser_boundaries_at_latch": sum(
+                    int(value["pending_application_parser_boundaries_at_latch"])
+                    for value in values
+                )
+            }
+            if state_version == 2
+            else {}
+        ),
         "post_cancellation_unscheduled_defense_control_packets": sum(
             post_control_packets
         ),
@@ -7119,11 +7135,14 @@ def _validate_formal_performance_evidence(evaluation: Mapping[str, Any]) -> dict
         or algorithm.get("classifier_input") is not False
         or set(algorithm)
         != {
+            "schema_version",
             "available",
             "classifier_input",
             "strata",
             "buflo_terminal_tail_strata",
+            "cs_buflo_local_termination_strata",
         }
+        or algorithm.get("schema_version") != 2
         or not isinstance(paired, list)
         or len(paired) != 1_000
         or not isinstance(summary, Mapping)
@@ -7295,6 +7314,92 @@ def _validate_formal_performance_evidence(evaluation: Mapping[str, Any]) -> dict
         observed_algorithm_strata.add(key)
     if observed_algorithm_strata != expected_algorithm_strata:
         raise ValueError("formal algorithm diagnostic stratum coverage is incomplete")
+    cs_local_et_rows = algorithm.get("cs_buflo_local_termination_strata")
+    cs_local_et_keys = {
+        "defense",
+        "workload_id",
+        "acquisition_block_index",
+        "samples",
+        "before_application_complete_samples",
+        "latched_at_us",
+        "pending_request_cancellations",
+        "stream_cancellations",
+        "application_receive_streams_handed_off",
+        "application_parser_boundaries_handed_off",
+        "application_parser_lease_bytes_handed_off",
+        "application_send_endpoints_released",
+        "post_local_et_natural_outgoing_bytes",
+        "post_local_et_natural_incoming_bytes",
+    }
+    expected_cs_local_et_strata = {
+        (workload, block) for workload in WORKLOADS for block in range(10)
+    }
+    seen_cs_local_et_strata: set[tuple[str, int]] = set()
+    if not isinstance(cs_local_et_rows, list) or len(cs_local_et_rows) != 50:
+        raise ValueError("formal CS-BuFLO local-termination stratum inventory is not exact")
+    for row in cs_local_et_rows:
+        if not isinstance(row, Mapping) or set(row) != cs_local_et_keys:
+            raise ValueError("formal CS-BuFLO local-termination stratum schema is not exact")
+        workload = row.get("workload_id")
+        block = row.get("acquisition_block_index")
+        key = (workload, block)
+        if (
+            row.get("defense") != "cs-buflo"
+            or key not in expected_cs_local_et_strata
+            or key in seen_cs_local_et_strata
+            or row.get("samples") != 10
+        ):
+            raise ValueError("formal CS-BuFLO local-termination stratum identity is invalid")
+        seen_cs_local_et_strata.add(key)
+        integer_fields = {
+            field: row.get(field)
+            for field in cs_local_et_keys
+            - {
+                "defense",
+                "workload_id",
+                "acquisition_block_index",
+                "samples",
+                "latched_at_us",
+            }
+        }
+        before = integer_fields["before_application_complete_samples"]
+        handoff_total = sum(
+            integer_fields[field]
+            for field in (
+                "application_receive_streams_handed_off",
+                "application_parser_boundaries_handed_off",
+                "application_parser_lease_bytes_handed_off",
+                "application_send_endpoints_released",
+            )
+        )
+        post_total = sum(
+            integer_fields[field]
+            for field in (
+                "post_local_et_natural_outgoing_bytes",
+                "post_local_et_natural_incoming_bytes",
+            )
+        )
+        latch = row.get("latched_at_us")
+        if (
+            any(type(value) is not int or value < 0 for value in integer_fields.values())
+            or not 0 <= before <= 10
+            or integer_fields["pending_request_cancellations"] != 0
+            or (before == 0 and (handoff_total != 0 or post_total != 0))
+            or (before > 0 and handoff_total == 0)
+            or not isinstance(latch, Mapping)
+            or set(latch) != {"p50", "p90", "p95"}
+            or any(
+                not isinstance(latch[field], (int, float))
+                or isinstance(latch[field], bool)
+                or not math.isfinite(float(latch[field]))
+                or float(latch[field]) <= 0
+                for field in ("p50", "p90", "p95")
+            )
+            or not latch["p50"] <= latch["p90"] <= latch["p95"]
+        ):
+            raise ValueError("formal CS-BuFLO local-termination evidence is invalid")
+    if seen_cs_local_et_strata != expected_cs_local_et_strata:
+        raise ValueError("formal CS-BuFLO local-termination coverage is incomplete")
     tail_rows = algorithm.get("buflo_terminal_tail_strata")
     tail_keys = {
         "defense",
@@ -7312,6 +7417,7 @@ def _validate_formal_performance_evidence(evaluation: Mapping[str, Any]) -> dict
         "open_streams_at_latch",
         "parser_lease_bytes_at_latch",
         "pending_parser_boundaries_at_latch",
+        "pending_application_parser_boundaries_at_latch",
         "exact_capacity_bytes_cancelled",
         "terminal_latched_at_us",
         "post_cancellation_unscheduled_defense_control_packets",
@@ -7358,6 +7464,7 @@ def _validate_formal_performance_evidence(evaluation: Mapping[str, Any]) -> dict
                 "open_streams_at_latch",
                 "parser_lease_bytes_at_latch",
                 "pending_parser_boundaries_at_latch",
+                "pending_application_parser_boundaries_at_latch",
                 "post_cancellation_unscheduled_defense_control_packets",
                 "post_cancellation_unscheduled_defense_control_bytes",
             )
@@ -7385,7 +7492,15 @@ def _validate_formal_performance_evidence(evaluation: Mapping[str, Any]) -> dict
             or streams != integer_fields["open_streams_at_latch"]
             or integer_fields["pending_request_cancellations"] != 0
             or integer_fields["parser_lease_bytes_at_latch"] != 0
-            or integer_fields["pending_parser_boundaries_at_latch"] != 0
+            or integer_fields[
+                "pending_application_parser_boundaries_at_latch"
+            ]
+            != 0
+            or integer_fields["pending_parser_boundaries_at_latch"] > streams
+            or (
+                streams == 0
+                and integer_fields["pending_parser_boundaries_at_latch"] != 0
+            )
             or (
                 streams == 0
                 and (control_packets != 0 or control_bytes != 0)
@@ -7453,6 +7568,7 @@ def _validate_formal_performance_evidence(evaluation: Mapping[str, Any]) -> dict
         "buflo_terminal_tail_strata": len(tail_rows),
         "buflo_terminal_tail_samples": total_tail_samples,
         "buflo_terminal_tail_cancellations": total_tail_cancellations,
+        "cs_buflo_local_termination_strata": len(cs_local_et_rows),
         "paired_client_metrics": sorted(required_costs),
         "passed": True,
     }

@@ -29,8 +29,8 @@ from pathlib import Path
 from typing import Any
 
 from .buflo_evaluation import (
-    FORMAL_CLASS_BY_WORKLOAD,
     FORMAL_BLOCKS,
+    FORMAL_CLASS_BY_WORKLOAD,
     FORMAL_DEFENSES,
     SCHEMA_VERSION,
     load_study_handoff,
@@ -48,14 +48,17 @@ from .fidelity import (
     CS_BUFLO_INCOMING_BOUNDARY_SEPARATION,
     CS_BUFLO_INCOMING_CADENCE_BOUNDARY,
     CS_BUFLO_INCOMING_TERMINAL_BOUNDARY,
+    CS_BUFLO_LOCAL_ET_V3_KEYS,
     CS_BUFLO_RATE_BOUNDARY_COUNTER_SEMANTICS,
     CS_BUFLO_RATE_BOUNDARY_TRANSLATION_VERSION,
     LEGACY_SCHEDULE_QCSD_FIELDS,
     SCHEDULE_PREFIX_FIELDS,
     SCHEDULE_QCSD_FIELDS,
-    _schedule_realization_metrics_from_path,
     _cs_buflo_rate_transition_vector_valid,
+    _schedule_realization_metrics_from_path,
+    buflo_terminal_diagnostics_valid,
     buflo_terminal_state_valid,
+    cs_buflo_local_et_handoff_valid,
     fidelity_eligible,
     new_defense_terminal_receipts_valid,
 )
@@ -1311,6 +1314,7 @@ def _algorithm_diagnostics(
     schedule_path: Path,
     events_path: Path,
     packets_path: Path,
+    require_current: bool = True,
 ) -> dict[str, Any]:
     if not isinstance(run, Mapping):
         raise ValueError("study handoff runner receipt is invalid")
@@ -1420,6 +1424,10 @@ def _algorithm_diagnostics(
             "buflo_terminal_subcell_stream_cancellations",
             "buflo_terminal_subcell_exact_capacity_bytes_cancelled",
         }
+        if require_current:
+            required.add(
+                "buflo_terminal_subcell_pending_application_parser_boundaries_at_latch"
+            )
         if (
             not isinstance(summary, Mapping)
             or not required <= set(diagnostics)
@@ -1445,6 +1453,9 @@ def _algorithm_diagnostics(
         pending_parser_boundaries_at_latch = diagnostics[
             "buflo_terminal_subcell_pending_parser_boundaries_at_latch"
         ]
+        pending_application_parser_boundaries_at_latch = diagnostics.get(
+            "buflo_terminal_subcell_pending_application_parser_boundaries_at_latch"
+        )
         responses = run.get("chaff_responses")
         if not isinstance(responses, list):
             raise ValueError("study handoff BuFLO chaff receipts are unavailable")
@@ -1554,17 +1565,13 @@ def _algorithm_diagnostics(
         policy = BUFLO_TERMINAL_SUBCELL_POLICY
         observer_effect = BUFLO_TERMINAL_SUBCELL_OBSERVER_EFFECT
         if (
-            summary.get("schema_version") != 2
+            summary.get("schema_version") != (3 if require_current else 2)
             or summary.get("terminal_subcell_policy") != policy
             or summary.get("terminal_subcell_observer_effect") != observer_effect
             or summary.get("diagnostics") != diagnostics
-            or terminal_latched is not True
-            or type(terminal_latched_at_us) is not int
-            or terminal_latched_at_us < 10_000_000
-            or open_streams_at_latch != streams
-            or parser_lease_bytes_at_latch != 0
-            or pending_parser_boundaries_at_latch != 0
-            or pending != 0
+            or not buflo_terminal_diagnostics_valid(
+                diagnostics, require_current=require_current
+            )
             or receipt_cancellations != streams
             or len(cancellation_events) != streams
             or len(typed_cancellation_events) != streams
@@ -1627,6 +1634,14 @@ def _algorithm_diagnostics(
             "paper_equivalent": False,
             "implementation_scope": "client_only_quic",
         }
+        if require_current:
+            buflo_state = {
+                "schema_version": 2,
+                **buflo_state,
+                "pending_application_parser_boundaries_at_latch": (
+                    pending_application_parser_boundaries_at_latch
+                ),
+            }
         if not buflo_terminal_state_valid(buflo_state):
             raise ValueError("study handoff BuFLO terminal-tail state is invalid")
     cs_state: dict[str, Any] | None = None
@@ -1672,7 +1687,18 @@ def _algorithm_diagnostics(
             "cs_buflo_local_et_pending_request_cancellations",
             "cs_buflo_local_et_stream_cancellations",
         }
-        if not required <= set(diagnostics):
+        if require_current:
+            required.update(CS_BUFLO_LOCAL_ET_V3_KEYS)
+        if (
+            not required <= set(diagnostics)
+            or summary.get("schema_version") != (3 if require_current else 2)
+            or not new_defense_terminal_receipts_valid(
+                run, "cs_buflo", require_application_complete=True
+            )
+            or not cs_buflo_local_et_handoff_valid(
+                diagnostics, require_current=require_current
+            )
+        ):
             raise ValueError("study handoff CS-BuFLO runner diagnostics are incomplete")
         cs_state = {
             "padding_variant": (
@@ -1715,12 +1741,57 @@ def _algorithm_diagnostics(
                 "stream_cancellations": diagnostics[
                     "cs_buflo_local_et_stream_cancellations"
                 ],
+                **(
+                    {
+                        "latched_at_us": diagnostics[
+                            "cs_buflo_local_et_latched_at_us"
+                        ],
+                        "before_application_complete": diagnostics[
+                            "cs_buflo_local_et_before_application_complete"
+                        ],
+                        "application_receive_streams_handed_off": diagnostics[
+                            "cs_buflo_local_et_application_receive_streams_handed_off"
+                        ],
+                        "application_parser_boundaries_handed_off": diagnostics[
+                            "cs_buflo_local_et_application_parser_boundaries_handed_off"
+                        ],
+                        "application_parser_lease_bytes_handed_off": diagnostics[
+                            "cs_buflo_local_et_application_parser_lease_bytes_handed_off"
+                        ],
+                        "application_send_endpoints_released": diagnostics[
+                            "cs_buflo_local_et_application_send_endpoints_released"
+                        ],
+                        "post_local_et_natural_outgoing_bytes": diagnostics[
+                            "cs_buflo_post_local_et_natural_outgoing_bytes"
+                        ],
+                        "post_local_et_natural_incoming_bytes": diagnostics[
+                            "cs_buflo_post_local_et_natural_incoming_bytes"
+                        ],
+                    }
+                    if require_current
+                    else {}
+                ),
             },
             "incoming_local_realized_cells": diagnostics[
                 "cs_buflo_incoming_local_realized_cells"
             ],
             "directions": {
                 direction: {
+                    **(
+                        {
+                            "natural_bytes": diagnostics[
+                                f"cs_buflo_natural_{direction}_bytes"
+                            ],
+                            "real_bearing_bytes": diagnostics[
+                                f"cs_buflo_real_bearing_{direction}_bytes"
+                            ],
+                            "post_local_et_natural_bytes": diagnostics[
+                                f"cs_buflo_post_local_et_natural_{direction}_bytes"
+                            ],
+                        }
+                        if require_current
+                        else {}
+                    ),
                     "terminal_interval_us": diagnostics[
                         f"cs_buflo_{direction}_interval_us"
                     ],
@@ -1809,7 +1880,7 @@ def _algorithm_diagnostics(
         ):
             raise ValueError("study handoff CS-BuFLO translation/termination state is invalid")
     return {
-        "schema_version": 2,
+        "schema_version": 3 if require_current else 2,
         "mode": defense,
         "runtime_kind": runtime_kind,
         "classifier_input": False,
@@ -2001,6 +2072,16 @@ def _validate_handoff_rows(
             expected_files.add(workload_relative)
         if detailed:
             run = load_json(root / str(row["raw_run_path"]))
+            stored_diagnostics = row.get("algorithm_diagnostics")
+            stored_schema = (
+                stored_diagnostics.get("schema_version")
+                if isinstance(stored_diagnostics, Mapping)
+                else None
+            )
+            if current_detailed and stored_schema != 3:
+                raise ValueError(
+                    "current study handoff requires algorithm diagnostic schema 3"
+                )
             expected_diagnostics = _algorithm_diagnostics(
                 run,
                 defense=str(defense),
@@ -2008,6 +2089,7 @@ def _validate_handoff_rows(
                 schedule_path=root / str(row["runner_schedule_path"]),
                 events_path=root / str(row["runner_events_path"]),
                 packets_path=root / str(row["runner_packets_path"]),
+                require_current=stored_schema == 3,
             )
             if row.get("algorithm_diagnostics") != expected_diagnostics:
                 raise ValueError("study handoff algorithm diagnostics do not match runner evidence")
@@ -2773,9 +2855,17 @@ splits and paired-visit membership. Validate the closed inventory with
 `sha256sum -c SHA256SUMS` and the semantic protocol with `buflo-study verify`.
 
 For BuFLO, `algorithm_diagnostics.buflo_state` binds the inclusive-minimum
-terminal latch, zero parser backlog, the unallocatable sub-cell capacity, typed
-client-local cancellation actions, and later unscheduled defense-control packet
-composition. Packet composition does not expose individual QUIC frame identity;
-this is a separately classified QCSD-only expected difference, not bilateral
-BuFLO behavior.
+terminal latch, zero live parser-lease bytes, zero pending application parser
+boundaries, the counted reviewed-chaff parser boundaries canceled with their
+streams, the unallocatable sub-cell capacity, typed client-local cancellation
+actions, and later unscheduled defense-control packet composition. Packet
+composition does not expose individual QUIC frame identity; this is a separately
+classified QCSD-only expected difference, not bilateral BuFLO behavior.
+
+For CS-BuFLO, `algorithm_diagnostics.cs_buflo_state.local_termination`
+distinguishes a post-onLoad latch from a pre-onLoad latch. The current schema
+counts application receive streams, parser state, and send endpoints handed
+back to ordinary HTTP/3, plus later natural bytes by direction. Those later
+bytes reconcile final accounting but do not update the frozen padding basis,
+estimator, rate transitions, or terminal interval.
 """

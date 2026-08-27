@@ -755,7 +755,8 @@ def _load_algorithm_diagnostics(value: Any, *, defense: str) -> Mapping[str, Any
     current_keys = legacy_keys | {"buflo_state"}
     if (
         not isinstance(value, dict)
-        or value.get("schema_version") not in {1, 2}
+        or type(value.get("schema_version")) is not int
+        or value.get("schema_version") not in {1, 2, 3}
         or set(value)
         != (legacy_keys if value.get("schema_version") == 1 else current_keys)
         or value.get("mode") != defense
@@ -764,19 +765,100 @@ def _load_algorithm_diagnostics(value: Any, *, defense: str) -> Mapping[str, Any
         or set(value.get("directions", {})) != {"outgoing", "incoming"}
     ):
         raise ValueError("study handoff algorithm diagnostic schema is invalid")
-    if value["schema_version"] == 2:
+    if value["schema_version"] in {2, 3}:
         runtime_kind = value.get("runtime_kind")
         buflo_state = value.get("buflo_state")
         cs_state = value.get("cs_buflo_state")
         if runtime_kind == "buflo":
-            if not buflo_terminal_state_valid(buflo_state) or cs_state is not None:
+            expected_state_schema = 2 if value["schema_version"] == 3 else 1
+            observed_state_schema = (
+                buflo_state.get("schema_version", 1)
+                if isinstance(buflo_state, Mapping)
+                else None
+            )
+            if (
+                observed_state_schema != expected_state_schema
+                or not buflo_terminal_state_valid(buflo_state)
+                or cs_state is not None
+            ):
                 raise ValueError("study handoff BuFLO algorithm state is invalid")
         elif runtime_kind == "cs_buflo":
-            if buflo_state is not None or not isinstance(cs_state, Mapping):
+            if (
+                buflo_state is not None
+                or not isinstance(cs_state, Mapping)
+                or (
+                    value["schema_version"] == 3
+                    and not _current_cs_buflo_state_valid(cs_state)
+                )
+            ):
                 raise ValueError("study handoff CS-BuFLO algorithm state is invalid")
         elif buflo_state is not None or cs_state is not None:
             raise ValueError("study handoff algorithm state contradicts its runtime kind")
     return value
+
+
+def _current_cs_buflo_state_valid(value: Mapping[str, Any]) -> bool:
+    local = value.get("local_termination")
+    expected_local_keys = {
+        "latched",
+        "pending_request_cancellations",
+        "stream_cancellations",
+        "latched_at_us",
+        "before_application_complete",
+        "application_receive_streams_handed_off",
+        "application_parser_boundaries_handed_off",
+        "application_parser_lease_bytes_handed_off",
+        "application_send_endpoints_released",
+        "post_local_et_natural_outgoing_bytes",
+        "post_local_et_natural_incoming_bytes",
+    }
+    integer_local_keys = expected_local_keys - {
+        "latched",
+        "before_application_complete",
+    }
+    if (
+        not isinstance(local, Mapping)
+        or set(local) != expected_local_keys
+        or local.get("latched") is not True
+        or type(local.get("before_application_complete")) is not bool
+        or any(type(local.get(key)) is not int or local[key] < 0 for key in integer_local_keys)
+        or local["latched_at_us"] <= 0
+    ):
+        return False
+    handoff_keys = (
+        "application_receive_streams_handed_off",
+        "application_parser_boundaries_handed_off",
+        "application_parser_lease_bytes_handed_off",
+        "application_send_endpoints_released",
+    )
+    post_keys = (
+        "post_local_et_natural_outgoing_bytes",
+        "post_local_et_natural_incoming_bytes",
+    )
+    if local["before_application_complete"]:
+        if not any(local[key] > 0 for key in handoff_keys):
+            return False
+    elif any(local[key] != 0 for key in (*handoff_keys, *post_keys)):
+        return False
+    directions = value.get("directions")
+    if not isinstance(directions, Mapping) or set(directions) != {"outgoing", "incoming"}:
+        return False
+    for direction in ("outgoing", "incoming"):
+        state = directions[direction]
+        if not isinstance(state, Mapping):
+            return False
+        natural = state.get("natural_bytes")
+        frozen = state.get("padding_basis_natural_bytes")
+        post = state.get("post_local_et_natural_bytes")
+        real_bearing = state.get("real_bearing_bytes")
+        if (
+            any(type(item) is not int or item < 0 for item in (natural, frozen, post, real_bearing))
+            or natural != frozen + post
+            or real_bearing > frozen
+            or post != local[f"post_local_et_natural_{direction}_bytes"]
+        ):
+            return False
+    return True
 
 
 def _load_performance(value: Any, trace: Sequence[ShapePacket]) -> Mapping[str, Any] | None:
@@ -1420,16 +1502,40 @@ def algorithm_breakdowns(samples: Sequence[StudySample]) -> dict[str, Any]:
             "available": False,
             "reason": "handoff runner algorithm diagnostics are incomplete",
         }
+    if not samples:
+        return {
+            "available": True,
+            "classifier_input": False,
+            "strata": [],
+            "buflo_terminal_tail_strata": [],
+        }
+    diagnostic_version_values = [
+        sample.algorithm_diagnostics["schema_version"]
+        for sample in samples
+        if sample.algorithm_diagnostics is not None
+    ]
+    if any(type(version) is not int for version in diagnostic_version_values):
+        raise ValueError("study handoff has an invalid algorithm diagnostic schema version")
+    diagnostic_versions = set(diagnostic_version_values)
+    if len(diagnostic_versions) != 1:
+        raise ValueError("study handoff mixes algorithm diagnostic schema versions")
+    diagnostic_version = next(iter(diagnostic_versions))
     groups: dict[tuple[str, str, int, str], list[Mapping[str, Any]]] = defaultdict(list)
     terminal_tail_groups: dict[tuple[str, str, int], list[Mapping[str, Any]]] = defaultdict(list)
+    cs_local_et_groups: dict[tuple[str, str, int], list[Mapping[str, Any]]] = defaultdict(list)
     for sample in samples:
         assert sample.algorithm_diagnostics is not None
         directions = sample.algorithm_diagnostics["directions"]
         buflo_state = sample.algorithm_diagnostics.get("buflo_state")
+        cs_state = sample.algorithm_diagnostics.get("cs_buflo_state")
         if isinstance(buflo_state, Mapping):
             terminal_tail_groups[
                 (sample.defense, sample.workload_id, sample.acquisition_block_index)
             ].append(buflo_state)
+        if diagnostic_version == 3 and isinstance(cs_state, Mapping):
+            cs_local_et_groups[
+                (sample.defense, sample.workload_id, sample.acquisition_block_index)
+            ].append(cs_state["local_termination"])
         for direction in ("outgoing", "incoming"):
             groups[
                 (
@@ -1665,6 +1771,16 @@ def algorithm_breakdowns(samples: Sequence[StudySample]) -> dict[str, Any]:
             "pending_parser_boundaries_at_latch": sum(
                 int(item["pending_parser_boundaries_at_latch"]) for item in group
             ),
+            **(
+                {
+                    "pending_application_parser_boundaries_at_latch": sum(
+                        int(item["pending_application_parser_boundaries_at_latch"])
+                        for item in group
+                    )
+                }
+                if diagnostic_version == 3
+                else {}
+            ),
             "exact_capacity_bytes_cancelled": {
                 "total": sum(
                     int(item["exact_capacity_bytes_cancelled"]) for item in group
@@ -1693,12 +1809,44 @@ def algorithm_breakdowns(samples: Sequence[StudySample]) -> dict[str, Any]:
         }
         for (defense, workload, block), group in sorted(terminal_tail_groups.items())
     ]
-    return {
+    cs_local_et_rows = [
+        {
+            "defense": defense,
+            "workload_id": workload,
+            "acquisition_block_index": block,
+            "samples": len(group),
+            "before_application_complete_samples": sum(
+                item["before_application_complete"] is True for item in group
+            ),
+            "latched_at_us": _numeric_quantiles(
+                [int(item["latched_at_us"]) for item in group]
+            ),
+            **{
+                field: sum(int(item[field]) for item in group)
+                for field in (
+                    "pending_request_cancellations",
+                    "stream_cancellations",
+                    "application_receive_streams_handed_off",
+                    "application_parser_boundaries_handed_off",
+                    "application_parser_lease_bytes_handed_off",
+                    "application_send_endpoints_released",
+                    "post_local_et_natural_outgoing_bytes",
+                    "post_local_et_natural_incoming_bytes",
+                )
+            },
+        }
+        for (defense, workload, block), group in sorted(cs_local_et_groups.items())
+    ]
+    result = {
         "available": True,
         "classifier_input": False,
         "strata": rows,
         "buflo_terminal_tail_strata": terminal_tail_rows,
     }
+    if diagnostic_version == 3:
+        result["schema_version"] = 2
+        result["cs_buflo_local_termination_strata"] = cs_local_et_rows
+    return result
 
 
 def _merge_algorithm_summaries(values: Sequence[Mapping[str, Any]]) -> dict[str, Any]:

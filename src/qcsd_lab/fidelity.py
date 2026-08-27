@@ -70,7 +70,24 @@ BUFLO_TERMINAL_CONTROL_EVIDENCE_SEMANTICS = (
     "post-cancellation unscheduled packet composition proves defense-control "
     "bytes but does not expose individual QUIC frame identity"
 )
-BUFLO_TERMINAL_STATE_KEYS = frozenset(
+CS_BUFLO_LOCAL_ET_V3_INTEGER_KEYS = frozenset(
+    {
+        "cs_buflo_local_et_latched_at_us",
+        "cs_buflo_local_et_application_receive_streams_handed_off",
+        "cs_buflo_local_et_application_parser_boundaries_handed_off",
+        "cs_buflo_local_et_application_parser_lease_bytes_handed_off",
+        "cs_buflo_local_et_application_send_endpoints_released",
+        "cs_buflo_post_local_et_natural_outgoing_bytes",
+        "cs_buflo_post_local_et_natural_incoming_bytes",
+    }
+)
+CS_BUFLO_LOCAL_ET_V3_BOOLEAN_KEYS = frozenset(
+    {"cs_buflo_local_et_before_application_complete"}
+)
+CS_BUFLO_LOCAL_ET_V3_KEYS = (
+    CS_BUFLO_LOCAL_ET_V3_INTEGER_KEYS | CS_BUFLO_LOCAL_ET_V3_BOOLEAN_KEYS
+)
+BUFLO_TERMINAL_STATE_V1_KEYS = frozenset(
     {
         "terminal_subcell_policy",
         "terminal_subcell_observer_effect",
@@ -97,12 +114,28 @@ BUFLO_TERMINAL_STATE_KEYS = frozenset(
         "implementation_scope",
     }
 )
+BUFLO_TERMINAL_STATE_KEYS = BUFLO_TERMINAL_STATE_V1_KEYS | {
+    "schema_version",
+    "pending_application_parser_boundaries_at_latch",
+}
 
 
 def buflo_terminal_state_valid(value: Any) -> bool:
-    """Validate the exact schema-2 BuFLO terminal-tail evidence contract."""
+    """Validate legacy implicit-v1 or current schema-2 BuFLO tail evidence."""
 
-    if not isinstance(value, Mapping) or set(value) != BUFLO_TERMINAL_STATE_KEYS:
+    if not isinstance(value, Mapping):
+        return False
+    schema_version = value.get("schema_version", 1)
+    if type(schema_version) is not int:
+        return False
+    expected_keys = (
+        BUFLO_TERMINAL_STATE_V1_KEYS
+        if schema_version == 1
+        else BUFLO_TERMINAL_STATE_KEYS
+        if schema_version == 2
+        else None
+    )
+    if expected_keys is None or set(value) != expected_keys:
         return False
     integer_fields = {
         "pending_request_cancellations",
@@ -118,6 +151,8 @@ def buflo_terminal_state_valid(value: Any) -> bool:
         "post_cancellation_unscheduled_defense_control_packets",
         "post_cancellation_unscheduled_defense_control_bytes",
     }
+    if schema_version == 2:
+        integer_fields.add("pending_application_parser_boundaries_at_latch")
     if any(type(value[field]) is not int or value[field] < 0 for field in integer_fields):
         return False
     streams = value["stream_cancellations"]
@@ -142,7 +177,12 @@ def buflo_terminal_state_valid(value: Any) -> bool:
         and value["terminal_latched_at_us"] >= 10_000_000
         and value["open_streams_at_latch"] == streams
         and value["parser_lease_bytes_at_latch"] == 0
-        and value["pending_parser_boundaries_at_latch"] == 0
+        and (
+            value["pending_parser_boundaries_at_latch"] == 0
+            if schema_version == 1
+            else value["pending_application_parser_boundaries_at_latch"] == 0
+            and value["pending_parser_boundaries_at_latch"] <= streams
+        )
         and value["paper_equivalent"] is False
         and value["implementation_scope"] == "client_only_quic"
         and value["control_evidence_semantics"]
@@ -158,6 +198,7 @@ def buflo_terminal_state_valid(value: Any) -> bool:
     if streams == 0:
         return bool(
             capacity == 0
+            and value["pending_parser_boundaries_at_latch"] == 0
             and value["post_cancellation_unscheduled_defense_control_packets"] == 0
             and value["post_cancellation_unscheduled_defense_control_bytes"] == 0
             and cancellation is None
@@ -176,6 +217,113 @@ def buflo_terminal_state_valid(value: Any) -> bool:
         <= first_control
         <= last_control
     )
+
+
+def buflo_terminal_diagnostics_valid(
+    diagnostics: Mapping[str, Any], *, require_current: bool = False
+) -> bool:
+    """Validate the version-inferred flat BuFLO terminal diagnostic contract."""
+
+    application_key = (
+        "buflo_terminal_subcell_pending_application_parser_boundaries_at_latch"
+    )
+    current = application_key in diagnostics
+    if require_current and not current:
+        return False
+    streams = diagnostics.get("buflo_terminal_subcell_stream_cancellations")
+    open_streams = diagnostics.get("buflo_terminal_subcell_open_streams_at_latch")
+    capacity = diagnostics.get(
+        "buflo_terminal_subcell_exact_capacity_bytes_cancelled"
+    )
+    total_boundaries = diagnostics.get(
+        "buflo_terminal_subcell_pending_parser_boundaries_at_latch"
+    )
+    integer_values = (streams, open_streams, capacity, total_boundaries)
+    if any(type(value) is not int or value < 0 for value in integer_values):
+        return False
+    if (
+        diagnostics.get("buflo_terminal_subcell_latched") is not True
+        or type(diagnostics.get("buflo_terminal_subcell_latched_at_us")) is not int
+        or diagnostics["buflo_terminal_subcell_latched_at_us"] < 10_000_000
+        or open_streams != streams
+        or diagnostics.get("buflo_terminal_subcell_parser_lease_bytes_at_latch")
+        != 0
+        or diagnostics.get("buflo_terminal_subcell_pending_request_cancellations")
+        != 0
+    ):
+        return False
+    if current:
+        application_boundaries = diagnostics.get(application_key)
+        if (
+            type(application_boundaries) is not int
+            or application_boundaries != 0
+            or total_boundaries > streams
+        ):
+            return False
+    elif total_boundaries != 0:
+        return False
+    return bool(
+        (streams == 0 and capacity == 0 and total_boundaries == 0)
+        or (streams > 0 and 0 <= capacity < 1_200)
+    )
+
+
+def cs_buflo_local_et_handoff_valid(
+    diagnostics: Mapping[str, Any], *, require_current: bool = False
+) -> bool:
+    """Validate the current CS-BuFLO application-passthrough transition."""
+
+    present = CS_BUFLO_LOCAL_ET_V3_KEYS & set(diagnostics)
+    if not present:
+        return not require_current
+    if present != CS_BUFLO_LOCAL_ET_V3_KEYS:
+        return False
+    if any(
+        type(diagnostics[key]) is not int or diagnostics[key] < 0
+        for key in CS_BUFLO_LOCAL_ET_V3_INTEGER_KEYS
+    ) or any(
+        type(diagnostics[key]) is not bool for key in CS_BUFLO_LOCAL_ET_V3_BOOLEAN_KEYS
+    ):
+        return False
+    before_application_complete = diagnostics[
+        "cs_buflo_local_et_before_application_complete"
+    ]
+    latch_at_us = diagnostics["cs_buflo_local_et_latched_at_us"]
+    handoff_keys = (
+        "cs_buflo_local_et_application_receive_streams_handed_off",
+        "cs_buflo_local_et_application_parser_boundaries_handed_off",
+        "cs_buflo_local_et_application_parser_lease_bytes_handed_off",
+        "cs_buflo_local_et_application_send_endpoints_released",
+    )
+    post_keys = (
+        "cs_buflo_post_local_et_natural_outgoing_bytes",
+        "cs_buflo_post_local_et_natural_incoming_bytes",
+    )
+    if latch_at_us <= 0:
+        return False
+    if before_application_complete:
+        if not any(diagnostics[key] > 0 for key in handoff_keys):
+            return False
+    elif any(diagnostics[key] != 0 for key in (*handoff_keys, *post_keys)):
+        return False
+    for direction in ("outgoing", "incoming"):
+        final_natural = diagnostics.get(f"cs_buflo_natural_{direction}_bytes")
+        frozen_natural = diagnostics.get(
+            f"cs_buflo_{direction}_padding_basis_natural_bytes"
+        )
+        post_natural = diagnostics[
+            f"cs_buflo_post_local_et_natural_{direction}_bytes"
+        ]
+        real_bearing = diagnostics.get(f"cs_buflo_real_bearing_{direction}_bytes")
+        if (
+            type(final_natural) is not int
+            or type(frozen_natural) is not int
+            or type(real_bearing) is not int
+            or final_natural != frozen_natural + post_natural
+            or real_bearing > frozen_natural
+        ):
+            return False
+    return True
 CLOCK_STEP_MAX_NS = 100_000_000
 CLOCK_STEP_CONTEXT_PACKETS = 5
 CLOCK_EPOCH_MIN_PACKETS = 32
@@ -1300,6 +1448,7 @@ _DIAGNOSTIC_CONTRACTS: dict[str, dict[str, str]] = {
                 "buflo_terminal_subcell_open_streams_at_latch",
                 "buflo_terminal_subcell_parser_lease_bytes_at_latch",
                 "buflo_terminal_subcell_pending_parser_boundaries_at_latch",
+                "buflo_terminal_subcell_pending_application_parser_boundaries_at_latch",
             )
         },
         "buflo_paper_equivalent": _BOOLEAN,
@@ -1374,6 +1523,7 @@ _DIAGNOSTIC_CONTRACTS: dict[str, dict[str, str]] = {
                 "cs_buflo_incoming_local_realized_cells",
                 "cs_buflo_outgoing_unresolved_cells",
                 "cs_buflo_incoming_unresolved_cells",
+                *CS_BUFLO_LOCAL_ET_V3_INTEGER_KEYS,
             )
         },
         **{
@@ -1390,6 +1540,7 @@ _DIAGNOSTIC_CONTRACTS: dict[str, dict[str, str]] = {
                 "cs_buflo_quiet_time_reached",
                 "cs_buflo_local_termination_latched",
                 "cs_buflo_event_guard_triggered",
+                *CS_BUFLO_LOCAL_ET_V3_BOOLEAN_KEYS,
             )
         },
         "cs_buflo_early_termination_semantics": _STRING,
@@ -1511,9 +1662,25 @@ def _diagnostics_match_contract(defense: str, diagnostics: dict[str, Any]) -> bo
         selected = {
             key: value for key, value in diagnostics.items() if key.startswith("cs_buflo_")
         }
-    if set(selected) != set(contract):
+    expected = set(contract)
+    if defense == "buflo" and (
+        "buflo_terminal_subcell_pending_application_parser_boundaries_at_latch"
+        not in selected
+    ):
+        # Historical summary schema 2 predates the application/chaff parser-boundary
+        # split.  Its single aggregate was required to be zero.
+        expected.remove(
+            "buflo_terminal_subcell_pending_application_parser_boundaries_at_latch"
+        )
+    if defense == "cs-buflo" and not (CS_BUFLO_LOCAL_ET_V3_KEYS & set(selected)):
+        # Historical summary schema 2 predates the explicit application-state
+        # passthrough and post-local-ET natural-byte accounting contract.
+        expected -= CS_BUFLO_LOCAL_ET_V3_KEYS
+    if set(selected) != expected:
         return False
-    return all(_diagnostic_value_matches(kind, selected[key]) for key, kind in contract.items())
+    return all(
+        _diagnostic_value_matches(contract[key], selected[key]) for key in expected
+    )
 
 
 def _scheduled_incoming_diagnostics_match(diagnostics: dict[str, Any]) -> bool:
@@ -1700,9 +1867,11 @@ def new_defense_terminal_receipts_valid(
                 "incoming_boundary_separation",
             }
         )
+    summary_schema = summary.get("schema_version")
     if (
         set(summary) != expected_fields
-        or summary.get("schema_version") != 2
+        or type(summary_schema) is not int
+        or summary_schema not in {2, 3}
         or summary.get("kind") != defense_kind
         or summary.get("implementation_scope") != "client_only_quic"
         or summary.get("paper_equivalent") is not False
@@ -1714,17 +1883,43 @@ def new_defense_terminal_receipts_valid(
     ):
         return False
     if defense_kind == "buflo":
+        current = summary_schema == 3
+        responses = run.get("chaff_responses")
+        receipt_cancellations = (
+            sum(
+                isinstance(response, Mapping)
+                and response.get("outcome")
+                == "buflo_terminal_subcell_tail_cancelled"
+                for response in responses
+            )
+            if isinstance(responses, list)
+            else None
+        )
         return (
             summary.get("terminal_subcell_policy")
             == BUFLO_TERMINAL_SUBCELL_POLICY
             and summary.get("terminal_subcell_observer_effect")
             == BUFLO_TERMINAL_SUBCELL_OBSERVER_EFFECT
             and selected["buflo_client_only"] is True
+            and current
+            == (
+                "buflo_terminal_subcell_pending_application_parser_boundaries_at_latch"
+                in selected
+            )
+            and buflo_terminal_diagnostics_valid(
+                selected, require_current=current
+            )
+            and (
+                not current
+                or receipt_cancellations
+                == selected["buflo_terminal_subcell_stream_cancellations"]
+            )
             and (
                 not require_application_complete
                 or selected["buflo_application_complete"] is True
             )
         )
+    current = summary_schema == 3
     return (
         summary.get("early_termination_semantics")
         == CS_BUFLO_EARLY_TERMINATION_SEMANTICS
@@ -1739,6 +1934,15 @@ def new_defense_terminal_receipts_valid(
         and selected["cs_buflo_client_only"] is True
         and selected["cs_buflo_quiet_time_reached"] is True
         and selected["cs_buflo_local_termination_latched"] is True
+        and current == CS_BUFLO_LOCAL_ET_V3_KEYS.issubset(selected)
+        and cs_buflo_local_et_handoff_valid(
+            selected, require_current=current
+        )
+        and (
+            not current
+            or selected["cs_buflo_application_complete"] is True
+            or selected["cs_buflo_local_et_before_application_complete"] is True
+        )
         and (
             not require_application_complete
             or selected["cs_buflo_application_complete"] is True
@@ -1860,33 +2064,7 @@ def fidelity_eligible(
             and diagnostics["buflo_application_complete"] is True
             and diagnostics["buflo_minimum_duration_reached"] is True
             and diagnostics["buflo_event_guard_triggered"] is False
-            and diagnostics["buflo_terminal_subcell_latched"] is True
-            and diagnostics["buflo_terminal_subcell_latched_at_us"] >= 10_000_000
-            and diagnostics["buflo_terminal_subcell_open_streams_at_latch"]
-            == diagnostics["buflo_terminal_subcell_stream_cancellations"]
-            and diagnostics["buflo_terminal_subcell_parser_lease_bytes_at_latch"] == 0
-            and diagnostics[
-                "buflo_terminal_subcell_pending_parser_boundaries_at_latch"
-            ]
-            == 0
-            and diagnostics["buflo_terminal_subcell_pending_request_cancellations"] == 0
-            and (
-                (
-                    diagnostics["buflo_terminal_subcell_stream_cancellations"] == 0
-                    and diagnostics[
-                        "buflo_terminal_subcell_exact_capacity_bytes_cancelled"
-                    ]
-                    == 0
-                )
-                or (
-                    diagnostics["buflo_terminal_subcell_stream_cancellations"] > 0
-                    and 0
-                    <= diagnostics[
-                        "buflo_terminal_subcell_exact_capacity_bytes_cancelled"
-                    ]
-                    < 1_200
-                )
-            )
+            and buflo_terminal_diagnostics_valid(diagnostics)
             and diagnostics["buflo_scheduled_outgoing_cells"]
             == diagnostics["buflo_full_outgoing_cells"]
             and isinstance(schedule_metrics, Mapping)
@@ -2003,6 +2181,7 @@ def _cs_buflo_fidelity_eligible(
         or diagnostics["cs_buflo_quiet_time_reached"] is not True
         or diagnostics["cs_buflo_local_termination_latched"] is not True
         or diagnostics["cs_buflo_event_guard_triggered"] is not False
+        or not cs_buflo_local_et_handoff_valid(diagnostics)
     ):
         return False
     zero_keys = (
@@ -2056,7 +2235,7 @@ def _cs_buflo_fidelity_eligible(
         or diagnostics["cs_buflo_real_bearing_outgoing_bytes"]
         != schedule.get("typed_real_bearing_outgoing_bytes")
         or diagnostics["cs_buflo_real_bearing_incoming_bytes"]
-        != diagnostics["cs_buflo_natural_incoming_bytes"]
+        != diagnostics["cs_buflo_incoming_padding_basis_natural_bytes"]
         or diagnostics["scheduled_incoming_requested_bytes"]
         != diagnostics["cs_buflo_scheduled_incoming_cells"] * 600
         or diagnostics.get("scheduled_incoming_advertised_bytes")
@@ -2187,10 +2366,11 @@ def _cs_buflo_payload_padding_target(natural: Any, cover: Any) -> int:
 def _cs_buflo_padding_targets_match(diagnostics: Mapping[str, Any]) -> bool:
     """Validate frozen CTSP/CPSP bases without substituting terminal counters.
 
-    The live cover and realized-byte counters may continue increasing after
-    ApplicationComplete freezes the padding decision.  They therefore prove
-    that the frozen basis was observed, while the six explicit basis counters
-    are the only sound inputs for exact target recomputation.
+    Live cover, realized-byte, and (for pre-onLoad local termination) natural
+    counters may continue increasing after the padding decision freezes.  The
+    explicit basis counters remain the only sound target inputs; version-3
+    post-local-ET natural counters reconcile later application passthrough
+    without mutating that frozen basis or the rate estimator.
     """
 
     for direction in ("outgoing", "incoming"):
@@ -2198,8 +2378,12 @@ def _cs_buflo_padding_targets_match(diagnostics: Mapping[str, Any]) -> bool:
             f"cs_buflo_{direction}_padding_basis_natural_bytes"
         ]
         frozen_cover = diagnostics[f"cs_buflo_{direction}_padding_basis_cover_bytes"]
+        post_natural = diagnostics.get(
+            f"cs_buflo_post_local_et_natural_{direction}_bytes", 0
+        )
         if (
-            diagnostics[f"cs_buflo_natural_{direction}_bytes"] != frozen_natural
+            diagnostics[f"cs_buflo_natural_{direction}_bytes"]
+            != frozen_natural + post_natural
             or diagnostics[f"cs_buflo_cover_{direction}_bytes"] < frozen_cover
         ):
             return False

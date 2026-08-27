@@ -22,9 +22,9 @@ from qcsd_lab.buflo_study import (
     run_study_action,
     validate_campaign_matrix,
     validate_controlled_campaign_receipt,
+    validate_established_seven_baseline,
     validate_formal_capture_capacity,
     validate_parameters,
-    validate_established_seven_baseline,
     validate_reference_gate_receipt,
     validate_staged_capture_prerequisites,
     validate_study_environment_receipt,
@@ -312,6 +312,12 @@ def test_buflo_provenance_binds_exact_terminal_summary_contract() -> None:
         provenance["terminal_subcell_observer_effect"]
         == BUFLO_TERMINAL_SUBCELL_OBSERVER_EFFECT
     )
+    assert provenance["terminal_translation_version"] == 2
+    assert provenance["terminal_parser_safety"] == (
+        "latch-requires-zero-live-parser-lease-bytes-and-zero-pending-"
+        "application-parser-boundaries;pending-reviewed-chaff-parser-"
+        "boundaries-are-counted-and-cancelled-with-their-streams"
+    )
 
 
 def _formal_performance_evaluation_fixture() -> dict[str, object]:
@@ -423,6 +429,7 @@ def _formal_performance_evaluation_fixture() -> dict[str, object]:
             "open_streams_at_latch": 0,
             "parser_lease_bytes_at_latch": 0,
             "pending_parser_boundaries_at_latch": 0,
+            "pending_application_parser_boundaries_at_latch": 0,
             "exact_capacity_bytes_cancelled": {
                 "total": 0,
                 "minimum": 0,
@@ -438,6 +445,30 @@ def _formal_performance_evaluation_fixture() -> dict[str, object]:
             },
             "post_cancellation_unscheduled_defense_control_packets": 0,
             "post_cancellation_unscheduled_defense_control_bytes": 0,
+        }
+        for workload in workloads
+        for block in range(10)
+    ]
+    cs_local_et = [
+        {
+            "defense": "cs-buflo",
+            "workload_id": workload,
+            "acquisition_block_index": block,
+            "samples": 10,
+            "before_application_complete_samples": 0,
+            "latched_at_us": {
+                "p50": 2_000_001.0,
+                "p90": 2_000_002.0,
+                "p95": 2_000_003.0,
+            },
+            "pending_request_cancellations": 0,
+            "stream_cancellations": 0,
+            "application_receive_streams_handed_off": 0,
+            "application_parser_boundaries_handed_off": 0,
+            "application_parser_lease_bytes_handed_off": 0,
+            "application_send_endpoints_released": 0,
+            "post_local_et_natural_outgoing_bytes": 0,
+            "post_local_et_natural_incoming_bytes": 0,
         }
         for workload in workloads
         for block in range(10)
@@ -460,10 +491,12 @@ def _formal_performance_evaluation_fixture() -> dict[str, object]:
             "paired_mode_client_block_workload_bootstrap_95": mode_client,
         },
         "algorithm_breakdowns": {
+            "schema_version": 2,
             "available": True,
             "classifier_input": False,
             "strata": algorithm_strata,
             "buflo_terminal_tail_strata": tail,
+            "cs_buflo_local_termination_strata": cs_local_et,
         },
         "paired_per_visit": [{} for _ in range(1_000)],
         "paired_metrics": {
@@ -478,6 +511,7 @@ def test_formal_performance_gate_requires_exact_axes_and_terminal_tail() -> None
     evidence = buflo_study._validate_formal_performance_evidence(value)
     assert evidence["buflo_terminal_tail_strata"] == 50
     assert evidence["buflo_terminal_tail_samples"] == 500
+    assert evidence["cs_buflo_local_termination_strata"] == 50
 
     mutations = []
     duplicate_algorithm = json.loads(json.dumps(value))
@@ -513,6 +547,21 @@ def test_formal_performance_gate_requires_exact_axes_and_terminal_tail() -> None
         "receipt_cancellations"
     ] = 1
     mutations.append(mismatched_counters)
+    missing_handoff = json.loads(json.dumps(value))
+    missing_handoff["algorithm_breakdowns"]["cs_buflo_local_termination_strata"][0][
+        "before_application_complete_samples"
+    ] = 1
+    mutations.append(missing_handoff)
+    post_without_early_et = json.loads(json.dumps(value))
+    post_without_early_et["algorithm_breakdowns"][
+        "cs_buflo_local_termination_strata"
+    ][0]["post_local_et_natural_outgoing_bytes"] = 1
+    mutations.append(post_without_early_et)
+    zero_latch = json.loads(json.dumps(value))
+    zero_latch["algorithm_breakdowns"]["cs_buflo_local_termination_strata"][0][
+        "latched_at_us"
+    ]["p50"] = 0
+    mutations.append(zero_latch)
 
     for changed in mutations:
         with pytest.raises(ValueError, match="formal"):
@@ -1163,6 +1212,7 @@ def test_sustained_capacity_gate_requires_all_clean_cells() -> None:
                     **(
                         {
                             "terminal_subcell": {
+                                "schema_version": 2,
                                 "terminal_subcell_policy": (
                                     BUFLO_TERMINAL_SUBCELL_POLICY
                                 ),
@@ -1182,7 +1232,8 @@ def test_sustained_capacity_gate_requires_all_clean_cells() -> None:
                                 "typed_cancellation_action_events": 1,
                                 "pending_request_cancellations": 0,
                                 "parser_lease_bytes_at_latch": 0,
-                                "pending_parser_boundaries_at_latch": 0,
+                                "pending_parser_boundaries_at_latch": 1,
+                                "pending_application_parser_boundaries_at_latch": 0,
                                 "exact_capacity_bytes_cancelled": 1_199,
                                 "whole_cell_floor_bytes": 1_200,
                                 "first_cancellation_monotonic_us": 10_000_010,
@@ -1237,6 +1288,19 @@ def test_sustained_capacity_gate_requires_all_clean_cells() -> None:
     proof = buflo_study._validate_sustained_cell_capacity(values)
     assert proof["samples"] == 30
     assert proof["profiles"]["buflo"]["cell_size_bytes"] == 1_200
+    assert proof["profiles"]["buflo"]["terminal_subcell"]["schema_version"] == 2
+    assert (
+        proof["profiles"]["buflo"]["terminal_subcell"][
+            "pending_parser_boundaries_at_latch"
+        ]
+        == 10
+    )
+    assert (
+        proof["profiles"]["buflo"]["terminal_subcell"][
+            "pending_application_parser_boundaries_at_latch"
+        ]
+        == 0
+    )
     assert (
         proof["profiles"]["buflo"]["terminal_subcell"][
             "exact_capacity_bytes_cancelled"
@@ -1265,6 +1329,14 @@ def test_sustained_capacity_gate_requires_all_clean_cells() -> None:
     with pytest.raises(ValueError, match="does not sustain"):
         buflo_study._validate_sustained_cell_capacity(values)
     tail["parser_lease_bytes_at_latch"] = 0
+    tail["pending_application_parser_boundaries_at_latch"] = 1
+    with pytest.raises(ValueError, match="does not sustain"):
+        buflo_study._validate_sustained_cell_capacity(values)
+    tail["pending_application_parser_boundaries_at_latch"] = 0
+    tail["pending_parser_boundaries_at_latch"] = 2
+    with pytest.raises(ValueError, match="does not sustain"):
+        buflo_study._validate_sustained_cell_capacity(values)
+    tail["pending_parser_boundaries_at_latch"] = 1
 
 
 def test_controlled_endpoint_gate_names_all_new_mode_two_origin_cells() -> None:
@@ -2482,6 +2554,7 @@ def test_buflo_fidelity_requires_every_zero_error_and_typed_terminal_once() -> N
         "buflo_terminal_subcell_open_streams_at_latch": 0,
         "buflo_terminal_subcell_parser_lease_bytes_at_latch": 0,
         "buflo_terminal_subcell_pending_parser_boundaries_at_latch": 0,
+        "buflo_terminal_subcell_pending_application_parser_boundaries_at_latch": 0,
     }
     schedule = _schedule_metrics(outgoing=501, incoming=501)
     canonical_targets = list(range(0, 10_000_001, 20_000))
@@ -2512,7 +2585,7 @@ def test_buflo_fidelity_requires_every_zero_error_and_typed_terminal_once() -> N
         "resolved_configuration": {"schema_version": 2, "defense": {"kind": "buflo"}},
         "defense_diagnostics": diagnostics,
         "buflo_summary": {
-            "schema_version": 2,
+            "schema_version": 3,
             "kind": "buflo",
             "implementation_scope": "client_only_quic",
             "paper_equivalent": False,
@@ -2533,9 +2606,21 @@ def test_buflo_fidelity_requires_every_zero_error_and_typed_terminal_once() -> N
             ),
             "diagnostics": diagnostics,
         },
+        "chaff_responses": [],
         "cs_buflo_summary": None,
     }
     assert new_defense_terminal_receipts_valid(run, "buflo", require_application_complete=True)
+    legacy_run = json.loads(json.dumps(run))
+    legacy_run["buflo_summary"]["schema_version"] = 2
+    legacy_run["defense_diagnostics"].pop(
+        "buflo_terminal_subcell_pending_application_parser_boundaries_at_latch"
+    )
+    legacy_run["buflo_summary"]["diagnostics"].pop(
+        "buflo_terminal_subcell_pending_application_parser_boundaries_at_latch"
+    )
+    assert new_defense_terminal_receipts_valid(
+        legacy_run, "buflo", require_application_complete=True
+    )
     for key in (
         "buflo_partial_outgoing_cells",
         "buflo_missed_outgoing_cells",
@@ -2641,6 +2726,14 @@ def test_cs_buflo_fidelity_reconciles_typed_composition_and_rate_state() -> None
         "cs_buflo_local_termination_latched": True,
         "cs_buflo_local_et_pending_request_cancellations": 0,
         "cs_buflo_local_et_stream_cancellations": 0,
+        "cs_buflo_local_et_latched_at_us": 2_000_000,
+        "cs_buflo_local_et_before_application_complete": False,
+        "cs_buflo_local_et_application_receive_streams_handed_off": 0,
+        "cs_buflo_local_et_application_parser_boundaries_handed_off": 0,
+        "cs_buflo_local_et_application_parser_lease_bytes_handed_off": 0,
+        "cs_buflo_local_et_application_send_endpoints_released": 0,
+        "cs_buflo_post_local_et_natural_outgoing_bytes": 0,
+        "cs_buflo_post_local_et_natural_incoming_bytes": 0,
         "cs_buflo_event_guard_triggered": False,
     }
     schedule = _schedule_metrics(outgoing=2, incoming=1)
@@ -2674,7 +2767,7 @@ def test_cs_buflo_fidelity_reconciles_typed_composition_and_rate_state() -> None
         "defense_diagnostics": diagnostics,
         "buflo_summary": None,
         "cs_buflo_summary": {
-            "schema_version": 2,
+            "schema_version": 3,
             "kind": "cs_buflo",
             "implementation_scope": "client_only_quic",
             "paper_equivalent": False,
@@ -2697,6 +2790,23 @@ def test_cs_buflo_fidelity_reconciles_typed_composition_and_rate_state() -> None
         },
     }
     assert new_defense_terminal_receipts_valid(run, "cs_buflo", require_application_complete=True)
+    legacy = json.loads(json.dumps(run))
+    legacy["cs_buflo_summary"]["schema_version"] = 2
+    for key in (
+        "cs_buflo_local_et_latched_at_us",
+        "cs_buflo_local_et_before_application_complete",
+        "cs_buflo_local_et_application_receive_streams_handed_off",
+        "cs_buflo_local_et_application_parser_boundaries_handed_off",
+        "cs_buflo_local_et_application_parser_lease_bytes_handed_off",
+        "cs_buflo_local_et_application_send_endpoints_released",
+        "cs_buflo_post_local_et_natural_outgoing_bytes",
+        "cs_buflo_post_local_et_natural_incoming_bytes",
+    ):
+        legacy["defense_diagnostics"].pop(key)
+        legacy["cs_buflo_summary"]["diagnostics"].pop(key)
+    assert new_defense_terminal_receipts_valid(
+        legacy, "cs_buflo", require_application_complete=True
+    )
     wrong_boundary = json.loads(json.dumps(run))
     wrong_boundary["cs_buflo_summary"]["incoming_terminal_boundary"] = (
         "local-advertisement"
@@ -2714,10 +2824,54 @@ def test_cs_buflo_fidelity_reconciles_typed_composition_and_rate_state() -> None
     quiet_only = json.loads(json.dumps(run))
     quiet_only["defense_diagnostics"]["cs_buflo_application_complete"] = False
     quiet_only["cs_buflo_summary"]["diagnostics"]["cs_buflo_application_complete"] = False
+    quiet_only["defense_diagnostics"][
+        "cs_buflo_local_et_before_application_complete"
+    ] = True
+    quiet_only["cs_buflo_summary"]["diagnostics"][
+        "cs_buflo_local_et_before_application_complete"
+    ] = True
+    quiet_only["defense_diagnostics"][
+        "cs_buflo_local_et_application_send_endpoints_released"
+    ] = 1
+    quiet_only["cs_buflo_summary"]["diagnostics"][
+        "cs_buflo_local_et_application_send_endpoints_released"
+    ] = 1
     assert new_defense_terminal_receipts_valid(quiet_only, "cs_buflo")
     assert not new_defense_terminal_receipts_valid(
         quiet_only, "cs_buflo", require_application_complete=True
     )
+    pre_onload = dict(diagnostics)
+    pre_onload.update(
+        cs_buflo_local_et_before_application_complete=True,
+        cs_buflo_local_et_application_receive_streams_handed_off=1,
+        cs_buflo_post_local_et_natural_outgoing_bytes=50,
+        cs_buflo_post_local_et_natural_incoming_bytes=25,
+        cs_buflo_natural_outgoing_bytes=550,
+        cs_buflo_natural_incoming_bytes=325,
+    )
+    assert fidelity_eligible(
+        "cs-buflo-cpsp",
+        pre_onload,
+        sample_eligible=True,
+        missed_events=0,
+        outgoing_size_mismatches=0,
+        schedule_metrics=schedule,
+    )
+    for key, value in (
+        ("cs_buflo_local_et_application_receive_streams_handed_off", 0),
+        ("cs_buflo_natural_outgoing_bytes", 549),
+        ("cs_buflo_real_bearing_incoming_bytes", 301),
+    ):
+        invalid_pre_onload = dict(pre_onload)
+        invalid_pre_onload[key] = value
+        assert not fidelity_eligible(
+            "cs-buflo-cpsp",
+            invalid_pre_onload,
+            sample_eligible=True,
+            missed_events=0,
+            outgoing_size_mismatches=0,
+            schedule_metrics=schedule,
+        )
     changed = dict(diagnostics)
     changed["cs_buflo_quic_padding_bytes"] += 1
     assert not fidelity_eligible(

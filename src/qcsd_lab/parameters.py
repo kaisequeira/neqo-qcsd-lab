@@ -538,7 +538,7 @@ def _validate_buflo_study_parameter_artifact(
     if kind == "buflo":
         _validate_buflo(parameter, int(ceiling), receipt_path)
         if (
-            receipt.get("terminal_translation_version") != 1
+            receipt.get("terminal_translation_version") != 2
             or receipt.get("paper_termination_semantics")
             != "minimum-duration-then-continue-only-while-real-data-remains"
             or receipt.get("live_terminal_semantics")
@@ -553,7 +553,8 @@ def _validate_buflo_study_parameter_artifact(
             or receipt.get("terminal_parser_safety")
             != (
                 "latch-requires-zero-live-parser-lease-bytes-and-zero-pending-"
-                "parser-boundaries"
+                "application-parser-boundaries;pending-reviewed-chaff-parser-"
+                "boundaries-are-counted-and-cancelled-with-their-streams"
             )
             or receipt.get("translation_classification")
             != "expected-client-only-qcsd-adaptation-difference"

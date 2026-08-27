@@ -7,20 +7,19 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-import qcsd_lab.buflo_handoff as handoff_module
-import qcsd_lab.buflo_study as study_module
 
 import qcsd_lab.buflo_handoff as handoff
-
+import qcsd_lab.buflo_handoff as handoff_module
+import qcsd_lab.buflo_study as study_module
 from qcsd_lab.buflo_handoff import (
     FORMAL_RESULT_NAMES,
     _algorithm_diagnostics,
     _performance_metadata,
     _read_shape_only_pcap,
-    _validate_handoff_sample_correctness,
     _validate_formal_sample_redirect_attestation,
-    _validate_runner_extension,
+    _validate_handoff_sample_correctness,
     _validate_run_sample_binding,
+    _validate_runner_extension,
     _write_checksums,
     _write_shape_only_pcap,
     validate_study_handoff,
@@ -48,6 +47,7 @@ def _complete_buflo_run(
     scheduled_incoming: int,
     stream_cancellations: int = 0,
     cancelled_capacity: int = 0,
+    pending_parser_boundaries: int = 0,
 ) -> dict[str, object]:
     diagnostics = {
         "buflo_scheduled_outgoing_cells": scheduled_outgoing,
@@ -68,7 +68,10 @@ def _complete_buflo_run(
         "buflo_terminal_subcell_latched_at_us": 10_000_001,
         "buflo_terminal_subcell_open_streams_at_latch": stream_cancellations,
         "buflo_terminal_subcell_parser_lease_bytes_at_latch": 0,
-        "buflo_terminal_subcell_pending_parser_boundaries_at_latch": 0,
+        "buflo_terminal_subcell_pending_parser_boundaries_at_latch": (
+            pending_parser_boundaries
+        ),
+        "buflo_terminal_subcell_pending_application_parser_boundaries_at_latch": 0,
         "buflo_paper_equivalent": False,
         "buflo_client_only": True,
         "buflo_egress_backlog_pending": False,
@@ -102,7 +105,7 @@ def _complete_buflo_run(
             for _ in range(stream_cancellations)
         ],
         "buflo_summary": {
-            "schema_version": 2,
+            "schema_version": 3,
             "kind": "buflo",
             "implementation_scope": "client_only_quic",
             "paper_equivalent": False,
@@ -466,7 +469,8 @@ def test_buflo_algorithm_diagnostics_bind_typed_tail_action_and_control_packet(
         events_path=events,
         packets_path=packets,
     )
-    assert algorithm["schema_version"] == 2
+    assert algorithm["schema_version"] == 3
+    assert algorithm["buflo_state"]["schema_version"] == 2
     assert algorithm["buflo_state"]["typed_cancellation_action_events"] == 1
     assert (
         algorithm["buflo_state"][
@@ -480,6 +484,35 @@ def test_buflo_algorithm_diagnostics_bind_typed_tail_action_and_control_packet(
         ]
         == 4
     )
+
+    legacy_run = json.loads(json.dumps(run))
+    legacy_run["buflo_summary"]["schema_version"] = 2
+    legacy_run["defense_diagnostics"].pop(
+        "buflo_terminal_subcell_pending_application_parser_boundaries_at_latch"
+    )
+    legacy_run["buflo_summary"]["diagnostics"].pop(
+        "buflo_terminal_subcell_pending_application_parser_boundaries_at_latch"
+    )
+    with pytest.raises(ValueError, match="terminal-tail evidence is unavailable"):
+        _algorithm_diagnostics(
+            legacy_run,
+            defense="buflo",
+            runtime_kind="buflo",
+            schedule_path=schedule,
+            events_path=events,
+            packets_path=packets,
+        )
+    legacy_algorithm = _algorithm_diagnostics(
+        legacy_run,
+        defense="buflo",
+        runtime_kind="buflo",
+        schedule_path=schedule,
+        events_path=events,
+        packets_path=packets,
+        require_current=False,
+    )
+    assert legacy_algorithm["schema_version"] == 2
+    assert "schema_version" not in legacy_algorithm["buflo_state"]
 
     event_row["details"] = event_row["details"].replace(
         "buflo_terminal_subcell_tail", "cs_buflo_local_early_termination"
@@ -562,6 +595,48 @@ def test_buflo_algorithm_diagnostics_bind_typed_tail_action_and_control_packet(
         ]
         == 10_000_040
     )
+
+    retained_boundary_run = _complete_buflo_run(
+        scheduled_outgoing=1,
+        scheduled_incoming=0,
+        stream_cancellations=2,
+        cancelled_capacity=624,
+        pending_parser_boundaries=1,
+    )
+    retained_boundary = _algorithm_diagnostics(
+        retained_boundary_run,
+        defense="buflo",
+        runtime_kind="buflo",
+        schedule_path=schedule,
+        events_path=events,
+        packets_path=packets,
+    )
+    assert retained_boundary["buflo_state"][
+        "pending_parser_boundaries_at_latch"
+    ] == 1
+    assert retained_boundary["buflo_state"][
+        "pending_application_parser_boundaries_at_latch"
+    ] == 0
+
+    for diagnostic, changed in (
+        (
+            "buflo_terminal_subcell_pending_application_parser_boundaries_at_latch",
+            1,
+        ),
+        ("buflo_terminal_subcell_pending_parser_boundaries_at_latch", 3),
+    ):
+        invalid_run = json.loads(json.dumps(retained_boundary_run))
+        invalid_run["defense_diagnostics"][diagnostic] = changed
+        invalid_run["buflo_summary"]["diagnostics"][diagnostic] = changed
+        with pytest.raises(ValueError, match="terminal-tail evidence"):
+            _algorithm_diagnostics(
+                invalid_run,
+                defense="buflo",
+                runtime_kind="buflo",
+                schedule_path=schedule,
+                events_path=events,
+                packets_path=packets,
+            )
 
 
 def test_formal_result_names_are_ten_ordered_blocks() -> None:

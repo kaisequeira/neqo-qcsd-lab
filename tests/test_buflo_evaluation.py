@@ -13,11 +13,12 @@ import pytest
 
 import qcsd_lab.buflo_evaluation as evaluation
 from qcsd_lab.buflo_evaluation import (
+    FORMAL_CLASS_BY_WORKLOAD,
     AttackResult,
     DlsvmKernelStore,
-    FORMAL_CLASS_BY_WORKLOAD,
     ShapePacket,
     StudySample,
+    algorithm_breakdowns,
     attack_bootstrap_intervals,
     damerau_levenshtein_distance,
     dlsvm_reference_receipt,
@@ -29,14 +30,13 @@ from qcsd_lab.buflo_evaluation import (
     paired_overheads,
     panchenko_features,
     performance_breakdowns,
-    algorithm_breakdowns,
     ratio_of_sums,
     run_historical_attacks,
     run_temporal_attacks,
     summarize_paired_overheads,
+    validate_dlsvm_preflight,
     validate_formal_cohort,
     vngpp_features,
-    validate_dlsvm_preflight,
     write_dlsvm_preflight,
 )
 from qcsd_lab.fidelity import (
@@ -44,7 +44,6 @@ from qcsd_lab.fidelity import (
     BUFLO_TERMINAL_SUBCELL_OBSERVER_EFFECT,
     BUFLO_TERMINAL_SUBCELL_POLICY,
 )
-
 
 _COMPARISON_CONTEXT_FIELDS = {
     "transport",
@@ -716,8 +715,60 @@ def test_algorithm_breakdown_retains_non_classifier_runner_strata() -> None:
     assert incoming["cs_buflo"]["incoming_local_realized_cells"] == 9
     assert incoming["receive_credit_consumption"]["consumed_cells"] == 1
 
+    current = json.loads(json.dumps(diagnostics))
+    current["schema_version"] = 3
+    current["peer_reproduction"] = {}
+    current["buflo_state"] = None
+    current["cs_buflo_state"]["local_termination"].update(
+        latched_at_us=2_000_000,
+        before_application_complete=True,
+        application_receive_streams_handed_off=1,
+        application_parser_boundaries_handed_off=0,
+        application_parser_lease_bytes_handed_off=0,
+        application_send_endpoints_released=0,
+        post_local_et_natural_outgoing_bytes=50,
+        post_local_et_natural_incoming_bytes=25,
+    )
+    for direction_name, post in (("outgoing", 50), ("incoming", 25)):
+        current_direction = current["cs_buflo_state"]["directions"][direction_name]
+        current_direction.update(
+            natural_bytes=1_000 + post,
+            real_bearing_bytes=900,
+            post_local_et_natural_bytes=post,
+        )
+    assert evaluation._load_algorithm_diagnostics(current, defense="cs-buflo") == current
+    invalid_current = json.loads(json.dumps(current))
+    invalid_current["cs_buflo_state"]["local_termination"][
+        "application_receive_streams_handed_off"
+    ] = 0
+    with pytest.raises(ValueError, match="CS-BuFLO algorithm state"):
+        evaluation._load_algorithm_diagnostics(invalid_current, defense="cs-buflo")
+    current_sample = StudySample(
+        "current", "site", "site", "cs-buflo", 0, "current-pair", _trace(), None, current
+    )
+    current_result = algorithm_breakdowns([current_sample])
+    assert current_result["schema_version"] == 2
+    assert current_result["cs_buflo_local_termination_strata"] == [
+        {
+            "defense": "cs-buflo",
+            "workload_id": "site",
+            "acquisition_block_index": 0,
+            "samples": 1,
+            "before_application_complete_samples": 1,
+            "latched_at_us": {"p50": 2_000_000.0, "p90": 2_000_000.0, "p95": 2_000_000.0},
+            "pending_request_cancellations": 0,
+            "stream_cancellations": 0,
+            "application_receive_streams_handed_off": 1,
+            "application_parser_boundaries_handed_off": 0,
+            "application_parser_lease_bytes_handed_off": 0,
+            "application_send_endpoints_released": 0,
+            "post_local_et_natural_outgoing_bytes": 50,
+            "post_local_et_natural_incoming_bytes": 25,
+        }
+    ]
 
-def test_buflo_schema_two_state_is_exact_and_aggregates_terminal_tail() -> None:
+
+def test_buflo_schema_three_diagnostics_are_exact_and_aggregate_terminal_tail() -> None:
     empty_summary = {"count": 0}
     direction = {
         "scheduled_cells": 0,
@@ -742,6 +793,7 @@ def test_buflo_schema_two_state_is_exact_and_aggregates_terminal_tail() -> None:
         },
     }
     state = {
+        "schema_version": 2,
         "terminal_subcell_policy": BUFLO_TERMINAL_SUBCELL_POLICY,
         "terminal_subcell_observer_effect": BUFLO_TERMINAL_SUBCELL_OBSERVER_EFFECT,
         "pending_request_cancellations": 0,
@@ -753,7 +805,8 @@ def test_buflo_schema_two_state_is_exact_and_aggregates_terminal_tail() -> None:
         "terminal_latched_at_us": 10_000_001,
         "open_streams_at_latch": 1,
         "parser_lease_bytes_at_latch": 0,
-        "pending_parser_boundaries_at_latch": 0,
+        "pending_parser_boundaries_at_latch": 1,
+        "pending_application_parser_boundaries_at_latch": 0,
         "typed_cancellation_action_events": 1,
         "first_cancellation_monotonic_us": 10_000_010,
         "last_exact_outgoing_cell_monotonic_us": 9_999_990,
@@ -767,7 +820,7 @@ def test_buflo_schema_two_state_is_exact_and_aggregates_terminal_tail() -> None:
         "implementation_scope": "client_only_quic",
     }
     diagnostics = {
-        "schema_version": 2,
+        "schema_version": 3,
         "mode": "buflo",
         "runtime_kind": "buflo",
         "classifier_input": False,
@@ -789,9 +842,12 @@ def test_buflo_schema_two_state_is_exact_and_aggregates_terminal_tail() -> None:
     )
     result = algorithm_breakdowns([sample])
     assert result["available"] is True
+    assert result["schema_version"] == 2
     assert len(result["buflo_terminal_tail_strata"]) == 1
     tail = result["buflo_terminal_tail_strata"][0]
     assert tail["stream_cancellations"] == 1
+    assert tail["pending_parser_boundaries_at_latch"] == 1
+    assert tail["pending_application_parser_boundaries_at_latch"] == 0
     assert tail["exact_capacity_bytes_cancelled"] == {
         "total": 1_199,
         "minimum": 1_199,
@@ -804,6 +860,8 @@ def test_buflo_schema_two_state_is_exact_and_aggregates_terminal_tail() -> None:
 
     for field, changed in (
         ("parser_lease_bytes_at_latch", 1),
+        ("pending_application_parser_boundaries_at_latch", 1),
+        ("pending_parser_boundaries_at_latch", 2),
         ("first_cancellation_monotonic_us", 9_999_999),
         ("terminal_subcell_policy", "drifted"),
     ):
@@ -812,12 +870,36 @@ def test_buflo_schema_two_state_is_exact_and_aggregates_terminal_tail() -> None:
         with pytest.raises(ValueError, match="BuFLO algorithm state"):
             evaluation._load_algorithm_diagnostics(invalid, defense="buflo")
 
-    legacy = {key: value for key, value in diagnostics.items() if key != "buflo_state"}
-    legacy["schema_version"] = 1
+    legacy_state = json.loads(json.dumps(state))
+    legacy_state.pop("schema_version")
+    legacy_state.pop("pending_application_parser_boundaries_at_latch")
+    legacy_state["pending_parser_boundaries_at_latch"] = 0
+    legacy = json.loads(json.dumps(diagnostics))
+    legacy["schema_version"] = 2
+    legacy["buflo_state"] = legacy_state
     assert evaluation._load_algorithm_diagnostics(legacy, defense="buflo") == legacy
-    legacy["buflo_state"] = None
+
+    legacy_without_state = {
+        key: value for key, value in diagnostics.items() if key != "buflo_state"
+    }
+    legacy_without_state["schema_version"] = 1
+    assert (
+        evaluation._load_algorithm_diagnostics(
+            legacy_without_state, defense="buflo"
+        )
+        == legacy_without_state
+    )
+    legacy_without_state["buflo_state"] = None
     with pytest.raises(ValueError, match="schema is invalid"):
-        evaluation._load_algorithm_diagnostics(legacy, defense="buflo")
+        evaluation._load_algorithm_diagnostics(
+            legacy_without_state, defense="buflo"
+        )
+
+    legacy_sample = StudySample(
+        "legacy", "site", "site", "buflo", 0, "legacy-pair", _trace(), None, legacy
+    )
+    with pytest.raises(ValueError, match="mixes algorithm diagnostic schema versions"):
+        algorithm_breakdowns([sample, legacy_sample])
 
 
 def test_handoff_loader_checks_trace_digest_and_shape_contract(tmp_path: Path) -> None:

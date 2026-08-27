@@ -38,10 +38,19 @@ modes including `undefended` and `static`).
 The BuFLO adaptation drains every allocatable 1,200-byte reviewed-chaff cell
 after the inclusive ten-second minimum. If only a sub-cell response tail
 remains, it latches only after all scheduled work and parser leases are
-terminal, then uses standard client-local HTTP/3 cancellation. The resulting
-unscheduled defense-control traffic is explicitly receipted and is an expected
-QCSD-only difference from the bilateral TCP study; it is never described as
+terminal and every pending application parser boundary has cleared. Pending
+reviewed-chaff parser boundaries are counted and canceled with their streams by
+standard client-local HTTP/3 cancellation. The resulting unscheduled
+defense-control traffic is explicitly receipted and is an expected QCSD-only
+difference from the bilateral TCP study; it is never described as
 paper-equivalent or as a server padding-complete signal.
+
+CS-BuFLO local early termination stops defense chaff and credit work, not the
+application. If it occurs before the local onLoad analogue, current receipts
+count the application receive streams, parser state, and send endpoints handed
+back to ordinary HTTP/3 processing. Natural application bytes after that latch
+remain in final accounting while the padding basis, estimator samples, rate
+transitions, and terminal interval stay frozen at the local-termination state.
 
 The versioned coordinator exposes nine fail-closed actions: `reference`,
 `qualify`, `historical-snapshot`, `freeze-cohort`, `code-gate`, `capture`,

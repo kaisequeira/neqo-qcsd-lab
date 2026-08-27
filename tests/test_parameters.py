@@ -560,6 +560,14 @@ def test_buflo_terminal_provenance_rejects_missing_changed_and_extra_keys(
     changed = json.loads(json.dumps(original))
     changed["terminal_subcell_observer_effect"] = "drifted"
     mutations.append(changed)
+    old_translation = json.loads(json.dumps(original))
+    old_translation["terminal_translation_version"] = 1
+    mutations.append(old_translation)
+    unsafe_parser_contract = json.loads(json.dumps(original))
+    unsafe_parser_contract["terminal_parser_safety"] = (
+        "latch-requires-zero-live-parser-lease-bytes-and-zero-pending-parser-boundaries"
+    )
+    mutations.append(unsafe_parser_contract)
     extra = json.loads(json.dumps(original))
     extra["unreceipted_terminal_semantics"] = True
     mutations.append(extra)
