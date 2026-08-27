@@ -2663,9 +2663,16 @@ def test_versioned_public5_outputs_are_narrowly_ignored() -> None:
         check=False,
     )
     dockerignore = (LAB_ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
+    dockerfile = (LAB_ROOT / "Dockerfile").read_text(encoding="utf-8")
+    collection_packages = (
+        dockerfile.split("FROM lab-runtime AS collection", 1)[1]
+        .split("RUN uv lock --check", 1)[0]
+        .split()
+    )
 
     assert ignored.returncode == 0
     assert visible.returncode == 1
+    assert "git" in collection_packages
     assert (
         "config/chaff-response-qualification-store/sets/buflo-study-public5-v*/"
         in dockerignore
