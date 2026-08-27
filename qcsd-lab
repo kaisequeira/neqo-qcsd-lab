@@ -1233,7 +1233,7 @@ buflo_namespace_evidence() {
   local container_name="$1"
   local interfaces="$2"
   local include_router="$3"
-  docker exec "${container_name}" /usr/local/bin/python3 -c '
+  docker exec "${container_name}" /usr/bin/python3 -c '
 import json
 import subprocess
 import sys

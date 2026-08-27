@@ -2512,6 +2512,9 @@ def test_launcher_applies_least_privilege_rr1_capture_partition() -> None:
     entrypoint = (LAB_ROOT / "docker/collection-entrypoint").read_text(
         encoding="utf-8"
     )
+    network_probe = launcher.split("buflo_namespace_evidence()", 1)[1].split(
+        "buflo_controlled_evidence_base64()", 1
+    )[0]
 
     assert 'study_capture_scheduler_contract="qcsd-client-rr1-cpu10-v1"' in launcher
     assert 'runtime+=(--cpuset-cpus "10-11" --ulimit "rtprio=1:1")' in launcher
@@ -2525,6 +2528,8 @@ def test_launcher_applies_least_privilege_rr1_capture_partition() -> None:
     assert "unsupported capture scheduler contract" in entrypoint
     assert "taskset --cpu-list 11 qcsd-lab-internal" in entrypoint
     assert "+sys_nice" not in entrypoint
+    assert 'docker exec "${container_name}" /usr/bin/python3 -c' in network_probe
+    assert "/usr/local/bin/python3" not in network_probe
 
 
 def test_versioned_build_receipts_coexist_and_reject_path_or_request_mismatch(
