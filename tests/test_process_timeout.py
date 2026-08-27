@@ -8,6 +8,7 @@ import pytest
 
 import qcsd_lab.capture_session as capture_session
 import qcsd_lab.prepare as prepare
+import qcsd_lab.process_scheduler as process_scheduler
 import qcsd_lab.util as util
 
 
@@ -118,6 +119,59 @@ def test_prepare_client_adds_host_grace_and_reports_timeout(
     }
 
 
+def test_prepare_client_applies_the_measured_rr1_scheduler_contract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    observed: dict[str, Any] = {}
+
+    def completed(command: list[str], **options: Any) -> subprocess.CompletedProcess[str]:
+        observed.update(command=command, options=options)
+        return subprocess.CompletedProcess(command, 0, "")
+
+    monkeypatch.setenv(
+        "QCSD_CAPTURE_SCHEDULER_CONTRACT", "qcsd-client-rr1-cpu10-v1"
+    )
+    monkeypatch.setattr(process_scheduler.os, "sched_getaffinity", lambda _pid: {11})
+    monkeypatch.setattr(
+        process_scheduler.resource,
+        "getrlimit",
+        lambda limit: (1, 1)
+        if limit == process_scheduler.resource.RLIMIT_RTPRIO
+        else pytest.fail("unexpected resource limit"),
+    )
+    monkeypatch.setattr(prepare, "run", completed)
+
+    result = prepare._run_neqo(
+        ["neqo", "probe"],
+        log=tmp_path / "probe.log",
+        configured_timeout_seconds=30,
+        label="Neqo HTTP/3 probe",
+    )
+
+    assert result.returncode == 0
+    assert observed["command"] == [
+        "/usr/bin/taskset",
+        "--cpu-list",
+        "10",
+        "/usr/bin/chrt",
+        "--rr",
+        "1",
+        "/usr/bin/setpriv",
+        "--bounding-set=-all",
+        "--inh-caps=-all",
+        "--ambient-caps=-all",
+        "--no-new-privs",
+        "--",
+        "neqo",
+        "probe",
+    ]
+    assert observed["options"] == {
+        "log": tmp_path / "probe.log",
+        "check": False,
+        "timeout": 35.0,
+    }
+
+
 def test_collection_client_adds_host_grace_and_preserves_timeout_diagnostics(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -166,12 +220,12 @@ def test_collection_client_applies_rr1_only_after_gnu_time(
     monkeypatch.setenv(
         "QCSD_CAPTURE_SCHEDULER_CONTRACT", "qcsd-client-rr1-cpu10-v1"
     )
-    monkeypatch.setattr(capture_session.os, "sched_getaffinity", lambda _pid: {11})
+    monkeypatch.setattr(process_scheduler.os, "sched_getaffinity", lambda _pid: {11})
     monkeypatch.setattr(
-        capture_session.resource,
+        process_scheduler.resource,
         "getrlimit",
         lambda limit: (1, 1)
-        if limit == capture_session.resource.RLIMIT_RTPRIO
+        if limit == process_scheduler.resource.RLIMIT_RTPRIO
         else pytest.fail("unexpected resource limit"),
     )
     monkeypatch.setattr(capture_session, "run", timed_out)
@@ -220,8 +274,8 @@ def test_collection_client_scheduler_contract_fails_closed(
     monkeypatch.setenv(
         "QCSD_CAPTURE_SCHEDULER_CONTRACT", "qcsd-client-rr1-cpu10-v1"
     )
-    monkeypatch.setattr(capture_session.os, "sched_getaffinity", lambda _pid: affinity)
-    monkeypatch.setattr(capture_session.resource, "getrlimit", lambda _limit: rtprio)
+    monkeypatch.setattr(process_scheduler.os, "sched_getaffinity", lambda _pid: affinity)
+    monkeypatch.setattr(process_scheduler.resource, "getrlimit", lambda _limit: rtprio)
 
     with pytest.raises(ValueError, match=message):
         capture_session._capture_scheduler_launch_prefix()

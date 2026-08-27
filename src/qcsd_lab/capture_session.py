@@ -12,7 +12,6 @@ import hashlib
 import json
 import os
 import re
-import resource
 import shutil
 import signal
 import subprocess
@@ -42,6 +41,12 @@ from .parameters import (
     PARAMETER_ARTIFACT_NAME,
     PARAMETER_PROVENANCE_ARTIFACT_NAME,
     validate_run_parameter_binding,
+)
+from .process_scheduler import (
+    CAPTURE_CLIENT_CPU as _CAPTURE_CLIENT_CPU,
+    CAPTURE_SCHEDULER_CONTRACT as _CAPTURE_SCHEDULER_CONTRACT,
+    capture_scheduler_contract as _capture_scheduler_contract,
+    capture_scheduler_launch_prefix as _capture_scheduler_launch_prefix,
 )
 from .util import (
     ProcessTimeoutError,
@@ -103,9 +108,6 @@ _RUNNER_WAKEUP_METRICS_SEMANTICS = (
     "actual_select_return_source; socket_wins_simultaneous_readiness; "
     "controller_subset_is_effective_earliest_deadline; scheduled_cells_are_not_wakeups"
 )
-_CAPTURE_SCHEDULER_CONTRACT = "qcsd-client-rr1-cpu10-v1"
-_CAPTURE_ORCHESTRATOR_CPU = 11
-_CAPTURE_CLIENT_CPU = 10
 _PROCESS_SCHEDULER_KEYS = {
     "schema_version",
     "source",
@@ -816,46 +818,6 @@ def _run_neqo_client(
     usage = _parse_client_resource_usage(resource_log, time.monotonic() - started)
     setattr(result, "client_resource_usage", usage)
     return result, False, host_timeout
-
-
-def _capture_scheduler_contract() -> str | None:
-    """Return the one supported measured-client scheduler contract, if selected."""
-
-    value = os.environ.get("QCSD_CAPTURE_SCHEDULER_CONTRACT")
-    if value in {None, ""}:
-        return None
-    if value != _CAPTURE_SCHEDULER_CONTRACT:
-        raise ValueError(f"unsupported capture scheduler contract: {value}")
-    return value
-
-
-def _capture_scheduler_launch_prefix() -> list[str]:
-    """Fail closed on the container partition before elevating only the client."""
-
-    if _capture_scheduler_contract() is None:
-        return []
-    affinity = os.sched_getaffinity(0)
-    if affinity != {_CAPTURE_ORCHESTRATOR_CPU}:
-        raise ValueError(
-            "capture scheduler parent must be confined to orchestrator CPU 11"
-        )
-    rtprio = resource.getrlimit(resource.RLIMIT_RTPRIO)
-    if rtprio != (1, 1):
-        raise ValueError("capture scheduler requires RLIMIT_RTPRIO soft/hard 1")
-    return [
-        "/usr/bin/taskset",
-        "--cpu-list",
-        str(_CAPTURE_CLIENT_CPU),
-        "/usr/bin/chrt",
-        "--rr",
-        "1",
-        "/usr/bin/setpriv",
-        "--bounding-set=-all",
-        "--inh-caps=-all",
-        "--ambient-caps=-all",
-        "--no-new-privs",
-        "--",
-    ]
 
 
 def _process_scheduler_valid(value: Any) -> bool:

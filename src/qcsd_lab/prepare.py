@@ -21,6 +21,7 @@ from .manifest import (
     validate_prepared_navigation_graph,
     write_frozen_manifest,
 )
+from .process_scheduler import capture_scheduler_launch_prefix
 from .util import (
     LAB_ROOT,
     ProcessTimeoutError,
@@ -564,8 +565,9 @@ def _run_neqo(
     """Run one preparation client under a deadline independent of Neqo."""
 
     host_timeout = neqo_host_timeout(configured_timeout_seconds)
+    measured_command = [*capture_scheduler_launch_prefix(), *command]
     try:
-        return run(command, log=log, check=False, timeout=host_timeout)
+        return run(measured_command, log=log, check=False, timeout=host_timeout)
     except ProcessTimeoutError as error:
         detail = error.result.stdout.strip() or "no client output"
         raise PreparationError(
