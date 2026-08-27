@@ -52,6 +52,7 @@ _CONFIGURATION_KEYS = {
 }
 _OPTIONAL_CONFIGURATION_KEYS = {
     "chaff_qualification_set",
+    "defense_order",
     "study_environment_sha256",
     "capture_admission_sha256",
     "formal_cohort_sha256",
@@ -577,6 +578,16 @@ def _validate_configuration(value: object) -> None:
         or _QUALIFICATION_SET.fullmatch(value["chaff_qualification_set"]) is None
     ):
         raise ValueError("configuration chaff_qualification_set is invalid")
+    if "defense_order" in value:
+        defense_order = value["defense_order"]
+        if (
+            not isinstance(defense_order, Mapping)
+            or set(defense_order) != {"scheme", "block"}
+            or defense_order["scheme"] != "cyclic-latin-square"
+            or type(defense_order["block"]) is not int
+            or defense_order["block"] < 0
+        ):
+            raise ValueError("configuration defense_order is invalid")
     if "study_environment_sha256" in value and not _is_digest(
         value["study_environment_sha256"]
     ):

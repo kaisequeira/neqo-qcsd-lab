@@ -240,6 +240,87 @@ def test_experiment_rejects_invalid_present_qualification_set(
         )
 
 
+def test_latin_square_defense_order_survives_initialization_checkpoint_and_resume_validation(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "results/campaign/run-latin-square"
+    inputs = root / "inputs"
+    inputs.mkdir(parents=True)
+    campaign = inputs / "campaign.yml"
+    atomic_text(campaign, "schema: 2\ndefense_order: cyclic-latin-square\n")
+    configuration = _configuration(campaign)
+    configuration["defense_order"] = {
+        "scheme": "cyclic-latin-square",
+        "block": 0,
+    }
+
+    experiment = initialize_experiment(
+        root,
+        name="campaign",
+        purpose="smoke",
+        run_id="run-latin-square",
+        source={"lab_commit": "a" * 40, "image": "sha256:image"},
+        configuration=configuration,
+        samples=[_sample()],
+        started_at="2026-08-27T00:00:00+00:00",
+    )
+    assert load_experiment(root)["configuration"]["defense_order"] == {
+        "scheme": "cyclic-latin-square",
+        "block": 0,
+    }
+
+    transition_sample(experiment, _sample()["sample_id"], "running", increment_attempt=True)
+    checkpoint_experiment(root, experiment)
+    resumed = load_experiment(root)
+    assert interrupt_running_samples(resumed) == [_sample()["sample_id"]]
+    checkpoint_experiment(root, resumed)
+    assert (
+        validate_resume_fingerprints(
+            root,
+            experiment=resumed,
+            expected_configuration=configuration,
+        )
+        == resumed["input_digest"]
+    )
+
+
+@pytest.mark.parametrize(
+    "defense_order",
+    [
+        None,
+        {},
+        {"scheme": "cyclic-latin-square"},
+        {"scheme": "cyclic-latin-square", "block": 0, "extra": True},
+        {"scheme": "seeded-shuffle", "block": 0},
+        {"scheme": "cyclic-latin-square", "block": True},
+        {"scheme": "cyclic-latin-square", "block": -1},
+        {"scheme": "cyclic-latin-square", "block": "0"},
+    ],
+)
+def test_experiment_rejects_invalid_present_defense_order(
+    tmp_path: Path, defense_order: object
+) -> None:
+    root = tmp_path / "results/campaign/run-invalid-order"
+    inputs = root / "inputs"
+    inputs.mkdir(parents=True)
+    campaign = inputs / "campaign.yml"
+    atomic_text(campaign, "schema: 2\n")
+    configuration = _configuration(campaign)
+    configuration["defense_order"] = defense_order
+
+    with pytest.raises(ValueError, match="configuration defense_order is invalid"):
+        initialize_experiment(
+            root,
+            name="campaign",
+            purpose="smoke",
+            run_id="run-invalid-order",
+            source={"lab_commit": "a" * 40, "image": "sha256:image"},
+            configuration=configuration,
+            samples=[_sample()],
+            started_at="2026-08-27T00:00:00+00:00",
+        )
+
+
 def test_resume_fingerprint_binds_the_immutable_ordered_sample_plan(tmp_path):
     root, experiment = _initialize(tmp_path)
     experiment["samples"][0]["seed"] += 1
