@@ -351,7 +351,7 @@ def test_controlled_receipt_requires_exact_bilateral_qdisc_evidence(
         "observed_qdisc": observed,
     }
     receipt = {
-        "schema_version": 1,
+        "schema_version": buflo_study.LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION,
         "stage": "controlled",
         "netem_profile": profile["id"],
         "netem_rank": rank,
@@ -361,6 +361,7 @@ def test_controlled_receipt_requires_exact_bilateral_qdisc_evidence(
             "local-large": "local-large",
             "local-small": "local-small",
         },
+        "fixture_scope": "controlled-live-manifests-including-two-origin-local-large",
         "treatment_order": [
             "undefended",
             "buflo",
@@ -400,6 +401,18 @@ def test_controlled_receipt_requires_exact_bilateral_qdisc_evidence(
     }
 
     assert validate_controlled_campaign_receipt(receipt)["netem_rank"] == rank
+    historical = dict(receipt)
+    historical.pop("fixture_scope")
+    historical["schema_version"] = 1
+    assert validate_controlled_campaign_receipt(historical)["netem_rank"] == rank
+    stripped = dict(receipt)
+    stripped.pop("fixture_scope")
+    with pytest.raises(ValueError, match="fields are invalid"):
+        validate_controlled_campaign_receipt(stripped)
+    changed_scope = json.loads(json.dumps(receipt))
+    changed_scope["fixture_scope"] = "same-origin-regression-surrogates"
+    with pytest.raises(ValueError, match="matrix binding"):
+        validate_controlled_campaign_receipt(changed_scope)
     changed = json.loads(json.dumps(receipt))
     changed["network"]["directional_coverage"]["server_to_client"]["opposite_ingress"] = (
         "unobserved"
@@ -606,6 +619,14 @@ def test_controlled_driver_does_not_change_regression_manifests(
         5,
     ]
     assert [len(regression[name]["resources"]) for name in ("simple", "complex")] == [1, 4]
+    assert {
+        resource["url"].split("/", 3)[2]
+        for resource in controlled["local-large"]["resources"]
+    } == {"qcsd-buflo-server-one:4433", "qcsd-buflo-server-two:4434"}
+    assert {
+        resource["url"].split("/", 3)[2]
+        for resource in regression["complex"]["resources"]
+    } == {"qcsd-buflo-server-one:4433"}
     for workload_id in ("local-small", "local-large"):
         proof = buflo_study._validate_controlled_csbuflo_rate_driver(
             workload_id, controlled[workload_id]["resources"]
@@ -639,14 +660,14 @@ def _regression_prefix_manifest(workload_id: str) -> dict[str, object]:
                 ),
                 buflo_study._local_resource(
                     2,
-                    "https://qcsd-buflo-server-two:4434/4096",
+                    "https://qcsd-buflo-server-one:4433/4096",
                     "Script",
                     4_096,
                     depends_on=[0],
                 ),
                 buflo_study._local_resource(
                     3,
-                    "https://qcsd-buflo-server-two:4434/2048",
+                    "https://qcsd-buflo-server-one:4433/2048",
                     "Image",
                     2_048,
                     depends_on=[2],
@@ -659,7 +680,6 @@ def _regression_prefix_manifest(workload_id: str) -> dict[str, object]:
             "final_url": resources[0]["url"],
             "approved_origins": [
                 "https://qcsd-buflo-server-one:4433",
-                "https://qcsd-buflo-server-two:4434",
             ],
             "expected_responses": [
                 {
@@ -964,6 +984,48 @@ def test_sustained_capacity_gate_requires_all_clean_cells() -> None:
         with pytest.raises(ValueError, match="does not sustain"):
             buflo_study._validate_sustained_cell_capacity(values)
         values[index]["capacity"][key] = original
+
+
+def test_controlled_endpoint_gate_names_all_new_mode_two_origin_cells() -> None:
+    endpoints = [
+        {"id": 0, "origin": "https://qcsd-buflo-server-one:4433/"},
+        {"id": 1, "origin": "https://qcsd-buflo-server-two:4434/"},
+    ]
+    coverage = buflo_study._controlled_endpoint_coverage(
+        endpoints,
+        workload="local-large",
+    )
+    assert coverage["observed_endpoint_count"] == 2
+    assert coverage["passed"] is True
+
+    values = [
+        {
+            "treatment": cell["treatment"],
+            "workload": cell["workload"],
+            "visit": cell["visit"],
+            "netem_profile": cell["netem_profile"],
+            "endpoint_coverage": coverage,
+        }
+        for cell in generated_stage_cells("controlled")
+        if cell["workload"] == "local-large"
+        and cell["treatment"] in {"buflo", "cs-buflo-ctsp", "cs-buflo-cpsp"}
+    ]
+    proof = buflo_study._validate_controlled_multi_endpoint_coverage(values)
+    assert proof["samples"] == 60
+    assert proof["treatments"] == {
+        "buflo": 20,
+        "cs-buflo-ctsp": 20,
+        "cs-buflo-cpsp": 20,
+    }
+    assert proof["passed"] is True
+
+    with pytest.raises(ValueError, match="all 60 cells"):
+        buflo_study._validate_controlled_multi_endpoint_coverage(values[:-1])
+    with pytest.raises(ValueError, match="exact expected endpoint set"):
+        buflo_study._controlled_endpoint_coverage(
+            [endpoints[0], {"id": 1, "origin": endpoints[0]["origin"]}],
+            workload="local-large",
+        )
 
 
 @pytest.mark.parametrize("stage", ("controlled", "regression"))

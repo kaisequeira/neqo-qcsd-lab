@@ -45,6 +45,7 @@ from .util import (
 )
 
 SCHEMA_VERSION = 1
+LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION = 2
 STUDY_ROOT = LAB_ROOT / "config/buflo-study/v1"
 STUDY_PLAN = STUDY_ROOT / "study.json"
 ESTABLISHED_SEVEN_BASELINE = STUDY_ROOT / "established-seven-baseline.json"
@@ -873,7 +874,7 @@ def generated_stage_cells(
 def validate_controlled_campaign_receipt(value: Any) -> dict[str, Any]:
     """Validate the qdisc observations frozen into one local study campaign."""
 
-    keys = {
+    historical_keys = {
         "schema_version",
         "stage",
         "netem_profile",
@@ -885,7 +886,16 @@ def validate_controlled_campaign_receipt(value: Any) -> dict[str, Any]:
         "evidence_class",
         "network",
     }
-    if not isinstance(value, Mapping) or set(value) != keys:
+    current_keys = historical_keys | {"fixture_scope"}
+    fields = frozenset(value) if isinstance(value, Mapping) else frozenset()
+    schema_version = value.get("schema_version") if isinstance(value, Mapping) else None
+    if not isinstance(value, Mapping) or not (
+        (schema_version == SCHEMA_VERSION and fields == frozenset(historical_keys))
+        or (
+            schema_version == LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION
+            and fields == frozenset(current_keys)
+        )
+    ):
         raise ValueError("controlled campaign receipt fields are invalid")
     stage = value["stage"]
     if stage not in {"controlled", "regression"}:
@@ -911,12 +921,20 @@ def validate_controlled_campaign_receipt(value: Any) -> dict[str, Any]:
         if stage == "controlled"
         else tuple(plan["regression"]["treatments"])
     )
+    expected_fixture_scope = (
+        "controlled-live-manifests-including-two-origin-local-large"
+        if stage == "controlled"
+        else "same-origin-regression-surrogates"
+    )
     if (
-        value["schema_version"] != SCHEMA_VERSION
-        or value["netem_profile"] != expected["id"]
+        value["netem_profile"] != expected["id"]
         or value["client_qdisc"] != expected["client_qdisc"]
         or value["server_qdisc"] != expected["server_qdisc"]
         or value["evidence_class"] != "controlled-test-only-nonformal"
+        or (
+            schema_version == LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION
+            and value["fixture_scope"] != expected_fixture_scope
+        )
         or value["workload_aliases"] != expected_aliases
         or tuple(value["treatment_order"]) != expected_treatments
     ):
@@ -1091,7 +1109,7 @@ def execute_local_controlled_profile(
         },
     }
     receipt = {
-        "schema_version": 1,
+        "schema_version": LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION,
         "stage": "controlled",
         "netem_profile": profile["id"],
         "netem_rank": netem_rank,
@@ -1101,6 +1119,7 @@ def execute_local_controlled_profile(
             "local-large": "local-large",
             "local-small": "local-small",
         },
+        "fixture_scope": "controlled-live-manifests-including-two-origin-local-large",
         "treatment_order": list(STAGE_TREATMENTS["smoke"]),
         "evidence_class": "controlled-test-only-nonformal",
         "network": network_receipt,
@@ -1224,13 +1243,14 @@ def execute_local_regression(
         },
     }
     receipt = {
-        "schema_version": 1,
+        "schema_version": LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION,
         "stage": "regression",
         "netem_profile": clean["id"],
         "netem_rank": 0,
         "client_qdisc": clean["client_qdisc"],
         "server_qdisc": clean["server_qdisc"],
         "workload_aliases": {"complex": "local-large", "simple": "local-small"},
+        "fixture_scope": "same-origin-regression-surrogates",
         "treatment_order": list(load_study_plan()["regression"]["treatments"]),
         "evidence_class": "controlled-test-only-nonformal",
         "network": network_receipt,
@@ -1407,6 +1427,10 @@ def _create_regression_workloads(root: Path) -> None:
                 )
             ]
         ),
+        # The Walkie-Talkie prefix qualifier proves one concrete HTTP/3
+        # connection.  Keep this test-only mould complex but same-origin;
+        # the controlled local-large workload retains live two-origin
+        # coverage for BuFLO and both CS-BuFLO variants.
         "complex": _local_prepared_manifest(
             [
                 _local_resource(
@@ -1424,14 +1448,14 @@ def _create_regression_workloads(root: Path) -> None:
                 ),
                 _local_resource(
                     2,
-                    "https://qcsd-buflo-server-two:4434/4096",
+                    "https://qcsd-buflo-server-one:4433/4096",
                     "Script",
                     4_096,
                     depends_on=[0],
                 ),
                 _local_resource(
                     3,
-                    "https://qcsd-buflo-server-two:4434/2048",
+                    "https://qcsd-buflo-server-one:4433/2048",
                     "Image",
                     2_048,
                     depends_on=[2],
@@ -5249,6 +5273,7 @@ def _validate_local_stage_results(
     sources = []
     authoritative_bytes = 0
     capacity_samples: list[dict[str, Any]] = []
+    multi_endpoint_samples: list[dict[str, Any]] = []
     controlled_costs: dict[tuple[str, str, int], dict[str, dict[str, int]]] = {}
     for root in result_roots:
         verified = verify_result(Path(root))
@@ -5325,6 +5350,12 @@ def _validate_local_stage_results(
                     "cs-buflo-cpsp",
                 }:
                     capacity_samples.append(evidence)
+                if cell["workload"] == "local-large" and cell["treatment"] in {
+                    "buflo",
+                    "cs-buflo-ctsp",
+                    "cs-buflo-cpsp",
+                }:
+                    multi_endpoint_samples.append(evidence)
                 key = (
                     str(cell["netem_profile"]),
                     str(cell["workload"]),
@@ -5351,6 +5382,9 @@ def _validate_local_stage_results(
         result["sustained_cell_capacity"] = _validate_sustained_cell_capacity(
             capacity_samples
         )
+        result["multiple_endpoint_coverage"] = _validate_controlled_multi_endpoint_coverage(
+            multi_endpoint_samples
+        )
         result["ctsp_cpsp_ordering"] = _validate_ctsp_cpsp_ordering(
             controlled_costs,
             evidence_sha256s=[item["evidence_sha256"] for item in bindings],
@@ -5375,6 +5409,10 @@ def _controlled_sample_capacity_and_cost(
     endpoints = run.get("endpoints") if isinstance(run, Mapping) else None
     if not isinstance(endpoints, list) or not endpoints:
         raise ValueError("controlled sample has no endpoint binding")
+    endpoint_coverage = _controlled_endpoint_coverage(
+        endpoints,
+        workload=str(cell["workload"]),
+    )
     trace = extract_trace(sample_path / "capture.pcapng", endpoints)
     if not trace or any(packet.udp_payload_len is None for packet in trace):
         raise ValueError("controlled sample has incomplete observer UDP evidence")
@@ -5576,7 +5614,106 @@ def _controlled_sample_capacity_and_cost(
         "netem_profile": str(cell["netem_profile"]),
         "wire_bytes": sum(packet.frame_len for packet in trace),
         "udp_payload_bytes": sum(int(packet.udp_payload_len) for packet in trace),
+        "endpoint_coverage": endpoint_coverage,
         "capacity": capacity,
+    }
+
+
+def _controlled_endpoint_coverage(
+    endpoints: Sequence[Any], *, workload: str
+) -> dict[str, Any]:
+    """Bind each controlled sample to its exact live endpoint set."""
+
+    from .manifest import https_origin
+
+    expected_by_workload = {
+        "local-small": ("https://qcsd-buflo-server-one:4433",),
+        "local-large": (
+            "https://qcsd-buflo-server-one:4433",
+            "https://qcsd-buflo-server-two:4434",
+        ),
+    }
+    expected = expected_by_workload.get(workload)
+    if expected is None:
+        raise ValueError("controlled endpoint coverage has an unknown workload")
+    observed_ids: list[int] = []
+    observed_origins: list[str] = []
+    for endpoint in endpoints:
+        if not isinstance(endpoint, Mapping):
+            raise ValueError("controlled endpoint coverage contains a non-object endpoint")
+        endpoint_id = endpoint.get("id")
+        origin = endpoint.get("origin")
+        canonical_origin = https_origin(origin) if isinstance(origin, str) else None
+        if type(endpoint_id) is not int or endpoint_id < 0 or canonical_origin is None:
+            raise ValueError("controlled endpoint coverage identity is invalid")
+        observed_ids.append(endpoint_id)
+        observed_origins.append(canonical_origin)
+    if (
+        sorted(observed_ids) != list(range(len(expected)))
+        or len(set(observed_origins)) != len(observed_origins)
+        or tuple(sorted(observed_origins)) != tuple(sorted(expected))
+    ):
+        raise ValueError("controlled sample does not bind the exact expected endpoint set")
+    return {
+        "schema_version": 1,
+        "workload": workload,
+        "expected_endpoint_count": len(expected),
+        "observed_endpoint_count": len(endpoints),
+        "expected_origins": list(expected),
+        "observed_origins": sorted(observed_origins),
+        "passed": True,
+    }
+
+
+def _validate_controlled_multi_endpoint_coverage(
+    values: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Require every new defense on every profile to exercise both origins."""
+
+    treatments = ("buflo", "cs-buflo-ctsp", "cs-buflo-cpsp")
+    profiles = tuple(
+        profile["id"] for profile in load_study_plan()["controlled"]["netem_profiles"]
+    )
+    expected = {
+        (treatment, profile, visit)
+        for treatment in treatments
+        for profile in profiles
+        for visit in range(5)
+    }
+    observed = {
+        (str(value["treatment"]), str(value["netem_profile"]), int(value["visit"]))
+        for value in values
+    }
+    expected_origins = [
+        "https://qcsd-buflo-server-one:4433",
+        "https://qcsd-buflo-server-two:4434",
+    ]
+    if observed != expected or len(values) != len(expected):
+        raise ValueError("controlled multi-endpoint evidence does not cover all 60 cells")
+    for value in values:
+        coverage = value.get("endpoint_coverage")
+        if not isinstance(coverage, Mapping) or dict(coverage) != {
+            "schema_version": 1,
+            "workload": "local-large",
+            "expected_endpoint_count": 2,
+            "observed_endpoint_count": 2,
+            "expected_origins": expected_origins,
+            "observed_origins": expected_origins,
+            "passed": True,
+        }:
+            raise ValueError("controlled multi-endpoint evidence is invalid")
+    return {
+        "schema_version": 1,
+        "samples": len(values),
+        "workload": "local-large",
+        "endpoint_count": 2,
+        "origins": expected_origins,
+        "profiles": list(profiles),
+        "treatments": {
+            treatment: sum(value["treatment"] == treatment for value in values)
+            for treatment in treatments
+        },
+        "passed": True,
     }
 
 
