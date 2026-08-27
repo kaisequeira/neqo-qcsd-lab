@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import base64
 import hashlib
 import json
 import os
@@ -50,6 +51,7 @@ from qcsd_lab.fidelity import (
     SCHEDULE_QCSD_FIELDS,
     _cs_buflo_padding_targets_match,
     _cs_buflo_payload_padding_target,
+    _runner_wakeup_metrics_valid as _fidelity_runner_wakeup_metrics_valid,
     _schedule_realization_metrics,
     fidelity_eligible,
     new_defense_terminal_receipts_valid,
@@ -189,6 +191,30 @@ def _runner_wakeup_receipt() -> dict[str, object]:
     }
 
 
+def _runner_wakeup_receipt_v2() -> dict[str, object]:
+    value = _runner_wakeup_receipt()
+    value.update(
+        {
+            "schema_version": 2,
+            "semantics": (
+                f'{value["semantics"]}; '
+                "buflo_exact_release_guard_reserves_candidate_window; "
+                "buflo_exact_release_active_wait_tail_us=250; "
+                "buflo_exact_release_guards_are_separately_receipted_active_waits; "
+                "buflo_active_defense_socket_drains_are_single_batch; "
+                "buflo_active_defense_http_drains_are_single_event; "
+                "buflo_output_is_interrupted_at_guard"
+            ),
+            "buflo_exact_release_guard_entries": 0,
+            "buflo_exact_release_guard_wait_nanoseconds": 0,
+            "buflo_exact_release_active_wait_nanoseconds": 0,
+            "buflo_exact_release_max_passive_wake_lateness_nanoseconds": 0,
+            "buflo_exact_release_max_guard_exit_lateness_nanoseconds": 0,
+        }
+    )
+    return value
+
+
 def test_registry_appends_two_candidate_scientific_identities() -> None:
     assert DEFENSE_ORDER[-2:] == ("buflo", "cs-buflo")
     assert DEFENSE_RUNTIME_KINDS["buflo"] == "buflo"
@@ -226,6 +252,11 @@ def test_study_plan_binds_existing_parameter_paths_and_exact_counts() -> None:
     assert plan["public_stages"]["smoke"]["expected_samples"] == 20
     assert plan["public_stages"]["rehearsal"]["expected_samples"] == 40
     assert plan["public_stages"]["formal"]["expected_samples"] == 1_500
+    assert plan["public_stages"]["formal"]["bootstrap_draws"] == 10_000
+    assert (
+        plan["public_stages"]["formal"]["bootstrap_contract"]
+        == buflo_study.FORMAL_BOOTSTRAP_CONTRACT
+    )
     assert plan["public_stages"]["formal"]["treatments"] == [
         "undefended",
         "buflo",
@@ -239,11 +270,21 @@ def test_study_plan_binds_existing_parameter_paths_and_exact_counts() -> None:
             "formal": ["regression", "smoke", "rehearsal"],
         },
         "reference_gate": "isolated-create-only-conformance-receipt",
+        "formal_code_gate": "validated-create-only-code-gate-receipt",
         "source_lineage": "one-exact-clean-collection-image",
         "formal_minimum_available_hours": 12.5,
         "formal_disk_safety_multiplier": 3,
         "formal_disk_projection_basis": ("verified-smoke-plus-rehearsal-bytes-per-sample"),
     }
+    assert buflo_study.formal_evaluation_contract_for_cohort(14) is None
+    assert (
+        buflo_study.formal_evaluation_contract_for_cohort(15)
+        == buflo_study.FORMAL_BOOTSTRAP_CONTRACT
+    )
+    tampered = json.loads(json.dumps(plan))
+    tampered["public_stages"]["formal"]["bootstrap_draws"] = 9_999
+    with pytest.raises(ValueError, match="formal stage matrix"):
+        buflo_study.validate_study_plan(tampered)
 
 
 def test_established_seven_baseline_rechecks_config_and_behavior_bytes(
@@ -620,7 +661,7 @@ def test_formal_performance_gate_requires_exact_axes_and_terminal_tail() -> None
         ),
     ),
 )
-def test_controlled_receipt_requires_exact_bilateral_qdisc_evidence(
+def test_historical_controlled_receipt_requires_exact_bilateral_qdisc_evidence(
     rank: int, observed: list[dict[str, object]]
 ) -> None:
     profile = load_study_plan()["controlled"]["netem_profiles"][rank]
@@ -630,7 +671,7 @@ def test_controlled_receipt_requires_exact_bilateral_qdisc_evidence(
         "observed_qdisc": observed,
     }
     receipt = {
-        "schema_version": buflo_study.LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION,
+        "schema_version": 2,
         "stage": "controlled",
         "netem_profile": profile["id"],
         "netem_rank": rank,
@@ -700,6 +741,372 @@ def test_controlled_receipt_requires_exact_bilateral_qdisc_evidence(
         validate_controlled_campaign_receipt(changed)
 
 
+def _shared_router_address(interface: str, ipv4: str | None) -> list[dict[str, object]]:
+    addr_info: list[dict[str, object]] = []
+    if ipv4 is not None:
+        address, prefix = ipv4.split("/")
+        addr_info.append({"family": "inet", "local": address, "prefixlen": int(prefix)})
+    return [
+        {
+            "ifname": interface,
+            "flags": ["BROADCAST", "UP", "LOWER_UP"],
+            "mtu": 1_500,
+            "addr_info": addr_info,
+        }
+    ]
+
+
+def _shared_router_offloads(interface: str) -> list[dict[str, object]]:
+    return [
+        {
+            "ifname": interface,
+            "generic-receive-offload": {"active": False},
+            "generic-segmentation-offload": {"active": False},
+            "tcp-segmentation-offload": {"active": False},
+            "tx-udp-segmentation": {"active": False},
+        }
+    ]
+
+
+def _shared_router_netem(profile: str, handle: str) -> dict[str, object]:
+    options: dict[str, object] = {
+        "limit": 100 if "limit 100" in profile else 1_000,
+        "delay": {"delay": 0.025, "jitter": 0, "correlation": 0},
+        "ecn": False,
+        "gap": 0,
+    }
+    if "rate 5mbit" in profile:
+        options["rate"] = {
+            "rate": 625_000,
+            "packetoverhead": 0,
+            "cellsize": 0,
+            "celloverhead": 0,
+        }
+    if "loss 1%" in profile:
+        options["loss-random"] = {"loss": 0.01, "correlation": 0}
+    return {"kind": "netem", "handle": handle, "root": True, "options": options}
+
+
+def _shared_router_routes(
+    own_subnet: str,
+    own_gateway: str,
+    own_ip: str,
+    remote_subnet: str,
+    remote_router: str,
+    interface: str,
+) -> list[dict[str, object]]:
+    return [
+        {"dst": "default", "gateway": own_gateway, "dev": interface, "flags": []},
+        {
+            "dst": own_subnet,
+            "dev": interface,
+            "flags": [],
+            "protocol": "kernel",
+            "scope": "link",
+            "prefsrc": own_ip,
+        },
+        {"dst": remote_subnet, "gateway": remote_router, "dev": interface, "flags": []},
+    ]
+
+
+def _shared_router_receipt(
+    monkeypatch: pytest.MonkeyPatch, rank: int, *, handle_suffix: str = ""
+) -> dict[str, object]:
+    profile = load_study_plan()["controlled"]["netem_profiles"][rank]
+    client_name = "qcsd-buflo-study-v15-client"
+    server_name = "qcsd-buflo-study-v15-server"
+    client_subnet, server_subnet, base = buflo_study._controlled_network_pair(
+        client_name, server_name
+    )
+    client_gateway = str(client_subnet.network_address + 1)
+    router_client = str(client_subnet.network_address + 2)
+    client_ip = str(client_subnet.network_address + 3)
+    server_gateway = str(server_subnet.network_address + 1)
+    router_server = str(server_subnet.network_address + 2)
+    server_ips = [
+        str(server_subnet.network_address + 3),
+        str(server_subnet.network_address + 4),
+    ]
+    noqueue = [{"kind": "noqueue", "root": True, "options": {}}]
+    ifb_default = [{"kind": "fq_codel", "root": True, "options": {}}]
+    impaired = rank != 0
+    router_eth0_qdisc = (
+        [
+            _shared_router_netem(profile["server_qdisc"], f"20{handle_suffix}:"),
+            {"kind": "ingress", "handle": "ffff:", "parent": "ffff:fff1", "options": {}},
+        ]
+        if impaired
+        else noqueue
+    )
+    router_ifb_qdisc = (
+        [_shared_router_netem(profile["client_qdisc"], f"10{handle_suffix}:")]
+        if impaired
+        else ifb_default
+    )
+    ingress_filter: list[dict[str, object]] = []
+    if impaired:
+        ingress_filter = [
+            {"protocol": "all", "kind": "u32"},
+            {"protocol": "all", "kind": "u32", "options": {"ht_divisor": 1}},
+            {
+                "protocol": "all",
+                "kind": "u32",
+                "options": {
+                    "match": {"value": "0", "mask": "0", "off": 0},
+                    "actions": [
+                        {
+                            "kind": "mirred",
+                            "mirred_action": "redirect",
+                            "direction": "egress",
+                            "to_dev": "ifb0",
+                            "control_action": {"type": "stolen"},
+                        }
+                    ],
+                },
+            },
+        ]
+    router_routes = [
+        {"dst": "default", "gateway": client_gateway, "dev": "eth0", "flags": []},
+        {
+            "dst": str(client_subnet),
+            "dev": "eth0",
+            "flags": [],
+            "protocol": "kernel",
+            "scope": "link",
+            "prefsrc": router_client,
+        },
+        {
+            "dst": str(server_subnet),
+            "dev": "eth1",
+            "flags": [],
+            "protocol": "kernel",
+            "scope": "link",
+            "prefsrc": router_server,
+        },
+    ]
+    servers = []
+    for suffix, alias, server_ip in zip(
+        ("one", "two"),
+        ("qcsd-buflo-server-one", "qcsd-buflo-server-two"),
+        server_ips,
+        strict=True,
+    ):
+        servers.append(
+            {
+                "container": f"{base}-server-{suffix}",
+                "alias": alias,
+                "addresses": {"eth0": _shared_router_address("eth0", f"{server_ip}/24")},
+                "qdiscs": {"eth0": noqueue},
+                "offloads": {"eth0": _shared_router_offloads("eth0")},
+                "routes": _shared_router_routes(
+                    str(server_subnet),
+                    server_gateway,
+                    server_ip,
+                    str(client_subnet),
+                    router_server,
+                    "eth0",
+                ),
+            }
+        )
+    raw = {
+        "schema_version": 1,
+        "client_network": {
+            "name": client_name,
+            "ipam": [
+                {"Subnet": str(client_subnet), "IPRange": "", "Gateway": client_gateway}
+            ],
+        },
+        "server_network": {
+            "name": server_name,
+            "ipam": [
+                {"Subnet": str(server_subnet), "IPRange": "", "Gateway": server_gateway}
+            ],
+        },
+        "router": {
+            "container": f"{base}-router",
+            "addresses": {
+                "eth0": _shared_router_address("eth0", f"{router_client}/24"),
+                "eth1": _shared_router_address("eth1", f"{router_server}/24"),
+                "ifb0": _shared_router_address("ifb0", None),
+            },
+            "qdiscs": {
+                "eth0": router_eth0_qdisc,
+                "eth1": noqueue,
+                "ifb0": router_ifb_qdisc,
+            },
+            "offloads": {
+                "eth0": _shared_router_offloads("eth0"),
+                "eth1": _shared_router_offloads("eth1"),
+            },
+            "routes": router_routes,
+            "client_ingress_filters": ingress_filter,
+            "ip_forward": 1,
+        },
+        "servers": servers,
+    }
+    client_observation = {
+        "addresses": {"eth0": _shared_router_address("eth0", f"{client_ip}/24")},
+        "qdiscs": {"eth0": noqueue},
+        "offloads": {"eth0": _shared_router_offloads("eth0")},
+        "routes": _shared_router_routes(
+            str(client_subnet),
+            client_gateway,
+            client_ip,
+            str(server_subnet),
+            router_client,
+            "eth0",
+        ),
+        "hosts": {
+            "qcsd-buflo-server-one": [server_ips[0]],
+            "qcsd-buflo-server-two": [server_ips[1]],
+        },
+    }
+    monkeypatch.setattr(buflo_study, "_observe_client_namespace", lambda: client_observation)
+    monkeypatch.setenv("QCSD_LAB_IMAGE_DIGEST", "sha256:" + "a" * 64)
+    evidence = base64.b64encode(
+        json.dumps(raw, sort_keys=True, separators=(",", ":")).encode()
+    ).decode()
+    network_receipt = buflo_study._build_shared_router_network_receipt(
+        network=client_name,
+        controlled_network_evidence_b64=evidence,
+        client_qdisc=profile["client_qdisc"],
+        server_qdisc=profile["server_qdisc"],
+        cohort_version=15,
+    )
+    return {
+        "schema_version": buflo_study.LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION,
+        "stage": "controlled",
+        "netem_profile": profile["id"],
+        "netem_rank": rank,
+        "client_qdisc": profile["client_qdisc"],
+        "server_qdisc": profile["server_qdisc"],
+        "workload_aliases": {"local-large": "local-large", "local-small": "local-small"},
+        "fixture_scope": "controlled-live-manifests-including-two-origin-local-large",
+        "cohort_version": 15,
+        "treatment_order": ["undefended", "buflo", "cs-buflo-cpsp", "cs-buflo-ctsp"],
+        "evidence_class": "controlled-test-only-nonformal",
+        "network": network_receipt,
+    }
+
+
+@pytest.mark.parametrize("rank", range(4))
+def test_shared_router_receipt_binds_exact_once_per_direction_topology(
+    monkeypatch: pytest.MonkeyPatch, rank: int
+) -> None:
+    receipt = _shared_router_receipt(monkeypatch, rank)
+    assert validate_controlled_campaign_receipt(receipt)["netem_rank"] == rank
+    assert receipt["network"]["capture_point"]["endpoint_impairment_qdiscs"] == 0
+    if rank == 2:
+        assert receipt["network"]["rate_aggregation"]["scope"] == (
+            "one-shared-qdisc-per-direction-across-both-server-origins"
+        )
+
+
+def test_shared_router_receipt_normalizes_nondeterministic_qdisc_handles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = _shared_router_receipt(monkeypatch, 2, handle_suffix="1")
+    second = _shared_router_receipt(monkeypatch, 2, handle_suffix="9")
+    assert first == second
+
+
+@pytest.mark.parametrize(
+    ("location", "key"),
+    (
+        ("top", "distribution"),
+        ("delay", "reorder"),
+        ("rate", "slot"),
+        ("loss-random", "seed"),
+    ),
+)
+def test_shared_router_netem_rejects_unknown_raw_options(location: str, key: str) -> None:
+    options = _shared_router_netem(
+        "netem delay 25ms rate 5mbit limit 100 loss 1%", "10:"
+    )["options"]
+    assert isinstance(options, dict)
+    if location == "top":
+        options[key] = 1
+    else:
+        nested = options[location]
+        assert isinstance(nested, dict)
+        nested[key] = 1
+    with pytest.raises(ValueError, match="controlled netem"):
+        buflo_study._canonical_netem_options(options)
+
+
+def test_shared_router_route_rejects_unreceipted_packetization_attributes() -> None:
+    routes = [
+        {
+            "dst": "default",
+            "gateway": "10.0.0.1",
+            "dev": "eth0",
+            "flags": [],
+            "mtu": 576,
+        }
+    ]
+    with pytest.raises(ValueError, match="controlled route row"):
+        buflo_study._canonical_routes(routes)
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    (
+        "ip-forward",
+        "router-interface",
+        "client-route",
+        "client-hosts",
+        "ifb-netem",
+        "ingress-filter",
+        "client-qdisc",
+        "server-qdisc",
+        "router-offload",
+        "coverage-count",
+        "aggregate-scope",
+        "cohort-version",
+    ),
+)
+def test_shared_router_receipt_rejects_network_evidence_tampering(
+    monkeypatch: pytest.MonkeyPatch, tamper: str
+) -> None:
+    receipt = _shared_router_receipt(monkeypatch, 2)
+    changed = json.loads(json.dumps(receipt))
+    network = changed["network"]
+    if tamper == "ip-forward":
+        network["router"]["ip_forward"] = 0
+    elif tamper == "router-interface":
+        network["router"]["observed_addresses"]["eth0"]["ipv4"] = network["router"][
+            "observed_addresses"
+        ]["eth1"]["ipv4"]
+    elif tamper == "client-route":
+        network["client"]["observed_routes"][0]["gateway"] = "10.0.0.254"
+    elif tamper == "client-hosts":
+        network["client"]["observed_hosts"]["qcsd-buflo-server-one"] = ["10.0.0.9"]
+    elif tamper == "ifb-netem":
+        network["router"]["observed_qdiscs"]["ifb0"][0]["netem"][
+            "rate_bytes_per_second"
+        ] = 1_250_000
+    elif tamper == "ingress-filter":
+        network["router"]["observed_client_ingress_filter"]["action"]["to_device"] = "eth1"
+    elif tamper == "client-qdisc":
+        network["client"]["observed_qdiscs"] = network["router"]["observed_qdiscs"][
+            "ifb0"
+        ]
+    elif tamper == "server-qdisc":
+        network["servers"][0]["observed_qdiscs"] = network["router"]["observed_qdiscs"][
+            "eth0"
+        ]
+    elif tamper == "router-offload":
+        network["router"]["observed_offloads"]["eth0"]["gso"] = True
+    elif tamper == "coverage-count":
+        network["directional_coverage"]["client_to_server"]["impairment_applications"] = 2
+    elif tamper == "aggregate-scope":
+        network["rate_aggregation"]["scope"] = "per-origin"
+    elif tamper == "cohort-version":
+        changed["cohort_version"] = 16
+    with pytest.raises(ValueError, match="controlled"):
+        validate_controlled_campaign_receipt(changed)
+
+
 def test_validation_attestation_promotion_is_fail_closed(tmp_path: Path) -> None:
     attestation = tmp_path / "validation-attestation.json"
     attestation.write_text(
@@ -709,6 +1116,101 @@ def test_validation_attestation_promotion_is_fail_closed(tmp_path: Path) -> None
 
     with pytest.raises(ValueError, match="typed evidence is missing"):
         validate_validation_attestation(attestation)
+
+
+def test_new_formal_artifacts_cannot_bypass_v15_contract(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="formal cohort creation requires cohort version 15"):
+        buflo_study.create_formal_cohort_manifest(
+            tmp_path / "cohort.json",
+            cohort_id="legacy-new-formal",
+            results_root=tmp_path / "results",
+            historical_pre_snapshot=tmp_path / "pre.json",
+            cohort_version=14,
+        )
+
+    with pytest.raises(
+        ValueError, match="formal capture admission requires cohort version 15"
+    ):
+        buflo_study.create_capture_admission(
+            tmp_path / "admission.json",
+            stage="formal",
+            reference_receipt=tmp_path / "reference.json",
+            qualification_receipt=tmp_path / "qualification.json",
+            prerequisite_result_roots=(),
+            results_root=tmp_path / "results",
+            cohort_version=14,
+        )
+
+
+def test_validation_attestation_rejects_each_hard_gate_identity_tamper(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    evidence = {
+        "reference_receipt": {"path": "reference.json"},
+        "code_gate_receipt": {"path": "code-gate.json"},
+        "qualification_receipt": {"path": "qualification.json"},
+        "regression_results": [{"root": "regression"}],
+        "controlled_results": [{"root": "controlled"}],
+        "smoke_result": {"root": "smoke"},
+        "rehearsal_result": {"root": "rehearsal"},
+        "formal_results": [{"root": f"formal-{index}"} for index in range(10)],
+        "capture_admission": {"path": "admission.json"},
+        "formal_cohort": {"path": "cohort.json"},
+        "handoff": {"root": "handoff"},
+        "evaluation_receipt": {"path": "evaluation.json"},
+        "comparison_review": {"path": "comparison.json"},
+        "historical_pre_snapshot": {"path": "pre.json"},
+        "historical_post_snapshot": {"path": "post.json"},
+    }
+    canonical = {
+        "schema_version": 2,
+        "artifact_type": buflo_study.ATTESTATION_ARTIFACT_TYPE,
+        "study_id": buflo_study.BUFLO_STUDY_ID,
+        "cohort_version": 15,
+        "qualification_set": "buflo-study-public5-v15",
+        "study_plan": {"path": "study.json", "sha256": "b" * 64},
+        "implementation_status": buflo_study.VALIDATED_STATUS,
+        "implementation_status_description": buflo_study.VALIDATED_STATUS_DESCRIPTION,
+        "implementation_scope": "client_only_quic",
+        "paper_equivalent": False,
+        "no_waivers": True,
+        "source": {},
+        "evidence": evidence,
+        "validation_summary": {},
+        "hard_gates": buflo_study._hard_gate_records(
+            ["a" * 64], schema_version=2
+        ),
+        "all_hard_gates_passed": True,
+    }
+    monkeypatch.setattr(
+        buflo_study,
+        "_validation_attestation_value",
+        lambda **_kwargs: canonical,
+    )
+    valid = tmp_path / "valid-attestation.json"
+    valid.write_text(json.dumps(canonical), encoding="utf-8")
+    assert validate_validation_attestation(valid, deep_code_gate=False)["cohort_version"] == 15
+
+    for index in range(len(buflo_study.HARD_GATE_IDENTITIES)):
+        tampered = json.loads(json.dumps(canonical))
+        forged_gate = tampered["hard_gates"][index]["gate"] + "-tampered"
+        tampered["hard_gates"][index]["gate"] = forged_gate
+        tampered["hard_gates"][index]["gate_identity_sha256"] = (
+            buflo_study._hard_gate_identity_sha256(index + 1, forged_gate)
+        )
+        path = tmp_path / f"tampered-gate-{index + 1:02d}.json"
+        path.write_text(json.dumps(tampered), encoding="utf-8")
+        with pytest.raises(ValueError, match=f"ordinal {index + 1}"):
+            validate_validation_attestation(path, deep_code_gate=False)
+
+
+def test_study_plan_rejects_each_hard_gate_identity_tamper() -> None:
+    plan = load_study_plan()
+    for index in range(len(buflo_study.HARD_GATE_IDENTITIES)):
+        tampered = json.loads(json.dumps(plan))
+        tampered["hard_gates"][index] += "-tampered"
+        with pytest.raises(ValueError, match="immutable ordered identities"):
+            buflo_study.validate_study_plan(tampered)
 
 
 def test_local_workload_preparation_freezes_real_probe_receipts_without_synthesis(
@@ -1804,6 +2306,131 @@ def test_capture_admission_rejects_cohort_mismatch_before_replay(tmp_path: Path)
         )
 
 
+def test_v15_formal_capture_admission_requires_code_gate_before_freeze_replay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = {"image_digest": "sha256:" + "a" * 64}
+    build = {
+        "path": "build.json",
+        "sha256": "b" * 64,
+        "collection_image": source["image_digest"],
+        "started_at": "2026-08-27T00:00:00+00:00",
+        "finished_at": "2026-08-27T00:01:00+00:00",
+    }
+    identity = {
+        "cohort_version": 15,
+        "sha256": build["sha256"],
+        "collection_image": build["collection_image"],
+        "started_at": build["started_at"],
+        "finished_at": build["finished_at"],
+    }
+    scheduler = buflo_study._capture_scheduler_environment_contract()
+    environment = {
+        "schema_version": 2,
+        "capture_scheduler": scheduler,
+        "docker": {"ncpu": 12},
+    }
+    regression = {"results": [{"root": "regression", "environment": environment}]}
+    staged = {
+        "source": source,
+        "regression": regression,
+        "public": {
+            "smoke": {"root": "smoke", "environment": environment},
+            "rehearsal": {"root": "rehearsal", "environment": environment},
+        },
+    }
+    qualification = {
+        "source": source,
+        "build_execution": {"path": build["path"], "sha256": build["sha256"]},
+        "controlled_results": {"results": [{"environment": environment}]},
+    }
+    monkeypatch.setattr(
+        buflo_study, "validate_reference_gate_receipt", lambda *_args, **_kwargs: {
+            "build_execution": identity
+        }
+    )
+    monkeypatch.setattr(
+        buflo_study, "validate_qualification_receipt", lambda *_args, **_kwargs: qualification
+    )
+    monkeypatch.setattr(
+        buflo_study,
+        "validate_staged_capture_prerequisites",
+        lambda *_args, **_kwargs: staged,
+    )
+    monkeypatch.setattr(
+        buflo_study, "validate_build_execution_receipt", lambda *_args, **_kwargs: build
+    )
+    monkeypatch.setattr(
+        buflo_study, "_one_build_execution_identity", lambda _values: identity
+    )
+    results_root = tmp_path / "results"
+    results_root.mkdir()
+
+    with pytest.raises(ValueError, match="validated code-gate receipt"):
+        buflo_study._capture_admission_value(
+            stage="formal",
+            reference_receipt=tmp_path / "reference.json",
+            qualification_receipt=tmp_path / "qualification.json",
+            prerequisite_result_roots=(),
+            results_root=results_root,
+            formal_cohort_manifest=tmp_path / "cohort.json",
+            historical_pre_snapshot=tmp_path / "pre.json",
+            cohort_version=15,
+        )
+
+    pre = tmp_path / "pre.json"
+    cohort_path = tmp_path / "cohort.json"
+    code_path = tmp_path / "code-gate.json"
+    for path in (pre, cohort_path, code_path):
+        path.write_text("{}\n", encoding="utf-8")
+    code_gate = {
+        **buflo_study._file_binding(code_path),
+        "source": source,
+        "build_execution_receipt": {"path": build["path"], "sha256": build["sha256"]},
+        "live_regression": regression,
+    }
+    monkeypatch.setattr(
+        buflo_study, "validate_code_gate_receipt", lambda *_args, **_kwargs: code_gate
+    )
+    monkeypatch.setattr(
+        buflo_study,
+        "validate_historical_guard_snapshot",
+        lambda *_args, **_kwargs: {"source": source},
+    )
+    monkeypatch.setattr(
+        buflo_study,
+        "validate_formal_cohort_manifest",
+        lambda *_args, **_kwargs: {
+            "cohort_version": 15,
+            "qualification_set": "buflo-study-public5-v15",
+            "source": source,
+            "historical_pre_formal_snapshot": buflo_study._file_binding(pre),
+            "results_root": str(results_root.resolve()),
+            "formal_campaigns": [],
+            "formal_evaluation": buflo_study.FORMAL_BOOTSTRAP_CONTRACT,
+        },
+    )
+    monkeypatch.setattr(
+        buflo_study,
+        "validate_formal_capture_capacity",
+        lambda *_args, **_kwargs: {"available_window_hours": 12.5},
+    )
+    admitted = buflo_study._capture_admission_value(
+        stage="formal",
+        reference_receipt=tmp_path / "reference.json",
+        qualification_receipt=tmp_path / "qualification.json",
+        prerequisite_result_roots=(),
+        results_root=results_root,
+        formal_cohort_manifest=cohort_path,
+        historical_pre_snapshot=pre,
+        code_gate_receipt=code_path,
+        formal_window_hours=12.5,
+        cohort_version=15,
+    )
+    assert admitted["schema_version"] == 3
+    assert admitted["code_gate"] == code_gate
+
+
 def test_formal_prelaunch_estimate_is_visible_only_on_stderr(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -1890,7 +2517,9 @@ def test_launcher_applies_least_privilege_rr1_capture_partition() -> None:
     assert 'runtime+=(--cpuset-cpus "10-11" --ulimit "rtprio=1:1")' in launcher
     assert "--cpuset-cpus 10-11" in launcher
     assert "--ulimit rtprio=1:1" in launcher
-    assert launcher.count("--cpuset-cpus 0-9") == 2
+    # Acceptance server, ordinary controlled server, and shared router helpers
+    # remain outside the isolated client CPU partition.
+    assert launcher.count("--cpuset-cpus 0-9") == 3
     assert "SYS_NICE" not in launcher
     assert "--cpu-rt-runtime" not in launcher
     assert "unsupported capture scheduler contract" in entrypoint
@@ -2450,17 +3079,57 @@ def test_completed_buflo_resource_receipt_binds_runner_timer_wakeups(tmp_path: P
     }
 
     assert _runner_wakeup_metrics_valid(metrics)
+    assert _fidelity_runner_wakeup_metrics_valid(metrics)
     measured = _merge_runner_wakeup_metrics(usage, metrics, required=True)
     assert measured["source"] == "gnu-time-python-monotonic-and-runner-select-v1"
     assert measured["timer_wakeups"] == 20
     assert measured["timer_wakeups_unavailable_reason"] is None
     assert _client_resource_usage_valid(measured)
+
+    current = dict(metrics)
+    current.update(
+        {
+            "schema_version": 2,
+            "semantics": (
+                f'{metrics["semantics"]}; '
+                "buflo_exact_release_guard_reserves_candidate_window; "
+                "buflo_exact_release_active_wait_tail_us=250; "
+                "buflo_exact_release_guards_are_separately_receipted_active_waits; "
+                "buflo_active_defense_socket_drains_are_single_batch; "
+                "buflo_active_defense_http_drains_are_single_event; "
+                "buflo_output_is_interrupted_at_guard"
+            ),
+            "buflo_exact_release_guard_entries": 19,
+            "buflo_exact_release_guard_wait_nanoseconds": 190_000_000,
+            "buflo_exact_release_active_wait_nanoseconds": 4_750_000,
+            "buflo_exact_release_max_passive_wake_lateness_nanoseconds": 73,
+            "buflo_exact_release_max_guard_exit_lateness_nanoseconds": 41,
+        }
+    )
+    assert _runner_wakeup_metrics_valid(current)
+    assert _fidelity_runner_wakeup_metrics_valid(current)
+    current_measured = _merge_runner_wakeup_metrics(usage, current, required=True)
+    assert current_measured["timer_wakeups"] == 20
+
+    invalid_active = dict(current)
+    invalid_active["buflo_exact_release_active_wait_nanoseconds"] = (
+        int(current["buflo_exact_release_guard_wait_nanoseconds"]) + 1
+    )
+    assert not _runner_wakeup_metrics_valid(invalid_active)
+    assert not _fidelity_runner_wakeup_metrics_valid(invalid_active)
+
+    invalid_empty = dict(current)
+    invalid_empty["buflo_exact_release_guard_entries"] = 0
+    assert not _runner_wakeup_metrics_valid(invalid_empty)
+    assert not _fidelity_runner_wakeup_metrics_valid(invalid_empty)
+
     with pytest.raises(ValueError, match="lacks runner wakeup metrics"):
         _merge_runner_wakeup_metrics(usage, None, required=True)
 
     invalid = dict(metrics)
     invalid["wait_returns"] += 1
     assert not _runner_wakeup_metrics_valid(invalid)
+    assert not _fidelity_runner_wakeup_metrics_valid(invalid)
     with pytest.raises(ValueError, match="wake.*invalid"):
         _merge_runner_wakeup_metrics(usage, invalid, required=True)
 
@@ -2610,6 +3279,18 @@ def test_buflo_fidelity_requires_every_zero_error_and_typed_terminal_once() -> N
         "cs_buflo_summary": None,
     }
     assert new_defense_terminal_receipts_valid(run, "buflo", require_application_complete=True)
+    current_wakeups = json.loads(json.dumps(run))
+    current_wakeups["runner_wakeup_metrics"] = {
+        **_runner_wakeup_receipt_v2(),
+        "buflo_exact_release_guard_entries": 19,
+        "buflo_exact_release_guard_wait_nanoseconds": 190_000_000,
+        "buflo_exact_release_active_wait_nanoseconds": 4_750_000,
+        "buflo_exact_release_max_passive_wake_lateness_nanoseconds": 73,
+        "buflo_exact_release_max_guard_exit_lateness_nanoseconds": 41,
+    }
+    assert new_defense_terminal_receipts_valid(
+        current_wakeups, "buflo", require_application_complete=True
+    )
     legacy_run = json.loads(json.dumps(run))
     legacy_run["buflo_summary"]["schema_version"] = 2
     legacy_run["defense_diagnostics"].pop(
@@ -2790,6 +3471,23 @@ def test_cs_buflo_fidelity_reconciles_typed_composition_and_rate_state() -> None
         },
     }
     assert new_defense_terminal_receipts_valid(run, "cs_buflo", require_application_complete=True)
+
+    current_wakeups = json.loads(json.dumps(run))
+    current_wakeups["runner_wakeup_metrics"] = _runner_wakeup_receipt_v2()
+    assert new_defense_terminal_receipts_valid(
+        current_wakeups, "cs_buflo", require_application_complete=True
+    )
+    invalid_wakeups = json.loads(json.dumps(current_wakeups))
+    invalid_wakeups["runner_wakeup_metrics"][
+        "buflo_exact_release_guard_entries"
+    ] = 1
+    invalid_wakeups["runner_wakeup_metrics"][
+        "buflo_exact_release_guard_wait_nanoseconds"
+    ] = 1
+    assert not new_defense_terminal_receipts_valid(
+        invalid_wakeups, "cs_buflo", require_application_complete=True
+    )
+
     legacy = json.loads(json.dumps(run))
     legacy["cs_buflo_summary"]["schema_version"] = 2
     for key in (
@@ -3128,7 +3826,26 @@ def test_comparison_review_cannot_omit_declared_csbuflo_incoming_boundary(
             ],
         },
     ]
-    evaluation = {"original_study_comparison": {"qcsd_rows": qcsd_rows}}
+    historical_rows = [
+        {
+            "anchor_id": "buflo-tau0-rho40-d1000",
+            "metrics": {"extra_bandwidth_percent": 93.5},
+        },
+        {
+            "anchor_id": "csbuflo-sites200-ctsp-et1",
+            "metrics": {"bandwidth_ratio": 2.796},
+        },
+    ]
+    anchor_inventory = list(
+        buflo_evaluation.historical_anchor_metric_inventory(historical_rows)
+    )
+    evaluation = {
+        "original_study_comparison": {
+            "qcsd_rows": qcsd_rows,
+            "historical_rows": historical_rows,
+            "anchor_metric_inventory": anchor_inventory,
+        }
+    }
     monkeypatch.setattr(
         buflo_evaluation,
         "validate_evaluation_receipt",
@@ -3144,7 +3861,7 @@ def test_comparison_review_cannot_omit_declared_csbuflo_incoming_boundary(
     assert "csbuflo-incoming-boundary-translation" in required_ids
     required_ids.remove("csbuflo-incoming-boundary-translation")
     review = {
-        "schema_version": 1,
+        "schema_version": 2,
         "artifact_type": buflo_study.COMPARISON_REVIEW_ARTIFACT_TYPE,
         "formal": True,
         "implementation_scope": "client_only_quic",
@@ -3166,18 +3883,43 @@ def test_comparison_review_cannot_omit_declared_csbuflo_incoming_boundary(
         "reviewed_at": "2026-08-27T00:00:00+00:00",
         "rows": [
             {
-                "defense": row["defense"],
-                "evaluation_row_sha256": buflo_study._canonical_digest(row),
+                "defense": (
+                    "buflo" if item["anchor_id"].startswith("buflo-") else "cs-buflo"
+                ),
+                "evaluation_row_sha256": buflo_study._canonical_digest(
+                    next(
+                        row
+                        for row in qcsd_rows
+                        if row["defense"]
+                        == (
+                            "buflo"
+                            if item["anchor_id"].startswith("buflo-")
+                            else "cs-buflo"
+                        )
+                    )
+                ),
+                "anchor_id": item["anchor_id"],
+                "historical_row_sha256": item["historical_row_sha256"],
+                "metric": metric,
                 "classification": "expected",
-                "explanation": "reviewed",
+                "explanation": (
+                    f"For {item['anchor_id']} metric {metric}, the QCSD client-only QUIC "
+                    "transport and Ethernet observation layer differ materially from the "
+                    "published TCP experiment, so the numeric value is contextual."
+                ),
             }
-            for row in qcsd_rows
+            for item in anchor_inventory
+            for metric in item["metric_paths"]
         ],
         "required_differences": [
             {
                 "difference": identifier,
                 "classification": "expected",
-                "explanation": "reviewed",
+                "explanation": (
+                    f"The {identifier} difference is expected because the QCSD client-only "
+                    "QUIC transport, endpoint, dataset, and observation protocol are "
+                    "explicitly distinct from the original study context."
+                ),
             }
             for identifier in sorted(required_ids)
         ],
@@ -3187,6 +3929,42 @@ def test_comparison_review_cannot_omit_declared_csbuflo_incoming_boundary(
     review_path.write_text(json.dumps(review, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="required-difference inventory"):
+        buflo_study.validate_comparison_review(
+            review_path,
+            evaluation_receipt=evaluation_receipt,
+            handoff=handoff,
+            formal=True,
+        )
+
+    missing_identifier = "csbuflo-incoming-boundary-translation"
+    complete = json.loads(json.dumps(review))
+    complete["required_differences"].append(
+        {
+            "difference": missing_identifier,
+            "classification": "expected",
+            "explanation": (
+                f"The {missing_identifier} difference is expected because QCSD client-only "
+                "QUIC uses a local endpoint and observation protocol that cannot reproduce "
+                "the modified server boundary from the original study."
+            ),
+        }
+    )
+    review_path.write_text(
+        json.dumps(complete, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    assert buflo_study.validate_comparison_review(
+        review_path,
+        evaluation_receipt=evaluation_receipt,
+        handoff=handoff,
+        formal=True,
+    )["passed"] is True
+
+    generic = json.loads(json.dumps(complete))
+    generic["rows"][0]["explanation"] = "reviewed"
+    review_path.write_text(
+        json.dumps(generic, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="row inventory or digest"):
         buflo_study.validate_comparison_review(
             review_path,
             evaluation_receipt=evaluation_receipt,

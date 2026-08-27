@@ -137,6 +137,14 @@
       "visits_per_workload": 10,
       "expected_samples": 1500,
       "formal_evidence": true,
+      "bootstrap_draws": 10000,
+      "bootstrap_contract": {
+        "draws": 10000,
+        "interval": "percentile-95",
+        "resampling_unit": "acquisition-block-and-workload",
+        "paired_seed": 20260827,
+        "attack_seed_policy": "20260827-plus-canonical-attack-index"
+      },
       "treatments": ["undefended", "buflo", "cs-buflo"],
       "campaigns": [
         "buflo-study-v1-formal-01.yml",
@@ -159,6 +167,7 @@
       "formal": ["regression", "smoke", "rehearsal"]
     },
     "reference_gate": "isolated-create-only-conformance-receipt",
+    "formal_code_gate": "validated-create-only-code-gate-receipt",
     "source_lineage": "one-exact-clean-collection-image",
     "formal_minimum_available_hours": 12.5,
     "formal_disk_safety_multiplier": 3,

@@ -239,6 +239,14 @@ _INPUT_BINDING_KEYS = frozenset(
     }
 )
 
+_SEALED_SAMPLE_COPY_BINDINGS = (
+    ("raw_pcapng_path", "raw_pcapng_sha256", "capture.pcapng"),
+    ("raw_run_path", "raw_run_sha256", "neqo/run.json"),
+    ("runner_schedule_path", "runner_schedule_sha256", "neqo/schedule.csv"),
+    ("runner_events_path", "runner_events_sha256", "neqo/events.csv"),
+    ("runner_packets_path", "runner_packets_sha256", "neqo/packets.csv"),
+)
+
 
 def export_study_handoff(
     result_roots: Sequence[Path],
@@ -451,6 +459,13 @@ def validate_study_handoff(path: Path, *, formal: bool, deep: bool = True) -> Pa
     ):
         raise ValueError("study handoff diagnostic inventory declaration is inconsistent")
     _validate_dataset(dataset, rows, formal=formal)
+    if formal:
+        _validate_formal_source_bindings(
+            root,
+            dataset,
+            rows,
+            handoff_checksums=checksums,
+        )
     loaded = load_study_handoff(root)
     row_by_id = {row["sample_id"]: row for row in rows}
     if any(row_by_id[sample.sample_id]["packet_count"] != len(sample.trace) for sample in loaded):
@@ -486,6 +501,197 @@ def validate_study_handoff(path: Path, *, formal: bool, deep: bool = True) -> Pa
             if _read_shape_only_pcap(root / row["shape_pcap_path"]) != expected:
                 raise ValueError("study handoff stripped capture differs from its trace")
     return root
+
+
+def _validate_formal_source_bindings(
+    handoff_root: Path,
+    dataset: Mapping[str, Any],
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    handoff_checksums: Mapping[str, str],
+) -> None:
+    """Bind every formal handoff copy to its still-valid authoritative seal.
+
+    ``SHA256SUMS`` closes the handoff itself, but it is not an authentication
+    boundary: a substituted artifact and a rewritten local inventory would be
+    internally consistent.  Formal validation therefore re-verifies each
+    recorded result root and requires all byte-for-byte copies to retain the
+    digest recorded by that result's ``evidence.sha256``.
+    """
+
+    blocks = dataset.get("blocks")
+    if not isinstance(blocks, list) or len(blocks) != len(FORMAL_BLOCKS):
+        raise ValueError("formal handoff source block inventory is invalid")
+
+    receipts: list[VerifiedResult] = []
+    for index, block in enumerate(blocks):
+        if not isinstance(block, Mapping):
+            raise ValueError("formal handoff source block is invalid")
+        root_value = block.get("result_root")
+        if not isinstance(root_value, str):
+            raise ValueError("formal handoff source result root is invalid")
+        recorded_root = Path(root_value)
+        try:
+            source_root = recorded_root.resolve(strict=True)
+        except (FileNotFoundError, OSError) as error:
+            raise ValueError("formal handoff source result root is unavailable") from error
+        if (
+            not recorded_root.is_absolute()
+            or recorded_root.is_symlink()
+            or root_value != str(source_root)
+            or not source_root.is_dir()
+        ):
+            raise ValueError("formal handoff source result root is not canonical")
+        evidence = source_root / "evidence.sha256"
+        if evidence.is_symlink() or not evidence.is_file():
+            raise ValueError("formal handoff source result has no regular evidence seal")
+
+        receipt = verify_result(source_root)
+        experiment = receipt.experiment
+        if (
+            receipt.root != source_root
+            or experiment.get("name") != block.get("result_name")
+            or experiment.get("configuration") != block.get("configuration")
+            or experiment.get("source") != dataset.get("execution_source")
+            or sha256_file(evidence) != block.get("result_evidence_sha256")
+            or len(receipt.checksums) != block.get("authoritative_files")
+            or experiment.get("started_at") != block.get("started_at")
+            or experiment.get("completed_at") != block.get("completed_at")
+            or _elapsed_seconds(experiment) != block.get("elapsed_seconds")
+            or index != block.get("acquisition_block_index")
+        ):
+            raise ValueError("formal handoff source result seal or lineage differs")
+        receipts.append(receipt)
+
+    # Reapply the formal source-result contract to the newly verified receipts,
+    # rather than trusting the export-time validation that created the handoff.
+    _validate_source_results(tuple(receipts), formal=True)
+
+    rows_by_block: dict[int, list[Mapping[str, Any]]] = {
+        index: [] for index in range(len(receipts))
+    }
+    for row in rows:
+        block_index = row.get("acquisition_block_index")
+        if type(block_index) is not int or block_index not in rows_by_block:
+            raise ValueError("formal handoff sample has no authoritative source block")
+        rows_by_block[block_index].append(row)
+
+    for block_index, receipt in enumerate(receipts):
+        source_samples = receipt.experiment.get("samples")
+        if not isinstance(source_samples, list):
+            raise ValueError("formal handoff source result has no sample inventory")
+        source_by_id: dict[str, Mapping[str, Any]] = {}
+        for source_sample in source_samples:
+            sample_id = (
+                source_sample.get("sample_id")
+                if isinstance(source_sample, Mapping)
+                else None
+            )
+            if not isinstance(sample_id, str) or sample_id in source_by_id:
+                raise ValueError("formal handoff source sample identity is invalid")
+            source_by_id[sample_id] = source_sample
+
+        block_rows = rows_by_block[block_index]
+        row_ids = [row.get("sample_id") for row in block_rows]
+        if (
+            any(not isinstance(sample_id, str) for sample_id in row_ids)
+            or len(row_ids) != len(set(row_ids))
+            or set(row_ids) != set(source_by_id)
+            or set(row_ids) != set(receipt.accepted_samples)
+        ):
+            raise ValueError("formal handoff sample inventory differs from its sealed result")
+
+        for row in block_rows:
+            sample_id = str(row["sample_id"])
+            source_sample = source_by_id[sample_id]
+            identity_bindings = (
+                ("workload_id", "workload_id"),
+                ("request_policy", "request_policy"),
+                ("visit", "visit"),
+                ("defense", "defense"),
+                ("runtime_kind", "runtime_kind"),
+                ("baseline", "baseline"),
+                ("seed", "seed"),
+                ("attempts", "attempts"),
+                ("source_sample_path", "path"),
+            )
+            if any(
+                row.get(row_key) != source_sample.get(source_key)
+                for row_key, source_key in identity_bindings
+            ):
+                raise ValueError("formal handoff sample identity differs from its sealed result")
+
+            source_sample_root = resolved_sample_directory(
+                receipt.root,
+                source_sample,
+                require_directory=True,
+            )
+            source_relative = str(row["source_sample_path"])
+            if source_sample_root.relative_to(receipt.root).as_posix() != source_relative:
+                raise ValueError("formal handoff source sample path is not canonical")
+            accepted_hashes = receipt.accepted_samples[sample_id]
+            for path_key, digest_key, source_suffix in _SEALED_SAMPLE_COPY_BINDINGS:
+                _validate_sealed_source_copy(
+                    handoff_root,
+                    row,
+                    path_key=path_key,
+                    digest_key=digest_key,
+                    source_path=source_sample_root / source_suffix,
+                    source_relative=f"{source_relative}/{source_suffix}",
+                    receipt=receipt,
+                    accepted_hashes=accepted_hashes,
+                    handoff_checksums=handoff_checksums,
+                )
+
+            workload_id = str(row["workload_id"])
+            workload_relative = f"inputs/workloads/{workload_id}.json"
+            _validate_sealed_source_copy(
+                handoff_root,
+                row,
+                path_key="application_workload_path",
+                digest_key="application_workload_sha256",
+                source_path=receipt.root / workload_relative,
+                source_relative=workload_relative,
+                receipt=receipt,
+                accepted_hashes=None,
+                handoff_checksums=handoff_checksums,
+            )
+
+
+def _validate_sealed_source_copy(
+    handoff_root: Path,
+    row: Mapping[str, Any],
+    *,
+    path_key: str,
+    digest_key: str,
+    source_path: Path,
+    source_relative: str,
+    receipt: VerifiedResult,
+    accepted_hashes: Mapping[str, str] | None,
+    handoff_checksums: Mapping[str, str],
+) -> None:
+    local_relative = row.get(path_key)
+    row_digest = row.get(digest_key)
+    seal_digest = receipt.checksums.get(source_relative)
+    if not isinstance(local_relative, str) or seal_digest is None:
+        raise ValueError("formal handoff copy is absent from its source evidence seal")
+    if accepted_hashes is not None and accepted_hashes.get(source_relative) != seal_digest:
+        raise ValueError("formal handoff copy differs from accepted-sample evidence")
+
+    local_candidate = handoff_root / local_relative
+    local_path = local_candidate.resolve()
+    if (
+        not local_path.is_relative_to(handoff_root)
+        or local_candidate.is_symlink()
+        or not local_path.is_file()
+        or source_path.is_symlink()
+        or not source_path.is_file()
+        or row_digest != seal_digest
+        or handoff_checksums.get(local_relative) != seal_digest
+        or sha256_file(local_path) != seal_digest
+        or sha256_file(source_path) != seal_digest
+    ):
+        raise ValueError("formal handoff copy differs from its sealed source artifact")
 
 
 def _sample_input_bindings(

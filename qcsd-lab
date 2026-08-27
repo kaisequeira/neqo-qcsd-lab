@@ -1151,58 +1151,208 @@ start_buflo_controlled_server() {
   local server_name="$1"
   local server_alias="$2"
   local server_port="$3"
-  local network_name="$4"
+  local server_network="$4"
+  local client_subnet="$5"
+  local router_server_ip="$6"
   docker run --detach --name "${server_name}" \
-    --network "${network_name}" --network-alias "${server_alias}" \
+    --network "${server_network}" --network-alias "${server_alias}" \
     --cpuset-cpus 0-9 \
     --security-opt no-new-privileges \
     --cap-drop ALL --cap-add NET_ADMIN \
     --env "QCSD_CONTROLLED_SERVER_PORT=${server_port}" \
+    --env "QCSD_CONTROLLED_CLIENT_SUBNET=${client_subnet}" \
+    --env "QCSD_CONTROLLED_ROUTER_SERVER_IP=${router_server_ip}" \
     --entrypoint /bin/sh \
     "${image_id}" -eu -c \
     'ethtool -K eth0 gro off gso off tso off tx-udp-segmentation off
+ip -4 route replace "${QCSD_CONTROLLED_CLIENT_SUBNET}" \
+  via "${QCSD_CONTROLLED_ROUTER_SERVER_IP}" dev eth0
 exec /usr/local/bin/neqo-server "0.0.0.0:${QCSD_CONTROLLED_SERVER_PORT}"'
 }
 
-configure_buflo_qdisc() {
-  local container_name="$1"
-  local profile="$2"
-  case "${profile}" in
-    clean)
-      docker exec "${container_name}" /bin/sh -eu -c \
-        'tc qdisc del dev eth0 root 2>/dev/null || true'
-      ;;
-    symmetric-50ms-rtt)
-      docker exec "${container_name}" \
-        tc qdisc replace dev eth0 root netem delay 25ms
-      ;;
-    symmetric-5mbit-50ms-rtt-100-packet-queue)
-      docker exec "${container_name}" \
-        tc qdisc replace dev eth0 root netem delay 25ms rate 5mbit limit 100
-      ;;
-    symmetric-1pct-loss-50ms-rtt)
-      docker exec "${container_name}" \
-        tc qdisc replace dev eth0 root netem delay 25ms loss 1%
-      ;;
-    *)
-      echo "unsupported controlled netem profile: ${profile}" >&2
-      return 2
-      ;;
-  esac
+start_buflo_controlled_router() {
+  local router_name="$1"
+  local client_network="$2"
+  local server_network="$3"
+  docker run --detach --name "${router_name}" \
+    --network "${client_network}" \
+    --cpuset-cpus 0-9 \
+    --security-opt no-new-privileges \
+    --cap-drop ALL --cap-add NET_ADMIN \
+    --sysctl net.ipv4.ip_forward=1 \
+    --entrypoint /bin/sh \
+    "${image_id}" -eu -c \
+    'exec sleep infinity'
+  docker network connect --gw-priority -1 "${server_network}" "${router_name}"
+  docker exec "${router_name}" /bin/sh -eu -c '
+ethtool -K eth0 gro off gso off tso off tx-udp-segmentation off
+ethtool -K eth1 gro off gso off tso off tx-udp-segmentation off
+'
 }
 
-buflo_qdisc_base64() {
-  docker exec "$1" tc -details -j qdisc show dev eth0 | base64 -w0
+configure_buflo_router() {
+  local router_name="$1"
+  local profile="$2"
+  docker exec "${router_name}" /bin/sh -eu -c '
+profile="$1"
+if ! ip link show dev ifb0 >/dev/null 2>&1; then
+  ip link add ifb0 type ifb
+fi
+ip link set dev ifb0 up
+tc qdisc del dev eth0 ingress 2>/dev/null || true
+tc qdisc del dev eth0 root 2>/dev/null || true
+tc qdisc del dev ifb0 root 2>/dev/null || true
+case "${profile}" in
+  clean) ;;
+  symmetric-50ms-rtt)
+    tc qdisc replace dev ifb0 root handle 10: netem delay 25ms
+    tc qdisc replace dev eth0 root handle 20: netem delay 25ms
+    ;;
+  symmetric-5mbit-50ms-rtt-100-packet-queue)
+    tc qdisc replace dev ifb0 root handle 10: netem delay 25ms rate 5mbit limit 100
+    tc qdisc replace dev eth0 root handle 20: netem delay 25ms rate 5mbit limit 100
+    ;;
+  symmetric-1pct-loss-50ms-rtt)
+    tc qdisc replace dev ifb0 root handle 10: netem delay 25ms loss 1%
+    tc qdisc replace dev eth0 root handle 20: netem delay 25ms loss 1%
+    ;;
+  *)
+    echo "unsupported controlled netem profile: ${profile}" >&2
+    exit 2
+    ;;
+esac
+if [ "${profile}" != clean ]; then
+  tc qdisc replace dev eth0 handle ffff: ingress
+  tc filter replace dev eth0 parent ffff: protocol all u32 \
+    match u32 0 0 action mirred egress redirect dev ifb0
+fi
+' sh "${profile}"
+}
+
+buflo_namespace_evidence() {
+  local container_name="$1"
+  local interfaces="$2"
+  local include_router="$3"
+  docker exec "${container_name}" /usr/local/bin/python3 -c '
+import json
+import subprocess
+import sys
+
+def observed(*command: str):
+    completed = subprocess.run(command, text=True, capture_output=True, check=False)
+    if completed.returncode != 0:
+        raise SystemExit(
+            f"network observation failed ({command!r}): {completed.stderr.strip()}"
+        )
+    try:
+        return json.loads(completed.stdout)
+    except json.JSONDecodeError as error:
+        raise SystemExit(f"network observation was not JSON ({command!r}): {error}")
+
+interfaces = sys.argv[1].split(",")
+value = {
+    "addresses": {
+        interface: observed("ip", "-j", "address", "show", "dev", interface)
+        for interface in interfaces
+    },
+    "qdiscs": {
+        interface: observed("tc", "-details", "-j", "qdisc", "show", "dev", interface)
+        for interface in interfaces
+    },
+    "offloads": {
+        interface: observed("ethtool", "--json", "--show-features", interface)
+        for interface in interfaces
+        if interface.startswith("eth")
+    },
+    "routes": observed("ip", "-j", "-4", "route", "show", "table", "main"),
+}
+if sys.argv[2] == "1":
+    value["client_ingress_filters"] = observed(
+        "tc", "-details", "-j", "filter", "show", "dev", "eth0", "parent", "ffff:"
+    )
+    value["ip_forward"] = int(
+        open("/proc/sys/net/ipv4/ip_forward", encoding="ascii").read().strip()
+    )
+print(json.dumps(value, sort_keys=True, separators=(",", ":")))
+' "${interfaces}" "${include_router}"
+}
+
+buflo_controlled_evidence_base64() {
+  local client_network="$1"
+  local server_network="$2"
+  local router_name="$3"
+  local first_server="$4"
+  local second_server="$5"
+  local router_json first_server_json second_server_json
+  local client_ipam server_ipam
+  router_json="$(buflo_namespace_evidence "${router_name}" "eth0,eth1,ifb0" 1)"
+  first_server_json="$(buflo_namespace_evidence "${first_server}" "eth0" 0)"
+  second_server_json="$(buflo_namespace_evidence "${second_server}" "eth0" 0)"
+  client_ipam="$(docker network inspect --format '{{json .IPAM.Config}}' "${client_network}")"
+  server_ipam="$(docker network inspect --format '{{json .IPAM.Config}}' "${server_network}")"
+  /usr/bin/python3 -c '
+import base64
+import json
+import sys
+
+value = {
+    "schema_version": 1,
+    "client_network": {"name": sys.argv[1], "ipam": json.loads(sys.argv[2])},
+    "server_network": {"name": sys.argv[3], "ipam": json.loads(sys.argv[4])},
+    "router": {"container": sys.argv[5], **json.loads(sys.argv[6])},
+    "servers": [
+        {
+            "container": sys.argv[7],
+            "alias": "qcsd-buflo-server-one",
+            **json.loads(sys.argv[8]),
+        },
+        {
+            "container": sys.argv[9],
+            "alias": "qcsd-buflo-server-two",
+            **json.loads(sys.argv[10]),
+        },
+    ],
+}
+encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+print(base64.b64encode(encoded).decode("ascii"))
+' \
+    "${client_network}" "${client_ipam}" \
+    "${server_network}" "${server_ipam}" \
+    "${router_name}" "${router_json}" \
+    "${first_server}" "${first_server_json}" \
+    "${second_server}" "${second_server_json}"
+}
+
+buflo_controlled_subnets() {
+  local cohort_version="$1"
+  /usr/bin/python3 -c '
+import hashlib
+import ipaddress
+import sys
+
+cohort = int(sys.argv[1])
+seed = hashlib.sha256(f"qcsd-buflo-study-v{cohort}".encode()).digest()
+pair = int.from_bytes(seed[:4], "big") % 16_384
+base = int(ipaddress.ip_address("10.128.0.0")) + pair * 512
+print(ipaddress.ip_network((base, 24)))
+print(ipaddress.ip_network((base + 256, 24)))
+' "${cohort_version}"
 }
 
 run_buflo_controlled_profile() {
   local stage="$1"
   local profile="$2"
-  local network_name="$3"
-  local first_server="$4"
-  local second_server="$5"
-  local destination="$6"
-  local first_qdisc second_qdisc
+  local client_network="$3"
+  local server_network="$4"
+  local router_name="$5"
+  local first_server="$6"
+  local second_server="$7"
+  local destination="$8"
+  local router_client_ip="$9"
+  local server_subnet="${10}"
+  local first_server_ip="${11}"
+  local second_server_ip="${12}"
+  local network_evidence_b64
   local controlled_results_mount="${ROOT}/results:/lab/results:rw"
   local -a study_environment_argument=()
   if [[ -n "${study_environment_b64}" ]]; then
@@ -1210,12 +1360,14 @@ run_buflo_controlled_profile() {
       --env "QCSD_STUDY_ENVIRONMENT_B64=${study_environment_b64}"
     )
   fi
-  configure_buflo_qdisc "${first_server}" "${profile}"
-  configure_buflo_qdisc "${second_server}" "${profile}"
-  first_qdisc="$(buflo_qdisc_base64 "${first_server}")"
-  second_qdisc="$(buflo_qdisc_base64 "${second_server}")"
+  configure_buflo_router "${router_name}" "${profile}"
+  network_evidence_b64="$(buflo_controlled_evidence_base64 \
+    "${client_network}" "${server_network}" "${router_name}" \
+    "${first_server}" "${second_server}")"
   docker run --rm \
-    --network "${network_name}" \
+    --network "${client_network}" \
+    --add-host "qcsd-buflo-server-one:${first_server_ip}" \
+    --add-host "qcsd-buflo-server-two:${second_server_ip}" \
     --cpuset-cpus 10-11 \
     --ulimit rtprio=1:1 \
     --security-opt no-new-privileges \
@@ -1227,7 +1379,8 @@ run_buflo_controlled_profile() {
     --env "QCSD_LAB_UID=$(id -u)" \
     --env "QCSD_LAB_GID=$(id -g)" \
     --env "QCSD_CAPTURE_SCHEDULER_CONTRACT=qcsd-client-rr1-cpu10-v1" \
-    --env "QCSD_BUFLO_NETEM_PROFILE=${profile}" \
+    --env "QCSD_CONTROLLED_ROUTER_CLIENT_IP=${router_client_ip}" \
+    --env "QCSD_CONTROLLED_SERVER_SUBNET=${server_subnet}" \
     --env "QCSD_BUFLO_CAPTURE_LOCK_HELD=1" \
     "${study_environment_argument[@]}" \
     --volume "${ROOT}:/lab:ro" \
@@ -1235,24 +1388,17 @@ run_buflo_controlled_profile() {
     --workdir /lab \
     --entrypoint /bin/sh \
     "${image_id}" -eu -c '
-case "${QCSD_BUFLO_NETEM_PROFILE}" in
-  clean) tc qdisc del dev eth0 root 2>/dev/null || true ;;
-  symmetric-50ms-rtt) tc qdisc replace dev eth0 root netem delay 25ms ;;
-  symmetric-5mbit-50ms-rtt-100-packet-queue)
-    tc qdisc replace dev eth0 root netem delay 25ms rate 5mbit limit 100 ;;
-  symmetric-1pct-loss-50ms-rtt)
-    tc qdisc replace dev eth0 root netem delay 25ms loss 1% ;;
-  *) exit 2 ;;
-esac
+ethtool -K eth0 gro off gso off tso off tx-udp-segmentation off
+ip -4 route replace "${QCSD_CONTROLLED_SERVER_SUBNET}" \
+  via "${QCSD_CONTROLLED_ROUTER_CLIENT_IP}" dev eth0
 exec /usr/local/bin/collection-entrypoint "$@"
 ' sh \
     buflo-study capture --stage "${stage}" \
     --cohort-version "${study_cohort_version}" \
     --destination "${destination}" \
     --local-netem-profile "${profile}" \
-    --network-name "${network_name}" \
-    --server-one-qdisc-b64 "${first_qdisc}" \
-    --server-two-qdisc-b64 "${second_qdisc}"
+    --network-name "${client_network}" \
+    --controlled-network-evidence-b64 "${network_evidence_b64}"
 }
 
 snapshot_regular_tree() {
@@ -1596,29 +1742,78 @@ if [[ "${1:-}" == "buflo-study" && "${2:-}" == "capture" ]]; then
       exit 1
     fi
     mkdir -p "${controlled_destination}"
-    controlled_network="qcsd-buflo-study-v${study_cohort_version}"
-    if docker network inspect "${controlled_network}" >/dev/null 2>&1; then
-      echo "controlled Docker network already exists; remove stale ${controlled_network}" >&2
+    controlled_network_base="qcsd-buflo-study-v${study_cohort_version}"
+    controlled_client_network="${controlled_network_base}-client"
+    controlled_server_network="${controlled_network_base}-server"
+    router_name="${controlled_network_base}-router"
+    first_server="${controlled_network_base}-server-one"
+    second_server="${controlled_network_base}-server-two"
+    for controlled_network in \
+      "${controlled_client_network}" "${controlled_server_network}"; do
+      if docker network inspect "${controlled_network}" >/dev/null 2>&1; then
+        echo "controlled Docker network already exists; remove stale ${controlled_network}" >&2
+        exit 1
+      fi
+    done
+    for controlled_container in "${router_name}" "${first_server}" "${second_server}"; do
+      if docker container inspect "${controlled_container}" >/dev/null 2>&1; then
+        echo "controlled container name already exists; remove stale ${controlled_container}" >&2
+        exit 1
+      fi
+    done
+    mapfile -t controlled_subnets < <(buflo_controlled_subnets "${study_cohort_version}")
+    if (( ${#controlled_subnets[@]} != 2 )); then
+      echo "controlled subnet derivation did not return exactly two networks" >&2
       exit 1
     fi
-    first_server="qcsd-buflo-server-one"
-    second_server="qcsd-buflo-server-two"
-    if docker container inspect "${first_server}" >/dev/null 2>&1 ||
-       docker container inspect "${second_server}" >/dev/null 2>&1; then
-      echo "controlled server container name already exists; remove stale sidecars" >&2
-      exit 1
-    fi
-    docker network create --driver bridge "${controlled_network}" >/dev/null
-    sidecars+=("${first_server}" "${second_server}")
+    controlled_client_subnet="${controlled_subnets[0]}"
+    controlled_server_subnet="${controlled_subnets[1]}"
+    sidecars+=("${router_name}" "${first_server}" "${second_server}")
     cleanup_buflo_controlled() {
       cleanup_sidecars
-      docker network rm "${controlled_network}" >/dev/null 2>&1 || true
+      docker network rm "${controlled_server_network}" >/dev/null 2>&1 || true
+      docker network rm "${controlled_client_network}" >/dev/null 2>&1 || true
     }
     trap cleanup_buflo_controlled EXIT INT TERM
+    docker network create --driver bridge --subnet "${controlled_client_subnet}" \
+      "${controlled_client_network}" >/dev/null
+    docker network create --driver bridge --subnet "${controlled_server_subnet}" \
+      "${controlled_server_network}" >/dev/null
+    start_buflo_controlled_router \
+      "${router_name}" "${controlled_client_network}" "${controlled_server_network}" \
+      >/dev/null
+    router_client_ip="$(docker inspect --format \
+      "{{with index .NetworkSettings.Networks \"${controlled_client_network}\"}}{{.IPAddress}}{{end}}" \
+      "${router_name}")"
+    router_server_ip="$(docker inspect --format \
+      "{{with index .NetworkSettings.Networks \"${controlled_server_network}\"}}{{.IPAddress}}{{end}}" \
+      "${router_name}")"
+    if [[ -z "${router_client_ip}" || -z "${router_server_ip}" ]]; then
+      echo "controlled router did not receive both required IPv4 addresses" >&2
+      exit 1
+    fi
+    docker exec "${router_name}" /bin/sh -eu -c '
+ip -4 -o address show dev eth0 | grep -F " $1/" >/dev/null
+ip -4 -o address show dev eth1 | grep -F " $2/" >/dev/null
+test "$(cat /proc/sys/net/ipv4/ip_forward)" = 1
+' sh "${router_client_ip}" "${router_server_ip}"
     start_buflo_controlled_server \
-      "${first_server}" qcsd-buflo-server-one 4433 "${controlled_network}" >/dev/null
+      "${first_server}" qcsd-buflo-server-one 4433 "${controlled_server_network}" \
+      "${controlled_client_subnet}" "${router_server_ip}" >/dev/null
     start_buflo_controlled_server \
-      "${second_server}" qcsd-buflo-server-two 4434 "${controlled_network}" >/dev/null
+      "${second_server}" qcsd-buflo-server-two 4434 "${controlled_server_network}" \
+      "${controlled_client_subnet}" "${router_server_ip}" >/dev/null
+    first_server_ip="$(docker inspect --format \
+      "{{with index .NetworkSettings.Networks \"${controlled_server_network}\"}}{{.IPAddress}}{{end}}" \
+      "${first_server}")"
+    second_server_ip="$(docker inspect --format \
+      "{{with index .NetworkSettings.Networks \"${controlled_server_network}\"}}{{.IPAddress}}{{end}}" \
+      "${second_server}")"
+    if [[ -z "${first_server_ip}" || -z "${second_server_ip}" ||
+          "${first_server_ip}" == "${second_server_ip}" ]]; then
+      echo "controlled ordinary servers did not receive distinct IPv4 addresses" >&2
+      exit 1
+    fi
     sleep 1
     profiles=(clean)
     if [[ "${controlled_stage}" == "controlled" ]]; then
@@ -1630,9 +1825,12 @@ if [[ "${1:-}" == "buflo-study" && "${2:-}" == "capture" ]]; then
     fi
     for profile in "${profiles[@]}"; do
       run_buflo_controlled_profile \
-        "${controlled_stage}" "${profile}" "${controlled_network}" \
-        "${first_server}" "${second_server}" \
-        "/lab/results/${controlled_destination_name}"
+        "${controlled_stage}" "${profile}" \
+        "${controlled_client_network}" "${controlled_server_network}" \
+        "${router_name}" "${first_server}" "${second_server}" \
+        "/lab/results/${controlled_destination_name}" \
+        "${router_client_ip}" "${controlled_server_subnet}" \
+        "${first_server_ip}" "${second_server_ip}"
     done
     exit 0
   fi

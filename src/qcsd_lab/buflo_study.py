@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import ipaddress
 import json
 import math
 import os
@@ -51,7 +52,8 @@ from .util import (
 )
 
 SCHEMA_VERSION = 1
-LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION = 2
+LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION = 3
+CONTROLLED_NETWORK_RECEIPT_SCHEMA_VERSION = 2
 STUDY_ROOT = LAB_ROOT / "config/buflo-study/v1"
 STUDY_PLAN = STUDY_ROOT / "study.json"
 ESTABLISHED_SEVEN_BASELINE = STUDY_ROOT / "established-seven-baseline.json"
@@ -187,6 +189,15 @@ REQUIRED_REFERENCE_SOURCES = frozenset(
 EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 FORMAL_MINIMUM_AVAILABLE_HOURS = 12.5
 FORMAL_DISK_SAFETY_MULTIPLIER = 3
+FORMAL_BOOTSTRAP_DRAWS = 10_000
+FORMAL_BOOTSTRAP_CONTRACT = {
+    "draws": FORMAL_BOOTSTRAP_DRAWS,
+    "interval": "percentile-95",
+    "resampling_unit": "acquisition-block-and-workload",
+    "paired_seed": 20260827,
+    "attack_seed_policy": "20260827-plus-canonical-attack-index",
+}
+FORMAL_FAIL_CLOSED_COHORT_VERSION = 15
 RUST_BASE_IMAGE = (
     "docker.io/library/rust:1.90-bookworm@"
     "sha256:3914072ca0c3b8aad871db9169a651ccfce30cf58303e5d6f2db16d1d8a7e58f"
@@ -217,6 +228,29 @@ CODE_GATE_ARTIFACT_TYPE = "qcsd-buflo-study-code-gate"
 COMPARISON_REVIEW_ARTIFACT_TYPE = "qcsd-buflo-study-comparison-review"
 CAPTURE_ADMISSION_ARTIFACT_TYPE = "qcsd-buflo-study-capture-admission"
 COHORT_MANIFEST_ARTIFACT_TYPE = "qcsd-buflo-study-formal-cohort"
+HARD_GATE_IDENTITIES = (
+    "reference-receipts-and-clean-room-oracles-pass",
+    "runtime-unit-integration-and-parameter-binding-tests-pass",
+    "nine-mode-regression-is-18-of-18-correct-and-fidelity-eligible",
+    "controlled-clean-and-netem-matrix-is-160-of-160-correct-and-fidelity-eligible",
+    "event-guards-misses-shortfalls-size-errors-and-unresolved-incoming-bytes-are-zero",
+    "ctsp-and-cpsp-resolve-to-distinct-sealed-parameter-hashes-and-padding-modes",
+    "public-smoke-is-20-of-20-correct-and-fidelity-eligible",
+    "public-rehearsal-is-40-of-40-correct-and-fidelity-eligible",
+    "formal-campaigns-are-frozen-before-capture-and-produce-1500-of-1500-eligible-samples",
+    (
+        "paired-overhead-latency-tail-goodput-and-client-correctness-are-reported-"
+        "with-95-percent-cluster-bootstrap-intervals"
+    ),
+    (
+        "paper-metric-and-classifier-comparisons-are-reconciled-with-observation-"
+        "layer-and-client-only-limitations"
+    ),
+    (
+        "historical-corpus-guard-is-unchanged-and-sealed-results-handoff-"
+        "evaluation-receipts-verify"
+    ),
+)
 RUST_CODE_GATE_ROOT = Path(
     os.environ.get(
         "QCSD_RUST_CODE_GATE_ROOT", "/usr/share/qcsd-lab/rust-code-gate"
@@ -427,7 +461,7 @@ def validate_study_plan(value: Mapping[str, Any]) -> None:
     }
     for stage, (blocks, visits, sample_count, formal) in expected.items():
         record = stages[stage]
-        if not isinstance(record, dict) or set(record) != {
+        expected_stage_fields = {
             "blocks",
             "seeds",
             "visits_per_workload",
@@ -435,7 +469,10 @@ def validate_study_plan(value: Mapping[str, Any]) -> None:
             "formal_evidence",
             "treatments",
             "campaigns",
-        }:
+        }
+        if formal:
+            expected_stage_fields.update({"bootstrap_draws", "bootstrap_contract"})
+        if not isinstance(record, dict) or set(record) != expected_stage_fields:
             raise ValueError(f"BuFLO {stage} stage fields are invalid")
         calculated = blocks * len(WORKLOADS) * visits * len(STAGE_TREATMENTS[stage])
         if (
@@ -448,6 +485,13 @@ def validate_study_plan(value: Mapping[str, Any]) -> None:
             or len(record["campaigns"]) != blocks
             or len(record["seeds"]) != blocks
             or len(set(record["seeds"])) != blocks
+            or (
+                formal
+                and (
+                    record.get("bootstrap_draws") != FORMAL_BOOTSTRAP_DRAWS
+                    or record.get("bootstrap_contract") != FORMAL_BOOTSTRAP_CONTRACT
+                )
+            )
         ):
             raise ValueError(f"BuFLO {stage} stage matrix is invalid")
 
@@ -457,6 +501,7 @@ def validate_study_plan(value: Mapping[str, Any]) -> None:
             for stage, prerequisites in STAGED_CAPTURE_PREREQUISITES.items()
         },
         "reference_gate": "isolated-create-only-conformance-receipt",
+        "formal_code_gate": "validated-create-only-code-gate-receipt",
         "source_lineage": "one-exact-clean-collection-image",
         "formal_minimum_available_hours": FORMAL_MINIMUM_AVAILABLE_HOURS,
         "formal_disk_safety_multiplier": FORMAL_DISK_SAFETY_MULTIPLIER,
@@ -465,8 +510,8 @@ def validate_study_plan(value: Mapping[str, Any]) -> None:
         raise ValueError("BuFLO staged capture admission contract is invalid")
 
     gates = value.get("hard_gates")
-    if not isinstance(gates, list) or len(gates) != 12 or len(gates) != len(set(gates)):
-        raise ValueError("BuFLO hard gates must contain twelve unique declarations")
+    if gates != list(HARD_GATE_IDENTITIES):
+        raise ValueError("BuFLO hard gates differ from the immutable ordered identities")
     historical = value.get("historical_corpus_guard")
     if historical != {
         "root": "handoffs/classifier-multiorigin5-v2",
@@ -673,6 +718,17 @@ def qualification_set_for_cohort(cohort_version: int) -> str:
     version = _cohort_version(cohort_version)
     pattern = load_study_plan()["qualification_set_pattern"]
     return str(pattern).format(cohort_version=version)
+
+
+def formal_evaluation_contract_for_cohort(
+    cohort_version: int,
+) -> dict[str, Any] | None:
+    """Return the prospective formal evaluator contract for fail-closed cohorts."""
+
+    version = _cohort_version(cohort_version)
+    if version < FORMAL_FAIL_CLOSED_COHORT_VERSION:
+        return None
+    return dict(FORMAL_BOOTSTRAP_CONTRACT)
 
 
 def _rendered_campaign_bytes(path: Path, *, cohort_version: int) -> bytes:
@@ -892,11 +948,15 @@ def validate_controlled_campaign_receipt(value: Any) -> dict[str, Any]:
         "evidence_class",
         "network",
     }
-    current_keys = historical_keys | {"fixture_scope"}
+    previous_keys = historical_keys | {"fixture_scope"}
+    current_keys = previous_keys | {"cohort_version"}
     fields = frozenset(value) if isinstance(value, Mapping) else frozenset()
     schema_version = value.get("schema_version") if isinstance(value, Mapping) else None
     if not isinstance(value, Mapping) or not (
         (schema_version == SCHEMA_VERSION and fields == frozenset(historical_keys))
+        or (
+            schema_version == 2 and fields == frozenset(previous_keys)
+        )
         or (
             schema_version == LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION
             and fields == frozenset(current_keys)
@@ -938,7 +998,7 @@ def validate_controlled_campaign_receipt(value: Any) -> dict[str, Any]:
         or value["server_qdisc"] != expected["server_qdisc"]
         or value["evidence_class"] != "controlled-test-only-nonformal"
         or (
-            schema_version == LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION
+            schema_version in {2, LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION}
             and value["fixture_scope"] != expected_fixture_scope
         )
         or value["workload_aliases"] != expected_aliases
@@ -949,11 +1009,40 @@ def validate_controlled_campaign_receipt(value: Any) -> dict[str, Any]:
         value["network"],
         client_qdisc=expected["client_qdisc"],
         server_qdisc=expected["server_qdisc"],
+        campaign_schema_version=schema_version,
+        cohort_version=value.get("cohort_version")
+        if schema_version == LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION
+        else None,
     )
     return dict(value)
 
 
-def _validate_network_receipt(value: Any, *, client_qdisc: str, server_qdisc: str) -> None:
+def _validate_network_receipt(
+    value: Any,
+    *,
+    client_qdisc: str,
+    server_qdisc: str,
+    campaign_schema_version: int,
+    cohort_version: int | None,
+) -> None:
+    if campaign_schema_version == LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION:
+        _validate_shared_router_network_receipt(
+            value,
+            client_qdisc=client_qdisc,
+            server_qdisc=server_qdisc,
+            cohort_version=cohort_version,
+        )
+        return
+    _validate_legacy_network_receipt(
+        value,
+        client_qdisc=client_qdisc,
+        server_qdisc=server_qdisc,
+    )
+
+
+def _validate_legacy_network_receipt(
+    value: Any, *, client_qdisc: str, server_qdisc: str
+) -> None:
     keys = {
         "schema_version",
         "artifact_type",
@@ -989,19 +1078,19 @@ def _validate_network_receipt(value: Any, *, client_qdisc: str, server_qdisc: st
     }
     if value["directional_coverage"] != expected_coverage:
         raise ValueError("controlled network receipt lacks bilateral directional coverage")
-    _validate_qdisc_endpoint(value["client"], role="client", expected=client_qdisc)
+    _validate_legacy_qdisc_endpoint(value["client"], role="client", expected=client_qdisc)
     servers = value["servers"]
     if not isinstance(servers, list) or len(servers) != 2:
         raise ValueError("controlled network receipt requires two server egress observations")
     aliases = []
     for server in servers:
-        _validate_qdisc_endpoint(server, role="server", expected=server_qdisc)
+        _validate_legacy_qdisc_endpoint(server, role="server", expected=server_qdisc)
         aliases.append(server.get("alias"))
     if sorted(aliases) != ["qcsd-buflo-server-one", "qcsd-buflo-server-two"]:
         raise ValueError("controlled network server aliases are invalid")
 
 
-def _validate_qdisc_endpoint(value: Any, *, role: str, expected: str) -> None:
+def _validate_legacy_qdisc_endpoint(value: Any, *, role: str, expected: str) -> None:
     required = {"role", "interface", "applied_qdisc", "observed_qdisc"}
     allowed = required | ({"alias"} if role == "server" else set())
     if (
@@ -1050,13 +1139,922 @@ def _validate_qdisc_endpoint(value: Any, *, role: str, expected: str) -> None:
         raise ValueError(f"controlled {role} netem receipt has unexpected loss")
 
 
+_SAFE_OFFLOADS = {
+    "gro": False,
+    "gso": False,
+    "tso": False,
+    "tx_udp_segmentation": False,
+}
+_CONTROLLED_OBSERVATION_CONTRACT = {
+    "schema_version": 1,
+    "normalization": "qcsd-controlled-network-semantic-observation-v1",
+    "commands": [
+        "ip -j address show dev <interface>",
+        "ip -j -4 route show table main",
+        "tc -details -j qdisc show dev <interface>",
+        "tc -details -j filter show dev eth0 parent ffff:",
+        "ethtool --json --show-features <interface>",
+        "cat /proc/sys/net/ipv4/ip_forward",
+        "client:/etc/hosts exact server aliases",
+    ],
+}
+_INGRESS_REDIRECT_CONTRACT = {
+    "protocol": "all",
+    "kind": "u32",
+    "match": {"value": "0", "mask": "0", "offset": 0},
+    "action": {
+        "kind": "mirred",
+        "mirred_action": "redirect",
+        "direction": "egress",
+        "to_device": "ifb0",
+        "control_action": "stolen",
+    },
+}
+
+
+def _exact_mapping(value: Any, keys: set[str], label: str) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping) or set(value) != keys:
+        raise ValueError(f"controlled {label} fields are invalid")
+    return value
+
+
+def _controlled_network_pair(
+    client_name: str, server_name: str
+) -> tuple[ipaddress.IPv4Network, ipaddress.IPv4Network, str]:
+    match = re.fullmatch(r"(qcsd-buflo-study-v([1-9][0-9]*))-client", client_name)
+    if match is None or server_name != f"{match.group(1)}-server":
+        raise ValueError("controlled shared-router network names are invalid")
+    cohort = int(match.group(2))
+    seed = hashlib.sha256(f"qcsd-buflo-study-v{cohort}".encode()).digest()
+    pair = int.from_bytes(seed[:4], "big") % 16_384
+    base = int(ipaddress.ip_address("10.128.0.0")) + pair * 512
+    return (
+        ipaddress.ip_network((base, 24)),
+        ipaddress.ip_network((base + 256, 24)),
+        match.group(1),
+    )
+
+
+def _canonical_ipam(value: Any, *, expected_name: str) -> dict[str, str]:
+    item = _exact_mapping(value, {"name", "ipam"}, "Docker network observation")
+    if item["name"] != expected_name:
+        raise ValueError("controlled Docker network name differs from its launch binding")
+    ipam = item["ipam"]
+    if not isinstance(ipam, list) or len(ipam) != 1:
+        raise ValueError("controlled Docker network requires one IPv4 IPAM record")
+    row = _exact_mapping(
+        ipam[0], {"Subnet", "IPRange", "Gateway"}, "Docker IPv4 IPAM observation"
+    )
+    if row["IPRange"] != "":
+        raise ValueError("controlled Docker network cannot use a secondary IP range")
+    try:
+        subnet = ipaddress.ip_network(row["Subnet"], strict=True)
+        gateway = ipaddress.ip_address(row["Gateway"])
+    except (TypeError, ValueError) as error:
+        raise ValueError("controlled Docker IPAM observation is invalid") from error
+    if not isinstance(subnet, ipaddress.IPv4Network) or gateway != subnet.network_address + 1:
+        raise ValueError("controlled Docker IPv4 gateway is not the fixed first host")
+    return {"name": expected_name, "subnet": str(subnet), "gateway": str(gateway)}
+
+
+def _canonical_address(value: Any, interface: str) -> dict[str, Any]:
+    if not isinstance(value, list) or len(value) != 1 or not isinstance(value[0], Mapping):
+        raise ValueError(f"controlled {interface} address observation is invalid")
+    row = value[0]
+    flags = row.get("flags")
+    if (
+        row.get("ifname") != interface
+        or row.get("mtu") != 1_500
+        or not isinstance(flags, list)
+        or "UP" not in flags
+        or "LOWER_UP" not in flags
+    ):
+        raise ValueError(f"controlled {interface} is not an up 1500-byte interface")
+    addr_info = row.get("addr_info")
+    if not isinstance(addr_info, list):
+        raise ValueError(f"controlled {interface} address list is invalid")
+    ipv4 = [entry for entry in addr_info if isinstance(entry, Mapping) and entry.get("family") == "inet"]
+    if len(ipv4) > 1:
+        raise ValueError(f"controlled {interface} has multiple IPv4 addresses")
+    address: str | None = None
+    if ipv4:
+        local = ipv4[0].get("local")
+        prefix = ipv4[0].get("prefixlen")
+        if not isinstance(local, str) or type(prefix) is not int:
+            raise ValueError(f"controlled {interface} IPv4 address is invalid")
+        try:
+            address = str(ipaddress.ip_interface(f"{local}/{prefix}"))
+        except ValueError as error:
+            raise ValueError(f"controlled {interface} IPv4 address is invalid") from error
+    return {"interface": interface, "ipv4": address, "mtu": 1_500, "up": True}
+
+
+def _duration_seconds(value: Any) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, str) and value.endswith("ms"):
+        return float(value[:-2]) / 1_000
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError("controlled netem duration is invalid")
+    return float(value) / 1_000_000 if value > 1 else float(value)
+
+
+def _canonical_netem_options(value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError("controlled netem options are invalid")
+    required = {"limit", "delay", "ecn", "gap"}
+    optional = {"rate", "loss-random"}
+    if not required <= set(value) or not set(value) <= required | optional:
+        raise ValueError("controlled netem options contain unknown or missing fields")
+    delay = value.get("delay")
+    if isinstance(delay, Mapping):
+        if set(delay) != {"delay", "jitter", "correlation"}:
+            raise ValueError("controlled netem delay fields are invalid")
+        delay_seconds = _duration_seconds(delay.get("delay"))
+        jitter_seconds = _duration_seconds(delay.get("jitter"))
+        delay_correlation = delay.get("correlation")
+    else:
+        delay_seconds = _duration_seconds(delay)
+        jitter_seconds = None
+        delay_correlation = None
+    rate = value.get("rate")
+    if isinstance(rate, Mapping) and set(rate) != {
+        "rate",
+        "packetoverhead",
+        "cellsize",
+        "celloverhead",
+    }:
+        raise ValueError("controlled netem rate fields are invalid")
+    rate_value = rate.get("rate") if isinstance(rate, Mapping) else rate
+    packet_overhead = rate.get("packetoverhead") if isinstance(rate, Mapping) else None
+    cell_size = rate.get("cellsize") if isinstance(rate, Mapping) else None
+    cell_overhead = rate.get("celloverhead") if isinstance(rate, Mapping) else None
+    loss = value.get("loss-random")
+    if isinstance(loss, Mapping) and set(loss) != {"loss", "correlation"}:
+        raise ValueError("controlled netem loss fields are invalid")
+    loss_value = loss.get("loss") if isinstance(loss, Mapping) else loss
+    loss_correlation = loss.get("correlation") if isinstance(loss, Mapping) else None
+    numeric = (
+        value.get("limit"),
+        jitter_seconds,
+        delay_correlation,
+        rate_value,
+        packet_overhead,
+        cell_size,
+        cell_overhead,
+        loss_value,
+        loss_correlation,
+        value.get("gap"),
+    )
+    if any(isinstance(item, bool) for item in numeric if item is not None):
+        raise ValueError("controlled netem numeric option is invalid")
+    return {
+        "limit_packets": value.get("limit"),
+        "delay_seconds": delay_seconds,
+        "jitter_seconds": jitter_seconds,
+        "delay_correlation": delay_correlation,
+        "rate_bytes_per_second": rate_value,
+        "packet_overhead_bytes": packet_overhead,
+        "cell_size_bytes": cell_size,
+        "cell_overhead_bytes": cell_overhead,
+        "loss_fraction": loss_value,
+        "loss_correlation": loss_correlation,
+        "gap": value.get("gap"),
+        "ecn": value.get("ecn"),
+    }
+
+
+def _canonical_qdiscs(value: Any, interface: str) -> list[dict[str, Any]]:
+    if not isinstance(value, list) or not value:
+        raise ValueError(f"controlled {interface} qdisc observation is invalid")
+    rows: list[dict[str, Any]] = []
+    for raw in value:
+        if not isinstance(raw, Mapping) or not isinstance(raw.get("kind"), str):
+            raise ValueError(f"controlled {interface} qdisc row is invalid")
+        kind = raw["kind"]
+        rows.append(
+            {
+                "kind": kind,
+                "root": raw.get("root") is True,
+                "parent": raw.get("parent") if isinstance(raw.get("parent"), str) else None,
+                "netem": _canonical_netem_options(raw.get("options"))
+                if kind == "netem"
+                else None,
+            }
+        )
+    rows.sort(key=lambda row: (row["kind"], str(row["parent"]), not row["root"]))
+    return rows
+
+
+def _canonical_routes(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        raise ValueError("controlled route observation is invalid")
+    rows: list[dict[str, Any]] = []
+    for raw in value:
+        allowed = {"dst", "gateway", "dev", "flags", "prefsrc", "protocol", "scope"}
+        if (
+            not isinstance(raw, Mapping)
+            or not {"dst", "dev", "flags"} <= set(raw)
+            or not set(raw) <= allowed
+            or raw["flags"] != []
+            or not isinstance(raw.get("dev"), str)
+        ):
+            raise ValueError("controlled route row is invalid")
+        row = {
+            "destination": raw.get("dst", "default"),
+            "gateway": raw.get("gateway"),
+            "device": raw["dev"],
+            "preferred_source": raw.get("prefsrc"),
+            "protocol": raw.get("protocol"),
+            "scope": raw.get("scope"),
+        }
+        if any(item is not None and not isinstance(item, str) for item in row.values()):
+            raise ValueError("controlled route value is invalid")
+        rows.append(row)
+    rows.sort(key=lambda row: json.dumps(row, sort_keys=True))
+    return rows
+
+
+def _canonical_offloads(value: Any, interface: str) -> dict[str, bool]:
+    if not isinstance(value, list) or len(value) != 1 or not isinstance(value[0], Mapping):
+        raise ValueError(f"controlled {interface} offload observation is invalid")
+    row = value[0]
+    if row.get("ifname") != interface:
+        raise ValueError(f"controlled {interface} offload interface is invalid")
+    fields = {
+        "gro": "generic-receive-offload",
+        "gso": "generic-segmentation-offload",
+        "tso": "tcp-segmentation-offload",
+        "tx_udp_segmentation": "tx-udp-segmentation",
+    }
+    observed: dict[str, bool] = {}
+    for short, feature in fields.items():
+        state = row.get(feature)
+        if not isinstance(state, Mapping) or type(state.get("active")) is not bool:
+            raise ValueError(f"controlled {interface} {short} observation is invalid")
+        observed[short] = state["active"]
+    if observed != _SAFE_OFFLOADS:
+        raise ValueError(f"controlled {interface} packet offloads are not disabled")
+    return observed
+
+
+def _canonical_ingress_filter(value: Any) -> dict[str, Any] | None:
+    if value == []:
+        return None
+    if not isinstance(value, list) or len(value) != 3:
+        raise ValueError("controlled router ingress filter observation is invalid")
+    action_rows = []
+    for row in value:
+        if not isinstance(row, Mapping) or row.get("protocol") != "all" or row.get("kind") != "u32":
+            raise ValueError("controlled router ingress filter is not an all-packet u32 filter")
+        options = row.get("options")
+        if isinstance(options, Mapping) and options.get("actions") is not None:
+            action_rows.append(options)
+    if len(action_rows) != 1:
+        raise ValueError("controlled router ingress filter lacks one terminal redirect")
+    options = action_rows[0]
+    match = options.get("match")
+    actions = options.get("actions")
+    if (
+        not isinstance(match, Mapping)
+        or str(match.get("value")) != "0"
+        or str(match.get("mask")) != "0"
+        or match.get("off") != 0
+        or not isinstance(actions, list)
+        or len(actions) != 1
+        or not isinstance(actions[0], Mapping)
+    ):
+        raise ValueError("controlled router ingress filter match is not catch-all")
+    action = actions[0]
+    control = action.get("control_action")
+    if (
+        action.get("kind") != "mirred"
+        or action.get("mirred_action") != "redirect"
+        or action.get("direction") != "egress"
+        or action.get("to_dev") != "ifb0"
+        or not isinstance(control, Mapping)
+        or control.get("type") != "stolen"
+    ):
+        raise ValueError("controlled router ingress filter does not redirect to ifb0")
+    return deepcopy(_INGRESS_REDIRECT_CONTRACT)
+
+
+def _observe_json(command: Sequence[str], label: str) -> Any:
+    completed = subprocess.run(command, text=True, capture_output=True, check=False)
+    if completed.returncode != 0:
+        raise RuntimeError(f"cannot observe controlled {label}: {completed.stderr.strip()}")
+    try:
+        return json.loads(completed.stdout)
+    except json.JSONDecodeError as error:
+        raise ValueError(f"controlled {label} observation is not JSON") from error
+
+
+def _observe_client_namespace() -> dict[str, Any]:
+    hosts: dict[str, list[str]] = {
+        "qcsd-buflo-server-one": [],
+        "qcsd-buflo-server-two": [],
+    }
+    for line in Path("/etc/hosts").read_text(encoding="utf-8").splitlines():
+        fields = line.split("#", 1)[0].split()
+        if len(fields) < 2:
+            continue
+        for alias in hosts:
+            if alias in fields[1:]:
+                hosts[alias].append(fields[0])
+    return {
+        "addresses": {"eth0": _observe_json(["ip", "-j", "address", "show", "dev", "eth0"], "client address")},
+        "qdiscs": {"eth0": _observe_json(["tc", "-details", "-j", "qdisc", "show", "dev", "eth0"], "client qdisc")},
+        "offloads": {"eth0": _observe_json(["ethtool", "--json", "--show-features", "eth0"], "client offloads")},
+        "routes": _observe_json(["ip", "-j", "-4", "route", "show", "table", "main"], "client routes"),
+        "hosts": hosts,
+    }
+
+
+def _decode_controlled_network_evidence(value: str) -> Mapping[str, Any]:
+    try:
+        decoded = base64.b64decode(value, validate=True).decode("utf-8")
+        parsed = json.loads(decoded)
+    except (UnicodeError, ValueError, json.JSONDecodeError) as error:
+        raise ValueError("controlled shared-router evidence is not canonical base64 JSON") from error
+    return _exact_mapping(
+        parsed,
+        {"schema_version", "client_network", "server_network", "router", "servers"},
+        "shared-router launch evidence",
+    )
+
+
+def _address_ip(address: Mapping[str, Any], label: str) -> ipaddress.IPv4Address:
+    value = address.get("ipv4")
+    if not isinstance(value, str):
+        raise ValueError(f"controlled {label} has no IPv4 address")
+    try:
+        interface = ipaddress.ip_interface(value)
+    except ValueError as error:
+        raise ValueError(f"controlled {label} IPv4 address is invalid") from error
+    if not isinstance(interface, ipaddress.IPv4Interface):
+        raise ValueError(f"controlled {label} must use IPv4")
+    return interface.ip
+
+
+def _route(
+    destination: str,
+    *,
+    device: str,
+    gateway: str | None = None,
+    preferred_source: str | None = None,
+    protocol: str | None = None,
+    scope: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "destination": destination,
+        "gateway": gateway,
+        "device": device,
+        "preferred_source": preferred_source,
+        "protocol": protocol,
+        "scope": scope,
+    }
+
+
+def _sorted_routes(rows: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(rows, key=lambda row: json.dumps(row, sort_keys=True))
+
+
+def _expected_namespace_routes(
+    *,
+    own_subnet: str,
+    own_gateway: str,
+    own_ip: str,
+    remote_subnet: str,
+    remote_router_ip: str,
+    device: str,
+) -> list[dict[str, Any]]:
+    return _sorted_routes(
+        [
+            _route("default", device=device, gateway=own_gateway),
+            _route(
+                own_subnet,
+                device=device,
+                preferred_source=own_ip,
+                protocol="kernel",
+                scope="link",
+            ),
+            _route(remote_subnet, device=device, gateway=remote_router_ip),
+        ]
+    )
+
+
+def _netem_contract(expected: str) -> dict[str, Any] | None:
+    if expected == "none":
+        return None
+    return {
+        "limit_packets": 100 if "limit 100" in expected else 1_000,
+        "delay_seconds": 0.025,
+        "jitter_seconds": 0.0,
+        "delay_correlation": 0,
+        "rate_bytes_per_second": 625_000 if "rate 5mbit" in expected else None,
+        "packet_overhead_bytes": 0 if "rate 5mbit" in expected else None,
+        "cell_size_bytes": 0 if "rate 5mbit" in expected else None,
+        "cell_overhead_bytes": 0 if "rate 5mbit" in expected else None,
+        "loss_fraction": 0.01 if "loss 1%" in expected else None,
+        "loss_correlation": 0 if "loss 1%" in expected else None,
+        "gap": 0,
+        "ecn": False,
+    }
+
+
+def _baseline_qdisc(kind: str) -> list[dict[str, Any]]:
+    return [{"kind": kind, "root": True, "parent": None, "netem": None}]
+
+
+def _shaped_qdisc(expected: str, *, with_ingress: bool = False) -> list[dict[str, Any]]:
+    contract = _netem_contract(expected)
+    if contract is None:
+        raise ValueError("internal shaped qdisc requires an impairment")
+    rows = [{"kind": "netem", "root": True, "parent": None, "netem": contract}]
+    if with_ingress:
+        rows.append({"kind": "ingress", "root": False, "parent": "ffff:fff1", "netem": None})
+    return sorted(rows, key=lambda row: (row["kind"], str(row["parent"]), not row["root"]))
+
+
+def _build_shared_router_network_receipt(
+    *,
+    network: str,
+    controlled_network_evidence_b64: str,
+    client_qdisc: str,
+    server_qdisc: str,
+    cohort_version: int,
+) -> dict[str, Any]:
+    if type(cohort_version) is not int or cohort_version <= 0:
+        raise ValueError("controlled shared-router cohort version is invalid")
+    if network != f"qcsd-buflo-study-v{cohort_version}-client":
+        raise ValueError("controlled shared-router network differs from the requested cohort")
+    evidence = _decode_controlled_network_evidence(controlled_network_evidence_b64)
+    if evidence["schema_version"] != SCHEMA_VERSION:
+        raise ValueError("controlled shared-router launch evidence schema is invalid")
+    server_network_name = network.removesuffix("-client") + "-server"
+    client_network = _canonical_ipam(evidence["client_network"], expected_name=network)
+    server_network = _canonical_ipam(
+        evidence["server_network"], expected_name=server_network_name
+    )
+    expected_client_subnet, expected_server_subnet, base_name = _controlled_network_pair(
+        client_network["name"], server_network["name"]
+    )
+    if (
+        client_network["subnet"] != str(expected_client_subnet)
+        or server_network["subnet"] != str(expected_server_subnet)
+    ):
+        raise ValueError("controlled Docker subnets differ from the fixed cohort allocation")
+
+    router = _exact_mapping(
+        evidence["router"],
+        {
+            "container",
+            "addresses",
+            "qdiscs",
+            "offloads",
+            "routes",
+            "client_ingress_filters",
+            "ip_forward",
+        },
+        "router namespace observation",
+    )
+    if router["container"] != f"{base_name}-router" or router["ip_forward"] != 1:
+        raise ValueError("controlled router identity or IPv4 forwarding state is invalid")
+    router_addresses_raw = _exact_mapping(
+        router["addresses"], {"eth0", "eth1", "ifb0"}, "router address observations"
+    )
+    router_qdiscs_raw = _exact_mapping(
+        router["qdiscs"], {"eth0", "eth1", "ifb0"}, "router qdisc observations"
+    )
+    router_offloads_raw = _exact_mapping(
+        router["offloads"], {"eth0", "eth1"}, "router offload observations"
+    )
+    router_addresses = {
+        interface: _canonical_address(router_addresses_raw[interface], interface)
+        for interface in ("eth0", "eth1", "ifb0")
+    }
+    router_qdiscs = {
+        interface: _canonical_qdiscs(router_qdiscs_raw[interface], interface)
+        for interface in ("eth0", "eth1", "ifb0")
+    }
+    router_offloads = {
+        interface: _canonical_offloads(router_offloads_raw[interface], interface)
+        for interface in ("eth0", "eth1")
+    }
+    router_client_ip = _address_ip(router_addresses["eth0"], "router eth0")
+    router_server_ip = _address_ip(router_addresses["eth1"], "router eth1")
+    if (
+        router_client_ip not in expected_client_subnet
+        or router_server_ip not in expected_server_subnet
+        or router_addresses["ifb0"]["ipv4"] is not None
+    ):
+        raise ValueError("controlled router interface-to-network binding is invalid")
+
+    raw_servers = evidence["servers"]
+    if not isinstance(raw_servers, list) or len(raw_servers) != 2:
+        raise ValueError("controlled shared router requires two ordinary servers")
+    servers: list[dict[str, Any]] = []
+    for rank, raw_server in enumerate(raw_servers, start=1):
+        server = _exact_mapping(
+            raw_server,
+            {"container", "alias", "addresses", "qdiscs", "offloads", "routes"},
+            "ordinary server namespace observation",
+        )
+        suffix = "one" if rank == 1 else "two"
+        alias = f"qcsd-buflo-server-{suffix}"
+        if server["alias"] != alias or server["container"] != f"{base_name}-server-{suffix}":
+            raise ValueError("controlled ordinary server identity is invalid")
+        addresses = _exact_mapping(server["addresses"], {"eth0"}, "server addresses")
+        qdiscs = _exact_mapping(server["qdiscs"], {"eth0"}, "server qdiscs")
+        offloads = _exact_mapping(server["offloads"], {"eth0"}, "server offloads")
+        address = _canonical_address(addresses["eth0"], "eth0")
+        server_ip = _address_ip(address, alias)
+        if server_ip not in expected_server_subnet:
+            raise ValueError("controlled ordinary server is outside the server network")
+        servers.append(
+            {
+                "role": "ordinary-http3-server-no-defense",
+                "alias": alias,
+                "container": server["container"],
+                "interface": "eth0",
+                "ipv4": str(server_ip),
+                "observed_address": address,
+                "observed_routes": _canonical_routes(server["routes"]),
+                "observed_qdiscs": _canonical_qdiscs(qdiscs["eth0"], "eth0"),
+                "observed_offloads": _canonical_offloads(offloads["eth0"], "eth0"),
+            }
+        )
+    if servers[0]["ipv4"] == servers[1]["ipv4"]:
+        raise ValueError("controlled ordinary servers share an IPv4 address")
+
+    client_raw = _observe_client_namespace()
+    client_address = _canonical_address(client_raw["addresses"]["eth0"], "eth0")
+    client_ip = _address_ip(client_address, "client eth0")
+    if client_ip not in expected_client_subnet:
+        raise ValueError("controlled client is outside the client network")
+    hosts = client_raw["hosts"]
+    expected_hosts = {server["alias"]: [server["ipv4"]] for server in servers}
+    if hosts != expected_hosts:
+        raise ValueError("controlled client does not have exact cross-network server host bindings")
+
+    receipt = {
+        "schema_version": CONTROLLED_NETWORK_RECEIPT_SCHEMA_VERSION,
+        "artifact_type": "qcsd-buflo-controlled-network-v2",
+        "image_digest": _controlled_image_digest(),
+        "topology": {
+            "kind": "shared-two-network-router",
+            "client_network": client_network,
+            "server_network": server_network,
+            "router_interfaces": {
+                "client_facing": "eth0",
+                "server_facing": "eth1",
+                "client_ingress_ifb": "ifb0",
+            },
+        },
+        "capture_point": {
+            "endpoint": "client:eth0",
+            "client_to_server_position": "before-router-eth0-ingress-ifb0-netem",
+            "server_to_client_position": "after-router-eth0-root-netem",
+            "endpoint_impairment_qdiscs": 0,
+        },
+        "client": {
+            "role": "capture-and-client",
+            "interface": "eth0",
+            "network": client_network["name"],
+            "ipv4": str(client_ip),
+            "observed_address": client_address,
+            "observed_routes": _canonical_routes(client_raw["routes"]),
+            "observed_qdiscs": _canonical_qdiscs(client_raw["qdiscs"]["eth0"], "eth0"),
+            "observed_offloads": _canonical_offloads(client_raw["offloads"]["eth0"], "eth0"),
+            "observed_hosts": hosts,
+        },
+        "router": {
+            "role": "shared-impairment-router",
+            "container": router["container"],
+            "client_ipv4": str(router_client_ip),
+            "server_ipv4": str(router_server_ip),
+            "ip_forward": router["ip_forward"],
+            "observed_addresses": router_addresses,
+            "observed_routes": _canonical_routes(router["routes"]),
+            "observed_qdiscs": router_qdiscs,
+            "observed_client_ingress_filter": _canonical_ingress_filter(
+                router["client_ingress_filters"]
+            ),
+            "observed_offloads": router_offloads,
+        },
+        "servers": servers,
+        "directional_coverage": {
+            "client_to_server": {
+                "shaping_site": "router:eth0-ingress-redirect-ifb0-root",
+                "applied_qdisc": client_qdisc,
+                "impairment_applications": 0 if client_qdisc == "none" else 1,
+                "capture_position": "before-impairment",
+            },
+            "server_to_client": {
+                "shaping_site": "router:eth0-root-egress",
+                "applied_qdisc": server_qdisc,
+                "impairment_applications": 0 if server_qdisc == "none" else 1,
+                "capture_position": "after-impairment",
+            },
+        },
+        "rate_aggregation": {
+            "scope": "one-shared-qdisc-per-direction-across-both-server-origins",
+            "client_to_server": "router:ifb0-root",
+            "server_to_client": "router:eth0-root",
+        },
+        "observation_contract": deepcopy(_CONTROLLED_OBSERVATION_CONTRACT),
+    }
+    _validate_shared_router_network_receipt(
+        receipt,
+        client_qdisc=client_qdisc,
+        server_qdisc=server_qdisc,
+        cohort_version=cohort_version,
+    )
+    return receipt
+
+
+def _validate_shared_router_network_receipt(
+    value: Any, *, client_qdisc: str, server_qdisc: str, cohort_version: int | None
+) -> None:
+    if type(cohort_version) is not int or cohort_version <= 0:
+        raise ValueError("controlled shared-router cohort version is invalid")
+    receipt = _exact_mapping(
+        value,
+        {
+            "schema_version",
+            "artifact_type",
+            "image_digest",
+            "topology",
+            "capture_point",
+            "client",
+            "router",
+            "servers",
+            "directional_coverage",
+            "rate_aggregation",
+            "observation_contract",
+        },
+        "shared-router network receipt",
+    )
+    image = receipt["image_digest"]
+    if (
+        receipt["schema_version"] != CONTROLLED_NETWORK_RECEIPT_SCHEMA_VERSION
+        or receipt["artifact_type"] != "qcsd-buflo-controlled-network-v2"
+        or not isinstance(image, str)
+        or re.fullmatch(r"sha256:[0-9a-f]{64}", image) is None
+    ):
+        raise ValueError("controlled shared-router network receipt identity is invalid")
+    topology = _exact_mapping(
+        receipt["topology"],
+        {"kind", "client_network", "server_network", "router_interfaces"},
+        "shared-router topology",
+    )
+    if topology["kind"] != "shared-two-network-router":
+        raise ValueError("controlled network does not use one shared two-network router")
+    client_network = _exact_mapping(
+        topology["client_network"], {"name", "subnet", "gateway"}, "client network"
+    )
+    server_network = _exact_mapping(
+        topology["server_network"], {"name", "subnet", "gateway"}, "server network"
+    )
+    expected_client_subnet, expected_server_subnet, base_name = _controlled_network_pair(
+        client_network["name"], server_network["name"]
+    )
+    if base_name != f"qcsd-buflo-study-v{cohort_version}":
+        raise ValueError("controlled shared-router receipt differs from the campaign cohort")
+    if (
+        client_network
+        != {
+            "name": f"{base_name}-client",
+            "subnet": str(expected_client_subnet),
+            "gateway": str(expected_client_subnet.network_address + 1),
+        }
+        or server_network
+        != {
+            "name": f"{base_name}-server",
+            "subnet": str(expected_server_subnet),
+            "gateway": str(expected_server_subnet.network_address + 1),
+        }
+        or topology["router_interfaces"]
+        != {"client_facing": "eth0", "server_facing": "eth1", "client_ingress_ifb": "ifb0"}
+    ):
+        raise ValueError("controlled shared-router topology/IPAM binding is invalid")
+    if receipt["capture_point"] != {
+        "endpoint": "client:eth0",
+        "client_to_server_position": "before-router-eth0-ingress-ifb0-netem",
+        "server_to_client_position": "after-router-eth0-root-netem",
+        "endpoint_impairment_qdiscs": 0,
+    }:
+        raise ValueError("controlled client capture point is not outside both impairments")
+
+    client = _exact_mapping(
+        receipt["client"],
+        {
+            "role",
+            "interface",
+            "network",
+            "ipv4",
+            "observed_address",
+            "observed_routes",
+            "observed_qdiscs",
+            "observed_offloads",
+            "observed_hosts",
+        },
+        "client namespace receipt",
+    )
+    try:
+        client_ip = ipaddress.ip_address(client["ipv4"])
+    except (TypeError, ValueError) as error:
+        raise ValueError("controlled client IPv4 receipt is invalid") from error
+    if (
+        client["role"] != "capture-and-client"
+        or client["interface"] != "eth0"
+        or client["network"] != client_network["name"]
+        or client_ip not in expected_client_subnet
+        or client["observed_address"]
+        != {"interface": "eth0", "ipv4": f"{client_ip}/24", "mtu": 1_500, "up": True}
+        or client["observed_qdiscs"] != _baseline_qdisc("noqueue")
+        or client["observed_offloads"] != _SAFE_OFFLOADS
+    ):
+        raise ValueError("controlled client address/qdisc/offload receipt is invalid")
+
+    router = _exact_mapping(
+        receipt["router"],
+        {
+            "role",
+            "container",
+            "client_ipv4",
+            "server_ipv4",
+            "ip_forward",
+            "observed_addresses",
+            "observed_routes",
+            "observed_qdiscs",
+            "observed_client_ingress_filter",
+            "observed_offloads",
+        },
+        "router namespace receipt",
+    )
+    try:
+        router_client_ip = ipaddress.ip_address(router["client_ipv4"])
+        router_server_ip = ipaddress.ip_address(router["server_ipv4"])
+    except (TypeError, ValueError) as error:
+        raise ValueError("controlled router IPv4 receipt is invalid") from error
+    if (
+        router["role"] != "shared-impairment-router"
+        or router["container"] != f"{base_name}-router"
+        or router["ip_forward"] != 1
+        or router_client_ip not in expected_client_subnet
+        or router_server_ip not in expected_server_subnet
+        or router["observed_offloads"] != {"eth0": _SAFE_OFFLOADS, "eth1": _SAFE_OFFLOADS}
+    ):
+        raise ValueError("controlled router identity/forwarding/offload receipt is invalid")
+    expected_router_addresses = {
+        "eth0": {"interface": "eth0", "ipv4": f"{router_client_ip}/24", "mtu": 1_500, "up": True},
+        "eth1": {"interface": "eth1", "ipv4": f"{router_server_ip}/24", "mtu": 1_500, "up": True},
+        "ifb0": {"interface": "ifb0", "ipv4": None, "mtu": 1_500, "up": True},
+    }
+    if router["observed_addresses"] != expected_router_addresses:
+        raise ValueError("controlled router eth0/eth1/ifb0 address binding is invalid")
+
+    raw_servers = receipt["servers"]
+    if not isinstance(raw_servers, list) or len(raw_servers) != 2:
+        raise ValueError("controlled shared-router receipt requires two ordinary servers")
+    server_ips: list[ipaddress.IPv4Address] = []
+    expected_servers: list[Mapping[str, Any]] = []
+    for rank, server_value in enumerate(raw_servers, start=1):
+        server = _exact_mapping(
+            server_value,
+            {
+                "role",
+                "alias",
+                "container",
+                "interface",
+                "ipv4",
+                "observed_address",
+                "observed_routes",
+                "observed_qdiscs",
+                "observed_offloads",
+            },
+            "ordinary server receipt",
+        )
+        suffix = "one" if rank == 1 else "two"
+        alias = f"qcsd-buflo-server-{suffix}"
+        try:
+            server_ip = ipaddress.ip_address(server["ipv4"])
+        except (TypeError, ValueError) as error:
+            raise ValueError("controlled server IPv4 receipt is invalid") from error
+        if (
+            server["role"] != "ordinary-http3-server-no-defense"
+            or server["alias"] != alias
+            or server["container"] != f"{base_name}-server-{suffix}"
+            or server["interface"] != "eth0"
+            or server_ip not in expected_server_subnet
+            or server["observed_address"]
+            != {"interface": "eth0", "ipv4": f"{server_ip}/24", "mtu": 1_500, "up": True}
+            or server["observed_qdiscs"] != _baseline_qdisc("noqueue")
+            or server["observed_offloads"] != _SAFE_OFFLOADS
+        ):
+            raise ValueError("controlled ordinary server namespace receipt is invalid")
+        server_ips.append(server_ip)
+        expected_servers.append(server)
+    if len(set(server_ips)) != 2:
+        raise ValueError("controlled ordinary server IPv4 identities are not distinct")
+
+    expected_client_routes = _expected_namespace_routes(
+        own_subnet=str(expected_client_subnet),
+        own_gateway=client_network["gateway"],
+        own_ip=str(client_ip),
+        remote_subnet=str(expected_server_subnet),
+        remote_router_ip=str(router_client_ip),
+        device="eth0",
+    )
+    if client["observed_routes"] != expected_client_routes:
+        raise ValueError("controlled client route bypasses or does not bind the shared router")
+    expected_hosts = {
+        "qcsd-buflo-server-one": [str(server_ips[0])],
+        "qcsd-buflo-server-two": [str(server_ips[1])],
+    }
+    if client["observed_hosts"] != expected_hosts:
+        raise ValueError("controlled client cross-network host bindings are invalid")
+    expected_router_routes = _sorted_routes(
+        [
+            _route("default", device="eth0", gateway=client_network["gateway"]),
+            _route(
+                str(expected_client_subnet),
+                device="eth0",
+                preferred_source=str(router_client_ip),
+                protocol="kernel",
+                scope="link",
+            ),
+            _route(
+                str(expected_server_subnet),
+                device="eth1",
+                preferred_source=str(router_server_ip),
+                protocol="kernel",
+                scope="link",
+            ),
+        ]
+    )
+    if router["observed_routes"] != expected_router_routes:
+        raise ValueError("controlled router routes do not exactly join the two networks")
+    for server, server_ip in zip(expected_servers, server_ips, strict=True):
+        expected_routes = _expected_namespace_routes(
+            own_subnet=str(expected_server_subnet),
+            own_gateway=server_network["gateway"],
+            own_ip=str(server_ip),
+            remote_subnet=str(expected_client_subnet),
+            remote_router_ip=str(router_server_ip),
+            device="eth0",
+        )
+        if server["observed_routes"] != expected_routes:
+            raise ValueError("controlled ordinary server route bypasses the shared router")
+
+    impaired = client_qdisc != "none"
+    expected_router_qdiscs = {
+        "eth0": _shaped_qdisc(server_qdisc, with_ingress=True)
+        if impaired
+        else _baseline_qdisc("noqueue"),
+        "eth1": _baseline_qdisc("noqueue"),
+        "ifb0": _shaped_qdisc(client_qdisc) if impaired else _baseline_qdisc("fq_codel"),
+    }
+    if router["observed_qdiscs"] != expected_router_qdiscs:
+        raise ValueError("controlled router qdisc placement or parameters are invalid")
+    if router["observed_client_ingress_filter"] != (
+        _INGRESS_REDIRECT_CONTRACT if impaired else None
+    ):
+        raise ValueError("controlled router ingress redirect evidence is invalid")
+    expected_coverage = {
+        "client_to_server": {
+            "shaping_site": "router:eth0-ingress-redirect-ifb0-root",
+            "applied_qdisc": client_qdisc,
+            "impairment_applications": 1 if impaired else 0,
+            "capture_position": "before-impairment",
+        },
+        "server_to_client": {
+            "shaping_site": "router:eth0-root-egress",
+            "applied_qdisc": server_qdisc,
+            "impairment_applications": 1 if impaired else 0,
+            "capture_position": "after-impairment",
+        },
+    }
+    if receipt["directional_coverage"] != expected_coverage:
+        raise ValueError("controlled router lacks exact once-per-direction impairment coverage")
+    if receipt["rate_aggregation"] != {
+        "scope": "one-shared-qdisc-per-direction-across-both-server-origins",
+        "client_to_server": "router:ifb0-root",
+        "server_to_client": "router:eth0-root",
+    }:
+        raise ValueError("controlled 5mbit profile is not shared across both origins")
+    if receipt["observation_contract"] != _CONTROLLED_OBSERVATION_CONTRACT:
+        raise ValueError("controlled network observation normalization contract is invalid")
+
+
 def execute_local_controlled_profile(
     destination: Path,
     *,
     netem_profile: str,
     network: str,
-    server_one_qdisc_b64: str,
-    server_two_qdisc_b64: str,
+    controlled_network_evidence_b64: str,
+    cohort_version: int,
 ) -> Path:
     """Qualify local chaff and execute/resume one real 40-cell netem campaign."""
 
@@ -1075,45 +2073,13 @@ def execute_local_controlled_profile(
     if not destination.is_dir():
         raise ValueError("local controlled destination is not a directory")
 
-    client_qdisc = _observed_qdisc()
-    network_receipt = {
-        "schema_version": 1,
-        "artifact_type": "qcsd-buflo-controlled-network-v1",
-        "image_digest": _controlled_image_digest(),
-        "network": network,
-        "client": {
-            "role": "client",
-            "interface": "eth0",
-            "applied_qdisc": profile["client_qdisc"],
-            "observed_qdisc": client_qdisc,
-        },
-        "servers": [
-            {
-                "role": "server",
-                "alias": "qcsd-buflo-server-one",
-                "interface": "eth0",
-                "applied_qdisc": profile["server_qdisc"],
-                "observed_qdisc": _decode_qdisc(server_one_qdisc_b64),
-            },
-            {
-                "role": "server",
-                "alias": "qcsd-buflo-server-two",
-                "interface": "eth0",
-                "applied_qdisc": profile["server_qdisc"],
-                "observed_qdisc": _decode_qdisc(server_two_qdisc_b64),
-            },
-        ],
-        "directional_coverage": {
-            "client_to_server": {
-                "shaped_egress": "client:eth0",
-                "opposite_ingress": "servers:eth0",
-            },
-            "server_to_client": {
-                "shaped_egress": "servers:eth0",
-                "opposite_ingress": "client:eth0",
-            },
-        },
-    }
+    network_receipt = _build_shared_router_network_receipt(
+        network=network,
+        controlled_network_evidence_b64=controlled_network_evidence_b64,
+        client_qdisc=profile["client_qdisc"],
+        server_qdisc=profile["server_qdisc"],
+        cohort_version=cohort_version,
+    )
     receipt = {
         "schema_version": LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION,
         "stage": "controlled",
@@ -1126,6 +2092,7 @@ def execute_local_controlled_profile(
             "local-small": "local-small",
         },
         "fixture_scope": "controlled-live-manifests-including-two-origin-local-large",
+        "cohort_version": cohort_version,
         "treatment_order": list(STAGE_TREATMENTS["smoke"]),
         "evidence_class": "controlled-test-only-nonformal",
         "network": network_receipt,
@@ -1200,8 +2167,8 @@ def execute_local_regression(
     destination: Path,
     *,
     network: str,
-    server_one_qdisc_b64: str,
-    server_two_qdisc_b64: str,
+    controlled_network_evidence_b64: str,
+    cohort_version: int,
 ) -> tuple[Path, ...]:
     """Execute/resume the exact 18-sample nine-mode clean-network regression."""
 
@@ -1210,44 +2177,13 @@ def execute_local_regression(
         raise ValueError("local regression destination cannot be a symlink")
     destination.mkdir(parents=True, exist_ok=True)
     clean = {"id": "clean", "client_qdisc": "none", "server_qdisc": "none"}
-    network_receipt = {
-        "schema_version": 1,
-        "artifact_type": "qcsd-buflo-controlled-network-v1",
-        "image_digest": _controlled_image_digest(),
-        "network": network,
-        "client": {
-            "role": "client",
-            "interface": "eth0",
-            "applied_qdisc": "none",
-            "observed_qdisc": _observed_qdisc(),
-        },
-        "servers": [
-            {
-                "role": "server",
-                "alias": "qcsd-buflo-server-one",
-                "interface": "eth0",
-                "applied_qdisc": "none",
-                "observed_qdisc": _decode_qdisc(server_one_qdisc_b64),
-            },
-            {
-                "role": "server",
-                "alias": "qcsd-buflo-server-two",
-                "interface": "eth0",
-                "applied_qdisc": "none",
-                "observed_qdisc": _decode_qdisc(server_two_qdisc_b64),
-            },
-        ],
-        "directional_coverage": {
-            "client_to_server": {
-                "shaped_egress": "client:eth0",
-                "opposite_ingress": "servers:eth0",
-            },
-            "server_to_client": {
-                "shaped_egress": "servers:eth0",
-                "opposite_ingress": "client:eth0",
-            },
-        },
-    }
+    network_receipt = _build_shared_router_network_receipt(
+        network=network,
+        controlled_network_evidence_b64=controlled_network_evidence_b64,
+        client_qdisc=clean["client_qdisc"],
+        server_qdisc=clean["server_qdisc"],
+        cohort_version=cohort_version,
+    )
     receipt = {
         "schema_version": LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION,
         "stage": "regression",
@@ -1257,6 +2193,7 @@ def execute_local_regression(
         "server_qdisc": clean["server_qdisc"],
         "workload_aliases": {"complex": "local-large", "simple": "local-small"},
         "fixture_scope": "same-origin-regression-surrogates",
+        "cohort_version": cohort_version,
         "treatment_order": list(load_study_plan()["regression"]["treatments"]),
         "evidence_class": "controlled-test-only-nonformal",
         "network": network_receipt,
@@ -2903,8 +3840,10 @@ def _formal_cohort_value(
         "src/qcsd_lab/parameters.py",
         "src/qcsd_lab/orchestrator.py",
     )
-    return {
-        "schema_version": 1,
+    value = {
+        "schema_version": (
+            2 if version >= FORMAL_FAIL_CLOSED_COHORT_VERSION else 1
+        ),
         "artifact_type": COHORT_MANIFEST_ARTIFACT_TYPE,
         "cohort_id": cohort_id,
         "cohort_version": version,
@@ -2924,6 +3863,10 @@ def _formal_cohort_value(
             "failed-and-incomplete-roots-retained-and-resumed-never-replaced"
         ),
     }
+    formal_evaluation = formal_evaluation_contract_for_cohort(version)
+    if formal_evaluation is not None:
+        value["formal_evaluation"] = formal_evaluation
+    return value
 
 
 def create_formal_cohort_manifest(
@@ -2936,11 +3879,17 @@ def create_formal_cohort_manifest(
 ) -> Path:
     """Prospectively select the only admissible result root for each formal block."""
 
+    version = _cohort_version(cohort_version)
+    if version < FORMAL_FAIL_CLOSED_COHORT_VERSION:
+        raise ValueError(
+            "new formal cohort creation requires cohort version "
+            f"{FORMAL_FAIL_CLOSED_COHORT_VERSION} or later"
+        )
     value = _formal_cohort_value(
         cohort_id=cohort_id,
         results_root=results_root,
         historical_pre_snapshot=historical_pre_snapshot,
-        cohort_version=cohort_version,
+        cohort_version=version,
         create_resolved_campaigns=True,
     )
     if any(Path(row["result_root"]).exists() for row in value["formal_campaigns"]):
@@ -3038,6 +3987,7 @@ def _capture_admission_value(
     results_root: Path,
     formal_cohort_manifest: Path | None = None,
     historical_pre_snapshot: Path | None = None,
+    code_gate_receipt: Path | None = None,
     formal_window_hours: float | None = None,
     formal_capacity_record: Mapping[str, Any] | None = None,
     cohort_version: int = 1,
@@ -3120,9 +4070,34 @@ def _capture_admission_value(
     capacity = None
     cohort = None
     historical = None
+    code_gate = None
     if stage == "formal":
         if formal_cohort_manifest is None or historical_pre_snapshot is None:
             raise ValueError("formal admission requires cohort and pre-formal snapshot receipts")
+        if (
+            version >= FORMAL_FAIL_CLOSED_COHORT_VERSION
+            and code_gate_receipt is None
+        ):
+            raise ValueError("formal admission requires a validated code-gate receipt")
+        if code_gate_receipt is not None:
+            regression_rows = staged.get("regression", {}).get("results", [])
+            regression_roots = tuple(
+                Path(row["root"])
+                for row in regression_rows
+                if isinstance(row, Mapping) and isinstance(row.get("root"), str)
+            )
+            code_gate = validate_code_gate_receipt(
+                code_gate_receipt,
+                regression_result_roots=regression_roots,
+                expected_cohort_version=version,
+                deep=False,
+            )
+            if (
+                code_gate["source"] != source
+                or code_gate["build_execution_receipt"] != selected_build_binding
+                or code_gate["live_regression"] != staged["regression"]
+            ):
+                raise ValueError("formal admission code gate differs from staged evidence")
         historical = validate_historical_guard_snapshot(
             historical_pre_snapshot,
             phase="pre-formal",
@@ -3159,8 +4134,14 @@ def _capture_admission_value(
             )
         allowed = [dict(row) for row in cohort["formal_campaigns"]]
     else:
-        if formal_cohort_manifest is not None or historical_pre_snapshot is not None:
-            raise ValueError("non-formal admission cannot bind formal cohort/history receipts")
+        if (
+            formal_cohort_manifest is not None
+            or historical_pre_snapshot is not None
+            or code_gate_receipt is not None
+        ):
+            raise ValueError(
+                "non-formal admission cannot bind formal cohort/history/code-gate receipts"
+            )
         selected = campaign_paths(
             stage,
             cohort_version=version,
@@ -3191,7 +4172,11 @@ def _capture_admission_value(
     ):
         raise ValueError("capture admission selected result root escapes its bound results root")
     value = {
-        "schema_version": 2 if capture_scheduler is not None else 1,
+        "schema_version": (
+            3
+            if code_gate is not None
+            else (2 if capture_scheduler is not None else 1)
+        ),
         "artifact_type": CAPTURE_ADMISSION_ARTIFACT_TYPE,
         "stage": stage,
         "cohort_version": version,
@@ -3222,6 +4207,8 @@ def _capture_admission_value(
     }
     if capture_scheduler is not None:
         value["capture_scheduler"] = capture_scheduler
+    if code_gate is not None:
+        value["code_gate"] = code_gate
     return value
 
 
@@ -3235,11 +4222,18 @@ def create_capture_admission(
     results_root: Path,
     formal_cohort_manifest: Path | None = None,
     historical_pre_snapshot: Path | None = None,
+    code_gate_receipt: Path | None = None,
     formal_window_hours: float | None = None,
     cohort_version: int = 1,
 ) -> Path:
     """Create the only token from which a public study capture may launch."""
 
+    version = _cohort_version(cohort_version)
+    if stage == "formal" and version < FORMAL_FAIL_CLOSED_COHORT_VERSION:
+        raise ValueError(
+            "new formal capture admission requires cohort version "
+            f"{FORMAL_FAIL_CLOSED_COHORT_VERSION} or later"
+        )
     value = _capture_admission_value(
         stage=stage,
         reference_receipt=reference_receipt,
@@ -3248,9 +4242,10 @@ def create_capture_admission(
         results_root=results_root,
         formal_cohort_manifest=formal_cohort_manifest,
         historical_pre_snapshot=historical_pre_snapshot,
+        code_gate_receipt=code_gate_receipt,
         formal_window_hours=formal_window_hours,
         formal_capacity_record=None,
-        cohort_version=cohort_version,
+        cohort_version=version,
         create_resolved_campaigns=True,
     )
     if any(Path(row["result_root"]).exists() for row in value["allowed_campaigns"]):
@@ -3298,6 +4293,7 @@ def validate_capture_admission(
         )
     historical = value.get("historical_pre_formal_snapshot")
     cohort = value.get("formal_cohort")
+    code_gate = value.get("code_gate")
     expected = _capture_admission_value(
         stage=str(value.get("stage")),
         reference_receipt=Path(str(reference.get("path"))),
@@ -3309,6 +4305,9 @@ def validate_capture_admission(
         ),
         historical_pre_snapshot=(
             Path(historical["path"]) if isinstance(historical, Mapping) else None
+        ),
+        code_gate_receipt=(
+            Path(code_gate["path"]) if isinstance(code_gate, Mapping) else None
         ),
         formal_window_hours=(
             value.get("formal_capacity", {}).get("available_window_hours")
@@ -4017,6 +5016,96 @@ def _comparison_required_difference_ids(
     return mandatory | declared
 
 
+_COMPARISON_EXPLANATION_CONTEXT_TERMS = frozenset(
+    {
+        "client-only",
+        "dataset",
+        "endpoint",
+        "ethernet",
+        "header",
+        "observation",
+        "padding",
+        "protocol",
+        "qcsd",
+        "quic",
+        "tcp",
+        "transport",
+    }
+)
+
+
+def _substantive_comparison_explanation(
+    value: Any, *, identifiers: Sequence[str]
+) -> bool:
+    if not isinstance(value, str):
+        return False
+    explanation = " ".join(value.split())
+    lowered = explanation.casefold()
+    words = re.findall(r"[a-z0-9][a-z0-9+_.-]*", lowered)
+    return bool(
+        len(explanation) >= 80
+        and len(words) >= 12
+        and all(identifier.casefold() in lowered for identifier in identifiers)
+        and any(term in lowered for term in _COMPARISON_EXPLANATION_CONTEXT_TERMS)
+    )
+
+
+def _comparison_required_anchor_metrics(
+    qcsd_rows: Sequence[Mapping[str, Any]],
+    historical_rows: Sequence[Mapping[str, Any]],
+    inventory: Sequence[Mapping[str, Any]],
+) -> dict[tuple[str, str, str], dict[str, str]]:
+    """Bind every published outcome metric to its relevant QCSD defense row."""
+
+    qcsd_by_defense = {
+        str(row["defense"]): _canonical_digest(row)
+        for row in qcsd_rows
+        if isinstance(row, Mapping) and isinstance(row.get("defense"), str)
+    }
+    historical_by_anchor = {
+        str(row["anchor_id"]): _canonical_digest(row)
+        for row in historical_rows
+        if isinstance(row, Mapping) and isinstance(row.get("anchor_id"), str)
+    }
+    expected: dict[tuple[str, str, str], dict[str, str]] = {}
+    for item in inventory:
+        if not isinstance(item, Mapping):
+            raise ValueError("comparison anchor/metric inventory is invalid")
+        anchor_id = item.get("anchor_id")
+        row_digest = item.get("historical_row_sha256")
+        metric_paths = item.get("metric_paths")
+        defense = (
+            "buflo"
+            if isinstance(anchor_id, str) and anchor_id.startswith("buflo-")
+            else (
+                "cs-buflo"
+                if isinstance(anchor_id, str) and anchor_id.startswith("csbuflo-")
+                else None
+            )
+        )
+        if (
+            defense not in qcsd_by_defense
+            or not isinstance(anchor_id, str)
+            or historical_by_anchor.get(anchor_id) != row_digest
+            or not isinstance(metric_paths, list)
+            or not metric_paths
+            or any(not isinstance(metric, str) or not metric for metric in metric_paths)
+            or len(metric_paths) != len(set(metric_paths))
+        ):
+            raise ValueError("comparison anchor/metric inventory is invalid")
+        for metric in metric_paths:
+            key = (defense, anchor_id, metric)
+            if key in expected:
+                raise ValueError("comparison anchor/metric inventory is not unique")
+            expected[key] = {
+                "evaluation_row_sha256": qcsd_by_defense[defense],
+                "historical_row_sha256": str(row_digest),
+            }
+    if not expected:
+        raise ValueError("comparison anchor/metric inventory is empty")
+    return expected
+
+
 def validate_comparison_review(
     path: Path,
     *,
@@ -4055,7 +5144,7 @@ def validate_comparison_review(
     if (
         not isinstance(value, Mapping)
         or set(value) != required
-        or value.get("schema_version") != 1
+        or value.get("schema_version") != 2
         or value.get("artifact_type") != COMPARISON_REVIEW_ARTIFACT_TYPE
         or value.get("formal") is not formal
         or value.get("implementation_scope") != "client_only_quic"
@@ -4082,15 +5171,24 @@ def validate_comparison_review(
     if value.get("handoff") != expected_handoff:
         raise ValueError("comparison review handoff binding is invalid")
     qcsd_rows = evaluation.get("original_study_comparison", {}).get("qcsd_rows")
+    historical_rows = evaluation.get("original_study_comparison", {}).get(
+        "historical_rows"
+    )
+    anchor_inventory = evaluation.get("original_study_comparison", {}).get(
+        "anchor_metric_inventory"
+    )
     reviews = value.get("rows")
-    if not isinstance(qcsd_rows, list) or not isinstance(reviews, list):
+    if (
+        not isinstance(qcsd_rows, list)
+        or not isinstance(historical_rows, list)
+        or not isinstance(anchor_inventory, list)
+        or not isinstance(reviews, list)
+    ):
         raise ValueError("comparison review rows are invalid")
-    expected = {
-        str(row["defense"]): _canonical_digest(row)
-        for row in qcsd_rows
-        if isinstance(row, Mapping) and isinstance(row.get("defense"), str)
-    }
-    observed: dict[str, str] = {}
+    expected = _comparison_required_anchor_metrics(
+        qcsd_rows, historical_rows, anchor_inventory
+    )
+    observed: set[tuple[str, str, str]] = set()
     for row in reviews:
         if (
             not isinstance(row, Mapping)
@@ -4098,21 +5196,32 @@ def validate_comparison_review(
             != {
                 "defense",
                 "evaluation_row_sha256",
+                "anchor_id",
+                "historical_row_sha256",
+                "metric",
                 "classification",
                 "explanation",
             }
-            or row.get("defense") not in expected
             or row.get("classification") not in {"expected", "resolved"}
-            or not isinstance(row.get("explanation"), str)
-            or not row["explanation"].strip()
         ):
             raise ValueError("comparison review contains an invalid row")
-        defense = str(row["defense"])
-        if defense in observed or row.get("evaluation_row_sha256") != expected[defense]:
+        key = (str(row.get("defense")), str(row.get("anchor_id")), str(row.get("metric")))
+        row_binding = expected.get(key)
+        if (
+            key in observed
+            or row_binding is None
+            or row.get("evaluation_row_sha256")
+            != row_binding["evaluation_row_sha256"]
+            or row.get("historical_row_sha256")
+            != row_binding["historical_row_sha256"]
+            or not _substantive_comparison_explanation(
+                row.get("explanation"), identifiers=(key[1], key[2])
+            )
+        ):
             raise ValueError("comparison review row inventory or digest is invalid")
-        observed[defense] = str(row["evaluation_row_sha256"])
-    if observed != expected:
-        raise ValueError("comparison review does not reconcile every QCSD numeric row")
+        observed.add(key)
+    if observed != set(expected):
+        raise ValueError("comparison review does not reconcile every anchor/metric pair")
     differences = value.get("required_differences")
     required_difference_ids = _comparison_required_difference_ids(qcsd_rows)
     if not isinstance(differences, list) or len(differences) != len(required_difference_ids):
@@ -4123,8 +5232,10 @@ def validate_comparison_review(
             not isinstance(row, Mapping)
             or set(row) != {"difference", "classification", "explanation"}
             or row.get("classification") not in {"expected", "resolved"}
-            or not isinstance(row.get("explanation"), str)
-            or not row["explanation"].strip()
+            or not isinstance(row.get("difference"), str)
+            or not _substantive_comparison_explanation(
+                row.get("explanation"), identifiers=(str(row.get("difference")),)
+            )
         ):
             raise ValueError("comparison review required difference is invalid")
         observed_difference_ids.add(str(row["difference"]))
@@ -6534,6 +7645,7 @@ def run_study_action(
     network_name: str | None = None,
     server_one_qdisc_b64: str | None = None,
     server_two_qdisc_b64: str | None = None,
+    controlled_network_evidence_b64: str | None = None,
 ) -> StudyActionResult:
     """Execute one explicit study boundary while retaining candidate status."""
 
@@ -6730,18 +7842,19 @@ def run_study_action(
             if (
                 destination is None
                 or not network_name
-                or not server_one_qdisc_b64
-                or not server_two_qdisc_b64
+                or not controlled_network_evidence_b64
+                or server_one_qdisc_b64 is not None
+                or server_two_qdisc_b64 is not None
             ):
                 raise ValueError(
-                    "internal controlled capture requires destination and bilateral qdisc inputs"
+                    "internal controlled capture requires destination and shared-router evidence"
                 )
             result = execute_local_controlled_profile(
                 destination,
                 netem_profile=local_netem_profile,
                 network=network_name,
-                server_one_qdisc_b64=server_one_qdisc_b64,
-                server_two_qdisc_b64=server_two_qdisc_b64,
+                controlled_network_evidence_b64=controlled_network_evidence_b64,
+                cohort_version=version,
             )
             details["result"] = str(result)
             details["resume_contract"] = (
@@ -6754,17 +7867,18 @@ def run_study_action(
                 local_netem_profile != "clean"
                 or destination is None
                 or not network_name
-                or not server_one_qdisc_b64
-                or not server_two_qdisc_b64
+                or not controlled_network_evidence_b64
+                or server_one_qdisc_b64 is not None
+                or server_two_qdisc_b64 is not None
             ):
                 raise ValueError(
-                    "internal regression capture requires clean bilateral Docker inputs"
+                    "internal regression capture requires clean shared-router Docker evidence"
                 )
             results = execute_local_regression(
                 destination,
                 network=network_name,
-                server_one_qdisc_b64=server_one_qdisc_b64,
-                server_two_qdisc_b64=server_two_qdisc_b64,
+                controlled_network_evidence_b64=controlled_network_evidence_b64,
+                cohort_version=version,
             )
             details["results"] = [str(result) for result in results]
             details["regression"] = validate_regression_results(results)
@@ -6805,6 +7919,17 @@ def run_study_action(
                 }
             ):
                 raise ValueError("supplied qualification receipt differs from the frozen admission")
+            frozen_code_gate = admitted.get("code_gate")
+            if (
+                code_gate_receipt is not None
+                and _file_binding(code_gate_receipt)
+                != (
+                    {"path": frozen_code_gate["path"], "sha256": frozen_code_gate["sha256"]}
+                    if isinstance(frozen_code_gate, Mapping)
+                    else None
+                )
+            ):
+                raise ValueError("supplied code-gate receipt differs from the frozen admission")
             if result_roots:
                 supplied_staged = validate_staged_capture_prerequisites(
                     stage,
@@ -6839,6 +7964,8 @@ def run_study_action(
             )
             details["qualification_receipt"] = admitted["qualification"]
             details["reference_gate"] = admitted["reference_gate"]
+            if admitted.get("code_gate") is not None:
+                details["code_gate"] = admitted["code_gate"]
             details["staged_prerequisites"] = admitted["staged_prerequisites"]
             if admitted["formal_capacity"] is not None:
                 details["formal_capacity"] = admitted["formal_capacity"]
@@ -6888,6 +8015,11 @@ def run_study_action(
                 expected_cohort_version=version,
             )
         if stage == "formal" and admitted is None:
+            if (
+                version >= FORMAL_FAIL_CLOSED_COHORT_VERSION
+                and code_gate_receipt is None
+            ):
+                blockers.append("formal capture requires --code-gate-receipt")
             if "staged_prerequisites" in details:
                 try:
                     details["formal_capacity"] = validate_formal_capture_capacity(
@@ -6932,6 +8064,9 @@ def run_study_action(
                     results_root=LAB_ROOT / "results",
                     formal_cohort_manifest=formal_cohort_manifest,
                     historical_pre_snapshot=historical_pre_snapshot,
+                    code_gate_receipt=(
+                        code_gate_receipt if stage == "formal" else None
+                    ),
                     formal_window_hours=formal_window_hours,
                     cohort_version=version,
                 )
@@ -7574,6 +8709,60 @@ def _validate_formal_performance_evidence(evaluation: Mapping[str, Any]) -> dict
     }
 
 
+def _hard_gate_identity_sha256(ordinal: int, gate: str) -> str:
+    return _canonical_digest({"ordinal": ordinal, "gate": gate})
+
+
+def _hard_gate_records(
+    evidence_sha256s: Sequence[str], *, schema_version: int
+) -> list[dict[str, Any]]:
+    records = []
+    for ordinal, gate in enumerate(HARD_GATE_IDENTITIES, start=1):
+        record: dict[str, Any] = {
+            "gate": gate,
+            "result": "pass",
+            "evidence_sha256s": list(evidence_sha256s),
+        }
+        if schema_version >= 2:
+            record["gate_identity_sha256"] = _hard_gate_identity_sha256(ordinal, gate)
+        records.append(record)
+    return records
+
+
+def _validate_attestation_hard_gates(value: Any, *, schema_version: int) -> None:
+    if not isinstance(value, list) or len(value) != len(HARD_GATE_IDENTITIES):
+        raise ValueError("validation attestation hard-gate inventory is incomplete")
+    required = {"gate", "result", "evidence_sha256s"}
+    if schema_version >= 2:
+        required.add("gate_identity_sha256")
+    for ordinal, (record, gate) in enumerate(
+        zip(value, HARD_GATE_IDENTITIES, strict=True), start=1
+    ):
+        evidence = record.get("evidence_sha256s") if isinstance(record, Mapping) else None
+        if (
+            not isinstance(record, Mapping)
+            or set(record) != required
+            or record.get("gate") != gate
+            or record.get("result") != "pass"
+            or not isinstance(evidence, list)
+            or not evidence
+            or evidence != sorted(set(evidence))
+            or any(
+                not isinstance(digest, str)
+                or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+                for digest in evidence
+            )
+            or (
+                schema_version >= 2
+                and record.get("gate_identity_sha256")
+                != _hard_gate_identity_sha256(ordinal, gate)
+            )
+        ):
+            raise ValueError(
+                f"validation attestation hard-gate identity is invalid: ordinal {ordinal}"
+            )
+
+
 def _validation_attestation_value(
     *,
     reference_receipt: Path,
@@ -7597,7 +8786,7 @@ def _validation_attestation_value(
     from .buflo_handoff import _validate_source_results, validate_study_handoff
     from .verification import verify_result
 
-    plan = load_study_plan()
+    load_study_plan()
     qualification = validate_qualification_receipt(
         qualification_receipt,
         controlled_result_roots=controlled_result_roots,
@@ -7641,6 +8830,10 @@ def _validation_attestation_value(
         or smoke.get("cohort_version") != cohort_version
         or rehearsal.get("cohort_version") != cohort_version
         or admission.get("formal_cohort") != _file_binding(formal_cohort_manifest)
+        or (
+            cohort_version >= FORMAL_FAIL_CLOSED_COHORT_VERSION
+            and admission.get("code_gate") != code
+        )
         or expected_formal_roots != [receipt.root for receipt in verified_formal]
         or [Path(row["result_root"]) for row in admission["allowed_campaigns"]]
         != expected_formal_roots
@@ -7656,6 +8849,13 @@ def _validation_attestation_value(
         formal=True,
         deep=True,
     )
+    if cohort_version >= FORMAL_FAIL_CLOSED_COHORT_VERSION and (
+        cohort.get("formal_evaluation") != FORMAL_BOOTSTRAP_CONTRACT
+        or evaluation.get("bootstrap_draws") != FORMAL_BOOTSTRAP_DRAWS
+    ):
+        raise ValueError(
+            "validation attestation formal evaluation differs from the prospective bootstrap contract"
+        )
     performance = _validate_formal_performance_evidence(evaluation)
     comparison = validate_comparison_review(
         comparison_review,
@@ -7783,16 +8983,14 @@ def _validation_attestation_value(
             evidence["handoff"]["sha256sums_sha256"],
         }
     )
-    hard_gates = [
-        {
-            "gate": gate,
-            "result": "pass",
-            "evidence_sha256s": evidence_digests,
-        }
-        for gate in plan["hard_gates"]
-    ]
+    attestation_schema_version = (
+        2 if cohort_version >= FORMAL_FAIL_CLOSED_COHORT_VERSION else 1
+    )
+    hard_gates = _hard_gate_records(
+        evidence_digests, schema_version=attestation_schema_version
+    )
     return {
-        "schema_version": 1,
+        "schema_version": attestation_schema_version,
         "artifact_type": ATTESTATION_ARTIFACT_TYPE,
         "study_id": BUFLO_STUDY_ID,
         "cohort_version": cohort_version,
@@ -7889,6 +9087,25 @@ def validate_validation_attestation(
         and stored_version != _cohort_version(expected_cohort_version)
     ):
         raise ValueError("validation attestation cohort version differs from the request")
+    expected_schema_version = (
+        2 if stored_version >= FORMAL_FAIL_CLOSED_COHORT_VERSION else 1
+    )
+    if (
+        value.get("schema_version") != expected_schema_version
+        or value.get("artifact_type") != ATTESTATION_ARTIFACT_TYPE
+        or value.get("study_id") != BUFLO_STUDY_ID
+        or value.get("implementation_status") != VALIDATED_STATUS
+        or value.get("implementation_status_description")
+        != VALIDATED_STATUS_DESCRIPTION
+        or value.get("implementation_scope") != "client_only_quic"
+        or value.get("paper_equivalent") is not False
+        or value.get("no_waivers") is not True
+        or value.get("all_hard_gates_passed") is not True
+    ):
+        raise ValueError("validation attestation promotion envelope is invalid")
+    _validate_attestation_hard_gates(
+        value.get("hard_gates"), schema_version=expected_schema_version
+    )
 
     def file_path(key: str) -> Path:
         item = evidence.get(key)

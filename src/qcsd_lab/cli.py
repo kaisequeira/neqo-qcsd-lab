@@ -170,6 +170,7 @@ def parser() -> argparse.ArgumentParser:
     buflo.add_argument("--network-name", help=argparse.SUPPRESS)
     buflo.add_argument("--server-one-qdisc-b64", help=argparse.SUPPRESS)
     buflo.add_argument("--server-two-qdisc-b64", help=argparse.SUPPRESS)
+    buflo.add_argument("--controlled-network-evidence-b64", help=argparse.SUPPRESS)
 
     test = commands.add_parser("test", help="run deterministic or controlled live tests")
     test.add_argument("suite", nargs="?", choices=("live",), default=None)
@@ -472,6 +473,7 @@ def main(argv: list[str] | None = None) -> None:
                 network_name=args.network_name,
                 server_one_qdisc_b64=args.server_one_qdisc_b64,
                 server_two_qdisc_b64=args.server_two_qdisc_b64,
+                controlled_network_evidence_b64=args.controlled_network_evidence_b64,
             )
         except (FileExistsError, OSError, RuntimeError, ValueError) as error:
             _fail(error)

@@ -42,6 +42,7 @@ from .fidelity import (
 from .util import LAB_ROOT, load_json, require_disjoint_path, sha256_file, source_metadata
 
 SCHEMA_VERSION = 1
+EVALUATION_RECEIPT_SCHEMA_VERSION = 2
 FORMAL_DEFENSES = ("undefended", "buflo", "cs-buflo")
 FORMAL_BLOCKS = tuple(range(10))
 FORMAL_CLASS_BY_WORKLOAD = {
@@ -55,6 +56,7 @@ FORMAL_WORKLOADS = tuple(FORMAL_CLASS_BY_WORKLOAD)
 TRAIN_BLOCKS = tuple(range(8))
 VALIDATION_BLOCK = 8
 TEST_BLOCK = 9
+FORMAL_BOOTSTRAP_DRAWS = 10_000
 _DEFAULT_OSAD_LIBRARY = Path("/usr/local/lib/qcsd/libqcsd_osad.so")
 _DLSVM_REFERENCE = LAB_ROOT / "config/reference/buflo-csbuflo/dlsvm-ccs-2012-v1.json"
 _DLSVM_REFERENCE_RECEIPT = _DLSVM_REFERENCE.with_suffix(".receipt.json")
@@ -3006,6 +3008,10 @@ def original_study_comparison_rows() -> tuple[dict[str, Any], ...]:
         profile = result["profile"]
         rows.append(
             {
+                "anchor_id": (
+                    f"buflo-tau{profile['tau_ms']}-rho{profile['rho_ms']}-"
+                    f"d{profile['d_bytes']}"
+                ),
                 "source": "Dyer et al., IEEE S&P 2012, Figure 12",
                 "result_scope": "original-study",
                 **buflo_context,
@@ -3045,6 +3051,10 @@ def original_study_comparison_rows() -> tuple[dict[str, Any], ...]:
     for result in csbuflo["main_results"]:
         rows.append(
             {
+                "anchor_id": (
+                    f"csbuflo-sites{result['sites']}-{result['padding_profile'].lower()}-"
+                    f"et{int(bool(result['early_termination']))}"
+                ),
                 "source": "Cai et al., WPES 2014, main security/performance evaluation",
                 "result_scope": "original-study",
                 **cs_context,
@@ -3061,6 +3071,10 @@ def original_study_comparison_rows() -> tuple[dict[str, Any], ...]:
         early = result["early_termination"]
         rows.append(
             {
+                "anchor_id": (
+                    f"csbuflo-sites{result['sites']}-{result['padding_profile'].lower()}-"
+                    f"et{int(bool(result['early_termination']))}"
+                ),
                 "source": "Cai et al., WPES 2014, Table 3 early-termination ablation",
                 "result_scope": "original-study",
                 **cs_context,
@@ -3074,9 +3088,58 @@ def original_study_comparison_rows() -> tuple[dict[str, Any], ...]:
                 "metrics": result,
             }
         )
-    if any(not _COMPARISON_CONTEXT_FIELDS <= set(row) for row in rows):
+    if (
+        len({row["anchor_id"] for row in rows}) != len(rows)
+        or any(not _COMPARISON_CONTEXT_FIELDS <= set(row) for row in rows)
+    ):
         raise RuntimeError("original-study comparison row omitted required context")
     return tuple(rows)
+
+
+def historical_anchor_metric_inventory(
+    rows: Sequence[Mapping[str, Any]] | None = None,
+) -> tuple[dict[str, Any], ...]:
+    """Freeze every published numeric outcome under one stable anchor identity."""
+
+    selected = tuple(rows) if rows is not None else original_study_comparison_rows()
+    inventory: list[dict[str, Any]] = []
+    for row in selected:
+        anchor_id = row.get("anchor_id")
+        metrics = row.get("metrics")
+        if not isinstance(anchor_id, str) or not anchor_id or not isinstance(metrics, Mapping):
+            raise ValueError("historical comparison anchor identity is invalid")
+        paths: list[str] = []
+
+        def visit(prefix: str, value: Any, output: list[str]) -> None:
+            if isinstance(value, Mapping):
+                for key in sorted(value):
+                    child = f"{prefix}.{key}" if prefix else str(key)
+                    visit(child, value[key], output)
+                return
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or prefix == "sites"
+                or prefix.startswith("profile.")
+            ):
+                return
+            if not math.isfinite(float(value)):
+                raise ValueError("historical comparison metric is not finite")
+            output.append(prefix)
+
+        visit("", metrics, paths)
+        if not paths:
+            raise ValueError("historical comparison anchor has no numeric outcome metrics")
+        inventory.append(
+            {
+                "anchor_id": anchor_id,
+                "historical_row_sha256": _canonical_json_sha256(row),
+                "metric_paths": paths,
+            }
+        )
+    if len({item["anchor_id"] for item in inventory}) != len(inventory):
+        raise ValueError("historical comparison anchor inventory is not unique")
+    return tuple(inventory)
 
 
 def _qcsd_comparison_rows(
@@ -3320,6 +3383,10 @@ def write_evaluation_receipt(
 
     if path.exists() or path.is_symlink():
         raise FileExistsError(f"evaluation receipt already exists: {path}")
+    if formal and bootstrap_draws != FORMAL_BOOTSTRAP_DRAWS:
+        raise ValueError(
+            f"formal evaluation requires exactly {FORMAL_BOOTSTRAP_DRAWS} bootstrap draws"
+        )
     paired = paired_overheads(samples)
     paired_summary = summarize_paired_overheads(paired, bootstrap_draws=bootstrap_draws)
     attacks = []
@@ -3341,7 +3408,7 @@ def write_evaluation_receipt(
         }
     evaluator_source = _evaluator_source_binding(handoff_root, formal=formal)
     receipt = {
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": EVALUATION_RECEIPT_SCHEMA_VERSION,
         "artifact_type": _EVALUATION_ARTIFACT_TYPE,
         "formal": formal,
         "sample_count": len(samples),
@@ -3379,6 +3446,7 @@ def write_evaluation_receipt(
         "original_study_comparison": {
             "acceptance_rule": _EVALUATION_COMPARISON_ACCEPTANCE_RULE,
             "historical_rows": list(original_study_comparison_rows()),
+            "anchor_metric_inventory": list(historical_anchor_metric_inventory()),
             "qcsd_rows": list(_qcsd_comparison_rows(samples, paired_summary, attack_results)),
             "numeric_discrepancy_review_required": True,
         },
@@ -3435,7 +3503,7 @@ def _validate_evaluation_receipt_value(
     if (
         not isinstance(value, dict)
         or set(value) != _EVALUATION_RECEIPT_KEYS
-        or value.get("schema_version") != SCHEMA_VERSION
+        or value.get("schema_version") != EVALUATION_RECEIPT_SCHEMA_VERSION
         or value.get("artifact_type") != _EVALUATION_ARTIFACT_TYPE
         or value.get("formal") is not formal
         or value.get("sample_count") != len(samples)
@@ -3452,6 +3520,10 @@ def _validate_evaluation_receipt_value(
         raise ValueError("evaluation receipt schema or cohort count is invalid")
     draws = int(value["bootstrap_draws"])
     if formal:
+        if draws != FORMAL_BOOTSTRAP_DRAWS:
+            raise ValueError(
+                f"formal evaluation requires exactly {FORMAL_BOOTSTRAP_DRAWS} bootstrap draws"
+            )
         validate_formal_cohort(samples, require_performance=True)
     expected_handoff = None
     if handoff_root is not None:
@@ -3561,11 +3633,14 @@ def _validate_evaluation_receipt_value(
         != {
             "acceptance_rule",
             "historical_rows",
+            "anchor_metric_inventory",
             "qcsd_rows",
             "numeric_discrepancy_review_required",
         }
         or comparison.get("acceptance_rule") != _EVALUATION_COMPARISON_ACCEPTANCE_RULE
         or comparison.get("historical_rows") != list(original_study_comparison_rows())
+        or comparison.get("anchor_metric_inventory")
+        != list(historical_anchor_metric_inventory())
         or comparison.get("qcsd_rows")
         != list(_qcsd_comparison_rows(samples, expected_summary, attack_results))
         or comparison.get("numeric_discrepancy_review_required") is not True
@@ -4008,6 +4083,11 @@ def evaluate_handoff(
     dlsvm_available_wall_seconds: float | None = None,
 ) -> Path:
     """Validate, evaluate, and bind one focused-study handoff in one call."""
+
+    if formal and bootstrap_draws != FORMAL_BOOTSTRAP_DRAWS:
+        raise ValueError(
+            f"formal evaluation requires exactly {FORMAL_BOOTSTRAP_DRAWS} bootstrap draws"
+        )
 
     # Local import avoids weakening the handoff module's dependency boundary.
     from .buflo_handoff import validate_study_handoff

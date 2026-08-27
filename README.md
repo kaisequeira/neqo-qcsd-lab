@@ -32,7 +32,7 @@ qualified defences.
 HTTP/3 servers and standard QUIC traffic; they are not bilateral or
 paper-equivalent implementations. Until a typed
 `validation-attestation.json` independently verifies every gate, the project
-status is **five validated defences plus two candidates** (nine selectable
+status is **five validated defenses plus two candidates** (nine selectable
 modes including `undefended` and `static`).
 
 The BuFLO adaptation drains every allocatable 1,200-byte reviewed-chaff cell
@@ -62,7 +62,7 @@ pinned external paper, author-source, and archive inputs.
 ```bash
 set -euo pipefail
 REFERENCE_ROOT=/absolute/pinned-reference-inputs
-COHORT_VERSION=1
+COHORT_VERSION=15
 REFERENCE="artifacts/buflo-study/reference-execution-v${COHORT_VERSION}.json"
 QUALIFICATION="artifacts/buflo-study/qualification-v${COHORT_VERSION}.json"
 CONTROLLED_ROOT="results/buflo-study-controlled-v${COHORT_VERSION}"
@@ -76,8 +76,8 @@ CODE_GATE="artifacts/buflo-study/code-gate-v${COHORT_VERSION}.json"
   --reference-root "$REFERENCE_ROOT" --destination "$REFERENCE" \
   --cohort-version "$COHORT_VERSION"
 
-# Test-only local captures. The wrapper provisions bilateral qdiscs and holds
-# the study-wide acquisition lock.
+# Test-only local captures. The wrapper provisions one shared two-network
+# router with receipted ingress/egress shaping and holds the acquisition lock.
 ./qcsd-lab buflo-study capture --stage controlled \
   --cohort-version "$COHORT_VERSION" --destination "$CONTROLLED_ROOT"
 ./qcsd-lab buflo-study capture --stage regression \
@@ -141,6 +141,7 @@ mapfile -t FORMAL < <(
   ./qcsd-lab buflo-study capture --stage formal \
     --cohort-version "$COHORT_VERSION" \
     --reference-receipt "$REFERENCE" \
+    --code-gate-receipt "$CODE_GATE" \
     --qualification-receipt "$QUALIFICATION" \
     "${REGRESSION_ARGS[@]}" --result "$SMOKE" --result "$REHEARSAL" \
     --historical-pre-snapshot "$PRE" --formal-cohort "$COHORT" \
@@ -169,14 +170,16 @@ EVALUATION="artifacts/buflo-study/evaluation-formal-v${COHORT_VERSION}.json"
   --cohort-version "$COHORT_VERSION" --destination "$HANDOFF"
 ./qcsd-lab buflo-study evaluate --formal --handoff "$HANDOFF" \
   --cohort-version "$COHORT_VERSION" \
+  --bootstrap-draws 10000 \
   --dlsvm-wall-seconds 45000 --destination "$EVALUATION"
 ```
 
 Formal evaluation deliberately pauses for a human comparison review. Create
 `artifacts/buflo-study/comparison-review-vN.json` with the exact schema enforced
-by `validate_comparison_review`: it must hash-bind every QCSD comparison row,
-classify each discrepancy as `expected` or `resolved`, explain it, and retain
-`paper_equivalent: false`. Then the only promotion command is:
+by `validate_comparison_review`: it must hash-bind and substantively classify
+every original-study anchor/metric pair as `expected` or `resolved`, explain
+the transport/dataset/protocol context, and retain `paper_equivalent: false`.
+Then the only promotion command is:
 
 ```bash
 REVIEW="artifacts/buflo-study/comparison-review-v${COHORT_VERSION}.json"
@@ -221,8 +224,11 @@ source-mismatched roots. The staged matrix is 18 test-only nine-mode regression
 samples, 160 controlled qualification samples, 20 public smoke samples, 40
 public rehearsal samples, then ten formal blocks totalling 1,500 focused
 samples. Formal admission additionally requires one exact clean no-cache image,
-the executed isolated reference receipt, at least 12.5 declared hours, and
-three times the storage projected from the verified smoke and rehearsal data.
+the executed isolated reference receipt, the hash-bound code-gate receipt, at
+least 12.5 declared hours, and three times the storage projected from the
+verified smoke and rehearsal data. Cohort v15 and later prospectively freeze
+exactly 10,000 block/workload bootstrap draws and their deterministic seed
+contract; formal evaluation rejects any different draw count.
 `experiment.json` is the only resume checkpoint. The coordinator automatically
 resumes the one prospectively selected root, preserves failed/interrupted
 physical-launch accounting, caps each study sample at three total launches,

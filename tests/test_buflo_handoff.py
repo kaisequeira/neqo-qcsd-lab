@@ -130,6 +130,282 @@ def _complete_buflo_run(
     }
 
 
+def _formal_source_binding_fixture(tmp_path: Path) -> tuple[
+    Path,
+    dict[str, object],
+    list[dict[str, object]],
+    dict[str, str],
+    VerifiedResult,
+]:
+    source_root = (tmp_path / "formal-result").resolve()
+    source_sample_relative = "samples/example-r1/as-defined/visit-001/buflo"
+    source_sample_root = source_root / source_sample_relative
+    (source_sample_root / "neqo").mkdir(parents=True)
+    source_files = {
+        "capture.pcapng": b"sealed-pcapng\n",
+        "neqo/run.json": b'{"completion_status":"complete"}\n',
+        "neqo/schedule.csv": b"target_time_us\n0\n",
+        "neqo/events.csv": b"monotonic_us\n0\n",
+        "neqo/packets.csv": b"monotonic_us\n0\n",
+    }
+    for relative, content in source_files.items():
+        path = source_sample_root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+    workload_relative = "inputs/workloads/example-r1.json"
+    workload = source_root / workload_relative
+    workload.parent.mkdir(parents=True)
+    workload.write_bytes(b'{"id":"example-r1"}\n')
+
+    checksums = {
+        f"{source_sample_relative}/{relative}": hashlib.sha256(content).hexdigest()
+        for relative, content in source_files.items()
+    }
+    checksums[workload_relative] = hashlib.sha256(workload.read_bytes()).hexdigest()
+    evidence = source_root / "evidence.sha256"
+    evidence.write_text(
+        "".join(f"{checksums[path]}  {path}\n" for path in sorted(checksums)),
+        encoding="utf-8",
+    )
+
+    sample = {
+        "sample_id": "sample-001",
+        "workload_id": "example-r1",
+        "request_policy": "as-defined",
+        "visit": 1,
+        "defense": "buflo",
+        "runtime_kind": "buflo",
+        "baseline": False,
+        "seed": 7,
+        "attempts": 1,
+        "path": source_sample_relative,
+    }
+    source = {"immutable": True}
+    experiment = {
+        "name": "formal-test",
+        "configuration": {"campaign_sha256": "1" * 64},
+        "source": source,
+        "samples": [sample],
+        "started_at": "2027-01-01T00:00:00+00:00",
+        "completed_at": "2027-01-01T00:00:01+00:00",
+    }
+    receipt = VerifiedResult(
+        root=source_root,
+        experiment=experiment,
+        checksums=checksums,
+        accepted_samples={
+            "sample-001": {
+                relative: digest
+                for relative, digest in checksums.items()
+                if relative.startswith(f"{source_sample_relative}/")
+            }
+        },
+    )
+
+    handoff_root = (tmp_path / "handoff").resolve()
+    local_bindings = {
+        "raw_pcapng_path": ("raw/sample-001.pcapng", "capture.pcapng"),
+        "raw_run_path": ("raw/sample-001.run.json", "neqo/run.json"),
+        "runner_schedule_path": (
+            "diagnostics/sample-001.schedule.csv",
+            "neqo/schedule.csv",
+        ),
+        "runner_events_path": (
+            "diagnostics/sample-001.events.csv",
+            "neqo/events.csv",
+        ),
+        "runner_packets_path": (
+            "diagnostics/sample-001.packets.csv",
+            "neqo/packets.csv",
+        ),
+    }
+    row: dict[str, object] = dict(sample)
+    row["source_sample_path"] = row.pop("path")
+    handoff_checksums: dict[str, str] = {}
+    for path_key, (local_relative, source_suffix) in local_bindings.items():
+        destination = handoff_root / local_relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes((source_sample_root / source_suffix).read_bytes())
+        digest_key = path_key.replace("_path", "_sha256")
+        row[path_key] = local_relative
+        row[digest_key] = checksums[f"{source_sample_relative}/{source_suffix}"]
+        handoff_checksums[local_relative] = str(row[digest_key])
+    application_relative = "inputs/acquisition-block-001/example-r1.json"
+    application = handoff_root / application_relative
+    application.parent.mkdir(parents=True)
+    application.write_bytes(workload.read_bytes())
+    row["application_workload_path"] = application_relative
+    row["application_workload_sha256"] = checksums[workload_relative]
+    row["acquisition_block_index"] = 0
+    handoff_checksums[application_relative] = checksums[workload_relative]
+
+    dataset: dict[str, object] = {
+        "execution_source": source,
+        "blocks": [
+            {
+                "acquisition_block_index": 0,
+                "result_name": "formal-test",
+                "result_root": str(source_root),
+                "result_evidence_sha256": hashlib.sha256(evidence.read_bytes()).hexdigest(),
+                "authoritative_files": len(checksums),
+                "configuration": experiment["configuration"],
+                "started_at": experiment["started_at"],
+                "completed_at": experiment["completed_at"],
+                "elapsed_seconds": 1.0,
+            }
+        ],
+    }
+    return handoff_root, dataset, [row], handoff_checksums, receipt
+
+
+def _install_formal_source_verifier(
+    monkeypatch: pytest.MonkeyPatch,
+    receipt: VerifiedResult,
+) -> list[Path]:
+    verified_roots: list[Path] = []
+
+    def verify(root: Path) -> VerifiedResult:
+        verified_roots.append(Path(root))
+        return receipt
+
+    monkeypatch.setattr(handoff, "FORMAL_BLOCKS", (0,))
+    monkeypatch.setattr(handoff, "verify_result", verify)
+    monkeypatch.setattr(handoff, "_validate_source_results", lambda *_args, **_kwargs: None)
+    return verified_roots
+
+
+def test_formal_handoff_reverifies_and_binds_authoritative_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, dataset, rows, checksums, receipt = _formal_source_binding_fixture(tmp_path)
+    verified_roots = _install_formal_source_verifier(monkeypatch, receipt)
+
+    handoff._validate_formal_source_bindings(
+        root,
+        dataset,
+        rows,
+        handoff_checksums=checksums,
+    )
+
+    assert verified_roots == [receipt.root]
+
+
+def test_public_formal_handoff_validation_rechecks_sources_when_not_deep(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, dataset, rows, _checksums, receipt = _formal_source_binding_fixture(tmp_path)
+    verified_roots = _install_formal_source_verifier(monkeypatch, receipt)
+    for directory in ("stripped", "traces"):
+        (root / directory).mkdir(parents=True)
+    (root / "README.md").write_text("formal test handoff\n", encoding="utf-8")
+    dataset.update(
+        {
+            "formal": True,
+            "result_names": ["formal-test"],
+            "counts_by_defense": {"buflo": 1},
+        }
+    )
+    rows[0].update(schema_version=1, packet_count=0)
+    (root / "dataset.json").write_text(
+        json.dumps(dataset, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    (root / "samples.jsonl").write_text(
+        json.dumps(rows[0], sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    _write_checksums(root)
+
+    sample = SimpleNamespace(sample_id="sample-001", defense="buflo", trace=())
+    monkeypatch.setattr(handoff, "_validate_handoff_rows", lambda *_args, **_kwargs: (True, False))
+    monkeypatch.setattr(handoff, "_validate_dataset", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(handoff, "load_study_handoff", lambda _root: (sample,))
+    monkeypatch.setattr(handoff, "validate_formal_cohort", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(handoff, "FORMAL_RESULT_NAMES", ("formal-test",))
+
+    assert validate_study_handoff(root, formal=True, deep=False) == root
+    assert verified_roots == [receipt.root]
+
+
+@pytest.mark.parametrize(
+    ("path_key", "digest_key"),
+    [
+        ("raw_pcapng_path", "raw_pcapng_sha256"),
+        ("raw_run_path", "raw_run_sha256"),
+        ("runner_schedule_path", "runner_schedule_sha256"),
+        ("runner_events_path", "runner_events_sha256"),
+        ("runner_packets_path", "runner_packets_sha256"),
+        ("application_workload_path", "application_workload_sha256"),
+    ],
+)
+def test_formal_handoff_rejects_rechecksummed_source_copy_substitution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    path_key: str,
+    digest_key: str,
+) -> None:
+    root, dataset, rows, checksums, receipt = _formal_source_binding_fixture(tmp_path)
+    _install_formal_source_verifier(monkeypatch, receipt)
+    row = rows[0]
+    local_relative = str(row[path_key])
+    (root / local_relative).write_bytes(b"locally substituted and rechecksummed\n")
+    substituted_digest = hashlib.sha256((root / local_relative).read_bytes()).hexdigest()
+    row[digest_key] = substituted_digest
+    checksums[local_relative] = substituted_digest
+
+    with pytest.raises(ValueError, match="differs from its sealed source artifact"):
+        handoff._validate_formal_source_bindings(
+            root,
+            dataset,
+            rows,
+            handoff_checksums=checksums,
+        )
+
+
+@pytest.mark.parametrize("binding", ["result_evidence_sha256", "authoritative_files"])
+def test_formal_handoff_rejects_result_seal_binding_substitution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    binding: str,
+) -> None:
+    root, dataset, rows, checksums, receipt = _formal_source_binding_fixture(tmp_path)
+    _install_formal_source_verifier(monkeypatch, receipt)
+    block = dataset["blocks"][0]
+    assert isinstance(block, dict)
+    block[binding] = "0" * 64 if binding.endswith("sha256") else 999
+
+    with pytest.raises(ValueError, match="source result seal or lineage differs"):
+        handoff._validate_formal_source_bindings(
+            root,
+            dataset,
+            rows,
+            handoff_checksums=checksums,
+        )
+
+
+def test_formal_handoff_rejects_noncanonical_source_result_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, dataset, rows, checksums, receipt = _formal_source_binding_fixture(tmp_path)
+    verified_roots = _install_formal_source_verifier(monkeypatch, receipt)
+    alias = tmp_path / "result-alias"
+    alias.symlink_to(receipt.root, target_is_directory=True)
+    block = dataset["blocks"][0]
+    assert isinstance(block, dict)
+    block["result_root"] = str(alias)
+
+    with pytest.raises(ValueError, match="source result root is not canonical"):
+        handoff._validate_formal_source_bindings(
+            root,
+            dataset,
+            rows,
+            handoff_checksums=checksums,
+        )
+    assert verified_roots == []
+
+
 def test_shape_only_pcap_round_trip(tmp_path: Path) -> None:
     trace = (
         _packet(0, "outgoing", 1_242),

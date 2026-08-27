@@ -95,7 +95,7 @@ _CLIENT_RESOURCE_USAGE_KEYS = {
     "rapl_energy_joules",
     "rapl_unavailable_reason",
 }
-_RUNNER_WAKEUP_METRICS_KEYS = {
+_RUNNER_WAKEUP_METRICS_V1_KEYS = {
     "schema_version",
     "semantics",
     "wait_returns",
@@ -104,9 +104,25 @@ _RUNNER_WAKEUP_METRICS_KEYS = {
     "controller_deadline_timer_wakeups",
     "other_timer_wakeups",
 }
-_RUNNER_WAKEUP_METRICS_SEMANTICS = (
+_RUNNER_WAKEUP_METRICS_V2_KEYS = _RUNNER_WAKEUP_METRICS_V1_KEYS | {
+    "buflo_exact_release_guard_entries",
+    "buflo_exact_release_guard_wait_nanoseconds",
+    "buflo_exact_release_active_wait_nanoseconds",
+    "buflo_exact_release_max_passive_wake_lateness_nanoseconds",
+    "buflo_exact_release_max_guard_exit_lateness_nanoseconds",
+}
+_RUNNER_WAKEUP_METRICS_V1_SEMANTICS = (
     "actual_select_return_source; socket_wins_simultaneous_readiness; "
     "controller_subset_is_effective_earliest_deadline; scheduled_cells_are_not_wakeups"
+)
+_RUNNER_WAKEUP_METRICS_V2_SEMANTICS = (
+    f"{_RUNNER_WAKEUP_METRICS_V1_SEMANTICS}; "
+    "buflo_exact_release_guard_reserves_candidate_window; "
+    "buflo_exact_release_active_wait_tail_us=250; "
+    "buflo_exact_release_guards_are_separately_receipted_active_waits; "
+    "buflo_active_defense_socket_drains_are_single_batch; "
+    "buflo_active_defense_http_drains_are_single_event; "
+    "buflo_output_is_interrupted_at_guard"
 )
 _PROCESS_SCHEDULER_KEYS = {
     "schema_version",
@@ -938,19 +954,43 @@ def _client_resource_usage_valid(value: Any) -> bool:
 
 
 def _runner_wakeup_metrics_valid(value: Any) -> bool:
-    if not isinstance(value, dict) or set(value) != _RUNNER_WAKEUP_METRICS_KEYS:
+    if not isinstance(value, dict):
         return False
-    if (
-        value.get("schema_version") != 1
-        or value.get("semantics") != _RUNNER_WAKEUP_METRICS_SEMANTICS
-    ):
+    schema_version = value.get("schema_version")
+    if type(schema_version) is not int:
         return False
-    count_keys = _RUNNER_WAKEUP_METRICS_KEYS - {"schema_version", "semantics"}
+    if schema_version == 1:
+        required = _RUNNER_WAKEUP_METRICS_V1_KEYS
+        semantics = _RUNNER_WAKEUP_METRICS_V1_SEMANTICS
+    elif schema_version == 2:
+        required = _RUNNER_WAKEUP_METRICS_V2_KEYS
+        semantics = _RUNNER_WAKEUP_METRICS_V2_SEMANTICS
+    else:
+        return False
+    if set(value) != required or value.get("semantics") != semantics:
+        return False
+    count_keys = required - {"schema_version", "semantics"}
     if any(
         isinstance(value[key], bool) or not isinstance(value[key], int) or value[key] < 0
         for key in count_keys
     ):
         return False
+    if schema_version == 2:
+        guard_measurements = (
+            value["buflo_exact_release_guard_wait_nanoseconds"],
+            value["buflo_exact_release_active_wait_nanoseconds"],
+            value["buflo_exact_release_max_passive_wake_lateness_nanoseconds"],
+            value["buflo_exact_release_max_guard_exit_lateness_nanoseconds"],
+        )
+        if (
+            value["buflo_exact_release_active_wait_nanoseconds"]
+            > value["buflo_exact_release_guard_wait_nanoseconds"]
+            or (
+                value["buflo_exact_release_guard_entries"] == 0
+                and any(guard_measurements)
+            )
+        ):
+            return False
     return (
         value["wait_returns"]
         == value["socket_readiness_wakeups"] + value["timer_wakeups"]

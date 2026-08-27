@@ -164,6 +164,7 @@ def test_original_study_comparison_is_row_complete_and_preserves_anchors() -> No
     rows = original_study_comparison_rows()
 
     assert len(rows) == 16
+    assert len({row["anchor_id"] for row in rows}) == 16
     assert all(row["result_scope"] == "original-study" for row in rows)
     assert all(_COMPARISON_CONTEXT_FIELDS <= row.keys() for row in rows)
 
@@ -178,6 +179,7 @@ def test_original_study_comparison_is_row_complete_and_preserves_anchors() -> No
         "mean_percent": 27.3,
         "plus_minus_percent": 1.8,
     }
+    assert first_buflo["anchor_id"] == "buflo-tau0-rho40-d1000"
 
     ctsp_200 = next(
         row
@@ -198,6 +200,16 @@ def test_original_study_comparison_is_row_complete_and_preserves_anchors() -> No
     assert cpsp_et["metrics"]["bandwidth_ratio"] == 2.6
     assert cpsp_et["metrics"]["latency_ratio"] == 2.87
     assert cpsp_et["metrics"]["vng_plus_plus_percent"] == 34.2
+
+    inventory = evaluation.historical_anchor_metric_inventory(rows)
+    assert len(inventory) == 16
+    assert sum(len(item["metric_paths"]) for item in inventory) == 136
+    first_inventory = next(
+        item for item in inventory if item["anchor_id"] == first_buflo["anchor_id"]
+    )
+    assert "extra_bandwidth_percent" in first_inventory["metric_paths"]
+    assert "accuracy.panchenko.mean_percent" in first_inventory["metric_paths"]
+    assert "profile.tau_ms" not in first_inventory["metric_paths"]
 
 
 def test_qcsd_numeric_comparison_remains_unreviewed_until_explained() -> None:
@@ -1103,6 +1115,7 @@ def test_evaluation_receipt_static_contract_is_exact_and_fail_closed(tmp_path: P
     )
     canonical = json.loads(destination.read_text(encoding="utf-8"))
     assert set(canonical) == evaluation._EVALUATION_RECEIPT_KEYS
+    assert canonical["schema_version"] == evaluation.EVALUATION_RECEIPT_SCHEMA_VERSION
     evaluation._validate_evaluation_receipt_value(
         canonical,
         samples=(),
@@ -1110,6 +1123,15 @@ def test_evaluation_receipt_static_contract_is_exact_and_fail_closed(tmp_path: P
         formal=False,
         deep=False,
     )
+
+    with pytest.raises(ValueError, match="exactly 10000 bootstrap draws"):
+        evaluation.write_evaluation_receipt(
+            tmp_path / "formal-wrong-draws.json",
+            samples=(),
+            attack_results=(),
+            bootstrap_draws=9_999,
+            formal=True,
+        )
 
     missing = json.loads(json.dumps(canonical))
     del missing["observation_layer"]
