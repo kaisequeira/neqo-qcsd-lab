@@ -546,6 +546,36 @@ def test_buflo_guard_is_capped_per_direction_at_ten_thousand() -> None:
         parameters._validate_buflo(value, 1_200, Path("buflo.json"))
 
 
+def test_buflo_terminal_provenance_rejects_missing_changed_and_extra_keys(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parameter, provenance = _copy_fixture(
+        tmp_path, monkeypatch, "buflo-live.json"
+    )
+    original = json.loads(provenance.read_text(encoding="utf-8"))
+    mutations = []
+    missing = json.loads(json.dumps(original))
+    del missing["terminal_subcell_policy"]
+    mutations.append(missing)
+    changed = json.loads(json.dumps(original))
+    changed["terminal_subcell_observer_effect"] = "drifted"
+    mutations.append(changed)
+    extra = json.loads(json.dumps(original))
+    extra["unreceipted_terminal_semantics"] = True
+    mutations.append(extra)
+
+    for receipt in mutations:
+        atomic_json(provenance, receipt)
+        with pytest.raises(ValueError, match="BuFLO"):
+            validate_parameter_artifact(
+                parameter,
+                expected_kind="buflo",
+                allow_study_candidate=True,
+                expected_qcsd_profile="research-1200",
+                expected_udp_payload_ceiling=1_200,
+            )
+
+
 def _copy_fixture(tmp_path, monkeypatch, name):
     monkeypatch.setattr(parameters, "LAB_ROOT", tmp_path)
     destination = tmp_path / "config/defense-params"

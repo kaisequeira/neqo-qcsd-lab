@@ -43,6 +43,9 @@ from qcsd_lab.defenses import (
     DEFENSE_VARIANT_LABELS,
 )
 from qcsd_lab.fidelity import (
+    BUFLO_TERMINAL_CONTROL_EVIDENCE_SEMANTICS,
+    BUFLO_TERMINAL_SUBCELL_OBSERVER_EFFECT,
+    BUFLO_TERMINAL_SUBCELL_POLICY,
     SCHEDULE_PREFIX_FIELDS,
     SCHEDULE_QCSD_FIELDS,
     _cs_buflo_padding_targets_match,
@@ -287,6 +290,233 @@ def test_cs_buflo_provenance_explicitly_receipts_source_live_estimator_divergenc
             parameter.with_name(parameter.name + ".provenance.json").read_text(encoding="utf-8")
         )
         assert {key: provenance[key] for key in expected} == expected
+
+
+def test_buflo_provenance_binds_exact_terminal_summary_contract() -> None:
+    parameter = PARAMETER_FILES["buflo"][1]
+    provenance = json.loads(
+        parameter.with_name(parameter.name + ".provenance.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert provenance["terminal_subcell_policy"] == (
+        "drain_whole_cells_then_client_local_http3_cancel_"
+        "unallocatable_reviewed_chaff_tail"
+    )
+    assert provenance["terminal_subcell_observer_effect"] == (
+        "typed_stop_sending_and_reset_stream_defense_control_may_follow_"
+        "the_last_exact_cell"
+    )
+    assert provenance["terminal_subcell_policy"] == BUFLO_TERMINAL_SUBCELL_POLICY
+    assert (
+        provenance["terminal_subcell_observer_effect"]
+        == BUFLO_TERMINAL_SUBCELL_OBSERVER_EFFECT
+    )
+
+
+def _formal_performance_evaluation_fixture() -> dict[str, object]:
+    modes = ("undefended", "buflo", "cs-buflo")
+    defended = ("buflo", "cs-buflo")
+    workloads = buflo_study.WORKLOADS
+    directional = [
+        {
+            "defense": mode,
+            "workload_id": workload,
+            "acquisition_block_index": block,
+            "direction": direction,
+            "samples": 10,
+        }
+        for mode in modes
+        for workload in workloads
+        for block in range(10)
+        for direction in ("outgoing", "incoming")
+    ]
+    client = [
+        {
+            "defense": mode,
+            "workload_id": workload,
+            "acquisition_block_index": block,
+            "samples": 10,
+        }
+        for mode in modes
+        for workload in workloads
+        for block in range(10)
+    ]
+    paired_directional = [
+        {
+            "defense": mode,
+            "workload_id": workload,
+            "acquisition_block_index": block,
+            "direction": direction,
+            "pairs": 10,
+        }
+        for mode in defended
+        for workload in workloads
+        for block in range(10)
+        for direction in ("outgoing", "incoming")
+    ]
+    paired_client = [
+        {
+            "defense": mode,
+            "workload_id": workload,
+            "acquisition_block_index": block,
+            "pairs": 10,
+        }
+        for mode in defended
+        for workload in workloads
+        for block in range(10)
+    ]
+    required_costs = (
+        "user_cpu_seconds",
+        "system_cpu_seconds",
+        "wall_time_seconds",
+        "maximum_rss_bytes",
+        "voluntary_context_switches",
+        "involuntary_context_switches",
+        "timer_wakeups",
+        "transport_retransmissions",
+    )
+    mode_client = [
+        {
+            "defense": mode,
+            "pairs": 500,
+            "paired_client_costs": {
+                metric: {"available": True} for metric in required_costs
+            },
+            "completion_ratio_block_workload_bootstrap_95": {},
+            "added_seconds_block_workload_bootstrap_95": {},
+            "goodput_ratio_block_workload_bootstrap_95": {},
+        }
+        for mode in defended
+    ]
+    algorithm_strata = [
+        {
+            "defense": mode,
+            "workload_id": workload,
+            "acquisition_block_index": block,
+            "direction": direction,
+            "samples": 10,
+        }
+        for mode in modes
+        for workload in workloads
+        for block in range(10)
+        for direction in ("outgoing", "incoming")
+    ]
+    tail = [
+        {
+            "defense": "buflo",
+            "workload_id": workload,
+            "acquisition_block_index": block,
+            "samples": 10,
+            "samples_with_cancellation": 0,
+            "terminal_subcell_policy": [BUFLO_TERMINAL_SUBCELL_POLICY],
+            "terminal_subcell_observer_effect": [
+                BUFLO_TERMINAL_SUBCELL_OBSERVER_EFFECT
+            ],
+            "control_evidence_semantics": [
+                BUFLO_TERMINAL_CONTROL_EVIDENCE_SEMANTICS
+            ],
+            "stream_cancellations": 0,
+            "receipt_cancellations": 0,
+            "typed_cancellation_action_events": 0,
+            "pending_request_cancellations": 0,
+            "open_streams_at_latch": 0,
+            "parser_lease_bytes_at_latch": 0,
+            "pending_parser_boundaries_at_latch": 0,
+            "exact_capacity_bytes_cancelled": {
+                "total": 0,
+                "minimum": 0,
+                "maximum": 0,
+                "p50": 0.0,
+                "p90": 0.0,
+                "p95": 0.0,
+            },
+            "terminal_latched_at_us": {
+                "p50": 10_000_001.0,
+                "p90": 10_000_002.0,
+                "p95": 10_000_003.0,
+            },
+            "post_cancellation_unscheduled_defense_control_packets": 0,
+            "post_cancellation_unscheduled_defense_control_bytes": 0,
+        }
+        for workload in workloads
+        for block in range(10)
+    ]
+    return {
+        "performance_breakdowns": {
+            "directional": directional,
+            "client": client,
+            "paired_directional_by_workload_block": paired_directional,
+            "paired_client_by_workload_block": paired_client,
+            "paired_mode_direction_block_workload_bootstrap_95": [
+                {
+                    "defense": mode,
+                    "direction": direction,
+                    "pairs": 500,
+                }
+                for mode in defended
+                for direction in ("outgoing", "incoming")
+            ],
+            "paired_mode_client_block_workload_bootstrap_95": mode_client,
+        },
+        "algorithm_breakdowns": {
+            "available": True,
+            "classifier_input": False,
+            "strata": algorithm_strata,
+            "buflo_terminal_tail_strata": tail,
+        },
+        "paired_per_visit": [{} for _ in range(1_000)],
+        "paired_metrics": {
+            "buflo": {"pairs": 500},
+            "cs-buflo": {"pairs": 500},
+        },
+    }
+
+
+def test_formal_performance_gate_requires_exact_axes_and_terminal_tail() -> None:
+    value = _formal_performance_evaluation_fixture()
+    evidence = buflo_study._validate_formal_performance_evidence(value)
+    assert evidence["buflo_terminal_tail_strata"] == 50
+    assert evidence["buflo_terminal_tail_samples"] == 500
+
+    mutations = []
+    duplicate_algorithm = json.loads(json.dumps(value))
+    duplicate_algorithm["algorithm_breakdowns"]["strata"][0].update(
+        duplicate_algorithm["algorithm_breakdowns"]["strata"][1]
+    )
+    mutations.append(duplicate_algorithm)
+    duplicate_performance = json.loads(json.dumps(value))
+    duplicate_performance["performance_breakdowns"]["directional"][0].update(
+        duplicate_performance["performance_breakdowns"]["directional"][1]
+    )
+    mutations.append(duplicate_performance)
+    nonzero_zero_tail = json.loads(json.dumps(value))
+    capacity = nonzero_zero_tail["algorithm_breakdowns"][
+        "buflo_terminal_tail_strata"
+    ][0]["exact_capacity_bytes_cancelled"]
+    capacity.update(
+        {"total": 10, "minimum": 1, "maximum": 1, "p50": 1, "p90": 1, "p95": 1}
+    )
+    mutations.append(nonzero_zero_tail)
+    parser_backlog = json.loads(json.dumps(value))
+    parser_backlog["algorithm_breakdowns"]["buflo_terminal_tail_strata"][0][
+        "parser_lease_bytes_at_latch"
+    ] = 1
+    mutations.append(parser_backlog)
+    wrong_policy = json.loads(json.dumps(value))
+    wrong_policy["algorithm_breakdowns"]["buflo_terminal_tail_strata"][0][
+        "terminal_subcell_policy"
+    ] = ["drifted"]
+    mutations.append(wrong_policy)
+    mismatched_counters = json.loads(json.dumps(value))
+    mismatched_counters["algorithm_breakdowns"]["buflo_terminal_tail_strata"][0][
+        "receipt_cancellations"
+    ] = 1
+    mutations.append(mismatched_counters)
+
+    for changed in mutations:
+        with pytest.raises(ValueError, match="formal"):
+            buflo_study._validate_formal_performance_evidence(changed)
 
 
 @pytest.mark.parametrize(
@@ -932,6 +1162,45 @@ def test_sustained_capacity_gate_requires_all_clean_cells() -> None:
                     "no_unresolved_credit": True,
                     **(
                         {
+                            "terminal_subcell": {
+                                "terminal_subcell_policy": (
+                                    BUFLO_TERMINAL_SUBCELL_POLICY
+                                ),
+                                "terminal_subcell_observer_effect": (
+                                    BUFLO_TERMINAL_SUBCELL_OBSERVER_EFFECT
+                                ),
+                                "control_evidence_semantics": (
+                                    "post-cancellation unscheduled packet composition "
+                                    "proves defense-control bytes but does not expose "
+                                    "individual QUIC frame identity"
+                                ),
+                                "terminal_latched": True,
+                                "terminal_latched_at_us": 10_000_001,
+                                "open_streams_at_latch": 1,
+                                "stream_cancellations": 1,
+                                "receipt_cancellations": 1,
+                                "typed_cancellation_action_events": 1,
+                                "pending_request_cancellations": 0,
+                                "parser_lease_bytes_at_latch": 0,
+                                "pending_parser_boundaries_at_latch": 0,
+                                "exact_capacity_bytes_cancelled": 1_199,
+                                "whole_cell_floor_bytes": 1_200,
+                                "first_cancellation_monotonic_us": 10_000_010,
+                                "last_exact_outgoing_cell_monotonic_us": 9_999_990,
+                                "last_scheduled_terminal_monotonic_us": 10_000_000,
+                                "post_cancellation_unscheduled_defense_control_packets": 1,
+                                "post_cancellation_unscheduled_defense_control_bytes": 4,
+                                "first_post_cancellation_defense_control_monotonic_us": 10_000_020,
+                                "last_post_cancellation_defense_control_monotonic_us": 10_000_020,
+                                "paper_equivalent": False,
+                                "implementation_scope": "client_only_quic",
+                            }
+                        }
+                        if treatment == "buflo"
+                        else {}
+                    ),
+                    **(
+                        {
                             f"{direction}_minimum_interval_{field}": 2
                             for direction in ("outgoing", "incoming")
                             for field in ("opportunities", "terminal", "full")
@@ -968,6 +1237,12 @@ def test_sustained_capacity_gate_requires_all_clean_cells() -> None:
     proof = buflo_study._validate_sustained_cell_capacity(values)
     assert proof["samples"] == 30
     assert proof["profiles"]["buflo"]["cell_size_bytes"] == 1_200
+    assert (
+        proof["profiles"]["buflo"]["terminal_subcell"][
+            "exact_capacity_bytes_cancelled"
+        ]["maximum"]
+        == 1_199
+    )
     assert proof["profiles"]["cs-buflo-ctsp"]["minimum_interval_us"] == 4_096
     for index, key, changed in (
         (0, "passed", False),
@@ -984,6 +1259,12 @@ def test_sustained_capacity_gate_requires_all_clean_cells() -> None:
         with pytest.raises(ValueError, match="does not sustain"):
             buflo_study._validate_sustained_cell_capacity(values)
         values[index]["capacity"][key] = original
+
+    tail = values[0]["capacity"]["terminal_subcell"]
+    tail["parser_lease_bytes_at_latch"] = 1
+    with pytest.raises(ValueError, match="does not sustain"):
+        buflo_study._validate_sustained_cell_capacity(values)
+    tail["parser_lease_bytes_at_latch"] = 0
 
 
 def test_controlled_endpoint_gate_names_all_new_mode_two_origin_cells() -> None:
@@ -2193,6 +2474,14 @@ def test_buflo_fidelity_requires_every_zero_error_and_typed_terminal_once() -> N
         "buflo_application_complete": True,
         "buflo_minimum_duration_reached": True,
         "buflo_event_guard_triggered": False,
+        "buflo_terminal_subcell_pending_request_cancellations": 0,
+        "buflo_terminal_subcell_stream_cancellations": 0,
+        "buflo_terminal_subcell_exact_capacity_bytes_cancelled": 0,
+        "buflo_terminal_subcell_latched": True,
+        "buflo_terminal_subcell_latched_at_us": 10_000_001,
+        "buflo_terminal_subcell_open_streams_at_latch": 0,
+        "buflo_terminal_subcell_parser_lease_bytes_at_latch": 0,
+        "buflo_terminal_subcell_pending_parser_boundaries_at_latch": 0,
     }
     schedule = _schedule_metrics(outgoing=501, incoming=501)
     canonical_targets = list(range(0, 10_000_001, 20_000))
@@ -2223,7 +2512,7 @@ def test_buflo_fidelity_requires_every_zero_error_and_typed_terminal_once() -> N
         "resolved_configuration": {"schema_version": 2, "defense": {"kind": "buflo"}},
         "defense_diagnostics": diagnostics,
         "buflo_summary": {
-            "schema_version": 1,
+            "schema_version": 2,
             "kind": "buflo",
             "implementation_scope": "client_only_quic",
             "paper_equivalent": False,
@@ -2234,6 +2523,14 @@ def test_buflo_fidelity_requires_every_zero_error_and_typed_terminal_once() -> N
                 "scheduled_server_datagram_timing",
                 "scheduled_server_datagram_size",
             ],
+            "terminal_subcell_policy": (
+                "drain_whole_cells_then_client_local_http3_cancel_"
+                "unallocatable_reviewed_chaff_tail"
+            ),
+            "terminal_subcell_observer_effect": (
+                "typed_stop_sending_and_reset_stream_defense_control_may_follow_"
+                "the_last_exact_cell"
+            ),
             "diagnostics": diagnostics,
         },
         "cs_buflo_summary": None,
@@ -2652,7 +2949,17 @@ def test_comparison_review_cannot_omit_declared_csbuflo_incoming_boundary(
         {"difference": "closed-world-dataset-and-classifier-protocol"},
     ]
     qcsd_rows = [
-        {"defense": "buflo", "known_expected_differences": common},
+        {
+            "defense": "buflo",
+            "known_expected_differences": [
+                *common,
+                {
+                    "difference": (
+                        "buflo-terminal-subcell-client-local-cancellation"
+                    )
+                },
+            ],
+        },
         {
             "defense": "cs-buflo",
             "known_expected_differences": [

@@ -1063,7 +1063,7 @@ def _validate_run_binding(
             "application_workload_source_hash_sha256"
         ) != sha256_file(application_workload_source):
             raise ValueError("runner prepared application-source receipt is invalid")
-        _validate_chaff_response_receipts(run_data, chaff_manifest)
+        _validate_chaff_response_receipts(run_data, chaff_manifest, defense.kind)
     elif run_data.get("application_workload_source_hash_sha256") is not None:
         raise ValueError("runner receipt contains an unexpected prepared application source")
     if defense.kind in {"traffic_morphing", "walkie_talkie"} and (
@@ -1086,7 +1086,9 @@ def _validate_run_binding(
         raise ValueError("runner receipt contains unexpected defense parameters")
 
 
-def _validate_chaff_response_receipts(run_data: dict[str, Any], chaff_manifest_path: Path) -> None:
+def _validate_chaff_response_receipts(
+    run_data: dict[str, Any], chaff_manifest_path: Path, defense_kind: str
+) -> None:
     """Recompute every runtime chaff identity claim from the frozen manifest."""
 
     manifest = load_json(chaff_manifest_path)
@@ -1111,6 +1113,10 @@ def _validate_chaff_response_receipts(run_data: dict[str, Any], chaff_manifest_p
         "identity_verified",
     )
     request_ids: set[int] = set()
+    typed_cancellations = {
+        "buflo_terminal_subcell_tail_cancelled": 0,
+        "local_early_termination_cancelled": 0,
+    }
     for receipt in receipts:
         if not isinstance(receipt, dict) or set(receipt) != {
             "resource_id",
@@ -1207,9 +1213,32 @@ def _validate_chaff_response_receipts(run_data: dict[str, Any], chaff_manifest_p
             or receipt.get("body_sha256") is not None
             or receipt["bytes"] > expected.get("body_bytes")
             or any(receipt.get(field) is not None for field in match_fields)
-            or receipt.get("outcome") not in {"incomplete", "reset", "endpoint_closed"}
+            or receipt.get("outcome")
+            not in {
+                "incomplete",
+                "reset",
+                "endpoint_closed",
+                *typed_cancellations,
+            }
         ):
             raise ValueError("partial chaff response contains an invalid identity claim")
+        outcome = receipt.get("outcome")
+        if outcome in typed_cancellations:
+            typed_cancellations[outcome] += 1
+    diagnostics = run_data.get("defense_diagnostics")
+    if not isinstance(diagnostics, dict):
+        raise ValueError("runner chaff response diagnostics are unavailable")
+    buflo_cancellations = typed_cancellations["buflo_terminal_subcell_tail_cancelled"]
+    cs_cancellations = typed_cancellations["local_early_termination_cancelled"]
+    if (
+        buflo_cancellations
+        != diagnostics.get("buflo_terminal_subcell_stream_cancellations", 0)
+        or cs_cancellations
+        != diagnostics.get("cs_buflo_local_et_stream_cancellations", 0)
+        or (buflo_cancellations > 0 and defense_kind != "buflo")
+        or (cs_cancellations > 0 and defense_kind != "cs_buflo")
+    ):
+        raise ValueError("typed chaff cancellation receipts contradict defense diagnostics")
 
 
 def _copy_defense_parameter_artifacts(defense: Defense, neqo: Path) -> None:

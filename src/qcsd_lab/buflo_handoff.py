@@ -40,6 +40,9 @@ from .capture import ObserverPacket, extract_trace
 from .defenses import defense_from_runtime_identity
 from .experiment import resolved_sample_directory
 from .fidelity import (
+    BUFLO_TERMINAL_CONTROL_EVIDENCE_SEMANTICS,
+    BUFLO_TERMINAL_SUBCELL_OBSERVER_EFFECT,
+    BUFLO_TERMINAL_SUBCELL_POLICY,
     CS_BUFLO_AUTHOR_RATE_BOUNDARY_COUNTER_SEMANTICS,
     CS_BUFLO_EARLY_TERMINATION_SEMANTICS,
     CS_BUFLO_INCOMING_BOUNDARY_SEPARATION,
@@ -52,6 +55,7 @@ from .fidelity import (
     SCHEDULE_QCSD_FIELDS,
     _schedule_realization_metrics_from_path,
     _cs_buflo_rate_transition_vector_valid,
+    buflo_terminal_state_valid,
     fidelity_eligible,
     new_defense_terminal_receipts_valid,
 )
@@ -1408,6 +1412,223 @@ def _algorithm_diagnostics(
     diagnostics = run.get("defense_diagnostics")
     if not isinstance(diagnostics, Mapping):
         diagnostics = {}
+    buflo_state: dict[str, Any] | None = None
+    if runtime_kind == "buflo":
+        summary = run.get("buflo_summary")
+        required = {
+            "buflo_terminal_subcell_pending_request_cancellations",
+            "buflo_terminal_subcell_stream_cancellations",
+            "buflo_terminal_subcell_exact_capacity_bytes_cancelled",
+        }
+        if (
+            not isinstance(summary, Mapping)
+            or not required <= set(diagnostics)
+            or not new_defense_terminal_receipts_valid(
+                run, "buflo", require_application_complete=True
+            )
+        ):
+            raise ValueError("study handoff BuFLO terminal-tail evidence is unavailable")
+        counters = {key: diagnostics[key] for key in required}
+        if any(type(value) is not int or value < 0 for value in counters.values()):
+            raise ValueError("study handoff BuFLO terminal-tail counters are invalid")
+        pending = counters["buflo_terminal_subcell_pending_request_cancellations"]
+        streams = counters["buflo_terminal_subcell_stream_cancellations"]
+        capacity = counters["buflo_terminal_subcell_exact_capacity_bytes_cancelled"]
+        terminal_latched = diagnostics["buflo_terminal_subcell_latched"]
+        terminal_latched_at_us = diagnostics["buflo_terminal_subcell_latched_at_us"]
+        open_streams_at_latch = diagnostics[
+            "buflo_terminal_subcell_open_streams_at_latch"
+        ]
+        parser_lease_bytes_at_latch = diagnostics[
+            "buflo_terminal_subcell_parser_lease_bytes_at_latch"
+        ]
+        pending_parser_boundaries_at_latch = diagnostics[
+            "buflo_terminal_subcell_pending_parser_boundaries_at_latch"
+        ]
+        responses = run.get("chaff_responses")
+        if not isinstance(responses, list):
+            raise ValueError("study handoff BuFLO chaff receipts are unavailable")
+        receipt_cancellations = sum(
+            isinstance(response, Mapping)
+            and response.get("outcome") == "buflo_terminal_subcell_tail_cancelled"
+            for response in responses
+        )
+        cancellation_events: list[tuple[int, str, Mapping[str, Any]]] = []
+        for index, row in enumerate(events_rows, 1):
+            if row["event"] != "action":
+                continue
+            try:
+                details = json.loads(row["details"])
+            except json.JSONDecodeError as error:
+                raise ValueError(
+                    f"events.csv row {index} action details are invalid JSON"
+                ) from error
+            if isinstance(details, Mapping) and details.get("type") == "cancel_chaff":
+                cancellation_events.append(
+                    (
+                        _csv_unsigned(
+                            row["monotonic_us"],
+                            label=f"events.csv row {index} cancellation time",
+                        ),
+                        row["outcome"],
+                        details,
+                    )
+                )
+        typed_cancellation_events = [
+            item
+            for item in cancellation_events
+            if item[1] == "applied"
+            and set(item[2]) == {"type", "endpoint", "stream", "reason"}
+            and item[2].get("reason") == "buflo_terminal_subcell_tail"
+            and type(item[2].get("endpoint")) is int
+            and item[2]["endpoint"] >= 0
+            and type(item[2].get("stream")) is int
+            and item[2]["stream"] >= 0
+        ]
+        cancellation_targets = {
+            (item[2]["endpoint"], item[2]["stream"])
+            for item in typed_cancellation_events
+        }
+        exact_outgoing_times = [
+            _csv_unsigned(
+                row["monotonic_us"], label="packets.csv exact outgoing time"
+            )
+            for row in packets_rows
+            if row["direction"] == "outgoing"
+            and row["scheduled_target"]
+            and row["send_policy"] == "exact"
+        ]
+        first_cancellation_us = (
+            min(at for at, _, _ in typed_cancellation_events)
+            if typed_cancellation_events
+            else None
+        )
+        last_cancellation_us = (
+            max(at for at, _, _ in typed_cancellation_events)
+            if typed_cancellation_events
+            else None
+        )
+        incoming_terminal_times = [
+            _csv_unsigned(
+                row["credit_consumed_at_us"],
+                label="schedule incoming terminal consumption time",
+            )
+            for row in schedule_rows
+            if row["direction"] == "incoming" and row["satisfaction"] == "satisfied"
+        ]
+        scheduled_terminal_times = exact_outgoing_times + incoming_terminal_times
+        last_scheduled_terminal_us = (
+            max(scheduled_terminal_times) if scheduled_terminal_times else None
+        )
+        post_cancellation_control_rows = [
+            row
+            for row in packets_rows
+            if last_cancellation_us is not None
+            and row["direction"] == "outgoing"
+            and row["qcsd_outcome_schema_version"] == "2"
+            and row["send_policy"] == "unscheduled"
+            and _csv_unsigned(
+                row["defense_control_bytes"],
+                label="packets.csv terminal defense-control bytes",
+            )
+            > 0
+            and _csv_unsigned(
+                row["monotonic_us"], label="packets.csv terminal control time"
+            )
+            >= last_cancellation_us
+        ]
+        post_cancellation_control_times = [
+            _csv_unsigned(
+                row["monotonic_us"], label="packets.csv terminal control time"
+            )
+            for row in post_cancellation_control_rows
+        ]
+        post_cancellation_control_bytes = sum(
+            _csv_unsigned(
+                row["defense_control_bytes"],
+                label="packets.csv terminal defense-control bytes",
+                positive=True,
+            )
+            for row in post_cancellation_control_rows
+        )
+        policy = BUFLO_TERMINAL_SUBCELL_POLICY
+        observer_effect = BUFLO_TERMINAL_SUBCELL_OBSERVER_EFFECT
+        if (
+            summary.get("schema_version") != 2
+            or summary.get("terminal_subcell_policy") != policy
+            or summary.get("terminal_subcell_observer_effect") != observer_effect
+            or summary.get("diagnostics") != diagnostics
+            or terminal_latched is not True
+            or type(terminal_latched_at_us) is not int
+            or terminal_latched_at_us < 10_000_000
+            or open_streams_at_latch != streams
+            or parser_lease_bytes_at_latch != 0
+            or pending_parser_boundaries_at_latch != 0
+            or pending != 0
+            or receipt_cancellations != streams
+            or len(cancellation_events) != streams
+            or len(typed_cancellation_events) != streams
+            or len(cancellation_targets) != streams
+            or (streams == 0 and capacity != 0)
+            or (streams > 0 and not 0 <= capacity < 1_200)
+            or (
+                streams > 0
+                and (
+                    first_cancellation_us is None
+                    or not exact_outgoing_times
+                    or last_scheduled_terminal_us is None
+                    or first_cancellation_us
+                    < max(last_scheduled_terminal_us, terminal_latched_at_us)
+                    or not post_cancellation_control_rows
+                )
+            )
+            or (
+                last_scheduled_terminal_us is not None
+                and terminal_latched_at_us < last_scheduled_terminal_us
+            )
+        ):
+            raise ValueError("study handoff BuFLO terminal-tail evidence is inconsistent")
+        buflo_state = {
+            "terminal_subcell_policy": policy,
+            "terminal_subcell_observer_effect": observer_effect,
+            "pending_request_cancellations": pending,
+            "stream_cancellations": streams,
+            "receipt_cancellations": receipt_cancellations,
+            "exact_capacity_bytes_cancelled": capacity,
+            "whole_cell_floor_bytes": 1_200,
+            "terminal_latched": terminal_latched,
+            "terminal_latched_at_us": terminal_latched_at_us,
+            "open_streams_at_latch": open_streams_at_latch,
+            "parser_lease_bytes_at_latch": parser_lease_bytes_at_latch,
+            "pending_parser_boundaries_at_latch": pending_parser_boundaries_at_latch,
+            "typed_cancellation_action_events": len(typed_cancellation_events),
+            "first_cancellation_monotonic_us": first_cancellation_us,
+            "last_exact_outgoing_cell_monotonic_us": (
+                max(exact_outgoing_times) if exact_outgoing_times else None
+            ),
+            "last_scheduled_terminal_monotonic_us": last_scheduled_terminal_us,
+            "control_evidence_semantics": BUFLO_TERMINAL_CONTROL_EVIDENCE_SEMANTICS,
+            "post_cancellation_unscheduled_defense_control_packets": len(
+                post_cancellation_control_rows
+            ),
+            "post_cancellation_unscheduled_defense_control_bytes": (
+                post_cancellation_control_bytes
+            ),
+            "first_post_cancellation_defense_control_monotonic_us": (
+                min(post_cancellation_control_times)
+                if post_cancellation_control_times
+                else None
+            ),
+            "last_post_cancellation_defense_control_monotonic_us": (
+                max(post_cancellation_control_times)
+                if post_cancellation_control_times
+                else None
+            ),
+            "paper_equivalent": False,
+            "implementation_scope": "client_only_quic",
+        }
+        if not buflo_terminal_state_valid(buflo_state):
+            raise ValueError("study handoff BuFLO terminal-tail state is invalid")
     cs_state: dict[str, Any] | None = None
     if runtime_kind == "cs_buflo":
         summary = run.get("cs_buflo_summary")
@@ -1588,7 +1809,7 @@ def _algorithm_diagnostics(
         ):
             raise ValueError("study handoff CS-BuFLO translation/termination state is invalid")
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "mode": defense,
         "runtime_kind": runtime_kind,
         "classifier_input": False,
@@ -1623,6 +1844,7 @@ def _algorithm_diagnostics(
             )
             for direction in ("outgoing", "incoming")
         },
+        "buflo_state": buflo_state,
         "cs_buflo_state": cs_state,
     }
 
@@ -2549,4 +2771,11 @@ The defenses are client-only QUIC adaptations and are not paper-equivalent
 bilateral implementations. `samples.jsonl` is authoritative for temporal block
 splits and paired-visit membership. Validate the closed inventory with
 `sha256sum -c SHA256SUMS` and the semantic protocol with `buflo-study verify`.
+
+For BuFLO, `algorithm_diagnostics.buflo_state` binds the inclusive-minimum
+terminal latch, zero parser backlog, the unallocatable sub-cell capacity, typed
+client-local cancellation actions, and later unscheduled defense-control packet
+composition. Packet composition does not expose individual QUIC frame identity;
+this is a separately classified QCSD-only expected difference, not bilateral
+BuFLO behavior.
 """

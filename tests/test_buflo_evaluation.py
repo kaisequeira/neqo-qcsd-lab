@@ -39,6 +39,11 @@ from qcsd_lab.buflo_evaluation import (
     validate_dlsvm_preflight,
     write_dlsvm_preflight,
 )
+from qcsd_lab.fidelity import (
+    BUFLO_TERMINAL_CONTROL_EVIDENCE_SEMANTICS,
+    BUFLO_TERMINAL_SUBCELL_OBSERVER_EFFECT,
+    BUFLO_TERMINAL_SUBCELL_POLICY,
+)
 
 
 _COMPARISON_CONTEXT_FIELDS = {
@@ -210,6 +215,11 @@ def test_qcsd_numeric_comparison_remains_unreviewed_until_explained() -> None:
     assert row["attestation_eligible"] is False
     assert all(
         difference["classification"] == "expected"
+        for difference in row["known_expected_differences"]
+    )
+    assert any(
+        difference["difference"]
+        == "buflo-terminal-subcell-client-local-cancellation"
         for difference in row["known_expected_differences"]
     )
 
@@ -705,6 +715,109 @@ def test_algorithm_breakdown_retains_non_classifier_runner_strata() -> None:
     assert incoming["cs_buflo"]["minimum_interval_local_realized"] == 5
     assert incoming["cs_buflo"]["incoming_local_realized_cells"] == 9
     assert incoming["receive_credit_consumption"]["consumed_cells"] == 1
+
+
+def test_buflo_schema_two_state_is_exact_and_aggregates_terminal_tail() -> None:
+    empty_summary = {"count": 0}
+    direction = {
+        "scheduled_cells": 0,
+        "target_size_bytes": {"summary": empty_summary, "histogram": {}},
+        "desired_udp_bytes": 0,
+        "observed_udp_bytes": 0,
+        "realization_ratio": None,
+        "satisfaction_counts": {},
+        "congestion_reason_counts": {},
+        "inter_target_delta_us": empty_summary,
+        "estimated_jitter_from_nearest_nominal_us": empty_summary,
+        "inferred_nearest_nominal_transitions": [],
+        "scheduling_lateness_us": empty_summary,
+        "traffic_composition_bytes": {},
+        "receive_credit_advertisement": {
+            "advertised_cells": 0,
+            "delay_us": empty_summary,
+        },
+        "receive_credit_consumption": {
+            "consumed_cells": 0,
+            "delay_us": empty_summary,
+        },
+    }
+    state = {
+        "terminal_subcell_policy": BUFLO_TERMINAL_SUBCELL_POLICY,
+        "terminal_subcell_observer_effect": BUFLO_TERMINAL_SUBCELL_OBSERVER_EFFECT,
+        "pending_request_cancellations": 0,
+        "stream_cancellations": 1,
+        "receipt_cancellations": 1,
+        "exact_capacity_bytes_cancelled": 1_199,
+        "whole_cell_floor_bytes": 1_200,
+        "terminal_latched": True,
+        "terminal_latched_at_us": 10_000_001,
+        "open_streams_at_latch": 1,
+        "parser_lease_bytes_at_latch": 0,
+        "pending_parser_boundaries_at_latch": 0,
+        "typed_cancellation_action_events": 1,
+        "first_cancellation_monotonic_us": 10_000_010,
+        "last_exact_outgoing_cell_monotonic_us": 9_999_990,
+        "last_scheduled_terminal_monotonic_us": 10_000_000,
+        "control_evidence_semantics": BUFLO_TERMINAL_CONTROL_EVIDENCE_SEMANTICS,
+        "post_cancellation_unscheduled_defense_control_packets": 1,
+        "post_cancellation_unscheduled_defense_control_bytes": 4,
+        "first_post_cancellation_defense_control_monotonic_us": 10_000_020,
+        "last_post_cancellation_defense_control_monotonic_us": 10_000_020,
+        "paper_equivalent": False,
+        "implementation_scope": "client_only_quic",
+    }
+    diagnostics = {
+        "schema_version": 2,
+        "mode": "buflo",
+        "runtime_kind": "buflo",
+        "classifier_input": False,
+        "peer_reproduction": {},
+        "runner_rows": {
+            "schedule": 0,
+            "events": 1,
+            "packets": 1,
+            "typed_events": 1,
+            "typed_packets": 1,
+        },
+        "directions": {"outgoing": direction, "incoming": direction},
+        "buflo_state": state,
+        "cs_buflo_state": None,
+    }
+    loaded = evaluation._load_algorithm_diagnostics(diagnostics, defense="buflo")
+    sample = StudySample(
+        "b", "site", "site", "buflo", 0, "pair", _trace(), None, loaded
+    )
+    result = algorithm_breakdowns([sample])
+    assert result["available"] is True
+    assert len(result["buflo_terminal_tail_strata"]) == 1
+    tail = result["buflo_terminal_tail_strata"][0]
+    assert tail["stream_cancellations"] == 1
+    assert tail["exact_capacity_bytes_cancelled"] == {
+        "total": 1_199,
+        "minimum": 1_199,
+        "maximum": 1_199,
+        "p50": 1_199.0,
+        "p90": 1_199.0,
+        "p95": 1_199.0,
+    }
+    assert tail["post_cancellation_unscheduled_defense_control_bytes"] == 4
+
+    for field, changed in (
+        ("parser_lease_bytes_at_latch", 1),
+        ("first_cancellation_monotonic_us", 9_999_999),
+        ("terminal_subcell_policy", "drifted"),
+    ):
+        invalid = json.loads(json.dumps(diagnostics))
+        invalid["buflo_state"][field] = changed
+        with pytest.raises(ValueError, match="BuFLO algorithm state"):
+            evaluation._load_algorithm_diagnostics(invalid, defense="buflo")
+
+    legacy = {key: value for key, value in diagnostics.items() if key != "buflo_state"}
+    legacy["schema_version"] = 1
+    assert evaluation._load_algorithm_diagnostics(legacy, defense="buflo") == legacy
+    legacy["buflo_state"] = None
+    with pytest.raises(ValueError, match="schema is invalid"):
+        evaluation._load_algorithm_diagnostics(legacy, defense="buflo")
 
 
 def test_handoff_loader_checks_trace_digest_and_shape_contract(tmp_path: Path) -> None:

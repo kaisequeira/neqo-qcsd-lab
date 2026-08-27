@@ -1446,11 +1446,21 @@ def _runtime_chaff_fixture(tmp_path: Path) -> tuple[Path, dict[str, object]]:
     return manifest, receipt
 
 
+def _runtime_chaff_run(receipts: list[dict[str, object]]) -> dict[str, object]:
+    return {
+        "chaff_responses": receipts,
+        "defense_diagnostics": {
+            "buflo_terminal_subcell_stream_cancellations": 0,
+            "cs_buflo_local_et_stream_cancellations": 0,
+        },
+    }
+
+
 def test_runtime_chaff_receipts_accept_verified_complete_and_truthful_reset(
     tmp_path: Path,
 ) -> None:
     manifest, receipt = _runtime_chaff_fixture(tmp_path)
-    _validate_chaff_response_receipts({"chaff_responses": [receipt]}, manifest)
+    _validate_chaff_response_receipts(_runtime_chaff_run([receipt]), manifest, "static")
 
     partial = {
         **receipt,
@@ -1466,9 +1476,58 @@ def test_runtime_chaff_receipts_accept_verified_complete_and_truthful_reset(
         "identity_verified": None,
         "outcome": "reset",
     }
-    _validate_chaff_response_receipts({"chaff_responses": [partial]}, manifest)
+    _validate_chaff_response_receipts(_runtime_chaff_run([partial]), manifest, "static")
     partial["outcome"] = "endpoint_closed"
-    _validate_chaff_response_receipts({"chaff_responses": [partial]}, manifest)
+    _validate_chaff_response_receipts(_runtime_chaff_run([partial]), manifest, "static")
+
+
+@pytest.mark.parametrize(
+    ("defense", "outcome", "diagnostic"),
+    [
+        (
+            "buflo",
+            "buflo_terminal_subcell_tail_cancelled",
+            "buflo_terminal_subcell_stream_cancellations",
+        ),
+        (
+            "cs_buflo",
+            "local_early_termination_cancelled",
+            "cs_buflo_local_et_stream_cancellations",
+        ),
+    ],
+)
+def test_runtime_chaff_receipts_accept_only_matching_typed_cancellations(
+    tmp_path: Path,
+    defense: str,
+    outcome: str,
+    diagnostic: str,
+) -> None:
+    manifest, receipt = _runtime_chaff_fixture(tmp_path)
+    receipt.update(
+        {
+            "status": None,
+            "content_encoding": None,
+            "bytes": 81,
+            "body_sha256": None,
+            "complete": False,
+            "status_match": None,
+            "content_encoding_match": None,
+            "body_bytes_match": None,
+            "body_sha256_match": None,
+            "identity_verified": None,
+            "outcome": outcome,
+        }
+    )
+    run = _runtime_chaff_run([receipt])
+    run["defense_diagnostics"][diagnostic] = 1
+    _validate_chaff_response_receipts(run, manifest, defense)
+
+    with pytest.raises(ValueError, match="typed chaff cancellation"):
+        _validate_chaff_response_receipts(run, manifest, "static")
+
+    run["defense_diagnostics"][diagnostic] = 0
+    with pytest.raises(ValueError, match="typed chaff cancellation"):
+        _validate_chaff_response_receipts(run, manifest, defense)
 
 
 @pytest.mark.parametrize(
@@ -1490,7 +1549,9 @@ def test_runtime_chaff_receipts_reject_known_contradictions(
     receipt["outcome"] = outcome
 
     with pytest.raises(ValueError, match="qualified|contradicts"):
-        _validate_chaff_response_receipts({"chaff_responses": [receipt]}, manifest)
+        _validate_chaff_response_receipts(
+            _runtime_chaff_run([receipt]), manifest, "static"
+        )
 
 
 @pytest.mark.parametrize(
@@ -1523,7 +1584,9 @@ def test_partial_runtime_chaff_receipts_reject_raw_identity_contradictions(
     )
 
     with pytest.raises(ValueError, match="contradict|invalid identity claim"):
-        _validate_chaff_response_receipts({"chaff_responses": [receipt]}, manifest)
+        _validate_chaff_response_receipts(
+            _runtime_chaff_run([receipt]), manifest, "static"
+        )
 
 
 def test_runner_receipt_is_bound_to_frozen_launch_inputs(

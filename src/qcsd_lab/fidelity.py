@@ -58,6 +58,124 @@ SCHEDULE_QCSD_FIELDS = ADVERTISEMENT_SCHEDULE_QCSD_FIELDS + (
 )
 DEFAULT_TIMESTAMP_TOLERANCE_NS = 10_000_000
 CLOCK_STEP_MIN_NS = 50_000_000
+BUFLO_TERMINAL_SUBCELL_POLICY = (
+    "drain_whole_cells_then_client_local_http3_cancel_"
+    "unallocatable_reviewed_chaff_tail"
+)
+BUFLO_TERMINAL_SUBCELL_OBSERVER_EFFECT = (
+    "typed_stop_sending_and_reset_stream_defense_control_may_follow_"
+    "the_last_exact_cell"
+)
+BUFLO_TERMINAL_CONTROL_EVIDENCE_SEMANTICS = (
+    "post-cancellation unscheduled packet composition proves defense-control "
+    "bytes but does not expose individual QUIC frame identity"
+)
+BUFLO_TERMINAL_STATE_KEYS = frozenset(
+    {
+        "terminal_subcell_policy",
+        "terminal_subcell_observer_effect",
+        "pending_request_cancellations",
+        "stream_cancellations",
+        "receipt_cancellations",
+        "exact_capacity_bytes_cancelled",
+        "whole_cell_floor_bytes",
+        "terminal_latched",
+        "terminal_latched_at_us",
+        "open_streams_at_latch",
+        "parser_lease_bytes_at_latch",
+        "pending_parser_boundaries_at_latch",
+        "typed_cancellation_action_events",
+        "first_cancellation_monotonic_us",
+        "last_exact_outgoing_cell_monotonic_us",
+        "last_scheduled_terminal_monotonic_us",
+        "control_evidence_semantics",
+        "post_cancellation_unscheduled_defense_control_packets",
+        "post_cancellation_unscheduled_defense_control_bytes",
+        "first_post_cancellation_defense_control_monotonic_us",
+        "last_post_cancellation_defense_control_monotonic_us",
+        "paper_equivalent",
+        "implementation_scope",
+    }
+)
+
+
+def buflo_terminal_state_valid(value: Any) -> bool:
+    """Validate the exact schema-2 BuFLO terminal-tail evidence contract."""
+
+    if not isinstance(value, Mapping) or set(value) != BUFLO_TERMINAL_STATE_KEYS:
+        return False
+    integer_fields = {
+        "pending_request_cancellations",
+        "stream_cancellations",
+        "receipt_cancellations",
+        "exact_capacity_bytes_cancelled",
+        "whole_cell_floor_bytes",
+        "terminal_latched_at_us",
+        "open_streams_at_latch",
+        "parser_lease_bytes_at_latch",
+        "pending_parser_boundaries_at_latch",
+        "typed_cancellation_action_events",
+        "post_cancellation_unscheduled_defense_control_packets",
+        "post_cancellation_unscheduled_defense_control_bytes",
+    }
+    if any(type(value[field]) is not int or value[field] < 0 for field in integer_fields):
+        return False
+    streams = value["stream_cancellations"]
+    capacity = value["exact_capacity_bytes_cancelled"]
+    last_exact = value["last_exact_outgoing_cell_monotonic_us"]
+    last_scheduled = value["last_scheduled_terminal_monotonic_us"]
+    cancellation = value["first_cancellation_monotonic_us"]
+    first_control = value[
+        "first_post_cancellation_defense_control_monotonic_us"
+    ]
+    last_control = value["last_post_cancellation_defense_control_monotonic_us"]
+    common = (
+        value["terminal_subcell_policy"] == BUFLO_TERMINAL_SUBCELL_POLICY
+        and value["terminal_subcell_observer_effect"]
+        == BUFLO_TERMINAL_SUBCELL_OBSERVER_EFFECT
+        and value["pending_request_cancellations"] == 0
+        and streams
+        == value["receipt_cancellations"]
+        == value["typed_cancellation_action_events"]
+        and value["whole_cell_floor_bytes"] == 1_200
+        and value["terminal_latched"] is True
+        and value["terminal_latched_at_us"] >= 10_000_000
+        and value["open_streams_at_latch"] == streams
+        and value["parser_lease_bytes_at_latch"] == 0
+        and value["pending_parser_boundaries_at_latch"] == 0
+        and value["paper_equivalent"] is False
+        and value["implementation_scope"] == "client_only_quic"
+        and value["control_evidence_semantics"]
+        == BUFLO_TERMINAL_CONTROL_EVIDENCE_SEMANTICS
+        and type(last_exact) is int
+        and last_exact >= 0
+        and type(last_scheduled) is int
+        and last_scheduled >= last_exact
+        and value["terminal_latched_at_us"] >= last_scheduled
+    )
+    if not common:
+        return False
+    if streams == 0:
+        return bool(
+            capacity == 0
+            and value["post_cancellation_unscheduled_defense_control_packets"] == 0
+            and value["post_cancellation_unscheduled_defense_control_bytes"] == 0
+            and cancellation is None
+            and first_control is None
+            and last_control is None
+        )
+    return bool(
+        0 <= capacity < 1_200
+        and value["post_cancellation_unscheduled_defense_control_packets"] > 0
+        and value["post_cancellation_unscheduled_defense_control_bytes"] > 0
+        and type(cancellation) is int
+        and type(first_control) is int
+        and type(last_control) is int
+        and max(last_scheduled, value["terminal_latched_at_us"])
+        <= cancellation
+        <= first_control
+        <= last_control
+    )
 CLOCK_STEP_MAX_NS = 100_000_000
 CLOCK_STEP_CONTEXT_PACKETS = 5
 CLOCK_EPOCH_MIN_PACKETS = 32
@@ -1175,6 +1293,13 @@ _DIAGNOSTIC_CONTRACTS: dict[str, dict[str, str]] = {
                 "buflo_incoming_unresolved_cells",
                 "buflo_catch_up_outgoing_cells",
                 "buflo_catch_up_incoming_cells",
+                "buflo_terminal_subcell_pending_request_cancellations",
+                "buflo_terminal_subcell_stream_cancellations",
+                "buflo_terminal_subcell_exact_capacity_bytes_cancelled",
+                "buflo_terminal_subcell_latched_at_us",
+                "buflo_terminal_subcell_open_streams_at_latch",
+                "buflo_terminal_subcell_parser_lease_bytes_at_latch",
+                "buflo_terminal_subcell_pending_parser_boundaries_at_latch",
             )
         },
         "buflo_paper_equivalent": _BOOLEAN,
@@ -1183,6 +1308,7 @@ _DIAGNOSTIC_CONTRACTS: dict[str, dict[str, str]] = {
         "buflo_application_complete": _BOOLEAN,
         "buflo_minimum_duration_reached": _BOOLEAN,
         "buflo_event_guard_triggered": _BOOLEAN,
+        "buflo_terminal_subcell_latched": _BOOLEAN,
     },
     "cs-buflo": {
         **{
@@ -1558,7 +1684,14 @@ def new_defense_terminal_receipts_valid(
         "unavailable_peer_properties",
         "diagnostics",
     }
-    if defense_kind == "cs_buflo":
+    if defense_kind == "buflo":
+        expected_fields.update(
+            {
+                "terminal_subcell_policy",
+                "terminal_subcell_observer_effect",
+            }
+        )
+    else:
         expected_fields.update(
             {
                 "early_termination_semantics",
@@ -1569,7 +1702,7 @@ def new_defense_terminal_receipts_valid(
         )
     if (
         set(summary) != expected_fields
-        or summary.get("schema_version") != (1 if defense_kind == "buflo" else 2)
+        or summary.get("schema_version") != 2
         or summary.get("kind") != defense_kind
         or summary.get("implementation_scope") != "client_only_quic"
         or summary.get("paper_equivalent") is not False
@@ -1581,8 +1714,16 @@ def new_defense_terminal_receipts_valid(
     ):
         return False
     if defense_kind == "buflo":
-        return selected["buflo_client_only"] is True and (
-            not require_application_complete or selected["buflo_application_complete"] is True
+        return (
+            summary.get("terminal_subcell_policy")
+            == BUFLO_TERMINAL_SUBCELL_POLICY
+            and summary.get("terminal_subcell_observer_effect")
+            == BUFLO_TERMINAL_SUBCELL_OBSERVER_EFFECT
+            and selected["buflo_client_only"] is True
+            and (
+                not require_application_complete
+                or selected["buflo_application_complete"] is True
+            )
         )
     return (
         summary.get("early_termination_semantics")
@@ -1719,6 +1860,33 @@ def fidelity_eligible(
             and diagnostics["buflo_application_complete"] is True
             and diagnostics["buflo_minimum_duration_reached"] is True
             and diagnostics["buflo_event_guard_triggered"] is False
+            and diagnostics["buflo_terminal_subcell_latched"] is True
+            and diagnostics["buflo_terminal_subcell_latched_at_us"] >= 10_000_000
+            and diagnostics["buflo_terminal_subcell_open_streams_at_latch"]
+            == diagnostics["buflo_terminal_subcell_stream_cancellations"]
+            and diagnostics["buflo_terminal_subcell_parser_lease_bytes_at_latch"] == 0
+            and diagnostics[
+                "buflo_terminal_subcell_pending_parser_boundaries_at_latch"
+            ]
+            == 0
+            and diagnostics["buflo_terminal_subcell_pending_request_cancellations"] == 0
+            and (
+                (
+                    diagnostics["buflo_terminal_subcell_stream_cancellations"] == 0
+                    and diagnostics[
+                        "buflo_terminal_subcell_exact_capacity_bytes_cancelled"
+                    ]
+                    == 0
+                )
+                or (
+                    diagnostics["buflo_terminal_subcell_stream_cancellations"] > 0
+                    and 0
+                    <= diagnostics[
+                        "buflo_terminal_subcell_exact_capacity_bytes_cancelled"
+                    ]
+                    < 1_200
+                )
+            )
             and diagnostics["buflo_scheduled_outgoing_cells"]
             == diagnostics["buflo_full_outgoing_cells"]
             and isinstance(schedule_metrics, Mapping)

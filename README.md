@@ -35,6 +35,14 @@ paper-equivalent implementations. Until a typed
 status is **five validated defences plus two candidates** (nine selectable
 modes including `undefended` and `static`).
 
+The BuFLO adaptation drains every allocatable 1,200-byte reviewed-chaff cell
+after the inclusive ten-second minimum. If only a sub-cell response tail
+remains, it latches only after all scheduled work and parser leases are
+terminal, then uses standard client-local HTTP/3 cancellation. The resulting
+unscheduled defense-control traffic is explicitly receipted and is an expected
+QCSD-only difference from the bilateral TCP study; it is never described as
+paper-equivalent or as a server padding-complete signal.
+
 The versioned coordinator exposes nine fail-closed actions: `reference`,
 `qualify`, `historical-snapshot`, `freeze-cohort`, `code-gate`, `capture`,
 `export`, `evaluate`, and `verify`. The following Bash sequence is the complete

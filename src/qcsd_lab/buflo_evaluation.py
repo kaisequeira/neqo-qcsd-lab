@@ -37,6 +37,7 @@ from .fidelity import (
     CS_BUFLO_INCOMING_BOUNDARY_SEPARATION,
     CS_BUFLO_INCOMING_CADENCE_BOUNDARY,
     CS_BUFLO_INCOMING_TERMINAL_BOUNDARY,
+    buflo_terminal_state_valid,
 )
 from .util import LAB_ROOT, load_json, require_disjoint_path, sha256_file, source_metadata
 
@@ -741,15 +742,40 @@ def load_study_handoff(root: Path) -> tuple[StudySample, ...]:
 def _load_algorithm_diagnostics(value: Any, *, defense: str) -> Mapping[str, Any] | None:
     if value is None:
         return None
+    legacy_keys = {
+        "schema_version",
+        "mode",
+        "runtime_kind",
+        "classifier_input",
+        "peer_reproduction",
+        "runner_rows",
+        "directions",
+        "cs_buflo_state",
+    }
+    current_keys = legacy_keys | {"buflo_state"}
     if (
         not isinstance(value, dict)
-        or value.get("schema_version") != 1
+        or value.get("schema_version") not in {1, 2}
+        or set(value)
+        != (legacy_keys if value.get("schema_version") == 1 else current_keys)
         or value.get("mode") != defense
         or value.get("classifier_input") is not False
         or not isinstance(value.get("runner_rows"), dict)
         or set(value.get("directions", {})) != {"outgoing", "incoming"}
     ):
         raise ValueError("study handoff algorithm diagnostic schema is invalid")
+    if value["schema_version"] == 2:
+        runtime_kind = value.get("runtime_kind")
+        buflo_state = value.get("buflo_state")
+        cs_state = value.get("cs_buflo_state")
+        if runtime_kind == "buflo":
+            if not buflo_terminal_state_valid(buflo_state) or cs_state is not None:
+                raise ValueError("study handoff BuFLO algorithm state is invalid")
+        elif runtime_kind == "cs_buflo":
+            if buflo_state is not None or not isinstance(cs_state, Mapping):
+                raise ValueError("study handoff CS-BuFLO algorithm state is invalid")
+        elif buflo_state is not None or cs_state is not None:
+            raise ValueError("study handoff algorithm state contradicts its runtime kind")
     return value
 
 
@@ -1395,9 +1421,15 @@ def algorithm_breakdowns(samples: Sequence[StudySample]) -> dict[str, Any]:
             "reason": "handoff runner algorithm diagnostics are incomplete",
         }
     groups: dict[tuple[str, str, int, str], list[Mapping[str, Any]]] = defaultdict(list)
+    terminal_tail_groups: dict[tuple[str, str, int], list[Mapping[str, Any]]] = defaultdict(list)
     for sample in samples:
         assert sample.algorithm_diagnostics is not None
         directions = sample.algorithm_diagnostics["directions"]
+        buflo_state = sample.algorithm_diagnostics.get("buflo_state")
+        if isinstance(buflo_state, Mapping):
+            terminal_tail_groups[
+                (sample.defense, sample.workload_id, sample.acquisition_block_index)
+            ].append(buflo_state)
         for direction in ("outgoing", "incoming"):
             groups[
                 (
@@ -1594,10 +1626,78 @@ def algorithm_breakdowns(samples: Sequence[StudySample]) -> dict[str, Any]:
                 ),
             }
         )
+    terminal_tail_rows = [
+        {
+            "defense": defense,
+            "workload_id": workload,
+            "acquisition_block_index": block,
+            "samples": len(group),
+            "samples_with_cancellation": sum(
+                int(item["stream_cancellations"]) > 0 for item in group
+            ),
+            "terminal_subcell_policy": sorted(
+                {str(item["terminal_subcell_policy"]) for item in group}
+            ),
+            "terminal_subcell_observer_effect": sorted(
+                {str(item["terminal_subcell_observer_effect"]) for item in group}
+            ),
+            "control_evidence_semantics": sorted(
+                {str(item["control_evidence_semantics"]) for item in group}
+            ),
+            "stream_cancellations": sum(
+                int(item["stream_cancellations"]) for item in group
+            ),
+            "receipt_cancellations": sum(
+                int(item["receipt_cancellations"]) for item in group
+            ),
+            "typed_cancellation_action_events": sum(
+                int(item["typed_cancellation_action_events"]) for item in group
+            ),
+            "pending_request_cancellations": sum(
+                int(item["pending_request_cancellations"]) for item in group
+            ),
+            "open_streams_at_latch": sum(
+                int(item["open_streams_at_latch"]) for item in group
+            ),
+            "parser_lease_bytes_at_latch": sum(
+                int(item["parser_lease_bytes_at_latch"]) for item in group
+            ),
+            "pending_parser_boundaries_at_latch": sum(
+                int(item["pending_parser_boundaries_at_latch"]) for item in group
+            ),
+            "exact_capacity_bytes_cancelled": {
+                "total": sum(
+                    int(item["exact_capacity_bytes_cancelled"]) for item in group
+                ),
+                "minimum": min(
+                    int(item["exact_capacity_bytes_cancelled"]) for item in group
+                ),
+                "maximum": max(
+                    int(item["exact_capacity_bytes_cancelled"]) for item in group
+                ),
+                **_numeric_quantiles(
+                    [int(item["exact_capacity_bytes_cancelled"]) for item in group]
+                ),
+            },
+            "terminal_latched_at_us": _numeric_quantiles(
+                [int(item["terminal_latched_at_us"]) for item in group]
+            ),
+            "post_cancellation_unscheduled_defense_control_packets": sum(
+                int(item["post_cancellation_unscheduled_defense_control_packets"])
+                for item in group
+            ),
+            "post_cancellation_unscheduled_defense_control_bytes": sum(
+                int(item["post_cancellation_unscheduled_defense_control_bytes"])
+                for item in group
+            ),
+        }
+        for (defense, workload, block), group in sorted(terminal_tail_groups.items())
+    ]
     return {
         "available": True,
         "classifier_input": False,
         "strata": rows,
+        "buflo_terminal_tail_strata": terminal_tail_rows,
     }
 
 
@@ -2843,7 +2943,11 @@ def _qcsd_comparison_rows(
         per_class = Counter(sample.class_label for sample in selected)
         if defense == "buflo":
             padding_variant = "1200-byte desired UDP-payload BuFLO cell"
-            early_termination = "not applicable"
+            early_termination = (
+                "inclusive 10-second minimum; drain every allocatable whole cell, then "
+                "client-locally cancel only an unallocatable reviewed-chaff sub-cell tail "
+                "with standard HTTP/3 control; no bilateral padding-complete signal"
+            )
         elif defense == "cs-buflo":
             padding_variant = (
                 "CTSP adaptation: outgoing total, incoming payload, 600-byte desired UDP payload"
@@ -2938,6 +3042,23 @@ def _qcsd_comparison_rows(
                         "reason": "five QCSD workloads and temporal holdout versus historical site corpora",
                     },
                 ]
+                + (
+                    [
+                        {
+                            "difference": "buflo-terminal-subcell-client-local-cancellation",
+                            "classification": "expected",
+                            "reason": (
+                                "after every allocatable 1,200-byte reviewed-chaff cell is "
+                                "drained, an unallocatable response tail is terminalized with "
+                                "standard client-local HTTP/3 STOP_SENDING/RESET_STREAM; those "
+                                "unscheduled defense-control bytes are separately receipted and "
+                                "are not part of the paper's bilateral TCP model"
+                            ),
+                        }
+                    ]
+                    if defense == "buflo"
+                    else []
+                )
                 + (
                     [
                         {

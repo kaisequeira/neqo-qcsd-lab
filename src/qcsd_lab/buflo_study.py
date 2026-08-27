@@ -33,6 +33,12 @@ from typing import Any
 
 import yaml
 
+from .fidelity import (
+    BUFLO_TERMINAL_CONTROL_EVIDENCE_SEMANTICS,
+    BUFLO_TERMINAL_SUBCELL_OBSERVER_EFFECT,
+    BUFLO_TERMINAL_SUBCELL_POLICY,
+    buflo_terminal_state_valid,
+)
 from .parameters import BUFLO_STUDY_ID, validate_parameter_artifact
 from .util import (
     LAB_ROOT,
@@ -3978,6 +3984,9 @@ _MANDATORY_CSBUFLO_COMPARISON_DIFFERENCE_IDS = frozenset(
         ),
     }
 )
+_MANDATORY_BUFLO_COMPARISON_DIFFERENCE_IDS = frozenset(
+    {"buflo-terminal-subcell-client-local-cancellation"}
+)
 
 
 def _comparison_required_difference_ids(
@@ -3999,6 +4008,8 @@ def _comparison_required_difference_ids(
                 raise ValueError("evaluation comparison difference inventory is invalid")
             declared.add(identifier)
     mandatory = set(_MANDATORY_COMPARISON_DIFFERENCE_IDS)
+    if "buflo" in defenses:
+        mandatory.update(_MANDATORY_BUFLO_COMPARISON_DIFFERENCE_IDS)
     if "cs-buflo" in defenses:
         mandatory.update(_MANDATORY_CSBUFLO_COMPARISON_DIFFERENCE_IDS)
     if not mandatory <= declared:
@@ -5488,6 +5499,9 @@ def _controlled_sample_capacity_and_cost(
             packets_path=sample_path / "neqo/packets.csv",
         )
     if treatment == "buflo":
+        terminal_subcell = (
+            algorithm.get("buflo_state") if isinstance(algorithm, Mapping) else None
+        )
         targets = schedule.get("target_times_us_by_direction")
         sizes = schedule.get("scheduled_sizes_by_direction")
         capacity = {
@@ -5508,6 +5522,7 @@ def _controlled_sample_capacity_and_cost(
             ),
             "runner_full_extended_schema_validated": algorithm is not None,
             "runner_algorithm_evidence_sha256": _canonical_digest(algorithm),
+            "terminal_subcell": terminal_subcell,
             "minimum_interval_exercised": all(
                 isinstance(targets, Mapping)
                 and isinstance(targets.get(direction), list)
@@ -5548,6 +5563,7 @@ def _controlled_sample_capacity_and_cost(
             and capacity["incoming_terminal_cells"]
             == capacity["incoming_opportunities"]
             and capacity["no_unresolved_credit"]
+            and _controlled_buflo_terminal_subcell_valid(terminal_subcell)
         )
     elif treatment in {"cs-buflo-ctsp", "cs-buflo-cpsp"}:
         sizes = schedule.get("scheduled_sizes_by_direction")
@@ -5818,8 +5834,12 @@ def _validate_sustained_cell_capacity(values: Sequence[Mapping[str, Any]]) -> di
             is not None
             and capacity.get("no_unresolved_credit") is True
         )
-        if not common or treatment == "buflo":
-            return common
+        if not common:
+            return False
+        if treatment == "buflo":
+            return _controlled_buflo_terminal_subcell_valid(
+                capacity.get("terminal_subcell")
+            )
         for direction in ("outgoing", "incoming"):
             opportunities = capacity.get(
                 f"{direction}_minimum_interval_opportunities"
@@ -5852,7 +5872,8 @@ def _validate_sustained_cell_capacity(values: Sequence[Mapping[str, Any]]) -> di
 
     if any(not capacity_is_valid(value) for value in values):
         raise ValueError(
-            "controlled clean evidence does not sustain 1200/600-byte bilateral opportunities"
+            "controlled clean evidence does not sustain 1200/600-byte client-only "
+            "outgoing-cell and incoming-credit opportunities"
         )
     return {
         "schema_version": 1,
@@ -5916,10 +5937,85 @@ def _validate_sustained_cell_capacity(values: Sequence[Mapping[str, Any]]) -> di
                     if treatment != "buflo"
                     else None
                 ),
+                "terminal_subcell": (
+                    _aggregate_controlled_buflo_terminal_subcells(
+                        [
+                            value["capacity"]["terminal_subcell"]
+                            for value in values
+                            if value["treatment"] == treatment
+                        ]
+                    )
+                    if treatment == "buflo"
+                    else None
+                ),
                 "no_unresolved_credit": True,
             }
             for treatment in ("buflo", "cs-buflo-ctsp", "cs-buflo-cpsp")
         },
+        "passed": True,
+    }
+
+
+def _controlled_buflo_terminal_subcell_valid(value: Any) -> bool:
+    return buflo_terminal_state_valid(value)
+
+
+def _aggregate_controlled_buflo_terminal_subcells(
+    values: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    if not values or any(not _controlled_buflo_terminal_subcell_valid(value) for value in values):
+        raise ValueError("controlled BuFLO terminal-subcell evidence is invalid")
+    capacities = [int(value["exact_capacity_bytes_cancelled"]) for value in values]
+    streams = [int(value["stream_cancellations"]) for value in values]
+    latch_times = [int(value["terminal_latched_at_us"]) for value in values]
+    post_control_packets = [
+        int(value["post_cancellation_unscheduled_defense_control_packets"])
+        for value in values
+    ]
+    post_control_bytes = [
+        int(value["post_cancellation_unscheduled_defense_control_bytes"])
+        for value in values
+    ]
+    return {
+        "schema_version": 1,
+        "samples": len(values),
+        "terminal_subcell_policy": BUFLO_TERMINAL_SUBCELL_POLICY,
+        "terminal_subcell_observer_effect": BUFLO_TERMINAL_SUBCELL_OBSERVER_EFFECT,
+        "control_evidence_semantics": BUFLO_TERMINAL_CONTROL_EVIDENCE_SEMANTICS,
+        "whole_cell_floor_bytes": 1_200,
+        "implementation_scope": "client_only_quic",
+        "paper_equivalent": False,
+        "terminal_latched_samples": len(values),
+        "terminal_latched_at_us": {
+            "minimum": min(latch_times),
+            "maximum": max(latch_times),
+        },
+        "samples_with_cancellation": sum(value > 0 for value in streams),
+        "stream_cancellations": sum(streams),
+        "open_streams_at_latch": sum(
+            int(value["open_streams_at_latch"]) for value in values
+        ),
+        "receipt_cancellations": sum(
+            int(value["receipt_cancellations"]) for value in values
+        ),
+        "typed_cancellation_action_events": sum(
+            int(value["typed_cancellation_action_events"]) for value in values
+        ),
+        "pending_request_cancellations": 0,
+        "parser_lease_bytes_at_latch": 0,
+        "pending_parser_boundaries_at_latch": 0,
+        "post_cancellation_unscheduled_defense_control_packets": sum(
+            post_control_packets
+        ),
+        "post_cancellation_unscheduled_defense_control_bytes": sum(post_control_bytes),
+        "exact_capacity_bytes_cancelled": {
+            "total": sum(capacities),
+            "minimum": min(capacities),
+            "maximum": max(capacities),
+        },
+        "every_residual_below_whole_cell_floor": all(
+            capacity < 1_200 for capacity in capacities
+        ),
         "passed": True,
     }
 
@@ -7020,6 +7116,14 @@ def _validate_formal_performance_evidence(evaluation: Mapping[str, Any]) -> dict
         not isinstance(performance, Mapping)
         or not isinstance(algorithm, Mapping)
         or algorithm.get("available") is not True
+        or algorithm.get("classifier_input") is not False
+        or set(algorithm)
+        != {
+            "available",
+            "classifier_input",
+            "strata",
+            "buflo_terminal_tail_strata",
+        }
         or not isinstance(paired, list)
         or len(paired) != 1_000
         or not isinstance(summary, Mapping)
@@ -7040,6 +7144,103 @@ def _validate_formal_performance_evidence(evaluation: Mapping[str, Any]) -> dict
         for key, count in expected_lengths.items()
     ):
         raise ValueError("formal performance stratum inventory is not exact")
+
+    def require_axes(
+        rows: Sequence[Mapping[str, Any]],
+        *,
+        fields: tuple[str, ...],
+        expected: set[tuple[Any, ...]],
+        count_field: str,
+        count: int,
+        label: str,
+    ) -> None:
+        seen: set[tuple[Any, ...]] = set()
+        for row in rows:
+            if not isinstance(row, Mapping):
+                raise ValueError(f"formal {label} stratum is invalid")
+            key = tuple(row.get(field) for field in fields)
+            if key not in expected or key in seen or row.get(count_field) != count:
+                raise ValueError(f"formal {label} stratum identity is invalid")
+            seen.add(key)
+        if seen != expected:
+            raise ValueError(f"formal {label} stratum coverage is incomplete")
+
+    defenses = ("undefended", "buflo", "cs-buflo")
+    defended = ("buflo", "cs-buflo")
+    require_axes(
+        performance["directional"],
+        fields=("defense", "workload_id", "acquisition_block_index", "direction"),
+        expected={
+            (mode, workload, block, direction)
+            for mode in defenses
+            for workload in WORKLOADS
+            for block in range(10)
+            for direction in ("outgoing", "incoming")
+        },
+        count_field="samples",
+        count=10,
+        label="directional performance",
+    )
+    require_axes(
+        performance["client"],
+        fields=("defense", "workload_id", "acquisition_block_index"),
+        expected={
+            (mode, workload, block)
+            for mode in defenses
+            for workload in WORKLOADS
+            for block in range(10)
+        },
+        count_field="samples",
+        count=10,
+        label="client performance",
+    )
+    require_axes(
+        performance["paired_directional_by_workload_block"],
+        fields=("defense", "workload_id", "acquisition_block_index", "direction"),
+        expected={
+            (mode, workload, block, direction)
+            for mode in defended
+            for workload in WORKLOADS
+            for block in range(10)
+            for direction in ("outgoing", "incoming")
+        },
+        count_field="pairs",
+        count=10,
+        label="paired directional performance",
+    )
+    require_axes(
+        performance["paired_client_by_workload_block"],
+        fields=("defense", "workload_id", "acquisition_block_index"),
+        expected={
+            (mode, workload, block)
+            for mode in defended
+            for workload in WORKLOADS
+            for block in range(10)
+        },
+        count_field="pairs",
+        count=10,
+        label="paired client performance",
+    )
+    require_axes(
+        performance["paired_mode_direction_block_workload_bootstrap_95"],
+        fields=("defense", "direction"),
+        expected={
+            (mode, direction)
+            for mode in defended
+            for direction in ("outgoing", "incoming")
+        },
+        count_field="pairs",
+        count=500,
+        label="mode-direction performance",
+    )
+    require_axes(
+        performance["paired_mode_client_block_workload_bootstrap_95"],
+        fields=("defense",),
+        expected={(mode,) for mode in defended},
+        count_field="pairs",
+        count=500,
+        label="mode-client performance",
+    )
     required_costs = {
         "user_cpu_seconds",
         "system_cpu_seconds",
@@ -7066,12 +7267,192 @@ def _validate_formal_performance_evidence(evaluation: Mapping[str, Any]) -> dict
             )
         ):
             raise ValueError("formal paired client cost distributions/CIs are incomplete")
-    if len(algorithm.get("strata", ())) != 300:
+    if not isinstance(algorithm.get("strata"), list) or len(algorithm["strata"]) != 300:
         raise ValueError("formal algorithm diagnostic stratum inventory is not exact")
+    expected_algorithm_strata = {
+        (defense, workload, block, direction)
+        for defense in ("undefended", "buflo", "cs-buflo")
+        for workload in WORKLOADS
+        for block in range(10)
+        for direction in ("outgoing", "incoming")
+    }
+    observed_algorithm_strata: set[tuple[str, str, int, str]] = set()
+    for row in algorithm["strata"]:
+        if not isinstance(row, Mapping):
+            raise ValueError("formal algorithm diagnostic stratum is invalid")
+        key = (
+            row.get("defense"),
+            row.get("workload_id"),
+            row.get("acquisition_block_index"),
+            row.get("direction"),
+        )
+        if (
+            key not in expected_algorithm_strata
+            or key in observed_algorithm_strata
+            or row.get("samples") != 10
+        ):
+            raise ValueError("formal algorithm diagnostic stratum identity is invalid")
+        observed_algorithm_strata.add(key)
+    if observed_algorithm_strata != expected_algorithm_strata:
+        raise ValueError("formal algorithm diagnostic stratum coverage is incomplete")
+    tail_rows = algorithm.get("buflo_terminal_tail_strata")
+    tail_keys = {
+        "defense",
+        "workload_id",
+        "acquisition_block_index",
+        "samples",
+        "samples_with_cancellation",
+        "terminal_subcell_policy",
+        "terminal_subcell_observer_effect",
+        "control_evidence_semantics",
+        "stream_cancellations",
+        "receipt_cancellations",
+        "typed_cancellation_action_events",
+        "pending_request_cancellations",
+        "open_streams_at_latch",
+        "parser_lease_bytes_at_latch",
+        "pending_parser_boundaries_at_latch",
+        "exact_capacity_bytes_cancelled",
+        "terminal_latched_at_us",
+        "post_cancellation_unscheduled_defense_control_packets",
+        "post_cancellation_unscheduled_defense_control_bytes",
+    }
+    expected_tail_strata = {
+        (workload, block) for workload in WORKLOADS for block in range(10)
+    }
+    seen_tail_strata: set[tuple[str, int]] = set()
+    total_tail_samples = 0
+    total_tail_cancellations = 0
+    if not isinstance(tail_rows, list) or len(tail_rows) != 50:
+        raise ValueError("formal BuFLO terminal-tail stratum inventory is not exact")
+    for row in tail_rows:
+        if not isinstance(row, Mapping) or set(row) != tail_keys:
+            raise ValueError("formal BuFLO terminal-tail stratum schema is not exact")
+        workload = row.get("workload_id")
+        block = row.get("acquisition_block_index")
+        key = (workload, block)
+        if (
+            row.get("defense") != "buflo"
+            or workload not in WORKLOADS
+            or type(block) is not int
+            or not 0 <= block < 10
+            or key in seen_tail_strata
+            or row.get("samples") != 10
+            or row.get("terminal_subcell_policy")
+            != [BUFLO_TERMINAL_SUBCELL_POLICY]
+            or row.get("terminal_subcell_observer_effect")
+            != [BUFLO_TERMINAL_SUBCELL_OBSERVER_EFFECT]
+            or row.get("control_evidence_semantics")
+            != [BUFLO_TERMINAL_CONTROL_EVIDENCE_SEMANTICS]
+        ):
+            raise ValueError("formal BuFLO terminal-tail stratum identity is invalid")
+        seen_tail_strata.add(key)
+        integer_fields = {
+            field: row.get(field)
+            for field in (
+                "samples_with_cancellation",
+                "stream_cancellations",
+                "receipt_cancellations",
+                "typed_cancellation_action_events",
+                "pending_request_cancellations",
+                "open_streams_at_latch",
+                "parser_lease_bytes_at_latch",
+                "pending_parser_boundaries_at_latch",
+                "post_cancellation_unscheduled_defense_control_packets",
+                "post_cancellation_unscheduled_defense_control_bytes",
+            )
+        }
+        if any(type(value) is not int or value < 0 for value in integer_fields.values()):
+            raise ValueError("formal BuFLO terminal-tail counters are invalid")
+        samples_with_cancellation = integer_fields["samples_with_cancellation"]
+        streams = integer_fields["stream_cancellations"]
+        control_packets = integer_fields[
+            "post_cancellation_unscheduled_defense_control_packets"
+        ]
+        control_bytes = integer_fields[
+            "post_cancellation_unscheduled_defense_control_bytes"
+        ]
+        capacity = row.get("exact_capacity_bytes_cancelled")
+        latch = row.get("terminal_latched_at_us")
+        if (
+            not 0 <= samples_with_cancellation <= 10
+            or (samples_with_cancellation == 0) != (streams == 0)
+            or streams < samples_with_cancellation
+            or streams
+            != integer_fields["receipt_cancellations"]
+            or streams
+            != integer_fields["typed_cancellation_action_events"]
+            or streams != integer_fields["open_streams_at_latch"]
+            or integer_fields["pending_request_cancellations"] != 0
+            or integer_fields["parser_lease_bytes_at_latch"] != 0
+            or integer_fields["pending_parser_boundaries_at_latch"] != 0
+            or (
+                streams == 0
+                and (control_packets != 0 or control_bytes != 0)
+            )
+            or (
+                streams > 0
+                and (control_packets == 0 or control_bytes == 0)
+            )
+            or control_packets < samples_with_cancellation
+            or control_bytes < control_packets
+            or not isinstance(capacity, Mapping)
+            or set(capacity) != {"total", "minimum", "maximum", "p50", "p90", "p95"}
+            or any(
+                type(capacity[field]) is not int or capacity[field] < 0
+                for field in ("total", "minimum", "maximum")
+            )
+            or not 0 <= capacity["minimum"] <= capacity["maximum"] < 1_200
+            or not capacity["minimum"] * 10
+            <= capacity["total"]
+            <= capacity["maximum"] * 10
+            or (
+                streams == 0
+                and any(
+                    float(capacity[field]) != 0.0
+                    for field in (
+                        "total",
+                        "minimum",
+                        "maximum",
+                        "p50",
+                        "p90",
+                        "p95",
+                    )
+                )
+            )
+            or any(
+                not isinstance(capacity[field], (int, float))
+                or isinstance(capacity[field], bool)
+                or not math.isfinite(float(capacity[field]))
+                or not capacity["minimum"]
+                <= float(capacity[field])
+                <= capacity["maximum"]
+                for field in ("p50", "p90", "p95")
+            )
+            or not capacity["p50"] <= capacity["p90"] <= capacity["p95"]
+            or not isinstance(latch, Mapping)
+            or set(latch) != {"p50", "p90", "p95"}
+            or any(
+                not isinstance(latch[field], (int, float))
+                or isinstance(latch[field], bool)
+                or not math.isfinite(float(latch[field]))
+                or float(latch[field]) < 10_000_000
+                for field in ("p50", "p90", "p95")
+            )
+            or not latch["p50"] <= latch["p90"] <= latch["p95"]
+        ):
+            raise ValueError("formal BuFLO terminal-tail stratum evidence is invalid")
+        total_tail_samples += int(row["samples"])
+        total_tail_cancellations += streams
+    if seen_tail_strata != expected_tail_strata or total_tail_samples != 500:
+        raise ValueError("formal BuFLO terminal-tail coverage is incomplete")
     return {
         "paired_visits": len(paired),
         "performance_strata": dict(expected_lengths),
         "algorithm_strata": len(algorithm["strata"]),
+        "buflo_terminal_tail_strata": len(tail_rows),
+        "buflo_terminal_tail_samples": total_tail_samples,
+        "buflo_terminal_tail_cancellations": total_tail_cancellations,
         "paired_client_metrics": sorted(required_costs),
         "passed": True,
     }

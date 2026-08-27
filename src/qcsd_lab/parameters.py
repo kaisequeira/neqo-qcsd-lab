@@ -8,6 +8,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .fidelity import (
+    BUFLO_TERMINAL_SUBCELL_OBSERVER_EFFECT,
+    BUFLO_TERMINAL_SUBCELL_POLICY,
+)
 from .fitting_walkie_talkie import receiver_continuation_contract as _current_wt_contract
 from .profiles import UDP_PAYLOAD_CEILING_BY_PROFILE
 from .util import LAB_ROOT, load_json, sha256_file
@@ -54,6 +58,16 @@ _CS_BUFLO_SEMANTICS_KEYS = {
     "author_rate_boundary_counter_semantics",
     "translation_classification",
     "early_termination_semantics",
+    "expected_difference",
+}
+_BUFLO_TERMINAL_SEMANTICS_KEYS = {
+    "terminal_translation_version",
+    "paper_termination_semantics",
+    "live_terminal_semantics",
+    "terminal_subcell_policy",
+    "terminal_subcell_observer_effect",
+    "terminal_parser_safety",
+    "translation_classification",
     "expected_difference",
 }
 _PARAMETER_FILE_KEYS = {"path", "sha256"}
@@ -455,7 +469,11 @@ def _validate_buflo_study_parameter_artifact(
 
     receipt_kind = receipt.get("defense_kind")
     expected_receipt_keys = _BUFLO_STUDY_PROVENANCE_KEYS | (
-        _CS_BUFLO_SEMANTICS_KEYS if receipt_kind == "cs_buflo" else set()
+        _CS_BUFLO_SEMANTICS_KEYS
+        if receipt_kind == "cs_buflo"
+        else _BUFLO_TERMINAL_SEMANTICS_KEYS
+        if receipt_kind == "buflo"
+        else set()
     )
     _require_exact_keys(receipt, expected_receipt_keys, "BuFLO study provenance")
     if receipt.get("schema_version") != PROVENANCE_SCHEMA_VERSION:
@@ -519,8 +537,37 @@ def _validate_buflo_study_parameter_artifact(
 
     if kind == "buflo":
         _validate_buflo(parameter, int(ceiling), receipt_path)
+        if (
+            receipt.get("terminal_translation_version") != 1
+            or receipt.get("paper_termination_semantics")
+            != "minimum-duration-then-continue-only-while-real-data-remains"
+            or receipt.get("live_terminal_semantics")
+            != (
+                "inclusive-tau-drain-whole-reviewed-chaff-cells-then-client-local-"
+                "http3-cancel-unallocatable-subcell-tail"
+            )
+            or receipt.get("terminal_subcell_policy")
+            != BUFLO_TERMINAL_SUBCELL_POLICY
+            or receipt.get("terminal_subcell_observer_effect")
+            != BUFLO_TERMINAL_SUBCELL_OBSERVER_EFFECT
+            or receipt.get("terminal_parser_safety")
+            != (
+                "latch-requires-zero-live-parser-lease-bytes-and-zero-pending-"
+                "parser-boundaries"
+            )
+            or receipt.get("translation_classification")
+            != "expected-client-only-qcsd-adaptation-difference"
+            or receipt.get("expected_difference")
+            != "typed-http3-defense-control-may-follow-the-last-exact-buflo-cell"
+        ):
+            raise ValueError(
+                f"BuFLO terminal-subcell translation is not explicit: {receipt_path}"
+            )
         expected_variant = "QCSD-BuFLO-udp1200-rho20-tau10"
-        expected_semantics = "qcsd-udp1200-adaptation-with-120-second-event-guard"
+        expected_semantics = (
+            "qcsd-udp1200-adaptation-with-120-second-event-guard-and-versioned-"
+            "terminal-subcell-policy"
+        )
     else:
         _validate_cs_buflo(parameter, int(ceiling), receipt_path)
         if (
