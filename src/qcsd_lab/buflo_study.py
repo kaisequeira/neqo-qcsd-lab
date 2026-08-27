@@ -4650,6 +4650,29 @@ _LAB_CODE_GATE_COMMANDS = (
 )
 
 
+def _validate_embedded_json_receipt(
+    path: Path,
+    *,
+    expected: Mapping[str, Any],
+    claimed_sha256: object,
+    label: str,
+) -> None:
+    """Bind a parsed receipt value to the exact sidecar bytes embedded in the image."""
+
+    unresolved = path.absolute()
+    if unresolved.is_symlink() or not unresolved.is_file():
+        raise ValueError(f"Rust code-gate {label} sidecar is absent or unsafe")
+    data = unresolved.read_bytes()
+    try:
+        parsed = json.loads(data)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Rust code-gate {label} sidecar is invalid JSON") from exc
+    if parsed != expected:
+        raise ValueError(f"Rust code-gate {label} sidecar content is inconsistent")
+    if claimed_sha256 != hashlib.sha256(data).hexdigest():
+        raise ValueError(f"Rust code-gate {label} sidecar hash is invalid")
+
+
 def validate_rust_code_gate(root: Path = RUST_CODE_GATE_ROOT) -> dict[str, Any]:
     """Validate the immutable build-stage Rust command receipt and every log."""
 
@@ -4739,13 +4762,22 @@ def validate_rust_code_gate(root: Path = RUST_CODE_GATE_ROOT) -> dict[str, Any]:
         != sha256_file(LAB_ROOT / "neqo-qcsd/Cargo.lock")
     ):
         raise ValueError("Rust code-gate build-input receipt is invalid")
-    source_bytes = (json.dumps(value["source_metadata"], separators=(",", ":")) + "\n").encode()
-    input_bytes = (json.dumps(build_inputs, separators=(",", ":")) + "\n").encode()
-    if (
-        value.get("source_metadata_sha256") != hashlib.sha256(source_bytes).hexdigest()
-        or value.get("study_build_inputs_sha256") != hashlib.sha256(input_bytes).hexdigest()
-    ):
-        raise ValueError("Rust code-gate embedded build receipts have invalid hashes")
+    # The build receipt hashes the exact metadata files copied into the image.
+    # JSON object key order is not semantic and the enclosing receipt is emitted
+    # with sorted keys, so reserializing the nested mappings cannot recover those
+    # original bytes.  Bind both parsed content and exact sidecar bytes instead.
+    _validate_embedded_json_receipt(
+        root.parent / "source.json",
+        expected=value["source_metadata"],
+        claimed_sha256=value.get("source_metadata_sha256"),
+        label="source-metadata",
+    )
+    _validate_embedded_json_receipt(
+        root.parent / "study-build-inputs.json",
+        expected=build_inputs,
+        claimed_sha256=value.get("study_build_inputs_sha256"),
+        label="build-input",
+    )
     tools = value.get("tool_versions")
     if (
         not isinstance(tools, Mapping)

@@ -61,6 +61,57 @@ from qcsd_lab.fidelity import (
 from qcsd_lab.util import LAB_ROOT
 
 
+def test_rust_code_gate_sidecar_hash_binds_exact_unsorted_json_bytes(
+    tmp_path: Path,
+) -> None:
+    sidecar = tmp_path / "source.json"
+    raw = b'{"z":1,"a":2}\n'
+    sidecar.write_bytes(raw)
+    expected = {"a": 2, "z": 1}
+
+    buflo_study._validate_embedded_json_receipt(
+        sidecar,
+        expected=expected,
+        claimed_sha256=hashlib.sha256(raw).hexdigest(),
+        label="test",
+    )
+
+    # A semantically equivalent rewrite is still a different embedded receipt.
+    sidecar.write_bytes(b'{"z":1, "a":2}\n')
+    with pytest.raises(ValueError, match="sidecar hash is invalid"):
+        buflo_study._validate_embedded_json_receipt(
+            sidecar,
+            expected=expected,
+            claimed_sha256=hashlib.sha256(raw).hexdigest(),
+            label="test",
+        )
+
+
+def test_rust_code_gate_sidecar_rejects_content_mismatch_and_symlink(
+    tmp_path: Path,
+) -> None:
+    sidecar = tmp_path / "source.json"
+    raw = b'{"z":1,"a":2}\n'
+    sidecar.write_bytes(raw)
+    with pytest.raises(ValueError, match="sidecar content is inconsistent"):
+        buflo_study._validate_embedded_json_receipt(
+            sidecar,
+            expected={"a": 3, "z": 1},
+            claimed_sha256=hashlib.sha256(raw).hexdigest(),
+            label="test",
+        )
+
+    link = tmp_path / "source-link.json"
+    link.symlink_to(sidecar)
+    with pytest.raises(ValueError, match="sidecar is absent or unsafe"):
+        buflo_study._validate_embedded_json_receipt(
+            link,
+            expected={"a": 2, "z": 1},
+            claimed_sha256=hashlib.sha256(raw).hexdigest(),
+            label="test",
+        )
+
+
 def _reference_execution_fixture(tmp_path: Path) -> Path:
     build_execution = _build_execution_value()
     source = {
