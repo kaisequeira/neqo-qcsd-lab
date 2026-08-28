@@ -91,14 +91,17 @@ a rejected first WTF-PAD attempt before accepting its retry, but the schema-1
 compatibility receipt bound only accepted attempts. It therefore could still
 verify after removal of that rejected attempt. The schema-1 proof is
 non-authoritative, and neither it nor any other v23 receipt can authorise the
-current source. Source fixes now bind every contiguous attempt and are under
-validation; a fresh clean cohort v24 must rerun the build, reference, 18/18
-regression, and complete code gate before any controlled qualification or
-class-study acquisition proceeds. No class-study qualification or validation
-attestation exists yet. The authoritative current heads, progression, and
-evidence ledger are maintained in [`../PROJECT.md`](../PROJECT.md); the exact
-extended-class protocol and matrices are maintained in
-[`../CLASS-STUDY.md`](../CLASS-STUDY.md).
+current source. The fixes that bind every contiguous attempt were committed at
+Lab `f8624a07697840071f7f14ccc4b325a8e252e458` and passed the complete host
+suite (1,502 passed, four skipped) and networkless collection-image suite
+(1,500 passed, six skipped). Those are unreceipted engineering preflights, not
+a cohort gate: a fresh clean cohort v24 must still rerun the build, reference,
+18/18 regression, and complete code gate before any controlled qualification
+or class-study acquisition proceeds. No class-study qualification or
+validation attestation exists yet. The authoritative current heads,
+progression, and evidence ledger are maintained in
+[`../PROJECT.md`](../PROJECT.md); the exact extended-class protocol and
+matrices are maintained in [`../CLASS-STUDY.md`](../CLASS-STUDY.md).
 
 ### Prospective 100-class final campaign
 
