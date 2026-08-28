@@ -46,7 +46,7 @@ from .class_study import (
     validate_hash_bound_receipt,
     write_create_only_json,
 )
-from .util import load_json, require_disjoint_path, sha256_file
+from .util import LAB_ROOT, load_json, require_disjoint_path, sha256_file
 from .verification import VerifiedResult, verify_result
 
 SCHEMA_VERSION = 1
@@ -1160,13 +1160,11 @@ def _successor_campaign_documents(
         restart_root / "artifacts" / f"{STUDY_ID}-authoritative-fitting"
     )
     static_reference = reference(
-        Path(__file__).resolve().parents[2] / "config/defense-params/static-control-1200.csv"
+        LAB_ROOT / "config/defense-params/static-control-1200.csv"
     )
-    buflo_reference = reference(
-        Path(__file__).resolve().parents[2] / "config/defense-params/buflo-live.json"
-    )
+    buflo_reference = reference(LAB_ROOT / "config/defense-params/buflo-live.json")
     cs_buflo_reference = reference(
-        Path(__file__).resolve().parents[2] / "config/defense-params/cs-buflo-ctsp-live.json"
+        LAB_ROOT / "config/defense-params/cs-buflo-ctsp-live.json"
     )
     fitting_name = f"{study_id}-authoritative-fitting-2000-1200"
     certification_name = f"{study_id}-certification-900-1200"

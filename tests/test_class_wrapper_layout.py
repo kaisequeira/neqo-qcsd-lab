@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,7 @@ from qcsd_lab.class_layout import class_study_layout
 
 ROOT = Path(__file__).resolve().parents[1]
 LAUNCHER = ROOT / "qcsd-lab"
+PYTHON_PATH = str(Path(sys.executable).parent)
 
 
 def _run(*arguments: str) -> subprocess.CompletedProcess[str]:
@@ -282,7 +284,7 @@ def test_nested_help_bypasses_docker_and_study_state(
     arguments: tuple[str, ...],
 ) -> None:
     environment = {
-        "PATH": f"{ROOT / '.venv/bin'}:/usr/bin:/bin",
+        "PATH": f"{PYTHON_PATH}:/usr/bin:/bin",
         "QCSD_LAB_COLLECTION_IMAGE": "deliberately-missing-help-image",
         "QCSD_LAB_PREPARE_IMAGE": "deliberately-missing-help-image",
         "QCSD_LAB_REFERENCE_IMAGE": "deliberately-missing-help-image",
@@ -306,7 +308,7 @@ def test_nested_help_bypasses_docker_and_study_state(
 
 def test_acquisition_watch_help_is_host_only_and_bypasses_docker() -> None:
     environment = {
-        "PATH": f"{ROOT / '.venv/bin'}:/usr/bin:/bin",
+        "PATH": f"{PYTHON_PATH}:/usr/bin:/bin",
         "QCSD_LAB_COLLECTION_IMAGE": "deliberately-missing-watch-image",
         "QCSD_LAB_PREPARE_IMAGE": "deliberately-missing-watch-image",
         "QCSD_LAB_REFERENCE_IMAGE": "deliberately-missing-watch-image",
@@ -331,7 +333,7 @@ def test_acquisition_watch_help_is_host_only_and_bypasses_docker() -> None:
 
 def test_acquisition_watch_delegates_only_its_supported_host_arguments() -> None:
     environment = {
-        "PATH": f"{ROOT / '.venv/bin'}:/usr/bin:/bin",
+        "PATH": f"{PYTHON_PATH}:/usr/bin:/bin",
         "QCSD_LAB_PREPARE_IMAGE": "deliberately-missing-watch-image",
     }
     invalid_heartbeat = subprocess.run(

@@ -32,9 +32,8 @@ qualified defences.
 HTTP/3 servers and standard QUIC traffic; they are not bilateral or
 paper-equivalent implementations. Until a typed
 class-study `validation-attestation.json` independently verifies every gate,
-the project
-status is **five validated defenses plus two candidates** (nine selectable
-modes including `undefended` and `static`).
+the project status is **five validated defences plus two candidates / nine
+selectable modes**, including the `undefended` and `static` controls.
 
 The BuFLO adaptation drains every allocatable 1,200-byte reviewed-chaff cell
 after the inclusive ten-second minimum. If only a sub-cell response tail
@@ -78,26 +77,33 @@ natural byte invalidates provisional stop evidence in the implementation, with
 the cumulative invalidation count retained in the final receipt.  This drain
 is not the paper's server padding-done signal.
 
-The latest preserved candidate checkpoint is cohort v20. Its isolated
-reference and code gates passed, including the 18/18 nine-mode regression, but
-the first 40-sample clean controlled shard finished with 39 accepted and
-eligible samples and one rejected BuFLO sample: scheduled incoming credit was
-advertised 9,150 microseconds after its opportunity, outside the strict
-half-open 5,000-microsecond realisation window. That checkpoint binds Lab
-`0a53d0ab4cceab4d61efee5dc16a37071d9511c9` and Neqo
-`be13aa1e549a037ffcd1bc7ccedcb8b9edf9bb8a`; subsequent exact-credit work used
-Lab `064919238765802caaf182ff069e711a7d4a4b54` and Neqo
-`9dc0e005d14b26b7e9b49408787eb444d35f0a32` as the documented pre-class-study
-candidate baseline. The prospective 100-class implementation below is later work and
-must receive its own clean, no-cache, source-bound evidence. Cohort v20 cannot
-authorise any of it, and no class-study qualification or validation attestation
-exists yet. The authoritative current clean heads, progression, and evidence
-ledger are maintained in [`../PROJECT.md`](../PROJECT.md).
+The latest executed candidate checkpoint is cohort v23. Its fresh pull/no-cache
+build, isolated reference gate, and 18/18 nine-mode regression passed against
+Lab `3ea8490ac8fd1c2b31b0ed828a11ae72d17d79c2` and Neqo
+`b7ca4ad8931001c9baa8ad04b064ade7fa9a405f`. The v23 code gate then ended with
+1,469 tests passed, 19 failed, and six skipped, so it created no immutable
+`code-gate-v23.json` receipt. Seventeen failures exposed collection-image
+launcher layout/help assumptions and two exposed installed-path assumptions.
+
+V23 also exposed an independent evidence-contract defect. Its live explicit
+two-origin compatibility run exercised all nine modes and physically retained
+a rejected first WTF-PAD attempt before accepting its retry, but the schema-1
+compatibility receipt bound only accepted attempts. It therefore could still
+verify after removal of that rejected attempt. The schema-1 proof is
+non-authoritative, and neither it nor any other v23 receipt can authorise the
+current source. Source fixes now bind every contiguous attempt and are under
+validation; a fresh clean cohort v24 must rerun the build, reference, 18/18
+regression, and complete code gate before any controlled qualification or
+class-study acquisition proceeds. No class-study qualification or validation
+attestation exists yet. The authoritative current heads, progression, and
+evidence ledger are maintained in [`../PROJECT.md`](../PROJECT.md); the exact
+extended-class protocol and matrices are maintained in
+[`../CLASS-STUDY.md`](../CLASS-STUDY.md).
 
 ### Prospective 100-class final campaign
 
-`classifier-multiorigin100-v1` supersedes the unrun five-class candidate
-formal stage. Its pinned Tranco receipt and deterministic 600-domain candidate
+`classifier-multiorigin100-v1` replaces the earlier unexecuted five-class
+candidate formal stage. Its pinned Tranco receipt and deterministic 600-domain
 catalogue are checked in under `config/class-study/v1/`; all 600 candidates are
 currently unassessed, so this is runnable infrastructure rather than acquired
 evidence. The public acquisition runner admits one exact prepared page per
@@ -124,8 +130,9 @@ The fresh browser load inside final preparation must reproduce the converged
 origin set: a newly observed unapproved HTTPS GET fails that probe and forces
 reconvergence on a retry, and persisted complete-coverage evidence rejects any
 `origin not approved` exclusion independently. Both single-origin and
-naturally multi-origin classes are eligible; origin
-count is not a selection criterion or quota. The closed-checksum handoff
+naturally multi-origin classes are eligible; origin count is not a selection
+criterion or quota, and no acquisition or selection stage intentionally omits
+multi-origin classes. The closed-checksum handoff
 reports the realised per-class origin counts, histogram, and
 single-/multi-origin totals in `dataset.json.resource_origin_profile`.
 

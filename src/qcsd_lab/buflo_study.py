@@ -54,9 +54,15 @@ from .util import (
 SCHEMA_VERSION = 1
 PREVIOUS_LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION = 3
 LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION = 4
-MULTI_ORIGIN_COMPATIBILITY_SCHEMA_VERSION = 1
+MULTI_ORIGIN_COMPATIBILITY_SCHEMA_VERSION = 2
 MULTI_ORIGIN_COMPATIBILITY_ARTIFACT_TYPE = (
     "qcsd-buflo-nine-mode-multi-origin-compatibility"
+)
+MULTI_ORIGIN_COMPATIBILITY_CHECKPOINT_TYPE = (
+    "qcsd-buflo-multi-origin-compatibility-checkpoint"
+)
+MULTI_ORIGIN_COMPATIBILITY_ATTEMPT_ERROR_TYPE = (
+    "qcsd-buflo-multi-origin-compatibility-attempt-error"
 )
 CONTROLLED_NETWORK_RECEIPT_SCHEMA_VERSION = 2
 STUDY_ROOT = LAB_ROOT / "config/buflo-study/v1"
@@ -3429,15 +3435,27 @@ def _regression_multi_origin_defenses(
     return defenses
 
 
-def _regression_multi_origin_attempt_inventory(attempt: Path) -> dict[str, str]:
+def _regression_multi_origin_raw_attempt_inventory(attempt: Path) -> dict[str, str]:
     if attempt.is_symlink() or not attempt.is_dir():
         raise ValueError("multi-origin compatibility attempt is not a regular directory")
     files: dict[str, str] = {}
     for path in sorted(attempt.rglob("*")):
         if path.is_symlink():
             raise ValueError("multi-origin compatibility attempt contains a symlink")
-        if path.is_file():
-            files[path.relative_to(attempt).as_posix()] = sha256_file(path)
+        if path.is_dir():
+            continue
+        if not path.is_file():
+            raise ValueError(
+                "multi-origin compatibility attempt contains a special filesystem entry"
+            )
+        files[path.relative_to(attempt).as_posix()] = sha256_file(path)
+    if not files:
+        raise ValueError("multi-origin compatibility attempt has no terminal evidence")
+    return files
+
+
+def _regression_multi_origin_attempt_inventory(attempt: Path) -> dict[str, str]:
+    files = _regression_multi_origin_raw_attempt_inventory(attempt)
     required = {
         "attempt.json",
         "captures/direct-quic.pcapng",
@@ -3450,6 +3468,279 @@ def _regression_multi_origin_attempt_inventory(attempt: Path) -> dict[str, str]:
     if not required <= set(files):
         raise ValueError("multi-origin compatibility attempt lacks required evidence files")
     return files
+
+
+def _validate_regression_multi_origin_checkpoint(
+    value: object,
+    *,
+    require_complete: bool,
+) -> dict[str, str]:
+    """Validate the exact resumable accepted-attempt map without trusting paths."""
+
+    if (
+        not isinstance(value, Mapping)
+        or set(value) != {"schema_version", "artifact_type", "accepted_attempts"}
+        or type(value.get("schema_version")) is not int
+        or value.get("schema_version") != 1
+        or value.get("artifact_type") != MULTI_ORIGIN_COMPATIBILITY_CHECKPOINT_TYPE
+        or not isinstance(value.get("accepted_attempts"), Mapping)
+    ):
+        raise ValueError("multi-origin compatibility checkpoint is invalid")
+    accepted = value["accepted_attempts"]
+    if require_complete and set(accepted) != set(MULTI_ORIGIN_COMPATIBILITY_MODES):
+        raise ValueError("multi-origin compatibility checkpoint is incomplete")
+    if not set(accepted) <= set(MULTI_ORIGIN_COMPATIBILITY_MODES):
+        raise ValueError("multi-origin compatibility checkpoint has an unknown mode")
+    normalized: dict[str, str] = {}
+    for mode, relative in accepted.items():
+        expected_prefix = Path("attempts") / str(mode)
+        if (
+            not isinstance(mode, str)
+            or not isinstance(relative, str)
+            or Path(relative).is_absolute()
+            or ".." in Path(relative).parts
+            or Path(relative).parent != expected_prefix
+            or re.fullmatch(r"attempt-(0[1-3])", Path(relative).name) is None
+        ):
+            raise ValueError("multi-origin compatibility checkpoint path is invalid")
+        normalized[mode] = relative
+    return normalized
+
+
+def _regression_multi_origin_persist_rejection(
+    attempt: Path,
+    error: BaseException,
+    *,
+    stage: str,
+) -> None:
+    """Persist a deterministic reason when the collector did not already do so."""
+
+    result_path = attempt / "attempt.json"
+    if result_path.is_file() and not result_path.is_symlink():
+        try:
+            result = load_json(result_path)
+        except (OSError, TypeError, ValueError):
+            result = None
+        if (
+            isinstance(result, Mapping)
+            and result.get("success") is False
+            and isinstance(result.get("failure"), Mapping)
+            and bool(result["failure"])
+        ):
+            return
+    value = {
+        "schema_version": 1,
+        "artifact_type": MULTI_ORIGIN_COMPATIBILITY_ATTEMPT_ERROR_TYPE,
+        "failure": {
+            "stage": stage,
+            "type": type(error).__name__,
+            "message": str(error) or type(error).__name__,
+        },
+    }
+    path = attempt / "multi-origin-compatibility-error.json"
+    if path.exists() or path.is_symlink():
+        _regression_multi_origin_rejection_failure(attempt)
+        return
+    atomic_json(path, value)
+
+
+def _regression_multi_origin_rejection_failure(attempt: Path) -> dict[str, Any]:
+    """Return the exact persisted reason for one rejected compatibility attempt."""
+
+    error_path = attempt / "multi-origin-compatibility-error.json"
+    if error_path.exists() or error_path.is_symlink():
+        if error_path.is_symlink() or not error_path.is_file():
+            raise ValueError("multi-origin compatibility rejection reason is unsafe")
+        value = load_json(error_path)
+        if (
+            not isinstance(value, Mapping)
+            or set(value) != {"schema_version", "artifact_type", "failure"}
+            or type(value.get("schema_version")) is not int
+            or value.get("schema_version") != 1
+            or value.get("artifact_type")
+            != MULTI_ORIGIN_COMPATIBILITY_ATTEMPT_ERROR_TYPE
+            or not isinstance(value.get("failure"), Mapping)
+            or set(value["failure"]) != {"stage", "type", "message"}
+            or not all(
+                isinstance(value["failure"].get(field), str)
+                and bool(value["failure"][field])
+                for field in ("stage", "type", "message")
+            )
+        ):
+            raise ValueError("multi-origin compatibility rejection reason is malformed")
+        return {
+            "source": "multi-origin-compatibility-error.json",
+            "details": dict(value["failure"]),
+        }
+    result_path = attempt / "attempt.json"
+    if result_path.is_symlink() or not result_path.is_file():
+        raise ValueError("multi-origin compatibility rejected attempt lacks its reason")
+    result = load_json(result_path)
+    failure = result.get("failure") if isinstance(result, Mapping) else None
+    if (
+        not isinstance(result, Mapping)
+        or result.get("success") is not False
+        or not isinstance(failure, Mapping)
+        or not failure
+    ):
+        raise ValueError("multi-origin compatibility rejected attempt lacks its reason")
+    return {"source": "attempt.json", "details": dict(failure)}
+
+
+def _regression_multi_origin_has_rejection_marker(attempt: Path) -> bool:
+    path = attempt / "multi-origin-compatibility-error.json"
+    return path.exists() or path.is_symlink()
+
+
+def _regression_multi_origin_attempt_record(
+    root: Path,
+    attempt: Path,
+    application_path: Path,
+    projected_chaff_path: Path,
+    defense: Any,
+    *,
+    seed: int,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Classify and hash one attempt; accepted evidence is returned separately."""
+
+    match = re.fullmatch(r"attempt-(0[1-3])", attempt.name)
+    if match is None:
+        raise ValueError("multi-origin compatibility attempt name is invalid")
+    files = _regression_multi_origin_raw_attempt_inventory(attempt)
+    evidence: dict[str, Any] | None = None
+    if _regression_multi_origin_has_rejection_marker(attempt):
+        failure: dict[str, Any] | None = (
+            _regression_multi_origin_rejection_failure(attempt)
+        )
+        outcome = "rejected"
+    else:
+        try:
+            evidence = _regression_multi_origin_attempt_evidence(
+                attempt,
+                application_path,
+                projected_chaff_path,
+                defense,
+                seed=seed,
+            )
+        except (OSError, TypeError, ValueError):
+            failure = _regression_multi_origin_rejection_failure(attempt)
+            outcome = "rejected"
+        else:
+            failure = None
+            outcome = "accepted"
+    return (
+        {
+            "attempt": attempt.relative_to(root).as_posix(),
+            "attempt_index": int(match.group(1)),
+            "outcome": outcome,
+            "failure": failure,
+            "file_count": len(files),
+            "files": files,
+            "files_sha256": _canonical_digest(files),
+        },
+        evidence,
+    )
+
+
+def _regression_multi_origin_attempt_ledgers(
+    root: Path,
+    application_path: Path,
+    projected_chaff_path: Path,
+    defenses: Sequence[Any],
+    accepted_attempts: Mapping[str, str],
+    samples: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Close the exact on-disk attempt tree through each mode's acceptance."""
+
+    attempts_root = root / "attempts"
+    if attempts_root.is_symlink() or not attempts_root.is_dir():
+        raise ValueError("multi-origin compatibility attempts root is invalid")
+    expected_modes = {str(defense.name) for defense in defenses}
+    actual_modes: set[str] = set()
+    for path in attempts_root.iterdir():
+        if path.is_symlink() or not path.is_dir():
+            raise ValueError(
+                "multi-origin compatibility attempts root contains an unsafe entry"
+            )
+        actual_modes.add(path.name)
+    if actual_modes != expected_modes:
+        raise ValueError("multi-origin compatibility attempt modes are not exact")
+    sample_by_mode = {
+        str(sample.get("mode")): sample
+        for sample in samples
+        if isinstance(sample, Mapping)
+    }
+    if set(sample_by_mode) != expected_modes or set(accepted_attempts) != expected_modes:
+        raise ValueError("multi-origin compatibility accepted mode binding is incomplete")
+
+    ledgers: list[dict[str, Any]] = []
+    for defense in defenses:
+        mode = str(defense.name)
+        mode_root = attempts_root / mode
+        attempts: dict[int, Path] = {}
+        for path in mode_root.iterdir():
+            match = re.fullmatch(r"attempt-(0[1-3])", path.name)
+            if path.is_symlink() or not path.is_dir() or match is None:
+                raise ValueError(
+                    f"multi-origin compatibility {mode} attempt inventory is unsafe"
+                )
+            attempts[int(match.group(1))] = path
+        if not attempts or sorted(attempts) != list(range(1, len(attempts) + 1)):
+            raise ValueError(
+                f"multi-origin compatibility {mode} attempts are not exact and contiguous"
+            )
+        seed = _stable_seed("buflo-regression-multi-origin-v1", mode)
+        records: list[dict[str, Any]] = []
+        accepted_evidence: list[dict[str, Any]] = []
+        for attempt_index in sorted(attempts):
+            record, evidence = _regression_multi_origin_attempt_record(
+                root,
+                attempts[attempt_index],
+                application_path,
+                projected_chaff_path,
+                defense,
+                seed=seed,
+            )
+            records.append(record)
+            if evidence is not None:
+                accepted_evidence.append(evidence)
+        if (
+            len(accepted_evidence) != 1
+            or records[-1]["outcome"] != "accepted"
+            or any(record["outcome"] != "rejected" for record in records[:-1])
+        ):
+            raise ValueError(
+                f"multi-origin compatibility {mode} attempt outcomes are not terminal"
+            )
+        accepted = records[-1]["attempt"]
+        sample = sample_by_mode[mode]
+        if (
+            accepted_attempts[mode] != accepted
+            or sample.get("attempt") != accepted
+            or sample.get("files") != records[-1]["files"]
+            or sample.get("files_sha256") != records[-1]["files_sha256"]
+        ):
+            raise ValueError(
+                f"multi-origin compatibility {mode} accepted attempt binding changed"
+            )
+        ledgers.append(
+            {
+                "mode": mode,
+                "accepted_attempt": accepted,
+                "attempt_count": len(records),
+                "rejected_attempts": len(records) - 1,
+                "attempts": records,
+            }
+        )
+    return ledgers
+
+
+def _validate_regression_multi_origin_attempt_ledger_receipt(
+    value: object,
+    expected: Sequence[Mapping[str, Any]],
+) -> None:
+    if not isinstance(value, list) or value != list(expected):
+        raise ValueError("multi-origin compatibility attempt ledger changed")
 
 
 def _regression_multi_origin_attempt_evidence(
@@ -3465,6 +3756,10 @@ def _regression_multi_origin_attempt_evidence(
     from .capture_session import _runner_result_complete, _validate_run_binding
     from .manifest import runtime_manifest
     from .orchestrator import _intrinsic_fidelity_failure
+
+    if _regression_multi_origin_has_rejection_marker(attempt):
+        _regression_multi_origin_rejection_failure(attempt)
+        raise ValueError("multi-origin compatibility attempt is durably rejected")
 
     application = load_json(application_path)
     runtime_path = attempt.parent.parent.parent / "inputs/application/runtime-complex.json"
@@ -3551,6 +3846,32 @@ def _regression_multi_origin_attempt_evidence(
         "fidelity_eligible": True,
         "passed": True,
     }
+
+
+def _regression_multi_origin_existing_attempt_evidence(
+    attempt: Path,
+    application_path: Path,
+    projected_chaff_path: Path,
+    defense: Any,
+    *,
+    seed: int,
+) -> dict[str, Any] | None:
+    """Resume only a terminal accepted or durably rejected existing attempt."""
+
+    if _regression_multi_origin_has_rejection_marker(attempt):
+        _regression_multi_origin_rejection_failure(attempt)
+        return None
+    try:
+        return _regression_multi_origin_attempt_evidence(
+            attempt,
+            application_path,
+            projected_chaff_path,
+            defense,
+            seed=seed,
+        )
+    except (OSError, TypeError, ValueError):
+        _regression_multi_origin_rejection_failure(attempt)
+        return None
 
 
 def _regression_multi_origin_runtime_inputs(defenses: Sequence[Any]) -> dict[str, Any]:
@@ -3758,18 +4079,10 @@ def _execute_regression_multi_origin_compatibility(
     else:
         state = {
             "schema_version": 1,
-            "artifact_type": "qcsd-buflo-multi-origin-compatibility-checkpoint",
+            "artifact_type": MULTI_ORIGIN_COMPATIBILITY_CHECKPOINT_TYPE,
             "accepted_attempts": {},
         }
-    if (
-        not isinstance(state, dict)
-        or set(state) != {"schema_version", "artifact_type", "accepted_attempts"}
-        or state["schema_version"] != 1
-        or state["artifact_type"]
-        != "qcsd-buflo-multi-origin-compatibility-checkpoint"
-        or not isinstance(state["accepted_attempts"], dict)
-    ):
-        raise ValueError("multi-origin compatibility checkpoint is invalid")
+    _validate_regression_multi_origin_checkpoint(state, require_complete=False)
     limits = capture_session.Limits(
         timeout_seconds=120,
         max_response_bytes=1_048_576,
@@ -3802,15 +4115,14 @@ def _execute_regression_multi_origin_compatibility(
             for attempt_index in range(1, limits.max_attempts + 1):
                 attempt = mode_root / f"attempt-{attempt_index:02d}"
                 if attempt.exists() or attempt.is_symlink():
-                    try:
-                        evidence = _regression_multi_origin_attempt_evidence(
-                            attempt,
-                            application_path,
-                            projected_chaff_path,
-                            defense,
-                            seed=seed,
-                        )
-                    except (OSError, TypeError, ValueError):
+                    evidence = _regression_multi_origin_existing_attempt_evidence(
+                        attempt,
+                        application_path,
+                        projected_chaff_path,
+                        defense,
+                        seed=seed,
+                    )
+                    if evidence is None:
                         continue
                 else:
                     context = SimpleNamespace(
@@ -3844,19 +4156,10 @@ def _execute_regression_multi_origin_compatibility(
                         ValueError,
                     ) as error:
                         attempt.mkdir(parents=True, exist_ok=True)
-                        atomic_json(
-                            attempt / "multi-origin-compatibility-error.json",
-                            {
-                                "schema_version": 1,
-                                "artifact_type": (
-                                    "qcsd-buflo-multi-origin-compatibility-attempt-error"
-                                ),
-                                "failure": {
-                                    "stage": "multi-origin-compatibility-collection",
-                                    "type": type(error).__name__,
-                                    "message": str(error),
-                                },
-                            },
+                        _regression_multi_origin_persist_rejection(
+                            attempt,
+                            error,
+                            stage="multi-origin-compatibility-collection",
                         )
                         continue
                     try:
@@ -3867,7 +4170,12 @@ def _execute_regression_multi_origin_compatibility(
                             defense,
                             seed=seed,
                         )
-                    except (OSError, TypeError, ValueError):
+                    except (OSError, TypeError, ValueError) as error:
+                        _regression_multi_origin_persist_rejection(
+                            attempt,
+                            error,
+                            stage="multi-origin-compatibility-eligibility",
+                        )
                         continue
                 if evidence is not None:
                     break
@@ -3883,6 +4191,19 @@ def _execute_regression_multi_origin_compatibility(
         atomic_json(state_path, state)
         evidence["sample_index"] = index
         samples.append(evidence)
+
+    accepted_attempts = _validate_regression_multi_origin_checkpoint(
+        state,
+        require_complete=True,
+    )
+    attempt_ledgers = _regression_multi_origin_attempt_ledgers(
+        root,
+        application_path,
+        projected_chaff_path,
+        defenses,
+        accepted_attempts,
+        samples,
+    )
 
     regression_bindings = _regression_result_bindings(result_roots)
     controlled_receipt_sha256 = _canonical_digest(dict(regression_receipt))
@@ -3904,6 +4225,11 @@ def _execute_regression_multi_origin_compatibility(
         "expected_modes": list(MULTI_ORIGIN_COMPATIBILITY_MODES),
         "expected_origins": list(MULTI_ORIGIN_COMPATIBILITY_ORIGINS),
         "expected_resource_ids": [0, 1, 2, 3],
+        "checkpoint": {
+            "path": state_path.relative_to(root).as_posix(),
+            "sha256": sha256_file(state_path),
+        },
+        "attempt_ledgers": attempt_ledgers,
         "inputs": {
             "application_workload": {
                 "path": application_path.relative_to(root).as_posix(),
@@ -4024,6 +4350,8 @@ def validate_regression_multi_origin_compatibility(
         "expected_modes",
         "expected_origins",
         "expected_resource_ids",
+        "checkpoint",
+        "attempt_ledgers",
         "inputs",
         "regression_results",
         "samples",
@@ -4048,6 +4376,15 @@ def validate_regression_multi_origin_compatibility(
     _validate_clean_source(value["source"], label="multi-origin compatibility")
     if dict(value["source"]) != source_metadata():
         raise ValueError("multi-origin compatibility does not bind the current source")
+    checkpoint_path = _regression_multi_origin_bound_path(
+        root,
+        value["checkpoint"],
+        label="checkpoint",
+    )
+    accepted_attempts = _validate_regression_multi_origin_checkpoint(
+        load_json(checkpoint_path),
+        require_complete=True,
+    )
     controlled = validate_controlled_campaign_receipt(value["controlled_receipt"])
     if (
         controlled["stage"] != "regression"
@@ -4237,14 +4574,30 @@ def validate_regression_multi_origin_compatibility(
         if dict(record) != expected:
             raise ValueError("multi-origin compatibility sample receipt changed")
         verified_samples.append(expected)
+    expected_ledgers = _regression_multi_origin_attempt_ledgers(
+        root,
+        application_path,
+        projected_chaff_path,
+        defenses,
+        accepted_attempts,
+        verified_samples,
+    )
+    _validate_regression_multi_origin_attempt_ledger_receipt(
+        value["attempt_ledgers"],
+        expected_ledgers,
+    )
     return {
-        "schema_version": 1,
+        "schema_version": MULTI_ORIGIN_COMPATIBILITY_SCHEMA_VERSION,
         "path": str(receipt_path),
         "sha256": sha256_file(receipt_path),
         "samples": len(verified_samples),
         "modes": [sample["mode"] for sample in verified_samples],
         "origins": list(MULTI_ORIGIN_COMPATIBILITY_ORIGINS),
         "resources_per_sample": 4,
+        "attempts": sum(record["attempt_count"] for record in expected_ledgers),
+        "rejected_attempts": sum(
+            record["rejected_attempts"] for record in expected_ledgers
+        ),
         "source": dict(value["source"]),
         "excluded_from_regression_matrix": True,
         "passed": True,

@@ -1605,6 +1605,363 @@ def _regression_multi_origin_identity_manifest() -> dict[str, object]:
     return manifest
 
 
+def _multi_origin_attempt_ledger_fixture(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[
+    Path,
+    Path,
+    Path,
+    tuple[SimpleNamespace, ...],
+    dict[str, str],
+    list[dict[str, object]],
+]:
+    root = tmp_path / "compatibility"
+    mode_root = root / "attempts/wtf-pad"
+    rejected = mode_root / "attempt-01"
+    accepted = mode_root / "attempt-02"
+    rejected.mkdir(parents=True)
+    accepted.mkdir()
+    (rejected / "attempt.json").write_text(
+        json.dumps(
+            {
+                "success": False,
+                "failure": {
+                    "stage": "capture",
+                    "reason": "direct/runner reconciliation failed",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (accepted / "attempt.json").write_text(
+        json.dumps({"success": True}),
+        encoding="utf-8",
+    )
+
+    def evidence(
+        attempt: Path,
+        _application_path: Path,
+        _projected_chaff_path: Path,
+        defense: SimpleNamespace,
+        *,
+        seed: int,
+    ) -> dict[str, object]:
+        result = json.loads((attempt / "attempt.json").read_text(encoding="utf-8"))
+        if result.get("success") is not True:
+            raise ValueError("attempt is rejected")
+        return {"attempt": str(attempt), "mode": defense.name, "seed": seed}
+
+    monkeypatch.setattr(
+        buflo_study,
+        "_regression_multi_origin_attempt_evidence",
+        evidence,
+    )
+    application_path = root / "application.json"
+    projected_chaff_path = root / "chaff.json"
+    defenses = (SimpleNamespace(name="wtf-pad"),)
+    relative = "attempts/wtf-pad/attempt-02"
+    files = buflo_study._regression_multi_origin_raw_attempt_inventory(accepted)
+    samples: list[dict[str, object]] = [
+        {
+            "mode": "wtf-pad",
+            "attempt": relative,
+            "files": files,
+            "files_sha256": buflo_study._canonical_digest(files),
+        }
+    ]
+    return (
+        root,
+        application_path,
+        projected_chaff_path,
+        defenses,
+        {"wtf-pad": relative},
+        samples,
+    )
+
+
+def _multi_origin_attempt_ledgers(
+    fixture: tuple[
+        Path,
+        Path,
+        Path,
+        tuple[SimpleNamespace, ...],
+        dict[str, str],
+        list[dict[str, object]],
+    ],
+) -> list[dict[str, object]]:
+    return buflo_study._regression_multi_origin_attempt_ledgers(*fixture)
+
+
+def test_regression_multi_origin_attempt_ledger_binds_rejection_before_acceptance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _multi_origin_attempt_ledger_fixture(tmp_path, monkeypatch)
+
+    [ledger] = _multi_origin_attempt_ledgers(fixture)
+
+    assert ledger["mode"] == "wtf-pad"
+    assert ledger["attempt_count"] == 2
+    assert ledger["rejected_attempts"] == 1
+    assert ledger["accepted_attempt"] == "attempts/wtf-pad/attempt-02"
+    rejected, accepted = ledger["attempts"]
+    assert rejected["outcome"] == "rejected"
+    assert rejected["failure"] == {
+        "source": "attempt.json",
+        "details": {
+            "stage": "capture",
+            "reason": "direct/runner reconciliation failed",
+        },
+    }
+    assert rejected["file_count"] == len(rejected["files"]) == 1
+    assert accepted["outcome"] == "accepted"
+    assert accepted["failure"] is None
+
+
+def test_regression_multi_origin_attempt_ledger_rejects_tampered_reason(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _multi_origin_attempt_ledger_fixture(tmp_path, monkeypatch)
+    original = _multi_origin_attempt_ledgers(fixture)
+    attempt = fixture[0] / "attempts/wtf-pad/attempt-01/attempt.json"
+    value = json.loads(attempt.read_text(encoding="utf-8"))
+    value["failure"]["reason"] = "changed"
+    attempt.write_text(json.dumps(value), encoding="utf-8")
+
+    reconstructed = _multi_origin_attempt_ledgers(fixture)
+    with pytest.raises(ValueError, match="attempt ledger changed"):
+        buflo_study._validate_regression_multi_origin_attempt_ledger_receipt(
+            original,
+            reconstructed,
+        )
+
+
+def test_regression_multi_origin_attempt_ledger_rejects_deleted_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _multi_origin_attempt_ledger_fixture(tmp_path, monkeypatch)
+    (fixture[0] / "attempts/wtf-pad/attempt-01/attempt.json").unlink()
+
+    with pytest.raises(ValueError, match="no terminal evidence"):
+        _multi_origin_attempt_ledgers(fixture)
+
+
+def test_regression_multi_origin_attempt_ledger_rejects_gap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _multi_origin_attempt_ledger_fixture(tmp_path, monkeypatch)
+    mode_root = fixture[0] / "attempts/wtf-pad"
+    (mode_root / "attempt-01").rename(tmp_path / "detached-attempt")
+
+    with pytest.raises(ValueError, match="not exact and contiguous"):
+        _multi_origin_attempt_ledgers(fixture)
+
+
+def test_regression_multi_origin_attempt_ledger_rejects_attempt_after_acceptance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _multi_origin_attempt_ledger_fixture(tmp_path, monkeypatch)
+    extra = fixture[0] / "attempts/wtf-pad/attempt-03"
+    extra.mkdir()
+    (extra / "attempt.json").write_text(
+        json.dumps(
+            {
+                "success": False,
+                "failure": {"stage": "capture", "reason": "late extra attempt"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="outcomes are not terminal"):
+        _multi_origin_attempt_ledgers(fixture)
+
+
+def test_regression_multi_origin_attempt_ledger_rejects_missing_reason(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _multi_origin_attempt_ledger_fixture(tmp_path, monkeypatch)
+    rejected = fixture[0] / "attempts/wtf-pad/attempt-01/attempt.json"
+    rejected.write_text(json.dumps({"success": False}), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="lacks its reason"):
+        buflo_study._regression_multi_origin_rejection_failure(rejected.parent)
+    with pytest.raises(ValueError, match="lacks its reason"):
+        _multi_origin_attempt_ledgers(fixture)
+
+
+def test_regression_multi_origin_attempt_ledger_rejects_nonterminal_failure_reason(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _multi_origin_attempt_ledger_fixture(tmp_path, monkeypatch)
+    rejected = fixture[0] / "attempts/wtf-pad/attempt-01/attempt.json"
+    value = json.loads(rejected.read_text(encoding="utf-8"))
+    value["success"] = True
+    rejected.write_text(json.dumps(value), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="lacks its reason"):
+        buflo_study._regression_multi_origin_rejection_failure(rejected.parent)
+    with pytest.raises(ValueError, match="attempt outcomes are not terminal"):
+        _multi_origin_attempt_ledgers(fixture)
+
+
+def test_regression_multi_origin_attempt_ledger_rejection_marker_is_terminal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _multi_origin_attempt_ledger_fixture(tmp_path, monkeypatch)
+    accepted = fixture[0] / "attempts/wtf-pad/attempt-02"
+    reason = {
+        "schema_version": 1,
+        "artifact_type": buflo_study.MULTI_ORIGIN_COMPATIBILITY_ATTEMPT_ERROR_TYPE,
+        "failure": {
+            "stage": "multi-origin-compatibility-eligibility",
+            "type": "ValueError",
+            "message": "persisted terminal rejection",
+        },
+    }
+    (accepted / "multi-origin-compatibility-error.json").write_text(
+        json.dumps(reason),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="attempt outcomes are not terminal"):
+        _multi_origin_attempt_ledgers(fixture)
+
+
+def test_regression_multi_origin_attempt_ledger_rejects_special_entry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _multi_origin_attempt_ledger_fixture(tmp_path, monkeypatch)
+    special = fixture[0] / "attempts/wtf-pad/attempt-01/unbound-fifo"
+    os.mkfifo(special)
+
+    with pytest.raises(ValueError, match="special filesystem entry"):
+        _multi_origin_attempt_ledgers(fixture)
+
+
+def test_regression_multi_origin_existing_interrupted_attempt_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempt = tmp_path / "attempt-01"
+    attempt.mkdir()
+
+    def rejected(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise ValueError("not eligible")
+
+    monkeypatch.setattr(
+        buflo_study,
+        "_regression_multi_origin_attempt_evidence",
+        rejected,
+    )
+    with pytest.raises(ValueError, match="lacks its reason"):
+        buflo_study._regression_multi_origin_existing_attempt_evidence(
+            attempt,
+            tmp_path / "application.json",
+            tmp_path / "chaff.json",
+            SimpleNamespace(name="wtf-pad"),
+            seed=1,
+        )
+    assert not (attempt / "multi-origin-compatibility-error.json").exists()
+
+
+def test_regression_multi_origin_existing_terminal_rejection_is_resume_skipped(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempt = tmp_path / "attempt-01"
+    attempt.mkdir()
+    reason = {
+        "schema_version": 1,
+        "artifact_type": buflo_study.MULTI_ORIGIN_COMPATIBILITY_ATTEMPT_ERROR_TYPE,
+        "failure": {
+            "stage": "multi-origin-compatibility-collection",
+            "type": "RuntimeError",
+            "message": "collector failed",
+        },
+    }
+    reason_path = attempt / "multi-origin-compatibility-error.json"
+    reason_path.write_text(json.dumps(reason), encoding="utf-8")
+
+    def otherwise_eligible(*_args: object, **_kwargs: object) -> dict[str, object]:
+        return {"passed": True}
+
+    monkeypatch.setattr(
+        buflo_study,
+        "_regression_multi_origin_attempt_evidence",
+        otherwise_eligible,
+    )
+    before = reason_path.read_bytes()
+    assert (
+        buflo_study._regression_multi_origin_existing_attempt_evidence(
+            attempt,
+            tmp_path / "application.json",
+            tmp_path / "chaff.json",
+            SimpleNamespace(name="wtf-pad"),
+            seed=1,
+        )
+        is None
+    )
+    assert reason_path.read_bytes() == before
+
+
+def test_regression_multi_origin_checkpoint_binding_rejects_tamper_and_wrong_acceptance(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "compatibility"
+    root.mkdir()
+    checkpoint = root / "checkpoint.json"
+    accepted = {
+        mode: f"attempts/{mode}/attempt-01"
+        for mode in buflo_study.MULTI_ORIGIN_COMPATIBILITY_MODES
+    }
+    value = {
+        "schema_version": 1,
+        "artifact_type": buflo_study.MULTI_ORIGIN_COMPATIBILITY_CHECKPOINT_TYPE,
+        "accepted_attempts": accepted,
+    }
+    checkpoint.write_text(json.dumps(value), encoding="utf-8")
+    binding = {
+        "path": "checkpoint.json",
+        "sha256": hashlib.sha256(checkpoint.read_bytes()).hexdigest(),
+    }
+    assert (
+        buflo_study._regression_multi_origin_bound_path(
+            root,
+            binding,
+            label="checkpoint",
+        )
+        == checkpoint.resolve()
+    )
+    assert buflo_study._validate_regression_multi_origin_checkpoint(
+        value,
+        require_complete=True,
+    ) == accepted
+
+    value["accepted_attempts"]["wtf-pad"] = "attempts/front/attempt-01"
+    checkpoint.write_text(json.dumps(value), encoding="utf-8")
+    with pytest.raises(ValueError, match="checkpoint changed"):
+        buflo_study._regression_multi_origin_bound_path(
+            root,
+            binding,
+            label="checkpoint",
+        )
+    with pytest.raises(ValueError, match="checkpoint path is invalid"):
+        buflo_study._validate_regression_multi_origin_checkpoint(
+            value,
+            require_complete=True,
+        )
+
+
 def test_regression_multi_origin_chaff_projection_changes_only_application_hash() -> None:
     strict = {
         "schema_version": 2,

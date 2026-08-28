@@ -65,16 +65,25 @@ require_submodule() {
   fi
 }
 
-command -v docker >/dev/null 2>&1 || {
-  echo "qcsd-lab requires Docker on the host" >&2
-  exit 1
+require_docker() {
+  command -v docker >/dev/null 2>&1 || {
+    echo "qcsd-lab requires Docker on the host" >&2
+    exit 1
+  }
+  if ! docker info >/dev/null 2>&1; then
+    echo "Docker is installed but its daemon is unavailable" >&2
+    exit 1
+  fi
 }
-if ! docker info >/dev/null 2>&1; then
-  echo "Docker is installed but its daemon is unavailable" >&2
-  exit 1
-fi
 
-require_submodule
+# Class-study arguments include security-sensitive canonical host paths.  Parse
+# and reject them before consulting Docker so validation is deterministic even
+# in the collection image's deliberately Docker-free test frame.  All other
+# actions retain the original early Docker/submodule checks.
+if [[ "${1:-}" != "class-study" ]]; then
+  require_docker
+  require_submodule
+fi
 
 if [[ "${1:-}" == "build" ]]; then
   build_cohort_version=1
@@ -1064,6 +1073,11 @@ for filename in (
       fi
       ;;
   esac
+fi
+
+if [[ "${1:-}" == "class-study" ]]; then
+  require_docker
+  require_submodule
 fi
 
 class_resume_environment=""

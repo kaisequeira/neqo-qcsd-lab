@@ -1039,7 +1039,7 @@ def test_public_origin_policy_pins_public_dns_and_rejects_private_answers(
 
 def test_public_address_policy_matches_neqo_shared_golden_vectors() -> None:
     vectors = load_json(
-        Path(acquisition_module.__file__).resolve().parents[2]
+        Path(__file__).resolve().parents[1]
         / "neqo-qcsd/neqo-bin/src/qcsd/public-address-policy-v1.json"
     )
     assert vectors["schema_version"] == 1
@@ -1202,6 +1202,11 @@ def test_existing_backend_reads_list_shaped_primary_response_manifest(
         acquisition_module,
         "_prepared_replay_identity_sha256",
         lambda _manifest: "b" * 64,
+    )
+    monkeypatch.setattr(
+        acquisition_module,
+        "public_origin_ip_pins",
+        lambda _origins: {"https://example.com": "1.1.1.1"},
     )
     probe = ExistingAcquisitionBackend(
         content_type_probe=lambda _url, _origins, _timeout: "text/html"
