@@ -40,8 +40,8 @@ from .fidelity import (
     CS_BUFLO_INCOMING_CADENCE_BOUNDARY,
     CS_BUFLO_INCOMING_TERMINAL_BOUNDARY,
     CS_BUFLO_LEGACY_EARLY_TERMINATION_SEMANTICS,
-    CS_BUFLO_TERMINATION_STOP_POLICY,
     CS_BUFLO_TERMINATION_STOP_PHASES,
+    CS_BUFLO_TERMINATION_STOP_POLICY,
     CS_BUFLO_TERMINATION_STOP_REASONS,
     buflo_terminal_state_valid,
 )
@@ -64,12 +64,36 @@ VALIDATION_BLOCK = 8
 TEST_BLOCK = 9
 FORMAL_BOOTSTRAP_DRAWS = 10_000
 _DEFAULT_OSAD_LIBRARY = Path("/usr/local/lib/qcsd/libqcsd_osad.so")
+_DEFAULT_JAVA_EXECUTABLE = Path("/usr/bin/java")
+_CLASSIFIER_RUNTIME_RECEIPT = Path("/usr/share/qcsd-lab/classifier-runtime-build.json")
+_CLASSIFIER_RUNTIME_DOMAIN = "qcsd-classifier-runtime-build-v1"
+_OSAD_SOURCE_SHA256 = "7a07903cee2a3e2c4995083dda4c16441d48b02504f1553741d659e797314dca"
+_OSAD_BUILD_COMMAND = (
+    "cc",
+    "-O3",
+    "-std=c11",
+    "-fPIC",
+    "-shared",
+    "-Wall",
+    "-Wextra",
+    "-Werror",
+    "qcsd_osad.c",
+    "-o",
+    "/out/usr/local/lib/qcsd/libqcsd_osad.so",
+)
+_DEBIAN_BASE_IMAGE = (
+    "docker.io/library/debian:bookworm-slim@"
+    "sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818"
+)
+_FORMAL_RUNTIME_OVERRIDE_ENV = (
+    "QCSD_JAVA",
+    "QCSD_OSAD_LIBRARY",
+    "QCSD_WEKA_DIRECTORY",
+)
 _DLSVM_REFERENCE = LAB_ROOT / "config/reference/buflo-csbuflo/dlsvm-ccs-2012-v1.json"
 _DLSVM_REFERENCE_RECEIPT = _DLSVM_REFERENCE.with_suffix(".receipt.json")
 _DLSVM_REFERENCE_SHA256 = "f1f51ed1228e9599cbac05dbef75300f319885d32c2e9a4c9d16c57d2e0dc4a6"
-_DLSVM_REFERENCE_RECEIPT_SHA256 = (
-    "5da96469bc6f66e65d6e8e9335a9c86d89acd1d3089f490121c7daf58a6a8b78"
-)
+_DLSVM_REFERENCE_RECEIPT_SHA256 = "5da96469bc6f66e65d6e8e9335a9c86d89acd1d3089f490121c7daf58a6a8b78"
 _DLSVM_RANDOM_STATE = 20260827
 _BUFLO_REFERENCE = LAB_ROOT / "config/reference/buflo-csbuflo/buflo-ieee-sp-2012-v1.json"
 _CSBUFLO_REFERENCE = LAB_ROOT / "config/reference/buflo-csbuflo/csbuflo-wpes-2014-v1.json"
@@ -240,6 +264,31 @@ class WekaBackend:
         return os.pathsep.join(str(path) for path in self.artifacts)
 
 
+@dataclass(frozen=True)
+class TrustedClassifierRuntime:
+    """Explicit test seam or the fixed production classifier runtime.
+
+    Formal command paths never construct this from environment variables.  A
+    synthetic test may pass an instance directly while production uses the
+    fixed receipt and installed paths below.
+    """
+
+    receipt: Path
+    osad_library: Path
+    java_executable: Path
+    weka_directory: Path
+    weka_artifacts: Mapping[str, str]
+
+
+_PRODUCTION_CLASSIFIER_RUNTIME = TrustedClassifierRuntime(
+    receipt=_CLASSIFIER_RUNTIME_RECEIPT,
+    osad_library=_DEFAULT_OSAD_LIBRARY,
+    java_executable=_DEFAULT_JAVA_EXECUTABLE,
+    weka_directory=_DEFAULT_WEKA_DIRECTORY,
+    weka_artifacts=_WEKA_ARTIFACTS,
+)
+
+
 class DlsvmKernelStore:
     """Compute each required OSAD matrix cell once and slice it across protocols."""
 
@@ -384,7 +433,8 @@ class DlsvmKernelStore:
         name = f"{kind}-{key}.npy"
         path = self._cache_directory / name
         seal_path = self._cache_directory / f"{name}.receipt.json"
-        if path.exists():
+        replayed_from_cache = path.exists()
+        if replayed_from_cache:
             _validate_dlsvm_matrix_seal(
                 path,
                 seal_path,
@@ -403,6 +453,7 @@ class DlsvmKernelStore:
                 row_samples=row_samples,
                 column_samples=column_samples,
                 identity_sha256=key,
+                recompute_values=False,
             )
             temporary = self._cache_directory / f".{name}.{os.getpid()}.tmp"
             try:
@@ -413,6 +464,7 @@ class DlsvmKernelStore:
                 try:
                     os.link(temporary, path)
                 except FileExistsError:
+                    replayed_from_cache = True
                     _validate_dlsvm_matrix_seal(
                         path,
                         seal_path,
@@ -437,6 +489,7 @@ class DlsvmKernelStore:
             row_samples=row_samples,
             column_samples=column_samples,
             identity_sha256=key,
+            recompute_values=replayed_from_cache,
         )
         matrix_sha256 = _sha256_file(path)
         seal_sha256 = _sha256_file(seal_path)
@@ -544,6 +597,7 @@ def _validate_dlsvm_matrix_semantics(
     row_samples: Sequence[StudySample],
     column_samples: Sequence[StudySample],
     identity_sha256: str,
+    recompute_values: bool = True,
 ) -> None:
     shape = (len(row_samples), len(column_samples))
     if (
@@ -561,26 +615,21 @@ def _validate_dlsvm_matrix_semantics(
     ):
         raise ValueError("DLSVM cached within-defense matrix invariants are invalid")
 
-    # The create-only seal prevents accidental replacement.  Recomputing a
-    # deterministic identity-keyed audit set additionally rejects a forged
-    # matrix plus forged seal without paying the full matrix cost on resume.
-    audit: set[tuple[int, int]] = {
-        (0, 0),
-        (shape[0] - 1, shape[1] - 1),
-        (0, shape[1] - 1),
-        (shape[0] - 1, 0),
-    }
-    digest = bytes.fromhex(identity_sha256)
-    for offset in range(0, len(digest) - 1, 2):
-        audit.add((digest[offset] % shape[0], digest[offset + 1] % shape[1]))
-        if len(audit) >= min(8, shape[0] * shape[1]):
-            break
-    for row, column in sorted(audit):
-        left = dlsvm_sequence(row_samples[row].trace)
-        right = dlsvm_sequence(column_samples[column].trace)
-        expected = math.exp(-(normalized_dlsvm_distance(left, right) ** 2))
-        if not math.isclose(float(matrix[row, column]), expected, rel_tol=1e-13, abs_tol=0.0):
-            raise ValueError("DLSVM cached matrix fails deterministic semantic audit")
+    if not recompute_values:
+        return
+    # A create-only hash seal detects accidental damage, not a coherent matrix
+    # substitution followed by resealing.  Cache reuse therefore regenerates
+    # every kernel value from the currently bound traces.  There is no sampled
+    # audit path in formal or non-formal cache replay.
+    if not isinstance(identity_sha256, str) or len(identity_sha256) != 64:
+        raise ValueError("DLSVM cached matrix identity is invalid")
+    expected = _dlsvm_kernel(
+        [dlsvm_sequence(sample.trace) for sample in row_samples],
+        [dlsvm_sequence(sample.trace) for sample in column_samples],
+        symmetric=kind == "within",
+    )
+    if not np.array_equal(matrix, expected):
+        raise ValueError("DLSVM cached matrix fails complete deterministic recomputation")
 
 
 @dataclass(frozen=True)
@@ -765,8 +814,7 @@ def _load_algorithm_diagnostics(value: Any, *, defense: str) -> Mapping[str, Any
         not isinstance(value, dict)
         or type(value.get("schema_version")) is not int
         or value.get("schema_version") not in {1, 2, 3, 4}
-        or set(value)
-        != (legacy_keys if value.get("schema_version") == 1 else current_keys)
+        or set(value) != (legacy_keys if value.get("schema_version") == 1 else current_keys)
         or value.get("mode") != defense
         or value.get("classifier_input") is not False
         or not isinstance(value.get("runner_rows"), dict)
@@ -782,9 +830,7 @@ def _load_algorithm_diagnostics(value: Any, *, defense: str) -> Mapping[str, Any
         if runtime_kind == "buflo":
             expected_state_schema = 2 if value["schema_version"] == 3 else 1
             observed_state_schema = (
-                buflo_state.get("schema_version", 1)
-                if isinstance(buflo_state, Mapping)
-                else None
+                buflo_state.get("schema_version", 1) if isinstance(buflo_state, Mapping) else None
             )
             if (
                 observed_state_schema != expected_state_schema
@@ -804,9 +850,7 @@ def _load_algorithm_diagnostics(value: Any, *, defense: str) -> Mapping[str, Any
                 )
                 or (
                     value["schema_version"] == 4
-                    and not _current_cs_buflo_stop_drain_state_valid(
-                        cs_state, value["directions"]
-                    )
+                    and not _current_cs_buflo_stop_drain_state_valid(cs_state, value["directions"])
                 )
             ):
                 raise ValueError("study handoff CS-BuFLO algorithm state is invalid")
@@ -877,16 +921,12 @@ _CS_BUFLO_DIRECTION_V4_KEYS = _CS_BUFLO_DIRECTION_V3_KEYS | {
 }
 
 
-def _current_cs_buflo_state_valid(
-    value: Mapping[str, Any], *, schema_version: int
-) -> bool:
+def _current_cs_buflo_state_valid(value: Mapping[str, Any], *, schema_version: int) -> bool:
     expected_state_keys = _CS_BUFLO_STATE_V3_KEYS | (
         {"early_termination_translation"} if schema_version == 4 else set()
     )
     expected_direction_keys = (
-        _CS_BUFLO_DIRECTION_V4_KEYS
-        if schema_version == 4
-        else _CS_BUFLO_DIRECTION_V3_KEYS
+        _CS_BUFLO_DIRECTION_V4_KEYS if schema_version == 4 else _CS_BUFLO_DIRECTION_V3_KEYS
     )
     expected_semantics = (
         CS_BUFLO_EARLY_TERMINATION_SEMANTICS
@@ -966,8 +1006,7 @@ def _current_cs_buflo_stop_drain_state_valid(
         not isinstance(translation, Mapping)
         or set(translation) != {"version", "stop_policy"}
         or type(translation.get("version")) is not int
-        or translation.get("version")
-        != CS_BUFLO_EARLY_TERMINATION_TRANSLATION_VERSION
+        or translation.get("version") != CS_BUFLO_EARLY_TERMINATION_TRANSLATION_VERSION
         or translation.get("stop_policy") != CS_BUFLO_TERMINATION_STOP_POLICY
     ):
         return False
@@ -990,11 +1029,9 @@ def _current_cs_buflo_stop_drain_state_valid(
             or not isinstance(metrics, Mapping)
             or state.get("termination_stop_latched") is not True
             or not isinstance(state.get("termination_stop_reason"), str)
-            or state.get("termination_stop_reason")
-            not in CS_BUFLO_TERMINATION_STOP_REASONS
+            or state.get("termination_stop_reason") not in CS_BUFLO_TERMINATION_STOP_REASONS
             or not isinstance(state.get("termination_stop_phase"), str)
-            or state.get("termination_stop_phase")
-            not in CS_BUFLO_TERMINATION_STOP_PHASES
+            or state.get("termination_stop_phase") not in CS_BUFLO_TERMINATION_STOP_PHASES
         ):
             return False
         crossing_total = state.get("termination_stop_crossing_total_bytes")
@@ -1002,17 +1039,11 @@ def _current_cs_buflo_stop_drain_state_valid(
         final_total = state.get("termination_accounted_bytes")
         last_increment = state.get("last_termination_increment_bytes")
         stop_us = state.get("termination_stop_latched_at_us")
-        scheduled_at_stop = state.get(
-            "termination_stop_scheduled_cells_at_stop"
-        )
+        scheduled_at_stop = state.get("termination_stop_scheduled_cells_at_stop")
         terminal_at_stop = state.get("termination_stop_terminal_cells_at_stop")
         progress_at_stop = state.get("termination_stop_progress_bytes_at_stop")
-        target_at_stop = state.get(
-            "termination_stop_padding_target_bytes_at_stop"
-        )
-        invalidations = state.get(
-            "termination_stop_provisional_invalidation_count"
-        )
+        target_at_stop = state.get("termination_stop_padding_target_bytes_at_stop")
+        invalidations = state.get("termination_stop_provisional_invalidation_count")
         scheduled_final = metrics.get("scheduled_cells")
         satisfactions = metrics.get("satisfaction_counts")
         ledger = state.get("stop_drain_ledger")
@@ -1045,13 +1076,11 @@ def _current_cs_buflo_stop_drain_state_valid(
         crossing_valid = (
             0 < crossing_increment <= crossing_total <= final_total
             and crossing_total > crossing_increment
-            and (crossing_total - crossing_increment).bit_length()
-            < crossing_total.bit_length()
+            and (crossing_total - crossing_increment).bit_length() < crossing_total.bit_length()
         )
         final_crossing = (
             0 < last_increment <= final_total
-            and (final_total - last_increment).bit_length()
-            < final_total.bit_length()
+            and (final_total - last_increment).bit_length() < final_total.bit_length()
         )
         reason = state["termination_stop_reason"]
         if (
@@ -1062,18 +1091,13 @@ def _current_cs_buflo_stop_drain_state_valid(
             != state.get("padding_target_bytes")
             or state.get("power_of_two_crossed") is not final_crossing
             or not (no_crossing or crossing_valid)
-            or (
-                direction == "incoming"
-                and crossing_valid
-                and crossing_increment != 600
-            )
+            or (direction == "incoming" and crossing_valid and crossing_increment != 600)
             or (
                 reason == "padding_target_reached"
                 and (not no_crossing or progress_at_stop < target_at_stop)
             )
             or (reason == "power_of_two_crossing" and not crossing_valid)
-            or ledger["drained_cells_after_stop"]
-            != scheduled_at_stop - terminal_at_stop
+            or ledger["drained_cells_after_stop"] != scheduled_at_stop - terminal_at_stop
             or not (
                 ledger["terminal_cells_strictly_before_stop"]
                 <= terminal_at_stop
@@ -1148,7 +1172,12 @@ def _validate_resource_usage(value: Any) -> None:
         "involuntary_context_switches",
     ):
         metric = value.get(key)
-        if isinstance(metric, bool) or not isinstance(metric, (int, float)) or metric < 0:
+        if (
+            isinstance(metric, bool)
+            or not isinstance(metric, (int, float))
+            or not math.isfinite(float(metric))
+            or metric < 0
+        ):
             raise ValueError(f"study handoff client resource metric is invalid: {key}")
     _validate_nullable_metric(value, "timer_wakeups", "timer_wakeups_unavailable_reason")
     _validate_nullable_metric(value, "rapl_energy_joules", "rapl_unavailable_reason")
@@ -1163,6 +1192,7 @@ def _validate_nullable_metric(value: Mapping[str, Any], metric: str, reason: str
     elif (
         isinstance(measured, bool)
         or not isinstance(measured, (int, float))
+        or not math.isfinite(float(measured))
         or measured < 0
         or unavailable is not None
     ):
@@ -1295,12 +1325,8 @@ def _add_optional_paired_performance(
     for direction in ("outgoing", "incoming"):
         row[f"defended_{direction}_wire_bytes"] = defended_performance["wire_bytes"][direction]
         row[f"baseline_{direction}_wire_bytes"] = baseline_performance["wire_bytes"][direction]
-        row[f"defended_{direction}_packet_count"] = defended_performance["packet_count"][
-            direction
-        ]
-        row[f"baseline_{direction}_packet_count"] = baseline_performance["packet_count"][
-            direction
-        ]
+        row[f"defended_{direction}_packet_count"] = defended_performance["packet_count"][direction]
+        row[f"baseline_{direction}_packet_count"] = baseline_performance["packet_count"][direction]
     udp_values = (
         *defended_performance["udp_payload_bytes"].values(),
         *baseline_performance["udp_payload_bytes"].values(),
@@ -1310,12 +1336,12 @@ def _add_optional_paired_performance(
     defended_udp = sum(defended_performance["udp_payload_bytes"].values())
     baseline_udp = sum(baseline_performance["udp_payload_bytes"].values())
     for direction in ("outgoing", "incoming"):
-        row[f"defended_{direction}_udp_payload_bytes"] = defended_performance[
-            "udp_payload_bytes"
-        ][direction]
-        row[f"baseline_{direction}_udp_payload_bytes"] = baseline_performance[
-            "udp_payload_bytes"
-        ][direction]
+        row[f"defended_{direction}_udp_payload_bytes"] = defended_performance["udp_payload_bytes"][
+            direction
+        ]
+        row[f"baseline_{direction}_udp_payload_bytes"] = baseline_performance["udp_payload_bytes"][
+            direction
+        ]
     row.update(
         {
             "defended_udp_payload_bytes": defended_udp,
@@ -1338,12 +1364,8 @@ def _add_optional_paired_performance(
                 * 1_000_000_000
                 / baseline.application_duration_ns
             ),
-            "defended_transport_retransmissions": defended_performance[
-                "transport_retransmissions"
-            ],
-            "baseline_transport_retransmissions": baseline_performance[
-                "transport_retransmissions"
-            ],
+            "defended_transport_retransmissions": defended_performance["transport_retransmissions"],
+            "baseline_transport_retransmissions": baseline_performance["transport_retransmissions"],
         }
     )
     defended_usage = defended_performance.get("client_resource_usage")
@@ -1478,12 +1500,12 @@ def performance_breakdowns(
                 "resource_usage": _summarize_resource_usage(usage),
             }
         )
-    paired = paired_overheads(samples) if any(
-        sample.defense == "undefended" for sample in samples
-    ) else []
-    paired_directional: dict[tuple[str, str, int, str], list[Mapping[str, Any]]] = (
-        defaultdict(list)
+    paired = (
+        paired_overheads(samples)
+        if any(sample.defense == "undefended" for sample in samples)
+        else []
     )
+    paired_directional: dict[tuple[str, str, int, str], list[Mapping[str, Any]]] = defaultdict(list)
     paired_client: dict[tuple[str, str, int], list[Mapping[str, Any]]] = defaultdict(list)
     mode_direction: dict[tuple[str, str], list[Mapping[str, Any]]] = defaultdict(list)
     mode_client: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
@@ -1505,9 +1527,7 @@ def performance_breakdowns(
             "direction": direction,
             **_paired_directional_performance(group, direction=direction),
         }
-        for (defense, workload, block, direction), group in sorted(
-            paired_directional.items()
-        )
+        for (defense, workload, block, direction), group in sorted(paired_directional.items())
     ]
     paired_client_rows = [
         {
@@ -1568,14 +1588,12 @@ def _paired_directional_performance(
         result[f"{metric}_additional_percent"] = 100.0 * (ratio - 1.0)
         result[f"{metric}_ratio_pair_quantiles"] = _numeric_quantiles(pair_values)
         if bootstrap_draws is not None:
-            result[f"{metric}_ratio_block_workload_bootstrap_95"] = (
-                _cluster_bootstrap_ratio(
-                    rows,
-                    numerator=numerator,
-                    denominator=denominator,
-                    draws=bootstrap_draws,
-                    seed=20260827 ^ (offset + (0 if direction == "outgoing" else 16)),
-                )
+            result[f"{metric}_ratio_block_workload_bootstrap_95"] = _cluster_bootstrap_ratio(
+                rows,
+                numerator=numerator,
+                denominator=denominator,
+                draws=bootstrap_draws,
+                seed=20260827 ^ (offset + (0 if direction == "outgoing" else 16)),
             )
     return result
 
@@ -1668,29 +1686,25 @@ def _paired_client_performance(
                 }
             )
             if bootstrap_draws is not None:
-                metric_result["ratio_block_workload_bootstrap_95"] = (
-                    _cluster_bootstrap_ratio(
-                        rows,
-                        numerator=numerator,
-                        denominator=denominator,
-                        draws=bootstrap_draws,
-                        seed=20260827 ^ int.from_bytes(
-                            hashlib.sha256(metric.encode("ascii")).digest()[:4], "big"
-                        ),
-                    )
+                metric_result["ratio_block_workload_bootstrap_95"] = _cluster_bootstrap_ratio(
+                    rows,
+                    numerator=numerator,
+                    denominator=denominator,
+                    draws=bootstrap_draws,
+                    seed=20260827
+                    ^ int.from_bytes(hashlib.sha256(metric.encode("ascii")).digest()[:4], "big"),
                 )
         if bootstrap_draws is not None:
-            metric_result["difference_block_workload_bootstrap_95"] = (
-                _cluster_bootstrap_difference(
-                    rows,
-                    defended=numerator,
-                    baseline=denominator,
-                    draws=bootstrap_draws,
-                    seed=20260827 ^ int.from_bytes(
-                        hashlib.sha256((metric + "-difference").encode("ascii")).digest()[:4],
-                        "big",
-                    ),
-                )
+            metric_result["difference_block_workload_bootstrap_95"] = _cluster_bootstrap_difference(
+                rows,
+                defended=numerator,
+                baseline=denominator,
+                draws=bootstrap_draws,
+                seed=20260827
+                ^ int.from_bytes(
+                    hashlib.sha256((metric + "-difference").encode("ascii")).digest()[:4],
+                    "big",
+                ),
             )
         paired_costs[metric] = metric_result
     result["paired_client_costs"] = paired_costs
@@ -1702,22 +1716,18 @@ def _paired_client_performance(
             draws=bootstrap_draws,
             seed=20260827 ^ 0xC011,
         )
-        result["goodput_ratio_block_workload_bootstrap_95"] = (
-            _cluster_bootstrap_goodput_ratio(
-                rows,
-                draws=bootstrap_draws,
-                seed=20260827 ^ 0x600D,
-            )
+        result["goodput_ratio_block_workload_bootstrap_95"] = _cluster_bootstrap_goodput_ratio(
+            rows,
+            draws=bootstrap_draws,
+            seed=20260827 ^ 0x600D,
         )
-        result["added_seconds_block_workload_bootstrap_95"] = (
-            _cluster_bootstrap_difference(
-                rows,
-                defended="defended_duration_ns",
-                baseline="baseline_duration_ns",
-                draws=bootstrap_draws,
-                seed=20260827 ^ 0xADD5,
-                scale=1 / 1_000_000_000,
-            )
+        result["added_seconds_block_workload_bootstrap_95"] = _cluster_bootstrap_difference(
+            rows,
+            defended="defended_duration_ns",
+            baseline="baseline_duration_ns",
+            draws=bootstrap_draws,
+            seed=20260827 ^ 0xADD5,
+            scale=1 / 1_000_000_000,
         )
     return result
 
@@ -1799,8 +1809,7 @@ def algorithm_breakdowns(samples: Sequence[StudySample]) -> dict[str, Any]:
         cs_v4_rows = [
             item["cs_buflo_state"]["directions"][direction]
             for item in group
-            if item["algorithm_schema_version"] == 4
-            and isinstance(item["cs_buflo_state"], Mapping)
+            if item["algorithm_schema_version"] == 4 and isinstance(item["cs_buflo_state"], Mapping)
         ]
         variants = sorted(
             {
@@ -1828,12 +1837,8 @@ def algorithm_breakdowns(samples: Sequence[StudySample]) -> dict[str, Any]:
                 "samples": len(group),
                 "scheduled_cells": sum(int(item["scheduled_cells"]) for item in directional),
                 "target_size_histogram": dict(sorted(target_histogram.items())),
-                "desired_udp_bytes": sum(
-                    int(item["desired_udp_bytes"]) for item in directional
-                ),
-                "observed_udp_bytes": sum(
-                    int(item["observed_udp_bytes"]) for item in directional
-                ),
+                "desired_udp_bytes": sum(int(item["desired_udp_bytes"]) for item in directional),
+                "observed_udp_bytes": sum(int(item["observed_udp_bytes"]) for item in directional),
                 "target_realization_ratio": (
                     sum(int(item["observed_udp_bytes"]) for item in directional)
                     / sum(int(item["desired_udp_bytes"]) for item in directional)
@@ -1847,10 +1852,7 @@ def algorithm_breakdowns(samples: Sequence[StudySample]) -> dict[str, Any]:
                     [item["inter_target_delta_us"] for item in directional]
                 ),
                 "estimated_jitter_us": _merge_algorithm_summaries(
-                    [
-                        item["estimated_jitter_from_nearest_nominal_us"]
-                        for item in directional
-                    ]
+                    [item["estimated_jitter_from_nearest_nominal_us"] for item in directional]
                 ),
                 "scheduling_lateness_us": _merge_algorithm_summaries(
                     [item["scheduling_lateness_us"] for item in directional]
@@ -1865,10 +1867,7 @@ def algorithm_breakdowns(samples: Sequence[StudySample]) -> dict[str, Any]:
                         for item in directional
                     ),
                     "delay_us": _merge_algorithm_summaries(
-                        [
-                            item["receive_credit_advertisement"]["delay_us"]
-                            for item in directional
-                        ]
+                        [item["receive_credit_advertisement"]["delay_us"] for item in directional]
                     ),
                 },
                 "receive_credit_consumption": {
@@ -1881,25 +1880,17 @@ def algorithm_breakdowns(samples: Sequence[StudySample]) -> dict[str, Any]:
                         for item in directional
                     ),
                     "delay_us": _merge_algorithm_summaries(
-                        [
-                            item["receive_credit_consumption"]["delay_us"]
-                            for item in directional
-                        ]
+                        [item["receive_credit_consumption"]["delay_us"] for item in directional]
                     ),
                 },
                 "inferred_rate_transition_count": sum(
-                    len(item["inferred_nearest_nominal_transitions"])
-                    for item in directional
+                    len(item["inferred_nearest_nominal_transitions"]) for item in directional
                 ),
-                "inferred_rate_transition_histogram": dict(
-                    sorted(transition_histogram.items())
-                ),
+                "inferred_rate_transition_histogram": dict(sorted(transition_histogram.items())),
                 "cs_buflo": (
                     {
                         "padding_variants": variants,
-                        "rate_adaptations": sum(
-                            int(item["rate_adaptations"]) for item in cs_rows
-                        ),
+                        "rate_adaptations": sum(int(item["rate_adaptations"]) for item in cs_rows),
                         "explicit_rate_transition_count": sum(
                             len(item["rate_transitions"]) for item in cs_rows
                         ),
@@ -1922,10 +1913,7 @@ def algorithm_breakdowns(samples: Sequence[StudySample]) -> dict[str, Any]:
                             [int(item["padding_target_bytes"]) for item in cs_rows]
                         ),
                         "next_adaptation_boundary_bytes": _numeric_quantiles(
-                            [
-                                int(item["next_adaptation_boundary_bytes"])
-                                for item in cs_rows
-                            ]
+                            [int(item["next_adaptation_boundary_bytes"]) for item in cs_rows]
                         ),
                         "estimator_samples": _numeric_quantiles(
                             [int(item["estimator_samples"]) for item in cs_rows]
@@ -1942,8 +1930,7 @@ def algorithm_breakdowns(samples: Sequence[StudySample]) -> dict[str, Any]:
                                     len(cs_rows) - len(cs_v4_rows)
                                 ),
                                 "latched": sum(
-                                    item["termination_stop_latched"] is True
-                                    for item in cs_v4_rows
+                                    item["termination_stop_latched"] is True for item in cs_v4_rows
                                 ),
                                 "reason_counts": dict(
                                     sorted(
@@ -1962,49 +1949,27 @@ def algorithm_breakdowns(samples: Sequence[StudySample]) -> dict[str, Any]:
                                     )
                                 ),
                                 "crossing_samples": sum(
-                                    int(
-                                        item[
-                                            "termination_stop_crossing_total_bytes"
-                                        ]
-                                    )
-                                    > 0
+                                    int(item["termination_stop_crossing_total_bytes"]) > 0
                                     for item in cs_v4_rows
                                 ),
                                 "crossing_total_bytes": (
                                     _numeric_quantiles(
                                         [
-                                            int(
-                                                item[
-                                                    "termination_stop_crossing_total_bytes"
-                                                ]
-                                            )
+                                            int(item["termination_stop_crossing_total_bytes"])
                                             for item in cs_v4_rows
-                                            if int(
-                                                item[
-                                                    "termination_stop_crossing_total_bytes"
-                                                ]
-                                            )
+                                            if int(item["termination_stop_crossing_total_bytes"])
                                             > 0
                                         ]
                                     )
                                     if any(
-                                        int(
-                                            item[
-                                                "termination_stop_crossing_total_bytes"
-                                            ]
-                                        )
-                                        > 0
+                                        int(item["termination_stop_crossing_total_bytes"]) > 0
                                         for item in cs_v4_rows
                                     )
                                     else None
                                 ),
                                 "drained_cells_after_stop": _numeric_quantiles(
                                     [
-                                        int(
-                                            item["stop_drain_ledger"][
-                                                "drained_cells_after_stop"
-                                            ]
-                                        )
+                                        int(item["stop_drain_ledger"]["drained_cells_after_stop"])
                                         for item in cs_v4_rows
                                     ]
                                 ),
@@ -2018,30 +1983,21 @@ def algorithm_breakdowns(samples: Sequence[StudySample]) -> dict[str, Any]:
                             }
                         ),
                         "minimum_interval_opportunities": sum(
-                            int(item["minimum_interval_opportunities"])
-                            for item in cs_rows
+                            int(item["minimum_interval_opportunities"]) for item in cs_rows
                         ),
                         "minimum_interval_terminal": sum(
-                            int(item["minimum_interval_terminal"])
-                            for item in cs_rows
+                            int(item["minimum_interval_terminal"]) for item in cs_rows
                         ),
                         "minimum_interval_full": sum(
-                            int(item["minimum_interval_full"])
-                            for item in cs_rows
+                            int(item["minimum_interval_full"]) for item in cs_rows
                         ),
                         "minimum_interval_local_realized": (
-                            sum(
-                                int(item["minimum_interval_local_realized"])
-                                for item in cs_rows
-                            )
+                            sum(int(item["minimum_interval_local_realized"]) for item in cs_rows)
                             if direction == "incoming"
                             else None
                         ),
                         "incoming_local_realized_cells": (
-                            sum(
-                                int(item["incoming_local_realized_cells"])
-                                for item in cs_rows
-                            )
+                            sum(int(item["incoming_local_realized_cells"]) for item in cs_rows)
                             if direction == "incoming"
                             else None
                         ),
@@ -2069,21 +2025,15 @@ def algorithm_breakdowns(samples: Sequence[StudySample]) -> dict[str, Any]:
             "control_evidence_semantics": sorted(
                 {str(item["control_evidence_semantics"]) for item in group}
             ),
-            "stream_cancellations": sum(
-                int(item["stream_cancellations"]) for item in group
-            ),
-            "receipt_cancellations": sum(
-                int(item["receipt_cancellations"]) for item in group
-            ),
+            "stream_cancellations": sum(int(item["stream_cancellations"]) for item in group),
+            "receipt_cancellations": sum(int(item["receipt_cancellations"]) for item in group),
             "typed_cancellation_action_events": sum(
                 int(item["typed_cancellation_action_events"]) for item in group
             ),
             "pending_request_cancellations": sum(
                 int(item["pending_request_cancellations"]) for item in group
             ),
-            "open_streams_at_latch": sum(
-                int(item["open_streams_at_latch"]) for item in group
-            ),
+            "open_streams_at_latch": sum(int(item["open_streams_at_latch"]) for item in group),
             "parser_lease_bytes_at_latch": sum(
                 int(item["parser_lease_bytes_at_latch"]) for item in group
             ),
@@ -2097,22 +2047,13 @@ def algorithm_breakdowns(samples: Sequence[StudySample]) -> dict[str, Any]:
                         for item in group
                     )
                 }
-                if all(
-                    "pending_application_parser_boundaries_at_latch" in item
-                    for item in group
-                )
+                if all("pending_application_parser_boundaries_at_latch" in item for item in group)
                 else {}
             ),
             "exact_capacity_bytes_cancelled": {
-                "total": sum(
-                    int(item["exact_capacity_bytes_cancelled"]) for item in group
-                ),
-                "minimum": min(
-                    int(item["exact_capacity_bytes_cancelled"]) for item in group
-                ),
-                "maximum": max(
-                    int(item["exact_capacity_bytes_cancelled"]) for item in group
-                ),
+                "total": sum(int(item["exact_capacity_bytes_cancelled"]) for item in group),
+                "minimum": min(int(item["exact_capacity_bytes_cancelled"]) for item in group),
+                "maximum": max(int(item["exact_capacity_bytes_cancelled"]) for item in group),
                 **_numeric_quantiles(
                     [int(item["exact_capacity_bytes_cancelled"]) for item in group]
                 ),
@@ -2121,12 +2062,10 @@ def algorithm_breakdowns(samples: Sequence[StudySample]) -> dict[str, Any]:
                 [int(item["terminal_latched_at_us"]) for item in group]
             ),
             "post_cancellation_unscheduled_defense_control_packets": sum(
-                int(item["post_cancellation_unscheduled_defense_control_packets"])
-                for item in group
+                int(item["post_cancellation_unscheduled_defense_control_packets"]) for item in group
             ),
             "post_cancellation_unscheduled_defense_control_bytes": sum(
-                int(item["post_cancellation_unscheduled_defense_control_bytes"])
-                for item in group
+                int(item["post_cancellation_unscheduled_defense_control_bytes"]) for item in group
             ),
         }
         for (defense, workload, block), group in sorted(terminal_tail_groups.items())
@@ -2140,9 +2079,7 @@ def algorithm_breakdowns(samples: Sequence[StudySample]) -> dict[str, Any]:
             "before_application_complete_samples": sum(
                 item["before_application_complete"] is True for item in group
             ),
-            "latched_at_us": _numeric_quantiles(
-                [int(item["latched_at_us"]) for item in group]
-            ),
+            "latched_at_us": _numeric_quantiles([int(item["latched_at_us"]) for item in group]),
             **{
                 field: sum(int(item[field]) for item in group)
                 for field in (
@@ -2187,9 +2124,7 @@ def _merge_algorithm_summaries(values: Sequence[Mapping[str, Any]]) -> dict[str,
         "count": count,
         "minimum": min(int(value["minimum"]) for value in populated),
         "maximum": max(int(value["maximum"]) for value in populated),
-        "weighted_mean": sum(
-            float(value["mean"]) * int(value["count"]) for value in populated
-        )
+        "weighted_mean": sum(float(value["mean"]) * int(value["count"]) for value in populated)
         / count,
         "sample_p50_range": {
             "minimum": min(int(value["p50"]) for value in populated),
@@ -2343,9 +2278,7 @@ def vngpp_features(trace: Sequence[ShapePacket]) -> dict[str, float]:
     # then takes the maximum Packet time.  Preserve that ordering instead of
     # exposing a fractional millisecond feature to Weka.
     features["duration-ms"] = (
-        max(_author_packet_time_ms(packet.relative_time_ns) for packet in trace)
-        if trace
-        else 0
+        max(_author_packet_time_ms(packet.relative_time_ns) for packet in trace) if trace else 0
     )
     return {key: float(value) for key, value in features.items()}
 
@@ -2439,9 +2372,18 @@ def _cached_normalized_dlsvm_distance(left: tuple[int, ...], right: tuple[int, .
 def _load_osad_library() -> tuple[ctypes.CDLL, Path] | None:
     configured = os.environ.get("QCSD_OSAD_LIBRARY")
     path = Path(configured).resolve() if configured else _DEFAULT_OSAD_LIBRARY
+    return _load_osad_library_path(path, required=bool(configured))
+
+
+def _load_osad_library_path(
+    path: Path,
+    *,
+    required: bool,
+) -> tuple[ctypes.CDLL, Path] | None:
+    path = Path(path).resolve()
     if path.is_symlink() or not path.is_file():
-        if configured:
-            raise RuntimeError(f"configured QCSD OSA accelerator is unavailable: {path}")
+        if required:
+            raise RuntimeError(f"required QCSD OSA accelerator is unavailable: {path}")
         return None
     library = ctypes.CDLL(os.fspath(path))
     function = library.qcsd_osad_distance
@@ -2476,10 +2418,23 @@ def _native_osad_distance(
     return result
 
 
-def dlsvm_backend_receipt() -> dict[str, Any]:
+def dlsvm_backend_receipt(
+    *,
+    formal: bool = False,
+    trusted_runtime: TrustedClassifierRuntime | None = None,
+) -> dict[str, Any]:
     """Describe and hash the exact clean-room DLSVM backend in use."""
 
-    loaded = _load_osad_library()
+    approved_runtime = None
+    if formal:
+        _reject_formal_runtime_overrides()
+        runtime = trusted_runtime or _PRODUCTION_CLASSIFIER_RUNTIME
+        approved_runtime = _validate_trusted_classifier_runtime(runtime)
+        loaded = _load_osad_library_path(runtime.osad_library, required=True)
+    else:
+        if trusted_runtime is not None:
+            raise ValueError("trusted classifier runtime is a formal-only test seam")
+        loaded = _load_osad_library()
     try:
         import sklearn.svm._libsvm as sklearn_libsvm
     except ImportError as error:
@@ -2514,6 +2469,8 @@ def dlsvm_backend_receipt() -> dict[str, Any]:
             "path": str(loaded[1]),
             "sha256": sha256_file(loaded[1]),
         }
+    if approved_runtime is not None:
+        result["approved_runtime"] = approved_runtime
     return result
 
 
@@ -2546,6 +2503,228 @@ def dlsvm_reference_receipt() -> dict[str, str]:
         "sha256": _DLSVM_REFERENCE_SHA256,
         "receipt_path": str(_DLSVM_REFERENCE_RECEIPT),
         "receipt_sha256": _DLSVM_REFERENCE_RECEIPT_SHA256,
+    }
+
+
+def _reject_formal_runtime_overrides() -> None:
+    configured = [name for name in _FORMAL_RUNTIME_OVERRIDE_ENV if name in os.environ]
+    if configured:
+        raise RuntimeError(
+            "formal classifier evaluation forbids runtime path overrides: " + ", ".join(configured)
+        )
+
+
+def _classifier_runtime_payload_sha256(value: Mapping[str, Any]) -> str:
+    payload = dict(value)
+    payload.pop("payload_sha256", None)
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(_CLASSIFIER_RUNTIME_DOMAIN.encode("utf-8") + b"\0" + encoded).hexdigest()
+
+
+def _package_versions(names: Sequence[str]) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for name in names:
+        if (
+            not isinstance(name, str)
+            or not name
+            or any(character not in "abcdefghijklmnopqrstuvwxyz0123456789+.-" for character in name)
+        ):
+            raise RuntimeError("classifier runtime receipt has an invalid package name")
+        completed = subprocess.run(
+            ["dpkg-query", "-W", "-f=${Version}", name],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        version = completed.stdout.strip()
+        if completed.returncode != 0 or not version:
+            raise RuntimeError(f"classifier runtime package is unavailable: {name}")
+        result[name] = version
+    return result
+
+
+def _owning_debian_package(path: Path) -> str:
+    completed = subprocess.run(
+        ["dpkg-query", "-S", str(Path(path).resolve())],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if completed.returncode != 0 or not completed.stdout.strip():
+        raise RuntimeError(f"classifier runtime binary has no package owner: {path}")
+    return completed.stdout.splitlines()[0].split(":", 1)[0].split(",", 1)[0]
+
+
+def _java_version(java: Path) -> str:
+    completed = subprocess.run(
+        [str(java), "-version"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError("Java runtime failed while validating classifier provenance")
+    value = (completed.stderr or completed.stdout).strip()
+    if not value:
+        raise RuntimeError("Java runtime returned no version identity")
+    return value
+
+
+def _validate_trusted_classifier_runtime(
+    runtime: TrustedClassifierRuntime,
+) -> dict[str, str]:
+    receipt_path = Path(runtime.receipt).resolve()
+    if receipt_path.is_symlink() or not receipt_path.is_file():
+        raise RuntimeError(f"approved classifier runtime receipt is unavailable: {receipt_path}")
+    try:
+        value = load_json(receipt_path)
+    except (OSError, ValueError, TypeError) as error:
+        raise RuntimeError("approved classifier runtime receipt is invalid") from error
+    required_keys = {
+        "schema_version",
+        "artifact_type",
+        "domain",
+        "source",
+        "build_inputs",
+        "osad",
+        "java",
+        "weka",
+        "payload_sha256",
+    }
+    if (
+        not isinstance(value, Mapping)
+        or set(value) != required_keys
+        or value.get("schema_version") != 1
+        or value.get("artifact_type") != "qcsd-classifier-runtime-build"
+        or value.get("domain") != _CLASSIFIER_RUNTIME_DOMAIN
+        or value.get("payload_sha256") != _classifier_runtime_payload_sha256(value)
+    ):
+        raise RuntimeError("approved classifier runtime receipt identity is invalid")
+
+    source = value.get("source")
+    current_source = source_metadata()
+    if (
+        not isinstance(source, Mapping)
+        or set(source) != set(current_source)
+        or any(
+            source.get(key) != current_source.get(key)
+            for key in current_source
+            if key != "image_digest"
+        )
+    ):
+        raise RuntimeError("approved classifier runtime source differs from evaluator source")
+    build_inputs = value.get("build_inputs")
+    if (
+        not isinstance(build_inputs, Mapping)
+        or set(build_inputs)
+        != {
+            "schema_version",
+            "artifact_type",
+            "cargo_lock_sha256",
+            "debian_base_image",
+            "rust_base_image",
+            "uv_lock_sha256",
+        }
+        or build_inputs.get("schema_version") != 1
+        or build_inputs.get("artifact_type") != "qcsd-study-build-inputs"
+        or build_inputs.get("debian_base_image") != _DEBIAN_BASE_IMAGE
+        or any(
+            not isinstance(build_inputs.get(key), str) or len(str(build_inputs[key])) != 64
+            for key in ("cargo_lock_sha256", "uv_lock_sha256")
+        )
+        or not isinstance(build_inputs.get("rust_base_image"), str)
+        or "@sha256:" not in str(build_inputs["rust_base_image"])
+    ):
+        raise RuntimeError("approved classifier runtime build inputs are invalid")
+
+    osad = value.get("osad")
+    osad_source = osad.get("source") if isinstance(osad, Mapping) else None
+    osad_compiler = osad.get("compiler") if isinstance(osad, Mapping) else None
+    osad_library = osad.get("library") if isinstance(osad, Mapping) else None
+    osad_source_path = LAB_ROOT / "tools/qcsd_osad.c"
+    library_path = Path(runtime.osad_library).resolve()
+    if (
+        not isinstance(osad, Mapping)
+        or set(osad) != {"source", "compiler", "build_command", "library"}
+        or osad_source != {"path": "tools/qcsd_osad.c", "sha256": _OSAD_SOURCE_SHA256}
+        or osad_source_path.is_symlink()
+        or not osad_source_path.is_file()
+        or sha256_file(osad_source_path) != _OSAD_SOURCE_SHA256
+        or osad.get("build_command") != list(_OSAD_BUILD_COMMAND)
+        or not isinstance(osad_compiler, Mapping)
+        or set(osad_compiler) != {"path", "sha256", "version", "packages"}
+        or not isinstance(osad_compiler.get("path"), str)
+        or not isinstance(osad_compiler.get("sha256"), str)
+        or len(osad_compiler["sha256"]) != 64
+        or not isinstance(osad_compiler.get("version"), str)
+        or not osad_compiler["version"]
+        or not isinstance(osad_compiler.get("packages"), Mapping)
+        or set(osad_compiler["packages"]) != {"gcc", "libc6-dev"}
+        or any(
+            not isinstance(version, str) or not version
+            for version in osad_compiler["packages"].values()
+        )
+        or not isinstance(osad_library, Mapping)
+        or osad_library != {"path": str(library_path), "sha256": sha256_file(library_path)}
+    ):
+        raise RuntimeError("approved OSAD build or binary receipt is invalid")
+
+    java = value.get("java")
+    declared_java = Path(runtime.java_executable)
+    resolved_java = declared_java.resolve()
+    if (
+        not isinstance(java, Mapping)
+        or set(java)
+        != {
+            "declared_path",
+            "resolved_path",
+            "sha256",
+            "version",
+            "packages",
+        }
+        or java.get("declared_path") != str(declared_java)
+        or java.get("resolved_path") != str(resolved_java)
+        or resolved_java.is_symlink()
+        or not resolved_java.is_file()
+        or java.get("sha256") != sha256_file(resolved_java)
+        or java.get("version") != _java_version(resolved_java)
+        or not isinstance(java.get("packages"), Mapping)
+        or set(java["packages"]) != {"default-jre-headless", _owning_debian_package(resolved_java)}
+        or dict(java["packages"]) != _package_versions(tuple(sorted(java["packages"])))
+    ):
+        raise RuntimeError("approved Java package or executable receipt is invalid")
+
+    weka = value.get("weka")
+    expected_artifacts = {
+        name: {
+            "path": str(Path(runtime.weka_directory).resolve() / name),
+            "sha256": digest,
+        }
+        for name, digest in sorted(runtime.weka_artifacts.items())
+    }
+    if (
+        not isinstance(weka, Mapping)
+        or set(weka) != {"directory", "artifacts"}
+        or weka.get("directory") != str(Path(runtime.weka_directory).resolve())
+        or weka.get("artifacts") != expected_artifacts
+    ):
+        raise RuntimeError("approved Weka artifact receipt is invalid")
+    for artifact in expected_artifacts.values():
+        artifact_path = Path(artifact["path"])
+        if (
+            artifact_path.is_symlink()
+            or not artifact_path.is_file()
+            or sha256_file(artifact_path) != artifact["sha256"]
+        ):
+            raise RuntimeError("approved Weka artifact bytes are unavailable")
+    return {
+        "path": str(receipt_path),
+        "sha256": sha256_file(receipt_path),
+        "payload_sha256": str(value["payload_sha256"]),
+        "artifact_type": "qcsd-classifier-runtime-build",
     }
 
 
@@ -2588,10 +2767,28 @@ def _load_weka_backend() -> WekaBackend | None:
     return WekaBackend(java=java, artifacts=artifact_paths)
 
 
-def vngpp_backend_receipt() -> dict[str, Any]:
+def vngpp_backend_receipt(
+    *,
+    formal: bool = False,
+    trusted_runtime: TrustedClassifierRuntime | None = None,
+) -> dict[str, Any]:
     """Describe the exact VNG++ feature and classifier implementation in use."""
 
-    backend = _load_weka_backend()
+    approved_runtime = None
+    if formal:
+        _reject_formal_runtime_overrides()
+        runtime = trusted_runtime or _PRODUCTION_CLASSIFIER_RUNTIME
+        approved_runtime = _validate_trusted_classifier_runtime(runtime)
+        backend = WekaBackend(
+            java=Path(runtime.java_executable).resolve(),
+            artifacts=tuple(
+                Path(runtime.weka_directory).resolve() / name for name in runtime.weka_artifacts
+            ),
+        )
+    else:
+        if trusted_runtime is not None:
+            raise ValueError("trusted classifier runtime is a formal-only test seam")
+        backend = _load_weka_backend()
     reference = classifier_reference_receipt()
     result: dict[str, Any] = {
         "schema_version": 1,
@@ -2604,22 +2801,16 @@ def vngpp_backend_receipt() -> dict[str, Any]:
         "backend": "pinned-weka-3.7.5" if backend is not None else "unavailable",
     }
     if backend is not None:
-        completed = subprocess.run(
-            [str(backend.java), "-version"],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if completed.returncode != 0:
-            raise RuntimeError("Java runtime failed while receipting the VNG++ backend")
         result["runtime"] = {
             "java_path": str(backend.java),
-            "java_version": (completed.stderr or completed.stdout).strip(),
+            "java_sha256": sha256_file(backend.java),
+            "java_version": _java_version(backend.java),
             "artifacts": [
                 {"path": str(path), "sha256": sha256_file(path)} for path in backend.artifacts
             ],
         }
+    if approved_runtime is not None:
+        result["approved_runtime"] = approved_runtime
     result["reference"] = reference
     return result
 
@@ -3061,9 +3252,10 @@ def _validate_dlsvm_preflight_value(
         "benchmark_cap_length": 12_000,
     }
     expected_executed = sorted({max(1, min(length, 12_000)) for length in representatives})
-    if trace_census != expected_trace_census or [
-        item.get("trace_length") for item in measurements
-    ] != expected_executed:
+    if (
+        trace_census != expected_trace_census
+        or [item.get("trace_length") for item in measurements] != expected_executed
+    ):
         raise ValueError("DLSVM preflight trace census is invalid")
     for item in measurements:
         length = item["trace_length"]
@@ -3082,8 +3274,7 @@ def _validate_dlsvm_preflight_value(
                 "cells_per_second",
                 "distance",
             }
-            or
-            item.get("dynamic_programming_cells") != cells
+            or item.get("dynamic_programming_cells") != cells
             or isinstance(elapsed, bool)
             or not isinstance(elapsed, (int, float))
             or elapsed <= 0
@@ -3119,14 +3310,12 @@ def _validate_dlsvm_preflight_value(
             "available_memory_bytes",
         }
         or set(admission) != {"wall_time_available", "memory_available"}
-        or
-        isinstance(projected, bool)
+        or isinstance(projected, bool)
         or not isinstance(projected, (int, float))
         or projected <= 0
         or type(memory) is not int
         or memory <= 0
-        or projection.get("conservative_single_worker_cells_per_second")
-        != conservative_rate
+        or projection.get("conservative_single_worker_cells_per_second") != conservative_rate
         or projection.get("workers") != workers
         or projection.get("worker_efficiency") != 0.65
         or projection.get("safety_factor") != 2.0
@@ -3149,12 +3338,9 @@ def _validate_dlsvm_preflight_value(
     ):
         raise ValueError("DLSVM preflight projection is invalid")
     expected_admission = {
-        "wall_time_available": (
-            available_wall is not None and available_wall >= expected_wall
-        ),
+        "wall_time_available": (available_wall is not None and available_wall >= expected_wall),
         "memory_available": (
-            available_memory is not None
-            and available_memory >= math.ceil(expected_memory * 1.5)
+            available_memory is not None and available_memory >= math.ceil(expected_memory * 1.5)
         ),
     }
     if admission != expected_admission:
@@ -3329,8 +3515,7 @@ def original_study_comparison_rows() -> tuple[dict[str, Any], ...]:
         rows.append(
             {
                 "anchor_id": (
-                    f"buflo-tau{profile['tau_ms']}-rho{profile['rho_ms']}-"
-                    f"d{profile['d_bytes']}"
+                    f"buflo-tau{profile['tau_ms']}-rho{profile['rho_ms']}-d{profile['d_bytes']}"
                 ),
                 "source": "Dyer et al., IEEE S&P 2012, Figure 12",
                 "result_scope": "original-study",
@@ -3408,9 +3593,8 @@ def original_study_comparison_rows() -> tuple[dict[str, Any], ...]:
                 "metrics": result,
             }
         )
-    if (
-        len({row["anchor_id"] for row in rows}) != len(rows)
-        or any(not _COMPARISON_CONTEXT_FIELDS <= set(row) for row in rows)
+    if len({row["anchor_id"] for row in rows}) != len(rows) or any(
+        not _COMPARISON_CONTEXT_FIELDS <= set(row) for row in rows
     ):
         raise RuntimeError("original-study comparison row omitted required context")
     return tuple(rows)
@@ -3623,8 +3807,7 @@ def _qcsd_comparison_rows(
                         },
                         {
                             "difference": (
-                                "csbuflo-paper-source-and-client-only-early-"
-                                "termination-translation"
+                                "csbuflo-paper-source-and-client-only-early-termination-translation"
                             ),
                             "classification": "expected",
                             "reason": (
@@ -3650,9 +3833,7 @@ def _qcsd_comparison_rows(
     return tuple(rows)
 
 
-def _evaluator_source_binding(
-    handoff_root: Path | None, *, formal: bool
-) -> dict[str, Any]:
+def _evaluator_source_binding(handoff_root: Path | None, *, formal: bool) -> dict[str, Any]:
     module_path = Path(__file__).resolve()
     handoff_module = module_path.with_name("buflo_handoff.py")
     native_source = LAB_ROOT / "tools/qcsd_osad.c"
@@ -3678,9 +3859,7 @@ def _evaluator_source_binding(
             == handoff_source["execution_source"]
             == handoff_source["exporter_source"]
         ):
-            raise ValueError(
-                "formal evaluation source differs from capture/export source lineage"
-            )
+            raise ValueError("formal evaluation source differs from capture/export source lineage")
     elif formal:
         raise ValueError("formal evaluation requires a sealed handoff source binding")
     osad = _load_osad_library()
@@ -3851,8 +4030,7 @@ def _validate_evaluation_receipt_value(
         or not isinstance(value.get("attacks"), list)
         or value.get("observation_layer") != _EVALUATION_OBSERVATION_LAYER
         or value.get("overhead_formula") != _EVALUATION_OVERHEAD_FORMULA
-        or value.get("five_class_random_chance_accuracy")
-        != _EVALUATION_RANDOM_CHANCE_ACCURACY
+        or value.get("five_class_random_chance_accuracy") != _EVALUATION_RANDOM_CHANCE_ACCURACY
         or value.get("temporal_protocol") != _evaluation_temporal_protocol()
         or value.get("limitations") != list(_EVALUATION_LIMITATIONS)
     ):
@@ -3874,9 +4052,7 @@ def _validate_evaluation_receipt_value(
         }
     if value.get("handoff") != expected_handoff:
         raise ValueError("evaluation receipt handoff binding is invalid")
-    if value.get("evaluator_source") != _evaluator_source_binding(
-        handoff_root, formal=formal
-    ):
+    if value.get("evaluator_source") != _evaluator_source_binding(handoff_root, formal=formal):
         raise ValueError("evaluation receipt source/backend lineage is invalid")
     expected_classifier_provenance = {
         "panchenko_vngpp": classifier_reference_receipt(),
@@ -3889,8 +4065,7 @@ def _validate_evaluation_receipt_value(
         raise ValueError("evaluation receipt classifier workload census is invalid")
 
     attack_results = tuple(
-        _validate_attack_record(record, samples=samples)
-        for record in value["attacks"]
+        _validate_attack_record(record, samples=samples) for record in value["attacks"]
     )
     identities = [
         (
@@ -3905,9 +4080,7 @@ def _validate_evaluation_receipt_value(
         raise ValueError("evaluation receipt repeats an attack result identity")
     if identities != _expected_attack_identities(samples):
         raise ValueError("evaluation receipt does not contain the exact attack matrix")
-    for index, (record, result) in enumerate(
-        zip(value["attacks"], attack_results, strict=True)
-    ):
+    for index, (record, result) in enumerate(zip(value["attacks"], attack_results, strict=True)):
         expected_interval = attack_bootstrap_intervals(
             result,
             draws=draws,
@@ -3918,10 +4091,7 @@ def _validate_evaluation_receipt_value(
 
     paired = paired_overheads(samples)
     expected_summary = summarize_paired_overheads(paired, bootstrap_draws=draws)
-    if (
-        value.get("paired_per_visit") != paired
-        or value.get("paired_metrics") != expected_summary
-    ):
+    if value.get("paired_per_visit") != paired or value.get("paired_metrics") != expected_summary:
         raise ValueError("evaluation paired-overhead evidence is invalid")
     expected_performance = (
         performance_breakdowns(samples, bootstrap_draws=draws)
@@ -3978,8 +4148,7 @@ def _validate_evaluation_receipt_value(
         }
         or comparison.get("acceptance_rule") != _EVALUATION_COMPARISON_ACCEPTANCE_RULE
         or comparison.get("historical_rows") != list(original_study_comparison_rows())
-        or comparison.get("anchor_metric_inventory")
-        != list(historical_anchor_metric_inventory())
+        or comparison.get("anchor_metric_inventory") != list(historical_anchor_metric_inventory())
         or comparison.get("qcsd_rows")
         != list(_qcsd_comparison_rows(samples, expected_summary, attack_results))
         or comparison.get("numeric_discrepancy_review_required") is not True
@@ -3988,9 +4157,7 @@ def _validate_evaluation_receipt_value(
     return value
 
 
-def _validate_attack_record(
-    record: Any, *, samples: Sequence[StudySample]
-) -> AttackResult:
+def _validate_attack_record(record: Any, *, samples: Sequence[StudySample]) -> AttackResult:
     required = {
         "schema_version",
         "attack",
@@ -4182,8 +4349,7 @@ def _replay_attack_result(
     testing = [
         sample
         for sample in samples
-        if sample.defense == result.testing_defense
-        and sample.acquisition_block_index == test_block
+        if sample.defense == result.testing_defense and sample.acquisition_block_index == test_block
     ]
     return _fit_predict_attack(
         result.attack,
@@ -4262,14 +4428,12 @@ def _expected_protocol_details(
         training = [
             sample
             for sample in samples
-            if sample.defense == training_defense
-            and sample.acquisition_block_index in TRAIN_BLOCKS
+            if sample.defense == training_defense and sample.acquisition_block_index in TRAIN_BLOCKS
         ]
         testing = [
             sample
             for sample in samples
-            if sample.defense == testing_defense
-            and sample.acquisition_block_index == test_block
+            if sample.defense == testing_defense and sample.acquisition_block_index == test_block
         ]
         train_ids = [sample.sample_id for sample in training]
         test_ids = [sample.sample_id for sample in testing]

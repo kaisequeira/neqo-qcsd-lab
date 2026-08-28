@@ -90,6 +90,7 @@ def atomic_json(path: Path, value: Any) -> None:
             os.fsync(out.fileno())
             temporary = Path(out.name)
         temporary.replace(path)
+        fsync_directory(path.parent)
     finally:
         if temporary is not None and temporary.exists():
             temporary.unlink()
@@ -113,9 +114,49 @@ def atomic_text(path: Path, value: str) -> None:
             os.fsync(out.fileno())
             temporary = Path(out.name)
         temporary.replace(path)
+        fsync_directory(path.parent)
     finally:
         if temporary is not None and temporary.exists():
             temporary.unlink()
+
+
+def durable_create(path: Path, value: bytes) -> None:
+    """Create a complete file exactly once and durably publish its name.
+
+    Writing directly through ``open("xb")`` can leave a partial but
+    permanently claimed evidence file after power loss.  A same-directory
+    hard link publishes only a fully flushed temporary file and retains
+    create-only collision semantics.
+    """
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "wb",
+            dir=path.parent,
+            prefix=f".{path.name}{ATOMIC_TEMP_MARKER}",
+            delete=False,
+        ) as out:
+            out.write(value)
+            out.flush()
+            os.fsync(out.fileno())
+            temporary = Path(out.name)
+        os.link(temporary, path)
+        fsync_directory(path.parent)
+    finally:
+        if temporary is not None and temporary.exists():
+            temporary.unlink()
+
+
+def fsync_directory(path: Path) -> None:
+    """Flush directory-entry changes required by crash-durable checkpoints."""
+
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def discard_atomic_write_temps(root: Path) -> list[Path]:

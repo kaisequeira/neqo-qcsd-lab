@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import itertools
 import math
 from dataclasses import dataclass
-from typing import Mapping, Sequence
+from typing import Iterable, Mapping, Sequence
 
 import numpy as np
 
@@ -356,24 +355,172 @@ def morphing_matrix(source: np.ndarray, target: np.ndarray, buckets: Sequence[in
 def minimum_cost_derangement(
     names: Sequence[str], candidates: Mapping[tuple[str, str], DirectedFit]
 ) -> tuple[tuple[str, str], ...]:
+    """Return the exact lexicographic minimum no-self assignment.
+
+    The former implementation enumerated every permutation, which made the
+    fitter unusable beyond very small cohorts.  This implementation folds the
+    three objective stages into arbitrary-precision integer edge weights and
+    solves the resulting assignment with the Hungarian algorithm.  Converting
+    each finite IEEE-754 input to a common power-of-two denominator preserves
+    even sub-ULP-looking differences such as the historical ``4e-16``
+    regression fixture; no tolerance or rounded weighted sum participates in
+    selecting the mapping.
+    """
+
     ordered = tuple(names)
-    best: tuple[tuple[float, float, tuple[str, ...]], tuple[str, ...]] | None = None
-    for targets in itertools.permutations(ordered):
-        if any(source == target for source, target in zip(ordered, targets, strict=True)):
-            continue
-        chosen = [
-            candidates[(source, target)] for source, target in zip(ordered, targets, strict=True)
-        ]
-        key = (
-            _cost_key(math.fsum(edge.fidelity_cost for edge in chosen)),
-            _cost_key(math.fsum(edge.byte_cost for edge in chosen)),
-            tuple(targets),
-        )
-        if best is None or key < best[0]:
-            best = (key, targets)
-    if best is None:
+    if len(ordered) < 2 or len(set(ordered)) != len(ordered):
         raise ValueError("Traffic Morphing has no feasible no-self target assignment")
-    return tuple(zip(ordered, best[1], strict=True))
+
+    edge_keys = tuple(
+        (source, target)
+        for source in ordered
+        for target in ordered
+        if source != target
+    )
+    try:
+        edges = tuple(candidates[key] for key in edge_keys)
+    except KeyError as error:
+        raise ValueError(
+            "Traffic Morphing has no feasible no-self target assignment"
+        ) from error
+
+    fidelity = _common_binary_integers(edge.fidelity_cost for edge in edges)
+    byte_cost = _common_binary_integers(edge.byte_cost for edge in edges)
+    fidelity_by_edge = dict(zip(edge_keys, fidelity, strict=True))
+    bytes_by_edge = dict(zip(edge_keys, byte_cost, strict=True))
+
+    # Every assignment selects exactly len(ordered) edges.  Subtracting each
+    # stage's global minimum is therefore a constant shift.  The stage scales
+    # are strict upper bounds on every lower-priority aggregate, making this a
+    # lossless scalar representation of:
+    #   (sum fidelity, sum bytes, tuple(targets)).
+    minimum_fidelity = min(fidelity)
+    minimum_bytes = min(byte_cost)
+    byte_span = max(byte_cost) - minimum_bytes
+    byte_stage_scale = len(ordered) * byte_span + 1
+    lexical_base = len(ordered) + 1
+    lexical_stage_scale = lexical_base ** len(ordered)
+    lexical_rank = {name: rank for rank, name in enumerate(sorted(ordered))}
+    lexical_places = tuple(
+        lexical_base ** (len(ordered) - source_index - 1)
+        for source_index in range(len(ordered))
+    )
+
+    weights: list[list[int | None]] = []
+    for source_index, source in enumerate(ordered):
+        row: list[int | None] = []
+        for target in ordered:
+            if source == target:
+                row.append(None)
+                continue
+            primary = fidelity_by_edge[(source, target)] - minimum_fidelity
+            secondary = bytes_by_edge[(source, target)] - minimum_bytes
+            lexical = lexical_rank[target] * lexical_places[source_index]
+            row.append(
+                (primary * byte_stage_scale + secondary) * lexical_stage_scale
+                + lexical
+            )
+        weights.append(row)
+
+    assignment = _minimum_weight_assignment(weights)
+    return tuple(
+        (source, ordered[target_index])
+        for source, target_index in zip(ordered, assignment, strict=True)
+    )
+
+
+def _common_binary_integers(values: Iterable[float]) -> tuple[int, ...]:
+    """Represent finite floats over one exact power-of-two denominator."""
+
+    checked = tuple(_cost_key(value) for value in values)
+    ratios = tuple(value.as_integer_ratio() for value in checked)
+    exponents: list[int] = []
+    for _numerator, denominator in ratios:
+        exponent = denominator.bit_length() - 1
+        if denominator != 1 << exponent:
+            raise AssertionError("an IEEE-754 denominator was not a power of two")
+        exponents.append(exponent)
+    common_exponent = max(exponents, default=0)
+    return tuple(
+        numerator << (common_exponent - exponent)
+        for (numerator, _denominator), exponent in zip(ratios, exponents, strict=True)
+    )
+
+
+def _minimum_weight_assignment(weights: Sequence[Sequence[int | None]]) -> tuple[int, ...]:
+    """Solve a square sparse integer assignment in O(n^3), deterministically."""
+
+    size = len(weights)
+    if not size or any(len(row) != size for row in weights):
+        raise ValueError("Traffic Morphing assignment matrix must be non-empty and square")
+
+    # One-indexed shortest augmenting path form of the Hungarian algorithm.
+    # Python integers retain the exact composite objective regardless of cohort
+    # size, unlike a floating weighted objective passed to an LP/MILP solver.
+    row_potential = [0] * (size + 1)
+    column_potential = [0] * (size + 1)
+    matched_row = [0] * (size + 1)
+    predecessor = [0] * (size + 1)
+
+    for source in range(1, size + 1):
+        matched_row[0] = source
+        minimum_slack: list[int | None] = [None] * (size + 1)
+        used = [False] * (size + 1)
+        column = 0
+        while True:
+            used[column] = True
+            active_row = matched_row[column]
+            delta: int | None = None
+            next_column = 0
+            for candidate_column in range(1, size + 1):
+                if used[candidate_column]:
+                    continue
+                weight = weights[active_row - 1][candidate_column - 1]
+                if weight is not None:
+                    slack = (
+                        weight
+                        - row_potential[active_row]
+                        - column_potential[candidate_column]
+                    )
+                    if (
+                        minimum_slack[candidate_column] is None
+                        or slack < minimum_slack[candidate_column]
+                    ):
+                        minimum_slack[candidate_column] = slack
+                        predecessor[candidate_column] = column
+                candidate_slack = minimum_slack[candidate_column]
+                if candidate_slack is not None and (
+                    delta is None
+                    or candidate_slack < delta
+                    or (candidate_slack == delta and candidate_column < next_column)
+                ):
+                    delta = candidate_slack
+                    next_column = candidate_column
+            if delta is None:
+                raise ValueError("Traffic Morphing has no feasible no-self target assignment")
+            for candidate_column in range(size + 1):
+                if used[candidate_column]:
+                    row_potential[matched_row[candidate_column]] += delta
+                    column_potential[candidate_column] -= delta
+                elif minimum_slack[candidate_column] is not None:
+                    minimum_slack[candidate_column] -= delta
+            column = next_column
+            if matched_row[column] == 0:
+                break
+
+        while column:
+            prior = predecessor[column]
+            matched_row[column] = matched_row[prior]
+            column = prior
+
+    assignment = [-1] * size
+    for column in range(1, size + 1):
+        source = matched_row[column]
+        if source:
+            assignment[source - 1] = column - 1
+    if any(target < 0 for target in assignment):
+        raise ValueError("Traffic Morphing has no feasible no-self target assignment")
+    return tuple(assignment)
 
 
 def _profile_json(edge: DirectedFit) -> dict[str, object]:

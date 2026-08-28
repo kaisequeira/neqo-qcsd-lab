@@ -23,8 +23,8 @@ import sys
 import tempfile
 import time
 import tomllib
-from contextlib import nullcontext
 from collections.abc import Mapping, Sequence
+from contextlib import nullcontext
 from copy import deepcopy
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -52,7 +52,12 @@ from .util import (
 )
 
 SCHEMA_VERSION = 1
-LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION = 3
+PREVIOUS_LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION = 3
+LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION = 4
+MULTI_ORIGIN_COMPATIBILITY_SCHEMA_VERSION = 1
+MULTI_ORIGIN_COMPATIBILITY_ARTIFACT_TYPE = (
+    "qcsd-buflo-nine-mode-multi-origin-compatibility"
+)
 CONTROLLED_NETWORK_RECEIPT_SCHEMA_VERSION = 2
 STUDY_ROOT = LAB_ROOT / "config/buflo-study/v1"
 STUDY_PLAN = STUDY_ROOT / "study.json"
@@ -219,6 +224,21 @@ LOCAL_STAGE_RESULT_NAMES = {
         "buflo-study-v1-regression-cs-buflo-1200",
     ),
 }
+MULTI_ORIGIN_COMPATIBILITY_MODES = (
+    "undefended",
+    "static",
+    "front",
+    "tamaraw",
+    "traffic-morphing",
+    "wtf-pad",
+    "walkie-talkie",
+    "buflo",
+    "cs-buflo",
+)
+MULTI_ORIGIN_COMPATIBILITY_ORIGINS = (
+    "https://qcsd-buflo-server-one:4433",
+    "https://qcsd-buflo-server-two:4434",
+)
 ATTESTATION_ARTIFACT_TYPE = "qcsd-buflo-study-validation-attestation"
 VALIDATED_STATUS = "validated-client-only-qcsd-adaptation"
 VALIDATED_STATUS_DESCRIPTION = "validated client-only QCSD adaptation"
@@ -958,7 +978,11 @@ def validate_controlled_campaign_receipt(value: Any) -> dict[str, Any]:
             schema_version == 2 and fields == frozenset(previous_keys)
         )
         or (
-            schema_version == LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION
+            schema_version
+            in {
+                PREVIOUS_LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION,
+                LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION,
+            }
             and fields == frozenset(current_keys)
         )
     ):
@@ -987,18 +1011,26 @@ def validate_controlled_campaign_receipt(value: Any) -> dict[str, Any]:
         if stage == "controlled"
         else tuple(plan["regression"]["treatments"])
     )
-    expected_fixture_scope = (
-        "controlled-live-manifests-including-two-origin-local-large"
-        if stage == "controlled"
-        else "same-origin-regression-surrogates"
-    )
+    expected_fixture_scope = "controlled-live-manifests-including-two-origin-local-large"
+    if stage == "regression":
+        expected_fixture_scope = (
+            "single-origin-prefix-regression-plus-bound-two-origin-"
+            "nine-mode-compatibility"
+            if schema_version == LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION
+            else "same-origin-regression-surrogates"
+        )
     if (
         value["netem_profile"] != expected["id"]
         or value["client_qdisc"] != expected["client_qdisc"]
         or value["server_qdisc"] != expected["server_qdisc"]
         or value["evidence_class"] != "controlled-test-only-nonformal"
         or (
-            schema_version in {2, LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION}
+            schema_version
+            in {
+                2,
+                PREVIOUS_LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION,
+                LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION,
+            }
             and value["fixture_scope"] != expected_fixture_scope
         )
         or value["workload_aliases"] != expected_aliases
@@ -1011,7 +1043,11 @@ def validate_controlled_campaign_receipt(value: Any) -> dict[str, Any]:
         server_qdisc=expected["server_qdisc"],
         campaign_schema_version=schema_version,
         cohort_version=value.get("cohort_version")
-        if schema_version == LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION
+        if schema_version
+        in {
+            PREVIOUS_LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION,
+            LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION,
+        }
         else None,
     )
     return dict(value)
@@ -1025,7 +1061,10 @@ def _validate_network_receipt(
     campaign_schema_version: int,
     cohort_version: int | None,
 ) -> None:
-    if campaign_schema_version == LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION:
+    if campaign_schema_version in {
+        PREVIOUS_LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION,
+        LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION,
+    }:
         _validate_shared_router_network_receipt(
             value,
             client_qdisc=client_qdisc,
@@ -2192,7 +2231,10 @@ def execute_local_regression(
         "client_qdisc": clean["client_qdisc"],
         "server_qdisc": clean["server_qdisc"],
         "workload_aliases": {"complex": "local-large", "simple": "local-small"},
-        "fixture_scope": "same-origin-regression-surrogates",
+        "fixture_scope": (
+            "single-origin-prefix-regression-plus-bound-two-origin-"
+            "nine-mode-compatibility"
+        ),
         "cohort_version": cohort_version,
         "treatment_order": list(load_study_plan()["regression"]["treatments"]),
         "evidence_class": "controlled-test-only-nonformal",
@@ -2256,6 +2298,15 @@ def execute_local_regression(
     counts = [len(verify_result(result).accepted_samples) for result in results]
     if counts != [14, 2, 2] or sum(counts) != 18:
         raise ValueError("local regression did not produce the exact 14+2+2 sample split")
+    _execute_regression_multi_origin_compatibility(
+        destination,
+        results,
+        regression_receipt=receipt,
+        walkie_talkie=walkie_talkie,
+        workload_root=workloads,
+        qualification_root=full_qualifications,
+        prefix_root=prefix_specs,
+    )
     validate_regression_results(results)
     return results
 
@@ -2371,9 +2422,10 @@ def _create_regression_workloads(root: Path) -> None:
             ]
         ),
         # The Walkie-Talkie prefix qualifier proves one concrete HTTP/3
-        # connection.  Keep this test-only mould complex but same-origin;
-        # the controlled local-large workload retains live two-origin
-        # coverage for BuFLO and both CS-BuFLO variants.
+        # connection.  This is deliberately the single-origin parameter
+        # surrogate; the separately receipted nine-mode compatibility workload
+        # below changes only the secondary resource origins and must pass live
+        # two-endpoint correctness and fidelity in every mode.
         "complex": _local_prepared_manifest(
             [
                 _local_resource(
@@ -2407,6 +2459,49 @@ def _create_regression_workloads(root: Path) -> None:
         ),
     }
     _prepare_local_workloads(root, manifests, label="local regression workload")
+
+
+def _create_regression_multi_origin_workload(root: Path) -> None:
+    """Prepare the exact two-origin counterpart of the complex WT surrogate."""
+
+    manifests = {
+        "complex": _local_prepared_manifest(
+            [
+                _local_resource(
+                    0,
+                    "https://qcsd-buflo-server-one:4433/131072",
+                    "Document",
+                    131_072,
+                ),
+                _local_resource(
+                    1,
+                    "https://qcsd-buflo-server-one:4433/1024",
+                    "Script",
+                    1_024,
+                    depends_on=[0],
+                ),
+                _local_resource(
+                    2,
+                    "https://qcsd-buflo-server-two:4434/4096",
+                    "Script",
+                    4_096,
+                    depends_on=[0],
+                ),
+                _local_resource(
+                    3,
+                    "https://qcsd-buflo-server-two:4434/2048",
+                    "Image",
+                    2_048,
+                    depends_on=[2],
+                ),
+            ]
+        )
+    }
+    _prepare_local_workloads(
+        root,
+        manifests,
+        label="local regression multi-origin compatibility workload",
+    )
 
 
 def _prepare_local_workloads(
@@ -2927,6 +3022,1233 @@ def _write_regression_walkie_talkie(
         "controlled regression Walkie-Talkie provenance",
     )
     return path
+
+
+def _regression_multi_origin_projection(
+    surrogate: Mapping[str, Any],
+    application: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Prove that only the declared secondary origins differ from the WT surrogate."""
+
+    from urllib.parse import urlsplit
+
+    from .manifest import canonical_bytes, https_origin, validate_research_preparation
+
+    surrogate_value = deepcopy(dict(surrogate))
+    application_value = deepcopy(dict(application))
+    validate_research_preparation(surrogate_value, workload_id="complex")
+    validate_research_preparation(application_value, workload_id="complex")
+    surrogate_resources = surrogate_value["resources"]
+    application_resources = application_value["resources"]
+    if len(surrogate_resources) != 4 or len(application_resources) != 4:
+        raise ValueError("multi-origin compatibility requires the exact four-resource graph")
+    surrogate_by_id = {resource["id"]: resource for resource in surrogate_resources}
+    application_by_id = {resource["id"]: resource for resource in application_resources}
+    if set(surrogate_by_id) != {0, 1, 2, 3} or set(application_by_id) != {0, 1, 2, 3}:
+        raise ValueError("multi-origin compatibility resource identities drifted")
+    expected_application_origins = {
+        0: MULTI_ORIGIN_COMPATIBILITY_ORIGINS[0],
+        1: MULTI_ORIGIN_COMPATIBILITY_ORIGINS[0],
+        2: MULTI_ORIGIN_COMPATIBILITY_ORIGINS[1],
+        3: MULTI_ORIGIN_COMPATIBILITY_ORIGINS[1],
+    }
+    projected_resources: list[dict[str, Any]] = []
+    for resource_id in range(4):
+        source = surrogate_by_id[resource_id]
+        target = application_by_id[resource_id]
+        source_url = urlsplit(str(source["url"]))
+        target_url = urlsplit(str(target["url"]))
+        source_without_url = {key: value for key, value in source.items() if key != "url"}
+        target_without_url = {key: value for key, value in target.items() if key != "url"}
+        if (
+            source_without_url != target_without_url
+            or source_url.scheme != "https"
+            or target_url.scheme != "https"
+            or (source_url.path, source_url.query, source_url.fragment)
+            != (target_url.path, target_url.query, target_url.fragment)
+            or https_origin(source["url"]) != MULTI_ORIGIN_COMPATIBILITY_ORIGINS[0]
+            or https_origin(target["url"]) != expected_application_origins[resource_id]
+        ):
+            raise ValueError(
+                f"multi-origin compatibility resource {resource_id} differs beyond origin"
+            )
+        projected_resources.append(
+            {
+                "resource_id": resource_id,
+                "surrogate_origin": https_origin(source["url"]),
+                "application_origin": https_origin(target["url"]),
+                "path": target_url.path,
+                "resource_metadata_sha256": hashlib.sha256(
+                    canonical_bytes(target_without_url)
+                ).hexdigest(),
+            }
+        )
+    surrogate_preparation = surrogate_value["preparation"]
+    application_preparation = application_value["preparation"]
+    if (
+        surrogate_preparation["source_url"] != application_preparation["source_url"]
+        or surrogate_preparation["final_url"] != application_preparation["final_url"]
+        or surrogate_preparation["expected_responses"]
+        != application_preparation["expected_responses"]
+        or surrogate_preparation["approved_origins"]
+        != [MULTI_ORIGIN_COMPATIBILITY_ORIGINS[0]]
+        or application_preparation["approved_origins"]
+        != list(MULTI_ORIGIN_COMPATIBILITY_ORIGINS)
+        or application_preparation["observed_origins"]
+        != list(MULTI_ORIGIN_COMPATIBILITY_ORIGINS)
+    ):
+        raise ValueError("multi-origin compatibility prepared response/origin binding drifted")
+    return {
+        "schema_version": 1,
+        "policy": (
+            "strict-single-origin-prefix-surrogate-with-identical-resource-graph-and-"
+            "prepared-response-identities;secondary-origin-difference-proved-live"
+        ),
+        "surrogate_origins": [MULTI_ORIGIN_COMPATIBILITY_ORIGINS[0]],
+        "application_origins": list(MULTI_ORIGIN_COMPATIBILITY_ORIGINS),
+        "resource_ids": [0, 1, 2, 3],
+        "resources": projected_resources,
+        "expected_responses_sha256": hashlib.sha256(
+            canonical_bytes(application_preparation["expected_responses"])
+        ).hexdigest(),
+        "only_declared_origins_differ": True,
+    }
+
+
+def _regression_multi_origin_run_identity(
+    run: Mapping[str, Any],
+    application: Mapping[str, Any],
+    *,
+    mode: str,
+) -> dict[str, Any]:
+    """Validate exact endpoints and application responses for one compatibility mode."""
+
+    from .manifest import https_origin
+
+    if mode not in MULTI_ORIGIN_COMPATIBILITY_MODES:
+        raise ValueError("multi-origin compatibility mode is not one of the exact nine")
+    endpoints = run.get("endpoints")
+    if not isinstance(endpoints, list):
+        raise ValueError(  # noqa: TRY004 - malformed evidence is one validation failure class.
+            "multi-origin compatibility run has no endpoint array"
+        )
+    endpoint_coverage = _controlled_endpoint_coverage(endpoints, workload="local-large")
+    resources = application.get("resources")
+    preparation = application.get("preparation")
+    expected_responses = (
+        preparation.get("expected_responses")
+        if isinstance(preparation, Mapping)
+        else None
+    )
+    responses = run.get("responses")
+    if (
+        not isinstance(resources, list)
+        or not isinstance(expected_responses, list)
+        or not isinstance(responses, list)
+    ):
+        raise ValueError(  # noqa: TRY004 - malformed evidence is one validation failure class.
+            "multi-origin compatibility response evidence is absent"
+        )
+    resources_by_id = {
+        resource.get("id"): resource
+        for resource in resources
+        if isinstance(resource, Mapping) and type(resource.get("id")) is int
+    }
+    expected_by_id = {
+        response.get("resource_id"): response
+        for response in expected_responses
+        if isinstance(response, Mapping) and type(response.get("resource_id")) is int
+    }
+    observed_by_id = {
+        response.get("resource_id"): response
+        for response in responses
+        if isinstance(response, Mapping) and type(response.get("resource_id")) is int
+    }
+    if (
+        set(resources_by_id) != {0, 1, 2, 3}
+        or set(expected_by_id) != set(resources_by_id)
+        or set(observed_by_id) != set(resources_by_id)
+        or len(responses) != len(observed_by_id)
+    ):
+        raise ValueError("multi-origin compatibility run lost or duplicated a resource")
+    identities: list[dict[str, Any]] = []
+    observed_origins: set[str] = set()
+    for resource_id in range(4):
+        resource = resources_by_id[resource_id]
+        expected = expected_by_id[resource_id]
+        observed = observed_by_id[resource_id]
+        origin = https_origin(resource.get("url"))
+        if (
+            origin not in MULTI_ORIGIN_COMPATIBILITY_ORIGINS
+            or observed.get("url") != resource.get("url")
+            or observed.get("status") != expected.get("status")
+            or observed.get("bytes") != expected.get("bytes")
+            or observed.get("body_sha256") != expected.get("body_sha256")
+            or observed.get("complete") is not True
+            or observed.get("outcome") != "succeeded"
+        ):
+            raise ValueError(
+                f"multi-origin compatibility resource {resource_id} response identity failed"
+            )
+        observed_origins.add(str(origin))
+        identities.append(
+            {
+                "resource_id": resource_id,
+                "origin": origin,
+                "url": resource["url"],
+                "status": expected["status"],
+                "bytes": expected["bytes"],
+                "body_sha256": expected["body_sha256"],
+            }
+        )
+    if observed_origins != set(MULTI_ORIGIN_COMPATIBILITY_ORIGINS):
+        raise ValueError("multi-origin compatibility run did not retain both resource origins")
+    return {
+        "mode": mode,
+        "endpoint_coverage": endpoint_coverage,
+        "resource_count": len(identities),
+        "resource_ids": [identity["resource_id"] for identity in identities],
+        "resources": identities,
+        "exact_prepared_response_identity": True,
+        "passed": True,
+    }
+
+
+def _project_regression_chaff_manifest(
+    qualified_manifest: Mapping[str, Any],
+    *,
+    surrogate_sha256: str,
+    application_sha256: str,
+) -> dict[str, Any]:
+    """Retarget only the application-source hash of a strict root-prefix proof."""
+
+    projected = deepcopy(dict(qualified_manifest))
+    if (
+        projected.get("schema_version") != 2
+        or projected.get("application_workload_sha256") != surrogate_sha256
+        or projected.get("application_resource_id") != 0
+        or projected.get("selected_chaff_resource_id") != 0
+        or not isinstance(projected.get("resources"), list)
+        or len(projected["resources"]) != 1
+    ):
+        raise ValueError("multi-origin compatibility prefix-qualified manifest is invalid")
+    projected["application_workload_sha256"] = application_sha256
+    return projected
+
+
+def _regression_multi_origin_walkie_talkie_value(
+    source: Mapping[str, Any], *, projected_manifest_sha256: str
+) -> dict[str, Any]:
+    parameter = deepcopy(dict(source))
+    if (
+        not isinstance(parameter, dict)
+        or parameter.get("schema_version") != 6
+        or parameter.get("generated_by")
+        != "qcsd-buflo-study-controlled-regression-v1"
+        or not isinstance(parameter.get("qualification_bindings"), list)
+    ):
+        raise ValueError("controlled Walkie-Talkie source parameter is invalid")
+    matches = [
+        binding
+        for binding in parameter["qualification_bindings"]
+        if isinstance(binding, dict) and binding.get("workload_id") == "complex"
+    ]
+    if len(matches) != 1:
+        raise ValueError("controlled Walkie-Talkie source lacks one complex binding")
+    matches[0]["qualified_chaff_manifest_sha256"] = projected_manifest_sha256
+    parameter["generated_by"] = (
+        "qcsd-buflo-study-multi-origin-compatibility-v1"
+    )
+    return parameter
+
+
+def _write_regression_multi_origin_walkie_talkie(
+    source_path: Path,
+    destination: Path,
+    provenance_path: Path,
+    *,
+    application_sha256: str,
+    projected_manifest_sha256: str,
+) -> None:
+    """Bind the strict prefix proof to the separately qualified live workload."""
+
+    from .manifest import canonical_bytes
+
+    parameter = _regression_multi_origin_walkie_talkie_value(
+        load_json(source_path),
+        projected_manifest_sha256=projected_manifest_sha256,
+    )
+    encoded = canonical_bytes(parameter)
+    _create_or_verify_bytes(
+        destination,
+        encoded,
+        "multi-origin compatibility Walkie-Talkie parameters",
+    )
+    provenance = {
+        "schema_version": 1,
+        "artifact_type": "qcsd-controlled-regression-parameters",
+        "status": "controlled-test-only",
+        "production_ready": False,
+        "defense_kind": "walkie_talkie",
+        "qcsd_profile": "live",
+        "udp_payload_ceiling": 1_200,
+        "parameter_file": {
+            "path": destination.name,
+            "sha256": sha256_file(destination),
+        },
+        "evidence_class": "nonformal-regression",
+        "workload_sha256": {"complex": application_sha256},
+    }
+    _create_or_verify_bytes(
+        provenance_path,
+        (json.dumps(provenance, indent=2, sort_keys=True) + "\n").encode(),
+        "multi-origin compatibility Walkie-Talkie provenance",
+    )
+    validate_parameter_artifact(
+        destination,
+        provenance_path=provenance_path,
+        expected_kind="walkie_talkie",
+        allow_reviewed_fixture=True,
+        expected_qcsd_profile="live",
+        expected_udp_payload_ceiling=1_200,
+        expected_workloads={"complex": application_sha256},
+    )
+
+
+def _regression_multi_origin_defenses(
+    walkie_talkie: Path,
+    walkie_talkie_provenance: Path,
+    *,
+    application_sha256: str,
+) -> tuple[Any, ...]:
+    """Resolve the exact nine test-only runtime identities without campaign mutation."""
+
+    from .capture_session import Defense
+    from .orchestrator import _validate_static_schedule
+    from .parameters import parameter_provenance_path
+
+    static = LAB_ROOT / "config/defense-params/static-control-1200.csv"
+    _validate_static_schedule(static, udp_payload_ceiling=1_200)
+
+    def reviewed(
+        name: str,
+        kind: str,
+        path: Path,
+        *,
+        workloads: Sequence[str] | Mapping[str, str] | None = None,
+        provenance: Path | None = None,
+    ) -> Any:
+        artifact = validate_parameter_artifact(
+            path,
+            provenance_path=provenance,
+            expected_kind=kind,
+            allow_reviewed_fixture=True,
+            expected_qcsd_profile="live",
+            expected_udp_payload_ceiling=1_200,
+            expected_workloads=workloads,
+        )
+        return Defense(
+            name=name,
+            kind=kind,
+            baseline=False,
+            parameters=str(path),
+            parameters_path=artifact.path,
+            parameters_sha256=artifact.sha256,
+            parameters_provenance=str(artifact.provenance_path),
+            parameters_provenance_path=artifact.provenance_path,
+            parameters_provenance_sha256=artifact.provenance_sha256,
+            parameters_input_policy=artifact.input_policy,
+        )
+
+    def candidate(name: str, kind: str, path: Path) -> Any:
+        artifact = validate_parameter_artifact(
+            path,
+            expected_kind=kind,
+            allow_study_candidate=True,
+            expected_qcsd_profile="research-1200",
+            expected_udp_payload_ceiling=1_200,
+        )
+        return Defense(
+            name=name,
+            kind=kind,
+            baseline=False,
+            parameters=str(path),
+            parameters_path=artifact.path,
+            parameters_sha256=artifact.sha256,
+            parameters_provenance=str(artifact.provenance_path),
+            parameters_provenance_path=artifact.provenance_path,
+            parameters_provenance_sha256=artifact.provenance_sha256,
+            parameters_input_policy=artifact.input_policy,
+        )
+
+    defenses = (
+        Defense(name="undefended", kind="none", baseline=True),
+        Defense(
+            name="static",
+            kind="static",
+            baseline=False,
+            schedule=str(static),
+            schedule_path=static,
+            schedule_sha256=sha256_file(static),
+            mode="chaff-only",
+        ),
+        Defense(name="front", kind="front", baseline=False),
+        Defense(name="tamaraw", kind="tamaraw", baseline=False),
+        reviewed(
+            "traffic-morphing",
+            "traffic_morphing",
+            LAB_ROOT / "config/defense-params/traffic-morphing-live.json",
+            workloads=("complex",),
+        ),
+        reviewed(
+            "wtf-pad",
+            "wtf_pad",
+            LAB_ROOT / "config/defense-params/wtfpad-live.json",
+        ),
+        reviewed(
+            "walkie-talkie",
+            "walkie_talkie",
+            walkie_talkie,
+            provenance=walkie_talkie_provenance,
+            workloads={"complex": application_sha256},
+        ),
+        candidate("buflo", "buflo", PARAMETER_FILES["buflo"][1]),
+        candidate("cs-buflo", "cs_buflo", PARAMETER_FILES["cs-buflo"][1]),
+    )
+    if tuple(defense.name for defense in defenses) != MULTI_ORIGIN_COMPATIBILITY_MODES:
+        raise AssertionError("multi-origin compatibility defense order drifted")
+    # Keep the source-adjacent provenance rule explicit for reviewed artifacts.
+    if any(
+        defense.parameters_path is not None
+        and defense.name != "walkie-talkie"
+        and defense.parameters_provenance_path
+        != parameter_provenance_path(defense.parameters_path)
+        for defense in defenses
+    ):
+        raise AssertionError("multi-origin compatibility parameter provenance drifted")
+    return defenses
+
+
+def _regression_multi_origin_attempt_inventory(attempt: Path) -> dict[str, str]:
+    if attempt.is_symlink() or not attempt.is_dir():
+        raise ValueError("multi-origin compatibility attempt is not a regular directory")
+    files: dict[str, str] = {}
+    for path in sorted(attempt.rglob("*")):
+        if path.is_symlink():
+            raise ValueError("multi-origin compatibility attempt contains a symlink")
+        if path.is_file():
+            files[path.relative_to(attempt).as_posix()] = sha256_file(path)
+    required = {
+        "attempt.json",
+        "captures/direct-quic.pcapng",
+        "traces/direct-quic.csv",
+        "neqo/run.json",
+        "neqo/packets.csv",
+        "neqo/events.csv",
+        "neqo/schedule.csv",
+    }
+    if not required <= set(files):
+        raise ValueError("multi-origin compatibility attempt lacks required evidence files")
+    return files
+
+
+def _regression_multi_origin_attempt_evidence(
+    attempt: Path,
+    application_path: Path,
+    projected_chaff_path: Path,
+    defense: Any,
+    *,
+    seed: int,
+) -> dict[str, Any]:
+    from types import SimpleNamespace
+
+    from .capture_session import _runner_result_complete, _validate_run_binding
+    from .manifest import runtime_manifest
+    from .orchestrator import _intrinsic_fidelity_failure
+
+    application = load_json(application_path)
+    runtime_path = attempt.parent.parent.parent / "inputs/application/runtime-complex.json"
+    expected_runtime = runtime_manifest(application)
+    if (
+        runtime_path.is_symlink()
+        or not runtime_path.is_file()
+        or load_json(runtime_path) != expected_runtime
+    ):
+        raise ValueError("multi-origin compatibility runtime workload binding is invalid")
+    result_path = attempt / "attempt.json"
+    run_path = attempt / "neqo/run.json"
+    if result_path.is_symlink() or run_path.is_symlink():
+        raise ValueError("multi-origin compatibility attempt evidence cannot be a symlink")
+    result = load_json(result_path)
+    run = load_json(run_path)
+    expected_ids = {resource["id"] for resource in application["resources"]}
+    if (
+        not isinstance(result, dict)
+        or result.get("success") is not True
+        or result.get("runner_complete") is not True
+        or result.get("runner_binding_valid") is not True
+        or result.get("endpoint_count") != 2
+        or result.get("expected_endpoint_count") != 2
+        or result.get("endpoint_count_valid") is not True
+        or not _runner_result_complete(run, expected_ids)
+    ):
+        raise ValueError("multi-origin compatibility attempt is not runner/capture eligible")
+    qcsd_profile = (
+        "research-1200" if defense.name in {"buflo", "cs-buflo"} else "live"
+    )
+    limits = SimpleNamespace(
+        timeout_seconds=120,
+        max_response_bytes=1_048_576,
+        capture_seconds=180,
+        capture_megabytes=64,
+        max_attempts=3,
+        per_origin_cooldown_seconds=0,
+        settle_seconds=1,
+    )
+    context = SimpleNamespace(
+        qcsd_profile=qcsd_profile,
+        request_policy="as-defined",
+        limits=limits,
+        udp_payload_ceiling=1_200,
+    )
+    _validate_run_binding(
+        run,
+        manifest=runtime_path,
+        chaff_manifest=None if defense.baseline else projected_chaff_path,
+        application_workload_source=None if defense.baseline else application_path,
+        workload_id="complex",
+        defense=defense,
+        seed=seed,
+        context=context,
+    )
+    sample = {
+        "sample_id": f"multi-origin-{defense.name}",
+        "defense": defense.name,
+        "runtime_kind": defense.kind,
+    }
+    fidelity_failure = _intrinsic_fidelity_failure(sample, result, attempt)
+    if fidelity_failure is not None:
+        raise ValueError(
+            "multi-origin compatibility attempt failed normal fidelity eligibility: "
+            f"{fidelity_failure}"
+        )
+    identity = _regression_multi_origin_run_identity(
+        run,
+        application,
+        mode=defense.name,
+    )
+    files = _regression_multi_origin_attempt_inventory(attempt)
+    return {
+        "mode": defense.name,
+        "runtime_kind": defense.kind,
+        "seed": seed,
+        "attempt": attempt.as_posix(),
+        "attempt_json_sha256": files["attempt.json"],
+        "file_count": len(files),
+        "files": files,
+        "files_sha256": _canonical_digest(files),
+        "identity": identity,
+        "fidelity_eligible": True,
+        "passed": True,
+    }
+
+
+def _regression_multi_origin_runtime_inputs(defenses: Sequence[Any]) -> dict[str, Any]:
+    inputs: dict[str, Any] = {}
+    for defense in defenses:
+        value: dict[str, Any] = {
+            "runtime_kind": defense.kind,
+            "baseline": defense.baseline,
+        }
+        if defense.schedule_path is not None:
+            value.update(
+                {
+                    "input_type": "static-schedule",
+                    "sha256": sha256_file(defense.schedule_path),
+                    "mode": defense.mode,
+                }
+            )
+        elif defense.parameters_path is not None:
+            if defense.parameters_provenance_path is None:
+                raise ValueError("multi-origin parameter provenance is absent")
+            value.update(
+                {
+                    "input_type": "parameter-artifact",
+                    "sha256": sha256_file(defense.parameters_path),
+                    "provenance_sha256": sha256_file(
+                        defense.parameters_provenance_path
+                    ),
+                    "input_policy": defense.parameters_input_policy,
+                }
+            )
+        else:
+            value["input_type"] = "source-bound"
+        inputs[defense.name] = value
+    if tuple(inputs) != MULTI_ORIGIN_COMPATIBILITY_MODES:
+        raise ValueError("multi-origin runtime input inventory is not the exact nine modes")
+    return inputs
+
+
+def _regression_result_bindings(result_roots: Sequence[Path]) -> list[dict[str, Any]]:
+    from .verification import verify_result
+
+    records: list[dict[str, Any]] = []
+    by_name: dict[str, Any] = {}
+    for value in result_roots:
+        verified = verify_result(Path(value))
+        if verified.experiment["name"] in by_name:
+            raise ValueError("regression compatibility binding contains a duplicate result")
+        by_name[verified.experiment["name"]] = verified
+    if set(by_name) != set(LOCAL_STAGE_RESULT_NAMES["regression"]):
+        raise ValueError("regression compatibility binding lacks the exact 18-sample shards")
+    for name in LOCAL_STAGE_RESULT_NAMES["regression"]:
+        verified = by_name[name]
+        campaign_path = verified.root / "inputs/campaign.yml"
+        if campaign_path.is_symlink() or not campaign_path.is_file():
+            raise ValueError("regression compatibility binding lacks its frozen campaign")
+        campaign = yaml.safe_load(campaign_path.read_text(encoding="utf-8"))
+        controlled = (
+            campaign.get("study_controlled")
+            if isinstance(campaign, Mapping)
+            else None
+        )
+        validate_controlled_campaign_receipt(controlled)
+        records.append(
+            {
+                "name": name,
+                "root": str(verified.root.resolve()),
+                "evidence_sha256": sha256_file(verified.root / "evidence.sha256"),
+                "controlled_receipt_sha256": _canonical_digest(controlled),
+            }
+        )
+    return records
+
+
+def _execute_regression_multi_origin_compatibility(
+    destination: Path,
+    result_roots: Sequence[Path],
+    *,
+    regression_receipt: Mapping[str, Any],
+    walkie_talkie: Path,
+    workload_root: Path,
+    qualification_root: Path,
+    prefix_root: Path,
+) -> Path:
+    """Run/resume the excluded nine-cell two-origin compatibility proof."""
+
+    from types import SimpleNamespace
+
+    from . import capture_session
+    from .chaff_qualification import (
+        load_qualified_chaff,
+        load_response_qualified_chaff,
+    )
+    from .manifest import canonical_bytes, runtime_manifest
+
+    root = destination / "multi-origin-nine-mode-compatibility"
+    receipt_path = root / "receipt.json"
+    if receipt_path.exists() or receipt_path.is_symlink():
+        validate_regression_multi_origin_compatibility(receipt_path, result_roots)
+        return receipt_path
+    for directory in (
+        root,
+        root / "inputs/application",
+        root / "inputs/application-response-qualification",
+        root / "inputs/surrogate/workloads",
+        root / "inputs/surrogate/chaff-qualifications",
+        root / "inputs/surrogate/chaff-prefix-specs",
+        root / "inputs/surrogate/chaff-manifests",
+        root / "inputs/defense-parameters",
+        root / "attempts",
+    ):
+        if directory.is_symlink():
+            raise ValueError(f"multi-origin compatibility path cannot be a symlink: {directory}")
+        directory.mkdir(parents=True, exist_ok=True)
+
+    application_root = root / "inputs/application"
+    _create_regression_multi_origin_workload(application_root)
+    application_path = application_root / "complex.json"
+    application = load_json(application_path)
+    runtime_path = application_root / "runtime-complex.json"
+    _create_or_verify_bytes(
+        runtime_path,
+        canonical_bytes(runtime_manifest(application)),
+        "multi-origin compatibility runtime workload",
+    )
+
+    response_root = root / "inputs/application-response-qualification"
+    response_sidecar = response_root / "complex.json"
+    if not response_sidecar.exists() and not response_sidecar.is_symlink():
+        _qualify_local_workloads_named(("complex",), application_root, response_root)
+    actual_response = load_response_qualified_chaff(
+        response_sidecar,
+        workload_id="complex",
+        base_manifest_path=application_path,
+        expected_sidecar_schema_version=2,
+        require_current_implementation=True,
+    )
+
+    surrogate_workload = root / "inputs/surrogate/workloads/complex.json"
+    surrogate_sidecar = root / "inputs/surrogate/chaff-qualifications/complex.json"
+    surrogate_prefix = root / "inputs/surrogate/chaff-prefix-specs/complex.json"
+    for source, target, label in (
+        (workload_root / "complex.json", surrogate_workload, "surrogate workload"),
+        (qualification_root / "complex.json", surrogate_sidecar, "surrogate qualification"),
+        (prefix_root / "complex.json", surrogate_prefix, "surrogate prefix specification"),
+    ):
+        if source.is_symlink() or not source.is_file():
+            raise ValueError(f"multi-origin compatibility {label} is unavailable")
+        _create_or_verify_bytes(target, source.read_bytes(), f"multi-origin {label}")
+    strict = load_qualified_chaff(
+        surrogate_sidecar,
+        workload_id="complex",
+        base_manifest_path=surrogate_workload,
+        prefix_spec_path=surrogate_prefix,
+        require_current_implementation=True,
+    )
+    strict_manifest_path = root / "inputs/surrogate/chaff-manifests/complex.json"
+    _create_or_verify_bytes(
+        strict_manifest_path,
+        canonical_bytes(strict.manifest),
+        "strict surrogate qualified chaff manifest",
+    )
+    projection = _regression_multi_origin_projection(
+        load_json(surrogate_workload), application
+    )
+    projected = _project_regression_chaff_manifest(
+        strict.manifest,
+        surrogate_sha256=sha256_file(surrogate_workload),
+        application_sha256=sha256_file(application_path),
+    )
+    projected_chaff_path = root / "inputs/projected-chaff-manifest.json"
+    _create_or_verify_bytes(
+        projected_chaff_path,
+        canonical_bytes(projected),
+        "multi-origin projected runtime chaff manifest",
+    )
+    parameter_root = root / "inputs/defense-parameters"
+    compatibility_walkie_talkie_source = parameter_root / "walkie-talkie-prefix-source.json"
+    if walkie_talkie.is_symlink() or not walkie_talkie.is_file():
+        raise ValueError("multi-origin compatibility Walkie-Talkie source is unavailable")
+    _create_or_verify_bytes(
+        compatibility_walkie_talkie_source,
+        walkie_talkie.read_bytes(),
+        "multi-origin compatibility Walkie-Talkie source",
+    )
+    compatibility_walkie_talkie = parameter_root / "walkie-talkie.json"
+    compatibility_walkie_talkie_provenance = parameter_root / "walkie-talkie.provenance.json"
+    _write_regression_multi_origin_walkie_talkie(
+        compatibility_walkie_talkie_source,
+        compatibility_walkie_talkie,
+        compatibility_walkie_talkie_provenance,
+        application_sha256=sha256_file(application_path),
+        projected_manifest_sha256=sha256_file(projected_chaff_path),
+    )
+    defenses = _regression_multi_origin_defenses(
+        compatibility_walkie_talkie,
+        compatibility_walkie_talkie_provenance,
+        application_sha256=sha256_file(application_path),
+    )
+
+    state_path = root / "checkpoint.json"
+    if state_path.exists() or state_path.is_symlink():
+        if state_path.is_symlink() or not state_path.is_file():
+            raise ValueError("multi-origin compatibility checkpoint is not a regular file")
+        state = load_json(state_path)
+    else:
+        state = {
+            "schema_version": 1,
+            "artifact_type": "qcsd-buflo-multi-origin-compatibility-checkpoint",
+            "accepted_attempts": {},
+        }
+    if (
+        not isinstance(state, dict)
+        or set(state) != {"schema_version", "artifact_type", "accepted_attempts"}
+        or state["schema_version"] != 1
+        or state["artifact_type"]
+        != "qcsd-buflo-multi-origin-compatibility-checkpoint"
+        or not isinstance(state["accepted_attempts"], dict)
+    ):
+        raise ValueError("multi-origin compatibility checkpoint is invalid")
+    limits = capture_session.Limits(
+        timeout_seconds=120,
+        max_response_bytes=1_048_576,
+        capture_seconds=180,
+        capture_megabytes=64,
+        max_attempts=3,
+        per_origin_cooldown_seconds=0,
+        settle_seconds=1,
+    )
+    samples: list[dict[str, Any]] = []
+    for index, defense in enumerate(defenses):
+        seed = _stable_seed("buflo-regression-multi-origin-v1", defense.name)
+        mode_root = root / "attempts" / defense.name
+        if mode_root.is_symlink():
+            raise ValueError("multi-origin compatibility mode root cannot be a symlink")
+        mode_root.mkdir(parents=True, exist_ok=True)
+        accepted = state["accepted_attempts"].get(defense.name)
+        evidence: dict[str, Any] | None = None
+        if isinstance(accepted, str):
+            candidate = root / accepted
+            if candidate.resolve().is_relative_to(mode_root.resolve()):
+                evidence = _regression_multi_origin_attempt_evidence(
+                    candidate,
+                    application_path,
+                    projected_chaff_path,
+                    defense,
+                    seed=seed,
+                )
+        if evidence is None:
+            for attempt_index in range(1, limits.max_attempts + 1):
+                attempt = mode_root / f"attempt-{attempt_index:02d}"
+                if attempt.exists() or attempt.is_symlink():
+                    try:
+                        evidence = _regression_multi_origin_attempt_evidence(
+                            attempt,
+                            application_path,
+                            projected_chaff_path,
+                            defense,
+                            seed=seed,
+                        )
+                    except (OSError, TypeError, ValueError):
+                        continue
+                else:
+                    context = SimpleNamespace(
+                        qcsd_profile=(
+                            "research-1200"
+                            if defense.name in {"buflo", "cs-buflo"}
+                            else "live"
+                        ),
+                        request_policy="as-defined",
+                        limits=limits,
+                        udp_payload_ceiling=1_200,
+                    )
+                    try:
+                        capture_session._collect_attempt(
+                            attempt,
+                            runtime_path,
+                            None if defense.baseline else projected_chaff_path,
+                            "complex",
+                            defense,
+                            seed,
+                            context,
+                            application_workload_source=(
+                                None if defense.baseline else application_path
+                            ),
+                        )
+                    except (
+                        OSError,
+                        RuntimeError,
+                        subprocess.SubprocessError,
+                        TypeError,
+                        ValueError,
+                    ) as error:
+                        attempt.mkdir(parents=True, exist_ok=True)
+                        atomic_json(
+                            attempt / "multi-origin-compatibility-error.json",
+                            {
+                                "schema_version": 1,
+                                "artifact_type": (
+                                    "qcsd-buflo-multi-origin-compatibility-attempt-error"
+                                ),
+                                "failure": {
+                                    "stage": "multi-origin-compatibility-collection",
+                                    "type": type(error).__name__,
+                                    "message": str(error),
+                                },
+                            },
+                        )
+                        continue
+                    try:
+                        evidence = _regression_multi_origin_attempt_evidence(
+                            attempt,
+                            application_path,
+                            projected_chaff_path,
+                            defense,
+                            seed=seed,
+                        )
+                    except (OSError, TypeError, ValueError):
+                        continue
+                if evidence is not None:
+                    break
+        if evidence is None:
+            atomic_json(state_path, state)
+            raise ValueError(
+                f"multi-origin compatibility exhausted three attempts for {defense.name}"
+            )
+        attempt_path = Path(evidence["attempt"])
+        relative_attempt = attempt_path.relative_to(root).as_posix()
+        evidence["attempt"] = relative_attempt
+        state["accepted_attempts"][defense.name] = relative_attempt
+        atomic_json(state_path, state)
+        evidence["sample_index"] = index
+        samples.append(evidence)
+
+    regression_bindings = _regression_result_bindings(result_roots)
+    controlled_receipt_sha256 = _canonical_digest(dict(regression_receipt))
+    if {
+        binding["controlled_receipt_sha256"] for binding in regression_bindings
+    } != {controlled_receipt_sha256}:
+        raise ValueError(
+            "multi-origin compatibility receipt differs from the frozen 18-sample campaigns"
+        )
+    value = {
+        "schema_version": MULTI_ORIGIN_COMPATIBILITY_SCHEMA_VERSION,
+        "artifact_type": MULTI_ORIGIN_COMPATIBILITY_ARTIFACT_TYPE,
+        "status": "passed",
+        "evidence_class": "controlled-test-only-nonformal-excluded-from-18-sample-matrix",
+        "source": source_metadata(),
+        "controlled_receipt": dict(regression_receipt),
+        "regression_matrix_samples": 18,
+        "compatibility_samples": len(samples),
+        "expected_modes": list(MULTI_ORIGIN_COMPATIBILITY_MODES),
+        "expected_origins": list(MULTI_ORIGIN_COMPATIBILITY_ORIGINS),
+        "expected_resource_ids": [0, 1, 2, 3],
+        "inputs": {
+            "application_workload": {
+                "path": application_path.relative_to(root).as_posix(),
+                "sha256": sha256_file(application_path),
+            },
+            "application_response_qualification": {
+                "path": response_sidecar.relative_to(root).as_posix(),
+                "sha256": sha256_file(response_sidecar),
+                "derived_manifest_sha256": actual_response.manifest_sha256,
+            },
+            "prefix_surrogate_workload": {
+                "path": surrogate_workload.relative_to(root).as_posix(),
+                "sha256": sha256_file(surrogate_workload),
+            },
+            "prefix_surrogate_qualification": {
+                "path": surrogate_sidecar.relative_to(root).as_posix(),
+                "sha256": sha256_file(surrogate_sidecar),
+            },
+            "prefix_specification": {
+                "path": surrogate_prefix.relative_to(root).as_posix(),
+                "sha256": sha256_file(surrogate_prefix),
+            },
+            "prefix_qualified_manifest": {
+                "path": strict_manifest_path.relative_to(root).as_posix(),
+                "sha256": sha256_file(strict_manifest_path),
+            },
+            "projected_runtime_chaff_manifest": {
+                "path": projected_chaff_path.relative_to(root).as_posix(),
+                "sha256": sha256_file(projected_chaff_path),
+            },
+            "walkie_talkie_parameters": {
+                "source_path": compatibility_walkie_talkie_source.relative_to(
+                    root
+                ).as_posix(),
+                "source_sha256": sha256_file(compatibility_walkie_talkie_source),
+                "path": compatibility_walkie_talkie.relative_to(root).as_posix(),
+                "sha256": sha256_file(compatibility_walkie_talkie),
+                "provenance_path": compatibility_walkie_talkie_provenance.relative_to(
+                    root
+                ).as_posix(),
+                "provenance_sha256": sha256_file(
+                    compatibility_walkie_talkie_provenance
+                ),
+            },
+            "projection": projection,
+            "runtime_inputs": _regression_multi_origin_runtime_inputs(defenses),
+        },
+        "regression_results": regression_bindings,
+        "samples": samples,
+        "passed": True,
+    }
+    _create_only_json(receipt_path, value)
+    validate_regression_multi_origin_compatibility(receipt_path, result_roots)
+    return receipt_path
+
+
+def _regression_multi_origin_bound_path(
+    root: Path,
+    value: object,
+    *,
+    path_field: str = "path",
+    sha256_field: str = "sha256",
+    fields: set[str] | None = None,
+    label: str,
+) -> Path:
+    expected_fields = fields or {path_field, sha256_field}
+    if not isinstance(value, Mapping) or set(value) != expected_fields:
+        raise ValueError(f"multi-origin compatibility {label} binding is malformed")
+    relative = value.get(path_field)
+    digest = value.get(sha256_field)
+    if (
+        not isinstance(relative, str)
+        or not relative
+        or Path(relative).is_absolute()
+        or ".." in Path(relative).parts
+        or not isinstance(digest, str)
+        or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+    ):
+        raise ValueError(f"multi-origin compatibility {label} binding is invalid")
+    path = root / relative
+    if (
+        path.is_symlink()
+        or not path.is_file()
+        or not path.resolve().is_relative_to(root.resolve())
+        or sha256_file(path) != digest
+    ):
+        raise ValueError(f"multi-origin compatibility {label} changed")
+    return path
+
+
+def validate_regression_multi_origin_compatibility(
+    receipt_path: Path,
+    result_roots: Sequence[Path],
+) -> dict[str, Any]:
+    """Deep-verify the excluded all-nine live two-origin correctness proof."""
+
+    from .chaff_qualification import (
+        load_qualified_chaff,
+        load_response_qualified_chaff,
+    )
+    from .manifest import canonical_bytes, validate_research_preparation
+
+    receipt_path = receipt_path.absolute()
+    if receipt_path.is_symlink() or not receipt_path.is_file():
+        raise ValueError("multi-origin compatibility receipt is not a regular file")
+    receipt_path = receipt_path.resolve()
+    root = receipt_path.parent
+    value = load_json(receipt_path)
+    required = {
+        "schema_version",
+        "artifact_type",
+        "status",
+        "evidence_class",
+        "source",
+        "controlled_receipt",
+        "regression_matrix_samples",
+        "compatibility_samples",
+        "expected_modes",
+        "expected_origins",
+        "expected_resource_ids",
+        "inputs",
+        "regression_results",
+        "samples",
+        "passed",
+    }
+    if (
+        not isinstance(value, dict)
+        or set(value) != required
+        or value["schema_version"] != MULTI_ORIGIN_COMPATIBILITY_SCHEMA_VERSION
+        or value["artifact_type"] != MULTI_ORIGIN_COMPATIBILITY_ARTIFACT_TYPE
+        or value["status"] != "passed"
+        or value["evidence_class"]
+        != "controlled-test-only-nonformal-excluded-from-18-sample-matrix"
+        or value["regression_matrix_samples"] != 18
+        or value["compatibility_samples"] != 9
+        or value["expected_modes"] != list(MULTI_ORIGIN_COMPATIBILITY_MODES)
+        or value["expected_origins"] != list(MULTI_ORIGIN_COMPATIBILITY_ORIGINS)
+        or value["expected_resource_ids"] != [0, 1, 2, 3]
+        or value["passed"] is not True
+    ):
+        raise ValueError("multi-origin compatibility receipt contract is invalid")
+    _validate_clean_source(value["source"], label="multi-origin compatibility")
+    if dict(value["source"]) != source_metadata():
+        raise ValueError("multi-origin compatibility does not bind the current source")
+    controlled = validate_controlled_campaign_receipt(value["controlled_receipt"])
+    if (
+        controlled["stage"] != "regression"
+        or controlled["schema_version"] != LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION
+    ):
+        raise ValueError(
+            "multi-origin compatibility is not bound to the current regression receipt"
+        )
+    expected_regression_results = _regression_result_bindings(result_roots)
+    if value["regression_results"] != expected_regression_results:
+        raise ValueError("multi-origin compatibility 18-sample result binding changed")
+    controlled_receipt_sha256 = _canonical_digest(dict(value["controlled_receipt"]))
+    if {
+        binding["controlled_receipt_sha256"]
+        for binding in expected_regression_results
+    } != {controlled_receipt_sha256}:
+        raise ValueError(
+            "multi-origin compatibility receipt differs from the frozen 18-sample campaigns"
+        )
+
+    inputs = value["inputs"]
+    expected_input_keys = {
+        "application_workload",
+        "application_response_qualification",
+        "prefix_surrogate_workload",
+        "prefix_surrogate_qualification",
+        "prefix_specification",
+        "prefix_qualified_manifest",
+        "projected_runtime_chaff_manifest",
+        "walkie_talkie_parameters",
+        "projection",
+        "runtime_inputs",
+    }
+    if not isinstance(inputs, Mapping) or set(inputs) != expected_input_keys:
+        raise ValueError("multi-origin compatibility input inventory is invalid")
+    application_path = _regression_multi_origin_bound_path(
+        root, inputs["application_workload"], label="application workload"
+    )
+    application = load_json(application_path)
+    validate_research_preparation(application, workload_id="complex")
+    response_sidecar = _regression_multi_origin_bound_path(
+        root,
+        inputs["application_response_qualification"],
+        fields={"path", "sha256", "derived_manifest_sha256"},
+        label="application response qualification",
+    )
+    actual_response = load_response_qualified_chaff(
+        response_sidecar,
+        workload_id="complex",
+        base_manifest_path=application_path,
+        expected_sidecar_schema_version=2,
+        require_current_implementation=True,
+    )
+    if (
+        inputs["application_response_qualification"]["derived_manifest_sha256"]
+        != actual_response.manifest_sha256
+    ):
+        raise ValueError("multi-origin response qualification derived manifest changed")
+    surrogate_workload = _regression_multi_origin_bound_path(
+        root, inputs["prefix_surrogate_workload"], label="prefix surrogate workload"
+    )
+    surrogate_sidecar = _regression_multi_origin_bound_path(
+        root,
+        inputs["prefix_surrogate_qualification"],
+        label="prefix surrogate qualification",
+    )
+    surrogate_prefix = _regression_multi_origin_bound_path(
+        root, inputs["prefix_specification"], label="prefix specification"
+    )
+    strict_manifest_path = _regression_multi_origin_bound_path(
+        root, inputs["prefix_qualified_manifest"], label="prefix-qualified manifest"
+    )
+    strict = load_qualified_chaff(
+        surrogate_sidecar,
+        workload_id="complex",
+        base_manifest_path=surrogate_workload,
+        prefix_spec_path=surrogate_prefix,
+        require_current_implementation=True,
+    )
+    if strict_manifest_path.read_bytes() != canonical_bytes(strict.manifest):
+        raise ValueError("multi-origin strict prefix-qualified manifest is not derived exactly")
+    expected_projection = _regression_multi_origin_projection(
+        load_json(surrogate_workload), application
+    )
+    if inputs["projection"] != expected_projection:
+        raise ValueError("multi-origin surrogate/application projection changed")
+    projected_chaff_path = _regression_multi_origin_bound_path(
+        root,
+        inputs["projected_runtime_chaff_manifest"],
+        label="projected runtime chaff manifest",
+    )
+    expected_projected = _project_regression_chaff_manifest(
+        strict.manifest,
+        surrogate_sha256=sha256_file(surrogate_workload),
+        application_sha256=sha256_file(application_path),
+    )
+    if projected_chaff_path.read_bytes() != canonical_bytes(expected_projected):
+        raise ValueError("multi-origin runtime chaff projection changed beyond source hash")
+
+    parameter_binding = inputs["walkie_talkie_parameters"]
+    parameter_fields = {
+        "source_path",
+        "source_sha256",
+        "path",
+        "sha256",
+        "provenance_path",
+        "provenance_sha256",
+    }
+    if not isinstance(parameter_binding, Mapping) or set(parameter_binding) != parameter_fields:
+        raise ValueError("multi-origin Walkie-Talkie parameter binding is malformed")
+    parameter_source = _regression_multi_origin_bound_path(
+        root,
+        parameter_binding,
+        path_field="source_path",
+        sha256_field="source_sha256",
+        fields=parameter_fields,
+        label="Walkie-Talkie source parameters",
+    )
+    parameter_path = _regression_multi_origin_bound_path(
+        root,
+        parameter_binding,
+        fields=parameter_fields,
+        label="Walkie-Talkie parameters",
+    )
+    provenance_path = _regression_multi_origin_bound_path(
+        root,
+        parameter_binding,
+        path_field="provenance_path",
+        sha256_field="provenance_sha256",
+        fields=parameter_fields,
+        label="Walkie-Talkie parameter provenance",
+    )
+    expected_parameter = _regression_multi_origin_walkie_talkie_value(
+        load_json(parameter_source),
+        projected_manifest_sha256=sha256_file(projected_chaff_path),
+    )
+    if parameter_path.read_bytes() != canonical_bytes(expected_parameter):
+        raise ValueError("multi-origin Walkie-Talkie parameter projection changed")
+    validate_parameter_artifact(
+        parameter_path,
+        provenance_path=provenance_path,
+        expected_kind="walkie_talkie",
+        allow_reviewed_fixture=True,
+        expected_qcsd_profile="live",
+        expected_udp_payload_ceiling=1_200,
+        expected_workloads={"complex": sha256_file(application_path)},
+    )
+    defenses = _regression_multi_origin_defenses(
+        parameter_path,
+        provenance_path,
+        application_sha256=sha256_file(application_path),
+    )
+    if inputs["runtime_inputs"] != _regression_multi_origin_runtime_inputs(defenses):
+        raise ValueError("multi-origin compatibility runtime input identities changed")
+
+    samples = value["samples"]
+    if not isinstance(samples, list) or len(samples) != len(defenses):
+        raise ValueError("multi-origin compatibility sample inventory is incomplete")
+    verified_samples: list[dict[str, Any]] = []
+    for index, (record, defense) in enumerate(zip(samples, defenses, strict=True)):
+        if not isinstance(record, Mapping):
+            raise ValueError(  # noqa: TRY004 - malformed receipt data is a ValueError.
+                "multi-origin compatibility sample is not an object"
+            )
+        relative = record.get("attempt")
+        if (
+            record.get("sample_index") != index
+            or record.get("mode") != defense.name
+            or not isinstance(relative, str)
+            or Path(relative).is_absolute()
+            or ".." in Path(relative).parts
+        ):
+            raise ValueError("multi-origin compatibility sample order/binding is invalid")
+        attempt = root / relative
+        if not attempt.resolve().is_relative_to((root / "attempts" / defense.name).resolve()):
+            raise ValueError("multi-origin compatibility attempt escapes its mode root")
+        seed = _stable_seed("buflo-regression-multi-origin-v1", defense.name)
+        expected = _regression_multi_origin_attempt_evidence(
+            attempt,
+            application_path,
+            projected_chaff_path,
+            defense,
+            seed=seed,
+        )
+        expected["attempt"] = relative
+        expected["sample_index"] = index
+        if dict(record) != expected:
+            raise ValueError("multi-origin compatibility sample receipt changed")
+        verified_samples.append(expected)
+    return {
+        "schema_version": 1,
+        "path": str(receipt_path),
+        "sha256": sha256_file(receipt_path),
+        "samples": len(verified_samples),
+        "modes": [sample["mode"] for sample in verified_samples],
+        "origins": list(MULTI_ORIGIN_COMPATIBILITY_ORIGINS),
+        "resources_per_sample": 4,
+        "source": dict(value["source"]),
+        "excluded_from_regression_matrix": True,
+        "passed": True,
+    }
 
 
 def _local_controlled_campaign_document(
@@ -5296,7 +6618,7 @@ def validate_controlled_results(
 
 
 def validate_regression_results(result_roots: Sequence[Path]) -> dict[str, Any]:
-    """Deep-verify the exact 18-cell nine-mode non-formal regression matrix."""
+    """Verify the 18-cell matrix and its excluded all-nine two-origin proof."""
 
     return _validate_local_stage_results("regression", result_roots)
 
@@ -6601,6 +7923,19 @@ def _validate_local_stage_results(
         )
     else:
         result["established_seven_baseline"] = validate_established_seven_baseline()
+        destinations = {
+            Path(binding["root"]).resolve().parents[2] for binding in bindings
+        }
+        if len(destinations) != 1:
+            raise ValueError("regression shards do not share one compatibility root")
+        [destination] = destinations
+        compatibility = validate_regression_multi_origin_compatibility(
+            destination / "multi-origin-nine-mode-compatibility/receipt.json",
+            result_roots,
+        )
+        if compatibility["source"] != lineage:
+            raise ValueError("regression compatibility source differs from the 18-sample shards")
+        result["multi_origin_nine_mode_compatibility"] = compatibility
     return result
 
 

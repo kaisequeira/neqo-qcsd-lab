@@ -7,8 +7,56 @@ PREPARE_IMAGE="${QCSD_LAB_PREPARE_IMAGE:-neqo-qcsd-lab-prepare:local}"
 REFERENCE_IMAGE="${QCSD_LAB_REFERENCE_IMAGE:-neqo-qcsd-lab-reference:local}"
 
 usage() {
-  echo "Usage: qcsd-lab {build|prepare|derive-chaff-prefix-specs|qualify-chaff|qualify-response-chaff|run|resume|verify|analyze|fit|buflo-study|test} [arguments...]" >&2
+  echo "Usage: qcsd-lab {build|prepare|derive-chaff-prefix-specs|qualify-chaff|qualify-response-chaff|run|resume|verify|analyze|fit|buflo-study|class-study|test} [arguments...]" >&2
 }
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+# Acquisition spans stability windows measured in days.  Keep its supervisor
+# on the host so it can remain interruptible, resume only from checkpoint.json,
+# and invoke the existing bounded Docker-backed coordinator actions when work
+# is due.  The Python tool owns argument validation; this branch intentionally
+# runs before all Docker and mutable study-state checks.
+if [[ "${1:-}" == "class-study" && "${2:-}" == "acquisition-watch" ]]; then
+  watch_python="python3"
+  if [[ -x "${ROOT}/.venv/bin/python" ]]; then
+    watch_python="${ROOT}/.venv/bin/python"
+  fi
+  command -v "${watch_python}" >/dev/null 2>&1 || {
+    echo "class-study acquisition-watch requires python3 on the host" >&2
+    exit 1
+  }
+  exec "${watch_python}" "${ROOT}/tools/class_acquisition_watch.py" "${@:3}"
+fi
+
+# Nested help is read-only and must not depend on Docker, a built image, or
+# any mutable study state.  Forward only the two exact argparse help shapes;
+# ordinary execution continues through every host-side validation below.
+if [[ ( "${1:-}" == "class-study" || "${1:-}" == "buflo-study" ) &&
+      ( ( $# == 2 && "${2:-}" == "--help" ) ||
+        ( $# == 3 && "${3:-}" == "--help" ) ) ]]; then
+  help_python="python3"
+  if [[ -x "${ROOT}/.venv/bin/python" ]]; then
+    help_python="${ROOT}/.venv/bin/python"
+  fi
+  command -v "${help_python}" >/dev/null 2>&1 || {
+    echo "qcsd-lab nested help requires python3" >&2
+    exit 1
+  }
+  if [[ $# == 2 && "${1}" == "class-study" && "${2}" == "--help" ]]; then
+    PYTHONPATH="${ROOT}/src" "${help_python}" -c \
+      'from qcsd_lab.cli import main; main()' "$@"
+    echo
+    echo "Host-only action:"
+    echo "  acquisition-watch   supervise due acquisition work with bounded 1-5 s heartbeats"
+    exit 0
+  fi
+  PYTHONPATH="${ROOT}/src" exec "${help_python}" -c \
+    'from qcsd_lab.cli import main; main()' "$@"
+fi
 
 require_submodule() {
   if [[ ! -f "${ROOT}/neqo-qcsd/Cargo.lock" ]]; then
@@ -184,7 +232,8 @@ fi
 
 study_cohort_version=""
 study_cohort_version_seen=0
-study_campaign_name="${2##*/}"
+study_campaign_name="${2:-}"
+study_campaign_name="${study_campaign_name##*/}"
 study_capture_admission_host=""
 study_capture_admission_container=""
 study_admission_build_path=""
@@ -373,13 +422,831 @@ print(*ids, sep="\n")
   fi
 fi
 
+# The class-study coordinator accepts many evidence paths.  Resolve every one
+# on the host, reject symlink traversal and paths outside this checkout, then
+# rewrite it to the corresponding read-only /lab path.  Writable overlays are
+# selected by action below; the workspace itself is never mounted read-write.
+class_study_action=""
+class_study_stage=""
+class_study_execute=0
+class_study_live=0
+class_container_args=()
+class_result_hosts=()
+class_regression_result_hosts=()
+class_controlled_result_hosts=()
+class_canary_result_hosts=()
+class_formal_result_hosts=()
+class_guarded_rw_dirs=()
+class_direct_rw_dirs=()
+class_rw_files=()
+declare -A class_path_hosts=()
+
+class_host_path() {
+  python3 -c '
+import os
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+raw = Path(sys.argv[2])
+container_root = Path("/lab")
+if raw == container_root:
+    raise SystemExit("class-study rejects the /lab container root as an explicit path")
+if raw.is_absolute() and raw.is_relative_to(container_root):
+    raw = root / raw.relative_to(container_root)
+candidate = Path(os.path.abspath(raw if raw.is_absolute() else root / raw))
+try:
+    if os.path.commonpath((str(root), str(candidate))) != str(root):
+        raise ValueError
+except ValueError:
+    raise SystemExit("class-study path is outside the Lab root")
+if candidate == root:
+    raise SystemExit("class-study rejects the workspace root as an explicit path")
+cursor = root
+for component in candidate.relative_to(root).parts:
+    cursor /= component
+    if cursor.is_symlink():
+        raise SystemExit(f"class-study path traverses a symlink: {cursor}")
+print(candidate)
+' "${ROOT}" "$1"
+}
+
+class_container_path() {
+  local host_path="$1"
+  printf '/lab/%s\n' "${host_path#${ROOT}/}"
+}
+
+class_add_unique() {
+  local -n target_array="$1"
+  local value="$2"
+  local existing
+  for existing in "${target_array[@]:-}"; do
+    if [[ "${existing}" == "${value}" ]]; then
+      return
+    fi
+  done
+  target_array+=("${value}")
+}
+
+class_require_directory() {
+  local value="$1"
+  local label="$2"
+  if [[ -z "${value}" || ! -d "${value}" || -L "${value}" ]]; then
+    echo "class-study ${label} must be an existing non-symlink directory" >&2
+    exit 2
+  fi
+}
+
+class_acquire_acquisition_lock() {
+  local acquisition_root="$1"
+  command -v flock >/dev/null 2>&1 || {
+    echo "class-study acquisition coordination requires flock on the host" >&2
+    return 1
+  }
+  class_require_directory "${acquisition_root}" "acquisition lock root"
+  local lock_path="${acquisition_root}/.class-study-acquisition.lock"
+  if [[ -L "${lock_path}" || ! -f "${lock_path}" ]]; then
+    echo "class-study acquisition lock must be a regular non-symlink file" >&2
+    return 1
+  fi
+  if [[ -n "${QCSD_CLASS_ACQUISITION_LOCK_FD:-}" ]]; then
+    class_acquisition_lock_fd="${QCSD_CLASS_ACQUISITION_LOCK_FD}"
+    if [[ ! "${class_acquisition_lock_fd}" =~ ^[0-9]+$ ]] ||
+       [[ ! -e "/proc/$$/fd/${class_acquisition_lock_fd}" ]] ||
+       [[ "$(stat -Lc '%d:%i' -- "${lock_path}")" != \
+          "$(stat -Lc '%d:%i' -- "/proc/$$/fd/${class_acquisition_lock_fd}")" ]]; then
+      echo "inherited class-study acquisition lock descriptor is invalid" >&2
+      return 1
+    fi
+  else
+    exec {class_acquisition_lock_fd}<>"${lock_path}"
+  fi
+  if ! flock -n "${class_acquisition_lock_fd}"; then
+    echo "another class-study acquisition process holds the runner lock" >&2
+    return 1
+  fi
+}
+
+class_require_output_parent() {
+  local value="$1"
+  local label="$2"
+  if [[ -z "${value}" ]]; then
+    echo "class-study ${label} is required" >&2
+    exit 2
+  fi
+  if [[ -L "${value}" ]]; then
+    echo "class-study ${label} destination cannot be a symlink" >&2
+    exit 1
+  fi
+  local parent
+  parent="$(dirname "${value}")"
+  if [[ "${parent}" == "${ROOT}" ]]; then
+    echo "class-study ${label} rejects the broad Lab root parent" >&2
+    exit 2
+  fi
+  class_require_directory "${parent}" "${label} parent"
+}
+
+class_require_canonical_path() {
+  local value="$1"
+  local expected="$2"
+  local label="$3"
+  if [[ -n "${value}" && "${value}" != "${expected}" ]]; then
+    echo "class-study ${label} must use the canonical path ${expected}" >&2
+    exit 2
+  fi
+}
+
+class_require_canonical_parent() {
+  local value="$1"
+  local expected="$2"
+  local label="$3"
+  if [[ -n "${value}" && "$(dirname "${value}")" != "${expected}" ]]; then
+    echo "class-study ${label} must be published directly under ${expected}" >&2
+    exit 2
+  fi
+}
+
+class_require_canonical_choice() {
+  local value="$1"
+  local first="$2"
+  local second="$3"
+  local label="$4"
+  if [[ -n "${value}" && "${value}" != "${first}" && "${value}" != "${second}" ]]; then
+    echo "class-study ${label} must use one canonical class-study path" >&2
+    echo "expected ${first} or ${second}" >&2
+    exit 2
+  fi
+}
+
+if [[ "${1:-}" == "class-study" ]]; then
+  command -v python3 >/dev/null 2>&1 || {
+    echo "class-study requires python3 on the host for path validation" >&2
+    exit 1
+  }
+  mapfile -t class_layout_fields < <(
+    QCSD_LAB_ROOT="${ROOT}" PYTHONPATH="${ROOT}/src" python3 -c '
+from qcsd_lab.class_layout import (
+    AUTHORITATIVE_COHORT_ASSEMBLY_FILENAME,
+    AUTHORITATIVE_COHORT_FILENAME,
+    FINAL_SELECTION_FILENAME,
+    PILOT_COHORT_ASSEMBLY_FILENAME,
+    PILOT_COHORT_FILENAME,
+    class_study_layout,
+)
+
+layout = class_study_layout()
+for field in (
+    "config_root",
+    "campaign_root",
+    "workload_root",
+    "study_config_root",
+    "defense_params_root",
+    "artifacts_root",
+    "acquisition_root",
+    "stability_root",
+    "pilot_numeric_root",
+    "pilot_final_root",
+    "pilot_prefix_root",
+    "authoritative_numeric_root",
+    "authoritative_final_root",
+    "authoritative_prefix_root",
+    "qualification_sets_root",
+    "pilot_qualification_set_root",
+    "final_qualification_set_root",
+):
+    print(getattr(layout, field))
+for filename in (
+    PILOT_COHORT_FILENAME,
+    PILOT_COHORT_ASSEMBLY_FILENAME,
+    AUTHORITATIVE_COHORT_FILENAME,
+    AUTHORITATIVE_COHORT_ASSEMBLY_FILENAME,
+    FINAL_SELECTION_FILENAME,
+):
+    print(filename)
+'
+  )
+  if (( ${#class_layout_fields[@]} != 22 )); then
+    echo "class-study could not derive the canonical Lab layout" >&2
+    exit 1
+  fi
+  class_config_root="${class_layout_fields[0]}"
+  class_campaign_root="${class_layout_fields[1]}"
+  class_workload_root="${class_layout_fields[2]}"
+  class_study_config_root="${class_layout_fields[3]}"
+  class_defense_params_root="${class_layout_fields[4]}"
+  class_artifacts_root="${class_layout_fields[5]}"
+  class_acquisition_root="${class_layout_fields[6]}"
+  class_stability_root="${class_layout_fields[7]}"
+  class_pilot_numeric_root="${class_layout_fields[8]}"
+  class_pilot_final_root="${class_layout_fields[9]}"
+  class_pilot_prefix_root="${class_layout_fields[10]}"
+  class_authoritative_numeric_root="${class_layout_fields[11]}"
+  class_authoritative_final_root="${class_layout_fields[12]}"
+  class_authoritative_prefix_root="${class_layout_fields[13]}"
+  class_qualification_sets_root="${class_layout_fields[14]}"
+  class_pilot_qualification_root="${class_layout_fields[15]}"
+  class_final_qualification_root="${class_layout_fields[16]}"
+  class_pilot_cohort="${class_study_config_root}/${class_layout_fields[17]}"
+  class_pilot_cohort_assembly="${class_study_config_root}/${class_layout_fields[18]}"
+  class_final_cohort="${class_study_config_root}/${class_layout_fields[19]}"
+  class_final_cohort_assembly="${class_study_config_root}/${class_layout_fields[20]}"
+  class_final_selection="${class_study_config_root}/${class_layout_fields[21]}"
+  class_candidate_catalogue="${class_study_config_root}/classifier-multiorigin100-v1-candidates.json"
+  class_pilot_qualification_manifest="${class_pilot_qualification_root}/_qualification-set.json"
+  class_final_qualification_manifest="${class_final_qualification_root}/_qualification-set.json"
+  class_study_action="${2:-}"
+  case "${class_study_action}" in
+    status|acquisition-init|acquisition-run|acquisition-status|acquisition-complete|stability|cohort|campaigns|fit-numeric|prefix-specs|qualify-prefix|finalize-fitting|capture|resume|export|evaluate|foundation|readiness|historical-snapshot|comparison-review|attest|successor-policy|successor-decision|successor-restart|successor-verify|verify) ;;
+    *)
+      echo "class-study requires one recognised action" >&2
+      exit 2
+      ;;
+  esac
+  class_container_args=(class-study "${class_study_action}")
+  class_index=3
+  while (( class_index <= $# )); do
+    class_argument="${!class_index}"
+    class_flag="${class_argument%%=*}"
+    class_inline=0
+    if [[ "${class_argument}" == --*=* ]]; then
+      class_value="${class_argument#*=}"
+      class_inline=1
+    fi
+    case "${class_flag}" in
+      --execute|--qualify-all-pending|--shallow)
+        if (( class_inline )); then
+          echo "${class_flag} does not accept a value" >&2
+          exit 2
+        fi
+        class_container_args+=("${class_flag}")
+        if [[ "${class_flag}" == "--execute" ]]; then
+          class_study_execute=1
+        elif [[ "${class_flag}" == "--qualify-all-pending" ]]; then
+          class_study_live=1
+        fi
+        class_index=$((class_index + 1))
+        continue
+        ;;
+      --stage|--qualification-workload|--acquisition-started-at|--acquisition-browser-tool|--acquisition-max-candidates|--acquisition-timeout-ms|--cohort-version|--snapshot-phase|--reviewer|--reviewed-at)
+        if (( ! class_inline )); then
+          class_next=$((class_index + 1))
+          if (( class_next > $# )); then
+            echo "${class_flag} requires a value" >&2
+            exit 2
+          fi
+          class_value="${!class_next}"
+          class_index=$((class_index + 1))
+        fi
+        class_container_args+=("${class_flag}" "${class_value}")
+        if [[ "${class_flag}" == "--stage" ]]; then
+          if [[ -n "${class_study_stage}" ]]; then
+            echo "class-study accepts --stage at most once" >&2
+            exit 2
+          fi
+          class_study_stage="${class_value}"
+        elif [[ "${class_flag}" == "--qualification-workload" ]]; then
+          class_study_live=1
+        fi
+        class_index=$((class_index + 1))
+        continue
+        ;;
+      --candidate-catalogue|--acquisition-root|--stability-root|--stability-input|--workload-root|--acquisition-completion|--pilot-cohort|--pilot-cohort-assembly|--final-cohort|--final-cohort-assembly|--cohort|--cohort-assembly|--final-selection|--campaign-root|--campaign|--results-root|--capture-result|--result|--regression-result|--controlled-result|--canary-result|--formal-result|--artifacts-root|--numeric-bundle|--prefix-spec-root|--qualification-checkpoint|--qualification-sidecar-root|--qualification-publication-root|--qualification-manifest|--final-bundle|--handoff|--evaluation-receipt|--build-execution-receipt|--reference-receipt|--code-gate-receipt|--controlled-qualification-receipt|--pilot-fitting-result|--pilot-compatibility-result|--authoritative-fitting-result|--certification-result|--foundation-attestation|--readiness-attestation|--historical-pre-snapshot|--historical-post-snapshot|--comparison-review|--comparison-review-input|--validation-attestation|--successor-policy|--successor-decision|--successor-restart|--destination|--target|--dlsvm-cache-directory)
+        if (( ! class_inline )); then
+          class_next=$((class_index + 1))
+          if (( class_next > $# )); then
+            echo "${class_flag} requires a value" >&2
+            exit 2
+          fi
+          class_value="${!class_next}"
+          class_index=$((class_index + 1))
+        fi
+        class_host="$(class_host_path "${class_value}")" || exit 2
+        class_inside="$(class_container_path "${class_host}")"
+        if [[ "${class_flag}" == "--result" ]]; then
+          class_result_hosts+=("${class_host}")
+        elif [[ "${class_flag}" == "--regression-result" ]]; then
+          class_regression_result_hosts+=("${class_host}")
+        elif [[ "${class_flag}" == "--controlled-result" ]]; then
+          class_controlled_result_hosts+=("${class_host}")
+        elif [[ "${class_flag}" == "--canary-result" ]]; then
+          class_canary_result_hosts+=("${class_host}")
+        elif [[ "${class_flag}" == "--formal-result" ]]; then
+          class_formal_result_hosts+=("${class_host}")
+        else
+          if [[ -n "${class_path_hosts[${class_flag}]:-}" ]]; then
+            echo "class-study accepts ${class_flag} at most once" >&2
+            exit 2
+          fi
+          class_path_hosts["${class_flag}"]="${class_host}"
+        fi
+        class_container_args+=("${class_flag}" "${class_inside}")
+        class_index=$((class_index + 1))
+        continue
+        ;;
+      *)
+        echo "class-study rejects unsupported argument: ${class_argument}" >&2
+        exit 2
+        ;;
+    esac
+  done
+
+  class_fresh_layout=0
+  case "${class_study_action}" in
+    acquisition-init|acquisition-run|acquisition-status|acquisition-complete|stability|cohort|campaigns|fit-numeric|prefix-specs|qualify-prefix|finalize-fitting|capture|foundation|readiness|historical-snapshot|comparison-review|attest)
+      class_fresh_layout=1
+      ;;
+  esac
+  class_successor_mode=0
+  if [[ -n "${class_path_hosts[--successor-restart]:-}" ]]; then
+    class_successor_mode=1
+    class_fresh_layout=0
+  fi
+  if (( class_fresh_layout )); then
+    class_require_canonical_path \
+      "${class_path_hosts[--candidate-catalogue]:-}" \
+      "${class_candidate_catalogue}" \
+      "candidate catalogue"
+    class_require_canonical_path \
+      "${class_path_hosts[--workload-root]:-}" \
+      "${class_workload_root}" \
+      "workload root"
+    class_require_canonical_path \
+      "${class_path_hosts[--campaign-root]:-}" \
+      "${class_campaign_root}" \
+      "campaign root"
+    class_require_canonical_path \
+      "${class_path_hosts[--artifacts-root]:-}" \
+      "${class_artifacts_root}" \
+      "artifact root"
+    class_require_canonical_path \
+      "${class_path_hosts[--acquisition-root]:-}" \
+      "${class_acquisition_root}" \
+      "acquisition root"
+    class_require_canonical_path \
+      "${class_path_hosts[--stability-root]:-}" \
+      "${class_stability_root}" \
+      "stability root"
+    class_require_canonical_path \
+      "${class_path_hosts[--qualification-publication-root]:-}" \
+      "${class_qualification_sets_root}" \
+      "qualification publication root"
+
+    class_require_canonical_path \
+      "${class_path_hosts[--pilot-cohort]:-}" \
+      "${class_pilot_cohort}" \
+      "pilot cohort"
+    class_require_canonical_path \
+      "${class_path_hosts[--pilot-cohort-assembly]:-}" \
+      "${class_pilot_cohort_assembly}" \
+      "pilot cohort assembly"
+    class_require_canonical_path \
+      "${class_path_hosts[--final-cohort]:-}" \
+      "${class_final_cohort}" \
+      "final cohort"
+    class_require_canonical_path \
+      "${class_path_hosts[--final-cohort-assembly]:-}" \
+      "${class_final_cohort_assembly}" \
+      "final cohort assembly"
+    class_require_canonical_path \
+      "${class_path_hosts[--final-selection]:-}" \
+      "${class_final_selection}" \
+      "final-selection"
+
+    class_require_canonical_parent \
+      "${class_path_hosts[--campaign]:-}" \
+      "${class_campaign_root}" \
+      "campaign"
+    if [[ -n "${class_study_stage}" &&
+          "${class_study_stage}" != "pilot" &&
+          "${class_study_stage}" != "authoritative" ]]; then
+      echo "class-study --stage must be pilot or authoritative" >&2
+      exit 2
+    fi
+    if [[ "${class_study_stage}" == "pilot" ]]; then
+      class_require_canonical_path \
+        "${class_path_hosts[--cohort]:-}" \
+        "${class_pilot_cohort}" \
+        "cohort"
+      class_require_canonical_path \
+        "${class_path_hosts[--cohort-assembly]:-}" \
+        "${class_pilot_cohort_assembly}" \
+        "cohort assembly"
+    elif [[ "${class_study_stage}" == "authoritative" ]]; then
+      class_require_canonical_path \
+        "${class_path_hosts[--cohort]:-}" \
+        "${class_final_cohort}" \
+        "cohort"
+      class_require_canonical_path \
+        "${class_path_hosts[--cohort-assembly]:-}" \
+        "${class_final_cohort_assembly}" \
+        "cohort assembly"
+    elif [[ -n "${class_path_hosts[--cohort]:-}" ||
+            -n "${class_path_hosts[--cohort-assembly]:-}" ]]; then
+      echo "class-study cohort publication requires --stage pilot or authoritative" >&2
+      exit 2
+    fi
+    # Reject alternate live roots for every fresh action, then apply the
+    # action's actual lineage.  In particular, authoritative cohort selection
+    # and campaign publication consume the frozen *pilot* numeric bundle.
+    class_require_canonical_choice \
+      "${class_path_hosts[--numeric-bundle]:-}" \
+      "${class_pilot_numeric_root}" \
+      "${class_authoritative_numeric_root}" \
+      "numeric bundle"
+    class_require_canonical_choice \
+      "${class_path_hosts[--prefix-spec-root]:-}" \
+      "${class_pilot_prefix_root}" \
+      "${class_authoritative_prefix_root}" \
+      "prefix-spec root"
+    class_require_canonical_choice \
+      "${class_path_hosts[--final-bundle]:-}" \
+      "${class_pilot_final_root}" \
+      "${class_authoritative_final_root}" \
+      "final bundle"
+    class_require_canonical_choice \
+      "${class_path_hosts[--qualification-manifest]:-}" \
+      "${class_pilot_qualification_manifest}" \
+      "${class_final_qualification_manifest}" \
+      "qualification manifest"
+
+    case "${class_study_action}" in
+      cohort|campaigns)
+        if [[ "${class_study_stage}" == "authoritative" ]]; then
+          class_require_canonical_path \
+            "${class_path_hosts[--numeric-bundle]:-}" \
+            "${class_pilot_numeric_root}" \
+            "numeric bundle"
+        fi
+        ;;
+      prefix-specs|qualify-prefix|finalize-fitting)
+        if [[ "${class_study_stage}" == "pilot" ]]; then
+          class_require_canonical_path \
+            "${class_path_hosts[--numeric-bundle]:-}" \
+            "${class_pilot_numeric_root}" \
+            "numeric bundle"
+          class_require_canonical_path \
+            "${class_path_hosts[--prefix-spec-root]:-}" \
+            "${class_pilot_prefix_root}" \
+            "prefix-spec root"
+          class_require_canonical_path \
+            "${class_path_hosts[--final-bundle]:-}" \
+            "${class_pilot_final_root}" \
+            "final bundle"
+          class_require_canonical_path \
+            "${class_path_hosts[--qualification-manifest]:-}" \
+            "${class_pilot_qualification_manifest}" \
+            "qualification manifest"
+        elif [[ "${class_study_stage}" == "authoritative" ]]; then
+          class_require_canonical_path \
+            "${class_path_hosts[--numeric-bundle]:-}" \
+            "${class_authoritative_numeric_root}" \
+            "numeric bundle"
+          class_require_canonical_path \
+            "${class_path_hosts[--prefix-spec-root]:-}" \
+            "${class_authoritative_prefix_root}" \
+            "prefix-spec root"
+          class_require_canonical_path \
+            "${class_path_hosts[--final-bundle]:-}" \
+            "${class_authoritative_final_root}" \
+            "final bundle"
+          class_require_canonical_path \
+            "${class_path_hosts[--qualification-manifest]:-}" \
+            "${class_final_qualification_manifest}" \
+            "qualification manifest"
+        fi
+        ;;
+      readiness)
+        class_require_canonical_path \
+          "${class_path_hosts[--numeric-bundle]:-}" \
+          "${class_pilot_numeric_root}" \
+          "numeric bundle"
+        class_require_canonical_path \
+          "${class_path_hosts[--prefix-spec-root]:-}" \
+          "${class_authoritative_prefix_root}" \
+          "prefix-spec root"
+        class_require_canonical_path \
+          "${class_path_hosts[--final-bundle]:-}" \
+          "${class_authoritative_final_root}" \
+          "final bundle"
+        class_require_canonical_path \
+          "${class_path_hosts[--qualification-manifest]:-}" \
+          "${class_final_qualification_manifest}" \
+          "qualification manifest"
+        class_require_canonical_path \
+          "${class_path_hosts[--qualification-sidecar-root]:-}" \
+          "${class_final_qualification_root}" \
+          "qualification sidecar root"
+        ;;
+    esac
+  fi
+
+  case "${class_study_action}" in
+    foundation|readiness|historical-snapshot|comparison-review|attest|successor-policy|successor-decision|successor-restart)
+      if (( class_successor_mode )); then
+        :
+      else
+      class_require_canonical_parent \
+        "${class_path_hosts[--destination]:-}" \
+        "${class_artifacts_root}" \
+        "${class_study_action} destination"
+      fi
+      ;;
+  esac
+
+  case "${class_study_action}" in
+    acquisition-init)
+      class_require_output_parent "${class_path_hosts[--acquisition-root]:-}" "acquisition runner"
+      class_add_unique class_guarded_rw_dirs "$(dirname "${class_path_hosts[--acquisition-root]}")"
+      ;;
+    acquisition-run)
+      class_require_directory "${class_path_hosts[--acquisition-root]:-}" "acquisition runner"
+      class_require_directory "${class_path_hosts[--stability-root]:-}" "stability root"
+      class_require_directory "${class_path_hosts[--workload-root]:-}" "workload root"
+      class_add_unique class_direct_rw_dirs "${class_path_hosts[--acquisition-root]}"
+      class_add_unique class_direct_rw_dirs "${class_path_hosts[--stability-root]}"
+      # Existing prepared workloads are immutable inputs.  Mount the parent
+      # writable only for atomic publication of a new canonical class, then
+      # rebind every pre-existing child read-only below.
+      class_add_unique class_guarded_rw_dirs "${class_path_hosts[--workload-root]}"
+      ;;
+    acquisition-complete)
+      class_require_directory "${class_path_hosts[--acquisition-root]:-}" "acquisition runner"
+      class_add_unique class_guarded_rw_dirs "${class_path_hosts[--acquisition-root]}"
+      ;;
+    stability)
+      if [[ -n "${class_path_hosts[--stability-input]:-}" ]]; then
+        class_require_directory "${class_path_hosts[--stability-root]:-}" "stability root"
+        class_add_unique class_direct_rw_dirs "${class_path_hosts[--stability-root]}"
+      fi
+      ;;
+    cohort)
+      class_require_output_parent "${class_path_hosts[--cohort]:-}" "cohort receipt"
+      class_require_output_parent "${class_path_hosts[--cohort-assembly]:-}" "cohort assembly"
+      class_add_unique class_guarded_rw_dirs "$(dirname "${class_path_hosts[--cohort]}")"
+      class_add_unique class_guarded_rw_dirs "$(dirname "${class_path_hosts[--cohort-assembly]}")"
+      if [[ -n "${class_path_hosts[--final-selection]:-}" ]]; then
+        class_require_output_parent "${class_path_hosts[--final-selection]}" "final-selection receipt"
+        class_add_unique class_guarded_rw_dirs "$(dirname "${class_path_hosts[--final-selection]}")"
+      fi
+      ;;
+    campaigns)
+      class_require_directory "${class_path_hosts[--campaign-root]:-}" "campaign root"
+      class_add_unique class_guarded_rw_dirs "${class_path_hosts[--campaign-root]}"
+      ;;
+    fit-numeric|prefix-specs|finalize-fitting)
+      class_require_directory "${class_path_hosts[--artifacts-root]:-}" "artifact root"
+      class_add_unique class_guarded_rw_dirs "${class_path_hosts[--artifacts-root]}"
+      ;;
+    qualify-prefix)
+      if [[ -z "${class_path_hosts[--foundation-attestation]:-}" ||
+            -L "${class_path_hosts[--foundation-attestation]:-}" ||
+            ! -f "${class_path_hosts[--foundation-attestation]:-}" ]]; then
+        echo "class-study qualify-prefix requires --foundation-attestation as a regular file" >&2
+        exit 2
+      fi
+      class_require_directory "${class_path_hosts[--qualification-sidecar-root]:-}" "qualification sidecar root"
+      class_require_directory "${class_path_hosts[--qualification-publication-root]:-}" "qualification publication root"
+      class_require_output_parent "${class_path_hosts[--qualification-checkpoint]:-}" "qualification checkpoint"
+      class_add_unique class_guarded_rw_dirs "${class_path_hosts[--qualification-sidecar-root]}"
+      class_add_unique class_guarded_rw_dirs "${class_path_hosts[--qualification-publication-root]}"
+      class_add_unique class_guarded_rw_dirs "$(dirname "${class_path_hosts[--qualification-checkpoint]}")"
+      if [[ -f "${class_path_hosts[--qualification-checkpoint]}" &&
+            ! -L "${class_path_hosts[--qualification-checkpoint]}" ]]; then
+        class_add_unique class_rw_files "${class_path_hosts[--qualification-checkpoint]}"
+      fi
+      ;;
+    capture)
+      if (( class_study_execute )); then
+        class_require_directory "${class_path_hosts[--results-root]:-}" "results root"
+        if [[ "${class_path_hosts[--results-root]}" != "${ROOT}/results" ]]; then
+          echo "class-study execution requires the canonical Lab results root" >&2
+          exit 2
+        fi
+        class_add_unique class_direct_rw_dirs "${ROOT}/results"
+      fi
+      ;;
+    resume)
+      if (( class_study_execute )); then
+        class_require_directory "${class_path_hosts[--capture-result]:-}" "capture result"
+        class_add_unique class_direct_rw_dirs "${class_path_hosts[--capture-result]}"
+      fi
+      ;;
+    export|evaluate|foundation|readiness|historical-snapshot|attest|successor-policy|successor-decision)
+      class_require_output_parent "${class_path_hosts[--destination]:-}" "destination"
+      class_add_unique class_guarded_rw_dirs "$(dirname "${class_path_hosts[--destination]}")"
+      if [[ "${class_study_action}" == "evaluate" &&
+            -n "${class_path_hosts[--dlsvm-cache-directory]:-}" ]]; then
+        class_cache="${class_path_hosts[--dlsvm-cache-directory]}"
+        if [[ -e "${class_cache}" ]]; then
+          class_require_directory "${class_cache}" "DLSVM cache"
+          class_add_unique class_direct_rw_dirs "${class_cache}"
+        else
+          class_require_directory "$(dirname "${class_cache}")" "DLSVM cache parent"
+          class_add_unique class_guarded_rw_dirs "$(dirname "${class_cache}")"
+        fi
+      fi
+      ;;
+    successor-restart)
+      class_successor_restart="${class_path_hosts[--destination]:-}"
+      class_require_output_parent "${class_successor_restart}" "successor restart"
+      if [[ -e "${class_successor_restart}" ]]; then
+        class_require_directory "${class_successor_restart}" "successor restart"
+        class_add_unique class_direct_rw_dirs "${class_successor_restart}"
+      else
+        class_add_unique class_guarded_rw_dirs "$(dirname "${class_successor_restart}")"
+      fi
+      ;;
+    comparison-review)
+      if [[ -n "${class_path_hosts[--comparison-review-input]:-}" ]]; then
+        class_require_output_parent "${class_path_hosts[--destination]:-}" "destination"
+        class_add_unique class_guarded_rw_dirs "$(dirname "${class_path_hosts[--destination]}")"
+      fi
+      ;;
+  esac
+fi
+
+class_resume_environment=""
+if [[ "${1:-}" == "class-study" &&
+      "${class_study_action}" == "qualify-prefix" ]]; then
+  class_foundation_path="${class_path_hosts[--foundation-attestation]}"
+  mapfile -t class_qualification_fields < <(
+    python3 -c '
+import hashlib, json, os, re, sys
+from pathlib import Path
+
+root = Path(sys.argv[1]).resolve()
+foundation_path = Path(sys.argv[2])
+
+def canonical(value):
+    return (json.dumps(value, indent=2, sort_keys=True, allow_nan=False) + "\n").encode()
+
+def under_root(raw):
+    text = str(raw)
+    candidate = root / text.removeprefix("/lab/") if text.startswith("/lab/") else Path(text)
+    if not candidate.is_absolute():
+        candidate = root / candidate
+    unresolved = Path(os.path.abspath(candidate))
+    try:
+        unresolved.relative_to(root)
+    except ValueError:
+        raise SystemExit("class-study foundation build receipt is outside the Lab root")
+    cursor = root
+    for part in unresolved.relative_to(root).parts:
+        cursor /= part
+        if cursor.is_symlink():
+            raise SystemExit(f"class-study foundation build path traverses a symlink: {cursor}")
+    if not unresolved.is_file():
+        raise SystemExit("class-study foundation build receipt is not a regular file")
+    return unresolved
+
+foundation_raw = foundation_path.read_bytes()
+foundation = json.loads(foundation_raw)
+if (
+    set(foundation) != {"schema_version", "receipt_type", "payload_sha256", "payload"}
+    or foundation.get("schema_version") != 1
+    or foundation.get("receipt_type") != "qcsd-class-study-foundation-attestation"
+    or not isinstance(foundation.get("payload"), dict)
+    or foundation.get("payload_sha256")
+       != hashlib.sha256(canonical(foundation["payload"])).hexdigest()
+):
+    raise SystemExit("class-study foundation attestation envelope is invalid")
+payload = foundation["payload"]
+evidence = payload.get("evidence")
+binding = evidence.get("build_execution") if isinstance(evidence, dict) else None
+if (
+    not isinstance(binding, dict)
+    or set(binding) != {"path", "sha256"}
+    or re.fullmatch(r"[0-9a-f]{64}", str(binding.get("sha256"))) is None
+):
+    raise SystemExit("class-study foundation build binding is invalid")
+build_path = under_root(binding.get("path"))
+build_raw = build_path.read_bytes()
+if hashlib.sha256(build_raw).hexdigest() != binding["sha256"]:
+    raise SystemExit("class-study foundation build receipt digest changed")
+build = json.loads(build_raw)
+claimed = build.get("payload_sha256")
+unsigned = dict(build)
+unsigned.pop("payload_sha256", None)
+actual = hashlib.sha256(
+    json.dumps(unsigned, sort_keys=True, separators=(",", ":")).encode()
+).hexdigest()
+images = build.get("images")
+source = build.get("source")
+prepare = images.get("prepare") if isinstance(images, dict) else None
+prepare_id = prepare.get("id") if isinstance(prepare, dict) else None
+foundation_source = payload.get("source")
+identity = payload.get("build_execution_identity")
+if (
+    build.get("schema_version") != 1
+    or build.get("artifact_type") != "qcsd-buflo-study-no-cache-build-execution"
+    or claimed != actual
+    or not isinstance(images, dict)
+    or set(images) != {"collection", "prepare", "reference"}
+    or re.fullmatch(r"sha256:[0-9a-f]{64}", str(prepare_id)) is None
+    or not isinstance(source, dict)
+    or source != foundation_source
+    or not isinstance(identity, dict)
+    or identity.get("sha256") != binding["sha256"]
+    or identity.get("collection_image") != source.get("image_digest")
+):
+    raise SystemExit("class-study foundation prepare build identity is invalid")
+print(prepare_id)
+' "${ROOT}" "${class_foundation_path}"
+  )
+  if (( ${#class_qualification_fields[@]} != 1 )); then
+    echo "class-study foundation prepare build identity is invalid" >&2
+    exit 1
+  fi
+  if [[ -n "${QCSD_LAB_PREPARE_IMAGE:-}" &&
+        "${QCSD_LAB_PREPARE_IMAGE}" != "${class_qualification_fields[0]}" ]]; then
+    echo "class-study qualify-prefix rejects QCSD_LAB_PREPARE_IMAGE that differs from foundation" >&2
+    exit 2
+  fi
+  PREPARE_IMAGE="${class_qualification_fields[0]}"
+elif [[ "${1:-}" == "class-study" && "${class_study_execute}" == "1" &&
+      "${class_study_action}" == "capture" ]]; then
+  study_build_execution_path="${class_path_hosts[--build-execution-receipt]:-}"
+  if [[ -z "${study_build_execution_path}" || -L "${study_build_execution_path}" ||
+        ! -f "${study_build_execution_path}" ]]; then
+    echo "class-study capture requires --build-execution-receipt as a regular file" >&2
+    exit 2
+  fi
+  mapfile -t class_build_fields < <(
+    python3 -c '
+import hashlib, json, re, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+raw = path.read_bytes()
+value = json.loads(raw)
+payload = dict(value)
+claimed = payload.pop("payload_sha256", None)
+actual = hashlib.sha256(
+    json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+).hexdigest()
+images = value.get("images")
+source = value.get("source")
+if (
+    value.get("schema_version") != 1
+    or value.get("artifact_type") != "qcsd-buflo-study-no-cache-build-execution"
+    or claimed != actual
+    or not isinstance(images, dict)
+    or set(images) != {"collection", "prepare", "reference"}
+    or not isinstance(source, dict)
+):
+    raise SystemExit("class-study build execution receipt is invalid")
+ids = []
+for target in ("collection", "prepare", "reference"):
+    record = images[target]
+    image_id = record.get("id") if isinstance(record, dict) else None
+    if re.fullmatch(r"sha256:[0-9a-f]{64}", str(image_id)) is None:
+        raise SystemExit("class-study build image binding is invalid")
+    ids.append(image_id)
+if source.get("image_digest") != ids[0]:
+    raise SystemExit("class-study build source differs from its collection image")
+print(hashlib.sha256(raw).hexdigest())
+print(*ids, sep="\n")
+' "${study_build_execution_path}"
+  )
+  if (( ${#class_build_fields[@]} != 4 )); then
+    echo "class-study build execution receipt is invalid" >&2
+    exit 1
+  fi
+  study_build_execution_sha256="${class_build_fields[0]}"
+  COLLECTION_IMAGE="${class_build_fields[1]}"
+  PREPARE_IMAGE="${class_build_fields[2]}"
+  REFERENCE_IMAGE="${class_build_fields[3]}"
+elif [[ "${1:-}" == "class-study" && "${class_study_execute}" == "1" &&
+        "${class_study_action}" == "resume" ]]; then
+  class_resume_environment="${class_path_hosts[--capture-result]}/inputs/study-environment.json"
+  if [[ -L "${class_resume_environment}" || ! -f "${class_resume_environment}" ]]; then
+    echo "class-study resume requires its frozen Docker environment receipt" >&2
+    exit 1
+  fi
+  COLLECTION_IMAGE="$(
+    python3 -c '
+import json, re, sys
+value = json.load(open(sys.argv[1], encoding="utf-8"))
+image = value.get("collection_image", {}).get("id")
+if re.fullmatch(r"sha256:[0-9a-f]{64}", str(image)) is None:
+    raise SystemExit("class-study frozen environment image binding is invalid")
+print(image)
+' "${class_resume_environment}"
+  )"
+fi
+
 case "${1:-}" in
   prepare|derive-chaff-prefix-specs|qualify-chaff|qualify-response-chaff) image="${PREPARE_IMAGE}" ;;
-  run|resume|verify|analyze|fit|buflo-study|test) image="${COLLECTION_IMAGE}" ;;
+  run|resume|verify|analyze|fit|buflo-study|class-study|test) image="${COLLECTION_IMAGE}" ;;
   *) usage; exit 2 ;;
 esac
 if [[ "${1:-}" == "buflo-study" && "${2:-}" == "reference" ]]; then
   image="${REFERENCE_IMAGE}"
+fi
+if [[ "${1:-}" == "class-study" &&
+      ( "${class_study_action}" == "qualify-prefix" ||
+        "${class_study_action}" == acquisition-* ) ]]; then
+  image="${PREPARE_IMAGE}"
 fi
 
 if ! docker image inspect "${image}" >/dev/null 2>&1; then
@@ -545,7 +1412,9 @@ if [[ "${1:-}" == "buflo-study" && "${2:-}" == "reference" ]]; then
   )
 fi
 
-if [[ "${1:-}" == "derive-chaff-prefix-specs" ||
+if [[ "${1:-}" == "class-study" ]]; then
+  : # Every class-study input/output root must already be explicit.
+elif [[ "${1:-}" == "derive-chaff-prefix-specs" ||
       "${1:-}" == "qualify-chaff" ||
       "${1:-}" == "qualify-response-chaff" ||
       "${1:-}" == "fit" ]]; then
@@ -570,7 +1439,55 @@ else
 fi
 image_id="$(docker image inspect --format '{{.Id}}' "${image}")"
 buflo_host_lock_fd=""
+class_host_lock_fd=""
+class_acquisition_lock_fd=""
+if [[ "${1:-}" == "class-study" && "${class_study_execute}" == "1" &&
+      ( "${class_study_action}" == "capture" ||
+        "${class_study_action}" == "resume" ) ]]; then
+  command -v flock >/dev/null 2>&1 || {
+    echo "class-study capture requires flock on the host" >&2
+    exit 1
+  }
+  class_lock_root="${ROOT}/results"
+  if [[ "${class_study_action}" == "resume" ]]; then
+    class_resume_root="${class_path_hosts[--capture-result]:-}"
+    if [[ -z "${class_resume_root}" || "${class_resume_root}" != "${ROOT}/results/"* ]]; then
+      echo "class-study resume requires a result beneath results/" >&2
+      exit 2
+    fi
+    class_lock_root="${ROOT}/results"
+  elif [[ "${class_path_hosts[--results-root]:-}" != "${ROOT}/results" ]]; then
+    echo "class-study capture results root must be the canonical results/ directory" >&2
+    exit 2
+  fi
+  class_require_directory "${class_lock_root}" "capture lock root"
+  # Share the same host-visible lock as every direct/BuFLO study launch.  The
+  # marker environment variable below tells the in-container orchestrator not
+  # to lock the descriptor a second time.
+  class_lock_path="${class_lock_root}/.buflo-study-v1.capture.lock"
+  if [[ -L "${class_lock_path}" ]]; then
+    echo "class-study capture lock cannot be a symlink" >&2
+    exit 1
+  fi
+  exec {class_host_lock_fd}>"${class_lock_path}"
+  if ! flock -n "${class_host_lock_fd}"; then
+    echo "another class-study capture or resume holds the global lock" >&2
+    exit 1
+  fi
+fi
+if [[ "${1:-}" == "class-study" &&
+      ( "${class_study_action}" == "acquisition-run" ||
+        "${class_study_action}" == "acquisition-status" ||
+        "${class_study_action}" == "acquisition-complete" ) ]]; then
+  class_acquisition_lock_root="${class_path_hosts[--acquisition-root]:-}"
+  class_acquire_acquisition_lock "${class_acquisition_lock_root}" || exit 1
+fi
 study_capture_scheduler_contract=""
+if [[ "${1:-}" == "class-study" && "${class_study_execute}" == "1" &&
+      ( "${class_study_action}" == "capture" ||
+        "${class_study_action}" == "resume" ) ]]; then
+  study_capture_scheduler_contract="qcsd-client-rr1-cpu10-v1"
+fi
 if [[ ( "${1:-}" == "buflo-study" && "${2:-}" == "capture" ) ||
       ( "${1:-}" == "run" &&
         "${study_campaign_name}" =~ ^buflo-study-v1-(smoke|rehearsal|formal-[0-9]{2})\.yml$ ) ||
@@ -592,11 +1509,23 @@ if [[ ( "${1:-}" == "buflo-study" && "${2:-}" == "capture" ) ||
   fi
 fi
 study_environment_b64=""
+if [[ "${1:-}" == "class-study" && "${class_study_execute}" == "1" &&
+      "${class_study_action}" == "resume" ]]; then
+  study_environment_b64="$(
+    python3 -c '
+import base64, sys
+from pathlib import Path
+print(base64.b64encode(Path(sys.argv[1]).read_bytes()).decode())
+' "${class_resume_environment}"
+  )"
+fi
 if [[ ( "${1:-}" == "run" &&
         "${study_campaign_name}" =~ ^buflo-study-v1-(smoke|rehearsal|formal-[0-9]{2})\.yml$ ) ||
-      ( "${1:-}" == "buflo-study" && "${2:-}" == "capture" ) ]]; then
+      ( "${1:-}" == "buflo-study" && "${2:-}" == "capture" ) ||
+      ( "${1:-}" == "class-study" && "${class_study_execute}" == "1" &&
+        "${class_study_action}" == "capture" ) ]]; then
   if [[ -L "${study_build_execution_path}" || ! -f "${study_build_execution_path}" ]]; then
-    echo "public BuFLO study capture requires the create-only no-cache build receipt" >&2
+    echo "research capture requires the create-only no-cache build receipt" >&2
     exit 1
   fi
   study_build_execution="$(/bin/cat "${study_build_execution_path}")"
@@ -927,15 +1856,38 @@ fi
 if [[ "${1:-}" == "fit" ]]; then
   verify_fit_neqo_checkout
 fi
+if [[ "${1:-}" == "class-study" &&
+      ( ( "${class_study_action}" == "qualify-prefix" &&
+          "${class_study_live}" == "1" ) ||
+        "${class_study_action}" == "acquisition-init" ||
+        "${class_study_action}" == "acquisition-run" ||
+        "${class_study_action}" == "acquisition-status" ||
+        "${class_study_action}" == "acquisition-complete" ||
+        ( ( "${class_study_action}" == "capture" ||
+            "${class_study_action}" == "resume" ) &&
+          "${class_study_execute}" == "1" ) ) ]]; then
+  verify_qualification_checkout "class-study ${class_study_action}"
+fi
 runtime=(--rm --security-opt no-new-privileges)
 network_mode="bridge"
 if [[ "${1:-}" == "fit" || "${1:-}" == "derive-chaff-prefix-specs" ||
-      ( "${1:-}" == "buflo-study" && "${2:-}" == "reference" ) ]]; then
+      ( "${1:-}" == "buflo-study" && "${2:-}" == "reference" ) ||
+      ( "${1:-}" == "class-study" &&
+        "${class_study_action}" != "acquisition-run" &&
+        ! ( "${class_study_action}" == "qualify-prefix" &&
+            "${class_study_live}" == "1" ) &&
+        ! ( ( "${class_study_action}" == "capture" ||
+              "${class_study_action}" == "resume" ) &&
+            "${class_study_execute}" == "1" ) ) ]]; then
   network_mode="none"
 fi
 if [[ "${1:-}" == "prepare" || "${1:-}" == "derive-chaff-prefix-specs" ||
       ( "${1:-}" == "buflo-study" && "${2:-}" == "reference" ) ||
-      "${1:-}" == "qualify-chaff" || "${1:-}" == "qualify-response-chaff" ]]; then
+      "${1:-}" == "qualify-chaff" || "${1:-}" == "qualify-response-chaff" ||
+      ( "${1:-}" == "class-study" &&
+        ! ( ( "${class_study_action}" == "capture" ||
+              "${class_study_action}" == "resume" ) &&
+            "${class_study_execute}" == "1" ) ) ]]; then
   runtime+=(--user "$(id -u):$(id -g)")
 else
   runtime+=(
@@ -958,6 +1910,58 @@ container=(
   --env "QCSD_LAB_IMAGE_DIGEST=${image_id}"
   --volume "${ROOT}:/lab:ro"
 )
+if [[ "${1:-}" == "class-study" &&
+      "${class_study_action}" == "acquisition-run" ]]; then
+  container+=(
+    --name "qcsd-classifier-multiorigin100-v1-acquisition-run"
+    --label "org.qcsd.study=classifier-multiorigin100-v1"
+    --label "org.qcsd.role=acquisition-run"
+    --label "org.qcsd.acquisition-root=/lab/artifacts/classifier-multiorigin100-v1-acquisition"
+    --label "org.qcsd.image-id=${image_id}"
+  )
+fi
+if [[ "${1:-}" == "class-study" ]]; then
+  for class_write_root in "${class_guarded_rw_dirs[@]:-}"; do
+    [[ -n "${class_write_root}" ]] || continue
+    class_require_directory "${class_write_root}" "writable output root"
+    if [[ "${class_write_root}" == "${ROOT}" ]]; then
+      echo "class-study rejects a blanket workspace read-write mount" >&2
+      exit 2
+    fi
+    class_write_container="$(class_container_path "${class_write_root}")"
+    container+=(--volume "${class_write_root}:${class_write_container}:rw")
+    while IFS= read -r -d '' class_existing_child; do
+      if [[ -L "${class_existing_child}" ]]; then
+        echo "class-study guarded output root contains a symlink: ${class_existing_child}" >&2
+        exit 1
+      fi
+      class_existing_name="${class_existing_child##*/}"
+      if [[ ! "${class_existing_name}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+        echo "class-study rejects unsafe existing output name: ${class_existing_name}" >&2
+        exit 1
+      fi
+      class_existing_container="$(class_container_path "${class_existing_child}")"
+      container+=(--volume "${class_existing_child}:${class_existing_container}:ro")
+    done < <(find "${class_write_root}" -mindepth 1 -maxdepth 1 -print0)
+  done
+  for class_write_root in "${class_direct_rw_dirs[@]:-}"; do
+    [[ -n "${class_write_root}" ]] || continue
+    class_require_directory "${class_write_root}" "direct writable root"
+    container+=(
+      --volume "${class_write_root}:$(class_container_path "${class_write_root}"):rw"
+    )
+  done
+  for class_write_file in "${class_rw_files[@]:-}"; do
+    [[ -n "${class_write_file}" ]] || continue
+    if [[ ! -f "${class_write_file}" || -L "${class_write_file}" ]]; then
+      echo "class-study writable checkpoint must be a regular file" >&2
+      exit 1
+    fi
+    container+=(
+      --volume "${class_write_file}:$(class_container_path "${class_write_file}"):rw"
+    )
+  done
+fi
 if [[ -n "${study_capture_scheduler_contract}" ]]; then
   container+=(
     --env "QCSD_CAPTURE_SCHEDULER_CONTRACT=${study_capture_scheduler_contract}"
@@ -971,6 +1975,41 @@ if [[ -n "${study_capture_admission_container}" ]]; then
 fi
 if [[ -n "${buflo_host_lock_fd}" ]]; then
   container+=(--env "QCSD_BUFLO_CAPTURE_LOCK_HELD=1")
+fi
+if [[ -n "${class_host_lock_fd}" &&
+      "${class_study_execute}" == "1" &&
+      ( "${class_study_action}" == "capture" ||
+        "${class_study_action}" == "resume" ) ]]; then
+  container+=(--env "QCSD_CLASS_CAPTURE_LOCK_HELD=1")
+fi
+if [[ "${1:-}" == "class-study" &&
+      ( "${class_study_action}" == "capture" ||
+        "${class_study_action}" == "resume" ) ]]; then
+  if [[ -n "${class_path_hosts[--readiness-attestation]:-}" ]]; then
+    container+=(
+      --env "QCSD_CLASS_READINESS_ATTESTATION=$(class_container_path "${class_path_hosts[--readiness-attestation]}")"
+    )
+  fi
+  if [[ -n "${class_path_hosts[--foundation-attestation]:-}" ]]; then
+    container+=(
+      --env "QCSD_CLASS_FOUNDATION_ATTESTATION=$(class_container_path "${class_path_hosts[--foundation-attestation]}")"
+    )
+  fi
+  if [[ -n "${class_path_hosts[--historical-pre-snapshot]:-}" ]]; then
+    container+=(
+      --env "QCSD_CLASS_HISTORICAL_PRE_SNAPSHOT=$(class_container_path "${class_path_hosts[--historical-pre-snapshot]}")"
+    )
+  fi
+fi
+if [[ "${1:-}" == "class-study" &&
+      ( "${class_study_action}" == "acquisition-run" ||
+        "${class_study_action}" == "qualify-prefix" ||
+        "${class_study_action}" == "capture" ||
+        "${class_study_action}" == "resume" ) ]]; then
+  # The Rust runner resolves once and connects to that exact address; this
+  # policy rejects any private/reserved answer before a public-study socket is
+  # created.  Chromium additionally receives per-origin resolver pins.
+  container+=(--env "QCSD_PUBLIC_ORIGIN_ONLY=1")
 fi
 if [[ "${QCSD_BUFLO_QUALIFY_CONTROLLED_ONLY:-0}" == "1" ]]; then
   container+=(--env "QCSD_BUFLO_QUALIFY_CONTROLLED_ONLY=1")
@@ -990,6 +2029,11 @@ if [[ "${1:-}" == "run" &&
 fi
 if [[ ( "${1:-}" == "buflo-study" && "${2:-}" == "capture" ) ||
       "${study_resume_public}" == "1" ]]; then
+  container+=(--env "QCSD_STUDY_NETWORK_CONDITION=public-docker-bridge-no-netem")
+fi
+if [[ "${1:-}" == "class-study" && "${class_study_execute}" == "1" &&
+      ( "${class_study_action}" == "capture" ||
+        "${class_study_action}" == "resume" ) ]]; then
   container+=(--env "QCSD_STUDY_NETWORK_CONDITION=public-docker-bridge-no-netem")
 fi
 if [[ "${1:-}" == "buflo-study" && "${2:-}" == "reference" ]]; then
@@ -1866,6 +2910,19 @@ fi
 
 if [[ "${1:-}" == "buflo-study" && "${2:-}" == "reference" ]]; then
   exec "${container[@]}" "${image_id}" "${reference_container_args[@]}"
+fi
+
+if [[ "${1:-}" == "class-study" ]]; then
+  if [[ "${class_study_action}" == "acquisition-run" ||
+        "${class_study_action}" == "acquisition-status" ||
+        "${class_study_action}" == "acquisition-complete" ]]; then
+    set +e
+    "${container[@]}" "${image_id}" "${class_container_args[@]}"
+    class_acquisition_status=$?
+    set -e
+    exit "${class_acquisition_status}"
+  fi
+  exec "${container[@]}" "${image_id}" "${class_container_args[@]}"
 fi
 
 exec "${container[@]}" "${image_id}" "$@"

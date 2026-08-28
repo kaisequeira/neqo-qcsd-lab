@@ -1,0 +1,4251 @@
+{
+  "payload": {
+    "candidates": [
+      {
+        "candidate_id": "tranco-0000697",
+        "domain": "consultant.ru",
+        "eligible": false,
+        "rank": 697,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000984",
+        "domain": "elmundo.es",
+        "eligible": false,
+        "rank": 984,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000837",
+        "domain": "msftauth.net",
+        "eligible": false,
+        "rank": 837,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000553",
+        "domain": "tandfonline.com",
+        "eligible": false,
+        "rank": 553,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000632",
+        "domain": "bidswitch.net",
+        "eligible": false,
+        "rank": 632,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000220",
+        "domain": "gmail.com",
+        "eligible": false,
+        "rank": 220,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000476",
+        "domain": "dual-s-msedge.net",
+        "eligible": false,
+        "rank": 476,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000628",
+        "domain": "360.cn",
+        "eligible": false,
+        "rank": 628,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000280",
+        "domain": "amplitude.com",
+        "eligible": false,
+        "rank": 280,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000709",
+        "domain": "wps.com",
+        "eligible": false,
+        "rank": 709,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000847",
+        "domain": "deepl.com",
+        "eligible": false,
+        "rank": 847,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000735",
+        "domain": "ring.com",
+        "eligible": false,
+        "rank": 735,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000674",
+        "domain": "twimg.com",
+        "eligible": false,
+        "rank": 674,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000123",
+        "domain": "criteo.com",
+        "eligible": false,
+        "rank": 123,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000844",
+        "domain": "cloudsink.net",
+        "eligible": false,
+        "rank": 844,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000518",
+        "domain": "gosuslugi.ru",
+        "eligible": false,
+        "rank": 518,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000640",
+        "domain": "britannica.com",
+        "eligible": false,
+        "rank": 640,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000966",
+        "domain": "tplinknbu.com",
+        "eligible": false,
+        "rank": 966,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000970",
+        "domain": "pccc.com",
+        "eligible": false,
+        "rank": 970,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000211",
+        "domain": "adsafeprotected.com",
+        "eligible": false,
+        "rank": 211,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000588",
+        "domain": "hotjar.com",
+        "eligible": false,
+        "rank": 588,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000223",
+        "domain": "cdngslb.com",
+        "eligible": false,
+        "rank": 223,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000195",
+        "domain": "theguardian.com",
+        "eligible": false,
+        "rank": 195,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000087",
+        "domain": "openai.com",
+        "eligible": false,
+        "rank": 87,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000683",
+        "domain": "footprintdns.com",
+        "eligible": false,
+        "rank": 683,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000727",
+        "domain": "creativecdn.com",
+        "eligible": false,
+        "rank": 727,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000954",
+        "domain": "xnxx.com",
+        "eligible": false,
+        "rank": 954,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000978",
+        "domain": "umich.edu",
+        "eligible": false,
+        "rank": 978,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000073",
+        "domain": "nginx.org",
+        "eligible": false,
+        "rank": 73,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000737",
+        "domain": "browser-intake-datadoghq.com",
+        "eligible": false,
+        "rank": 737,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000728",
+        "domain": "bandcamp.com",
+        "eligible": false,
+        "rank": 728,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000678",
+        "domain": "optimizely.com",
+        "eligible": false,
+        "rank": 678,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000197",
+        "domain": "creativecommons.org",
+        "eligible": false,
+        "rank": 197,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000602",
+        "domain": "wix.com",
+        "eligible": false,
+        "rank": 602,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000088",
+        "domain": "gwfb.net",
+        "eligible": false,
+        "rank": 88,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000516",
+        "domain": "google.com.hk",
+        "eligible": false,
+        "rank": 516,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000008",
+        "domain": "youtube.com",
+        "eligible": false,
+        "rank": 8,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000901",
+        "domain": "ys7.com",
+        "eligible": false,
+        "rank": 901,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000976",
+        "domain": "btloader.com",
+        "eligible": false,
+        "rank": 976,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000094",
+        "domain": "samsung.com",
+        "eligible": false,
+        "rank": 94,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000563",
+        "domain": "deviantart.com",
+        "eligible": false,
+        "rank": 563,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000115",
+        "domain": "outlook.com",
+        "eligible": false,
+        "rank": 115,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000748",
+        "domain": "ted.com",
+        "eligible": false,
+        "rank": 748,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000192",
+        "domain": "cnn.com",
+        "eligible": false,
+        "rank": 192,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000927",
+        "domain": "epam.com",
+        "eligible": false,
+        "rank": 927,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000055",
+        "domain": "icloud.com",
+        "eligible": false,
+        "rank": 55,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000801",
+        "domain": "prnewswire.com",
+        "eligible": false,
+        "rank": 801,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0001000",
+        "domain": "costco.com",
+        "eligible": false,
+        "rank": 1000,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000589",
+        "domain": "ca.gov",
+        "eligible": false,
+        "rank": 589,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000113",
+        "domain": "okcdn.ru",
+        "eligible": false,
+        "rank": 113,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000883",
+        "domain": "biblegateway.com",
+        "eligible": false,
+        "rank": 883,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000143",
+        "domain": "dropbox.com",
+        "eligible": false,
+        "rank": 143,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000949",
+        "domain": "hm.com",
+        "eligible": false,
+        "rank": 949,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000799",
+        "domain": "ameblo.jp",
+        "eligible": false,
+        "rank": 799,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000279",
+        "domain": "mangosip.ru",
+        "eligible": false,
+        "rank": 279,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000256",
+        "domain": "adnxs.com",
+        "eligible": false,
+        "rank": 256,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000114",
+        "domain": "google-analytics.com",
+        "eligible": false,
+        "rank": 114,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000459",
+        "domain": "list-manage.com",
+        "eligible": false,
+        "rank": 459,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000393",
+        "domain": "demdex.net",
+        "eligible": false,
+        "rank": 393,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000275",
+        "domain": "msedge.net",
+        "eligible": false,
+        "rank": 275,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000121",
+        "domain": "afternic.com",
+        "eligible": false,
+        "rank": 121,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000575",
+        "domain": "uol.com.br",
+        "eligible": false,
+        "rank": 575,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000085",
+        "domain": "root-servers.net",
+        "eligible": false,
+        "rank": 85,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000224",
+        "domain": "ozon.ru",
+        "eligible": false,
+        "rank": 224,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000452",
+        "domain": "go.com",
+        "eligible": false,
+        "rank": 452,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000065",
+        "domain": "spotify.com",
+        "eligible": false,
+        "rank": 65,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000496",
+        "domain": "markmonitor.com",
+        "eligible": false,
+        "rank": 496,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000812",
+        "domain": "bunnyinfra.net",
+        "eligible": false,
+        "rank": 812,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000407",
+        "domain": "spaceweb.pro",
+        "eligible": false,
+        "rank": 407,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000521",
+        "domain": "run.app",
+        "eligible": false,
+        "rank": 521,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000659",
+        "domain": "pvp.net",
+        "eligible": false,
+        "rank": 659,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000132",
+        "domain": "dnsowl.com",
+        "eligible": false,
+        "rank": 132,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000436",
+        "domain": "businessinsider.com",
+        "eligible": false,
+        "rank": 436,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000184",
+        "domain": "azurewebsites.net",
+        "eligible": false,
+        "rank": 184,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000501",
+        "domain": "gcdn.co",
+        "eligible": false,
+        "rank": 501,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000882",
+        "domain": "mybluehost.me",
+        "eligible": false,
+        "rank": 882,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000167",
+        "domain": "applovin.com",
+        "eligible": false,
+        "rank": 167,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000959",
+        "domain": "jd.com",
+        "eligible": false,
+        "rank": 959,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000825",
+        "domain": "zpath.net",
+        "eligible": false,
+        "rank": 825,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000067",
+        "domain": "ntp.org",
+        "eligible": false,
+        "rank": 67,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000186",
+        "domain": "w3.org",
+        "eligible": false,
+        "rank": 186,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000753",
+        "domain": "criteo.net",
+        "eligible": false,
+        "rank": 753,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000526",
+        "domain": "vercel-dns-016.com",
+        "eligible": false,
+        "rank": 526,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000804",
+        "domain": "people.com",
+        "eligible": false,
+        "rank": 804,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000365",
+        "domain": "walmart.com",
+        "eligible": false,
+        "rank": 365,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000506",
+        "domain": "exp-tas.com",
+        "eligible": false,
+        "rank": 506,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000260",
+        "domain": "launchpad.net",
+        "eligible": false,
+        "rank": 260,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000889",
+        "domain": "jetbrains.com",
+        "eligible": false,
+        "rank": 889,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000072",
+        "domain": "cdninstagram.com",
+        "eligible": false,
+        "rank": 72,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000442",
+        "domain": "intel.com",
+        "eligible": false,
+        "rank": 442,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000723",
+        "domain": "uber.com",
+        "eligible": false,
+        "rank": 723,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000859",
+        "domain": "frontiersin.org",
+        "eligible": false,
+        "rank": 859,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000644",
+        "domain": "yelp.com",
+        "eligible": false,
+        "rank": 644,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000148",
+        "domain": "static.microsoft",
+        "eligible": false,
+        "rank": 148,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000074",
+        "domain": "akam.net",
+        "eligible": false,
+        "rank": 74,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000803",
+        "domain": "shopeemobile.com",
+        "eligible": false,
+        "rank": 803,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000277",
+        "domain": "forter.com",
+        "eligible": false,
+        "rank": 277,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000577",
+        "domain": "grammarly.com",
+        "eligible": false,
+        "rank": 577,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000938",
+        "domain": "mercadolibre.com.ar",
+        "eligible": false,
+        "rank": 938,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000169",
+        "domain": "3gppnetwork.org",
+        "eligible": false,
+        "rank": 169,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000236",
+        "domain": "sourceforge.net",
+        "eligible": false,
+        "rank": 236,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000028",
+        "domain": "azure.com",
+        "eligible": false,
+        "rank": 28,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000096",
+        "domain": "nginx.com",
+        "eligible": false,
+        "rank": 96,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000789",
+        "domain": "ozone.ru",
+        "eligible": false,
+        "rank": 789,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000964",
+        "domain": "corriere.it",
+        "eligible": false,
+        "rank": 964,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000900",
+        "domain": "sentinelone.net",
+        "eligible": false,
+        "rank": 900,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000160",
+        "domain": "tumblr.com",
+        "eligible": false,
+        "rank": 160,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000781",
+        "domain": "orderbox-dns.com",
+        "eligible": false,
+        "rank": 781,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000157",
+        "domain": "steamserver.net",
+        "eligible": false,
+        "rank": 157,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000048",
+        "domain": "skype.com",
+        "eligible": false,
+        "rank": 48,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000623",
+        "domain": "sharethrough.com",
+        "eligible": false,
+        "rank": 623,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000156",
+        "domain": "gravatar.com",
+        "eligible": false,
+        "rank": 156,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000425",
+        "domain": "openx.net",
+        "eligible": false,
+        "rank": 425,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000730",
+        "domain": "google.co.uk",
+        "eligible": false,
+        "rank": 730,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000557",
+        "domain": "cookielaw.org",
+        "eligible": false,
+        "rank": 557,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000320",
+        "domain": "crpt.ru",
+        "eligible": false,
+        "rank": 320,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000651",
+        "domain": "elpais.com",
+        "eligible": false,
+        "rank": 651,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000276",
+        "domain": "vecdnlb.com",
+        "eligible": false,
+        "rank": 276,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000717",
+        "domain": "openstreetmap.org",
+        "eligible": false,
+        "rank": 717,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0000262",
+        "domain": "meraki.com",
+        "eligible": false,
+        "rank": 262,
+        "stratum": "1-1000"
+      },
+      {
+        "candidate_id": "tranco-0009491",
+        "domain": "escortsandbabes.com.au",
+        "eligible": false,
+        "rank": 9491,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0005296",
+        "domain": "game8.co",
+        "eligible": false,
+        "rank": 5296,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0003185",
+        "domain": "likeevideo.ru",
+        "eligible": false,
+        "rank": 3185,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0005646",
+        "domain": "dbankcloud.eu",
+        "eligible": false,
+        "rank": 5646,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0004970",
+        "domain": "mx-ns.mx",
+        "eligible": false,
+        "rank": 4970,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0002747",
+        "domain": "minecraft.net",
+        "eligible": false,
+        "rank": 2747,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0005653",
+        "domain": "bmwgroup.com",
+        "eligible": false,
+        "rank": 5653,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0004630",
+        "domain": "189.cn",
+        "eligible": false,
+        "rank": 4630,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0008176",
+        "domain": "dagospia.com",
+        "eligible": false,
+        "rank": 8176,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0002816",
+        "domain": "dehasher.com",
+        "eligible": false,
+        "rank": 2816,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0008641",
+        "domain": "linksys.com",
+        "eligible": false,
+        "rank": 8641,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0009002",
+        "domain": "looti.net",
+        "eligible": false,
+        "rank": 9002,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0004672",
+        "domain": "icio.us",
+        "eligible": false,
+        "rank": 4672,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0005023",
+        "domain": "videotron.ca",
+        "eligible": false,
+        "rank": 5023,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0007176",
+        "domain": "rp-online.de",
+        "eligible": false,
+        "rank": 7176,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0003295",
+        "domain": "goodhousekeeping.com",
+        "eligible": false,
+        "rank": 3295,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0003637",
+        "domain": "clinicaltrials.gov",
+        "eligible": false,
+        "rank": 3637,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0007370",
+        "domain": "awsdns-14.net",
+        "eligible": false,
+        "rank": 7370,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0001495",
+        "domain": "joyclub.de",
+        "eligible": false,
+        "rank": 1495,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0002197",
+        "domain": "kde.org",
+        "eligible": false,
+        "rank": 2197,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0004613",
+        "domain": "picsart.com",
+        "eligible": false,
+        "rank": 4613,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0006505",
+        "domain": "sportinglife.com",
+        "eligible": false,
+        "rank": 6505,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0007553",
+        "domain": "sbisec.co.jp",
+        "eligible": false,
+        "rank": 7553,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0001935",
+        "domain": "sweb.ru",
+        "eligible": false,
+        "rank": 1935,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0006778",
+        "domain": "wikiloc.com",
+        "eligible": false,
+        "rank": 6778,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0001948",
+        "domain": "snapkit.com",
+        "eligible": false,
+        "rank": 1948,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0005639",
+        "domain": "nj.com",
+        "eligible": false,
+        "rank": 5639,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0002593",
+        "domain": "greenxh.live",
+        "eligible": false,
+        "rank": 2593,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0007941",
+        "domain": "amazon.sg",
+        "eligible": false,
+        "rank": 7941,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0009136",
+        "domain": "xxxtophd.com",
+        "eligible": false,
+        "rank": 9136,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0007469",
+        "domain": "basalam.com",
+        "eligible": false,
+        "rank": 7469,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0001134",
+        "domain": "spamhaus.org",
+        "eligible": false,
+        "rank": 1134,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0008358",
+        "domain": "xvideos.tube",
+        "eligible": false,
+        "rank": 8358,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0009044",
+        "domain": "widen.net",
+        "eligible": false,
+        "rank": 9044,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0004219",
+        "domain": "byte008.com",
+        "eligible": false,
+        "rank": 4219,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0009757",
+        "domain": "tnebnet.org",
+        "eligible": false,
+        "rank": 9757,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0006721",
+        "domain": "expediapartnercentral.com",
+        "eligible": false,
+        "rank": 6721,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0009564",
+        "domain": "banesconline.com",
+        "eligible": false,
+        "rank": 9564,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0009382",
+        "domain": "watchhentai.net",
+        "eligible": false,
+        "rank": 9382,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0007971",
+        "domain": "daily.co.jp",
+        "eligible": false,
+        "rank": 7971,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0004972",
+        "domain": "lnkdns.net",
+        "eligible": false,
+        "rank": 4972,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0009004",
+        "domain": "awsdns-20.co.uk",
+        "eligible": false,
+        "rank": 9004,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0006601",
+        "domain": "virginmedia.com",
+        "eligible": false,
+        "rank": 6601,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0004442",
+        "domain": "queniuiq.com",
+        "eligible": false,
+        "rank": 4442,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0008944",
+        "domain": "redporn.porn",
+        "eligible": false,
+        "rank": 8944,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0003164",
+        "domain": "profi.ru",
+        "eligible": false,
+        "rank": 3164,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0007115",
+        "domain": "hanime.tv",
+        "eligible": false,
+        "rank": 7115,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0004138",
+        "domain": "org.ru",
+        "eligible": false,
+        "rank": 4138,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0007991",
+        "domain": "doodle.com",
+        "eligible": false,
+        "rank": 7991,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0006432",
+        "domain": "very.co.uk",
+        "eligible": false,
+        "rank": 6432,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0008330",
+        "domain": "loveread.ec",
+        "eligible": false,
+        "rank": 8330,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0009317",
+        "domain": "claveunica.gob.cl",
+        "eligible": false,
+        "rank": 9317,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0003804",
+        "domain": "awsdns-48.com",
+        "eligible": false,
+        "rank": 3804,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0001196",
+        "domain": "aftonbladet.se",
+        "eligible": false,
+        "rank": 1196,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0007377",
+        "domain": "virgilio.it",
+        "eligible": false,
+        "rank": 7377,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0001263",
+        "domain": "pandora.com",
+        "eligible": false,
+        "rank": 1263,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0001712",
+        "domain": "kqbd.mobi",
+        "eligible": false,
+        "rank": 1712,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0008257",
+        "domain": "personal.com.ar",
+        "eligible": false,
+        "rank": 8257,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0001589",
+        "domain": "xxx18hot.com",
+        "eligible": false,
+        "rank": 1589,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0006952",
+        "domain": "work.ua",
+        "eligible": false,
+        "rank": 6952,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0006190",
+        "domain": "invisalign.com",
+        "eligible": false,
+        "rank": 6190,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0003111",
+        "domain": "vtex.com",
+        "eligible": false,
+        "rank": 3111,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0008815",
+        "domain": "google.im",
+        "eligible": false,
+        "rank": 8815,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0007495",
+        "domain": "rd.com",
+        "eligible": false,
+        "rank": 7495,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0001564",
+        "domain": "pussyboy.net",
+        "eligible": false,
+        "rank": 1564,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0009334",
+        "domain": "poznan.pl",
+        "eligible": false,
+        "rank": 9334,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0001309",
+        "domain": "e621.net",
+        "eligible": false,
+        "rank": 1309,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0004429",
+        "domain": "nanit.com",
+        "eligible": false,
+        "rank": 4429,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0005828",
+        "domain": "crazymaplestudios.com",
+        "eligible": false,
+        "rank": 5828,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0007423",
+        "domain": "jpn.com",
+        "eligible": false,
+        "rank": 7423,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0003779",
+        "domain": "salon.com",
+        "eligible": false,
+        "rank": 3779,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0008120",
+        "domain": "gn-dns.com",
+        "eligible": false,
+        "rank": 8120,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0003588",
+        "domain": "xtracloud.net",
+        "eligible": false,
+        "rank": 3588,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0005408",
+        "domain": "demonii.com",
+        "eligible": false,
+        "rank": 5408,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0003956",
+        "domain": "identrust.com",
+        "eligible": false,
+        "rank": 3956,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0005935",
+        "domain": "vidio.com",
+        "eligible": false,
+        "rank": 5935,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0003756",
+        "domain": "dnsv1.com",
+        "eligible": false,
+        "rank": 3756,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0007645",
+        "domain": "boomtrain.com",
+        "eligible": false,
+        "rank": 7645,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0007279",
+        "domain": "lansweeper.com",
+        "eligible": false,
+        "rank": 7279,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0002243",
+        "domain": "otm-r.com",
+        "eligible": false,
+        "rank": 2243,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0006765",
+        "domain": "svt.se",
+        "eligible": false,
+        "rank": 6765,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0007597",
+        "domain": "bigbadtoystore.com",
+        "eligible": false,
+        "rank": 7597,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0004631",
+        "domain": "amazon.com.tr",
+        "eligible": false,
+        "rank": 4631,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0002778",
+        "domain": "crazyegg.com",
+        "eligible": false,
+        "rank": 2778,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0006259",
+        "domain": "gemini.google",
+        "eligible": false,
+        "rank": 6259,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0008183",
+        "domain": "sexkomix2.com",
+        "eligible": false,
+        "rank": 8183,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0001043",
+        "domain": "huffpost.com",
+        "eligible": false,
+        "rank": 1043,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0008234",
+        "domain": "kavak.com",
+        "eligible": false,
+        "rank": 8234,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0004637",
+        "domain": "rg.ru",
+        "eligible": false,
+        "rank": 4637,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0004729",
+        "domain": "cometchat.io",
+        "eligible": false,
+        "rank": 4729,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0004956",
+        "domain": "kozow.com",
+        "eligible": false,
+        "rank": 4956,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0007639",
+        "domain": "dotloop.com",
+        "eligible": false,
+        "rank": 7639,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0002426",
+        "domain": "vkuseraudio.ru",
+        "eligible": false,
+        "rank": 2426,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0009361",
+        "domain": "starwars.com",
+        "eligible": false,
+        "rank": 9361,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0005208",
+        "domain": "pathofexile.com",
+        "eligible": false,
+        "rank": 5208,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0004784",
+        "domain": "hostgator.mx",
+        "eligible": false,
+        "rank": 4784,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0001171",
+        "domain": "gismeteo.ru",
+        "eligible": false,
+        "rank": 1171,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0004601",
+        "domain": "itsupport247.net",
+        "eligible": false,
+        "rank": 4601,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0004458",
+        "domain": "teacherspayteachers.com",
+        "eligible": false,
+        "rank": 4458,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0009394",
+        "domain": "amebaownd.com",
+        "eligible": false,
+        "rank": 9394,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0002539",
+        "domain": "urldefense.com",
+        "eligible": false,
+        "rank": 2539,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0005616",
+        "domain": "tractorsupply.com",
+        "eligible": false,
+        "rank": 5616,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0001210",
+        "domain": "dcinside.com",
+        "eligible": false,
+        "rank": 1210,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0002456",
+        "domain": "thexh.live",
+        "eligible": false,
+        "rank": 2456,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0005506",
+        "domain": "blogspot.ca",
+        "eligible": false,
+        "rank": 5506,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0006495",
+        "domain": "verkada-lan.com",
+        "eligible": false,
+        "rank": 6495,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0007060",
+        "domain": "chmfin.com",
+        "eligible": false,
+        "rank": 7060,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0004299",
+        "domain": "linklist.bio",
+        "eligible": false,
+        "rank": 4299,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0004868",
+        "domain": "kinoafisha.info",
+        "eligible": false,
+        "rank": 4868,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0009345",
+        "domain": "cv666.net",
+        "eligible": false,
+        "rank": 9345,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0006457",
+        "domain": "huoma-cname.shop",
+        "eligible": false,
+        "rank": 6457,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0009580",
+        "domain": "anichin.cafe",
+        "eligible": false,
+        "rank": 9580,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0004891",
+        "domain": "google.com.pg",
+        "eligible": false,
+        "rank": 4891,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0002249",
+        "domain": "evo-games.com",
+        "eligible": false,
+        "rank": 2249,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0005352",
+        "domain": "tripadvisor.es",
+        "eligible": false,
+        "rank": 5352,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0007036",
+        "domain": "dns.id",
+        "eligible": false,
+        "rank": 7036,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0006293",
+        "domain": "freebit.net",
+        "eligible": false,
+        "rank": 6293,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0009923",
+        "domain": "xn--72c0anj1fqy6jqa7ei.net",
+        "eligible": false,
+        "rank": 9923,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0002901",
+        "domain": "dc-telemetry.net",
+        "eligible": false,
+        "rank": 2901,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0008652",
+        "domain": "govee.com",
+        "eligible": false,
+        "rank": 8652,
+        "stratum": "1001-10000"
+      },
+      {
+        "candidate_id": "tranco-0067760",
+        "domain": "sportnews.bz",
+        "eligible": false,
+        "rank": 67760,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0018347",
+        "domain": "instyle.de",
+        "eligible": false,
+        "rank": 18347,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0063908",
+        "domain": "hdporn.gg",
+        "eligible": false,
+        "rank": 63908,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0087955",
+        "domain": "bankmuscatonline.com",
+        "eligible": false,
+        "rank": 87955,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0092246",
+        "domain": "bsf2020.com",
+        "eligible": false,
+        "rank": 92246,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0098193",
+        "domain": "peoplay.com",
+        "eligible": false,
+        "rank": 98193,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0013163",
+        "domain": "pinkoi.com",
+        "eligible": false,
+        "rank": 13163,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0095090",
+        "domain": "tmo.net",
+        "eligible": false,
+        "rank": 95090,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0089465",
+        "domain": "blankshirts.com",
+        "eligible": false,
+        "rank": 89465,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0045162",
+        "domain": "global-ic.net",
+        "eligible": false,
+        "rank": 45162,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0025022",
+        "domain": "iyf.tv",
+        "eligible": false,
+        "rank": 25022,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0042570",
+        "domain": "websocket.org",
+        "eligible": false,
+        "rank": 42570,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0075227",
+        "domain": "gr-wcon.com",
+        "eligible": false,
+        "rank": 75227,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0032552",
+        "domain": "ohiolottery.com",
+        "eligible": false,
+        "rank": 32552,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0083991",
+        "domain": "k-hentai.org",
+        "eligible": false,
+        "rank": 83991,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0034939",
+        "domain": "softgarden.io",
+        "eligible": false,
+        "rank": 34939,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0013252",
+        "domain": "avvo.com",
+        "eligible": false,
+        "rank": 13252,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0067143",
+        "domain": "animalsexporn.net",
+        "eligible": false,
+        "rank": 67143,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0085947",
+        "domain": "pc6.com",
+        "eligible": false,
+        "rank": 85947,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0035566",
+        "domain": "doabooks.org",
+        "eligible": false,
+        "rank": 35566,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0010742",
+        "domain": "umweltbundesamt.de",
+        "eligible": false,
+        "rank": 10742,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0023328",
+        "domain": "care2.com",
+        "eligible": false,
+        "rank": 23328,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0054794",
+        "domain": "anticaptcha.net",
+        "eligible": false,
+        "rank": 54794,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0059010",
+        "domain": "incredibuild.com",
+        "eligible": false,
+        "rank": 59010,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0087505",
+        "domain": "netorn.net",
+        "eligible": false,
+        "rank": 87505,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0089948",
+        "domain": "onlineksrtcswift.com",
+        "eligible": false,
+        "rank": 89948,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0080435",
+        "domain": "poki-gdn.com",
+        "eligible": false,
+        "rank": 80435,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0047478",
+        "domain": "orpi.com",
+        "eligible": false,
+        "rank": 47478,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0084695",
+        "domain": "qz.io",
+        "eligible": false,
+        "rank": 84695,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0046499",
+        "domain": "getbring.com",
+        "eligible": false,
+        "rank": 46499,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0031552",
+        "domain": "ind1.bet",
+        "eligible": false,
+        "rank": 31552,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0070141",
+        "domain": "ajaxshowtime.com",
+        "eligible": false,
+        "rank": 70141,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0091931",
+        "domain": "55bmw1.com",
+        "eligible": false,
+        "rank": 91931,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0065334",
+        "domain": "severe-weather.eu",
+        "eligible": false,
+        "rank": 65334,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0095122",
+        "domain": "swri.org",
+        "eligible": false,
+        "rank": 95122,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0085149",
+        "domain": "pomurec.com",
+        "eligible": false,
+        "rank": 85149,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0056334",
+        "domain": "topcasinolucky.com",
+        "eligible": false,
+        "rank": 56334,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0088539",
+        "domain": "mojichina.com",
+        "eligible": false,
+        "rank": 88539,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0066277",
+        "domain": "chayns.site",
+        "eligible": false,
+        "rank": 66277,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0055612",
+        "domain": "markedbyteachers.com",
+        "eligible": false,
+        "rank": 55612,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0014408",
+        "domain": "blm.gov",
+        "eligible": false,
+        "rank": 14408,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0010328",
+        "domain": "freeservers.com",
+        "eligible": false,
+        "rank": 10328,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0086363",
+        "domain": "dailyexcelsior.com",
+        "eligible": false,
+        "rank": 86363,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0077361",
+        "domain": "edna.bg",
+        "eligible": false,
+        "rank": 77361,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0043910",
+        "domain": "limeroad.com",
+        "eligible": false,
+        "rank": 43910,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0080733",
+        "domain": "gudgk.edu.pk",
+        "eligible": false,
+        "rank": 80733,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0020572",
+        "domain": "worldjournal.com",
+        "eligible": false,
+        "rank": 20572,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0062494",
+        "domain": "entitledto.co.uk",
+        "eligible": false,
+        "rank": 62494,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0014335",
+        "domain": "hetrixtools.net",
+        "eligible": false,
+        "rank": 14335,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0084011",
+        "domain": "livehealth.solutions",
+        "eligible": false,
+        "rank": 84011,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0096662",
+        "domain": "gstudying.com",
+        "eligible": false,
+        "rank": 96662,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0081757",
+        "domain": "gustavus.edu",
+        "eligible": false,
+        "rank": 81757,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0061972",
+        "domain": "findwords.info",
+        "eligible": false,
+        "rank": 61972,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0086758",
+        "domain": "unipolgf.it",
+        "eligible": false,
+        "rank": 86758,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0050824",
+        "domain": "troostwijkauctions.com",
+        "eligible": false,
+        "rank": 50824,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0022248",
+        "domain": "ldtax.gov.bd",
+        "eligible": false,
+        "rank": 22248,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0086870",
+        "domain": "resumeworded.com",
+        "eligible": false,
+        "rank": 86870,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0067026",
+        "domain": "uniri.hr",
+        "eligible": false,
+        "rank": 67026,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0069208",
+        "domain": "earthtimes.org",
+        "eligible": false,
+        "rank": 69208,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0058213",
+        "domain": "gitlab-static.net",
+        "eligible": false,
+        "rank": 58213,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0039682",
+        "domain": "e-builder.net",
+        "eligible": false,
+        "rank": 39682,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0072930",
+        "domain": "bnuyun.com",
+        "eligible": false,
+        "rank": 72930,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0035639",
+        "domain": "mundoen.com",
+        "eligible": false,
+        "rank": 35639,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0071936",
+        "domain": "refpa57334.com",
+        "eligible": false,
+        "rank": 71936,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0082448",
+        "domain": "lme.jp",
+        "eligible": false,
+        "rank": 82448,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0057025",
+        "domain": "travelfusion.com",
+        "eligible": false,
+        "rank": 57025,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0051031",
+        "domain": "dus.com",
+        "eligible": false,
+        "rank": 51031,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0077001",
+        "domain": "tneaonline.org",
+        "eligible": false,
+        "rank": 77001,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0017881",
+        "domain": "norwegian.com",
+        "eligible": false,
+        "rank": 17881,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0045995",
+        "domain": "lalamaza.com",
+        "eligible": false,
+        "rank": 45995,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0087220",
+        "domain": "mundodonghua.com",
+        "eligible": false,
+        "rank": 87220,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0055085",
+        "domain": "amazongames.com",
+        "eligible": false,
+        "rank": 55085,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0039873",
+        "domain": "x10.mx",
+        "eligible": false,
+        "rank": 39873,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0023032",
+        "domain": "fry99.cc",
+        "eligible": false,
+        "rank": 23032,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0091343",
+        "domain": "thefintechtimes.com",
+        "eligible": false,
+        "rank": 91343,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0047632",
+        "domain": "vuelta.club",
+        "eligible": false,
+        "rank": 47632,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0053001",
+        "domain": "saloncentric.com",
+        "eligible": false,
+        "rank": 53001,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0046727",
+        "domain": "iribnews.ir",
+        "eligible": false,
+        "rank": 46727,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0049780",
+        "domain": "lc.cx",
+        "eligible": false,
+        "rank": 49780,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0078538",
+        "domain": "sie.gov.hk",
+        "eligible": false,
+        "rank": 78538,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0026548",
+        "domain": "msstatic.com",
+        "eligible": false,
+        "rank": 26548,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0049064",
+        "domain": "launchgood.com",
+        "eligible": false,
+        "rank": 49064,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0033184",
+        "domain": "amzndns-cn.net",
+        "eligible": false,
+        "rank": 33184,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0030614",
+        "domain": "posticloud.fi",
+        "eligible": false,
+        "rank": 30614,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0090759",
+        "domain": "binance.tr",
+        "eligible": false,
+        "rank": 90759,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0092471",
+        "domain": "diam247x.com",
+        "eligible": false,
+        "rank": 92471,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0014250",
+        "domain": "tiktokmod.pro",
+        "eligible": false,
+        "rank": 14250,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0017130",
+        "domain": "invaluable.com",
+        "eligible": false,
+        "rank": 17130,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0089014",
+        "domain": "sinhalasub.lk",
+        "eligible": false,
+        "rank": 89014,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0042885",
+        "domain": "productboard.com",
+        "eligible": false,
+        "rank": 42885,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0060262",
+        "domain": "gameknot.com",
+        "eligible": false,
+        "rank": 60262,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0082358",
+        "domain": "aienji.net",
+        "eligible": false,
+        "rank": 82358,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0085161",
+        "domain": "nornick.ru",
+        "eligible": false,
+        "rank": 85161,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0022618",
+        "domain": "sleeptracker.com",
+        "eligible": false,
+        "rank": 22618,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0094029",
+        "domain": "sensongsmp3.live",
+        "eligible": false,
+        "rank": 94029,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0072931",
+        "domain": "speedguide.net",
+        "eligible": false,
+        "rank": 72931,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0017505",
+        "domain": "borlabs.io",
+        "eligible": false,
+        "rank": 17505,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0035143",
+        "domain": "monkeyvillage.pro",
+        "eligible": false,
+        "rank": 35143,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0036978",
+        "domain": "unmissions.org",
+        "eligible": false,
+        "rank": 36978,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0069493",
+        "domain": "nwu.edu",
+        "eligible": false,
+        "rank": 69493,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0063496",
+        "domain": "undiz.com",
+        "eligible": false,
+        "rank": 63496,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0013005",
+        "domain": "slrclub.com",
+        "eligible": false,
+        "rank": 13005,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0034496",
+        "domain": "xn--xhqv9jbtpfww.cn",
+        "eligible": false,
+        "rank": 34496,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0096707",
+        "domain": "exacq.com",
+        "eligible": false,
+        "rank": 96707,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0051196",
+        "domain": "globalpolicy.org",
+        "eligible": false,
+        "rank": 51196,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0035825",
+        "domain": "toto12kiba.org",
+        "eligible": false,
+        "rank": 35825,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0067892",
+        "domain": "wheel-size.com",
+        "eligible": false,
+        "rank": 67892,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0085669",
+        "domain": "lafm.com.co",
+        "eligible": false,
+        "rank": 85669,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0050931",
+        "domain": "ahs.com",
+        "eligible": false,
+        "rank": 50931,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0026313",
+        "domain": "sci-hub.st",
+        "eligible": false,
+        "rank": 26313,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0015325",
+        "domain": "transistor.fm",
+        "eligible": false,
+        "rank": 15325,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0042778",
+        "domain": "scmagazine.com",
+        "eligible": false,
+        "rank": 42778,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0017008",
+        "domain": "samsung-news.com",
+        "eligible": false,
+        "rank": 17008,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0070878",
+        "domain": "acsbap.com",
+        "eligible": false,
+        "rank": 70878,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0019173",
+        "domain": "exodus.com",
+        "eligible": false,
+        "rank": 19173,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0086056",
+        "domain": "kingbokep.tokyo",
+        "eligible": false,
+        "rank": 86056,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0080597",
+        "domain": "curve.app",
+        "eligible": false,
+        "rank": 80597,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0043440",
+        "domain": "miruro.tv",
+        "eligible": false,
+        "rank": 43440,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0050051",
+        "domain": "ipo.gov.uk",
+        "eligible": false,
+        "rank": 50051,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0038676",
+        "domain": "testberichte.de",
+        "eligible": false,
+        "rank": 38676,
+        "stratum": "10001-100000"
+      },
+      {
+        "candidate_id": "tranco-0204878",
+        "domain": "vortexnetwork.net",
+        "eligible": false,
+        "rank": 204878,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0236417",
+        "domain": "cf5gbet.com",
+        "eligible": false,
+        "rank": 236417,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0484907",
+        "domain": "idealistic-bath.com",
+        "eligible": false,
+        "rank": 484907,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0376867",
+        "domain": "koc.com.tr",
+        "eligible": false,
+        "rank": 376867,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0454793",
+        "domain": "underworldempiregame.com",
+        "eligible": false,
+        "rank": 454793,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0457501",
+        "domain": "onebyone.ua",
+        "eligible": false,
+        "rank": 457501,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0156366",
+        "domain": "ilristorantinotolentino.it",
+        "eligible": false,
+        "rank": 156366,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0336981",
+        "domain": "ca33ands.shop",
+        "eligible": false,
+        "rank": 336981,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0290468",
+        "domain": "buyzoxs.de",
+        "eligible": false,
+        "rank": 290468,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0349195",
+        "domain": "xxxstreams.org",
+        "eligible": false,
+        "rank": 349195,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0377136",
+        "domain": "kuracloud.com",
+        "eligible": false,
+        "rank": 377136,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0166844",
+        "domain": "hklbbugpoj.net",
+        "eligible": false,
+        "rank": 166844,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0326890",
+        "domain": "miss-sexe.com",
+        "eligible": false,
+        "rank": 326890,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0456586",
+        "domain": "tvkstella.pl",
+        "eligible": false,
+        "rank": 456586,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0329397",
+        "domain": "compulab.com",
+        "eligible": false,
+        "rank": 329397,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0305825",
+        "domain": "burnaware.com",
+        "eligible": false,
+        "rank": 305825,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0468221",
+        "domain": "ebonyfacial.net",
+        "eligible": false,
+        "rank": 468221,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0273087",
+        "domain": "pes.edu",
+        "eligible": false,
+        "rank": 273087,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0340010",
+        "domain": "mospravda.ru",
+        "eligible": false,
+        "rank": 340010,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0299219",
+        "domain": "rocketmail.com",
+        "eligible": false,
+        "rank": 299219,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0459811",
+        "domain": "madeintext.com",
+        "eligible": false,
+        "rank": 459811,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0119588",
+        "domain": "cryptokazancev.ru",
+        "eligible": false,
+        "rank": 119588,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0445426",
+        "domain": "388898.xyz",
+        "eligible": false,
+        "rank": 445426,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0407283",
+        "domain": "vodafonecu.gr",
+        "eligible": false,
+        "rank": 407283,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0399534",
+        "domain": "joooooy.com",
+        "eligible": false,
+        "rank": 399534,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0466500",
+        "domain": "britspinworks.uk",
+        "eligible": false,
+        "rank": 466500,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0231491",
+        "domain": "thaiembassy.com",
+        "eligible": false,
+        "rank": 231491,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0359160",
+        "domain": "deep-nudes.com",
+        "eligible": false,
+        "rank": 359160,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0442263",
+        "domain": "homesteady.com",
+        "eligible": false,
+        "rank": 442263,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0189455",
+        "domain": "mecash.ru",
+        "eligible": false,
+        "rank": 189455,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0225434",
+        "domain": "awsdns-us-gov-52.us",
+        "eligible": false,
+        "rank": 225434,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0214504",
+        "domain": "apnaluck.com",
+        "eligible": false,
+        "rank": 214504,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0334141",
+        "domain": "careercontessa.com",
+        "eligible": false,
+        "rank": 334141,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0476606",
+        "domain": "isthost.net",
+        "eligible": false,
+        "rank": 476606,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0476343",
+        "domain": "thechildrenshospital.org",
+        "eligible": false,
+        "rank": 476343,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0302606",
+        "domain": "campus-tuete.de",
+        "eligible": false,
+        "rank": 302606,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0196782",
+        "domain": "sitkagear.com",
+        "eligible": false,
+        "rank": 196782,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0223922",
+        "domain": "152media.info",
+        "eligible": false,
+        "rank": 223922,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0447929",
+        "domain": "spinworks.nl",
+        "eligible": false,
+        "rank": 447929,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0291376",
+        "domain": "kegland.com.au",
+        "eligible": false,
+        "rank": 291376,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0497231",
+        "domain": "g3news.biz",
+        "eligible": false,
+        "rank": 497231,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0460319",
+        "domain": "diecezjatarnow.pl",
+        "eligible": false,
+        "rank": 460319,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0110439",
+        "domain": "utpjournals.press",
+        "eligible": false,
+        "rank": 110439,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0362368",
+        "domain": "circle-economy.com",
+        "eligible": false,
+        "rank": 362368,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0328209",
+        "domain": "asiachan.com",
+        "eligible": false,
+        "rank": 328209,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0326225",
+        "domain": "herobullion.com",
+        "eligible": false,
+        "rank": 326225,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0135055",
+        "domain": "barnstormers.com",
+        "eligible": false,
+        "rank": 135055,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0397939",
+        "domain": "middleware.bg",
+        "eligible": false,
+        "rank": 397939,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0246529",
+        "domain": "staff-capital.com",
+        "eligible": false,
+        "rank": 246529,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0427430",
+        "domain": "castleapk.com",
+        "eligible": false,
+        "rank": 427430,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0200051",
+        "domain": "mec.gob.ar",
+        "eligible": false,
+        "rank": 200051,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0367000",
+        "domain": "www.to.gov.br",
+        "eligible": false,
+        "rank": 367000,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0114432",
+        "domain": "vdose.co",
+        "eligible": false,
+        "rank": 114432,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0187266",
+        "domain": "austindailyherald.com",
+        "eligible": false,
+        "rank": 187266,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0342536",
+        "domain": "therefinery.ltd",
+        "eligible": false,
+        "rank": 342536,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0449244",
+        "domain": "notebookgalerie.de",
+        "eligible": false,
+        "rank": 449244,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0263228",
+        "domain": "anotherboring.top",
+        "eligible": false,
+        "rank": 263228,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0180312",
+        "domain": "abra-meble.pl",
+        "eligible": false,
+        "rank": 180312,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0220759",
+        "domain": "sexbam53.top",
+        "eligible": false,
+        "rank": 220759,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0403861",
+        "domain": "staticpanvel.com.br",
+        "eligible": false,
+        "rank": 403861,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0190087",
+        "domain": "coyu.com",
+        "eligible": false,
+        "rank": 190087,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0294036",
+        "domain": "49slotsgo.com",
+        "eligible": false,
+        "rank": 294036,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0399388",
+        "domain": "pjourway.org",
+        "eligible": false,
+        "rank": 399388,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0145539",
+        "domain": "overthemoon.com",
+        "eligible": false,
+        "rank": 145539,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0111013",
+        "domain": "aristata.co.za",
+        "eligible": false,
+        "rank": 111013,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0492867",
+        "domain": "giftinfo.co.kr",
+        "eligible": false,
+        "rank": 492867,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0265591",
+        "domain": "gazman.com.au",
+        "eligible": false,
+        "rank": 265591,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0329906",
+        "domain": "serverg.net",
+        "eligible": false,
+        "rank": 329906,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0235073",
+        "domain": "legorafi.fr",
+        "eligible": false,
+        "rank": 235073,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0337030",
+        "domain": "tangleteezer.com",
+        "eligible": false,
+        "rank": 337030,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0405745",
+        "domain": "checkmyip.com",
+        "eligible": false,
+        "rank": 405745,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0323123",
+        "domain": "rtb-adscholars.com",
+        "eligible": false,
+        "rank": 323123,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0453728",
+        "domain": "supergasbras.com.br",
+        "eligible": false,
+        "rank": 453728,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0463133",
+        "domain": "scalebranding.com",
+        "eligible": false,
+        "rank": 463133,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0346582",
+        "domain": "thepondguy.com",
+        "eligible": false,
+        "rank": 346582,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0409328",
+        "domain": "platform.uno",
+        "eligible": false,
+        "rank": 409328,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0407638",
+        "domain": "pdftoexcel.com",
+        "eligible": false,
+        "rank": 407638,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0429022",
+        "domain": "soporte-tecnico-df.com",
+        "eligible": false,
+        "rank": 429022,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0416342",
+        "domain": "gotobus.com",
+        "eligible": false,
+        "rank": 416342,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0352271",
+        "domain": "historydefined.net",
+        "eligible": false,
+        "rank": 352271,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0106674",
+        "domain": "megavideo.com",
+        "eligible": false,
+        "rank": 106674,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0424742",
+        "domain": "skovian.com",
+        "eligible": false,
+        "rank": 424742,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0146181",
+        "domain": "edifier.com",
+        "eligible": false,
+        "rank": 146181,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0450366",
+        "domain": "dposhop.ru",
+        "eligible": false,
+        "rank": 450366,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0253077",
+        "domain": "kwrn.eu",
+        "eligible": false,
+        "rank": 253077,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0152973",
+        "domain": "au1.com.au",
+        "eligible": false,
+        "rank": 152973,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0464518",
+        "domain": "thesportshop.co.nz",
+        "eligible": false,
+        "rank": 464518,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0159634",
+        "domain": "chmln-cdn.com",
+        "eligible": false,
+        "rank": 159634,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0119850",
+        "domain": "epider.me",
+        "eligible": false,
+        "rank": 119850,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0220780",
+        "domain": "sexvietnamhd.net",
+        "eligible": false,
+        "rank": 220780,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0167996",
+        "domain": "aniroleplay.com",
+        "eligible": false,
+        "rank": 167996,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0256819",
+        "domain": "replicatestatus.com",
+        "eligible": false,
+        "rank": 256819,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0489087",
+        "domain": "findmoves.com",
+        "eligible": false,
+        "rank": 489087,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0274495",
+        "domain": "statsblaze.com",
+        "eligible": false,
+        "rank": 274495,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0301432",
+        "domain": "maiwa.com",
+        "eligible": false,
+        "rank": 301432,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0409849",
+        "domain": "tjinstoko.eu",
+        "eligible": false,
+        "rank": 409849,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0332697",
+        "domain": "ourcrowd.com",
+        "eligible": false,
+        "rank": 332697,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0210899",
+        "domain": "rusdate.co.il",
+        "eligible": false,
+        "rank": 210899,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0218828",
+        "domain": "tarjetasucredito.com.ar",
+        "eligible": false,
+        "rank": 218828,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0168533",
+        "domain": "hhilifting.com",
+        "eligible": false,
+        "rank": 168533,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0440536",
+        "domain": "truebookeindhoven.nl",
+        "eligible": false,
+        "rank": 440536,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0294749",
+        "domain": "galinha.site",
+        "eligible": false,
+        "rank": 294749,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0358305",
+        "domain": "koders.com",
+        "eligible": false,
+        "rank": 358305,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0374708",
+        "domain": "freedert.online",
+        "eligible": false,
+        "rank": 374708,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0395867",
+        "domain": "vraylar.com",
+        "eligible": false,
+        "rank": 395867,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0257426",
+        "domain": "abanuc.com",
+        "eligible": false,
+        "rank": 257426,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0469677",
+        "domain": "afriksoir.net",
+        "eligible": false,
+        "rank": 469677,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0481881",
+        "domain": "alterna-energie.fr",
+        "eligible": false,
+        "rank": 481881,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0100284",
+        "domain": "site24x7.eu",
+        "eligible": false,
+        "rank": 100284,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0183309",
+        "domain": "withnews.jp",
+        "eligible": false,
+        "rank": 183309,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0195400",
+        "domain": "wer-weiss-was.de",
+        "eligible": false,
+        "rank": 195400,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0482970",
+        "domain": "rushiwebworld.com",
+        "eligible": false,
+        "rank": 482970,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0347177",
+        "domain": "datodns.eu",
+        "eligible": false,
+        "rank": 347177,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0297333",
+        "domain": "theomne.net",
+        "eligible": false,
+        "rank": 297333,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0351020",
+        "domain": "autocodes.com",
+        "eligible": false,
+        "rank": 351020,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0157124",
+        "domain": "51microshop.com",
+        "eligible": false,
+        "rank": 157124,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0133069",
+        "domain": "xn--incendiosespaa-2nb.es",
+        "eligible": false,
+        "rank": 133069,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0464369",
+        "domain": "region.center",
+        "eligible": false,
+        "rank": 464369,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0148375",
+        "domain": "xn--5brt0b23ydjll0n.com",
+        "eligible": false,
+        "rank": 148375,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0389325",
+        "domain": "parfuemerie-kirner.de",
+        "eligible": false,
+        "rank": 389325,
+        "stratum": "100001-500000"
+      },
+      {
+        "candidate_id": "tranco-0705861",
+        "domain": "hostcloud1.top",
+        "eligible": false,
+        "rank": 705861,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0865351",
+        "domain": "nm-cdn23.top",
+        "eligible": false,
+        "rank": 865351,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0857476",
+        "domain": "cladglobal.com",
+        "eligible": false,
+        "rank": 857476,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0836116",
+        "domain": "srindiamis.org",
+        "eligible": false,
+        "rank": 836116,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0723118",
+        "domain": "momentum.se",
+        "eligible": false,
+        "rank": 723118,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0630901",
+        "domain": "azall.com",
+        "eligible": false,
+        "rank": 630901,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0530225",
+        "domain": "37486195.xyz",
+        "eligible": false,
+        "rank": 530225,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0869957",
+        "domain": "perview.de",
+        "eligible": false,
+        "rank": 869957,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0762962",
+        "domain": "astrolearn.co",
+        "eligible": false,
+        "rank": 762962,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0661815",
+        "domain": "rammsteinworld.com",
+        "eligible": false,
+        "rank": 661815,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0615066",
+        "domain": "keyboardchecker.com",
+        "eligible": false,
+        "rank": 615066,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0805030",
+        "domain": "liveunlimitedlondon.com",
+        "eligible": false,
+        "rank": 805030,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0549621",
+        "domain": "ufoelektronika.com",
+        "eligible": false,
+        "rank": 549621,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0644110",
+        "domain": "physiotherapy.ca",
+        "eligible": false,
+        "rank": 644110,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0752098",
+        "domain": "02ufh294.com",
+        "eligible": false,
+        "rank": 752098,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0522841",
+        "domain": "summary.com",
+        "eligible": false,
+        "rank": 522841,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0722948",
+        "domain": "bergerac.fr",
+        "eligible": false,
+        "rank": 722948,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0716301",
+        "domain": "sussfamily.net",
+        "eligible": false,
+        "rank": 716301,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0910458",
+        "domain": "inspireglobalsolutions.com",
+        "eligible": false,
+        "rank": 910458,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0635565",
+        "domain": "e75shxfd.com",
+        "eligible": false,
+        "rank": 635565,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0560591",
+        "domain": "clarkmoody.com",
+        "eligible": false,
+        "rank": 560591,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0984172",
+        "domain": "mygirls.me",
+        "eligible": false,
+        "rank": 984172,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0703793",
+        "domain": "mizumo.com.py",
+        "eligible": false,
+        "rank": 703793,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0984436",
+        "domain": "essilor-instruments.com",
+        "eligible": false,
+        "rank": 984436,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0752459",
+        "domain": "11bet100.com",
+        "eligible": false,
+        "rank": 752459,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0961402",
+        "domain": "elago.com",
+        "eligible": false,
+        "rank": 961402,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0760681",
+        "domain": "amhomefinder.co.uk",
+        "eligible": false,
+        "rank": 760681,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0807573",
+        "domain": "mamtatelecom.com",
+        "eligible": false,
+        "rank": 807573,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0780407",
+        "domain": "ecash-guinee.com",
+        "eligible": false,
+        "rank": 780407,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0631769",
+        "domain": "petzmainstreet.com",
+        "eligible": false,
+        "rank": 631769,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0933029",
+        "domain": "polo999.com",
+        "eligible": false,
+        "rank": 933029,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0716030",
+        "domain": "anteroresources.com",
+        "eligible": false,
+        "rank": 716030,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0576340",
+        "domain": "haddad.hr",
+        "eligible": false,
+        "rank": 576340,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0746285",
+        "domain": "iprn.pro",
+        "eligible": false,
+        "rank": 746285,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0887772",
+        "domain": "loanpricing.com",
+        "eligible": false,
+        "rank": 887772,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0748876",
+        "domain": "create.studio",
+        "eligible": false,
+        "rank": 748876,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0761888",
+        "domain": "apteachers.in",
+        "eligible": false,
+        "rank": 761888,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0988707",
+        "domain": "500spins.click",
+        "eligible": false,
+        "rank": 988707,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0808298",
+        "domain": "matahokimasuk.org",
+        "eligible": false,
+        "rank": 808298,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0763150",
+        "domain": "atlasformen.hu",
+        "eligible": false,
+        "rank": 763150,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0774501",
+        "domain": "contractorcourses.com",
+        "eligible": false,
+        "rank": 774501,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0882089",
+        "domain": "ccjewelers.net",
+        "eligible": false,
+        "rank": 882089,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0769495",
+        "domain": "buscapina.com.co",
+        "eligible": false,
+        "rank": 769495,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0883027",
+        "domain": "canlitvizle.com",
+        "eligible": false,
+        "rank": 883027,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0631569",
+        "domain": "zodchiy.org",
+        "eligible": false,
+        "rank": 631569,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0743464",
+        "domain": "zeropage.org",
+        "eligible": false,
+        "rank": 743464,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0513034",
+        "domain": "buddel-jungs.de",
+        "eligible": false,
+        "rank": 513034,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0858756",
+        "domain": "allinfo.space",
+        "eligible": false,
+        "rank": 858756,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0594249",
+        "domain": "zoomlife.ir",
+        "eligible": false,
+        "rank": 594249,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0762165",
+        "domain": "areegator.com",
+        "eligible": false,
+        "rank": 762165,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0742425",
+        "domain": "alternate.ch",
+        "eligible": false,
+        "rank": 742425,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0631046",
+        "domain": "paperwrld.com",
+        "eligible": false,
+        "rank": 631046,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0950250",
+        "domain": "kikuyo.lg.jp",
+        "eligible": false,
+        "rank": 950250,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0901409",
+        "domain": "idocdelta.us",
+        "eligible": false,
+        "rank": 901409,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0564815",
+        "domain": "arlab.net.ar",
+        "eligible": false,
+        "rank": 564815,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0928094",
+        "domain": "gala.net",
+        "eligible": false,
+        "rank": 928094,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0966313",
+        "domain": "outbacktourer.com.au",
+        "eligible": false,
+        "rank": 966313,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0876417",
+        "domain": "congtyuytin.com",
+        "eligible": false,
+        "rank": 876417,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0713264",
+        "domain": "cgh-residences.com",
+        "eligible": false,
+        "rank": 713264,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0878555",
+        "domain": "bw-i.de",
+        "eligible": false,
+        "rank": 878555,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0596138",
+        "domain": "k-tounyu.jp",
+        "eligible": false,
+        "rank": 596138,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0681105",
+        "domain": "erev2.com",
+        "eligible": false,
+        "rank": 681105,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0647534",
+        "domain": "modeltrainmarket.com",
+        "eligible": false,
+        "rank": 647534,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0719329",
+        "domain": "ch2iu29ba6.com",
+        "eligible": false,
+        "rank": 719329,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0974762",
+        "domain": "hat-gar-keine-homepage.de",
+        "eligible": false,
+        "rank": 974762,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0791917",
+        "domain": "hellocallers.com",
+        "eligible": false,
+        "rank": 791917,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0855603",
+        "domain": "corewavecircle.it",
+        "eligible": false,
+        "rank": 855603,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0604623",
+        "domain": "datacore.ch",
+        "eligible": false,
+        "rank": 604623,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0666298",
+        "domain": "aifaceswapper.io",
+        "eligible": false,
+        "rank": 666298,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0717801",
+        "domain": "boutreview.com",
+        "eligible": false,
+        "rank": 717801,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0682900",
+        "domain": "sunrecords.tw",
+        "eligible": false,
+        "rank": 682900,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0637485",
+        "domain": "gotenna.com",
+        "eligible": false,
+        "rank": 637485,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0523788",
+        "domain": "serc.nl",
+        "eligible": false,
+        "rank": 523788,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0709424",
+        "domain": "londonroyaljournal.uk",
+        "eligible": false,
+        "rank": 709424,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0849300",
+        "domain": "wicket71bd.com",
+        "eligible": false,
+        "rank": 849300,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0960210",
+        "domain": "ngeorgia.com",
+        "eligible": false,
+        "rank": 960210,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0807652",
+        "domain": "manfinder.com",
+        "eligible": false,
+        "rank": 807652,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0937227",
+        "domain": "shopincdn.ovh",
+        "eligible": false,
+        "rank": 937227,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0827173",
+        "domain": "reddy365.club",
+        "eligible": false,
+        "rank": 827173,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0732780",
+        "domain": "primewildmedia.uk",
+        "eligible": false,
+        "rank": 732780,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0601400",
+        "domain": "marcel-travelposters.com",
+        "eligible": false,
+        "rank": 601400,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0706335",
+        "domain": "renegadecraft.com",
+        "eligible": false,
+        "rank": 706335,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0876249",
+        "domain": "steadypulse.fit",
+        "eligible": false,
+        "rank": 876249,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0916991",
+        "domain": "energis.pl",
+        "eligible": false,
+        "rank": 916991,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0862945",
+        "domain": "keepshu.org",
+        "eligible": false,
+        "rank": 862945,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0955579",
+        "domain": "oecs.int",
+        "eligible": false,
+        "rank": 955579,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0618293",
+        "domain": "carpetextractors.com",
+        "eligible": false,
+        "rank": 618293,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0911867",
+        "domain": "drovgudogan.com",
+        "eligible": false,
+        "rank": 911867,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0537315",
+        "domain": "toz-app.com",
+        "eligible": false,
+        "rank": 537315,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0952169",
+        "domain": "speednetsa.net",
+        "eligible": false,
+        "rank": 952169,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0635004",
+        "domain": "sparkassen-mediacenter.de",
+        "eligible": false,
+        "rank": 635004,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0819846",
+        "domain": "panchirach.com",
+        "eligible": false,
+        "rank": 819846,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0890465",
+        "domain": "fontmood.com",
+        "eligible": false,
+        "rank": 890465,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0842751",
+        "domain": "trendsys.in",
+        "eligible": false,
+        "rank": 842751,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0575760",
+        "domain": "4gstatic.com",
+        "eligible": false,
+        "rank": 575760,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0778891",
+        "domain": "dpanel.pl",
+        "eligible": false,
+        "rank": 778891,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0509278",
+        "domain": "steel-toe-shoes.com",
+        "eligible": false,
+        "rank": 509278,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0611781",
+        "domain": "artistsspace.org",
+        "eligible": false,
+        "rank": 611781,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0714389",
+        "domain": "bluelane.au",
+        "eligible": false,
+        "rank": 714389,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0578863",
+        "domain": "wir-lgd.org.pl",
+        "eligible": false,
+        "rank": 578863,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0985823",
+        "domain": "milspares.co.uk",
+        "eligible": false,
+        "rank": 985823,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0849669",
+        "domain": "winxx705.com",
+        "eligible": false,
+        "rank": 849669,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0736956",
+        "domain": "dnssrvs.com",
+        "eligible": false,
+        "rank": 736956,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0677494",
+        "domain": "vipph.fun",
+        "eligible": false,
+        "rank": 677494,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0628819",
+        "domain": "greenshiftnetworks.com",
+        "eligible": false,
+        "rank": 628819,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0596571",
+        "domain": "hukukmarket.com",
+        "eligible": false,
+        "rank": 596571,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0888241",
+        "domain": "peresentacconette.com",
+        "eligible": false,
+        "rank": 888241,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0573184",
+        "domain": "keanscm.ie",
+        "eligible": false,
+        "rank": 573184,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0867228",
+        "domain": "byggfabriken.se",
+        "eligible": false,
+        "rank": 867228,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0561266",
+        "domain": "smotrish-ivi.ru",
+        "eligible": false,
+        "rank": 561266,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0778003",
+        "domain": "disk.ng",
+        "eligible": false,
+        "rank": 778003,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0557799",
+        "domain": "124.casino",
+        "eligible": false,
+        "rank": 557799,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0637909",
+        "domain": "boldpath.us",
+        "eligible": false,
+        "rank": 637909,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0890808",
+        "domain": "xdock.co",
+        "eligible": false,
+        "rank": 890808,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0899606",
+        "domain": "dailycurrant.com",
+        "eligible": false,
+        "rank": 899606,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0577131",
+        "domain": "rapiboy.com",
+        "eligible": false,
+        "rank": 577131,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0541796",
+        "domain": "glassonline.com",
+        "eligible": false,
+        "rank": 541796,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0572897",
+        "domain": "ku.fi",
+        "eligible": false,
+        "rank": 572897,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0751254",
+        "domain": "itdeveloper.info",
+        "eligible": false,
+        "rank": 751254,
+        "stratum": "500001-1000000"
+      },
+      {
+        "candidate_id": "tranco-0695824",
+        "domain": "highdesertmuseum.org",
+        "eligible": false,
+        "rank": 695824,
+        "stratum": "500001-1000000"
+      }
+    ],
+    "catalogue_schema_version": 1,
+    "selection": {
+      "ordering": "sha256(list_sha256 || study_id || canonical_domain)",
+      "outcome_fields_used": [],
+      "per_stratum": 120,
+      "rank_strata": [
+        {
+          "id": "1-1000",
+          "maximum_rank": 1000,
+          "minimum_rank": 1
+        },
+        {
+          "id": "1001-10000",
+          "maximum_rank": 10000,
+          "minimum_rank": 1001
+        },
+        {
+          "id": "10001-100000",
+          "maximum_rank": 100000,
+          "minimum_rank": 10001
+        },
+        {
+          "id": "100001-500000",
+          "maximum_rank": 500000,
+          "minimum_rank": 100001
+        },
+        {
+          "id": "500001-1000000",
+          "maximum_rank": 1000000,
+          "minimum_rank": 500001
+        }
+      ]
+    },
+    "study_id": "classifier-multiorigin100-v1",
+    "tranco": {
+      "entries_sha256": "3080625d850e00ae692e0e7d4abdd101369f3b0221d9826b474e52a200ffe0f4",
+      "list_id": "W36Q9",
+      "list_sha256": "3dcf7f6b7fd29124d6800fc4d0eb66f49ad8c8194be22e2dbee1686ed9662fbf",
+      "retrieved_at": "2026-08-28T08:29:09Z",
+      "row_count": 1000000,
+      "source_url": "https://tranco-list.eu/download/W36Q9/1000000"
+    }
+  },
+  "payload_sha256": "99f09a1694f200f4d362be5c119781d5c416ada6e4406d3a3b61081f035126eb",
+  "receipt_type": "qcsd-class-study-candidate-catalogue",
+  "schema_version": 1
+}

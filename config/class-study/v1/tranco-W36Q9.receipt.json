@@ -1,0 +1,30 @@
+{
+  "payload": {
+    "catalogue_schema_version": 1,
+    "parser_contract": {
+      "columns": [
+        "rank",
+        "canonical_tranco_domain"
+      ],
+      "duplicate_domains": "rejected",
+      "encoding": "utf-8-strict-no-bom",
+      "production_rank_range": [
+        1,
+        1000000
+      ],
+      "rank_order": "strictly-increasing"
+    },
+    "snapshot": {
+      "entries_sha256": "3080625d850e00ae692e0e7d4abdd101369f3b0221d9826b474e52a200ffe0f4",
+      "list_id": "W36Q9",
+      "list_sha256": "3dcf7f6b7fd29124d6800fc4d0eb66f49ad8c8194be22e2dbee1686ed9662fbf",
+      "retrieved_at": "2026-08-28T08:29:09Z",
+      "row_count": 1000000,
+      "source_url": "https://tranco-list.eu/download/W36Q9/1000000"
+    },
+    "study_id": "classifier-multiorigin100-v1"
+  },
+  "payload_sha256": "7f81cd12305c877afc94a1d15d01927af290290baadbcd9154a0edd45fa90589",
+  "receipt_type": "qcsd-class-study-tranco-snapshot",
+  "schema_version": 1
+}

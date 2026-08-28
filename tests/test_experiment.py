@@ -32,6 +32,41 @@ def _configuration(campaign: Path) -> dict:
     }
 
 
+def _class_configuration(
+    campaign: Path,
+    role: str,
+    *,
+    successor: bool = False,
+) -> dict:
+    configuration = _configuration(campaign)
+    configuration.update(
+        profile="research-1200",
+        evidence_role=role,
+        class_study_cohort_sha256="c" * 64,
+        class_study_cohort_assembly_sha256="d" * 64,
+        class_study_id=(
+            "classifier-multiorigin100-v2-012345abcdef"
+            if successor
+            else "classifier-multiorigin100-v1"
+        ),
+        class_study_launch_sha256="e" * 64,
+        class_study_foundation_sha256="f" * 64,
+        public_origin_policy={
+            "environment": "QCSD_PUBLIC_ORIGIN_ONLY",
+            "required_value": "1",
+            "resolution": "resolve-once-reject-any-non-public-connect-exact-address",
+        },
+    )
+    if successor:
+        configuration["class_study_successor_sha256"] = "1" * 64
+    if role in {"canary", "formal"}:
+        configuration.update(
+            class_study_readiness_sha256="2" * 64,
+            class_study_historical_pre_snapshot_sha256="3" * 64,
+        )
+    return configuration
+
+
 def _sample() -> dict:
     return {
         "sample_id": "site-as-defined-000-undefended",
@@ -61,6 +96,37 @@ def _initialize(tmp_path: Path) -> tuple[Path, dict]:
         configuration=_configuration(campaign),
         samples=[_sample()],
         started_at="2026-08-06T00:00:00+00:00",
+    )
+    return root, experiment
+
+
+def _initialize_class_experiment(
+    tmp_path: Path,
+    *,
+    role: str,
+    configuration: dict | None = None,
+    successor: bool = False,
+) -> tuple[Path, dict]:
+    run_id = f"run-{role}"
+    root = tmp_path / "results" / "class-campaign" / run_id
+    inputs = root / "inputs"
+    inputs.mkdir(parents=True)
+    campaign = inputs / "campaign.yml"
+    atomic_text(campaign, "schema: 2\n")
+    resolved = (
+        _class_configuration(campaign, role, successor=successor)
+        if configuration is None
+        else configuration
+    )
+    experiment = initialize_experiment(
+        root,
+        name="class-campaign",
+        purpose="evaluation" if role == "formal" else "smoke",
+        run_id=run_id,
+        source={"lab_commit": "a" * 40, "image": "sha256:image"},
+        configuration=resolved,
+        samples=[_sample()],
+        started_at="2026-08-29T00:00:00+00:00",
     )
     return root, experiment
 
@@ -213,6 +279,192 @@ def test_named_qualification_set_survives_initialization_checkpoint_and_resume_v
         )
         == resumed["input_digest"]
     )
+
+
+@pytest.mark.parametrize(
+    ("role", "successor"),
+    (
+        ("certification", False),
+        ("canary", False),
+        ("formal", False),
+        ("formal", True),
+    ),
+)
+def test_class_study_configuration_survives_initialize_checkpoint_load_and_resume(
+    tmp_path: Path,
+    role: str,
+    successor: bool,
+) -> None:
+    root, experiment = _initialize_class_experiment(
+        tmp_path,
+        role=role,
+        successor=successor,
+    )
+    configuration = experiment["configuration"]
+    assert load_experiment(root)["configuration"] == configuration
+
+    transition_sample(experiment, _sample()["sample_id"], "running", increment_attempt=True)
+    checkpoint_experiment(root, experiment)
+    resumed = load_experiment(root)
+    assert interrupt_running_samples(resumed) == [_sample()["sample_id"]]
+    checkpoint_experiment(root, resumed)
+    loaded = load_experiment(root)
+    assert loaded["samples"][0]["state"] == "interrupted"
+    assert (
+        validate_resume_fingerprints(
+            root,
+            experiment=loaded,
+            expected_configuration=configuration,
+        )
+        == loaded["input_digest"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("role", "field", "invalid", "successor"),
+    (
+        (
+            "certification",
+            "class_study_id",
+            "classifier-multiorigin100-v2",
+            False,
+        ),
+        ("certification", "class_study_cohort_sha256", "A" * 64, False),
+        (
+            "certification",
+            "class_study_cohort_assembly_sha256",
+            "0" * 63,
+            False,
+        ),
+        ("certification", "class_study_launch_sha256", "not-a-digest", False),
+        ("certification", "class_study_foundation_sha256", None, False),
+        ("canary", "class_study_readiness_sha256", True, False),
+        ("formal", "class_study_historical_pre_snapshot_sha256", "0" * 63, False),
+        ("formal", "class_study_successor_sha256", "z" * 64, True),
+        ("formal", "public_origin_policy", None, False),
+        (
+            "formal",
+            "public_origin_policy",
+            {
+                "environment": "QCSD_PUBLIC_ORIGIN_ONLY",
+                "required_value": "0",
+                "resolution": "resolve-once-reject-any-non-public-connect-exact-address",
+            },
+            False,
+        ),
+        (
+            "formal",
+            "public_origin_policy",
+            {
+                "environment": "QCSD_PUBLIC_ORIGIN_ONLY",
+                "required_value": "1",
+            },
+            False,
+        ),
+        (
+            "formal",
+            "public_origin_policy",
+            {
+                "environment": "QCSD_PUBLIC_ORIGIN_ONLY",
+                "required_value": "1",
+                "resolution": "resolve-once-reject-any-non-public-connect-exact-address",
+                "fallback": "allow",
+            },
+            False,
+        ),
+    ),
+)
+def test_class_study_configuration_rejects_malformed_typed_fields(
+    tmp_path: Path,
+    role: str,
+    field: str,
+    invalid: object,
+    successor: bool,
+) -> None:
+    campaign = tmp_path / "campaign.yml"
+    atomic_text(campaign, "schema: 2\n")
+    configuration = _class_configuration(campaign, role, successor=successor)
+    configuration[field] = invalid
+
+    with pytest.raises(ValueError, match=field):
+        _initialize_class_experiment(
+            tmp_path,
+            role=role,
+            configuration=configuration,
+        )
+
+
+@pytest.mark.parametrize(
+    "missing",
+    (
+        "evidence_role",
+        "class_study_cohort_sha256",
+        "class_study_cohort_assembly_sha256",
+        "class_study_id",
+        "class_study_launch_sha256",
+        "class_study_foundation_sha256",
+        "public_origin_policy",
+    ),
+)
+def test_class_study_configuration_requires_complete_common_binding(
+    tmp_path: Path,
+    missing: str,
+) -> None:
+    campaign = tmp_path / "campaign.yml"
+    atomic_text(campaign, "schema: 2\n")
+    configuration = _class_configuration(campaign, "certification")
+    configuration.pop(missing)
+
+    with pytest.raises(ValueError, match="class-study binding is incomplete"):
+        _initialize_class_experiment(
+            tmp_path,
+            role="certification",
+            configuration=configuration,
+        )
+
+
+def test_class_study_configuration_enforces_role_authority_and_successor_cooccurrence(
+    tmp_path: Path,
+) -> None:
+    campaign = tmp_path / "campaign.yml"
+    atomic_text(campaign, "schema: 2\n")
+
+    certification = _class_configuration(campaign, "certification")
+    certification["class_study_readiness_sha256"] = "2" * 64
+    certification["class_study_historical_pre_snapshot_sha256"] = "3" * 64
+    with pytest.raises(ValueError, match="role authority is inconsistent"):
+        _initialize_class_experiment(
+            tmp_path / "certification",
+            role="certification",
+            configuration=certification,
+        )
+
+    canary = _class_configuration(campaign, "canary")
+    canary.pop("class_study_readiness_sha256")
+    with pytest.raises(ValueError, match="role authority is inconsistent"):
+        _initialize_class_experiment(
+            tmp_path / "canary",
+            role="canary",
+            configuration=canary,
+        )
+
+    base = _class_configuration(campaign, "formal")
+    base["class_study_successor_sha256"] = "1" * 64
+    with pytest.raises(ValueError, match="successor binding is inconsistent"):
+        _initialize_class_experiment(
+            tmp_path / "base",
+            role="formal",
+            configuration=base,
+        )
+
+    successor = _class_configuration(campaign, "formal", successor=True)
+    successor.pop("class_study_successor_sha256")
+    with pytest.raises(ValueError, match="successor binding is inconsistent"):
+        _initialize_class_experiment(
+            tmp_path / "successor",
+            role="formal",
+            configuration=successor,
+        )
 
 
 @pytest.mark.parametrize("qualification_set", [None, "", "../escape", ".hidden", "Mixed-Case"])

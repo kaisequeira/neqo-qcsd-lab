@@ -172,6 +172,146 @@ def parser() -> argparse.ArgumentParser:
     buflo.add_argument("--server-two-qdisc-b64", help=argparse.SUPPRESS)
     buflo.add_argument("--controlled-network-evidence-b64", help=argparse.SUPPRESS)
 
+    class_study = commands.add_parser(
+        "class-study",
+        help="coordinate the evidence-ordered 100-class classifier study",
+    )
+    class_study.add_argument(
+        "action",
+        choices=(
+            "status",
+            "acquisition-init",
+            "acquisition-run",
+            "acquisition-status",
+            "acquisition-complete",
+            "stability",
+            "cohort",
+            "campaigns",
+            "fit-numeric",
+            "prefix-specs",
+            "qualify-prefix",
+            "finalize-fitting",
+            "capture",
+            "resume",
+            "export",
+            "evaluate",
+            "foundation",
+            "readiness",
+            "historical-snapshot",
+            "comparison-review",
+            "attest",
+            "successor-policy",
+            "successor-decision",
+            "successor-restart",
+            "successor-verify",
+            "verify",
+        ),
+    )
+    class_study.add_argument("--stage", choices=("pilot", "authoritative"))
+    class_study.add_argument("--candidate-catalogue", type=Path)
+    class_study.add_argument("--acquisition-root", type=Path)
+    class_study.add_argument("--acquisition-started-at")
+    class_study.add_argument(
+        "--acquisition-browser-tool", default="playwright-chromium"
+    )
+    class_study.add_argument("--acquisition-max-candidates", type=int, default=1)
+    class_study.add_argument("--acquisition-timeout-ms", type=int, default=60_000)
+    class_study.add_argument("--stability-root", type=Path)
+    class_study.add_argument("--stability-input", type=Path)
+    class_study.add_argument("--workload-root", type=Path)
+    class_study.add_argument("--acquisition-completion", type=Path)
+    class_study.add_argument("--pilot-cohort", type=Path)
+    class_study.add_argument("--pilot-cohort-assembly", type=Path)
+    class_study.add_argument("--final-cohort", type=Path)
+    class_study.add_argument("--final-cohort-assembly", type=Path)
+    class_study.add_argument("--cohort", type=Path)
+    class_study.add_argument("--cohort-assembly", type=Path)
+    class_study.add_argument("--final-selection", type=Path)
+    class_study.add_argument("--campaign-root", type=Path)
+    class_study.add_argument("--campaign", type=Path)
+    class_study.add_argument("--results-root", type=Path)
+    class_study.add_argument("--capture-result", type=Path)
+    class_study.add_argument(
+        "--result", dest="result_roots", action="append", type=Path, default=[]
+    )
+    class_study.add_argument(
+        "--regression-result",
+        dest="regression_result_roots",
+        action="append",
+        type=Path,
+        default=[],
+    )
+    class_study.add_argument(
+        "--controlled-result",
+        dest="controlled_result_roots",
+        action="append",
+        type=Path,
+        default=[],
+    )
+    class_study.add_argument(
+        "--canary-result",
+        dest="canary_result_roots",
+        action="append",
+        type=Path,
+        default=[],
+    )
+    class_study.add_argument(
+        "--formal-result",
+        dest="formal_result_roots",
+        action="append",
+        type=Path,
+        default=[],
+    )
+    class_study.add_argument("--artifacts-root", type=Path)
+    class_study.add_argument("--numeric-bundle", type=Path)
+    class_study.add_argument("--prefix-spec-root", type=Path)
+    class_study.add_argument("--qualification-checkpoint", type=Path)
+    class_study.add_argument("--qualification-sidecar-root", type=Path)
+    class_study.add_argument("--qualification-publication-root", type=Path)
+    class_study.add_argument("--qualification-manifest", type=Path)
+    class_study.add_argument("--qualification-workload")
+    class_study.add_argument("--qualify-all-pending", action="store_true")
+    class_study.add_argument("--final-bundle", type=Path)
+    class_study.add_argument("--handoff", type=Path)
+    class_study.add_argument("--evaluation-receipt", type=Path)
+    class_study.add_argument("--cohort-version", action=_SinglePositiveInteger)
+    class_study.add_argument("--build-execution-receipt", type=Path)
+    class_study.add_argument("--reference-receipt", type=Path)
+    class_study.add_argument("--code-gate-receipt", type=Path)
+    class_study.add_argument("--controlled-qualification-receipt", type=Path)
+    class_study.add_argument("--pilot-fitting-result", type=Path)
+    class_study.add_argument("--pilot-compatibility-result", type=Path)
+    class_study.add_argument("--authoritative-fitting-result", type=Path)
+    class_study.add_argument("--certification-result", type=Path)
+    class_study.add_argument("--foundation-attestation", type=Path)
+    class_study.add_argument("--readiness-attestation", type=Path)
+    class_study.add_argument("--historical-pre-snapshot", type=Path)
+    class_study.add_argument("--historical-post-snapshot", type=Path)
+    class_study.add_argument(
+        "--snapshot-phase", choices=("pre-formal", "post-formal")
+    )
+    class_study.add_argument("--comparison-review", type=Path)
+    class_study.add_argument("--validation-attestation", type=Path)
+    class_study.add_argument("--successor-policy", type=Path)
+    class_study.add_argument("--successor-decision", type=Path)
+    class_study.add_argument("--successor-restart", type=Path)
+    class_study.add_argument("--comparison-review-input", type=Path)
+    class_study.add_argument("--reviewer")
+    class_study.add_argument("--reviewed-at")
+    class_study.add_argument("--destination", type=Path)
+    class_study.add_argument("--target", type=Path)
+    class_study.add_argument(
+        "--execute",
+        action="store_true",
+        help="launch or resume capture after prerequisite and preflight validation",
+    )
+    class_study.add_argument(
+        "--shallow",
+        action="store_true",
+        help="skip raw-PCAP replay while retaining closed-inventory verification",
+    )
+    class_study.add_argument("--dlsvm-cache-directory", type=Path)
+
     test = commands.add_parser("test", help="run deterministic or controlled live tests")
     test.add_argument("suite", nargs="?", choices=("live",), default=None)
     return root
@@ -476,6 +616,108 @@ def main(argv: list[str] | None = None) -> None:
                 controlled_network_evidence_b64=args.controlled_network_evidence_b64,
             )
         except (FileExistsError, OSError, RuntimeError, ValueError) as error:
+            _fail(error)
+        print(json.dumps(result.as_dict(), indent=2, sort_keys=True))
+        if result.status == "blocked":
+            raise SystemExit(1)
+        return
+    if args.command == "class-study":
+        from .class_pipeline import run_class_study_action
+
+        def absolute(path: Path | None) -> Path | None:
+            return path.absolute() if path is not None else None
+
+        try:
+            result = run_class_study_action(
+                args.action,
+                stage=args.stage,
+                candidate_catalogue_path=absolute(args.candidate_catalogue),
+                acquisition_root=absolute(args.acquisition_root),
+                acquisition_started_at=args.acquisition_started_at,
+                acquisition_browser_tool=args.acquisition_browser_tool,
+                acquisition_max_candidates=args.acquisition_max_candidates,
+                acquisition_timeout_ms=args.acquisition_timeout_ms,
+                stability_root=absolute(args.stability_root),
+                stability_input=absolute(args.stability_input),
+                workload_root=absolute(args.workload_root),
+                acquisition_completion_path=absolute(args.acquisition_completion),
+                pilot_cohort_receipt_path=absolute(args.pilot_cohort),
+                pilot_cohort_assembly_path=absolute(args.pilot_cohort_assembly),
+                final_cohort_receipt_path=absolute(args.final_cohort),
+                final_cohort_assembly_path=absolute(args.final_cohort_assembly),
+                cohort_receipt_path=absolute(args.cohort),
+                cohort_assembly_path=absolute(args.cohort_assembly),
+                final_selection_path=absolute(args.final_selection),
+                campaign_root=absolute(args.campaign_root),
+                campaign=absolute(args.campaign),
+                results_root=absolute(args.results_root),
+                capture_result=absolute(args.capture_result),
+                result_roots=tuple(path.absolute() for path in args.result_roots),
+                regression_result_roots=tuple(
+                    path.absolute() for path in args.regression_result_roots
+                ),
+                controlled_result_roots=tuple(
+                    path.absolute() for path in args.controlled_result_roots
+                ),
+                canary_result_roots=tuple(
+                    path.absolute() for path in args.canary_result_roots
+                ),
+                formal_result_roots=tuple(
+                    path.absolute() for path in args.formal_result_roots
+                ),
+                artifacts_root=absolute(args.artifacts_root),
+                numeric_bundle_root=absolute(args.numeric_bundle),
+                prefix_spec_root=absolute(args.prefix_spec_root),
+                qualification_checkpoint=absolute(args.qualification_checkpoint),
+                qualification_sidecar_root=absolute(args.qualification_sidecar_root),
+                qualification_publication_root=absolute(
+                    args.qualification_publication_root
+                ),
+                qualification_manifest=absolute(args.qualification_manifest),
+                qualification_workload=args.qualification_workload,
+                qualify_all_pending=args.qualify_all_pending,
+                final_bundle_root=absolute(args.final_bundle),
+                handoff=absolute(args.handoff),
+                evaluation_receipt=absolute(args.evaluation_receipt),
+                cohort_version=args.cohort_version,
+                build_execution_receipt=absolute(args.build_execution_receipt),
+                reference_receipt=absolute(args.reference_receipt),
+                code_gate_receipt=absolute(args.code_gate_receipt),
+                controlled_qualification_receipt=absolute(
+                    args.controlled_qualification_receipt
+                ),
+                pilot_fitting_result=absolute(args.pilot_fitting_result),
+                pilot_compatibility_result=absolute(
+                    args.pilot_compatibility_result
+                ),
+                authoritative_fitting_result=absolute(
+                    args.authoritative_fitting_result
+                ),
+                certification_result=absolute(args.certification_result),
+                foundation_attestation=absolute(args.foundation_attestation),
+                readiness_attestation=absolute(args.readiness_attestation),
+                historical_pre_snapshot=absolute(args.historical_pre_snapshot),
+                historical_post_snapshot=absolute(args.historical_post_snapshot),
+                snapshot_phase=args.snapshot_phase,
+                comparison_review=absolute(args.comparison_review),
+                validation_attestation=absolute(args.validation_attestation),
+                successor_policy=absolute(args.successor_policy),
+                successor_decision=absolute(args.successor_decision),
+                successor_restart=absolute(args.successor_restart),
+                comparison_review_input=absolute(args.comparison_review_input),
+                reviewer=args.reviewer,
+                reviewed_at=args.reviewed_at,
+                destination=absolute(args.destination),
+                target=absolute(args.target),
+                execute=args.execute,
+                deep=not args.shallow,
+                dlsvm_cache_directory=absolute(args.dlsvm_cache_directory),
+            )
+        except CampaignIncomplete as error:
+            print(error, file=sys.stderr)
+            print(error.root)
+            raise SystemExit(1) from None
+        except (FileExistsError, OSError, RuntimeError, TypeError, ValueError) as error:
             _fail(error)
         print(json.dumps(result.as_dict(), indent=2, sort_keys=True))
         if result.status == "blocked":

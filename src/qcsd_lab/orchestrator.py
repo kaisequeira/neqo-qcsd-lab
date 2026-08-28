@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import csv
 import fcntl
+import hashlib
 import json
 import math
 import os
@@ -51,11 +52,14 @@ from .parameters import (
     validate_parameter_artifact,
 )
 from .profiles import UDP_PAYLOAD_CEILING_BY_PROFILE
+from .class_study import STUDY_ID
 from .util import (
     LAB_ROOT,
     SOURCE_METADATA_KEYS,
     atomic_json,
     discard_atomic_write_temps,
+    durable_create,
+    fsync_directory,
     load_json,
     response_signature,
     sha256_bytes,
@@ -64,9 +68,41 @@ from .util import (
 )
 
 SCHEMA_VERSION = 1
+CLASS_STUDY_SCHEMA_VERSION = 2
+CLASS_STUDY_PUBLIC_ORIGIN_ENV = "QCSD_PUBLIC_ORIGIN_ONLY"
+SUPPORTED_SCHEMA_VERSIONS = frozenset({SCHEMA_VERSION, CLASS_STUDY_SCHEMA_VERSION})
 PURPOSES = {"smoke", "fitting", "evaluation"}
+EVIDENCE_ROLES = frozenset(
+    {
+        "pilot-fitting",
+        "pilot-compatibility",
+        "authoritative-fitting",
+        "certification",
+        "canary",
+        "formal",
+    }
+)
+CLASS_STUDY_NAME_PREFIX = "classifier-multiorigin100-v1-"
+CLASS_STUDY_LAUNCH_ARTIFACT_TYPE = "qcsd-class-study-first-launch-claim"
+CLASS_STUDY_LAUNCH_SCHEMA_VERSION = 1
+CLASS_STUDY_LAUNCH_INPUT = "inputs/class-study-launch.json"
+CLASS_STUDY_FOUNDATION_INPUT = "inputs/class-study-foundation.json"
+CLASS_STUDY_READINESS_INPUT = "inputs/class-study-readiness.json"
+CLASS_STUDY_HISTORICAL_PRE_INPUT = (
+    "inputs/class-study-historical-pre-snapshot.json"
+)
+CLASS_STUDY_SUCCESSOR_INPUT = "inputs/class-study-successor.json"
+CLASS_STUDY_FOUNDATION_CONFIGURATION_KEY = "class_study_foundation_sha256"
+CLASS_STUDY_READINESS_CONFIGURATION_KEY = "class_study_readiness_sha256"
+CLASS_STUDY_HISTORICAL_PRE_CONFIGURATION_KEY = (
+    "class_study_historical_pre_snapshot_sha256"
+)
+CLASS_STUDY_SUCCESSOR_CONFIGURATION_KEY = "class_study_successor_sha256"
+CLASS_STUDY_FOUNDATION_ENV = "QCSD_CLASS_FOUNDATION_ATTESTATION"
+CLASS_STUDY_READINESS_ENV = "QCSD_CLASS_READINESS_ATTESTATION"
+CLASS_STUDY_HISTORICAL_PRE_ENV = "QCSD_CLASS_HISTORICAL_PRE_SNAPSHOT"
 REQUEST_POLICIES = {"as-defined", "half-duplex"}
-CAMPAIGN_KEYS = {
+LEGACY_CAMPAIGN_KEYS = {
     "schema",
     "name",
     "purpose",
@@ -80,6 +116,13 @@ CAMPAIGN_KEYS = {
     "limits",
     "study_controlled",
 }
+CAMPAIGN_KEYS = LEGACY_CAMPAIGN_KEYS | {
+    "evidence_role",
+    "sample_order",
+    "class_study_cohort",
+    "class_study_cohort_assembly",
+    "class_study_successor",
+}
 LIMIT_KEYS = {
     "timeout_seconds",
     "max_response_bytes",
@@ -91,6 +134,7 @@ LIMIT_KEYS = {
 }
 DEFENSE_KEYS = {"name", "kind", "schedule", "mode", "parameters"}
 EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 WALKIE_TALKIE_RECEIVER_RAW_HEADROOM_BYTES = 1_200
 RESPONSE_ONLY_CHAFF_DEFENSE_KINDS = frozenset(
     {"front", "tamaraw", *BUFLO_STUDY_PARAMETER_KINDS}
@@ -137,6 +181,8 @@ class Workload:
     chaff_manifest_path: Path | None = None
     chaff_manifest_sha256: str | None = None
     chaff_manifest_data: dict[str, Any] | None = None
+    qualification_set_manifest_path: Path | None = None
+    qualification_set_manifest_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -155,6 +201,18 @@ class Campaign:
     defense_order_scheme: str = "seeded-shuffle"
     defense_order_block: int | None = None
     study_controlled: Mapping[str, Any] | None = None
+    schema_version: int = SCHEMA_VERSION
+    evidence_role: str | None = None
+    sample_order_scheme: str = "grouped"
+    sample_order_window: int | None = None
+    class_study_cohort_path: Path | None = None
+    class_study_cohort_sha256: str | None = None
+    class_study_cohort_assembly_path: Path | None = None
+    class_study_cohort_assembly_sha256: str | None = None
+    class_study_id: str | None = None
+    class_study_successor_path: Path | None = None
+    class_study_successor_sha256: str | None = None
+    class_study_launch_namespace: str | None = None
 
     @property
     def udp_payload_ceiling(self) -> int:
@@ -193,6 +251,93 @@ def _object(value: Any, location: str) -> dict[str, Any]:
     return dict(value)
 
 
+def _load_successor_campaign_context(
+    campaign_path: Path,
+    *,
+    source_bytes: bytes,
+    raw_reference: object,
+    schema_version: int,
+    frozen_inputs: Path | None,
+) -> dict[str, Any] | None:
+    """Resolve one exact hash-namespaced successor plan before path admission."""
+
+    if raw_reference is None:
+        return None
+    if schema_version != CLASS_STUDY_SCHEMA_VERSION:
+        raise ValueError("class_study_successor is valid only for schema-two campaigns")
+    if (
+        not isinstance(raw_reference, str)
+        or not raw_reference
+        or Path(raw_reference).is_absolute()
+        or Path(raw_reference).as_posix() != raw_reference
+    ):
+        raise ValueError("class_study_successor must be a normalised relative path")
+    if frozen_inputs is None:
+        restart_path = (campaign_path.parent / raw_reference).resolve()
+        from .class_successor import validate_successor_restart
+
+        restart = validate_successor_restart(restart_path)
+        restart_root = restart_path.parent.parent
+        expected_campaign = restart_root / "plan/campaigns" / campaign_path.name
+        if campaign_path.resolve() != expected_campaign.resolve():
+            raise ValueError("successor campaign is outside its hash-namespaced plan")
+    else:
+        restart_path = frozen_inputs / "class-study-successor.json"
+        if restart_path.is_symlink() or not restart_path.is_file():
+            raise ValueError("frozen successor campaign lacks its restart authority")
+        from .class_study import validate_hash_bound_receipt
+        from .class_successor import RESTART_RECEIPT_TYPE
+
+        restart_value = load_json(restart_path)
+        restart = validate_hash_bound_receipt(
+            restart_value, expected_type=RESTART_RECEIPT_TYPE
+        )
+        restart_root = restart_path.parent
+    artifacts = restart.get("immutable_plan_artifacts")
+    if isinstance(artifacts, Mapping) and frozen_inputs is not None:
+        matches = [
+            binding
+            for relative, binding in artifacts.items()
+            if isinstance(relative, str)
+            and relative.startswith("campaigns/")
+            and isinstance(binding, Mapping)
+            and binding.get("sha256") == sha256_bytes(source_bytes)
+        ]
+        campaign_binding = matches[0] if len(matches) == 1 else None
+    else:
+        campaign_binding = (
+            artifacts.get(f"campaigns/{campaign_path.name}")
+            if isinstance(artifacts, Mapping)
+            else None
+        )
+    if (
+        not isinstance(campaign_binding, Mapping)
+        or campaign_binding.get("sha256") != sha256_bytes(source_bytes)
+    ):
+        raise ValueError("successor campaign bytes differ from the immutable restart plan")
+    study_id = restart.get("study_id")
+    namespace = restart.get("namespace")
+    launch_namespace = (
+        namespace.get("launch_namespace") if isinstance(namespace, Mapping) else None
+    )
+    if (
+        not isinstance(study_id, str)
+        or not study_id.startswith("classifier-multiorigin100-v2-")
+        or launch_namespace != f".{study_id}-launches"
+    ):
+        raise ValueError("successor restart has an invalid study/launch namespace")
+    return {
+        "study_id": study_id,
+        "launch_namespace": launch_namespace,
+        "restart_path": str(restart_path.resolve()),
+        "restart_sha256": sha256_file(restart_path),
+        "restart_root": str(restart_root.resolve()),
+        "qualification_set_root": str(
+            (restart_root / "qualification" / f"{study_id}-final-full").resolve()
+        ),
+    }
+
+
 def load_campaign(path: Path) -> Campaign:
     """Load the single consolidated campaign schema."""
 
@@ -209,7 +354,7 @@ def _load_campaign(
     frozen_inputs: Path | None,
     allow_historical_research_bundle: bool = False,
 ) -> Campaign:
-    path = path.resolve()
+    path = Path(os.path.abspath(path))
     try:
         source_bytes = path.read_bytes()
         source = yaml.safe_load(source_bytes.decode("utf-8"))
@@ -218,7 +363,41 @@ def _load_campaign(
     except yaml.YAMLError as error:
         raise ValueError(f"campaign YAML is invalid: {error}") from error
     value = _object(source, "campaign")
-    _reject_unknown(value, CAMPAIGN_KEYS, "campaign")
+    schema_version = value.get("schema")
+    if type(schema_version) is not int or schema_version not in SUPPORTED_SCHEMA_VERSIONS:
+        choices = ", ".join(str(item) for item in sorted(SUPPORTED_SCHEMA_VERSIONS))
+        raise ValueError(f"campaign schema must be one of: {choices}")
+    successor_context = _load_successor_campaign_context(
+        path,
+        source_bytes=source_bytes,
+        raw_reference=value.get("class_study_successor"),
+        schema_version=schema_version,
+        frozen_inputs=frozen_inputs,
+    )
+    if (
+        schema_version == CLASS_STUDY_SCHEMA_VERSION
+        and frozen_inputs is None
+        and successor_context is None
+    ):
+        from .class_layout import require_canonical_fresh_child
+
+        path = require_canonical_fresh_child(
+            path,
+            field="campaign_root",
+            label="fresh schema-two class-study campaign",
+        )
+        if path.suffix != ".yml":
+            raise ValueError("fresh schema-two class-study campaign must use a .yml filename")
+    else:
+        # Historical schema-one and frozen result-local loaders retain their
+        # established resolution semantics.  Sealed-result verification owns
+        # the trust boundary for the latter.
+        path = path.resolve()
+    _reject_unknown(
+        value,
+        LEGACY_CAMPAIGN_KEYS if schema_version == SCHEMA_VERSION else CAMPAIGN_KEYS,
+        "campaign",
+    )
     required = {
         "schema",
         "name",
@@ -232,8 +411,11 @@ def _load_campaign(
     missing = required - set(value)
     if missing:
         raise ValueError(f"campaign is missing: {', '.join(sorted(missing))}")
-    if value["schema"] != SCHEMA_VERSION:
-        raise ValueError(f"campaign schema must be {SCHEMA_VERSION}")
+    evidence_role, sample_order_scheme, sample_order_window = _load_class_study_execution(
+        schema_version,
+        evidence_role=value.get("evidence_role"),
+        sample_order=value.get("sample_order"),
+    )
     if "chaff_qualification_set" not in value:
         qualification_set = None
     else:
@@ -271,6 +453,13 @@ def _load_campaign(
         if purpose != "smoke":
             raise ValueError("controlled study metadata is valid only for smoke campaigns")
     config_root = _campaign_config_root(path, frozen_inputs=frozen_inputs)
+    if successor_context is not None and frozen_inputs is None:
+        config_root = (LAB_ROOT / "config").resolve()
+    cohort_trust_root = (
+        Path(successor_context["restart_root"]) / "plan"
+        if successor_context is not None and frozen_inputs is None
+        else config_root
+    )
     workloads = _load_workloads(
         path,
         value["workloads"],
@@ -278,18 +467,75 @@ def _load_campaign(
         frozen_inputs=frozen_inputs,
         config_root=config_root,
     )
+    (
+        class_study_cohort_path,
+        class_study_cohort_sha256,
+        class_study_cohort_assembly_path,
+        class_study_cohort_assembly_sha256,
+    ) = _load_class_study_cohort_binding(
+        schema_version=schema_version,
+        evidence_role=evidence_role,
+        raw_path=value.get("class_study_cohort"),
+        raw_assembly_path=value.get("class_study_cohort_assembly"),
+        campaign_path=path,
+        config_root=config_root,
+        cohort_trust_root=cohort_trust_root,
+        frozen_inputs=frozen_inputs,
+        workload_ids=tuple(workload.id for workload in workloads),
+        workload_hashes={workload.id: workload.sha256 for workload in workloads},
+    )
+    class_qualification_context = None
+    if (
+        successor_context is not None
+        and frozen_inputs is None
+        and qualification_set is not None
+    ):
+        from .class_fitting import QualificationContext
+
+        restart_root = Path(successor_context["restart_root"])
+        class_qualification_context = QualificationContext(
+            workload_root=config_root / "workloads",
+            sidecar_root=Path(successor_context["qualification_set_root"]),
+            prefix_spec_root=(
+                restart_root
+                / "artifacts"
+                / f"{STUDY_ID}-authoritative-fitting-prefix-specs"
+            ),
+            expected_qualification_set=qualification_set,
+        )
     defenses = _load_defenses(
-        config_root / "campaigns",
+        (
+            path.parent
+            if successor_context is not None and frozen_inputs is None
+            else config_root / "campaigns"
+        ),
         value["defenses"],
         purpose,
         profile,
         {workload.id: workload.sha256 for workload in workloads},
         frozen_inputs=frozen_inputs,
         allow_historical_research_bundle=allow_historical_research_bundle,
+        evidence_role=evidence_role,
+        class_qualification_context=class_qualification_context,
+        qualification_set=qualification_set,
+        expected_successor_study_id=(
+            str(successor_context["study_id"])
+            if successor_context is not None
+            else None
+        ),
+        expected_successor_restart_sha256=(
+            str(successor_context["restart_sha256"])
+            if successor_context is not None
+            else None
+        ),
     )
     has_defended_run = any(not defense.baseline for defense in defenses)
     qualification_scope = _required_chaff_qualification_scope(defenses)
-    if qualification_set is not None and qualification_scope != RESPONSE_ONLY_CHAFF_SCOPE:
+    if (
+        schema_version == SCHEMA_VERSION
+        and qualification_set is not None
+        and qualification_scope != RESPONSE_ONLY_CHAFF_SCOPE
+    ):
         raise ValueError("chaff_qualification_set requires a response-only defended runtime")
     current_prepared_inputs = all(
         isinstance(workload.data.get("preparation"), Mapping) for workload in workloads
@@ -322,7 +568,19 @@ def _load_campaign(
             qualification_scope=qualification_scope,
             qualification_set=qualification_set,
             config_root=config_root,
+            qualification_set_root_override=(
+                Path(successor_context["qualification_set_root"])
+                if successor_context is not None and frozen_inputs is None
+                else None
+            ),
         )
+        if schema_version == CLASS_STUDY_SCHEMA_VERSION:
+            if qualification_set is None:
+                raise ValueError("schema-two defended campaigns require a named qualification set")
+            if any(workload.qualification_set_manifest_path is None for workload in workloads):
+                raise ValueError(
+                    "schema-two defended campaigns require a manifest-bound qualification set"
+                )
     _validate_loaded_qualification_bindings(defenses, workloads)
     if any(_uses_schema_six_walkie_talkie(defense) for defense in defenses):
         if not all(workload.chaff_manifest_data is not None for workload in workloads):
@@ -333,6 +591,19 @@ def _load_campaign(
     name = value["name"]
     if not isinstance(name, str) or _slug(name) != name:
         raise ValueError("campaign name must be a filesystem-safe identifier")
+    if (
+        schema_version == CLASS_STUDY_SCHEMA_VERSION
+        and frozen_inputs is None
+        and successor_context is None
+    ):
+        from .class_layout import require_canonical_fresh_child
+
+        path = require_canonical_fresh_child(
+            path,
+            field="campaign_root",
+            filename=f"{name}.yml",
+            label="fresh schema-two class-study campaign",
+        )
     campaign = Campaign(
         path=path,
         source_bytes=source_bytes,
@@ -348,10 +619,334 @@ def _load_campaign(
         defense_order_scheme=defense_order_scheme,
         defense_order_block=defense_order_block,
         study_controlled=study_controlled,
+        schema_version=schema_version,
+        evidence_role=evidence_role,
+        sample_order_scheme=sample_order_scheme,
+        sample_order_window=sample_order_window,
+        class_study_cohort_path=class_study_cohort_path,
+        class_study_cohort_sha256=class_study_cohort_sha256,
+        class_study_cohort_assembly_path=class_study_cohort_assembly_path,
+        class_study_cohort_assembly_sha256=class_study_cohort_assembly_sha256,
+        class_study_id=(
+            str(successor_context["study_id"])
+            if successor_context is not None
+            else STUDY_ID if schema_version == CLASS_STUDY_SCHEMA_VERSION else None
+        ),
+        class_study_successor_path=(
+            Path(successor_context["restart_path"])
+            if successor_context is not None
+            else None
+        ),
+        class_study_successor_sha256=(
+            str(successor_context["restart_sha256"])
+            if successor_context is not None
+            else None
+        ),
+        class_study_launch_namespace=(
+            str(successor_context["launch_namespace"])
+            if successor_context is not None
+            else f".{STUDY_ID}-launches"
+            if schema_version == CLASS_STUDY_SCHEMA_VERSION
+            else None
+        ),
     )
     if purpose == "fitting":
         _validate_fitting_campaign(campaign, raw_limits=raw_limits)
+    _validate_evidence_role(campaign)
+    if schema_version == CLASS_STUDY_SCHEMA_VERSION:
+        if (
+            class_study_cohort_path is None
+            or class_study_cohort_assembly_path is None
+        ):
+            raise AssertionError("class-study campaign lost its admission receipts")
+        if successor_context is None:
+            from .class_campaigns import validate_campaign_document
+
+            validate_campaign_document(
+                value,
+                cohort_receipt=class_study_cohort_path,
+                cohort_assembly_receipt=class_study_cohort_assembly_path,
+                enforce_fresh_layout=frozen_inputs is None,
+            )
     return campaign
+
+
+def _load_class_study_cohort_binding(
+    *,
+    schema_version: int,
+    evidence_role: str | None,
+    raw_path: object,
+    raw_assembly_path: object,
+    campaign_path: Path,
+    config_root: Path,
+    frozen_inputs: Path | None,
+    workload_ids: tuple[str, ...],
+    workload_hashes: Mapping[str, str],
+    cohort_trust_root: Path | None = None,
+) -> tuple[Path | None, str | None, Path | None, str | None]:
+    """Resolve the final cohort receipt without affecting historical campaigns."""
+
+    if schema_version == SCHEMA_VERSION:
+        if raw_path is not None or raw_assembly_path is not None:
+            raise ValueError("campaign schema one cannot declare class-study cohort evidence")
+        return None, None, None, None
+    requires_final = evidence_role in {
+        "authoritative-fitting",
+        "certification",
+        "canary",
+        "formal",
+    }
+    if raw_path is None or raw_assembly_path is None:
+        raise ValueError(
+            f"{evidence_role} evidence requires cohort and cohort-assembly receipts"
+        )
+    for field, raw in (
+        ("class_study_cohort", raw_path),
+        ("class_study_cohort_assembly", raw_assembly_path),
+    ):
+        if not isinstance(raw, str) or not raw or Path(raw).is_absolute():
+            raise ValueError(f"{field} must be a nonempty relative path")
+    cohort_candidate = (
+        frozen_inputs / "class-study-cohort.json"
+        if frozen_inputs is not None
+        else campaign_path.parent / raw_path
+    )
+    assembly_candidate = (
+        frozen_inputs / "class-study-cohort-assembly.json"
+        if frozen_inputs is not None
+        else campaign_path.parent / raw_assembly_path
+    )
+    receipt_path = _trusted_regular_input(
+        cohort_candidate,
+        root=(
+            frozen_inputs
+            if frozen_inputs is not None
+            else (cohort_trust_root or config_root)
+        ),
+        label="class-study cohort receipt",
+    )
+    assembly_path = _trusted_regular_input(
+        assembly_candidate,
+        root=(
+            frozen_inputs
+            if frozen_inputs is not None
+            else (cohort_trust_root or config_root)
+        ),
+        label="class-study cohort-assembly receipt",
+    )
+    from .class_cohort import cohort_workload_hashes, validate_cohort_assembly_receipt
+    from .class_study import load_study_receipt
+
+    receipt, selection = load_study_receipt(receipt_path)
+    assembly = load_json(assembly_path)
+    validate_cohort_assembly_receipt(assembly, cohort=receipt)
+    expected = selection.final if requires_final else selection.pilot
+    expected_ids = tuple(candidate.candidate_id for candidate in expected)
+    if workload_ids != expected_ids:
+        cohort = "final" if requires_final else "pilot"
+        raise ValueError(f"{evidence_role} workload order differs from the {cohort} cohort")
+    expected_hashes = cohort_workload_hashes(
+        assembly,
+        cohort=receipt,
+        workload_ids=expected_ids,
+    )
+    if dict(workload_hashes) != expected_hashes:
+        raise ValueError(
+            f"{evidence_role} prepared workload bytes differ from cohort admission"
+        )
+    return (
+        receipt_path,
+        sha256_file(receipt_path),
+        assembly_path,
+        sha256_file(assembly_path),
+    )
+
+
+def _load_class_study_execution(
+    schema_version: int,
+    *,
+    evidence_role: object,
+    sample_order: object,
+) -> tuple[str | None, str, int | None]:
+    """Parse the schema-two evidence and execution controls without changing v1."""
+
+    if schema_version == SCHEMA_VERSION:
+        if evidence_role is not None or sample_order is not None:
+            raise ValueError("campaign schema one cannot declare class-study execution fields")
+        return None, "grouped", None
+    if not isinstance(evidence_role, str) or evidence_role not in EVIDENCE_ROLES:
+        choices = ", ".join(sorted(EVIDENCE_ROLES))
+        raise ValueError(f"schema-two campaign evidence_role must be one of: {choices}")
+    if sample_order is None:
+        return evidence_role, "grouped", None
+    value = _object(sample_order, "sample_order")
+    _reject_unknown(value, {"scheme", "window_size"}, "sample_order")
+    if value.get("scheme") != "origin-aware-windowed":
+        raise ValueError("sample_order scheme must be origin-aware-windowed")
+    window = value.get("window_size")
+    if type(window) is not int or not 2 <= window <= 100:
+        raise ValueError("sample_order window_size must be an integer in [2, 100]")
+    return evidence_role, "origin-aware-windowed", window
+
+
+def _validate_evidence_role(campaign: Campaign) -> None:
+    """Keep excluded fitting/qualification traffic out of formal result roles."""
+
+    if campaign.schema_version == SCHEMA_VERSION:
+        return
+    expected_purpose = {
+        "pilot-fitting": "fitting",
+        "authoritative-fitting": "fitting",
+        "pilot-compatibility": "smoke",
+        "certification": "smoke",
+        "canary": "smoke",
+        "formal": "evaluation",
+    }[str(campaign.evidence_role)]
+    if campaign.purpose != expected_purpose:
+        raise ValueError(
+            f"{campaign.evidence_role} evidence requires purpose {expected_purpose}"
+        )
+    expected_attempts = 1 if campaign.evidence_role == "certification" else 3
+    if campaign.limits.max_attempts != expected_attempts:
+        raise ValueError(
+            f"{campaign.evidence_role} evidence requires max_attempts "
+            f"{expected_attempts}"
+        )
+    _validate_class_study_campaign_contract(campaign)
+
+
+def _validate_class_study_campaign_contract(campaign: Campaign) -> None:
+    """Enforce the preregistered matrices independently of generated YAML."""
+
+    from .class_campaigns import (
+        CAPTURE_LIMITS,
+        FINAL_QUALIFICATION_SET,
+        ORIGIN_AWARE_WINDOW,
+        PILOT_QUALIFICATION_SET,
+    )
+    from .class_study import (
+        COMPATIBILITY_MODES,
+        FINAL_CLASS_COUNT,
+        FORMAL_MODES,
+        PILOT_COUNT,
+        STUDY_ID,
+    )
+
+    role = str(campaign.evidence_role)
+    study_id = campaign.class_study_id or STUDY_ID
+    successor = campaign.class_study_successor_sha256 is not None
+    expected_workloads = (
+        PILOT_COUNT
+        if role in {"pilot-fitting", "pilot-compatibility"}
+        else FINAL_CLASS_COUNT
+    )
+    expected_visits = {
+        "pilot-fitting": 2,
+        "pilot-compatibility": 1,
+        "authoritative-fitting": 10,
+        "certification": 1,
+        "canary": 1,
+        "formal": 2,
+    }[role]
+    if len(campaign.workloads) != expected_workloads or any(
+        workload.visits != expected_visits for workload in campaign.workloads
+    ):
+        raise ValueError(
+            f"{role} evidence requires {expected_workloads} workloads with "
+            f"{expected_visits} visit(s) each"
+        )
+    expected_policies = (
+        ("as-defined", "half-duplex")
+        if role in {"pilot-fitting", "authoritative-fitting"}
+        else ("as-defined",)
+    )
+    if campaign.request_policies != expected_policies:
+        raise ValueError(f"{role} evidence has the wrong request-policy matrix")
+    expected_modes = (
+        ("undefended",)
+        if role in {"pilot-fitting", "authoritative-fitting", "canary"}
+        else FORMAL_MODES
+        if role == "formal"
+        else COMPATIBILITY_MODES
+    )
+    observed_modes = tuple(defense.name for defense in campaign.defenses)
+    if observed_modes != expected_modes:
+        raise ValueError(f"{role} defenses differ from the fixed class-study mode order")
+    expected_kinds = {
+        "undefended": "none",
+        "static": "static",
+        "front": "front",
+        "tamaraw": "tamaraw",
+        "traffic-morphing": "traffic_morphing",
+        "wtf-pad": "wtf_pad",
+        "walkie-talkie": "walkie_talkie",
+        "buflo": "buflo",
+        "cs-buflo": "cs_buflo",
+    }
+    if any(defense.kind != expected_kinds[defense.name] for defense in campaign.defenses):
+        raise ValueError(f"{role} runtime kinds differ from the fixed class-study identities")
+    if (
+        campaign.sample_order_scheme != "origin-aware-windowed"
+        or campaign.sample_order_window != ORIGIN_AWARE_WINDOW
+    ):
+        raise ValueError(
+            f"{role} evidence requires the fixed origin-aware sample window"
+        )
+    expected_name = {
+        "pilot-fitting": f"{STUDY_ID}-pilot-fitting-1200",
+        "pilot-compatibility": "classifier-multiorigin100-v1-pilot-compatibility-1080-1200",
+        "authoritative-fitting": f"{STUDY_ID}-authoritative-fitting-1200",
+        "certification": "classifier-multiorigin100-v1-certification-900-1200",
+    }.get(role)
+    if successor:
+        expected_name = {
+            "authoritative-fitting": f"{study_id}-authoritative-fitting-2000-1200",
+            "certification": f"{study_id}-certification-900-1200",
+        }.get(role)
+    if role in {"canary", "formal"}:
+        expected_name_pattern = rf"{re.escape(study_id)}-{role}-[0-9]{{2}}-1200"
+        if re.fullmatch(expected_name_pattern, campaign.name) is None:
+            raise ValueError(f"{role} campaign name is not canonical")
+    elif expected_name is not None and campaign.name != expected_name:
+        raise ValueError(f"{role} campaign name is not canonical")
+    expected_seed = int.from_bytes(
+        hashlib.sha256(f"{study_id}\0{campaign.name}".encode()).digest()[:4],
+        "big",
+    )
+    if campaign.seed != expected_seed:
+        raise ValueError(f"{role} campaign seed differs from its canonical name")
+    expected_attempts = 1 if role == "certification" else 3
+    expected_limits = {**CAPTURE_LIMITS, "max_attempts": expected_attempts}
+    if campaign.limits.as_dict() != expected_limits:
+        raise ValueError(f"{role} capture limits differ from the fixed study contract")
+    expected_qualification = {
+        "pilot-compatibility": PILOT_QUALIFICATION_SET,
+        "certification": FINAL_QUALIFICATION_SET,
+        "formal": FINAL_QUALIFICATION_SET,
+    }.get(role)
+    if successor and role in {"certification", "formal"}:
+        expected_qualification = f"{study_id}-final-full"
+    if campaign.chaff_qualification_set != expected_qualification:
+        raise ValueError(f"{role} qualification-set identity is not canonical")
+    if role in {"pilot-compatibility", "certification", "canary", "formal"}:
+        if campaign.defense_order_scheme != "cyclic-latin-square":
+            raise ValueError(f"{role} evidence requires cyclic Latin defense ordering")
+    elif (
+        campaign.defense_order_scheme != "seeded-shuffle"
+        or campaign.defense_order_block is not None
+    ):
+        raise ValueError(f"{role} fitting order differs from the fixed study contract")
+    if role in {"canary", "formal"}:
+        match = re.search(r"-([0-9]{2})-1200$", campaign.name)
+        if match is None:
+            raise ValueError(f"{role} campaign has no acquisition block")
+        block = int(match.group(1))
+        if not 1 <= block <= 10 or campaign.defense_order_block != block - 1:
+            raise ValueError(f"{role} defense-order block differs from its campaign name")
+    elif role in {"pilot-compatibility", "certification"} and (
+        campaign.defense_order_block != 0
+    ):
+        raise ValueError(f"{role} defense-order block must be zero")
 
 
 def _uses_schema_six_walkie_talkie(defense: capture_engine.Defense) -> bool:
@@ -386,10 +981,17 @@ def _load_qualified_chaff_inputs(
     qualification_scope: str = FULL_CHAFF_SCOPE,
     qualification_set: str | None = None,
     config_root: Path | None = None,
+    qualification_set_root_override: Path | None = None,
 ) -> tuple[Workload, ...]:
     """Bind the selected immutable sidecar contract and derived manifest."""
 
-    from .chaff_qualification import load_qualified_chaff, load_response_qualified_chaff
+    from .chaff_qualification import (
+        NAMED_QUALIFICATION_PREFIX_DIRECTORY,
+        NAMED_QUALIFICATION_SET_MANIFEST,
+        load_named_qualification_set,
+        load_qualified_chaff,
+        load_response_qualified_chaff,
+    )
 
     if frozen_inputs is not None:
         qualification_scope = _frozen_chaff_qualification_scope(
@@ -397,8 +999,11 @@ def _load_qualified_chaff_inputs(
             workloads,
             defense_derived_scope=qualification_scope,
         )
+    set_manifest_path: Path | None = None
+    set_manifest_sha256: str | None = None
     if frozen_inputs is None:
         config_root = campaign_path.parent.parent if config_root is None else config_root
+        qualification_trust_root = config_root
         if qualification_scope == RESPONSE_ONLY_CHAFF_SCOPE:
             if qualification_set is None:
                 qualification_root = config_root / "chaff-response-qualification-store/v2"
@@ -411,24 +1016,56 @@ def _load_qualified_chaff_inputs(
                     root=config_root,
                     label="selected response qualification set",
                 )
-                expected_names = {f"{workload.id}.json" for workload in workloads}
-                entries = list(qualification_root.iterdir())
-                if {entry.name for entry in entries} != expected_names or any(
-                    entry.is_symlink() or not entry.is_file() for entry in entries
-                ):
-                    raise ValueError(
-                        "selected response qualification set does not contain the exact "
-                        "campaign workload cohort"
-                    )
             prefix_root: Path | None = None
         elif qualification_scope == FULL_CHAFF_SCOPE:
-            qualification_root = config_root / "chaff-qualification-store/v2"
-            prefix_root = config_root / "chaff-prefix-specs/v2"
+            if qualification_set is None:
+                qualification_root = config_root / "chaff-qualification-store/v2"
+                prefix_root = config_root / "chaff-prefix-specs/v2"
+            else:
+                from .chaff_qualification import validate_qualification_set
+
+                qualification_set = validate_qualification_set(qualification_set)
+                selected_root = (
+                    qualification_set_root_override
+                    if qualification_set_root_override is not None
+                    else config_root
+                    / "chaff-qualification-store"
+                    / "sets"
+                    / qualification_set
+                )
+                trust_root = (
+                    qualification_set_root_override.parent
+                    if qualification_set_root_override is not None
+                    else config_root
+                )
+                qualification_trust_root = trust_root
+                qualification_root = _trusted_regular_directory(
+                    selected_root,
+                    root=trust_root,
+                    label="selected full qualification set",
+                )
+                published_prefix_root = (
+                    qualification_root / NAMED_QUALIFICATION_PREFIX_DIRECTORY
+                )
+                prefix_root = _trusted_regular_directory(
+                    (
+                        published_prefix_root
+                        if published_prefix_root.exists()
+                        or published_prefix_root.is_symlink()
+                        else config_root
+                        / "chaff-prefix-specs"
+                        / "sets"
+                        / qualification_set
+                    ),
+                    root=qualification_trust_root,
+                    label="selected full qualification prefix specifications",
+                )
         else:
             raise ValueError(f"unsupported chaff qualification scope: {qualification_scope}")
         manifest_root: Path | None = None
     else:
         config_root = frozen_inputs
+        qualification_trust_root = frozen_inputs
         qualification_root = frozen_inputs / "chaff-qualifications"
         prefix_root = (
             None
@@ -436,6 +1073,30 @@ def _load_qualified_chaff_inputs(
             else frozen_inputs / "chaff-prefix-specs"
         )
         manifest_root = frozen_inputs / "chaff-manifests"
+    candidate_set_manifest = qualification_root / NAMED_QUALIFICATION_SET_MANIFEST
+    if candidate_set_manifest.exists() or candidate_set_manifest.is_symlink():
+        named = load_named_qualification_set(
+            candidate_set_manifest,
+            workload_root=config_root / "workloads",
+            sidecar_root=qualification_root,
+            prefix_spec_root=prefix_root,
+            expected_qualification_set=qualification_set,
+            expected_qualification_scope=qualification_scope,
+            expected_workload_ids=tuple(workload.id for workload in workloads),
+            require_current_implementation=frozen_inputs is None,
+        )
+        set_manifest_path = named.manifest_path
+        set_manifest_sha256 = named.manifest_sha256
+    elif qualification_set is not None:
+        expected_names = {f"{workload.id}.json" for workload in workloads}
+        entries = list(qualification_root.iterdir())
+        if {entry.name for entry in entries} != expected_names or any(
+            entry.is_symlink() or not entry.is_file() for entry in entries
+        ):
+            raise ValueError(
+                "selected response qualification set does not contain the exact "
+                "campaign workload cohort"
+            )
     qualified: list[Workload] = []
     for workload in workloads:
         if manifest_root is None:
@@ -448,7 +1109,7 @@ def _load_qualified_chaff_inputs(
             )
         sidecar_path = _trusted_regular_input(
             qualification_root / f"{workload.id}.json",
-            root=config_root,
+            root=qualification_trust_root,
             label="chaff qualification sidecar",
         )
         if qualification_scope == RESPONSE_ONLY_CHAFF_SCOPE:
@@ -470,7 +1131,7 @@ def _load_qualified_chaff_inputs(
                 raise AssertionError("full chaff qualification has no prefix-spec root")
             spec_path = _trusted_regular_input(
                 prefix_root / f"{workload.id}.json",
-                root=config_root,
+                root=qualification_trust_root,
                 label="chaff prefix-pack specification",
             )
             receipt = load_qualified_chaff(
@@ -494,6 +1155,8 @@ def _load_qualified_chaff_inputs(
                 chaff_manifest_path=manifest_path,
                 chaff_manifest_sha256=receipt.manifest_sha256,
                 chaff_manifest_data=receipt.manifest,
+                qualification_set_manifest_path=set_manifest_path,
+                qualification_set_manifest_sha256=set_manifest_sha256,
             )
         )
     return tuple(qualified)
@@ -530,7 +1193,8 @@ def _frozen_chaff_qualification_scope(
     if prefix_present:
         if any(version is not None for version in response_versions):
             raise ValueError(
-                "frozen chaff evidence ambiguously contains response-only manifests and prefix specs"
+                "frozen chaff evidence ambiguously contains response-only manifests "
+                "and prefix specs"
             )
         return FULL_CHAFF_SCOPE
     if any(version is None for version in response_versions):
@@ -668,6 +1332,31 @@ def _validate_loaded_qualification_bindings(
                     "controlled regression parameters do not match loaded chaff qualifications"
                 )
             continue
+        if (
+            provenance.get("artifact_type")
+            == "qcsd-class-study-research-defense-bundle"
+        ):
+            qualification = provenance.get("qualification_inputs")
+            raw_bindings = (
+                qualification.get("qualification_bindings")
+                if isinstance(qualification, Mapping)
+                else None
+            )
+            if not isinstance(raw_bindings, list):
+                raise ValueError("class-study fitting bundle lacks qualification bindings")
+            if any(value is None for record in expected.values() for value in record.values()):
+                raise ValueError("class-study bundle requires qualified chaff for every workload")
+            bindings = {
+                record.get("workload_id"): dict(record)
+                for record in raw_bindings
+                if isinstance(record, Mapping)
+                and isinstance(record.get("workload_id"), str)
+            }
+            if any(bindings.get(workload_id) != record for workload_id, record in expected.items()):
+                raise ValueError(
+                    "loaded chaff qualifications do not match class-study WT6 bindings"
+                )
+            continue
         contract = provenance.get("fitting_contract")
         if not isinstance(contract, Mapping) or contract.get("contract_version") != 6:
             continue
@@ -774,6 +1463,42 @@ def _manifest_resource_type_rank(resource: Mapping[str, Any]) -> int:
 def _validate_fitting_campaign(campaign: Campaign, *, raw_limits: Any) -> None:
     """Reject an underspecified fitting capture before any traffic can run."""
 
+    if campaign.schema_version == CLASS_STUDY_SCHEMA_VERSION:
+        prefix = "class-study fitting campaigns require"
+        expected_count = 120 if campaign.evidence_role == "pilot-fitting" else 100
+        expected_visits = 2 if campaign.evidence_role == "pilot-fitting" else 10
+        expected_stage = "pilot" if campaign.evidence_role == "pilot-fitting" else "authoritative"
+        expected_name = (
+            f"{campaign.class_study_id}-authoritative-fitting-2000-1200"
+            if campaign.class_study_successor_sha256 is not None
+            else f"{STUDY_ID}-{expected_stage}-fitting-1200"
+        )
+        if campaign.name != expected_name:
+            raise ValueError(f"{prefix} the canonical {expected_stage} name")
+        if campaign.profile != "research-1200":
+            raise ValueError(f"{prefix} profile research-1200")
+        if len(campaign.workloads) != expected_count or expected_count % 2:
+            raise ValueError(f"{prefix} exactly {expected_count} unique workloads")
+        if any(workload.visits != expected_visits for workload in campaign.workloads):
+            raise ValueError(f"{prefix} exactly {expected_visits} visits per workload")
+        if campaign.request_policies != ("as-defined", "half-duplex"):
+            raise ValueError(
+                f"{prefix} request policies in exact order: as-defined, then half-duplex"
+            )
+        if len(campaign.defenses) != 1:
+            raise ValueError(f"{prefix} exactly one undefended baseline")
+        defense = campaign.defenses[0]
+        if defense.name != "undefended" or defense.kind != "none" or defense.baseline is not True:
+            raise ValueError(f"{prefix} the canonical undefended baseline with runtime kind none")
+        if not isinstance(raw_limits, dict) or set(raw_limits) != LIMIT_KEYS:
+            raise ValueError(f"{prefix} every explicit capture, retry, cooldown, and settle limit")
+        if campaign.limits != FITTING_LIMITS:
+            raise ValueError(
+                f"{prefix} the fixed 120-second/1-MiB/180-second/64-MiB/"
+                "3-attempt/30-second/1-second limits"
+            )
+        return
+
     prefix = "research fitting campaigns require"
     if campaign.name != "research-fitting-1200":
         raise ValueError(f"{prefix} the exact name research-fitting-1200")
@@ -837,7 +1562,7 @@ def _lower_hex_digest(value: object, *, length: int) -> bool:
 
 
 def _workload_root(campaign_path: Path) -> Path:
-    # Campaigns conventionally live under config/campaigns and workloads under
+    # Campaign directories live directly below config/ and workloads below
     # config/workloads. Keeping this one convention removes another path knob.
     return campaign_path.parent.parent / "workloads"
 
@@ -892,7 +1617,11 @@ def _load_workloads(
             raise ValueError("workload visit counts must be positive integers")
         manifest_path = _trusted_regular_input(
             root / f"{workload_id}.json",
-            root=(frozen_inputs if frozen_inputs is not None else (config_root or path.parent.parent)),
+            root=(
+                frozen_inputs
+                if frozen_inputs is not None
+                else (config_root or path.parent.parent)
+            ),
             label="workload manifest",
         )
         try:
@@ -1012,9 +1741,18 @@ def _load_defenses(
     *,
     frozen_inputs: Path | None = None,
     allow_historical_research_bundle: bool = False,
+    evidence_role: str | None = None,
+    class_qualification_context: object | None = None,
+    qualification_set: str | None = None,
+    expected_successor_study_id: str | None = None,
+    expected_successor_restart_sha256: str | None = None,
 ) -> tuple[capture_engine.Defense, ...]:
     if not isinstance(raw, list) or not raw:
         raise ValueError("defenses must be a non-empty list")
+    if (expected_successor_study_id is None) != (
+        expected_successor_restart_sha256 is None
+    ):
+        raise ValueError("successor defense loading requires study and restart identity")
     defenses: list[capture_engine.Defense] = []
     names: set[str] = set()
     evaluation_bundle_root: Path | None = None
@@ -1087,7 +1825,14 @@ def _load_defenses(
                 provenance_path = parameter_provenance_path(parameters_path)
             else:
                 research_dir = frozen_inputs / "defense-parameters" / "research-1200"
-                if kind in SEALED_RESEARCH_PARAMETER_KINDS and (
+                class_research_dir = frozen_inputs / "defense-parameters" / "class-study"
+                if (
+                    kind in SEALED_RESEARCH_PARAMETER_KINDS
+                    and (class_research_dir / original_name).is_file()
+                ):
+                    parameters_path = (class_research_dir / original_name).resolve()
+                    provenance_path = (class_research_dir / "provenance.json").resolve()
+                elif kind in SEALED_RESEARCH_PARAMETER_KINDS and (
                     purpose == "evaluation" or (research_dir / original_name).is_file()
                 ):
                     parameters_path = (research_dir / original_name).resolve()
@@ -1097,7 +1842,44 @@ def _load_defenses(
                     parameters_path = (artifact_dir / "parameters.json").resolve()
                     provenance_path = (artifact_dir / "provenance.json").resolve()
 
-            if purpose == "evaluation" and kind in SEALED_RESEARCH_PARAMETER_KINDS:
+            # Provenance identifies the new common class-study bundle, but its
+            # absence must still flow through the established bundle verifier.
+            # In particular, an entirely absent legacy evaluation bundle has a
+            # stable actionable error below rather than leaking FileNotFoundError
+            # while merely probing its prospective provenance path.
+            provenance_value = (
+                load_json(provenance_path)
+                if provenance_path.is_file() and not provenance_path.is_symlink()
+                else None
+            )
+            is_class_bundle = (
+                isinstance(provenance_value, Mapping)
+                and provenance_value.get("artifact_type")
+                == "qcsd-class-study-research-defense-bundle"
+            )
+            if (
+                expected_successor_study_id is not None
+                and kind in SEALED_RESEARCH_PARAMETER_KINDS
+                and not is_class_bundle
+            ):
+                raise ValueError(
+                    "successor data-driven defenses require their exact class fitting bundle"
+                )
+            if is_class_bundle:
+                from .class_fitting import BUNDLE_FILES as CLASS_BUNDLE_FILES
+
+                bundle_root = parameters_path.parent
+                if evaluation_bundle_root is not None and bundle_root != evaluation_bundle_root:
+                    raise ValueError(
+                        "class-study data-driven defenses must reference one common bundle"
+                    )
+                evaluation_bundle_root = bundle_root
+                expected_name = CLASS_BUNDLE_FILES[kind]
+                if original_name != expected_name or parameters_path.name != expected_name:
+                    raise ValueError(
+                        f"class-study {kind} must reference {expected_name} from its common bundle"
+                    )
+            elif purpose == "evaluation" and kind in SEALED_RESEARCH_PARAMETER_KINDS:
                 from .fitting import (
                     BUNDLE_FILES,
                     _verify_current_artifact_bundle_at,
@@ -1153,7 +1935,18 @@ def _load_defenses(
                     expected_qcsd_profile=profile,
                     expected_udp_payload_ceiling=UDP_PAYLOAD_CEILING_BY_PROFILE[profile],
                     expected_workloads=workloads,
-                    qualification_inputs_root=base.parent,
+                    qualification_inputs_root=(
+                        None
+                        if class_qualification_context is not None
+                        else base.parent
+                    ),
+                    qualification_context=class_qualification_context,
+                    expected_qualification_set=qualification_set,
+                    campaign_evidence_role=evidence_role,
+                    expected_successor_study_id=expected_successor_study_id,
+                    expected_successor_restart_sha256=(
+                        expected_successor_restart_sha256
+                    ),
                 )
             else:
                 artifact = validate_frozen_parameter_artifact(
@@ -1171,6 +1964,13 @@ def _load_defenses(
                     expected_workloads=workloads,
                     allow_historical_research_bundle=allow_historical_research_bundle,
                     qualification_inputs_root=frozen_inputs,
+                    qualification_context=None,
+                    expected_qualification_set=qualification_set,
+                    campaign_evidence_role=evidence_role,
+                    expected_successor_study_id=expected_successor_study_id,
+                    expected_successor_restart_sha256=(
+                        expected_successor_restart_sha256
+                    ),
                 )
             defenses.append(
                 capture_engine.Defense(
@@ -1260,20 +2060,29 @@ def _validate_static_schedule(path: Path, *, udp_payload_ceiling: int) -> None:
 def plan_campaign(campaign: Campaign) -> list[dict[str, Any]]:
     """Expand the deterministic sequential sample plan."""
 
-    samples: list[dict[str, Any]] = []
+    groups: list[list[dict[str, Any]]] = []
     workload_ranks = {
-        workload_id: index for index, workload_id in enumerate(sorted(w.id for w in campaign.workloads))
+        workload_id: index
+        for index, workload_id in enumerate(
+            sorted(workload.id for workload in campaign.workloads)
+        )
     }
     for workload in campaign.workloads:
         for policy in campaign.request_policies:
             for visit in range(workload.visits):
+                group: list[dict[str, Any]] = []
                 defenses = list(campaign.defenses)
                 if campaign.defense_order_scheme == "cyclic-latin-square":
                     if campaign.defense_order_block is None:
                         raise ValueError("Latin-square campaign has no acquisition block")
-                    phase = (
-                        campaign.defense_order_block + workload_ranks[workload.id] + visit
-                    ) % len(defenses)
+                    if campaign.schema_version == CLASS_STUDY_SCHEMA_VERSION:
+                        # Schema two balances the complete workload/visit cross product.
+                        # With 100 classes and two visits this yields exactly 25 uses of
+                        # every one of the eight formal Latin rows in each block.
+                        rank = workload_ranks[workload.id] * workload.visits + visit
+                    else:
+                        rank = workload_ranks[workload.id] + visit
+                    phase = (campaign.defense_order_block + rank) % len(defenses)
                     defenses = defenses[phase:] + defenses[:phase]
                 else:
                     random.Random(
@@ -1291,7 +2100,7 @@ def plan_campaign(campaign: Campaign) -> list[dict[str, Any]]:
                     sample_id = _stable_digest(
                         "sample", campaign.name, workload.id, policy, visit, defense.name, seed
                     )
-                    samples.append(
+                    group.append(
                         {
                             "sample_id": sample_id,
                             "workload_id": workload.id,
@@ -1312,7 +2121,64 @@ def plan_campaign(campaign: Campaign) -> list[dict[str, Any]]:
                             "artifacts": {},
                         }
                     )
+                groups.append(group)
+    if campaign.sample_order_scheme == "grouped":
+        return [sample for group in groups for sample in group]
+    if campaign.sample_order_scheme != "origin-aware-windowed":
+        raise AssertionError(f"unsupported sample order: {campaign.sample_order_scheme}")
+    if campaign.sample_order_window is None:
+        raise AssertionError("origin-aware campaign has no window size")
+    ordered = _origin_aware_group_order(campaign, groups)
+    samples: list[dict[str, Any]] = []
+    for offset in range(0, len(ordered), campaign.sample_order_window):
+        window = ordered[offset : offset + campaign.sample_order_window]
+        width = max(len(group) for group in window)
+        for position in range(width):
+            samples.extend(group[position] for group in window if position < len(group))
     return samples
+
+
+def _origin_aware_group_order(
+    campaign: Campaign, groups: list[list[dict[str, Any]]]
+) -> list[list[dict[str, Any]]]:
+    """Greedily separate groups sharing any prepared endpoint origin."""
+
+    if campaign.sample_order_window is None:
+        raise AssertionError("origin-aware group ordering requires a window")
+    workload_by_id = {workload.id: workload for workload in campaign.workloads}
+    origin_sets = {
+        workload.id: frozenset(capture_engine._manifest_origins(runtime_manifest(workload.data)))
+        for workload in campaign.workloads
+    }
+    remaining = list(enumerate(groups))
+    selected: list[tuple[int, list[dict[str, Any]]]] = []
+    recent: list[frozenset[str]] = []
+    while remaining:
+        recent_union = frozenset().union(*recent) if recent else frozenset()
+
+        def key(item: tuple[int, list[dict[str, Any]]]) -> tuple[int, int, int, int]:
+            original_index, group = item
+            workload_id = group[0]["workload_id"]
+            if workload_id not in workload_by_id:
+                raise AssertionError("planned group names an unknown workload")
+            origins = origin_sets[workload_id]
+            overlap = len(origins & recent_union)
+            return (
+                int(overlap > 0),
+                overlap,
+                _stable_seed("origin-aware-order", campaign.seed, original_index, workload_id),
+                original_index,
+            )
+
+        chosen = min(remaining, key=key)
+        remaining.remove(chosen)
+        selected.append(chosen)
+        chosen_origins = origin_sets[chosen[1][0]["workload_id"]]
+        recent.append(chosen_origins)
+        keep = max(campaign.sample_order_window - 1, 1)
+        if len(recent) > keep:
+            recent = recent[-keep:]
+    return [group for _index, group in selected]
 
 
 def preflight_campaign(path: Path) -> dict[str, Any]:
@@ -1356,12 +2222,154 @@ def preflight_campaign(path: Path) -> dict[str, Any]:
     }
     if campaign.chaff_qualification_set is not None:
         result["chaff_qualification_set"] = campaign.chaff_qualification_set
+        if _is_class_study_campaign(campaign):
+            result["chaff_qualification_set_manifest_sha256"] = (
+                _class_study_campaign_qualification_manifest_sha256(campaign)
+            )
+        else:
+            set_hashes = {
+                workload.qualification_set_manifest_sha256
+                for workload in campaign.workloads
+                if workload.qualification_set_manifest_sha256 is not None
+            }
+            if len(set_hashes) == 1:
+                [result["chaff_qualification_set_manifest_sha256"]] = set_hashes
+    if campaign.class_study_cohort_sha256 is not None:
+        result["class_study_cohort_sha256"] = campaign.class_study_cohort_sha256
+    if campaign.class_study_cohort_assembly_sha256 is not None:
+        result["class_study_cohort_assembly_sha256"] = (
+            campaign.class_study_cohort_assembly_sha256
+        )
+    if campaign.class_study_id is not None:
+        result["class_study_id"] = campaign.class_study_id
+    if campaign.class_study_successor_sha256 is not None:
+        result[CLASS_STUDY_SUCCESSOR_CONFIGURATION_KEY] = (
+            campaign.class_study_successor_sha256
+        )
     if campaign.defense_order_scheme != "seeded-shuffle":
         result["defense_order"] = {
             "scheme": campaign.defense_order_scheme,
             "block": campaign.defense_order_block,
         }
+    if campaign.evidence_role is not None:
+        result["schema"] = campaign.schema_version
+        result["evidence_role"] = campaign.evidence_role
+        result["defense_runtime_inputs"] = _class_study_campaign_runtime_inputs(
+            campaign
+        )
+    if campaign.sample_order_scheme != "grouped":
+        result["sample_order"] = {
+            "scheme": campaign.sample_order_scheme,
+            "window_size": campaign.sample_order_window,
+        }
     return result
+
+
+def _class_study_campaign_runtime_inputs(
+    campaign: Campaign,
+) -> dict[str, dict[str, Any]]:
+    """Derive every loaded class campaign mode's typed runtime identity."""
+
+    if not _is_class_study_campaign(campaign):
+        raise ValueError("runtime-input identity requires a class-study campaign")
+    identities: dict[str, dict[str, Any]] = {}
+    for defense in campaign.defenses:
+        if defense.name in identities:
+            raise ValueError("class-study runtime-input identity has duplicate modes")
+        if defense.kind in capture_engine.PARAMETER_FLAG_BY_KIND:
+            if (
+                defense.parameters_path is None
+                or defense.parameters_provenance_path is None
+                or not isinstance(defense.parameters_sha256, str)
+                or _SHA256.fullmatch(defense.parameters_sha256) is None
+                or not isinstance(defense.parameters_provenance_sha256, str)
+                or _SHA256.fullmatch(defense.parameters_provenance_sha256) is None
+                or not isinstance(defense.parameters_input_policy, str)
+                or not defense.parameters_input_policy
+                or defense.schedule_path is not None
+            ):
+                raise ValueError(
+                    f"class-study {defense.name} runtime parameter binding is incomplete"
+                )
+            identity = {
+                "identity_type": "hash-bound-parameter-artifact",
+                "runtime_kind": defense.kind,
+                "parameters_sha256": defense.parameters_sha256,
+                "provenance_sha256": defense.parameters_provenance_sha256,
+                "input_policy": defense.parameters_input_policy,
+            }
+        elif defense.kind == "static":
+            if (
+                defense.schedule_path is None
+                or not isinstance(defense.schedule_sha256, str)
+                or _SHA256.fullmatch(defense.schedule_sha256) is None
+                or defense.mode not in capture_engine.STATIC_MODES
+                or defense.parameters_path is not None
+            ):
+                raise ValueError(
+                    "class-study static runtime schedule binding is incomplete"
+                )
+            identity = {
+                "identity_type": "hash-bound-static-schedule",
+                "runtime_kind": defense.kind,
+                "schedule_sha256": defense.schedule_sha256,
+                "mode": defense.mode,
+            }
+        else:
+            if (
+                defense.kind not in {"none", "front", "tamaraw"}
+                or defense.schedule_path is not None
+                or defense.parameters_path is not None
+            ):
+                raise ValueError(
+                    f"class-study {defense.name} source-bound runtime input is invalid"
+                )
+            identity = {
+                "identity_type": (
+                    "source-bound-no-defense"
+                    if defense.kind == "none"
+                    else "source-bound-built-in"
+                ),
+                "runtime_kind": defense.kind,
+            }
+        identities[defense.name] = identity
+    return identities
+
+
+def _class_study_campaign_qualification_manifest_sha256(
+    campaign: Campaign,
+) -> str | None:
+    """Return the one loaded named-set manifest identity, or prove its absence."""
+
+    values = {
+        workload.qualification_set_manifest_sha256
+        for workload in campaign.workloads
+        if workload.qualification_set_manifest_sha256 is not None
+    }
+    if campaign.chaff_qualification_set is None:
+        if values or any(
+            workload.qualification_set_manifest_path is not None
+            for workload in campaign.workloads
+        ):
+            raise ValueError(
+                "class-study campaign has qualification-set evidence without a named set"
+            )
+        return None
+    if (
+        len(values) != 1
+        or any(
+            workload.qualification_set_manifest_path is None
+            or workload.qualification_set_manifest_sha256 is None
+            for workload in campaign.workloads
+        )
+    ):
+        raise ValueError(
+            "class-study named qualification-set binding is inconsistent"
+        )
+    [digest] = values
+    if _SHA256.fullmatch(digest) is None:
+        raise ValueError("class-study named qualification-set digest is invalid")
+    return digest
 
 
 @contextmanager
@@ -1383,7 +2391,9 @@ def _study_capture_lock(results_root: Path):
         try:
             fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as error:
-            raise RuntimeError("another BuFLO-study capture or resume holds the global lock") from error
+            raise RuntimeError(
+                "another BuFLO-study capture or resume holds the global lock"
+            ) from error
         payload = f"pid={os.getpid()}\n"
         os.ftruncate(descriptor, 0)
         os.write(descriptor, payload.encode("ascii"))
@@ -1406,23 +2416,716 @@ def _public_buflo_campaign(name: str) -> bool:
     )
 
 
+def _is_class_study_campaign(campaign: Campaign) -> bool:
+    """Return whether a campaign carries the complete schema-two class identity."""
+
+    study_id = campaign.class_study_id or STUDY_ID
+    return bool(
+        campaign.schema_version == CLASS_STUDY_SCHEMA_VERSION
+        and campaign.evidence_role in EVIDENCE_ROLES
+        and isinstance(study_id, str)
+        and campaign.name.startswith(f"{study_id}-")
+        and campaign.class_study_cohort_sha256 is not None
+        and campaign.class_study_cohort_assembly_sha256 is not None
+    )
+
+
+def _has_durable_attempt_budget(campaign: Campaign) -> bool:
+    return campaign.name.startswith("buflo-study-v1-") or _is_class_study_campaign(
+        campaign
+    )
+
+
+def _has_durable_attempt_name(name: object) -> bool:
+    return isinstance(name, str) and (
+        name.startswith("buflo-study-v1-")
+        or name.startswith(CLASS_STUDY_NAME_PREFIX)
+        or name.startswith("classifier-multiorigin100-v2-")
+    )
+
+
+def _require_class_study_public_origin_policy(campaign_or_name: Campaign | object) -> None:
+    is_class_study = (
+        _is_class_study_campaign(campaign_or_name)
+        if isinstance(campaign_or_name, Campaign)
+        else isinstance(campaign_or_name, str)
+        and (
+            campaign_or_name.startswith(CLASS_STUDY_NAME_PREFIX)
+            or campaign_or_name.startswith("classifier-multiorigin100-v2-")
+        )
+    )
+    if is_class_study and os.environ.get(CLASS_STUDY_PUBLIC_ORIGIN_ENV) != "1":
+        raise ValueError(
+            "class-study capture requires QCSD_PUBLIC_ORIGIN_ONLY=1 before launch"
+        )
+
+
 def run_campaign(path: Path, results_root: Path = Path("/lab/results")) -> Path:
     campaign = load_campaign(path)
-    if campaign.name.startswith("buflo-study-v1-") and os.environ.get(
-        "QCSD_BUFLO_CAPTURE_LOCK_HELD"
-    ) != "1":
+    lock_held = (
+        campaign.name.startswith("buflo-study-v1-")
+        and os.environ.get("QCSD_BUFLO_CAPTURE_LOCK_HELD") == "1"
+    ) or (
+        _is_class_study_campaign(campaign)
+        and os.environ.get("QCSD_CLASS_CAPTURE_LOCK_HELD") == "1"
+    )
+    if _has_durable_attempt_budget(campaign) and not lock_held:
         with _study_capture_lock(results_root):
             return _run_loaded_campaign(campaign, results_root)
     return _run_loaded_campaign(campaign, results_root)
 
 
+def _class_study_launch_key(campaign: Campaign) -> str:
+    if not _is_class_study_campaign(campaign):
+        raise ValueError("first-launch claim requires a class-study campaign")
+    from .class_study import class_study_launch_identity, class_study_launch_key
+
+    identity = class_study_launch_identity(
+        study_id=str(campaign.class_study_id),
+        campaign_name=campaign.name,
+        evidence_role=str(campaign.evidence_role),
+        cohort_sha256=str(campaign.class_study_cohort_sha256),
+        cohort_assembly_sha256=str(campaign.class_study_cohort_assembly_sha256),
+    )
+    return class_study_launch_key(**identity)
+
+
+def _class_study_launch_payload(
+    campaign: Campaign,
+    *,
+    result_root: Path,
+    source: Mapping[str, Any],
+    created_at: str,
+) -> dict[str, Any]:
+    payload = {
+        "study_id": campaign.class_study_id or STUDY_ID,
+        "launch_key": _class_study_launch_key(campaign),
+        "campaign_name": campaign.name,
+        "campaign_sha256": sha256_bytes(campaign.source_bytes),
+        "evidence_role": campaign.evidence_role,
+        "class_study_cohort_sha256": campaign.class_study_cohort_sha256,
+        "class_study_cohort_assembly_sha256": (
+            campaign.class_study_cohort_assembly_sha256
+        ),
+        "result_root": str(result_root.resolve()),
+        "created_at": created_at,
+        "source": dict(source),
+        "policy": "one-result-root-per-campaign-and-cohort-assembly",
+    }
+    if campaign.class_study_successor_sha256 is not None:
+        payload["class_study_successor_sha256"] = (
+            campaign.class_study_successor_sha256
+        )
+        payload["launch_namespace"] = campaign.class_study_launch_namespace
+    return payload
+
+
+def _bind_class_study_launch(payload: Mapping[str, Any]) -> dict[str, Any]:
+    detached = json.loads(
+        json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    )
+    digest = sha256_bytes(
+        json.dumps(detached, sort_keys=True, separators=(",", ":")).encode()
+    )
+    return {
+        "schema_version": CLASS_STUDY_LAUNCH_SCHEMA_VERSION,
+        "artifact_type": CLASS_STUDY_LAUNCH_ARTIFACT_TYPE,
+        "payload_sha256": digest,
+        "payload": detached,
+    }
+
+
+def _validate_class_study_launch_value(
+    value: Any,
+    *,
+    campaign: Campaign,
+    result_root: Path,
+    source: Mapping[str, Any],
+) -> dict[str, Any]:
+    if not isinstance(value, Mapping) or set(value) != {
+        "schema_version",
+        "artifact_type",
+        "payload_sha256",
+        "payload",
+    }:
+        raise ValueError("class-study first-launch claim has an invalid envelope")
+    payload = value.get("payload")
+    if (
+        value.get("schema_version") != CLASS_STUDY_LAUNCH_SCHEMA_VERSION
+        or value.get("artifact_type") != CLASS_STUDY_LAUNCH_ARTIFACT_TYPE
+        or not isinstance(payload, Mapping)
+        or value.get("payload_sha256")
+        != sha256_bytes(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        )
+    ):
+        raise ValueError("class-study first-launch claim does not verify")
+    expected = _class_study_launch_payload(
+        campaign,
+        result_root=result_root,
+        source=source,
+        created_at=str(payload.get("created_at")),
+    )
+    if dict(payload) != expected:
+        raise ValueError("class-study first-launch claim differs from its campaign")
+    return dict(payload)
+
+
+def _class_study_authority_specification(
+    campaign: Campaign,
+) -> dict[str, tuple[str, str]]:
+    """Return the exact authority inputs required by one class-study role."""
+
+    if not _is_class_study_campaign(campaign):
+        raise ValueError("class-study authority requires a class-study campaign")
+    if campaign.evidence_role not in EVIDENCE_ROLES:
+        raise ValueError("class-study campaign has no recognised evidence role")
+    required = {
+        CLASS_STUDY_FOUNDATION_ENV: (
+            CLASS_STUDY_FOUNDATION_INPUT,
+            CLASS_STUDY_FOUNDATION_CONFIGURATION_KEY,
+        )
+    }
+    if campaign.evidence_role in {"canary", "formal"}:
+        required.update(
+            {
+                CLASS_STUDY_READINESS_ENV: (
+                    CLASS_STUDY_READINESS_INPUT,
+                    CLASS_STUDY_READINESS_CONFIGURATION_KEY,
+                ),
+                CLASS_STUDY_HISTORICAL_PRE_ENV: (
+                    CLASS_STUDY_HISTORICAL_PRE_INPUT,
+                    CLASS_STUDY_HISTORICAL_PRE_CONFIGURATION_KEY,
+                ),
+            }
+        )
+    return required
+
+
+def _class_study_authority_paths(campaign: Campaign) -> dict[str, Path]:
+    """Resolve prospective authority without creating any result state."""
+
+    environment = {
+        CLASS_STUDY_FOUNDATION_ENV: os.environ.get(CLASS_STUDY_FOUNDATION_ENV),
+        CLASS_STUDY_READINESS_ENV: os.environ.get(CLASS_STUDY_READINESS_ENV),
+        CLASS_STUDY_HISTORICAL_PRE_ENV: os.environ.get(
+            CLASS_STUDY_HISTORICAL_PRE_ENV
+        ),
+    }
+    required = _class_study_authority_specification(campaign)
+    unexpected = sorted(
+        name
+        for name, value in environment.items()
+        if value is not None and name not in required
+    )
+    if unexpected:
+        raise ValueError(
+            "unexpected class-study authority environment: " + ", ".join(unexpected)
+        )
+
+    resolved: dict[str, Path] = {}
+    for name, (relative, _configuration_key) in required.items():
+        raw_path = environment[name]
+        if not raw_path:
+            raise ValueError(f"{campaign.evidence_role} campaign requires {name}")
+        path = Path(raw_path)
+        if path.is_symlink() or not path.is_file():
+            raise ValueError(f"{name} must name a regular non-symlink file")
+        resolved[relative] = path.resolve()
+    return resolved
+
+
+def _validate_class_study_authority_files(
+    campaign: Campaign,
+    *,
+    source: Mapping[str, Any],
+    paths: Mapping[str, Path],
+) -> dict[str, Mapping[str, Any]]:
+    """Reconstruct authority and bind it to source, build, and cohort."""
+
+    from .class_attestation import (
+        validate_class_foundation_attestation,
+        validate_class_historical_snapshot,
+        validate_class_readiness_attestation,
+    )
+
+    required_relatives = {
+        relative
+        for relative, _configuration_key in _class_study_authority_specification(
+            campaign
+        ).values()
+    }
+    if set(paths) != required_relatives:
+        raise ValueError("class-study authority file set differs from its role")
+
+    foundation_path = paths[CLASS_STUDY_FOUNDATION_INPUT]
+    foundation = validate_class_foundation_attestation(
+        foundation_path,
+        deep_code_gate=True,
+        runtime_role="collection",
+    )
+    if foundation.get("source") != dict(source):
+        raise ValueError("class-study foundation uses a different source identity")
+    if campaign.class_study_successor_path is not None:
+        from .class_study import canonical_json_sha256, validate_hash_bound_receipt
+        from .class_successor import RESTART_RECEIPT_TYPE
+
+        successor = validate_hash_bound_receipt(
+            load_json(campaign.class_study_successor_path),
+            expected_type=RESTART_RECEIPT_TYPE,
+        )
+        if (
+            successor.get("predecessor_foundation_sha256")
+            != sha256_file(foundation_path)
+            or successor.get("source_sha256") != canonical_json_sha256(source)
+            or successor.get("build_execution_identity_sha256")
+            != canonical_json_sha256(foundation.get("build_execution_identity"))
+        ):
+            raise ValueError(
+                "successor campaign foundation/source/build differs from its restart"
+            )
+    validated: dict[str, Mapping[str, Any]] = {"foundation": foundation}
+    if campaign.evidence_role not in {"canary", "formal"}:
+        return validated
+
+    readiness_path = paths[CLASS_STUDY_READINESS_INPUT]
+    snapshot_path = paths[CLASS_STUDY_HISTORICAL_PRE_INPUT]
+    readiness = validate_class_readiness_attestation(
+        readiness_path,
+        deep_code_gate=True,
+    )
+    snapshot = validate_class_historical_snapshot(
+        snapshot_path,
+        expected_phase="pre-formal",
+    )
+    evidence = readiness.get("evidence")
+    final_cohort = evidence.get("final_cohort") if isinstance(evidence, Mapping) else None
+    final_assembly = (
+        evidence.get("final_cohort_assembly") if isinstance(evidence, Mapping) else None
+    )
+    readiness_foundation = (
+        evidence.get("foundation") if isinstance(evidence, Mapping) else None
+    )
+    snapshot_readiness = snapshot.get("readiness")
+    readiness_successor = (
+        evidence.get("successor_restart")
+        if isinstance(evidence, Mapping)
+        else None
+    )
+    if (
+        readiness.get("source") != dict(source)
+        or snapshot.get("source") != dict(source)
+        or readiness.get("build_execution_identity")
+        != foundation.get("build_execution_identity")
+        or not isinstance(readiness_foundation, Mapping)
+        or readiness_foundation.get("sha256") != sha256_file(foundation_path)
+        or not isinstance(snapshot_readiness, Mapping)
+        or snapshot_readiness.get("sha256") != sha256_file(readiness_path)
+        or not isinstance(final_cohort, Mapping)
+        or final_cohort.get("sha256") != campaign.class_study_cohort_sha256
+        or not isinstance(final_assembly, Mapping)
+        or final_assembly.get("sha256")
+        != campaign.class_study_cohort_assembly_sha256
+        or (
+            campaign.class_study_successor_sha256 is not None
+            and (
+                not isinstance(readiness_successor, Mapping)
+                or readiness_successor.get("sha256")
+                != campaign.class_study_successor_sha256
+                or readiness.get("study_id") != campaign.class_study_id
+                or snapshot.get("study_id") != campaign.class_study_id
+            )
+        )
+    ):
+        raise ValueError(
+            "class-study capture authority differs from source, build, or cohort"
+        )
+    validated.update(readiness=readiness, historical_pre_snapshot=snapshot)
+    return validated
+
+
+def _study_environment_from_environment(
+    campaign: Campaign,
+    source: Mapping[str, Any],
+) -> tuple[bytes, Any, Mapping[str, Any]] | None:
+    """Decode and validate the prospective host environment without writing it."""
+
+    encoded = os.environ.get("QCSD_STUDY_ENVIRONMENT_B64")
+    is_study = campaign.name.startswith("buflo-study-v1-") or _is_class_study_campaign(
+        campaign
+    )
+    if not is_study:
+        if encoded is not None:
+            raise ValueError(
+                "study environment receipt cannot be applied to a non-study campaign"
+            )
+        return None
+    if not encoded:
+        raise ValueError("research campaign requires a host Docker environment receipt")
+    try:
+        raw = base64.b64decode(encoded, validate=True)
+        value = json.loads(raw.decode("utf-8"))
+    except (UnicodeError, ValueError, json.JSONDecodeError) as error:
+        raise ValueError("study Docker environment receipt is malformed") from error
+    from .buflo_study import validate_study_environment_receipt
+
+    validated = validate_study_environment_receipt(
+        value,
+        expected_image_digest=source.get("image_digest"),
+    )
+    return raw, value, validated
+
+
+def _validate_class_study_preclaim_authority(
+    campaign: Campaign,
+    *,
+    source: Mapping[str, Any],
+    started_at: datetime,
+) -> None:
+    """Fail closed on authority/build lineage before creating a global claim."""
+
+    if started_at.tzinfo is None or started_at.utcoffset() is None:
+        raise ValueError("class-study launch timestamp must be timezone-aware")
+    authority = _validate_class_study_authority_files(
+        campaign,
+        source=source,
+        paths=_class_study_authority_paths(campaign),
+    )
+    if campaign.class_study_successor_sha256 is not None:
+        # Repeat artifact hashes and exact fitting provenance after campaign
+        # loading so no replacement can cross the load-to-claim boundary.
+        _revalidate_loaded_class_study_runtime_files(campaign)
+    try:
+        foundation_recorded_at = datetime.fromisoformat(
+            str(authority["foundation"]["recorded_at"])
+        )
+    except (KeyError, ValueError) as error:
+        raise ValueError("class-study foundation timestamp is invalid") from error
+    if (
+        foundation_recorded_at.tzinfo is None
+        or foundation_recorded_at.utcoffset() is None
+        or foundation_recorded_at > started_at
+    ):
+        raise ValueError("class-study launch precedes its foundation authority")
+    historical_pre = authority.get("historical_pre_snapshot")
+    if historical_pre is not None:
+        try:
+            historical_recorded_at = datetime.fromisoformat(
+                str(historical_pre["recorded_at"])
+            )
+        except (KeyError, ValueError) as error:
+            raise ValueError(
+                "class-study historical pre-snapshot timestamp is invalid"
+            ) from error
+        if (
+            historical_recorded_at.tzinfo is None
+            or historical_recorded_at.utcoffset() is None
+            or historical_recorded_at > started_at
+        ):
+            raise ValueError(
+                "class-study launch precedes its historical pre-snapshot"
+            )
+    environment_record = _study_environment_from_environment(campaign, source)
+    if environment_record is None:  # pragma: no cover - class campaigns are studies.
+        raise AssertionError("class-study environment validation was bypassed")
+    _raw, _value, environment = environment_record
+    foundation_build = authority["foundation"].get("build_execution_identity")
+    environment_build = environment.get("build_execution")
+    if not isinstance(foundation_build, Mapping) or not isinstance(
+        environment_build, Mapping
+    ):
+        raise ValueError("class-study authority has no typed no-cache build identity")
+    observed_build = {key: environment_build.get(key) for key in foundation_build}
+    if observed_build != dict(foundation_build):
+        raise ValueError(
+            "class-study Docker environment uses a different no-cache build"
+        )
+    readiness = authority.get("readiness")
+    if (
+        readiness is not None
+        and readiness.get("build_execution_identity") != foundation_build
+    ):
+        raise ValueError("class-study readiness and foundation use different builds")
+    if readiness is not None:
+        _validate_class_study_runtime_authority(campaign, readiness=readiness)
+
+
+def _validate_class_study_runtime_authority(
+    campaign: Campaign,
+    *,
+    readiness: Mapping[str, Any],
+) -> None:
+    """Bind a loaded canary/formal campaign to certified runtime inputs."""
+
+    from .class_study import COMPATIBILITY_MODES, FORMAL_MODES
+
+    if campaign.evidence_role not in {"canary", "formal"}:
+        raise ValueError("runtime authority is valid only for canary/formal campaigns")
+    _revalidate_loaded_class_study_runtime_files(campaign)
+    summary = readiness.get("summary")
+    certification_inputs = (
+        summary.get("certification_defense_runtime_inputs")
+        if isinstance(summary, Mapping)
+        else None
+    )
+    if (
+        not isinstance(certification_inputs, Mapping)
+        or set(certification_inputs) != set(COMPATIBILITY_MODES)
+    ):
+        raise ValueError("class-study readiness has no complete certified runtime map")
+    expected_modes = ("undefended",) if campaign.evidence_role == "canary" else FORMAL_MODES
+    observed = _class_study_campaign_runtime_inputs(campaign)
+    expected = {mode: certification_inputs[mode] for mode in expected_modes}
+    if observed != expected:
+        raise ValueError(
+            "class-study campaign runtime inputs differ from certification/readiness"
+        )
+
+    final_manifest_sha256 = (
+        summary.get("final_qualification_set_manifest_sha256")
+        if isinstance(summary, Mapping)
+        else None
+    )
+    if (
+        not isinstance(final_manifest_sha256, str)
+        or _SHA256.fullmatch(final_manifest_sha256) is None
+    ):
+        raise ValueError(
+            "class-study readiness has no final qualification-set manifest identity"
+        )
+    observed_manifest = _class_study_campaign_qualification_manifest_sha256(campaign)
+    if campaign.evidence_role == "formal":
+        if observed_manifest != final_manifest_sha256:
+            raise ValueError(
+                "class-study formal qualification manifest differs from readiness"
+            )
+    elif observed_manifest is not None:
+        raise ValueError("class-study canary unexpectedly uses a qualification set")
+
+
+def _revalidate_loaded_class_study_runtime_files(campaign: Campaign) -> None:
+    """Close load-to-claim races for every external runtime input."""
+
+    def require_hash(path: Path | None, digest: str | None, *, label: str) -> None:
+        if (
+            path is None
+            or path.is_symlink()
+            or not path.is_file()
+            or not isinstance(digest, str)
+            or _SHA256.fullmatch(digest) is None
+            or sha256_file(path) != digest
+        ):
+            raise ValueError(f"class-study {label} changed after campaign loading")
+
+    successor_study_id = campaign.class_study_id
+    successor_restart_sha256 = campaign.class_study_successor_sha256
+    if successor_restart_sha256 is None:
+        if successor_study_id not in {None, STUDY_ID}:
+            raise ValueError("class-study runtime has an unbound alternate study identity")
+    elif (
+        not isinstance(successor_study_id, str)
+        or not successor_study_id.startswith("classifier-multiorigin100-v2-")
+        or _SHA256.fullmatch(successor_restart_sha256) is None
+    ):
+        raise ValueError("class-study successor runtime identity is incomplete")
+    seen_provenance: set[Path] = set()
+    for defense in campaign.defenses:
+        if defense.schedule_path is not None:
+            require_hash(
+                defense.schedule_path,
+                defense.schedule_sha256,
+                label=f"{defense.name} schedule",
+            )
+        if defense.parameters_path is not None:
+            require_hash(
+                defense.parameters_path,
+                defense.parameters_sha256,
+                label=f"{defense.name} parameters",
+            )
+            require_hash(
+                defense.parameters_provenance_path,
+                defense.parameters_provenance_sha256,
+                label=f"{defense.name} parameter provenance",
+            )
+            provenance_path = defense.parameters_provenance_path.resolve()
+            if (
+                successor_restart_sha256 is not None
+                and provenance_path not in seen_provenance
+            ):
+                provenance = load_json(provenance_path)
+                is_class_bundle = (
+                    isinstance(provenance, Mapping)
+                    and provenance.get("artifact_type")
+                    == "qcsd-class-study-research-defense-bundle"
+                )
+                if defense.kind in SEALED_RESEARCH_PARAMETER_KINDS and not is_class_bundle:
+                    raise ValueError(
+                        "successor data-driven defenses require their exact class fitting bundle"
+                    )
+                if is_class_bundle:
+                    from .class_fitting import require_successor_fitting_identity
+
+                    assert successor_study_id is not None
+                    require_successor_fitting_identity(
+                        provenance,
+                        expected_study_id=successor_study_id,
+                        expected_restart_sha256=successor_restart_sha256,
+                    )
+                seen_provenance.add(provenance_path)
+    seen_manifests: set[Path] = set()
+    for workload in campaign.workloads:
+        path = workload.qualification_set_manifest_path
+        if path is None:
+            continue
+        resolved = path.resolve()
+        if resolved in seen_manifests:
+            continue
+        require_hash(
+            path,
+            workload.qualification_set_manifest_sha256,
+            label="named qualification-set manifest",
+        )
+        seen_manifests.add(resolved)
+
+
+def _claim_class_study_launch(
+    campaign: Campaign,
+    *,
+    results_root: Path,
+    source: Mapping[str, Any],
+    started_at: datetime,
+) -> tuple[Path, str, Path]:
+    """Create/recover the global claim before any class-study result launch."""
+
+    from .experiment import result_path
+
+    _validate_class_study_preclaim_authority(
+        campaign,
+        source=source,
+        started_at=started_at,
+    )
+    root = results_root.absolute()
+    if root.is_symlink() or not root.is_dir():
+        raise ValueError("class-study results root must be a regular directory")
+    root = root.resolve()
+    namespace = campaign.class_study_launch_namespace or f".{STUDY_ID}-launches"
+    if not isinstance(namespace, str) or Path(namespace).name != namespace:
+        raise ValueError("class-study launch namespace is invalid")
+    registry = root / namespace
+    if registry.exists() or registry.is_symlink():
+        if registry.is_symlink() or not registry.is_dir():
+            raise ValueError("class-study launch registry is not a regular directory")
+    else:
+        registry.mkdir(mode=0o700)
+        fsync_directory(root)
+    key = _class_study_launch_key(campaign)
+    marker = registry / f"{key}.json"
+    if marker.is_symlink():
+        raise ValueError("class-study launch claim cannot be a symlink")
+    if marker.exists():
+        value = load_json(marker)
+        payload = value.get("payload") if isinstance(value, Mapping) else None
+        if not isinstance(payload, Mapping) or not isinstance(
+            payload.get("result_root"), str
+        ):
+            raise ValueError("class-study launch claim is malformed")
+        claimed_root = Path(payload["result_root"])
+        _validate_class_study_launch_value(
+            value,
+            campaign=campaign,
+            result_root=claimed_root,
+            source=source,
+        )
+        run_id = claimed_root.name
+        if result_path(root, campaign.name, run_id) != claimed_root.resolve():
+            raise ValueError("class-study launch claim result path is not canonical")
+        if claimed_root.exists() or claimed_root.is_symlink():
+            if claimed_root.is_symlink() or not claimed_root.is_dir():
+                raise ValueError("class-study claimed result root is unsafe")
+            if (claimed_root / "experiment.json").is_file():
+                raise FileExistsError(
+                    "class-study campaign/cohort has already launched; resume its claimed result"
+                )
+            _discard_unlaunched_class_root(claimed_root)
+        return claimed_root, run_id, marker
+
+    run_id = started_at.strftime("%Y%m%dT%H%M%S.%fZ")
+    result_root = result_path(root, campaign.name, run_id)
+    value = _bind_class_study_launch(
+        _class_study_launch_payload(
+            campaign,
+            result_root=result_root,
+            source=source,
+            created_at=started_at.isoformat(),
+        )
+    )
+    encoded = (json.dumps(value, indent=2, sort_keys=True) + "\n").encode()
+    durable_create(marker, encoded)
+    return result_root, run_id, marker
+
+
+def _discard_unlaunched_class_root(root: Path) -> None:
+    """Recover only our own pre-experiment materialisation after a hard stop."""
+
+    if root.is_symlink() or not root.is_dir() or (root / "experiment.json").exists():
+        raise ValueError("class-study pre-launch recovery target is unsafe")
+    allowed_root_names = {"inputs"}
+    for entry in root.iterdir():
+        if entry.name not in allowed_root_names and ".qcsd-tmp-" not in entry.name:
+            raise ValueError(
+                "class-study claimed root has unknown pre-launch content; manual audit required"
+            )
+    for path in root.rglob("*"):
+        if path.is_symlink():
+            raise ValueError("class-study pre-launch recovery refuses symlinks")
+    # No attempt can exist before experiment.json is durably initialised.  The
+    # remaining tree consists solely of reproducible frozen-input copies, so a
+    # same-key retry may recreate it at the already claimed path.
+    shutil.rmtree(root)
+
+
+def _validate_class_study_launch(root: Path, campaign: Campaign) -> str:
+    """Verify the frozen claim and its global create-only registry copy."""
+
+    if not _is_class_study_campaign(campaign):
+        raise ValueError("class-study launch validation received another campaign")
+    frozen = root / CLASS_STUDY_LAUNCH_INPUT
+    if frozen.is_symlink() or not frozen.is_file():
+        raise ValueError("class-study result has no frozen first-launch claim")
+    source_path = root / "inputs/source.json"
+    if source_path.is_symlink() or not source_path.is_file():
+        raise ValueError("class-study result has no frozen source identity")
+    source = load_json(source_path)
+    value = load_json(frozen)
+    payload = _validate_class_study_launch_value(
+        value,
+        campaign=campaign,
+        result_root=root,
+        source=source,
+    )
+    namespace = campaign.class_study_launch_namespace or f".{STUDY_ID}-launches"
+    if not isinstance(namespace, str) or Path(namespace).name != namespace:
+        raise ValueError("class-study launch namespace is invalid")
+    registry = root.parents[1] / namespace
+    marker = registry / f"{payload['launch_key']}.json"
+    if (
+        marker.is_symlink()
+        or not marker.is_file()
+        or sha256_file(marker) != sha256_file(frozen)
+    ):
+        raise ValueError("class-study global first-launch claim differs from the result")
+    return sha256_file(frozen)
+
+
 def _run_loaded_campaign(campaign: Campaign, results_root: Path) -> Path:
     from .experiment import initialize_experiment, result_path
 
+    _require_class_study_public_origin_policy(campaign)
     source = source_metadata()
     if campaign.purpose == "fitting":
         _validate_fitting_capture_source(source)
     started = datetime.now(timezone.utc)
+    class_launch: Path | None = None
     if _public_buflo_campaign(campaign.name):
         admission_value = os.environ.get("QCSD_BUFLO_CAPTURE_ADMISSION")
         if not admission_value:
@@ -1438,11 +3141,31 @@ def _run_loaded_campaign(campaign: Campaign, results_root: Path) -> Path:
         run_id = root.name
         if result_path(results_root, campaign.name, run_id) != root.resolve():
             raise ValueError("capture admission result root is not canonical")
+    elif _is_class_study_campaign(campaign):
+        root, run_id, class_launch = _claim_class_study_launch(
+            campaign,
+            results_root=results_root,
+            source=source,
+            started_at=started,
+        )
     else:
         run_id = started.strftime("%Y%m%dT%H%M%S.%fZ")
         root = result_path(results_root, campaign.name, run_id)
     root.mkdir(parents=True, exist_ok=False)
+    if class_launch is not None:
+        inputs = root / "inputs"
+        inputs.mkdir()
+        frozen_launch = root / CLASS_STUDY_LAUNCH_INPUT
+        with class_launch.open("rb") as input_file, frozen_launch.open("xb") as output:
+            shutil.copyfileobj(input_file, output)
+            output.flush()
+            os.fsync(output.fileno())
     runtime_campaign, configuration = _materialize_inputs(root, campaign, source)
+    if class_launch is not None:
+        configuration["class_study_launch_sha256"] = _validate_class_study_launch(
+            root,
+            runtime_campaign,
+        )
     samples = plan_campaign(runtime_campaign)
     experiment = initialize_experiment(
         root,
@@ -1496,6 +3219,80 @@ def _materialize_inputs(
     if frozen_campaign.read_bytes() != campaign.source_bytes:
         raise ValueError("campaign changed during input materialization")
     atomic_json(inputs / "source.json", source)
+    _materialize_class_study_authority(inputs, campaign)
+    class_study_successor_destination: Path | None = None
+    if campaign.class_study_successor_path is not None:
+        if campaign.class_study_successor_sha256 is None:
+            raise ValueError("successor campaign has no restart receipt digest")
+        class_study_successor_destination = inputs / "class-study-successor.json"
+        shutil.copy2(
+            campaign.class_study_successor_path,
+            class_study_successor_destination,
+        )
+        if (
+            sha256_file(class_study_successor_destination)
+            != campaign.class_study_successor_sha256
+        ):
+            raise ValueError("successor restart receipt changed during materialization")
+    class_study_cohort_destination: Path | None = None
+    class_study_cohort_assembly_destination: Path | None = None
+    if campaign.class_study_cohort_path is not None:
+        if (
+            campaign.class_study_cohort_sha256 is None
+            or campaign.class_study_cohort_assembly_path is None
+            or campaign.class_study_cohort_assembly_sha256 is None
+        ):
+            raise ValueError("class-study cohort evidence has no complete frozen binding")
+        class_study_cohort_destination = inputs / "class-study-cohort.json"
+        class_study_cohort_assembly_destination = inputs / "class-study-cohort-assembly.json"
+        shutil.copy2(campaign.class_study_cohort_path, class_study_cohort_destination)
+        shutil.copy2(
+            campaign.class_study_cohort_assembly_path,
+            class_study_cohort_assembly_destination,
+        )
+        if sha256_file(class_study_cohort_destination) != campaign.class_study_cohort_sha256:
+            raise ValueError("class-study cohort receipt changed during materialization")
+        if (
+            sha256_file(class_study_cohort_assembly_destination)
+            != campaign.class_study_cohort_assembly_sha256
+        ):
+            raise ValueError("class-study cohort assembly changed during materialization")
+        from .class_cohort import validate_cohort_assembly_receipt
+        from .class_study import load_study_receipt
+
+        frozen_cohort, _selection = load_study_receipt(class_study_cohort_destination)
+        validate_cohort_assembly_receipt(
+            load_json(class_study_cohort_assembly_destination),
+            cohort=frozen_cohort,
+        )
+    qualification_set_manifest_destination: Path | None = None
+    qualification_set_manifest_paths = {
+        workload.qualification_set_manifest_path
+        for workload in campaign.workloads
+        if workload.qualification_set_manifest_path is not None
+    }
+    if qualification_set_manifest_paths:
+        if len(qualification_set_manifest_paths) != 1 or any(
+            workload.qualification_set_manifest_path is None
+            or workload.qualification_set_manifest_sha256 is None
+            for workload in campaign.workloads
+        ):
+            raise ValueError("named qualification-set binding is inconsistent across workloads")
+        from .chaff_qualification import NAMED_QUALIFICATION_SET_MANIFEST
+
+        [qualification_set_manifest_source] = qualification_set_manifest_paths
+        qualification_set_manifest_destination = (
+            chaff_qualifications_dir / NAMED_QUALIFICATION_SET_MANIFEST
+        )
+        shutil.copy2(
+            qualification_set_manifest_source,
+            qualification_set_manifest_destination,
+        )
+        expected_set_hashes = {
+            workload.qualification_set_manifest_sha256 for workload in campaign.workloads
+        }
+        if expected_set_hashes != {sha256_file(qualification_set_manifest_destination)}:
+            raise ValueError("named qualification-set manifest changed during materialization")
     runtime_workloads: list[Workload] = []
     for workload in campaign.workloads:
         destination = workloads_dir / f"{workload.id}.json"
@@ -1571,8 +3368,29 @@ def _materialize_inputs(
                 chaff_manifest_data=qualified.manifest,
                 runtime_path=runtime_destination,
                 runtime_sha256=sha256_file(runtime_destination),
+                qualification_set_manifest_path=qualification_set_manifest_destination,
+                qualification_set_manifest_sha256=(
+                    sha256_file(qualification_set_manifest_destination)
+                    if qualification_set_manifest_destination is not None
+                    else None
+                ),
             )
         runtime_workloads.append(runtime)
+    if qualification_set_manifest_destination is not None:
+        from .chaff_qualification import load_named_qualification_set
+
+        load_named_qualification_set(
+            qualification_set_manifest_destination,
+            workload_root=workloads_dir,
+            sidecar_root=chaff_qualifications_dir,
+            prefix_spec_root=(
+                chaff_prefix_specs_dir if required_scope == FULL_CHAFF_SCOPE else None
+            ),
+            expected_qualification_set=campaign.chaff_qualification_set,
+            expected_qualification_scope=required_scope,
+            expected_workload_ids=tuple(workload.id for workload in campaign.workloads),
+            require_current_implementation=True,
+        )
     runtime_defenses: list[capture_engine.Defense] = []
     for defense in campaign.defenses:
         runtime = defense
@@ -1626,6 +3444,17 @@ def _materialize_inputs(
                     raise ValueError(f"{defense.name} parameter source binding is missing")
                 destination = research_dir / Path(defense.parameters).name
                 provenance = research_dir / "provenance.json"
+            elif defense.parameters_input_policy in {
+                "sealed-class-study-pilot-fitting-v1",
+                "sealed-class-study-fitting-v1",
+            }:
+                class_dir = parameters_dir / "class-study"
+                if not class_dir.exists():
+                    shutil.copytree(defense.parameters_path.parent, class_dir)
+                if defense.parameters is None:
+                    raise ValueError(f"{defense.name} parameter source binding is missing")
+                destination = class_dir / Path(defense.parameters).name
+                provenance = class_dir / "provenance.json"
             else:
                 destination_dir.mkdir(exist_ok=True)
                 destination = destination_dir / "parameters.json"
@@ -1657,6 +3486,16 @@ def _materialize_inputs(
                     workload.id: workload.sha256 for workload in campaign.workloads
                 },
                 qualification_inputs_root=inputs,
+                expected_qualification_set=campaign.chaff_qualification_set,
+                campaign_evidence_role=campaign.evidence_role,
+                expected_successor_study_id=(
+                    campaign.class_study_id
+                    if campaign.class_study_successor_sha256 is not None
+                    else None
+                ),
+                expected_successor_restart_sha256=(
+                    campaign.class_study_successor_sha256
+                ),
             )
             if (
                 frozen_artifact.sha256 != defense.parameters_sha256
@@ -1677,36 +3516,102 @@ def _materialize_inputs(
         path=inputs / "campaign.yml",
         workloads=tuple(runtime_workloads),
         defenses=tuple(runtime_defenses),
+        class_study_cohort_path=class_study_cohort_destination,
+        class_study_cohort_sha256=(
+            sha256_file(class_study_cohort_destination)
+            if class_study_cohort_destination is not None
+            else None
+        ),
+        class_study_cohort_assembly_path=class_study_cohort_assembly_destination,
+        class_study_cohort_assembly_sha256=(
+            sha256_file(class_study_cohort_assembly_destination)
+            if class_study_cohort_assembly_destination is not None
+            else None
+        ),
+        class_study_successor_path=class_study_successor_destination,
+        class_study_successor_sha256=(
+            sha256_file(class_study_successor_destination)
+            if class_study_successor_destination is not None
+            else None
+        ),
     )
     return runtime_campaign, _frozen_configuration(root, runtime_campaign)
+
+
+def _materialize_class_study_authority(inputs: Path, campaign: Campaign) -> None:
+    """Freeze the gate authority required by a prospective class-study run."""
+
+    if not _is_class_study_campaign(campaign):
+        if any(
+            os.environ.get(name) is not None
+            for name in (
+                CLASS_STUDY_FOUNDATION_ENV,
+                CLASS_STUDY_READINESS_ENV,
+                CLASS_STUDY_HISTORICAL_PRE_ENV,
+            )
+        ):
+            raise ValueError(
+                "class-study authority cannot be applied to a non-class campaign"
+            )
+        return
+
+    for relative, source in _class_study_authority_paths(campaign).items():
+        destination = inputs.parent / relative
+        durable_create(destination, source.read_bytes())
+    _validate_frozen_class_study_authority(inputs.parent, campaign)
+
+
+def _validate_frozen_class_study_authority(
+    root: Path, campaign: Campaign
+) -> dict[str, str]:
+    """Revalidate frozen authority and derive its configuration bindings."""
+
+    required = tuple(_class_study_authority_specification(campaign).values())
+    all_relatives = {
+        CLASS_STUDY_FOUNDATION_INPUT,
+        CLASS_STUDY_READINESS_INPUT,
+        CLASS_STUDY_HISTORICAL_PRE_INPUT,
+    }
+    required_relatives = {relative for relative, _key in required}
+    for relative in all_relatives - required_relatives:
+        unexpected = root / relative
+        if unexpected.exists() or unexpected.is_symlink():
+            raise ValueError(
+                f"{campaign.evidence_role} result has unexpected authority {relative}"
+            )
+    if not required:
+        return {}
+
+    frozen: dict[str, Path] = {}
+    configuration: dict[str, str] = {}
+    for relative, key in required:
+        path = root / relative
+        if path.is_symlink() or not path.is_file():
+            raise ValueError(
+                f"{campaign.evidence_role} result lacks frozen authority {relative}"
+            )
+        frozen[relative] = path
+        configuration[key] = sha256_file(path)
+
+    _validate_class_study_authority_files(
+        campaign,
+        source=load_json(root / "inputs/source.json"),
+        paths=frozen,
+    )
+    return configuration
 
 
 def _materialize_study_environment(
     inputs: Path, campaign: Campaign, source: Mapping[str, Any]
 ) -> None:
-    encoded = os.environ.get("QCSD_STUDY_ENVIRONMENT_B64")
-    is_study = campaign.name.startswith("buflo-study-v1-")
-    if not is_study:
-        if encoded is not None:
-            raise ValueError("study environment receipt cannot be applied to a non-study campaign")
+    receipt = _study_environment_from_environment(campaign, source)
+    if receipt is None:
         return
-    if not encoded:
-        raise ValueError("BuFLO study campaign requires a host Docker environment receipt")
-    try:
-        raw = base64.b64decode(encoded, validate=True)
-        value = json.loads(raw.decode("utf-8"))
-    except (UnicodeError, ValueError, json.JSONDecodeError) as error:
-        raise ValueError("BuFLO study Docker environment receipt is malformed") from error
-    from .buflo_study import validate_study_environment_receipt
-
-    validate_study_environment_receipt(
-        value,
-        expected_image_digest=source.get("image_digest"),
-    )
+    raw, value, _validated = receipt
     destination = inputs / "study-environment.json"
-    destination.write_bytes(raw)
+    durable_create(destination, raw)
     if load_json(destination) != value:
-        raise ValueError("BuFLO study Docker environment changed during materialization")
+        raise ValueError("study Docker environment changed during materialization")
 
 
 def _materialize_capture_admission(
@@ -1890,10 +3795,20 @@ def _execute(root: Path, campaign: Campaign, experiment: dict[str, Any]) -> Path
     workload_by_id = {workload.id: workload for workload in campaign.workloads}
     defense_by_name = {defense.name: defense for defense in campaign.defenses}
     origin_last_run = _prior_origin_completion(campaign, experiment)
-    groups: dict[tuple[str, str, int], list[dict[str, Any]]] = {}
+    groups: dict[tuple[object, ...], list[dict[str, Any]]] = {}
     for sample_id in experiment["execution_order"]:
         sample = samples_by_id[sample_id]
-        group = (sample["workload_id"], sample["request_policy"], sample["visit"])
+        if campaign.sample_order_scheme == "grouped":
+            group: tuple[object, ...] = (
+                sample["workload_id"],
+                sample["request_policy"],
+                sample["visit"],
+            )
+        else:
+            # Schema-two plans already interleave modes and origins.  A singleton
+            # execution group prevents the legacy regrouping pass from silently
+            # undoing that frozen acquisition order.
+            group = ("sample", sample_id)
         groups.setdefault(group, []).append(sample)
     for members in groups.values():
         for sample in members:
@@ -1903,12 +3818,12 @@ def _execute(root: Path, campaign: Campaign, experiment: dict[str, Any]) -> Path
             workload = workload_by_id[sample["workload_id"]]
             defense = defense_by_name[sample["defense"]]
             attempts_this_execution = 0
-            # BuFLO-study ``sample["attempts"]`` is the durable, cross-resume
-            # budget.  Preserve the historical generic campaign contract while
-            # preventing a resumed study cell from acquiring another three
-            # traces after already exhausting its prospective total cap.
+            # BuFLO-study and schema-two class-study ``sample["attempts"]`` is
+            # the durable, cross-resume budget.  Preserve the historical generic
+            # campaign contract while preventing a resumed study cell from
+            # acquiring another three traces after exhausting its total cap.
             while attempts_this_execution < campaign.limits.max_attempts and (
-                not campaign.name.startswith("buflo-study-v1-")
+                not _has_durable_attempt_budget(campaign)
                 or sample["attempts"] < campaign.limits.max_attempts
             ):
                 attempts_this_execution += 1
@@ -1965,7 +3880,8 @@ def _execute(root: Path, campaign: Campaign, experiment: dict[str, Any]) -> Path
                         else:
                             if not defense.baseline:
                                 raise ValueError(
-                                    "defended execution lacks frozen prepared source and qualified chaff"
+                                    "defended execution lacks frozen prepared source and "
+                                    "qualified chaff"
                                 )
                             result = capture_engine._collect_attempt(
                                 attempt,
@@ -2697,11 +4613,19 @@ def resume_campaign(root: Path) -> Path:
     experiment_path = root / "experiment.json"
     value = load_json(experiment_path)
     name = value.get("name") if isinstance(value, Mapping) else None
-    if (
+    lock_held = (
         isinstance(name, str)
         and name.startswith("buflo-study-v1-")
-        and os.environ.get("QCSD_BUFLO_CAPTURE_LOCK_HELD") != "1"
-    ):
+        and os.environ.get("QCSD_BUFLO_CAPTURE_LOCK_HELD") == "1"
+    ) or (
+        isinstance(name, str)
+        and (
+            name.startswith(CLASS_STUDY_NAME_PREFIX)
+            or name.startswith("classifier-multiorigin100-v2-")
+        )
+        and os.environ.get("QCSD_CLASS_CAPTURE_LOCK_HELD") == "1"
+    )
+    if _has_durable_attempt_name(name) and not lock_held:
         if len(root.parents) < 2:
             raise ValueError("study result root has no canonical results ancestor")
         with _study_capture_lock(root.parents[1]):
@@ -2718,6 +4642,19 @@ def _resume_campaign_locked(root: Path) -> Path:
         validate_resume_fingerprints,
     )
     from .verification import prepare_resume, seal_result, verify_result
+
+    initial = load_json(root / "experiment.json")
+    _require_class_study_public_origin_policy(
+        initial.get("name") if isinstance(initial, Mapping) else None
+    )
+
+    successor_input = root / CLASS_STUDY_SUCCESSOR_INPUT
+    if not (root / "evidence.sha256").exists() and (
+        successor_input.exists() or successor_input.is_symlink()
+    ):
+        # Validate the frozen campaign and its exact fitting provenance before
+        # even deleting non-authoritative atomic-write temporaries.
+        _campaign_from_frozen_inputs(root)
 
     # A hard stop can leave only a recognizably named, uncommitted sibling of
     # an otherwise intact atomic checkpoint. It is never authoritative and is
@@ -2758,11 +4695,11 @@ def _resume_campaign_locked(root: Path) -> Path:
     experiment = prepare_resume(root, expected_source=source_metadata())
     # A running checkpoint means the process stopped before promotion.  The
     # established generic campaign contract discards that partial attempt and
-    # reuses its number.  Prospective BuFLO-study campaigns instead count every
-    # physical collector launch against the durable three-attempt ceiling: a
-    # hard interruption becomes a small immutable failure tombstone before a
-    # later launch receives the next attempt number.
-    study_attempt_budget = experiment["name"].startswith("buflo-study-v1-")
+    # reuses its number.  BuFLO-study and schema-two class-study campaigns
+    # instead count every physical collector launch against the durable attempt
+    # ceiling: a hard interruption becomes a small immutable failure tombstone
+    # before a later launch receives the next attempt number.
+    study_attempt_budget = _has_durable_attempt_name(experiment["name"])
     for sample in experiment["samples"]:
         if sample["state"] != "interrupted":
             continue
@@ -2827,7 +4764,7 @@ def validate_frozen_experiment_contract(
     for sample in experiment["samples"]:
         resolved_sample_directory(root, sample)
         if (
-            campaign.name.startswith("buflo-study-v1-")
+            _has_durable_attempt_budget(campaign)
             and sample["attempts"] > campaign.limits.max_attempts
         ):
             raise ValueError("sample exceeds the campaign's total persisted attempt cap")
@@ -2890,24 +4827,108 @@ def _frozen_configuration(root: Path, campaign: Campaign) -> dict[str, Any]:
     }
     if campaign.chaff_qualification_set is not None:
         configuration["chaff_qualification_set"] = campaign.chaff_qualification_set
+        set_hashes = {
+            workload.qualification_set_manifest_sha256
+            for workload in campaign.workloads
+            if workload.qualification_set_manifest_sha256 is not None
+        }
+        if set_hashes:
+            if len(set_hashes) != 1 or any(
+                workload.qualification_set_manifest_sha256 is None
+                for workload in campaign.workloads
+            ):
+                raise ValueError("frozen named qualification-set binding is inconsistent")
+            [configuration["chaff_qualification_set_manifest_sha256"]] = set_hashes
     if campaign.defense_order_scheme != "seeded-shuffle":
         configuration["defense_order"] = {
             "scheme": campaign.defense_order_scheme,
             "block": campaign.defense_order_block,
         }
+    if campaign.evidence_role is not None:
+        configuration["evidence_role"] = campaign.evidence_role
+    if campaign.class_study_cohort_path is not None:
+        if campaign.class_study_cohort_sha256 is None:
+            raise ValueError("frozen class-study cohort has no digest")
+        configuration["class_study_cohort_sha256"] = campaign.class_study_cohort_sha256
+        if campaign.class_study_cohort_assembly_sha256 is None:
+            raise ValueError("frozen class-study cohort assembly has no digest")
+        configuration["class_study_cohort_assembly_sha256"] = (
+            campaign.class_study_cohort_assembly_sha256
+        )
+        if campaign.class_study_id is not None:
+            configuration["class_study_id"] = campaign.class_study_id
+        if campaign.class_study_successor_sha256 is not None:
+            configuration[CLASS_STUDY_SUCCESSOR_CONFIGURATION_KEY] = (
+                campaign.class_study_successor_sha256
+            )
+        configuration["class_study_launch_sha256"] = _validate_class_study_launch(
+            root,
+            campaign,
+        )
+    if campaign.sample_order_scheme != "grouped":
+        configuration["sample_order"] = {
+            "scheme": campaign.sample_order_scheme,
+            "window_size": campaign.sample_order_window,
+        }
+    if _is_class_study_campaign(campaign):
+        configuration.update(_validate_frozen_class_study_authority(root, campaign))
+        configuration["public_origin_policy"] = {
+            "environment": CLASS_STUDY_PUBLIC_ORIGIN_ENV,
+            "required_value": "1",
+            "resolution": "resolve-once-reject-any-non-public-connect-exact-address",
+        }
     study_environment = root / "inputs/study-environment.json"
-    if campaign.name.startswith("buflo-study-v1-"):
+    if campaign.name.startswith("buflo-study-v1-") or _is_class_study_campaign(
+        campaign
+    ):
         from .buflo_study import validate_study_environment_receipt
 
         if study_environment.is_symlink() or not study_environment.is_file():
             raise ValueError("BuFLO study campaign has no frozen environment receipt")
-        validate_study_environment_receipt(
+        validated_environment = validate_study_environment_receipt(
             load_json(study_environment),
             expected_image_digest=load_json(root / "inputs/source.json")["image_digest"],
         )
+        if _is_class_study_campaign(campaign):
+            from .class_attestation import validate_class_foundation_attestation
+
+            expected_build: Mapping[str, Any] | None = (
+                validate_class_foundation_attestation(
+                    root / CLASS_STUDY_FOUNDATION_INPUT,
+                    deep_code_gate=True,
+                    runtime_role="collection",
+                ).get("build_execution_identity")
+            )
+            if campaign.evidence_role in {"canary", "formal"}:
+                from .class_attestation import validate_class_readiness_attestation
+
+                readiness_build = validate_class_readiness_attestation(
+                    root / CLASS_STUDY_READINESS_INPUT,
+                    deep_code_gate=True,
+                ).get("build_execution_identity")
+                if readiness_build != expected_build:
+                    raise ValueError(
+                        "class-study readiness and foundation use different builds"
+                    )
+            if expected_build is not None:
+                environment_build = validated_environment.get("build_execution")
+                observed_build = (
+                    {
+                        key: environment_build.get(key)
+                        for key in expected_build
+                    }
+                    if isinstance(environment_build, Mapping)
+                    else None
+                )
+                if observed_build != expected_build:
+                    raise ValueError(
+                        "class-study Docker environment uses a different no-cache build"
+                    )
         configuration["study_environment_sha256"] = sha256_file(study_environment)
         admission = root / "inputs/capture-admission.json"
-        if _public_buflo_campaign(campaign.name):
+        if campaign.name.startswith("buflo-study-v1-") and _public_buflo_campaign(
+            campaign.name
+        ):
             from .buflo_study import validate_capture_admission
 
             if admission.is_symlink() or not admission.is_file():

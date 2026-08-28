@@ -95,16 +95,89 @@ files = {path: hashlib.sha256((root / path).read_bytes()).hexdigest() for path i
 Path("/qualification-source-files.json").write_text(
     json.dumps(files, indent=2, sort_keys=True) + "\n", encoding="utf-8"
 )
+
+# Keep the historical qualification receipt stable, but independently bind
+# the complete installed Python package and the class-catalogue build tool.
+runtime_paths = [
+    root / ".dockerignore",
+    root / "Dockerfile",
+    root / "pyproject.toml",
+    root / "uv.lock",
+    root / "tools/build_class_catalogue.py",
+    *sorted((root / "src/qcsd_lab").rglob("*.py")),
+]
+runtime_files = {}
+for path in runtime_paths:
+    if path.is_symlink() or not path.is_file():
+        raise SystemExit(f"Python runtime source is not a regular file: {path}")
+    relative = path.relative_to(root).as_posix()
+    runtime_files[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+if not any(path.startswith("src/qcsd_lab/class_") for path in runtime_files):
+    raise SystemExit("class-study Python modules are absent from the runtime inventory")
+Path("/python-runtime-source-files.json").write_text(
+    json.dumps(runtime_files, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+)
 PY
 
 FROM ${DEBIAN_IMAGE} AS osad-builder
-RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev && \
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev python3 && \
     rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY tools/qcsd_osad.c ./qcsd_osad.c
 RUN mkdir -p /out/usr/local/lib/qcsd && \
     cc -O3 -std=c11 -fPIC -shared -Wall -Wextra -Werror \
-      qcsd_osad.c -o /out/usr/local/lib/qcsd/libqcsd_osad.so
+      qcsd_osad.c -o /out/usr/local/lib/qcsd/libqcsd_osad.so && \
+    mkdir -p /out/usr/share/qcsd-lab
+RUN python3 - <<'PY'
+import hashlib
+import json
+import shutil
+import subprocess
+from pathlib import Path
+
+def sha256(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+def package_version(name):
+    return subprocess.run(
+        ["dpkg-query", "-W", "-f=${Version}", name],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+compiler = Path(shutil.which("cc")).resolve()
+source = Path("qcsd_osad.c")
+library = Path("/out/usr/local/lib/qcsd/libqcsd_osad.so")
+receipt = {
+    "source": {
+        "path": "tools/qcsd_osad.c",
+        "sha256": sha256(source),
+    },
+    "compiler": {
+        "path": str(compiler),
+        "sha256": sha256(compiler),
+        "version": subprocess.run(
+            ["cc", "--version"], check=True, capture_output=True, text=True
+        ).stdout.splitlines()[0],
+        "packages": {
+            name: package_version(name) for name in ("gcc", "libc6-dev")
+        },
+    },
+    "build_command": [
+        "cc", "-O3", "-std=c11", "-fPIC", "-shared", "-Wall", "-Wextra",
+        "-Werror", "qcsd_osad.c", "-o",
+        "/out/usr/local/lib/qcsd/libqcsd_osad.so",
+    ],
+    "library": {
+        "path": "/usr/local/lib/qcsd/libqcsd_osad.so",
+        "sha256": sha256(library),
+    },
+}
+Path("/out/usr/share/qcsd-lab/osad-build.json").write_text(
+    json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+)
+PY
 
 # Fetch the exact Weka 3.7.5 VNG++ runtime declared by the pinned reference
 # receipt.  Formal evaluation verifies these hashes again before execution.
@@ -377,21 +450,37 @@ COPY --from=uv-bin /uv /uvx /usr/local/bin/
 WORKDIR /opt/qcsd-lab
 COPY pyproject.toml uv.lock README.md ./
 COPY src/ ./src/
+COPY tools/build_class_catalogue.py ./tools/build_class_catalogue.py
+COPY --from=source-metadata /source-metadata.json /usr/share/qcsd-lab/source.json
+COPY --from=source-metadata /python-runtime-source-files.json \
+    /tmp/python-runtime-source-files.json
 RUN uv lock --check && \
     uv sync --frozen --no-dev --no-editable && \
-    install -m 0755 /opt/qcsd-venv/bin/qcsd-lab-internal /usr/local/bin/qcsd-lab-internal
+    install -m 0755 /opt/qcsd-venv/bin/qcsd-lab-internal /usr/local/bin/qcsd-lab-internal && \
+    install -m 0755 tools/build_class_catalogue.py \
+      /usr/local/bin/qcsd-build-class-catalogue && \
+    qcsd-build-class-catalogue --help >/dev/null && \
+    python3 -m qcsd_lab.runtime_provenance build \
+      --source-manifest /tmp/python-runtime-source-files.json \
+      --source-metadata /usr/share/qcsd-lab/source.json \
+      --destination /usr/share/qcsd-lab/python-runtime-implementation.json && \
+    rm /tmp/python-runtime-source-files.json
 
 FROM lab-runtime AS collection
 RUN apt-get update && apt-get install -y --no-install-recommends \
     default-jre-headless ethtool git iproute2 time tshark util-linux wireshark-common && \
     rm -rf /var/lib/apt/lists/*
 RUN uv lock --check && \
-    uv sync --frozen --no-dev --no-editable --extra test --extra evaluation
+    uv sync --frozen --no-dev --no-editable --extra test --extra evaluation && \
+    python3 -c 'import sklearn; assert sklearn.__version__ == "1.9.0"' && \
+    python3 -m qcsd_lab.runtime_provenance verify
 COPY --from=neqo-builder /out/bin/ /usr/local/bin/
 COPY --from=neqo-builder /out/nss/ /opt/nss/
 COPY --from=neqo-code-gate /out/rust-code-gate/ \
     /usr/share/qcsd-lab/rust-code-gate/
 COPY --from=osad-builder /out/usr/local/lib/qcsd/ /usr/local/lib/qcsd/
+COPY --from=osad-builder /out/usr/share/qcsd-lab/osad-build.json \
+    /tmp/osad-build.json
 COPY --from=weka-builder /out/opt/qcsd/weka/ /opt/qcsd/weka/
 COPY --from=source-metadata /source-metadata.json /usr/share/qcsd-lab/source.json
 COPY --from=source-metadata /study-build-inputs.json \
@@ -402,6 +491,7 @@ RUN python3 - <<'PY'
 import hashlib
 import importlib.util
 import json
+import subprocess
 from pathlib import Path
 
 domain = "qcsd-chaff-qualification-implementation-v1"
@@ -440,7 +530,80 @@ receipt["sha256"] = hashlib.sha256(domain.encode() + b"\0" + payload).hexdigest(
 Path("/usr/share/qcsd-lab/qualification-implementation.json").write_text(
     json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8"
 )
+
+def package_version(name):
+    return subprocess.run(
+        ["dpkg-query", "-W", "-f=${Version}", name],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+java_declared = Path("/usr/bin/java")
+java_resolved = java_declared.resolve(strict=True)
+owner_output = subprocess.run(
+    ["dpkg-query", "-S", str(java_resolved)],
+    check=True,
+    capture_output=True,
+    text=True,
+).stdout.splitlines()[0]
+java_owner = owner_output.split(":", 1)[0].split(",", 1)[0]
+java_packages = {
+    name: package_version(name)
+    for name in sorted({"default-jre-headless", java_owner})
+}
+java_completed = subprocess.run(
+    [str(java_resolved), "-version"],
+    check=True,
+    capture_output=True,
+    text=True,
+)
+java_version = (java_completed.stderr or java_completed.stdout).strip()
+weka_directory = Path("/opt/qcsd/weka")
+weka_artifacts = {
+    name: {
+        "path": str(weka_directory / name),
+        "sha256": file_receipt(weka_directory / name)["sha256"],
+    }
+    for name in (
+        "java-cup-0.11a.jar",
+        "pentaho-package-manager-0.9.9.jar",
+        "weka-dev-3.7.5.jar",
+    )
+}
+classifier_runtime = {
+    "schema_version": 1,
+    "artifact_type": "qcsd-classifier-runtime-build",
+    "domain": "qcsd-classifier-runtime-build-v1",
+    "source": source,
+    "build_inputs": json.loads(
+        Path("/usr/share/qcsd-lab/study-build-inputs.json").read_text()
+    ),
+    "osad": json.loads(Path("/tmp/osad-build.json").read_text()),
+    "java": {
+        "declared_path": str(java_declared),
+        "resolved_path": str(java_resolved),
+        "sha256": file_receipt(java_resolved)["sha256"],
+        "version": java_version,
+        "packages": java_packages,
+    },
+    "weka": {
+        "directory": str(weka_directory),
+        "artifacts": weka_artifacts,
+    },
+}
+classifier_payload = json.dumps(
+    classifier_runtime, sort_keys=True, separators=(",", ":")
+).encode()
+classifier_runtime["payload_sha256"] = hashlib.sha256(
+    b"qcsd-classifier-runtime-build-v1\0" + classifier_payload
+).hexdigest()
+Path("/usr/share/qcsd-lab/classifier-runtime-build.json").write_text(
+    json.dumps(classifier_runtime, indent=2, sort_keys=True) + "\n",
+    encoding="utf-8",
+)
 Path("/tmp/qualification-source-files.json").unlink()
+Path("/tmp/osad-build.json").unlink()
 PY
 ENV LD_LIBRARY_PATH=/opt/nss/lib \
     TEST_FIXTURE_DB=/opt/nss/test-db \
@@ -459,7 +622,8 @@ ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/collection-entrypoint"]
 FROM lab-runtime AS reference
 RUN apt-get update && apt-get install -y --no-install-recommends \
     autoconf build-essential libssl-dev zlib1g-dev && \
-    rm -rf /var/lib/apt/lists/*
+    rm -rf /var/lib/apt/lists/* && \
+    python3 -m qcsd_lab.runtime_provenance verify
 COPY --from=source-metadata /source-metadata.json /usr/share/qcsd-lab/source.json
 ENV QCSD_LAB_SOURCE_METADATA=/usr/share/qcsd-lab/source.json
 COPY tools/qcsd_csbuflo_author_harness.c \
@@ -474,7 +638,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     rm -rf /var/lib/apt/lists/*
 RUN uv lock --check && \
     uv sync --frozen --no-dev --no-editable \
-      --extra test --extra evaluation --extra discovery
+      --extra test --extra evaluation --extra discovery && \
+    python3 -c 'import playwright.sync_api' && \
+    /usr/bin/chromium --version >/dev/null && \
+    python3 -m qcsd_lab.runtime_provenance verify
 ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 LABEL org.opencontainers.image.title="neqo-qcsd-lab prepare" \
       org.opencontainers.image.source="https://github.com/kaisequeira/neqo-qcsd-lab"

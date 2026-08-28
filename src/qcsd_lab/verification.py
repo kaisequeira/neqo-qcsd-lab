@@ -15,6 +15,7 @@ from .experiment import (
     load_experiment,
     resolved_sample_directory,
     validate_accepted_samples,
+    validate_durable_attempt_evidence,
     validate_resume_fingerprints,
 )
 from .util import atomic_text, sha256_file
@@ -90,6 +91,7 @@ def seal_result(root: Path) -> dict[str, str]:
     validate_resume_fingerprints(root, experiment=experiment)
     _validate_frozen_contract(root, experiment, allow_historical_research_bundle=False)
     validate_accepted_samples(root, experiment)
+    validate_durable_attempt_evidence(root, experiment)
     checksums = {
         relative: sha256_file(path) for relative, path in authoritative_files(root).items()
     }
@@ -135,6 +137,7 @@ def verify_result(root: Path) -> VerifiedResult:
     validate_resume_fingerprints(root, experiment=experiment)
     _validate_frozen_contract(root, experiment, allow_historical_research_bundle=True)
     accepted = validate_accepted_samples(root, experiment)
+    validate_durable_attempt_evidence(root, experiment)
     return VerifiedResult(root, experiment, checksums, accepted)
 
 

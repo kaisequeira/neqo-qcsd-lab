@@ -782,9 +782,11 @@ def test_campaign_passes_named_set_only_to_response_only_loader(
         qualification_scope: str,
         qualification_set: str | None,
         config_root: Path | None,
+        qualification_set_root_override: Path | None = None,
     ) -> tuple[orchestrator.Workload, ...]:
         assert frozen_inputs is None
         assert config_root == tmp_path / "config"
+        assert qualification_set_root_override is None
         assert qualification_scope == orchestrator.RESPONSE_ONLY_CHAFF_SCOPE
         observed.append(qualification_set)
         return workloads

@@ -22,7 +22,7 @@ def discovered() -> DiscoveryResult:
         observed_request_count=3,
         observed_origins=["https://cdn.test", "https://page.test"],
         approved_origins=["https://cdn.test", "https://page.test"],
-        exclusions=[{"url": "https://tracker.test/a.js", "reason": "origin not approved"}],
+        exclusions=[],
         resources=[
             {
                 "id": 0,
@@ -50,6 +50,7 @@ def discovered() -> DiscoveryResult:
                 ],
             },
         ],
+        expandable_origins=["https://cdn.test", "https://page.test"],
     )
 
 
@@ -285,6 +286,78 @@ def test_prepare_complete_coverage_requires_a_rendered_get_from_every_approved_o
         )
 
     assert not (tmp_path / "missing-approved-origin.json").exists()
+
+
+def test_prepare_complete_coverage_rejects_final_discovery_origin_drift(
+    tmp_path,
+    monkeypatch,
+):
+    discovery = discovered()
+    discovery.observed_origins.append("https://tracker.test")
+    assert discovery.expandable_origins is not None
+    discovery.expandable_origins.append("https://tracker.test")
+    discovery.exclusions.append(
+        {"url": "https://tracker.test/a.js", "reason": "origin not approved"}
+    )
+    monkeypatch.setattr(prepare, "discover_page", lambda *_args, **_kwargs: discovery)
+    monkeypatch.setattr(
+        prepare,
+        "run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("probe used")),
+    )
+
+    with pytest.raises(
+        prepare.PreparationError,
+        match=r"observed new HTTPS GET origins.*https://tracker\.test",
+    ):
+        prepare.prepare_workload(
+            "late-origin-drift",
+            "https://page.test/",
+            ["https://page.test", "https://cdn.test"],
+            output_root=tmp_path,
+            require_complete_coverage=True,
+        )
+
+    assert not (tmp_path / "late-origin-drift.json").exists()
+
+
+@pytest.mark.parametrize(
+    ("expandable_origins", "message"),
+    [
+        (None, "requires the final browser discovery"),
+        (["https://page.test/"], "canonical HTTPS origins"),
+        (
+            ["https://page.test", "https://cdn.test"],
+            "sorted unique final browser expandable-origin ledger",
+        ),
+        (["https://page.test"], "omits approved HTTPS GET origins"),
+    ],
+)
+def test_prepare_complete_coverage_requires_a_canonical_final_get_origin_ledger(
+    tmp_path,
+    monkeypatch,
+    expandable_origins,
+    message,
+):
+    discovery = discovered()
+    discovery.expandable_origins = expandable_origins
+    monkeypatch.setattr(prepare, "discover_page", lambda *_args, **_kwargs: discovery)
+    monkeypatch.setattr(
+        prepare,
+        "run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("probe used")),
+    )
+
+    with pytest.raises(prepare.PreparationError, match=message):
+        prepare.prepare_workload(
+            "invalid-final-origin-ledger",
+            "https://page.test/",
+            ["https://page.test", "https://cdn.test"],
+            output_root=tmp_path,
+            require_complete_coverage=True,
+        )
+
+    assert not (tmp_path / "invalid-final-origin-ledger.json").exists()
 
 
 def test_prepare_canonicalizes_stale_probe_lengths_from_stable_get_evidence(

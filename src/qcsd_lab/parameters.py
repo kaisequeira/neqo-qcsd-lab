@@ -218,6 +218,11 @@ def validate_parameter_artifact(
     expected_udp_payload_ceiling: int | None = None,
     expected_workloads: Mapping[str, object] | Collection[str] | None = None,
     qualification_inputs_root: Path | None = None,
+    qualification_context: object | None = None,
+    expected_qualification_set: str | None = None,
+    campaign_evidence_role: str | None = None,
+    expected_successor_study_id: str | None = None,
+    expected_successor_restart_sha256: str | None = None,
 ) -> ParameterArtifact:
     """Validate one runtime parameter file and its concise smoke receipt.
 
@@ -239,7 +244,12 @@ def validate_parameter_artifact(
         require_checked_in_fixture=True,
         allow_historical_research_bundle=False,
         qualification_inputs_root=qualification_inputs_root,
+        qualification_context=qualification_context,
+        expected_qualification_set=expected_qualification_set,
         frozen_qualification_inputs=False,
+        campaign_evidence_role=campaign_evidence_role,
+        expected_successor_study_id=expected_successor_study_id,
+        expected_successor_restart_sha256=expected_successor_restart_sha256,
     )
 
 
@@ -256,6 +266,11 @@ def validate_frozen_parameter_artifact(
     expected_workloads: Mapping[str, object] | Collection[str],
     allow_historical_research_bundle: bool = False,
     qualification_inputs_root: Path | None = None,
+    qualification_context: object | None = None,
+    expected_qualification_set: str | None = None,
+    campaign_evidence_role: str | None = None,
+    expected_successor_study_id: str | None = None,
+    expected_successor_restart_sha256: str | None = None,
 ) -> ParameterArtifact:
     """Revalidate a copied artifact using its frozen campaign binding.
 
@@ -282,7 +297,12 @@ def validate_frozen_parameter_artifact(
         require_checked_in_fixture=False,
         allow_historical_research_bundle=allow_historical_research_bundle,
         qualification_inputs_root=qualification_inputs_root,
+        qualification_context=qualification_context,
+        expected_qualification_set=expected_qualification_set,
         frozen_qualification_inputs=True,
+        campaign_evidence_role=campaign_evidence_role,
+        expected_successor_study_id=expected_successor_study_id,
+        expected_successor_restart_sha256=expected_successor_restart_sha256,
     )
 
 
@@ -300,7 +320,12 @@ def _validate_parameter_artifact(
     require_checked_in_fixture: bool,
     allow_historical_research_bundle: bool,
     qualification_inputs_root: Path | None,
+    qualification_context: object | None,
+    expected_qualification_set: str | None,
     frozen_qualification_inputs: bool,
+    campaign_evidence_role: str | None,
+    expected_successor_study_id: str | None,
+    expected_successor_restart_sha256: str | None,
 ) -> ParameterArtifact:
     receipt_path = (
         provenance_path
@@ -320,6 +345,94 @@ def _validate_parameter_artifact(
 
     parameter = _mapping(load_json(parameter_path), "defense parameters")
     receipt = _mapping(load_json(receipt_path), "parameter provenance")
+    if receipt.get("artifact_type") == "qcsd-class-study-research-defense-bundle":
+        from .class_fitting import (
+            BUNDLE_FILES as CLASS_BUNDLE_FILES,
+            QualificationContext,
+            class_research_parameter_record,
+        )
+
+        if campaign_evidence_role is None:
+            raise ValueError("class-study parameters require an explicit campaign evidence role")
+        if qualification_inputs_root is None and qualification_context is None:
+            raise ValueError("class-study parameters require qualification evidence")
+        expected_parameter_name = receipt_parameter_name or parameter_path.name
+        inferred = {
+            filename: kind for kind, filename in CLASS_BUNDLE_FILES.items()
+        }.get(expected_parameter_name)
+        kind = expected_kind or inferred
+        if kind not in SEALED_RESEARCH_PARAMETER_KINDS or inferred != kind:
+            raise ValueError("class-study parameter defense kind cannot be inferred")
+        if expected_qcsd_profile not in {None, "research-1200"}:
+            raise ValueError("class-study parameter QCSD profile does not match campaign")
+        if expected_udp_payload_ceiling not in {None, 1_200}:
+            raise ValueError("class-study parameter UDP ceiling does not match campaign")
+        qualification = receipt.get("qualification_inputs")
+        qualification_set = (
+            qualification.get("qualification_set")
+            if isinstance(qualification, Mapping)
+            else None
+        )
+        if not isinstance(qualification_set, str) or not qualification_set:
+            raise ValueError("class-study provenance has no qualification-set binding")
+        if qualification_context is not None:
+            if frozen_qualification_inputs:
+                raise ValueError(
+                    "frozen class-study parameters require their result-local qualification root"
+                )
+            if qualification_inputs_root is not None:
+                raise ValueError(
+                    "class-study qualification root and explicit context are mutually exclusive"
+                )
+            if not isinstance(qualification_context, QualificationContext):
+                raise TypeError(
+                    "class-study qualification context must be a QualificationContext"
+                )
+            context = qualification_context
+            if (
+                expected_qualification_set is not None
+                and context.expected_qualification_set
+                != expected_qualification_set
+            ):
+                raise ValueError(
+                    "class-study qualification context has another named set"
+                )
+        elif frozen_qualification_inputs:
+            root = Path(qualification_inputs_root).resolve()
+            context = QualificationContext(
+                workload_root=root / "workloads",
+                sidecar_root=root / "chaff-qualifications",
+                prefix_spec_root=root / "chaff-prefix-specs",
+                require_current_implementation=False,
+                expected_qualification_set=expected_qualification_set,
+            )
+        else:
+            root = Path(qualification_inputs_root).resolve()
+            context = QualificationContext(
+                workload_root=root / "workloads",
+                sidecar_root=root / "chaff-qualification-store" / "sets" / qualification_set,
+                prefix_spec_root=root / "chaff-prefix-specs" / "sets" / qualification_set,
+                require_current_implementation=True,
+                expected_qualification_set=expected_qualification_set,
+            )
+        expected_ids = tuple(expected_workloads or ())
+        parameter_sha256, provenance_sha256, input_policy = class_research_parameter_record(
+            parameter_path,
+            receipt_path,
+            expected_kind=kind,
+            expected_workloads=expected_ids,
+            campaign_evidence_role=campaign_evidence_role,
+            qualification_context=context,
+            expected_successor_study_id=expected_successor_study_id,
+            expected_successor_restart_sha256=expected_successor_restart_sha256,
+        )
+        return ParameterArtifact(
+            path=parameter_path,
+            sha256=parameter_sha256,
+            provenance_path=receipt_path,
+            provenance_sha256=provenance_sha256,
+            input_policy=input_policy,
+        )
     if receipt.get("artifact_type") == "qcsd-research-defense-bundle":
         from .fitting import BUNDLE_FILES, research_parameter_record
 

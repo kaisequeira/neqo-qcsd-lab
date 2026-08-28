@@ -13,6 +13,7 @@ from qcsd_lab.experiment import (
     input_digest,
     initialize_experiment,
     transition_sample,
+    validate_durable_attempt_evidence,
 )
 from qcsd_lab.util import atomic_json, atomic_text, sha256_file
 from qcsd_lab.verification import (
@@ -80,6 +81,18 @@ def _make_result(tmp_path: Path, *, complete: bool = False) -> tuple[Path, dict]
     return root, experiment
 
 
+def _make_durable_result(tmp_path: Path) -> tuple[Path, dict]:
+    root, experiment = _make_result(tmp_path, complete=True)
+    experiment["name"] = "buflo-study-v1-attempt-evidence-test"
+    atomic_json(root / "experiment.json", experiment)
+    return root, experiment
+
+
+def _write_failure_receipt(path: Path, failure: dict) -> None:
+    path.mkdir(parents=True)
+    atomic_json(path / "failure.json", failure)
+
+
 def test_seal_is_deterministic_and_excludes_rebuildable_derived_files(tmp_path):
     root, _ = _make_result(tmp_path, complete=True)
     atomic_text(root / "derived/report.html", "first report")
@@ -104,6 +117,106 @@ def test_seal_is_deterministic_and_excludes_rebuildable_derived_files(tmp_path):
     assert verify_result(root).checksums == checksums
     assert seal_result(root) == checksums
     assert (root / "evidence.sha256").read_bytes() == first
+
+
+def test_seal_and_verify_enforce_durable_physical_attempt_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(verification, "_validate_frozen_contract", lambda *_args, **_kwargs: None)
+
+    seal_root, seal_experiment = _make_durable_result(tmp_path / "seal")
+    [seal_sample] = seal_experiment["samples"]
+    _write_failure_receipt(
+        seal_root / "failures" / seal_sample["sample_id"] / "attempt-001",
+        {"stage": "collection", "type": "UnexpectedFailure"},
+    )
+    with pytest.raises(ValueError, match="unexpected durable failed-attempt evidence"):
+        seal_result(seal_root)
+    assert not (seal_root / "evidence.sha256").exists()
+
+    verify_root, verify_experiment = _make_durable_result(tmp_path / "verify")
+    seal_result(verify_root)
+    verify_experiment["samples"][0]["attempts"] = 2
+    atomic_json(verify_root / "experiment.json", verify_experiment)
+    checksums = {
+        relative: sha256_file(path)
+        for relative, path in authoritative_files(verify_root).items()
+    }
+    atomic_text(
+        verify_root / "evidence.sha256",
+        "".join(f"{checksums[path]}  {path}\n" for path in sorted(checksums)),
+    )
+    with pytest.raises(ValueError, match="lacks its durable failed-attempt directory"):
+        verify_result(verify_root)
+
+
+def test_durable_attempt_evidence_requires_exact_contiguous_terminal_receipts(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "durable"
+    (root / "failures").mkdir(parents=True)
+    previous_failure = {"stage": "collection", "type": "TransientFailure"}
+    terminal_failure = {"stage": "fidelity", "type": "StrictDefenseFidelityFailure"}
+    sample_id = "sample-001"
+    first = root / "failures" / sample_id / "attempt-001"
+    second = root / "failures" / sample_id / "attempt-002"
+    _write_failure_receipt(first, previous_failure)
+    atomic_json(
+        second / "attempt.json",
+        {"success": False, "failure": terminal_failure},
+    )
+    experiment = {
+        "name": "classifier-multiorigin100-v1-formal-01-1200",
+        "configuration": {
+            "class_study_id": "classifier-multiorigin100-v1",
+            "limits": {"max_attempts": 3},
+        },
+        "samples": [
+            {
+                "sample_id": sample_id,
+                "state": "failed",
+                "attempts": 2,
+                "failure": terminal_failure,
+            }
+        ],
+    }
+    validate_durable_attempt_evidence(root, experiment)
+
+    atomic_json(
+        second / "attempt.json",
+        {"success": True, "failure": terminal_failure},
+    )
+    with pytest.raises(ValueError, match="not a terminal failure"):
+        validate_durable_attempt_evidence(root, experiment)
+    atomic_json(
+        second / "attempt.json",
+        {"success": False, "failure": terminal_failure},
+    )
+
+    extra = root / "failures" / sample_id / "attempt-003"
+    _write_failure_receipt(extra, previous_failure)
+    with pytest.raises(ValueError, match="not exact and contiguous"):
+        validate_durable_attempt_evidence(root, experiment)
+    unknown = root / "failures" / "unknown-sample"
+    extra.rename(unknown)
+    with pytest.raises(ValueError, match="failed-sample inventory"):
+        validate_durable_attempt_evidence(root, experiment)
+    unknown.rename(extra)
+    experiment["samples"][0]["attempts"] = 3
+    experiment["samples"][0]["failure"] = {"stage": "fidelity", "type": "OtherFailure"}
+    with pytest.raises(ValueError, match="differs from its attempt receipt"):
+        validate_durable_attempt_evidence(root, experiment)
+
+
+def test_legacy_generic_result_keeps_per_invocation_attempt_compatibility(tmp_path: Path) -> None:
+    root, experiment = _make_result(tmp_path, complete=True)
+    experiment["samples"][0]["attempts"] = 2
+    atomic_json(root / "experiment.json", experiment)
+
+    seal_result(root)
+
+    assert verify_result(root).experiment["samples"][0]["attempts"] == 2
 
 
 @pytest.mark.parametrize("mutation", ["missing", "modified", "extra"])

@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from qcsd_lab.class_acquisition import validate_class_study_preparation
 from qcsd_lab.manifest import (
     EMPTY_SHA256,
     runtime_manifest,
@@ -118,6 +119,19 @@ def prepared_manifest():
         },
         "resources": [root, resource(1, dependencies=[0])],
     }
+
+
+def class_study_prepared_manifest():
+    value = prepared_manifest()
+    value["preparation"]["coverage_admission"] = {
+        "schema_version": 1,
+        "policy": "all-approved-origins-and-rendered-resources",
+        "required_origins": list(value["preparation"]["approved_origins"]),
+        "required_resources": [
+            {"id": item["id"], "url": item["url"]} for item in value["resources"]
+        ],
+    }
+    return value
 
 
 def test_safe_discovery_headers_preserve_behavior_but_remove_secrets():
@@ -426,8 +440,67 @@ def test_complete_coverage_admission_rejects_h3_unavailable_exclusions():
         }
     )
 
-    with pytest.raises(ValueError, match="cannot contain HTTP/3-unavailable"):
+    with pytest.raises(ValueError, match="cannot contain.*HTTP/3-unavailable"):
         validate_manifest(value)
+
+
+def test_class_study_complete_coverage_rejects_unapproved_origin_get_exclusions():
+    value = class_study_prepared_manifest()
+    value["preparation"]["exclusions"].append(
+        {
+            "url": "https://late-origin.example/asset.js",
+            "reason": "origin not approved",
+        }
+    )
+
+    with pytest.raises(ValueError, match="cannot contain unapproved-origin"):
+        validate_class_study_preparation(value, workload_id="class-001")
+
+
+def test_class_study_preparation_requires_and_accepts_exact_complete_coverage():
+    value = class_study_prepared_manifest()
+
+    validate_class_study_preparation(value, workload_id="class-001")
+
+    del value["preparation"]["coverage_admission"]
+    with pytest.raises(ValueError, match="requires a complete-coverage admission"):
+        validate_class_study_preparation(value, workload_id="class-001")
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        (
+            lambda value: value["preparation"]["coverage_admission"].update(
+                policy="partial"
+            ),
+            "coverage admission policy is invalid",
+        ),
+        (
+            lambda value: value["preparation"]["coverage_admission"][
+                "required_resources"
+            ].pop(),
+            "bind every rendered resource",
+        ),
+        (
+            lambda value: (
+                value["preparation"]["approved_origins"].append("https://cdn.example"),
+                value["preparation"]["coverage_admission"]["required_origins"].append(
+                    "https://cdn.example"
+                ),
+            ),
+            "no retained resource for approved origins",
+        ),
+    ],
+)
+def test_class_study_preparation_rejects_malformed_or_tampered_complete_coverage(
+    mutation, message
+):
+    value = class_study_prepared_manifest()
+    mutation(value)
+
+    with pytest.raises(ValueError, match=message):
+        validate_class_study_preparation(value, workload_id="class-001")
 
 
 @pytest.mark.parametrize("location", ["source_url", "final_url"])

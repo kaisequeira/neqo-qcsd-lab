@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import ipaddress
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlsplit
@@ -31,6 +33,11 @@ class DiscoveryResult:
     approved_origins: list[str]
     exclusions: list[dict[str, str]]
     resources: list[dict[str, Any]]
+    origin_ip_pins: dict[str, str] = field(default_factory=dict)
+    # Production supplies the exact HTTPS-GET-only set that an iterative
+    # caller may promote into the next approved-origin pass.  ``None`` records
+    # an absent ledger; class-study convergence rejects that absence.
+    expandable_origins: list[str] | None = None
 
 
 @dataclass
@@ -40,6 +47,7 @@ class _RequestAdmission:
     approved_origins: set[str]
     observed_request_count: int = 0
     observed_origins: set[str] = field(default_factory=set)
+    expandable_origins: set[str] = field(default_factory=set)
     exclusions: dict[tuple[str, str], dict[str, str]] = field(default_factory=dict)
 
     def exclude(self, url: str, reason: str) -> None:
@@ -58,6 +66,8 @@ class _RequestAdmission:
         request_origin = origin(url)
         if request_origin:
             self.observed_origins.add(request_origin)
+            if method == "GET":
+                self.expandable_origins.add(request_origin)
         reason = exclusion_reason(method, url, self.approved_origins)
         if reason:
             # Record before failing so an interception error cannot erase the
@@ -80,6 +90,7 @@ def discover_page(
     *,
     allow_origins: list[str],
     timeout_ms: int,
+    origin_ip_pins: Mapping[str, str] | None = None,
 ) -> DiscoveryResult:
     """Discover one page graph while retaining only explicitly approved origins."""
 
@@ -90,6 +101,7 @@ def discover_page(
     approved = sorted({_normalize_origin(value) for value in allow_origins})
     if not approved:
         raise ValueError("workload preparation requires at least one approved origin")
+    pins = _validate_origin_ip_pins(approved, origin_ip_pins)
     try:
         from playwright.sync_api import sync_playwright
     except ImportError as error:
@@ -99,10 +111,13 @@ def discover_page(
     discovered: dict[str, DiscoveredRequest] = {}
     final_url = url
     with sync_playwright() as playwright:
+        launch_args = ["--disable-quic=false", "--enable-quic", "--no-sandbox"]
+        if pins:
+            launch_args.append("--host-resolver-rules=" + _host_resolver_rules(pins))
         browser = playwright.chromium.launch(
             headless=True,
             executable_path=os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH"),
-            args=["--disable-quic=false", "--enable-quic", "--no-sandbox"],
+            args=launch_args,
         )
         chromium_version = browser.version
         # Fetch interception does not see frame-owned requests already handled
@@ -201,6 +216,8 @@ def discover_page(
             admission.exclusions.values(), key=lambda item: (item["url"], item["reason"])
         ),
         resources=resources,
+        origin_ip_pins=pins,
+        expandable_origins=sorted(admission.expandable_origins),
     )
 
 
@@ -258,3 +275,35 @@ def _normalize_origin(value: str) -> str:
     if parts.path not in {"", "/"} or parts.query or parts.fragment:
         raise ValueError(f"approved origin must not contain a path: {value}")
     return normalized
+
+
+def _validate_origin_ip_pins(approved: list[str], pins: Mapping[str, str] | None) -> dict[str, str]:
+    if pins is None:
+        return {}
+    if not isinstance(pins, Mapping) or set(pins) != set(approved):
+        raise ValueError("origin IP pins must cover the approved origin set exactly")
+    result: dict[str, str] = {}
+    for approved_origin in approved:
+        raw = pins[approved_origin]
+        if not isinstance(raw, str):
+            raise ValueError("origin IP pin must be a string")
+        try:
+            address = ipaddress.ip_address(raw)
+        except ValueError as error:
+            raise ValueError("origin IP pin is not a canonical address") from error
+        if address.compressed != raw:
+            raise ValueError("origin IP pin must use canonical text")
+        result[approved_origin] = raw
+    return result
+
+
+def _host_resolver_rules(pins: Mapping[str, str]) -> str:
+    rules: list[str] = []
+    for approved_origin, address in sorted(pins.items()):
+        hostname = urlsplit(approved_origin).hostname
+        if hostname is None:
+            raise ValueError("origin IP pin has no hostname")
+        destination = f"[{address}]" if ":" in address else address
+        rules.append(f"MAP {hostname} {destination}")
+    rules.append("MAP * ~NOTFOUND")
+    return ",".join(rules)

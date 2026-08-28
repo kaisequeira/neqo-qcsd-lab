@@ -6,7 +6,6 @@ import copy
 import ctypes
 import errno
 import json
-import itertools
 import math
 import os
 import shutil
@@ -106,6 +105,12 @@ class InspectedStructuralArtifactBundle:
             "root": str(self.root),
             "artifacts": self.artifact_hashes,
         }
+
+
+@dataclass(frozen=True)
+class _RecordedMorphingCost:
+    fidelity_cost: float
+    byte_cost: float
 
 
 def is_artifact_bundle_candidate(path: Path) -> bool:
@@ -1460,24 +1465,18 @@ def _validate_traffic_morphing_receipt(value: object, workload_order: Sequence[s
     candidate_by_edge = {(item["source"], item["target"]): item for item in candidates}
     if any(item != candidate_by_edge.get((item["source"], item["target"])) for item in selected):
         raise ValueError("Traffic Morphing selected costs disagree with candidate costs")
-    optimum: tuple[tuple[float, float, tuple[str, ...]], tuple[str, ...]] | None = None
-    for target_vector in itertools.permutations(workload_order):
-        if any(
-            source == target for source, target in zip(workload_order, target_vector, strict=True)
-        ):
-            continue
-        edges = [
-            candidate_by_edge[(source, target)]
-            for source, target in zip(workload_order, target_vector, strict=True)
-        ]
-        key = (
-            math.fsum(float(edge["l1_cost"]) for edge in edges),
-            math.fsum(float(edge["estimated_added_bytes"]) for edge in edges),
-            tuple(target_vector),
+    recorded_costs = {
+        edge: _RecordedMorphingCost(
+            fidelity_cost=float(record["l1_cost"]),
+            byte_cost=float(record["estimated_added_bytes"]),
         )
-        if optimum is None or key < optimum[0]:
-            optimum = (key, tuple(target_vector))
-    if optimum is None or tuple(targets) != optimum[1]:
+        for edge, record in candidate_by_edge.items()
+    }
+    optimum = fitting_morphing.minimum_cost_derangement(
+        workload_order,
+        recorded_costs,  # type: ignore[arg-type]
+    )
+    if tuple(zip(workload_order, targets, strict=True)) != optimum:
         raise ValueError("Traffic Morphing selected mapping is not the recorded optimum")
 
 
@@ -1677,24 +1676,15 @@ def _validate_legacy_walkie_talkie_receipt(value: object, workload_order: Sequen
     ):
         raise ValueError("Walkie-Talkie selected costs disagree with candidate costs")
 
-    def choose(remaining: tuple[str, ...]) -> tuple[int, tuple[tuple[str, str], ...]]:
-        if not remaining:
-            return 0, ()
-        left = remaining[0]
-        optimum: tuple[int, tuple[tuple[str, str], ...]] | None = None
-        for index in range(1, len(remaining)):
-            right = remaining[index]
-            rest_cost, rest_pairs = choose(remaining[1:index] + remaining[index + 1 :])
-            candidate = (
-                candidate_by_pair[(left, right)] + rest_cost,
-                tuple(sorted(((left, right), *rest_pairs))),
+    optimum_pairs = tuple(
+        (left, right)
+        for left, right, _cost in (
+            fitting_walkie_talkie.minimum_weight_perfect_matching_from_costs(
+                lexical,
+                candidate_by_pair,
             )
-            if optimum is None or candidate < optimum:
-                optimum = candidate
-        assert optimum is not None
-        return optimum
-
-    _cost, optimum_pairs = choose(lexical)
+        )
+    )
     if tuple(selected_pairs) != optimum_pairs:
         raise ValueError("Walkie-Talkie selected pairs are not the recorded optimum")
 
@@ -1823,24 +1813,18 @@ def _validate_current_walkie_talkie_receipt(
     ):
         raise ValueError("Walkie-Talkie selected costs disagree with candidate costs")
 
-    def choose(remaining: tuple[str, ...]) -> tuple[int, tuple[tuple[str, str], ...]]:
-        if not remaining:
-            return 0, ()
-        left = remaining[0]
-        optimum: tuple[int, tuple[tuple[str, str], ...]] | None = None
-        for index in range(1, len(remaining)):
-            right = remaining[index]
-            rest_cost, rest_pairs = choose(remaining[1:index] + remaining[index + 1 :])
-            candidate = (
-                candidate_by_pair[(left, right)]["base_matching_cost_packets"] + rest_cost,
-                tuple(sorted(((left, right), *rest_pairs))),
+    optimum_pairs = tuple(
+        (left, right)
+        for left, right, _cost in (
+            fitting_walkie_talkie.minimum_weight_perfect_matching_from_costs(
+                lexical,
+                {
+                    pair: record["base_matching_cost_packets"]
+                    for pair, record in candidate_by_pair.items()
+                },
             )
-            if optimum is None or candidate < optimum:
-                optimum = candidate
-        assert optimum is not None
-        return optimum
-
-    _cost, optimum_pairs = choose(lexical)
+        )
+    )
     if tuple(selected_pairs) != optimum_pairs:
         raise ValueError("Walkie-Talkie selected pairs are not the recorded optimum")
 

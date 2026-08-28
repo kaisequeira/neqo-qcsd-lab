@@ -1,0 +1,605 @@
+{
+  "schema_version": 1,
+  "artifact_type": "qcsd-class-study-prospective-contract",
+  "study_id": "classifier-multiorigin100-v1",
+  "status": {
+    "phase": "candidate-catalogue-created",
+    "prospective": true,
+    "capture_ready": false,
+    "formal_capture_started": false,
+    "formal_samples_accepted": 0,
+    "real_class_acquisition_observations": 0,
+    "real_class_study_samples_executed": 0,
+    "foundation_attestation": "absent",
+    "class_readiness_attestation": "absent",
+    "historical_pre_snapshot": "absent",
+    "cohort_selection_receipt": "absent",
+    "cohort_assembly_receipt": "absent",
+    "candidate_defence_status": "five validated defenses plus two candidates / nine selectable modes",
+    "promotion_prohibition": "do-not-claim-seven-validated-defenses-without-a-verifying-validation-attestation"
+  },
+  "canonical_workspace_layout": {
+    "scope": "fresh-prospective-publication-only",
+    "source": "qcsd_lab.class_layout",
+    "config_root": "config",
+    "campaign_root": "config/classifier-multiorigin100-v1-campaigns",
+    "workload_root": "config/workloads",
+    "study_config_root": "config/class-study/v1",
+    "pilot_cohort": "config/class-study/v1/classifier-multiorigin100-v1-pilot-cohort.json",
+    "pilot_cohort_assembly": "config/class-study/v1/classifier-multiorigin100-v1-pilot-cohort-assembly.json",
+    "authoritative_cohort": "config/class-study/v1/classifier-multiorigin100-v1-cohort.json",
+    "authoritative_cohort_assembly": "config/class-study/v1/classifier-multiorigin100-v1-cohort-assembly.json",
+    "final_selection": "config/class-study/v1/classifier-multiorigin100-v1-final-selection.json",
+    "defense_params_root": "config/defense-params",
+    "artifacts_root": "artifacts",
+    "acquisition_root": "artifacts/classifier-multiorigin100-v1-acquisition",
+    "stability_root": "artifacts/classifier-multiorigin100-v1-stability",
+    "pilot_numeric_root": "artifacts/classifier-multiorigin100-v1-pilot-fitting-numeric",
+    "pilot_final_root": "artifacts/classifier-multiorigin100-v1-pilot-fitting",
+    "pilot_prefix_root": "artifacts/classifier-multiorigin100-v1-pilot-fitting-prefix-specs",
+    "authoritative_numeric_root": "artifacts/classifier-multiorigin100-v1-authoritative-fitting-numeric",
+    "authoritative_final_root": "artifacts/classifier-multiorigin100-v1-authoritative-fitting",
+    "authoritative_prefix_root": "artifacts/classifier-multiorigin100-v1-authoritative-fitting-prefix-specs",
+    "qualification_sets_root": "config/chaff-qualification-store/sets",
+    "pilot_qualification_set_root": "config/chaff-qualification-store/sets/classifier-multiorigin100-v1-pilot120-full-v1",
+    "final_qualification_set_root": "config/chaff-qualification-store/sets/classifier-multiorigin100-v1-final100-full-v1",
+    "fresh_path_policy": "exact-no-alternate-root-no-symlink-component",
+    "campaign_to_study_reference_root": "../class-study/v1",
+    "campaign_to_artifacts_reference_root": "../../artifacts",
+    "frozen_result_policy": "sealed-result-inputs-are-validated-in-place-and-never-remapped-as-fresh-workspace-inputs"
+  },
+  "population": {
+    "ranking_source": "Tranco",
+    "snapshot_receipt": {
+      "path": "tranco-W36Q9.receipt.json",
+      "sha256": "4fe4e869b3253a483d7ca21b0bbd970f795089620a1ab4b2512f5442a1ffe6bb",
+      "list_id": "W36Q9",
+      "list_sha256": "3dcf7f6b7fd29124d6800fc4d0eb66f49ad8c8194be22e2dbee1686ed9662fbf",
+      "row_count": 1000000
+    },
+    "candidate_catalogue": {
+      "path": "classifier-multiorigin100-v1-candidates.json",
+      "sha256": "9d2ec1d755648292526ff623700b07a9bab3988a67444c262aea9f4a855e5146",
+      "candidate_count": 600,
+      "superseded_300_domain_draft": {
+        "sha256": "d6152f468b49627f2c5a696f51e9aa7da26f26e59f07c9618caba4a8669a673c",
+        "payload_sha256": "403e80b35fd27952a37b4ec361d6beed7d51ad33dac4f4fae0b1847c46eeb13b",
+        "ordered_candidate_ids_sha256": "3973e9e94aa11fdee8a1a128f8f1755298b96ee371607e83b96abe12201fe87e",
+        "relationship": "all-300-candidate-identities-are-a-proper-subset-of-the-expanded-catalogue"
+      },
+      "eligibility_passed": 0,
+      "eligibility_field_meaning": "false-is-prospective-and-unassessed-until-evidence-assembly;it-is-not-a-scientific-rejection"
+    },
+    "ordering": "sha256(list_sha256 || study_id || canonical_domain)",
+    "rank_strata": [
+      {
+        "id": "1-1000",
+        "minimum_rank": 1,
+        "maximum_rank": 1000,
+        "candidate_quota": 120,
+        "pilot_quota": 24,
+        "final_quota": 20,
+        "reserve_quota": 4
+      },
+      {
+        "id": "1001-10000",
+        "minimum_rank": 1001,
+        "maximum_rank": 10000,
+        "candidate_quota": 120,
+        "pilot_quota": 24,
+        "final_quota": 20,
+        "reserve_quota": 4
+      },
+      {
+        "id": "10001-100000",
+        "minimum_rank": 10001,
+        "maximum_rank": 100000,
+        "candidate_quota": 120,
+        "pilot_quota": 24,
+        "final_quota": 20,
+        "reserve_quota": 4
+      },
+      {
+        "id": "100001-500000",
+        "minimum_rank": 100001,
+        "maximum_rank": 500000,
+        "candidate_quota": 120,
+        "pilot_quota": 24,
+        "final_quota": 20,
+        "reserve_quota": 4
+      },
+      {
+        "id": "500001-1000000",
+        "minimum_rank": 500001,
+        "maximum_rank": 1000000,
+        "candidate_quota": 120,
+        "pilot_quota": 24,
+        "final_quota": 20,
+        "reserve_quota": 4
+      }
+    ]
+  },
+  "page_admission": {
+    "unit": "one-exact-prepared-public-page-per-unique-frozen-tranco-candidate-domain",
+    "navigation_boundary": {
+      "identity": "exact-frozen-tranco-candidate-domain",
+      "admitted_hosts": "exact-candidate-host-and-its-subdomains-only",
+      "parent_and_sibling_domains": "forbidden",
+      "public_suffix_list": "not-used-to-widen-or-reinterpret-the-boundary",
+      "redirect_policy": "final-url-must-remain-inside-the-exact-candidate-domain-boundary"
+    },
+    "transport": "ordinary-http3-server-client-only-quic-adaptation",
+    "request_method": "GET",
+    "authentication": "forbidden",
+    "service_worker_dependency": "forbidden",
+    "cross-domain-redirect-alias": "forbidden",
+    "approved_origins": "explicit-and-frozen",
+    "resource_origin_policy": {
+      "multi_origin_pages_allowed": true,
+      "single_origin_pages_allowed": true,
+      "origin_count_quota": null,
+      "origin_count_used_for_selection": false,
+      "candidate_domain_boundary_applies_to": "primary-page-navigation-identity-and-redirects-not-subresource-origins",
+      "navigation_seed_scope": "page-specific-document-navigation-origins-only;one-page-origin-ledger-must-not-seed-another-page",
+      "cross_origin_subresource_discovery": "iteratively-observe-denied-public-https-get-origins-then-refetch-with-the-expanded-frozen-allow-list",
+      "origin_expansion_request_policy": "only-observed-https-get-origins-are-promotable;post-and-other-method-origins-remain-audited-but-never-approved",
+      "retained_subresource_policy": "retain-every-discovered-public-https-get-subresource-in-an-accepted-converged-workload",
+      "maximum_approved_origins": 32,
+      "maximum_observed_audit_origins": 512,
+      "maximum_convergence_passes": 8,
+      "limit_failure_policy": "reject-the-class-above-32-origins-or-without-convergence-after-eight-passes;never-silently-truncate-an-accepted-workload",
+      "complete_coverage_required": "at-least-one-rendered-resource-from-every-approved-origin-and-every-retained-resource",
+      "realised_origin_count_distribution_must_be_reported": true,
+      "formal_handoff_report": "dataset.json.resource_origin_profile"
+    },
+    "resource_response_ceiling_bytes": 1048576,
+    "udp_payload_ceiling_bytes": 1200,
+    "stability_probe_schedule": [
+      {
+        "id": "t+30s",
+        "target_ms": 30000,
+        "earliest_ms": 25000,
+        "latest_ms": 35000
+      },
+      {
+        "id": "t+24h",
+        "target_ms": 86400000,
+        "earliest_ms": 85500000,
+        "latest_ms": 87300000
+      },
+      {
+        "id": "t+72h",
+        "target_ms": 259200000,
+        "earliest_ms": 258300000,
+        "latest_ms": 260100000
+      }
+    ],
+    "stability_window_semantics": {
+      "registered_timestamp": "durably-checkpointed-network-observation-start",
+      "completion_timestamp": "probe_completed_at-recorded-separately",
+      "retry_rule": "a-retry-must-start-within-the-same-window-and-records-its-actual-start-time",
+      "retry_preparation_identity": "unique-durably-checkpointed-attempt-id-and-create-only-manifest;orphaned-manifests-cannot-be-relabelled"
+    },
+    "stable_identity_fields": [
+      "final_url",
+      "status",
+      "content_type",
+      "body_bytes",
+      "body_sha256",
+      "resource_graph_sha256"
+    ],
+    "semantic_prepared_replay_identity": {
+      "observation_field": "resource_graph_sha256",
+      "schema_version": 1,
+      "canonical_components": [
+        "preparation.source_url",
+        "preparation.final_url",
+        "preparation.approved_origins",
+        "preparation.expected_responses",
+        "complete-neqo-runtime-manifest"
+      ],
+      "excluded_from_longitudinal_identity": "per-run-packet-qualification-and-provenance"
+    },
+    "prepared_manifest_policy": {
+      "all_probe_sha256s": "recorded-but-not-compared-as-the-longitudinal-identity",
+      "admitted_manifest": "first-t+30s-raw-prepared-manifest-after-all-three-semantic-stability-probes-pass",
+      "later_manifest_replacement": "forbidden"
+    },
+    "selection_inputs": [
+      "boolean-technical-eligibility",
+      "optional-walkie-talkie-feasible-pair-graph"
+    ],
+    "walkie_talkie_feasible_pair_graph": {
+      "edge_source": "selected-wt6-runtime-profiles-in-the-deeply-verified-finalized-pilot-bundle",
+      "qualified_edges": 60,
+      "candidate_unordered_pairs": 7140,
+      "alternate_pair_inference": "forbidden",
+      "endpoint_requirement": "both-endpoints-have-frozen-prefix-and-sidecar-capacity-at-least-the-profile-requirement",
+      "final_requirement": "select-50-qualified-edges-with-exactly-20-classes-per-rank-stratum-or-fail-v1-before-final-freeze"
+    },
+    "prohibited_selection_inputs": [
+      "classifier-accuracy",
+      "trace-separability",
+      "defence-overhead",
+      "defence-latency",
+      "privacy-outcome"
+    ]
+  },
+  "cohort_receipt_contract": {
+    "selection": {
+      "receipt_type": "qcsd-class-study-cohort",
+      "purpose": "bind-exact-ordered-candidate-pilot-final-and-reserve-inventories-and-optional-feasible-pair-graph",
+      "campaign_yaml_field": "class_study_cohort",
+      "frozen_result_input": "inputs/class-study-cohort.json",
+      "handoff_dataset_key": "class_cohort"
+    },
+    "assembly": {
+      "receipt_type": "qcsd-class-study-cohort-assembly",
+      "purpose": "bind-selection-to-candidate-catalogue-stability-evidence-and-exact-admitted-prepared-workload-sha256-values",
+      "required_per_candidate_fields": [
+        "candidate_id",
+        "eligible",
+        "selected_page",
+        "stability_receipt",
+        "prepared_workload",
+        "reasons"
+      ],
+      "campaign_yaml_field": "class_study_cohort_assembly",
+      "frozen_result_input": "inputs/class-study-cohort-assembly.json",
+      "handoff_dataset_key": "class_cohort_assembly"
+    },
+    "downstream_policy": "campaigns-fitting-results-handoff-and-evaluation-require-and-hash-verify-both-receipts",
+    "prepared_workload_policy": "every-frozen-workload-sha256-must-equal-its-admitted-assembly-record"
+  },
+  "cohorts": {
+    "candidate": {
+      "classes": 600,
+      "per_stratum": 120,
+      "state": "catalogued-not-validated"
+    },
+    "pilot": {
+      "classes": 120,
+      "per_stratum": 24,
+      "state": "absent",
+      "selection_receipt": "absent",
+      "assembly_receipt": "absent"
+    },
+    "final": {
+      "classes": 100,
+      "per_stratum": 20,
+      "state": "absent",
+      "selection_receipt": "absent",
+      "assembly_receipt": "absent"
+    },
+    "reserve": {
+      "classes": 20,
+      "per_stratum": 4,
+      "state": "absent",
+      "selection_receipt": "absent",
+      "assembly_receipt": "absent"
+    },
+    "replacement_rule": "any-need-to-replace-a-frozen-final-class-fails-v1-closed",
+    "reserve_policy": {
+      "role": "frozen-attrition-and-successor-planning-inventory",
+      "automatic_replacement": false,
+      "in_place_v1_replacement": "forbidden",
+      "successor_requirement": "a-separately-preregistered-successor-study-and-cohort-must-select-any-replacement-before-new-evidence",
+      "successor_restart": "authoritative-fitting-final-qualification-certification-readiness-pre-snapshot-canaries-formal-capture-handoff-evaluation-and-attestation"
+    }
+  },
+  "modes": {
+    "compatibility": [
+      "undefended",
+      "static",
+      "front",
+      "tamaraw",
+      "traffic-morphing",
+      "wtf-pad",
+      "walkie-talkie",
+      "buflo",
+      "cs-buflo"
+    ],
+    "formal": [
+      "undefended",
+      "front",
+      "tamaraw",
+      "traffic-morphing",
+      "wtf-pad",
+      "walkie-talkie",
+      "buflo",
+      "cs-buflo"
+    ],
+    "static_role": "mechanical-schedule-control-tested-in-compatibility-not-a-formal-research-defence",
+    "cs_buflo_formal_variant": "CTSP",
+    "cs_buflo_cpsp_role": "controlled-ablation-not-an-additional-selectable-mode"
+  },
+  "evidence_roles": {
+    "pilot-fitting": {
+      "formal_classifier_input": false,
+      "attempt_limit": 3
+    },
+    "pilot-compatibility": {
+      "formal_classifier_input": false,
+      "attempt_limit": 3
+    },
+    "authoritative-fitting": {
+      "formal_classifier_input": false,
+      "attempt_limit": 3
+    },
+    "certification": {
+      "formal_classifier_input": false,
+      "attempt_limit": 1
+    },
+    "canary": {
+      "formal_classifier_input": false,
+      "attempt_limit": 3
+    },
+    "formal": {
+      "formal_classifier_input": true,
+      "attempt_limit": 3
+    }
+  },
+  "stage_order": [
+    "pinned-tranco-receipt-and-deterministic-600-domain-candidate-catalogue",
+    "fresh-no-cache-build-reference-code-regression-and-controlled-gates",
+    "class-acquisition-foundation-attestation-freeze",
+    "30s-24h-72h-public-page-acquisition-and-stability-evidence",
+    "pilot-selection-and-cohort-assembly-receipts-freeze",
+    "pilot-fitting",
+    "pilot-full-chaff-and-prefix-qualification",
+    "pilot-nine-mode-compatibility",
+    "final-and-reserve-selection-and-cohort-assembly-receipts-freeze",
+    "authoritative-fitting",
+    "final-full-chaff-and-prefix-qualification",
+    "final-nine-mode-first-launch-certification",
+    "class-readiness-attestation-freeze",
+    "complete-freeze-and-historical-pre-snapshot-before-any-canary-or-formal-launch",
+    "per-block-undefended-canary-with-bounded-preserved-retries",
+    "formal-eight-mode-capture-with-bounded-preserved-retries",
+    "historical-post-snapshot-handoff-evaluation-comparison-and-attestation"
+  ],
+  "authority_gates": {
+    "foundation": {
+      "artifact_type": "qcsd-class-study-foundation-attestation",
+      "state": "absent",
+      "promotion_authority": false,
+      "required_before": [
+        "public-page-acquisition",
+        "every-class-study-capture-role"
+      ],
+      "reconstructed_gates": [
+        "one-current-clean-source-and-pinned-no-cache-build",
+        "independent-reference-conformance",
+        "complete-code-gate",
+        "nine-mode-regression-18-of-18",
+        "controlled-qualification-160-of-160"
+      ]
+    },
+    "readiness": {
+      "artifact_type": "qcsd-class-study-readiness-attestation",
+      "state": "absent",
+      "promotion_authority": false,
+      "required_before": [
+        "canary",
+        "formal"
+      ],
+      "reconstructed_scope": "foundation-and-common-source-build-complete-acquisition-and-admission-pilot-and-final-fitting-qualification-final-selection-assembly-and-900-of-900-first-launch-certification"
+    },
+    "historical_pre_snapshot": {
+      "artifact_type": "qcsd-class-study-historical-snapshot",
+      "phase": "pre-formal",
+      "state": "absent",
+      "required_after": "verified-class-readiness-attestation",
+      "required_before": "every-canary-and-formal-launch",
+      "scope": "deep-historical-corpus-identity-readiness-and-source-lineage"
+    }
+  },
+  "matrices": {
+    "nine_mode_regression": {
+      "formula": "2-controlled-workloads*9-modes*1-visit",
+      "samples": 18,
+      "formal_classifier_input": false
+    },
+    "controlled_gate": {
+      "formula": "2-workloads*4-treatments*4-network-profiles*5-visits",
+      "samples": 160,
+      "formal_classifier_input": false
+    },
+    "pilot_fitting": {
+      "formula": "120-classes*2-visits*2-policies*1-undefended-mode",
+      "samples": 480,
+      "formal_classifier_input": false
+    },
+    "pilot_full_qualification": {
+      "formula": "120-classes*6-full-live-qualification-executions",
+      "samples": 720,
+      "formal_classifier_input": false
+    },
+    "pilot_compatibility": {
+      "formula": "120-classes*9-modes*1-visit",
+      "samples": 1080,
+      "formal_classifier_input": false
+    },
+    "authoritative_fitting": {
+      "formula": "100-classes*10-visits*2-policies*1-undefended-mode",
+      "samples": 2000,
+      "formal_classifier_input": false
+    },
+    "final_full_qualification": {
+      "formula": "100-classes*6-full-live-qualification-executions",
+      "samples": 600,
+      "formal_classifier_input": false
+    },
+    "final_certification": {
+      "formula": "100-classes*9-modes*1-visit",
+      "samples": 900,
+      "formal_classifier_input": false
+    },
+    "per_block_canaries": {
+      "formula": "10-blocks*100-classes*1-undefended-visit",
+      "samples": 1000,
+      "formal_classifier_input": false
+    },
+    "formal": {
+      "formula": "10-blocks*100-classes*2-visits*8-modes",
+      "samples": 16000,
+      "samples_per_block": 1600,
+      "samples_per_mode": 2000,
+      "formal_classifier_input": true
+    }
+  },
+  "prospective_execution_state": {
+    "real_public_page_observations": 0,
+    "pilot_fitting": "0/480",
+    "pilot_full_qualification": "0/720",
+    "pilot_compatibility": "0/1080",
+    "authoritative_fitting": "0/2000",
+    "final_full_qualification": "0/600",
+    "final_certification": "0/900",
+    "per_block_canaries": "0/1000",
+    "formal": "0/16000",
+    "scientific_evidence_note": "unit-and-synthetic-tests-are-not-real-class-study-data"
+  },
+  "capture_contract": {
+    "profile": "research-1200",
+    "request_policy": "as-defined",
+    "timeout_seconds": 120,
+    "capture_seconds": 180,
+    "max_response_bytes": 1048576,
+    "capture_megabytes": 64,
+    "per_origin_cooldown_seconds": 30,
+    "settle_seconds": 1,
+    "sample_order": {
+      "scheme": "origin-aware-windowed",
+      "window_size": 16
+    },
+    "defence_order": "cyclic-latin-square",
+    "accepted_sample_inventory": [
+      "capture.pcapng",
+      "neqo/run.json",
+      "neqo/packets.csv",
+      "neqo/events.csv",
+      "neqo/schedule.csv"
+    ],
+    "campaign_cohort_fields": [
+      "class_study_cohort",
+      "class_study_cohort_assembly"
+    ],
+    "frozen_cohort_inputs": [
+      "inputs/class-study-cohort.json",
+      "inputs/class-study-cohort-assembly.json"
+    ],
+    "frozen_authority_inputs": {
+      "every_class_study_result": [
+        "inputs/class-study-launch.json",
+        "inputs/class-study-foundation.json"
+      ],
+      "canary_and_formal": [
+        "inputs/class-study-readiness.json",
+        "inputs/class-study-historical-pre-snapshot.json"
+      ]
+    },
+    "result_configuration_sha256_keys": [
+      "class_study_cohort_sha256",
+      "class_study_cohort_assembly_sha256",
+      "class_study_launch_sha256",
+      "class_study_foundation_sha256",
+      "class_study_readiness_sha256",
+      "class_study_historical_pre_snapshot_sha256"
+    ],
+    "resume_authority": "experiment.json",
+    "failed_attempts": "preserved",
+    "global_launch_claim": {
+      "artifact_type": "qcsd-class-study-first-launch-claim",
+      "uniqueness": "canonical-campaign-role-block-and-cohort-assembly",
+      "result_root_policy": "one-create-only-claimed-result-root",
+      "recovery": "before-experiment-json-only-recognised-frozen-inputs-may-be-recreated-at-the-same-claimed-root"
+    },
+    "physical_sample_launch_boundary": "sample-marked-running-attempt-count-incremented-and-experiment-json-atomically-checkpointed-before-collector-call",
+    "attempt_receipt_role": "terminal-evidence-not-the-launch-boundary",
+    "post_checkpoint_interruption": "consumes-the-durable-attempt-and-must-resume-the-claimed-experiment",
+    "pre_launch_infrastructure_failure": "recoverable-only-before-experiment-json-at-the-existing-global-claim",
+    "certification": "one-started-launch-only-no-retry-or-substitution",
+    "canary_and_formal": "up-to-three-attempts-with-every-failure-preserved-and-no-substitution-or-relabelling",
+    "storage_preflight_multiplier": 3
+  },
+  "temporal_protocol": {
+    "blocks": 10,
+    "visits_per_class_mode_per_block": 2,
+    "train": {
+      "blocks": [1, 2, 3, 4, 5, 6, 7, 8],
+      "visits_per_class_mode": 16,
+      "samples": 12800
+    },
+    "validation": {
+      "blocks": [9],
+      "visits_per_class_mode": 2,
+      "samples": 1600
+    },
+    "heldout_test": {
+      "blocks": [10],
+      "visits_per_class_mode": 2,
+      "samples": 1600
+    },
+    "tuning_on_block_10": false,
+    "closed_world_random_chance": 0.01
+  },
+  "classifier_contract": {
+    "primary": "adaptive-per-defense-temporal",
+    "continuity": "undefended-trained-transfer",
+    "secondary": "paper-style-stratified-ten-fold",
+    "classifier_visible_fields": [
+      "relative_time_ns",
+      "direction",
+      "observer_frame_length_bytes"
+    ],
+    "forbidden_fields": [
+      "address",
+      "port",
+      "connection-id",
+      "hostname",
+      "tls",
+      "quic-header",
+      "payload",
+      "defence-label"
+    ],
+    "bootstrap_draws": 10000,
+    "bootstrap_clusters": [
+      "acquisition-block",
+      "workload"
+    ],
+    "handoff_dataset_cohort_keys": [
+      "class_cohort",
+      "class_cohort_assembly"
+    ],
+    "handoff_dataset_launch_key": "class_study_launches",
+    "handoff_launch_policy": "ten-distinct-block-specific-launch-claims-must-hash-verify",
+    "cohort_binding_policy": "selection-and-assembly-receipts-and-every-admitted-prepared-workload-sha256-must-verify"
+  },
+  "historical_corpus_guard": {
+    "root": "../../../handoffs/classifier-multiorigin5-v2",
+    "sample_count": 2500,
+    "sha256sums_entries": 12503,
+    "pre_and_post_validation": "deep-closed-sha256-inventory",
+    "files": {
+      "SHA256SUMS": "85bfd88be6c2105201ec7ff3eb87a743e378bd748a9c2097db2fb227875ec2d7",
+      "dataset.json": "46289f368912ee6e90314578814b821eb0dfeadcd794d3422c1af3599623317b",
+      "samples.jsonl": "5974ab9c582793501c558ec294bea4e3afb01bf57039f990fceba33fb0b1e15f"
+    }
+  },
+  "immutability": {
+    "catalogue_selection_assembly_fitting_qualification_campaign_and_handoff_receipts": "create-only-and-hash-bound",
+    "fitting_qualification_compatibility_canary_and_formal_data": "mutually-disjoint-evidence-roles",
+    "formal_export_source_role": "formal-only",
+    "class_replacement_after_final-freeze": "v1-fails-closed-no-automatic-reserve-substitution",
+    "replacement_successor": "separately-preregistered-successor-study-and-cohort-with-full-authoritative-downstream-restart",
+    "historical_classifier_corpus": "read-only-byte-for-byte-unchanged"
+  },
+  "readiness_gates": {
+    "foundation_attestation": "required-before-any-real-public-page-acquisition-or-class-study-capture-role-and-frozen-by-every-result-only-after-the-five-source-build-reference-code-regression-controlled-gates-pass",
+    "class_readiness_attestation": "required-before-any-canary-or-formal-launch-and-only-after-foundation-acquisition-admission-final-selection-and-assembly-final-fitting-final-qualification-and-900-of-900-first-launch-certification-verify",
+    "historical_pre_snapshot": "required-after-readiness-and-before-every-canary-or-formal-launch",
+    "validation_attestation": "only-after-1000-of-1000-canaries-16000-of-16000-formal-samples-handoff-correctness-performance-classifier-evaluation-paper-comparison-historical-post-snapshot-and-independent-hash-verification-pass",
+    "waivers": "forbidden"
+  }
+}

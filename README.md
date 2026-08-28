@@ -31,7 +31,8 @@ qualified defences.
 `buflo` and `cs-buflo` are client-only QUIC adaptations. They use ordinary
 HTTP/3 servers and standard QUIC traffic; they are not bilateral or
 paper-equivalent implementations. Until a typed
-`validation-attestation.json` independently verifies every gate, the project
+class-study `validation-attestation.json` independently verifies every gate,
+the project
 status is **five validated defenses plus two candidates** (nine selectable
 modes including `undefended` and `static`).
 
@@ -77,17 +78,147 @@ natural byte invalidates provisional stop evidence in the implementation, with
 the cumulative invalidation count retained in the final receipt.  This drain
 is not the paper's server padding-done signal.
 
+The latest preserved candidate checkpoint is cohort v20. Its isolated
+reference and code gates passed, including the 18/18 nine-mode regression, but
+the first 40-sample clean controlled shard finished with 39 accepted and
+eligible samples and one rejected BuFLO sample: scheduled incoming credit was
+advertised 9,150 microseconds after its opportunity, outside the strict
+half-open 5,000-microsecond realisation window. That checkpoint binds Lab
+`0a53d0ab4cceab4d61efee5dc16a37071d9511c9` and Neqo
+`be13aa1e549a037ffcd1bc7ccedcb8b9edf9bb8a`; subsequent exact-credit work used
+Lab `064919238765802caaf182ff069e711a7d4a4b54` and Neqo
+`9dc0e005d14b26b7e9b49408787eb444d35f0a32` as the documented pre-class-study
+candidate baseline. The prospective 100-class implementation below is later work and
+must receive its own clean, no-cache, source-bound evidence. Cohort v20 cannot
+authorise any of it, and no class-study qualification or validation attestation
+exists yet. The authoritative current clean heads, progression, and evidence
+ledger are maintained in [`../PROJECT.md`](../PROJECT.md).
+
+### Prospective 100-class final campaign
+
+`classifier-multiorigin100-v1` supersedes the unrun five-class candidate
+formal stage. Its pinned Tranco receipt and deterministic 600-domain candidate
+catalogue are checked in under `config/class-study/v1/`; all 600 candidates are
+currently unassessed, so this is runnable infrastructure rather than acquired
+evidence. The public acquisition runner admits one exact prepared page per
+candidate only after matching start-window observations at 30 seconds, 24
+hours, and 72 hours, then freezes 120 pilot classes and finally 100 study
+classes plus 20 reserves across five fixed rank strata.
+
+The catalogue contains 120 candidates per stratum, so only a 20% technical
+eligibility yield is needed to obtain each stratum's 24 pilot classes. This
+margin was fixed before acquisition; selection still uses the first eligible
+domains in the pinned hash order and never defence, classifier, latency, or
+bandwidth outcomes.
+
+The candidate-domain boundary governs the primary navigation identity and
+redirects, not subresource origins. Discovery iteratively expands a frozen
+public-HTTPS GET origin allow-list and complete preparation retains rendered
+resources from every approved origin. Document-navigation origins are seeded
+per page, so optional pages cannot contaminate one another's origin graphs. The
+32-origin and eight-pass limits are
+fail-closed admission bounds: exceeding either bound or failing to converge
+rejects the class rather than truncating an accepted workload. Every discovered
+public HTTPS GET subresource is retained in an accepted, converged workload.
+The fresh browser load inside final preparation must reproduce the converged
+origin set: a newly observed unapproved HTTPS GET fails that probe and forces
+reconvergence on a retry, and persisted complete-coverage evidence rejects any
+`origin not approved` exclusion independently. Both single-origin and
+naturally multi-origin classes are eligible; origin
+count is not a selection criterion or quota. The closed-checksum handoff
+reports the realised per-class origin counts, histogram, and
+single-/multi-origin totals in `dataset.json.resource_origin_profile`.
+
+The endpoint is one contemporaneous paired corpus over the same frozen 100
+classes and visit indices under `undefended`, FRONT, Tamaraw, Traffic
+Morphing, WTF-PAD, Walkie-Talkie, BuFLO, and canonical CTSP CS-BuFLO. Ten
+temporal blocks contain two visits per class and mode, giving 16,000 formal
+captures. Before any formal block, all 100 classes must first pass a single-
+launch 900-cell certification under all nine selectable modes, including the
+non-defence `static` control. `static` is excluded from the efficacy corpus;
+CPSP CS-BuFLO remains a controlled ablation rather than a tenth mode.
+Certification permits exactly one started attempt per class/mode cell. Each
+excluded canary sample and each authoritative formal sample permits at most
+three total attempts across resumes; every failed or interrupted attempt
+remains sealed and cannot be relabelled or omitted.
+
+Traffic Morphing, WTF-PAD, and Walkie-Talkie receive separate, excluded
+fitting evidence: 480 pilot fitting captures and 2,000 final fitting captures,
+with 720/600 live qualification executions and a 1,080-cell pilot
+compatibility screen. The final cohort is not admitted from classifier
+performance. Its optional Walkie-Talkie graph contains only pair-specific WT6
+profiles with frozen capacity evidence at both endpoints; untested alternate
+pairs are not inferred feasible. Publications are create-only and fail-closed;
+campaign results resume through `experiment.json`, while acquisition resumes
+only through its own `checkpoint.json`. The full protocol, exact matrices,
+current zero-progress ledger, and claim boundary are in
+[`../CLASS-STUDY.md`](../CLASS-STUDY.md).
+
+Fresh class-study commands use one canonical path graph: generated campaigns
+live only in `config/classifier-multiorigin100-v1-campaigns/`, admitted
+workloads remain in `config/workloads/`, cohort receipts live under
+`config/class-study/v1/`, fitted bundles are direct children of `artifacts/`,
+and final named qualification sets are published below
+`config/chaff-qualification-store/sets/`. The host launcher derives and checks
+those paths through `qcsd_lab.class_layout`; alternate or symlinked fresh roots
+fail before Docker launch. Result resume and verification instead use the
+hash-bound frozen `inputs/` tree and do not reinterpret it as a live workspace
+root. Exact directories and prospective command fragments are listed in the
+[canonical-layout section](../CLASS-STUDY.md#26-canonical-fresh-workspace-layout).
+
+After `acquisition-init` has created the canonical provenance and
+`checkpoint.json`, supervise the long 30-second/24-hour/72-hour acquisition
+from the host with:
+
+```shell
+./qcsd-lab class-study acquisition-watch
+```
+
+The supervisor validates the catalogue, foundation, exact prepare-image
+digest, provenance, and checkpoint before doing any work. It invokes the
+existing bounded `acquisition-run` action only when work is due, remains
+interruptible while waiting, and resumes from the same `checkpoint.json` when
+the command is restarted. It creates no alternative state or completion
+receipt. The optional `--heartbeat-seconds` value controls signal-responsive
+host sleep slices and must be greater than zero and no more than five seconds;
+it does not poll Docker at that frequency.
+
+Operationally, this stage is longer than 72 hours. Serial acquisition and the
+190-second pending-baseline guard permit new baselines no faster than once per
+25 seconds, so opening 600 baselines takes at least 4 h 9 min 35 s and the last
+candidate's earliest `t+72h` probe is at least 75 h 54 min 35 s after the first
+baseline. This excludes navigation, preparation, Docker, network, and retry
+time; preflight and supervision must allow additional margin.
+
+### Retained focused candidate workflow
+
+The following `buflo-study` workflow is retained as the command reference for
+the earlier focused three-mode, 1,500-sample design. It is not the
+`classifier-multiorigin100-v1` endpoint, and neither its receipts nor its
+versioned attestation can substitute for the class-study
+`validation-attestation.json`.
+
 The versioned coordinator exposes nine fail-closed actions: `reference`,
 `qualify`, `historical-snapshot`, `freeze-cohort`, `code-gate`, `capture`,
 `export`, `evaluate`, and `verify`. The following Bash sequence is the complete
-evidence workflow. It assumes the fixed create-only destinations do not yet
+retained focused-study workflow. It assumes the fixed create-only destinations do not yet
 exist and that `REFERENCE_ROOT` names the absolute directory containing the
-pinned external paper, author-source, and archive inputs.
+pinned external paper, author-source, and archive inputs. Set `COHORT_VERSION`
+in the calling environment to an unused positive integer; the sequence rejects
+a missing, non-canonical, or already-used value before it creates anything.
 
 ```bash
 set -euo pipefail
 REFERENCE_ROOT=/absolute/pinned-reference-inputs
-COHORT_VERSION=15
+: "${COHORT_VERSION:?export COHORT_VERSION as an unused positive integer}"
+[[ "$COHORT_VERSION" =~ ^[1-9][0-9]*$ ]] || {
+  echo "COHORT_VERSION must be a canonical positive integer" >&2
+  exit 2
+}
+[[ ! -e "artifacts/buflo-study/build-execution-v${COHORT_VERSION}.json" ]] || {
+  echo "COHORT_VERSION already has a create-only build receipt" >&2
+  exit 2
+}
 REFERENCE="artifacts/buflo-study/reference-execution-v${COHORT_VERSION}.json"
 QUALIFICATION="artifacts/buflo-study/qualification-v${COHORT_VERSION}.json"
 CONTROLLED_ROOT="results/buflo-study-controlled-v${COHORT_VERSION}"
@@ -204,7 +335,8 @@ Formal evaluation deliberately pauses for a human comparison review. Create
 by `validate_comparison_review`: it must hash-bind and substantively classify
 every original-study anchor/metric pair as `expected` or `resolved`, explain
 the transport/dataset/protocol context, and retain `paper_equivalent: false`.
-Then the only promotion command is:
+The retained focused workflow's terminal verification and attestation command
+is:
 
 ```bash
 REVIEW="artifacts/buflo-study/comparison-review-v${COHORT_VERSION}.json"
@@ -243,7 +375,8 @@ from its capture admission; `resume` derives it only from the frozen
 `inputs/capture-admission.json`, so neither command can be redirected to a
 different cohort. Keep all earlier versioned evidence.
 
-The exact result arguments are the immutable result roots reported by the
+For this retained focused workflow, the exact result arguments are the
+immutable result roots reported by the
 preceding stage; the coordinator rejects missing, extra, relabelled, or
 source-mismatched roots. The staged matrix is 18 test-only nine-mode regression
 samples, 160 controlled qualification samples, 20 public smoke samples, 40
@@ -424,9 +557,13 @@ Its audited five-file aggregate SHA-256 is
 | `serde-home-r2` | `d4f71ecc7782d395c711af06fb9f2cfc407dd0c60a35aaffc024f39acf41165c` |
 | `rfc9114-text-r2` | `bd528f882ff471fee5bb6e9a21fea44c2d13d46faa863f784b3b67ea10f55f7d` |
 
-That image is qualification provenance, not the final acquisition collection
-image. The exact final image for the rehearsal and 2,500 formal captures is
-still pending.
+That image is qualification provenance, not the acquisition collection image.
+The later sealed acquisition used clean Lab
+`8988a48a8e43cc9d47505cae12ee7758bc7fa5ee`, clean Neqo
+`6aceaac85243d6e0e34354108e010705d3c83088`, and collection image
+`sha256:38c24b0c5c4a06b223a904e896e1e38401c78fffbe6edab0f17846bb66a04de2`.
+The distinction remains important because the qualification image above is not
+the source receipt for any of the 2,500 formal samples.
 
 The historical legacy POC5 exact-five cohort was qualified atomically from
 clean Lab Q6 `0d0b1984c1d87b0502899cc451f1ed6ab6463d03`, tree
@@ -760,7 +897,8 @@ for diagnosis.
 
 The checked-in `smoke.yml` defines the post-fit, 14-sample external evaluation:
 Cloudflare QUIC and Bootstrap Introduction, one independent visit
-each, the `as-defined` request policy, and all seven current defence modes. It
+each, the `as-defined` request policy, and all seven then-established
+selectable modes: five research defences plus two controls. It
 uses `research-1200`, the fixed seed `2026081204`, the mechanical
 `static-control-1200.csv`, and the one create-only production bundle under
 `artifacts/research-1200/`. The contract-5 predecessor is archived read-only at
@@ -791,11 +929,15 @@ promotion from its recorded hashes without another network request. Otherwise
 it removes only the partial working directory of an interrupted, unpromoted
 attempt; completed failed attempts remain evidence.
 
-`max_attempts` is the automatic retry budget for each invocation. An explicit
-`resume` is a new operator-authorized retry epoch for still-incomplete samples;
-accepted samples remain immutable. To avoid bypassing timing controls across a
-process restart, every previously attempted origin waits one full configured
-cooldown before the first resumed request.
+For legacy generic campaigns, `max_attempts` is the automatic retry budget for
+each invocation and an explicit `resume` begins a new operator-authorised retry
+epoch for still-incomplete samples. BuFLO-study and schema-two class-study
+campaigns use a stricter durable total instead: every physical collector launch
+counts against the same per-sample limit across resumes, and an interrupted
+launch is retained as a failure tombstone. Accepted samples remain immutable.
+To avoid bypassing timing controls across a process restart, every previously
+attempted origin waits one full configured cooldown before the first resumed
+request.
 
 ### `verify`
 
@@ -876,8 +1018,8 @@ verifies:
 ./classifier-pilot verify classifier-poc5-v2
 ```
 
-The active POC5 contract binds one workload to each of five distinct class
-origins: `getbootstrap-home-r3` to `getbootstrap.com`,
+The retained legacy POC5 contract binds one workload to each of five distinct
+class origins: `getbootstrap-home-r3` to `getbootstrap.com`,
 `cloudflare-quiche-r3` to `cloudflare-quic.com`,
 `hyper-basic-client-r2` to `hyper.rs`, `serde-home-r1` to `serde.rs`, and
 `rfc9114-text-r1` to `www.rfc-editor.org`. Ten acquisition blocks each
@@ -1541,7 +1683,7 @@ expansions are:
 - final: six workloads × three visits × one request policy × seven modes =
   126 samples.
 
-The POC5 workload/class bindings are exactly
+The retained legacy POC5 workload/class bindings were exactly
 `getbootstrap-home-r3`/`getbootstrap.com`,
 `cloudflare-quiche-r3`/`cloudflare-quic.com`,
 `hyper-basic-client-r2`/`hyper.rs`, `serde-home-r1`/`serde.rs`, and
@@ -1713,11 +1855,20 @@ Initial, URL, and request metadata. Use only undefended blocks 01--08 for
 training, block 09 for validation, and block 10 for the clean test. FRONT and
 Tamaraw remain inference-only.
 
-Status: the repaired pre-promotion implementation and the create-only v2
-response qualification set are ready. The exact final acquisition image, the
-excluded v2 rehearsal, all 2,500 formal v2 captures, their per-campaign
-analyses, and both v2 handoffs are still pending. This documentation does not
-claim that v2 acquisition is complete.
+Status: the excluded v2 rehearsal completed 30/30 accepted and eligible, its
+interface handoff is sealed, and all twenty formal result roots completed,
+verified, and produced their per-campaign analyses. The create-only formal
+handoff at `handoffs/classifier-multiorigin5-v2/` contains all 2,500 samples:
+1,500 undefended, 500 FRONT, and 500 Tamaraw. Its `SHA256SUMS`, `dataset.json`,
+and `samples.jsonl` SHA-256 values are respectively
+`85bfd88be6c2105201ec7ff3eb87a743e378bd748a9c2097db2fb227875ec2d7`,
+`46289f368912ee6e90314578814b821eb0dfeadcd794d3422c1af3599623317b`,
+and `5974ab9c582793501c558ec294bea4e3afb01bf57039f990fceba33fb0b1e15f`.
+This artifact is a five-class classifier-*pipeline* pilot, not evidence of
+classifier or defence efficacy: only undefended blocks supply the
+train/validation/test observations, while every FRONT and Tamaraw sample is
+inference-only. It neither evaluates an attacker retrained within each defence
+nor supplies validation evidence for the later BuFLO or CS-BuFLO candidates.
 
 The entire `classifier-multiorigin5-v1` acquisition lineage is retained only
 as superseded diagnostic evidence. Its excluded rehearsal, B01, P01, and P02
@@ -1820,10 +1971,10 @@ The incomplete six-class diagnostic at
 from the POC5 corpus and classifier export. None of its individually accepted
 samples is reused. Its Apache response drift and FRONT/Tamaraw fidelity
 failures show that the strict gates rejected that particular run; they do not,
-by themselves, establish a general defect in Neqo. The replacement cohort must
-therefore pass a fresh Linux-local capture-integrity rehearsal with exactly
-30/30 accepted and eligible samples and a verified interface handoff before
-any formal block.
+by themselves, establish a general defect in Neqo. The replacement cohort was
+therefore required to pass a fresh Linux-local capture-integrity rehearsal with
+exactly 30/30 accepted and eligible samples and a verified interface handoff
+before any formal block; v2 satisfied that prerequisite.
 Never weaken fidelity to force a pass. Refresh, repair, or prospectively
 replace a failing class under a new frozen contract instead.
 The fitting corpus, qualification runs, smoke result, failed attempts, and

@@ -7,17 +7,18 @@ and derives the separate manifest accepted by the production chaff namespace.
 
 from __future__ import annotations
 
-import json
 import ctypes
 import errno
+import json
 import os
 import re
 import shutil
 import tempfile
 import time
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 from urllib.parse import urlsplit
 
 from .manifest import canonical_bytes, runtime_manifest, validate_research_preparation
@@ -25,6 +26,7 @@ from .prepare import NEQO_PROVENANCE_KEYS, PreparationError, _run_neqo
 from .util import (
     LAB_ROOT,
     SOURCE_METADATA_KEYS,
+    atomic_json,
     load_json,
     sha256_bytes,
     sha256_file,
@@ -52,6 +54,14 @@ PREFIX_SPEC_ARTIFACT_TYPE = "qcsd-walkie-talkie-prefix-pack-spec"
 RESPONSE_ARTIFACT_TYPE = "qcsd-chaff-response-qualification"
 RESPONSE_ONLY_SIDECAR_ARTIFACT_TYPE = "qcsd-chaff-response-only-qualification"
 RESPONSE_ONLY_QUALIFICATION_SCOPE = "response-only"
+FULL_QUALIFICATION_SCOPE = "full"
+LEGACY_NAMED_QUALIFICATION_SET_SCHEMA_VERSION = 1
+NAMED_QUALIFICATION_SET_SCHEMA_VERSION = 2
+NAMED_QUALIFICATION_SET_ARTIFACT_TYPE = "qcsd-named-chaff-qualification-set"
+NAMED_QUALIFICATION_CHECKPOINT_SCHEMA_VERSION = 1
+NAMED_QUALIFICATION_CHECKPOINT_ARTIFACT_TYPE = "qcsd-named-chaff-qualification-checkpoint"
+NAMED_QUALIFICATION_SET_MANIFEST = "_qualification-set.json"
+NAMED_QUALIFICATION_PREFIX_DIRECTORY = "_prefix-specs"
 PREFIX_ARTIFACT_TYPE = "qcsd-chaff-prefix-pack-qualification"
 HEADER_PROJECTION = ("accept", "accept-encoding", "accept-language")
 SELECTION_POLICY = "qualified-largest-known-valid-same-origin-response-v2"
@@ -105,8 +115,9 @@ IMAGE_IMPLEMENTATION_RECEIPT = Path(
     )
 )
 
-# Every Python module is included because CLI imports make the whole package a
-# transitive startup surface.  Data/docs-only commits may follow qualification.
+# Every module in the established generic qualification execution surface is
+# retained here so historical sidecar receipts remain schema-compatible.
+# Study-specific orchestration and evaluation sources are bound separately.
 IMPLEMENTATION_STATIC_FILES = (
     ".dockerignore",
     "Dockerfile",
@@ -208,6 +219,47 @@ RESPONSE_ONLY_V2_SIDECAR_KEYS = {
     "resource",
 }
 BASE_MANIFEST_KEYS = {"path", "sha256"}
+NAMED_QUALIFICATION_SET_KEYS = {
+    "schema_version",
+    "artifact_type",
+    "qualification_set",
+    "qualification_scope",
+    "qualification_sidecar_schema_version",
+    "workload_count",
+    "workload_ids",
+    "workloads",
+    "bindings_sha256",
+}
+NAMED_QUALIFICATION_SET_AUTHORITY_KEYS = NAMED_QUALIFICATION_SET_KEYS | {
+    "qualification_authority"
+}
+NAMED_QUALIFICATION_ENTRY_KEYS = {
+    "index",
+    "workload_id",
+    "workload_manifest",
+    "qualification_sidecar",
+    "runtime_manifest_sha256",
+    "prefix_pack_spec",
+}
+NAMED_QUALIFICATION_CHECKPOINT_KEYS = {
+    "schema_version",
+    "artifact_type",
+    "qualification_set",
+    "qualification_scope",
+    "qualification_sidecar_schema_version",
+    "workload_count",
+    "workload_ids",
+    "workloads",
+}
+NAMED_QUALIFICATION_CHECKPOINT_ENTRY_KEYS = {
+    "index",
+    "workload_id",
+    "workload_manifest",
+    "prefix_pack_spec",
+    "status",
+    "qualification_sidecar",
+    "runtime_manifest_sha256",
+}
 POLICY_KEYS = {
     "response_runs",
     "parallel_response_requests",
@@ -555,6 +607,18 @@ class QualifiedChaffOutput:
     path: Path
     sha256: str
     manifest_sha256: str
+
+
+@dataclass(frozen=True)
+class NamedQualificationSetOutput:
+    """One atomically published, cohort-bound qualification set."""
+
+    path: Path
+    manifest_path: Path
+    manifest_sha256: str
+    qualification_set: str
+    qualification_scope: str
+    workload_ids: tuple[str, ...]
 
 
 def implementation_receipt(
@@ -1303,6 +1367,40 @@ def validate_prefix_pack_spec(
     return dict(spec)
 
 
+def validate_prefix_spec_for_qualification(
+    value: object,
+    *,
+    workload_id: str,
+    application_manifest: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Validate either immutable prefix-spec generation at qualification time.
+
+    Historical schema two remains on its original validator.  The expanded
+    class study uses a distinct schema-three artifact because its schema-six
+    mould already contains sender framing; accepting it through the historical
+    projector would add that framing twice.  The stronger source-WT6 binding is
+    repeated when the final fitting bundle is authorised.
+    """
+
+    if (
+        isinstance(value, Mapping)
+        and value.get("artifact_type")
+        == "qcsd-class-study-walkie-talkie-prefix-pack-spec"
+    ):
+        from .class_fitting import validate_schema_six_prefix_spec_shape
+
+        return validate_schema_six_prefix_spec_shape(
+            value,
+            workload_id=workload_id,
+            application_manifest=application_manifest,
+        )
+    return validate_prefix_pack_spec(
+        value,
+        workload_id=workload_id,
+        application_manifest=application_manifest,
+    )
+
+
 def derive_prefix_pack_specs(
     *,
     source_path: Path | None = None,
@@ -1552,7 +1650,7 @@ def validate_sidecar(
         "sha256"
     ] != sha256_file(prefix_spec_path):
         raise ValueError("chaff qualification prefix-pack specification mismatch")
-    prefix_spec = validate_prefix_pack_spec(
+    prefix_spec = validate_prefix_spec_for_qualification(
         load_json(prefix_spec_path), workload_id=workload_id, application_manifest=base
     )
     required = prefix_spec["required_chaff_streams"]
@@ -2490,6 +2588,966 @@ def validate_qualification_set(value: object) -> str:
     return value
 
 
+def build_named_qualification_set_manifest(
+    workload_ids: Sequence[str],
+    *,
+    qualification_set: str,
+    qualification_scope: str,
+    workload_root: Path,
+    sidecar_root: Path,
+    prefix_spec_root: Path | None = None,
+    qualification_sidecar_schema_version: int | None = None,
+    require_current_implementation: bool = True,
+    qualification_authority: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a deterministic manifest for any exact, ordered qualification cohort.
+
+    This function performs no network work and writes nothing.  Every workload,
+    sidecar, derived runtime manifest, and (for full qualification) prefix
+    specification is revalidated from disk before its digest enters the result.
+    """
+
+    name = validate_qualification_set(qualification_set)
+    scope = _named_qualification_scope(qualification_scope)
+    cohort = _named_workload_ids(workload_ids)
+    schema_version = _named_qualification_sidecar_schema(
+        scope, qualification_sidecar_schema_version
+    )
+    workloads = _regular_directory_without_symlinks(workload_root, "workload root")
+    sidecars = _regular_directory_without_symlinks(sidecar_root, "qualification sidecar root")
+    specs = _named_prefix_spec_root(scope, prefix_spec_root)
+    entries = [
+        _named_qualification_entry(
+            index,
+            workload_id,
+            qualification_scope=scope,
+            qualification_sidecar_schema_version=schema_version,
+            workload_root=workloads,
+            sidecar_root=sidecars,
+            prefix_spec_root=specs,
+            require_current_implementation=require_current_implementation,
+        )
+        for index, workload_id in enumerate(cohort)
+    ]
+    manifest: dict[str, Any] = {
+        "schema_version": (
+            NAMED_QUALIFICATION_SET_SCHEMA_VERSION
+            if qualification_authority is not None
+            else LEGACY_NAMED_QUALIFICATION_SET_SCHEMA_VERSION
+        ),
+        "artifact_type": NAMED_QUALIFICATION_SET_ARTIFACT_TYPE,
+        "qualification_set": name,
+        "qualification_scope": scope,
+        "qualification_sidecar_schema_version": schema_version,
+        "workload_count": len(cohort),
+        "workload_ids": list(cohort),
+        "workloads": entries,
+    }
+    if qualification_authority is not None:
+        if not isinstance(qualification_authority, Mapping):
+            raise TypeError("named qualification authority must be an object")
+        _validate_named_qualification_sidecar_authority(
+            sidecars, cohort, qualification_authority
+        )
+        manifest["qualification_authority"] = json.loads(
+            json.dumps(qualification_authority, sort_keys=True, separators=(",", ":"))
+        )
+    manifest["bindings_sha256"] = _named_qualification_bindings_sha256(manifest)
+    return manifest
+
+
+def validate_named_qualification_set_manifest(
+    value: object,
+    *,
+    workload_root: Path,
+    sidecar_root: Path,
+    prefix_spec_root: Path | None = None,
+    expected_qualification_set: str | None = None,
+    expected_qualification_scope: str | None = None,
+    expected_workload_ids: Sequence[str] | None = None,
+    require_current_implementation: bool = True,
+    expected_qualification_authority: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Validate a named-set manifest and every file to which it is bound."""
+
+    if not isinstance(value, Mapping):
+        raise TypeError("named chaff qualification-set manifest has an invalid exact schema")
+    manifest_schema = value.get("schema_version")
+    manifest = _exact_mapping(
+        value,
+        (
+            NAMED_QUALIFICATION_SET_AUTHORITY_KEYS
+            if manifest_schema == NAMED_QUALIFICATION_SET_SCHEMA_VERSION
+            else NAMED_QUALIFICATION_SET_KEYS
+        ),
+        "named chaff qualification-set manifest",
+    )
+    name = validate_qualification_set(manifest["qualification_set"])
+    scope = _named_qualification_scope(manifest["qualification_scope"])
+    schema_version = _named_qualification_sidecar_schema(
+        scope, manifest["qualification_sidecar_schema_version"]
+    )
+    cohort = _named_workload_ids(manifest["workload_ids"])
+    if (
+        type(manifest["schema_version"]) is not int
+        or manifest["schema_version"]
+        not in {
+            LEGACY_NAMED_QUALIFICATION_SET_SCHEMA_VERSION,
+            NAMED_QUALIFICATION_SET_SCHEMA_VERSION,
+        }
+        or manifest["artifact_type"] != NAMED_QUALIFICATION_SET_ARTIFACT_TYPE
+        or type(manifest["workload_count"]) is not int
+        or manifest["workload_count"] != len(cohort)
+    ):
+        raise ValueError("named chaff qualification-set manifest binding is invalid")
+    if manifest["schema_version"] == NAMED_QUALIFICATION_SET_SCHEMA_VERSION:
+        authority = manifest.get("qualification_authority")
+        if not isinstance(authority, Mapping):
+            raise ValueError("named qualification authority is missing")
+    else:
+        authority = None
+    if expected_qualification_authority is not None:
+        if not isinstance(expected_qualification_authority, Mapping):
+            raise TypeError("expected named qualification authority must be an object")
+        if authority != expected_qualification_authority:
+            raise ValueError("named qualification authority differs from the expected build")
+    if expected_qualification_set is not None and name != validate_qualification_set(
+        expected_qualification_set
+    ):
+        raise ValueError("named chaff qualification set is unexpected")
+    if expected_qualification_scope is not None and scope != _named_qualification_scope(
+        expected_qualification_scope
+    ):
+        raise ValueError("named chaff qualification scope is unexpected")
+    if expected_workload_ids is not None and cohort != _named_workload_ids(expected_workload_ids):
+        raise ValueError("named chaff qualification workload cohort is unexpected")
+    workloads = _regular_directory_without_symlinks(workload_root, "workload root")
+    sidecars = _regular_directory_without_symlinks(sidecar_root, "qualification sidecar root")
+    if authority is not None:
+        _validate_named_qualification_sidecar_authority(sidecars, cohort, authority)
+    specs = _named_prefix_spec_root(scope, prefix_spec_root)
+    values = manifest["workloads"]
+    if not isinstance(values, list) or len(values) != len(cohort):
+        raise ValueError("named chaff qualification workload entries are invalid")
+    for index, (workload_id, value_entry) in enumerate(zip(cohort, values, strict=True)):
+        entry = _exact_mapping(
+            value_entry,
+            NAMED_QUALIFICATION_ENTRY_KEYS,
+            "named chaff qualification workload entry",
+        )
+        if (
+            type(entry["index"]) is not int
+            or entry["index"] != index
+            or entry["workload_id"] != workload_id
+        ):
+            raise ValueError("named chaff qualification workload order is invalid")
+        expected = _named_qualification_entry(
+            index,
+            workload_id,
+            qualification_scope=scope,
+            qualification_sidecar_schema_version=schema_version,
+            workload_root=workloads,
+            sidecar_root=sidecars,
+            prefix_spec_root=specs,
+            require_current_implementation=require_current_implementation,
+        )
+        if entry != expected:
+            raise ValueError("named chaff qualification workload binding is invalid")
+    bindings_sha256 = manifest["bindings_sha256"]
+    if not _digest(bindings_sha256) or bindings_sha256 != _named_qualification_bindings_sha256(
+        manifest
+    ):
+        raise ValueError("named chaff qualification-set bindings SHA-256 is invalid")
+    return dict(manifest)
+
+
+def load_named_qualification_set(
+    manifest_path: Path,
+    *,
+    workload_root: Path,
+    sidecar_root: Path | None = None,
+    prefix_spec_root: Path | None = None,
+    expected_qualification_set: str | None = None,
+    expected_qualification_scope: str | None = None,
+    expected_workload_ids: Sequence[str] | None = None,
+    require_current_implementation: bool = True,
+    expected_qualification_authority: Mapping[str, Any] | None = None,
+) -> NamedQualificationSetOutput:
+    """Load and validate one regular named-set manifest without following symlinks."""
+
+    path = Path(os.path.abspath(manifest_path))
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"named chaff qualification-set manifest is not a regular file: {path}")
+    raw = path.read_bytes()
+    try:
+        value = json.loads(raw.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as error:
+        raise ValueError(
+            f"named chaff qualification-set manifest is invalid JSON: {path}"
+        ) from error
+    manifest = validate_named_qualification_set_manifest(
+        value,
+        workload_root=workload_root,
+        sidecar_root=sidecar_root or path.parent,
+        prefix_spec_root=prefix_spec_root,
+        expected_qualification_set=expected_qualification_set,
+        expected_qualification_scope=expected_qualification_scope,
+        expected_workload_ids=expected_workload_ids,
+        require_current_implementation=require_current_implementation,
+        expected_qualification_authority=expected_qualification_authority,
+    )
+    return NamedQualificationSetOutput(
+        path=path.parent.resolve(),
+        manifest_path=path.resolve(),
+        manifest_sha256=sha256_bytes(raw),
+        qualification_set=manifest["qualification_set"],
+        qualification_scope=manifest["qualification_scope"],
+        workload_ids=tuple(manifest["workload_ids"]),
+    )
+
+
+def publish_named_qualification_set(
+    workload_ids: Sequence[str],
+    *,
+    qualification_set: str,
+    qualification_scope: str,
+    workload_root: Path,
+    sidecar_root: Path,
+    publication_root: Path,
+    prefix_spec_root: Path | None = None,
+    qualification_sidecar_schema_version: int | None = None,
+    require_current_implementation: bool = True,
+    qualification_authority: Mapping[str, Any] | None = None,
+) -> NamedQualificationSetOutput:
+    """Copy and atomically publish one immutable named qualification set.
+
+    Per-workload sidecars remain at the set directory's top level so existing
+    runtime selection can address ``<set>/<workload-id>.json``.  A full set
+    carries the exact prefix specifications beneath the reserved
+    ``_prefix-specs`` directory, and the whole inventory is promoted by one
+    atomic rename.  Reserved leading-underscore names cannot collide with a
+    valid workload ID.
+    """
+
+    name = validate_qualification_set(qualification_set)
+    destination_parent = _regular_directory_without_symlinks(
+        publication_root, "named qualification publication root"
+    )
+    destination = destination_parent / name
+    if destination.exists() or destination.is_symlink():
+        raise FileExistsError(
+            f"{destination} already exists; named qualification-set publication is create-only"
+        )
+    stale = sorted(destination_parent.glob(f".{name}.qcsd-set-*"))
+    if stale:
+        raise ValueError("named qualification publication root contains a stale candidate")
+    source_sidecars = _regular_directory_without_symlinks(
+        sidecar_root, "qualification sidecar root"
+    )
+    manifest = build_named_qualification_set_manifest(
+        workload_ids,
+        qualification_set=name,
+        qualification_scope=qualification_scope,
+        workload_root=workload_root,
+        sidecar_root=source_sidecars,
+        prefix_spec_root=prefix_spec_root,
+        qualification_sidecar_schema_version=qualification_sidecar_schema_version,
+        require_current_implementation=require_current_implementation,
+        qualification_authority=qualification_authority,
+    )
+    candidate = Path(tempfile.mkdtemp(prefix=f".{name}.qcsd-set-", dir=destination_parent))
+    try:
+        for entry in manifest["workloads"]:
+            filename = entry["qualification_sidecar"]["path"]
+            source = source_sidecars / filename
+            target = candidate / filename
+            with source.open("rb") as input_file, target.open("xb") as output_file:
+                shutil.copyfileobj(input_file, output_file)
+                output_file.flush()
+                os.fsync(output_file.fileno())
+        published_prefix_root: Path | None = None
+        if manifest["qualification_scope"] == FULL_QUALIFICATION_SCOPE:
+            if prefix_spec_root is None:
+                raise ValueError("named full qualification requires a prefix-spec root")
+            published_prefix_root = candidate / NAMED_QUALIFICATION_PREFIX_DIRECTORY
+            published_prefix_root.mkdir()
+            for entry in manifest["workloads"]:
+                prefix_receipt = entry["prefix_pack_spec"]
+                if not isinstance(prefix_receipt, Mapping):
+                    raise ValueError("named full qualification prefix binding is missing")
+                filename = prefix_receipt["path"]
+                source = Path(prefix_spec_root) / filename
+                target = published_prefix_root / filename
+                with source.open("rb") as input_file, target.open("xb") as output_file:
+                    shutil.copyfileobj(input_file, output_file)
+                    output_file.flush()
+                    os.fsync(output_file.fileno())
+        manifest_path = candidate / NAMED_QUALIFICATION_SET_MANIFEST
+        with manifest_path.open("xb") as output_file:
+            output_file.write(canonical_bytes(manifest))
+            output_file.flush()
+            os.fsync(output_file.fileno())
+        validate_named_qualification_set_manifest(
+            load_json(manifest_path),
+            workload_root=workload_root,
+            sidecar_root=candidate,
+            prefix_spec_root=published_prefix_root,
+            expected_qualification_set=name,
+            expected_qualification_scope=qualification_scope,
+            expected_workload_ids=workload_ids,
+            require_current_implementation=require_current_implementation,
+            expected_qualification_authority=qualification_authority,
+        )
+        for entry in manifest["workloads"]:
+            receipts = [
+                (
+                    source_sidecars / entry["qualification_sidecar"]["path"],
+                    entry["qualification_sidecar"],
+                    "sidecar",
+                ),
+                (
+                    Path(workload_root) / entry["workload_manifest"]["path"],
+                    entry["workload_manifest"],
+                    "workload",
+                ),
+            ]
+            if entry["prefix_pack_spec"] is not None:
+                if prefix_spec_root is None:
+                    raise ValueError("named full qualification requires a prefix-spec root")
+                receipts.append(
+                    (
+                        Path(prefix_spec_root) / entry["prefix_pack_spec"]["path"],
+                        entry["prefix_pack_spec"],
+                        "prefix specification",
+                    )
+                )
+            for source, receipt, label in receipts:
+                if (
+                    source.is_symlink()
+                    or not source.is_file()
+                    or sha256_file(source) != receipt["sha256"]
+                ):
+                    raise ValueError(f"named qualification {label} changed before publication")
+        if published_prefix_root is not None:
+            _fsync_named_directory(published_prefix_root)
+        _fsync_named_directory(candidate)
+        _rename_noreplace(candidate, destination)
+        _fsync_named_directory(destination_parent)
+    except Exception:
+        # Preserve the unpublished candidate for diagnosis.  A subsequent
+        # invocation refuses ambiguity until it is explicitly audited.
+        raise
+    published_manifest = destination / NAMED_QUALIFICATION_SET_MANIFEST
+    return NamedQualificationSetOutput(
+        path=destination,
+        manifest_path=published_manifest,
+        manifest_sha256=sha256_file(published_manifest),
+        qualification_set=name,
+        qualification_scope=manifest["qualification_scope"],
+        workload_ids=tuple(manifest["workload_ids"]),
+    )
+
+
+def _named_qualification_scope(value: object) -> str:
+    if not isinstance(value, str) or value not in {
+        RESPONSE_ONLY_QUALIFICATION_SCOPE,
+        FULL_QUALIFICATION_SCOPE,
+    }:
+        raise ValueError("named chaff qualification scope must be response-only or full")
+    return str(value)
+
+
+def _named_workload_ids(value: object) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)) or not value:
+        raise ValueError("named chaff qualification requires a nonempty workload cohort")
+    cohort = tuple(value)
+    if any(
+        not isinstance(workload_id, str) or QUALIFICATION_SET_PATTERN.fullmatch(workload_id) is None
+        for workload_id in cohort
+    ):
+        raise ValueError("named chaff qualification workload IDs are invalid")
+    if len(set(cohort)) != len(cohort):
+        raise ValueError("named chaff qualification workload IDs must be unique")
+    return cohort
+
+
+def _named_qualification_sidecar_schema(qualification_scope: str, value: object | None) -> int:
+    if value is None:
+        value = (
+            RESPONSE_ONLY_SIDECAR_V2_SCHEMA_VERSION
+            if qualification_scope == RESPONSE_ONLY_QUALIFICATION_SCOPE
+            else SCHEMA_VERSION
+        )
+    if type(value) is not int:
+        raise ValueError("named chaff qualification sidecar schema version is invalid")
+    if qualification_scope == RESPONSE_ONLY_QUALIFICATION_SCOPE:
+        if value not in {
+            RESPONSE_ONLY_SIDECAR_SCHEMA_VERSION,
+            RESPONSE_ONLY_SIDECAR_V2_SCHEMA_VERSION,
+        }:
+            raise ValueError("named response-only qualification sidecar schema is unsupported")
+    elif value != SCHEMA_VERSION:
+        raise ValueError("named full qualification sidecar schema is unsupported")
+    return value
+
+
+def _named_prefix_spec_root(qualification_scope: str, prefix_spec_root: Path | None) -> Path | None:
+    if qualification_scope == RESPONSE_ONLY_QUALIFICATION_SCOPE:
+        return None
+    if prefix_spec_root is None:
+        raise ValueError("named full qualification requires a prefix-spec root")
+    return _regular_directory_without_symlinks(prefix_spec_root, "prefix-spec root")
+
+
+def _named_regular_file(root: Path, filename: str, label: str) -> Path:
+    path = root / filename
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"{label} is not a regular file: {path}")
+    return path
+
+
+def _named_qualification_sidecar_binding(
+    workload_id: str,
+    *,
+    qualification_scope: str,
+    qualification_sidecar_schema_version: int,
+    workload_path: Path,
+    sidecar_root: Path,
+    prefix_spec_path: Path | None,
+    require_current_implementation: bool,
+) -> tuple[dict[str, str], str]:
+    sidecar_path = _named_regular_file(sidecar_root, f"{workload_id}.json", "qualification sidecar")
+    if qualification_scope == RESPONSE_ONLY_QUALIFICATION_SCOPE:
+        qualified = load_response_qualified_chaff(
+            sidecar_path,
+            workload_id=workload_id,
+            base_manifest_path=workload_path,
+            expected_sidecar_schema_version=qualification_sidecar_schema_version,
+            require_current_implementation=require_current_implementation,
+        )
+    else:
+        if prefix_spec_path is None:
+            raise ValueError("named full qualification requires a prefix-pack specification")
+        qualified = load_qualified_chaff(
+            sidecar_path,
+            workload_id=workload_id,
+            base_manifest_path=workload_path,
+            prefix_spec_path=prefix_spec_path,
+            require_current_implementation=require_current_implementation,
+        )
+    return (
+        {"path": sidecar_path.name, "sha256": qualified.sidecar_sha256},
+        qualified.manifest_sha256,
+    )
+
+
+def _named_qualification_entry(
+    index: int,
+    workload_id: str,
+    *,
+    qualification_scope: str,
+    qualification_sidecar_schema_version: int,
+    workload_root: Path,
+    sidecar_root: Path,
+    prefix_spec_root: Path | None,
+    require_current_implementation: bool,
+) -> dict[str, Any]:
+    workload_path = _named_regular_file(workload_root, f"{workload_id}.json", "workload manifest")
+    workload = load_json(workload_path)
+    validate_research_preparation(workload, workload_id=workload_id)
+    workload_receipt = {"path": workload_path.name, "sha256": sha256_file(workload_path)}
+    prefix_spec_path: Path | None = None
+    prefix_receipt: dict[str, str] | None = None
+    if qualification_scope == FULL_QUALIFICATION_SCOPE:
+        if prefix_spec_root is None:
+            raise ValueError("named full qualification requires a prefix-spec root")
+        prefix_spec_path = _named_regular_file(
+            prefix_spec_root, f"{workload_id}.json", "prefix-pack specification"
+        )
+        validate_prefix_spec_for_qualification(
+            load_json(prefix_spec_path),
+            workload_id=workload_id,
+            application_manifest=workload,
+        )
+        prefix_receipt = {
+            "path": prefix_spec_path.name,
+            "sha256": sha256_file(prefix_spec_path),
+        }
+    sidecar_receipt, runtime_manifest_sha256 = _named_qualification_sidecar_binding(
+        workload_id,
+        qualification_scope=qualification_scope,
+        qualification_sidecar_schema_version=qualification_sidecar_schema_version,
+        workload_path=workload_path,
+        sidecar_root=sidecar_root,
+        prefix_spec_path=prefix_spec_path,
+        require_current_implementation=require_current_implementation,
+    )
+    return {
+        "index": index,
+        "workload_id": workload_id,
+        "workload_manifest": workload_receipt,
+        "qualification_sidecar": sidecar_receipt,
+        "runtime_manifest_sha256": runtime_manifest_sha256,
+        "prefix_pack_spec": prefix_receipt,
+    }
+
+
+def _named_qualification_bindings_sha256(value: Mapping[str, Any]) -> str:
+    payload = {key: item for key, item in value.items() if key != "bindings_sha256"}
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    version = value.get("schema_version")
+    return sha256_bytes(
+        f"qcsd-named-chaff-qualification-set-v{version}\0".encode() + encoded
+    )
+
+
+def _validate_named_qualification_sidecar_authority(
+    sidecar_root: Path,
+    workload_ids: Sequence[str],
+    authority: Mapping[str, Any],
+) -> None:
+    source = authority.get("prepare_source")
+    image = authority.get("prepare_image_digest")
+    if not isinstance(source, Mapping) or not _IMAGE_DIGEST.fullmatch(str(image)):
+        raise ValueError("named qualification authority has no prepare source/image")
+    if source.get("image_digest") != image:
+        raise ValueError("named qualification authority prepare source/image differs")
+    for workload_id in workload_ids:
+        path = _named_regular_file(
+            sidecar_root, f"{workload_id}.json", "qualification sidecar"
+        )
+        sidecar = load_json(path)
+        if (
+            not isinstance(sidecar, Mapping)
+            or sidecar.get("qualification_source") != source
+            or sidecar.get("qualification_image_digest") != image
+        ):
+            raise ValueError(
+                f"named qualification sidecar {workload_id} differs from its prepare authority"
+            )
+
+
+def _fsync_named_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def initialize_named_qualification_checkpoint(
+    checkpoint_path: Path,
+    workload_ids: Sequence[str],
+    *,
+    qualification_set: str,
+    qualification_scope: str,
+    workload_root: Path,
+    prefix_spec_root: Path | None = None,
+    qualification_sidecar_schema_version: int | None = None,
+) -> dict[str, Any]:
+    """Create the sole mutable per-workload qualification checkpoint.
+
+    Initialisation validates and hashes every immutable input, but deliberately
+    does not run a client or require any qualification sidecar to exist.
+    """
+
+    path = Path(os.path.abspath(checkpoint_path))
+    parent = _regular_directory_without_symlinks(path.parent, "qualification checkpoint root")
+    path = parent / path.name
+    if path.exists() or path.is_symlink():
+        raise FileExistsError(f"{path} already exists; qualification checkpoint is create-only")
+    name = validate_qualification_set(qualification_set)
+    scope = _named_qualification_scope(qualification_scope)
+    cohort = _named_workload_ids(workload_ids)
+    schema_version = _named_qualification_sidecar_schema(
+        scope, qualification_sidecar_schema_version
+    )
+    workloads = _regular_directory_without_symlinks(workload_root, "workload root")
+    specs = _named_prefix_spec_root(scope, prefix_spec_root)
+    entries = [
+        {
+            **_named_checkpoint_input_entry(
+                index,
+                workload_id,
+                qualification_scope=scope,
+                workload_root=workloads,
+                prefix_spec_root=specs,
+            ),
+            "status": "pending",
+            "qualification_sidecar": None,
+            "runtime_manifest_sha256": None,
+        }
+        for index, workload_id in enumerate(cohort)
+    ]
+    checkpoint: dict[str, Any] = {
+        "schema_version": NAMED_QUALIFICATION_CHECKPOINT_SCHEMA_VERSION,
+        "artifact_type": NAMED_QUALIFICATION_CHECKPOINT_ARTIFACT_TYPE,
+        "qualification_set": name,
+        "qualification_scope": scope,
+        "qualification_sidecar_schema_version": schema_version,
+        "workload_count": len(cohort),
+        "workload_ids": list(cohort),
+        "workloads": entries,
+    }
+    with path.open("xb") as output:
+        output.write(canonical_bytes(checkpoint))
+        output.flush()
+        os.fsync(output.fileno())
+    _fsync_named_directory(parent)
+    return checkpoint
+
+
+def validate_named_qualification_checkpoint(
+    value: object,
+    *,
+    workload_root: Path,
+    sidecar_root: Path | None = None,
+    prefix_spec_root: Path | None = None,
+    expected_qualification_set: str | None = None,
+    expected_qualification_scope: str | None = None,
+    expected_workload_ids: Sequence[str] | None = None,
+    require_current_implementation: bool = True,
+) -> dict[str, Any]:
+    """Validate a checkpoint's frozen inputs and every completed class entry."""
+
+    checkpoint = _exact_mapping(
+        value,
+        NAMED_QUALIFICATION_CHECKPOINT_KEYS,
+        "named chaff qualification checkpoint",
+    )
+    name = validate_qualification_set(checkpoint["qualification_set"])
+    scope = _named_qualification_scope(checkpoint["qualification_scope"])
+    schema_version = _named_qualification_sidecar_schema(
+        scope, checkpoint["qualification_sidecar_schema_version"]
+    )
+    cohort = _named_workload_ids(checkpoint["workload_ids"])
+    if (
+        type(checkpoint["schema_version"]) is not int
+        or checkpoint["schema_version"] != NAMED_QUALIFICATION_CHECKPOINT_SCHEMA_VERSION
+        or checkpoint["artifact_type"] != NAMED_QUALIFICATION_CHECKPOINT_ARTIFACT_TYPE
+        or type(checkpoint["workload_count"]) is not int
+        or checkpoint["workload_count"] != len(cohort)
+    ):
+        raise ValueError("named chaff qualification checkpoint binding is invalid")
+    if expected_qualification_set is not None and name != validate_qualification_set(
+        expected_qualification_set
+    ):
+        raise ValueError("named chaff qualification checkpoint set is unexpected")
+    if expected_qualification_scope is not None and scope != _named_qualification_scope(
+        expected_qualification_scope
+    ):
+        raise ValueError("named chaff qualification checkpoint scope is unexpected")
+    if expected_workload_ids is not None and cohort != _named_workload_ids(expected_workload_ids):
+        raise ValueError("named chaff qualification checkpoint cohort is unexpected")
+    workloads = _regular_directory_without_symlinks(workload_root, "workload root")
+    specs = _named_prefix_spec_root(scope, prefix_spec_root)
+    sidecars = (
+        _regular_directory_without_symlinks(sidecar_root, "qualification sidecar root")
+        if sidecar_root is not None
+        else None
+    )
+    values = checkpoint["workloads"]
+    if not isinstance(values, list) or len(values) != len(cohort):
+        raise ValueError("named chaff qualification checkpoint entries are invalid")
+    for index, (workload_id, value_entry) in enumerate(zip(cohort, values, strict=True)):
+        entry = _exact_mapping(
+            value_entry,
+            NAMED_QUALIFICATION_CHECKPOINT_ENTRY_KEYS,
+            "named chaff qualification checkpoint entry",
+        )
+        expected_input = _named_checkpoint_input_entry(
+            index,
+            workload_id,
+            qualification_scope=scope,
+            workload_root=workloads,
+            prefix_spec_root=specs,
+        )
+        if any(entry[key] != item for key, item in expected_input.items()):
+            raise ValueError("named chaff qualification checkpoint input binding is invalid")
+        if entry["status"] == "pending":
+            if (
+                entry["qualification_sidecar"] is not None
+                or entry["runtime_manifest_sha256"] is not None
+            ):
+                raise ValueError("pending qualification checkpoint entry contains an output")
+            continue
+        if entry["status"] != "qualified" or sidecars is None:
+            raise ValueError(
+                "qualified checkpoint entries require an explicit qualification sidecar root"
+            )
+        workload_path = workloads / entry["workload_manifest"]["path"]
+        prefix_spec_path = (
+            specs / entry["prefix_pack_spec"]["path"]
+            if specs is not None and entry["prefix_pack_spec"] is not None
+            else None
+        )
+        sidecar_receipt, runtime_manifest_sha256 = _named_qualification_sidecar_binding(
+            workload_id,
+            qualification_scope=scope,
+            qualification_sidecar_schema_version=schema_version,
+            workload_path=workload_path,
+            sidecar_root=sidecars,
+            prefix_spec_path=prefix_spec_path,
+            require_current_implementation=require_current_implementation,
+        )
+        if (
+            entry["qualification_sidecar"] != sidecar_receipt
+            or entry["runtime_manifest_sha256"] != runtime_manifest_sha256
+        ):
+            raise ValueError("qualified checkpoint output binding is invalid")
+    return dict(checkpoint)
+
+
+def load_named_qualification_checkpoint(
+    checkpoint_path: Path,
+    *,
+    workload_root: Path,
+    sidecar_root: Path | None = None,
+    prefix_spec_root: Path | None = None,
+    expected_qualification_set: str | None = None,
+    expected_qualification_scope: str | None = None,
+    expected_workload_ids: Sequence[str] | None = None,
+    require_current_implementation: bool = True,
+) -> dict[str, Any]:
+    """Load one checkpoint and validate its exact on-disk bindings."""
+
+    path = Path(os.path.abspath(checkpoint_path))
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"qualification checkpoint is not a regular file: {path}")
+    return validate_named_qualification_checkpoint(
+        load_json(path),
+        workload_root=workload_root,
+        sidecar_root=sidecar_root,
+        prefix_spec_root=prefix_spec_root,
+        expected_qualification_set=expected_qualification_set,
+        expected_qualification_scope=expected_qualification_scope,
+        expected_workload_ids=expected_workload_ids,
+        require_current_implementation=require_current_implementation,
+    )
+
+
+def record_named_qualification_checkpoint(
+    checkpoint_path: Path,
+    workload_id: str,
+    *,
+    workload_root: Path,
+    sidecar_root: Path,
+    prefix_spec_root: Path | None = None,
+    require_current_implementation: bool = True,
+) -> dict[str, Any]:
+    """Index one already-created sidecar, idempotently, without network work."""
+
+    checkpoint = load_named_qualification_checkpoint(
+        checkpoint_path,
+        workload_root=workload_root,
+        sidecar_root=sidecar_root,
+        prefix_spec_root=prefix_spec_root,
+        require_current_implementation=require_current_implementation,
+    )
+    if workload_id not in checkpoint["workload_ids"]:
+        raise ValueError("qualification checkpoint does not contain the workload ID")
+    index = checkpoint["workload_ids"].index(workload_id)
+    entry = checkpoint["workloads"][index]
+    workloads = _regular_directory_without_symlinks(workload_root, "workload root")
+    sidecars = _regular_directory_without_symlinks(sidecar_root, "qualification sidecar root")
+    specs = _named_prefix_spec_root(checkpoint["qualification_scope"], prefix_spec_root)
+    workload_path = workloads / entry["workload_manifest"]["path"]
+    prefix_spec_path = (
+        specs / entry["prefix_pack_spec"]["path"]
+        if specs is not None and entry["prefix_pack_spec"] is not None
+        else None
+    )
+    sidecar_receipt, runtime_manifest_sha256 = _named_qualification_sidecar_binding(
+        workload_id,
+        qualification_scope=checkpoint["qualification_scope"],
+        qualification_sidecar_schema_version=checkpoint["qualification_sidecar_schema_version"],
+        workload_path=workload_path,
+        sidecar_root=sidecars,
+        prefix_spec_path=prefix_spec_path,
+        require_current_implementation=require_current_implementation,
+    )
+    if entry["status"] == "qualified":
+        if (
+            entry["qualification_sidecar"] != sidecar_receipt
+            or entry["runtime_manifest_sha256"] != runtime_manifest_sha256
+        ):
+            raise ValueError("qualified checkpoint entry cannot be rebound")
+        return checkpoint
+    entry["status"] = "qualified"
+    entry["qualification_sidecar"] = sidecar_receipt
+    entry["runtime_manifest_sha256"] = runtime_manifest_sha256
+    _replace_named_qualification_checkpoint(Path(checkpoint_path), checkpoint)
+    return load_named_qualification_checkpoint(
+        checkpoint_path,
+        workload_root=workload_root,
+        sidecar_root=sidecar_root,
+        prefix_spec_root=prefix_spec_root,
+        require_current_implementation=require_current_implementation,
+    )
+
+
+def reconcile_named_qualification_checkpoint(
+    checkpoint_path: Path,
+    *,
+    workload_root: Path,
+    sidecar_root: Path,
+    prefix_spec_root: Path | None = None,
+    require_current_implementation: bool = True,
+) -> dict[str, Any]:
+    """Recover valid sidecars left between durable creation and checkpointing."""
+
+    checkpoint = load_named_qualification_checkpoint(
+        checkpoint_path,
+        workload_root=workload_root,
+        sidecar_root=sidecar_root,
+        prefix_spec_root=prefix_spec_root,
+        require_current_implementation=require_current_implementation,
+    )
+    workloads = _regular_directory_without_symlinks(workload_root, "workload root")
+    sidecars = _regular_directory_without_symlinks(sidecar_root, "qualification sidecar root")
+    specs = _named_prefix_spec_root(checkpoint["qualification_scope"], prefix_spec_root)
+    changed = False
+    for entry in checkpoint["workloads"]:
+        if entry["status"] != "pending":
+            continue
+        sidecar_path = sidecars / f"{entry['workload_id']}.json"
+        if not sidecar_path.exists() and not sidecar_path.is_symlink():
+            continue
+        workload_path = workloads / entry["workload_manifest"]["path"]
+        prefix_spec_path = (
+            specs / entry["prefix_pack_spec"]["path"]
+            if specs is not None and entry["prefix_pack_spec"] is not None
+            else None
+        )
+        sidecar_receipt, runtime_manifest_sha256 = _named_qualification_sidecar_binding(
+            entry["workload_id"],
+            qualification_scope=checkpoint["qualification_scope"],
+            qualification_sidecar_schema_version=checkpoint["qualification_sidecar_schema_version"],
+            workload_path=workload_path,
+            sidecar_root=sidecars,
+            prefix_spec_path=prefix_spec_path,
+            require_current_implementation=require_current_implementation,
+        )
+        entry["status"] = "qualified"
+        entry["qualification_sidecar"] = sidecar_receipt
+        entry["runtime_manifest_sha256"] = runtime_manifest_sha256
+        changed = True
+    if changed:
+        _replace_named_qualification_checkpoint(Path(checkpoint_path), checkpoint)
+    return load_named_qualification_checkpoint(
+        checkpoint_path,
+        workload_root=workload_root,
+        sidecar_root=sidecar_root,
+        prefix_spec_root=prefix_spec_root,
+        require_current_implementation=require_current_implementation,
+    )
+
+
+def pending_named_qualification_workloads(
+    checkpoint_path: Path,
+    *,
+    workload_root: Path,
+    sidecar_root: Path,
+    prefix_spec_root: Path | None = None,
+    require_current_implementation: bool = True,
+) -> tuple[str, ...]:
+    """Return pending workload IDs in the immutable caller-supplied order."""
+
+    checkpoint = load_named_qualification_checkpoint(
+        checkpoint_path,
+        workload_root=workload_root,
+        sidecar_root=sidecar_root,
+        prefix_spec_root=prefix_spec_root,
+        require_current_implementation=require_current_implementation,
+    )
+    return tuple(
+        entry["workload_id"] for entry in checkpoint["workloads"] if entry["status"] == "pending"
+    )
+
+
+def publish_named_qualification_set_from_checkpoint(
+    checkpoint_path: Path,
+    *,
+    workload_root: Path,
+    sidecar_root: Path,
+    publication_root: Path,
+    prefix_spec_root: Path | None = None,
+    require_current_implementation: bool = True,
+    qualification_authority: Mapping[str, Any] | None = None,
+) -> NamedQualificationSetOutput:
+    """Publish only after every checkpoint entry has one validated sidecar."""
+
+    checkpoint = load_named_qualification_checkpoint(
+        checkpoint_path,
+        workload_root=workload_root,
+        sidecar_root=sidecar_root,
+        prefix_spec_root=prefix_spec_root,
+        require_current_implementation=require_current_implementation,
+    )
+    pending = [
+        entry["workload_id"] for entry in checkpoint["workloads"] if entry["status"] != "qualified"
+    ]
+    if pending:
+        raise ValueError("named qualification checkpoint is incomplete: " + ", ".join(pending))
+    return publish_named_qualification_set(
+        checkpoint["workload_ids"],
+        qualification_set=checkpoint["qualification_set"],
+        qualification_scope=checkpoint["qualification_scope"],
+        workload_root=workload_root,
+        sidecar_root=sidecar_root,
+        publication_root=publication_root,
+        prefix_spec_root=prefix_spec_root,
+        qualification_sidecar_schema_version=checkpoint["qualification_sidecar_schema_version"],
+        require_current_implementation=require_current_implementation,
+        qualification_authority=qualification_authority,
+    )
+
+
+def _named_checkpoint_input_entry(
+    index: int,
+    workload_id: str,
+    *,
+    qualification_scope: str,
+    workload_root: Path,
+    prefix_spec_root: Path | None,
+) -> dict[str, Any]:
+    workload_path = _named_regular_file(workload_root, f"{workload_id}.json", "workload manifest")
+    workload = load_json(workload_path)
+    validate_research_preparation(workload, workload_id=workload_id)
+    prefix_receipt: dict[str, str] | None = None
+    if qualification_scope == FULL_QUALIFICATION_SCOPE:
+        if prefix_spec_root is None:
+            raise ValueError("named full qualification requires a prefix-spec root")
+        prefix_path = _named_regular_file(
+            prefix_spec_root, f"{workload_id}.json", "prefix-pack specification"
+        )
+        validate_prefix_spec_for_qualification(
+            load_json(prefix_path), workload_id=workload_id, application_manifest=workload
+        )
+        prefix_receipt = {"path": prefix_path.name, "sha256": sha256_file(prefix_path)}
+    return {
+        "index": index,
+        "workload_id": workload_id,
+        "workload_manifest": {
+            "path": workload_path.name,
+            "sha256": sha256_file(workload_path),
+        },
+        "prefix_pack_spec": prefix_receipt,
+    }
+
+
+def _replace_named_qualification_checkpoint(
+    checkpoint_path: Path, checkpoint: Mapping[str, Any]
+) -> None:
+    path = Path(os.path.abspath(checkpoint_path))
+    parent = _regular_directory_without_symlinks(path.parent, "qualification checkpoint root")
+    path = parent / path.name
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"qualification checkpoint is not a regular file: {path}")
+    atomic_json(path, dict(checkpoint))
+    _fsync_named_directory(parent)
+
+
 def qualify_chaff(
     workload_id: str,
     *,
@@ -2533,7 +3591,7 @@ def qualify_chaff(
     application = selected_navigation_root(base, workload_id)
     selected, prepared_selected = selected_chaff_resource(base, workload_id)
     headers = project_compact_headers(selected)
-    prefix_spec = validate_prefix_pack_spec(
+    prefix_spec = validate_prefix_spec_for_qualification(
         load_json(spec_path), workload_id=workload_id, application_manifest=base
     )
     required = prefix_spec["required_chaff_streams"]

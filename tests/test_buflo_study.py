@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import csv
 import base64
+import csv
 import hashlib
 import json
 import os
@@ -53,10 +53,12 @@ from qcsd_lab.fidelity import (
     SCHEDULE_QCSD_FIELDS,
     _cs_buflo_padding_targets_match,
     _cs_buflo_payload_padding_target,
-    _runner_wakeup_metrics_valid as _fidelity_runner_wakeup_metrics_valid,
     _schedule_realization_metrics,
     fidelity_eligible,
     new_defense_terminal_receipts_valid,
+)
+from qcsd_lab.fidelity import (
+    _runner_wakeup_metrics_valid as _fidelity_runner_wakeup_metrics_valid,
 )
 from qcsd_lab.util import LAB_ROOT
 
@@ -1072,6 +1074,36 @@ def test_shared_router_receipt_binds_exact_once_per_direction_topology(
         )
 
 
+def test_regression_receipt_binds_the_separate_two_origin_nine_mode_proof(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    receipt = _shared_router_receipt(monkeypatch, 0)
+    receipt.update(
+        {
+            "stage": "regression",
+            "workload_aliases": {"complex": "local-large", "simple": "local-small"},
+            "fixture_scope": (
+                "single-origin-prefix-regression-plus-bound-two-origin-"
+                "nine-mode-compatibility"
+            ),
+            "treatment_order": list(load_study_plan()["regression"]["treatments"]),
+        }
+    )
+
+    assert validate_controlled_campaign_receipt(receipt)["fixture_scope"].endswith(
+        "nine-mode-compatibility"
+    )
+    historical = {
+        **receipt,
+        "schema_version": buflo_study.PREVIOUS_LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION,
+        "fixture_scope": "same-origin-regression-surrogates",
+    }
+    assert validate_controlled_campaign_receipt(historical)["schema_version"] == 3
+    invalid_current = {**receipt, "fixture_scope": "same-origin-regression-surrogates"}
+    with pytest.raises(ValueError, match="matrix binding"):
+        validate_controlled_campaign_receipt(invalid_current)
+
+
 def test_shared_router_receipt_normalizes_nondeterministic_qdisc_handles(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1460,11 +1492,14 @@ def test_controlled_driver_does_not_change_regression_manifests(
     monkeypatch.setattr(buflo_study, "_prepare_local_workloads", capture)
     buflo_study._create_local_workloads(tmp_path)
     buflo_study._create_regression_workloads(tmp_path)
+    buflo_study._create_regression_multi_origin_workload(tmp_path)
 
     _controlled_label, controlled, controlled_gate = calls[0]
     _regression_label, regression, regression_gate = calls[1]
+    _compatibility_label, compatibility, compatibility_gate = calls[2]
     assert controlled_gate is True
     assert regression_gate is False
+    assert compatibility_gate is False
     assert [len(controlled[name]["resources"]) for name in ("local-small", "local-large")] == [
         2,
         5,
@@ -1478,6 +1513,10 @@ def test_controlled_driver_does_not_change_regression_manifests(
         resource["url"].split("/", 3)[2]
         for resource in regression["complex"]["resources"]
     } == {"qcsd-buflo-server-one:4433"}
+    assert {
+        resource["url"].split("/", 3)[2]
+        for resource in compatibility["complex"]["resources"]
+    } == {"qcsd-buflo-server-one:4433", "qcsd-buflo-server-two:4434"}
     for workload_id in ("local-small", "local-large"):
         proof = buflo_study._validate_controlled_csbuflo_rate_driver(
             workload_id, controlled[workload_id]["resources"]
@@ -1544,6 +1583,161 @@ def _regression_prefix_manifest(workload_id: str) -> dict[str, object]:
         },
         "resources": resources,
     }
+
+
+def _regression_multi_origin_identity_manifest() -> dict[str, object]:
+    manifest = _regression_prefix_manifest("complex")
+    resources = manifest["resources"]
+    assert isinstance(resources, list)
+    for resource in resources:
+        if resource["id"] in {2, 3}:
+            resource["url"] = resource["url"].replace(
+                "qcsd-buflo-server-one:4433", "qcsd-buflo-server-two:4434"
+            )
+    preparation = manifest["preparation"]
+    assert isinstance(preparation, dict)
+    preparation["approved_origins"] = list(
+        buflo_study.MULTI_ORIGIN_COMPATIBILITY_ORIGINS
+    )
+    preparation["observed_origins"] = list(
+        buflo_study.MULTI_ORIGIN_COMPATIBILITY_ORIGINS
+    )
+    return manifest
+
+
+def test_regression_multi_origin_chaff_projection_changes_only_application_hash() -> None:
+    strict = {
+        "schema_version": 2,
+        "application_workload_sha256": "1" * 64,
+        "application_resource_id": 0,
+        "selected_chaff_resource_id": 0,
+        "resources": [{"id": 0, "url": "https://qcsd-buflo-server-one:4433/131072"}],
+        "qualification_identity": {"sha256": "2" * 64},
+    }
+    original = json.loads(json.dumps(strict))
+
+    projected = buflo_study._project_regression_chaff_manifest(
+        strict,
+        surrogate_sha256="1" * 64,
+        application_sha256="3" * 64,
+    )
+
+    assert strict == original
+    assert projected == {
+        **original,
+        "application_workload_sha256": "3" * 64,
+    }
+
+
+def test_regression_multi_origin_identity_retains_both_endpoints_and_all_resources_in_every_mode(
+    tmp_path: Path,
+) -> None:
+    from qcsd_lab.fitting_walkie_talkie import receiver_continuation_contract
+
+    manifest = _regression_multi_origin_identity_manifest()
+    resources = manifest["resources"]
+    preparation = manifest["preparation"]
+    assert isinstance(resources, list) and isinstance(preparation, dict)
+    expected = {
+        response["resource_id"]: response
+        for response in preparation["expected_responses"]
+    }
+    run = {
+        "endpoints": [
+            {"id": 0, "origin": "https://qcsd-buflo-server-one:4433"},
+            {"id": 1, "origin": "https://qcsd-buflo-server-two:4434"},
+        ],
+        "responses": [
+            {
+                "resource_id": resource["id"],
+                "url": resource["url"],
+                "status": expected[resource["id"]]["status"],
+                "bytes": expected[resource["id"]]["bytes"],
+                "body_sha256": expected[resource["id"]]["body_sha256"],
+                "complete": True,
+                "outcome": "succeeded",
+            }
+            for resource in resources
+        ],
+    }
+
+    source_value = buflo_study.load_json(
+        LAB_ROOT / "config/defense-params/walkie-talkie-live.json"
+    )
+    source_value.update(
+        {
+            "schema_version": 6,
+            "generated_by": "qcsd-buflo-study-controlled-regression-v1",
+            "receiver_continuation": receiver_continuation_contract(),
+            "qualification_bindings": [
+                {
+                    "workload_id": "complex",
+                    "chaff_qualification_sidecar_sha256": "1" * 64,
+                    "prefix_pack_spec_sha256": "2" * 64,
+                    "qualified_chaff_manifest_sha256": "3" * 64,
+                    "application_resource_id": 0,
+                    "selected_chaff_resource_id": 0,
+                    "qualified_parallel_chaff_streams": 5,
+                    "walkie_talkie_required_chaff_streams": 1,
+                }
+            ],
+        }
+    )
+    source_path = tmp_path / "walkie-talkie-prefix-source.json"
+    buflo_study.atomic_json(source_path, source_value)
+    parameter_path = tmp_path / "walkie-talkie.json"
+    provenance_path = tmp_path / "walkie-talkie.provenance.json"
+    buflo_study._write_regression_multi_origin_walkie_talkie(
+        source_path,
+        parameter_path,
+        provenance_path,
+        application_sha256="a" * 64,
+        projected_manifest_sha256="b" * 64,
+    )
+    defenses = buflo_study._regression_multi_origin_defenses(
+        parameter_path,
+        provenance_path,
+        application_sha256="a" * 64,
+    )
+    evidence = [
+        buflo_study._regression_multi_origin_run_identity(
+            run,
+            manifest,
+            mode=defense.name,
+        )
+        for defense in defenses
+    ]
+
+    assert [row["mode"] for row in evidence] == list(
+        buflo_study.MULTI_ORIGIN_COMPATIBILITY_MODES
+    )
+    assert [defense.kind for defense in defenses] == [
+        "none",
+        "static",
+        "front",
+        "tamaraw",
+        "traffic_morphing",
+        "wtf_pad",
+        "walkie_talkie",
+        "buflo",
+        "cs_buflo",
+    ]
+    assert all(
+        row["endpoint_coverage"]["observed_endpoint_count"] == 2
+        and row["resource_ids"] == [0, 1, 2, 3]
+        and {resource["origin"] for resource in row["resources"]}
+        == set(buflo_study.MULTI_ORIGIN_COMPATIBILITY_ORIGINS)
+        for row in evidence
+    )
+
+    missing = json.loads(json.dumps(run))
+    missing["responses"].pop()
+    with pytest.raises(ValueError, match="lost or duplicated"):
+        buflo_study._regression_multi_origin_run_identity(
+            missing,
+            manifest,
+            mode="walkie-talkie",
+        )
 
 
 @pytest.mark.parametrize(

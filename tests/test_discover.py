@@ -88,6 +88,11 @@ def test_request_stage_admission_continues_multi_origin_gets_and_blocks_tracker_
         "https://page.test",
         "https://tracker.test",
     }
+    assert admission.expandable_origins == {
+        "https://cdn.test",
+        "https://page.test",
+        "https://tracker.test",
+    }
     assert sorted(admission.exclusions.values(), key=lambda item: item["url"]) == [
         {
             "url": "https://page.test/cdn-cgi/rum",
@@ -242,6 +247,11 @@ def test_discover_page_installs_request_stage_policy_before_navigation(monkeypat
     ]
     assert result.resources[1]["depends_on"] == [0]
     assert result.observed_request_count == 4
+    assert result.expandable_origins == [
+        "https://cdn.test",
+        "https://page.test",
+        "https://tracker.test",
+    ]
     assert result.exclusions == [
         {
             "url": "https://page.test/cdn-cgi/rum",

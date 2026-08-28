@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
-from typing import Mapping, Sequence
+from typing import Collection, Mapping, Sequence
+
+import numpy as np
 
 from .fitting_trace import FittingTrace
 
@@ -15,6 +18,7 @@ RECEIVER_CONTINUATION_CELLS = 1
 SENDER_FRAMING_CELLS = 1
 MAX_U32 = 2**32 - 1
 MAX_U64 = 2**64 - 1
+MAX_EXACT_BINARY64_INTEGER = 2**53 - 1
 BURST_DEFINITION = "global-application-batch-direction-transitions"
 CELL_BYTE_DOMAIN = "http3-request-stream-offset.bytes"
 
@@ -578,34 +582,253 @@ def schema_five_receiver_continuation_contract() -> dict[str, object]:
 
 def minimum_weight_perfect_matching(
     envelopes: Mapping[str, ProfileEnvelope],
+    *,
+    feasible_pairs: Collection[tuple[str, str]] | None = None,
 ) -> tuple[tuple[str, str, int], ...]:
+    """Return the exact-cost, lexically canonical full-cohort matching.
+
+    Pair enumeration grows as ``(n - 1)!!``.  The binary degree formulation
+    below instead delegates the general-graph matching to the pinned SciPy
+    HiGHS MILP solver.  Integer costs are reduced by their greatest common
+    divisor before conversion to solver coefficients, then the chosen result
+    is checked against the original integers.  A second solve detects whether
+    the optimum is unique; only tied optima pay for the per-pair lexical
+    canonicalisation stages.
+
+    ``feasible_pairs`` can restrict the candidate graph after an external
+    qualification stage.  Pairs are undirected and may be supplied in either
+    order.
+    """
+
     names = tuple(sorted(envelopes))
-    if not names or len(names) % 2:
-        raise ValueError("Walkie-Talkie perfect matching requires an even workload count")
     costs = {
-        (left, right): symmetric_mold_padding_cost(envelopes[left].bursts, envelopes[right].bursts)
+        (left, right): symmetric_mold_padding_cost(
+            envelopes[left].bursts, envelopes[right].bursts
+        )
         for index, left in enumerate(names)
         for right in names[index + 1 :]
     }
+    return minimum_weight_perfect_matching_from_costs(
+        names,
+        costs,
+        feasible_pairs=feasible_pairs,
+    )
 
-    def choose(remaining: tuple[str, ...]) -> tuple[int, tuple[tuple[str, str], ...]]:
-        if not remaining:
-            return 0, ()
-        left = remaining[0]
-        best: tuple[int, tuple[tuple[str, str], ...]] | None = None
-        for index in range(1, len(remaining)):
-            right = remaining[index]
-            rest = remaining[1:index] + remaining[index + 1 :]
-            rest_cost, rest_pairs = choose(rest)
-            pairs = tuple(sorted(((left, right), *rest_pairs)))
-            candidate = (costs[(left, right)] + rest_cost, pairs)
-            if best is None or candidate < best:
-                best = candidate
-        assert best is not None
-        return best
 
-    _total, selected = choose(names)
-    return tuple((left, right, costs[(left, right)]) for left, right in selected)
+def minimum_weight_perfect_matching_from_costs(
+    names: Sequence[str],
+    pair_costs: Mapping[tuple[str, str], int],
+    *,
+    feasible_pairs: Collection[tuple[str, str]] | None = None,
+) -> tuple[tuple[str, str, int], ...]:
+    """Solve a matching from already receipted canonical pair costs."""
+
+    ordered = tuple(sorted(names))
+    if not ordered or len(ordered) % 2 or len(set(ordered)) != len(ordered):
+        raise ValueError("Walkie-Talkie perfect matching requires an even workload count")
+    permitted = _validated_feasible_pairs(ordered, feasible_pairs)
+    edges = tuple(
+        (left_index, right_index)
+        for left_index in range(len(ordered))
+        for right_index in range(left_index + 1, len(ordered))
+        if permitted is None or (ordered[left_index], ordered[right_index]) in permitted
+    )
+    if not edges:
+        raise ValueError("Walkie-Talkie has no feasible perfect matching")
+    try:
+        costs = tuple(
+            pair_costs[(ordered[left], ordered[right])] for left, right in edges
+        )
+    except KeyError as error:
+        raise ValueError("Walkie-Talkie pair costs do not cover every feasible pair") from error
+    if any(type(cost) is not int or not 0 <= cost <= MAX_U64 for cost in costs):
+        raise ValueError("Walkie-Talkie pair cost is not an unsigned integer")
+
+    minimum_cost = min(costs)
+    divisor = 0
+    for cost in costs:
+        divisor = math.gcd(divisor, cost - minimum_cost)
+    divisor = max(divisor, 1)
+    normalized_costs = tuple((cost - minimum_cost) // divisor for cost in costs)
+    # SciPy/HiGHS receives binary64 objective coefficients.  Normalisation
+    # removes any harmless common offset and GCD first; after that, require
+    # every possible perfect-matching sum to remain in the exact integer
+    # domain of binary64.  Otherwise two integer objectives that differ by one
+    # can round to the same float and the solver can return a nonminimum match.
+    if max(normalized_costs) * (len(ordered) // 2) > MAX_EXACT_BINARY64_INTEGER:
+        raise ValueError(
+            "Walkie-Talkie normalized matching objective exceeds the exact "
+            "binary64 integer range"
+        )
+
+    primary = _solve_matching_milp(len(ordered), edges, normalized_costs)
+    if primary is None:
+        raise ValueError("Walkie-Talkie has no feasible perfect matching")
+    optimum = sum(normalized_costs[index] for index in primary)
+
+    # A different matching must omit at least one edge from the selected set.
+    # Proving no equal-cost alternative lets large, naturally unique cohorts
+    # avoid all subsequent tie-breaking solves.
+    alternative = _solve_matching_milp(
+        len(ordered),
+        edges,
+        normalized_costs,
+        excluded_complete_selection=primary,
+    )
+    if alternative is not None:
+        alternative_cost = sum(normalized_costs[index] for index in alternative)
+        if alternative_cost < optimum:
+            raise ValueError("Walkie-Talkie matching solver returned a nonminimum result")
+    else:
+        alternative_cost = None
+
+    if alternative_cost == optimum:
+        fixed: list[int] = []
+        remaining = set(range(len(ordered)))
+        edge_lookup = {edge: index for index, edge in enumerate(edges)}
+        while remaining:
+            left = min(remaining)
+            lexical_objective = tuple(
+                (
+                    right if edge_left == left else edge_left if right == left else 0
+                )
+                for edge_left, right in edges
+            )
+            selected = _solve_matching_milp(
+                len(ordered),
+                edges,
+                lexical_objective,
+                normalized_costs=normalized_costs,
+                normalized_optimum=optimum,
+                fixed_edges=tuple(fixed),
+            )
+            if selected is None:
+                raise ValueError("Walkie-Talkie lexical matching stage is infeasible")
+            partner = next(
+                (right if edge_left == left else edge_left)
+                for index in selected
+                for edge_left, right in (edges[index],)
+                if edge_left == left or right == left
+            )
+            canonical_edge = (min(left, partner), max(left, partner))
+            fixed.append(edge_lookup[canonical_edge])
+            remaining.remove(left)
+            remaining.remove(partner)
+        primary = tuple(sorted(fixed))
+
+    selected_pairs = sorted(
+        (
+            ordered[edges[index][0]],
+            ordered[edges[index][1]],
+            costs[index],
+        )
+        for index in primary
+    )
+    if sum(cost for _left, _right, cost in selected_pairs) != (
+        len(ordered) // 2 * minimum_cost + divisor * optimum
+    ):
+        raise ValueError("Walkie-Talkie matching solver changed the exact integer optimum")
+    return tuple(selected_pairs)
+
+
+def _validated_feasible_pairs(
+    names: Sequence[str],
+    feasible_pairs: Collection[tuple[str, str]] | None,
+) -> frozenset[tuple[str, str]] | None:
+    if feasible_pairs is None:
+        return None
+    known = set(names)
+    result: set[tuple[str, str]] = set()
+    for pair in feasible_pairs:
+        if not isinstance(pair, tuple) or len(pair) != 2:
+            raise ValueError("Walkie-Talkie feasible pairs must be two-item tuples")
+        left, right = pair
+        if left not in known or right not in known or left == right:
+            raise ValueError("Walkie-Talkie feasible pair references an invalid workload")
+        result.add(tuple(sorted((left, right))))
+    return frozenset(result)
+
+
+def _solve_matching_milp(
+    workload_count: int,
+    edges: Sequence[tuple[int, int]],
+    objective: Sequence[int],
+    *,
+    normalized_costs: Sequence[int] | None = None,
+    normalized_optimum: int | None = None,
+    fixed_edges: Sequence[int] = (),
+    excluded_complete_selection: Sequence[int] = (),
+) -> tuple[int, ...] | None:
+    """Solve one deterministic binary degree-constrained matching stage."""
+
+    from scipy.optimize import Bounds, LinearConstraint, milp
+    from scipy.sparse import csc_array
+
+    edge_count = len(edges)
+    if len(objective) != edge_count:
+        raise ValueError("Walkie-Talkie matching objective has the wrong width")
+    if (normalized_costs is None) != (normalized_optimum is None):
+        raise ValueError("Walkie-Talkie matching optimum constraint is incomplete")
+
+    incidence_rows: list[int] = []
+    incidence_columns: list[int] = []
+    incidence_values: list[float] = []
+    for edge_index, (left, right) in enumerate(edges):
+        incidence_rows.extend((left, right))
+        incidence_columns.extend((edge_index, edge_index))
+        incidence_values.extend((1.0, 1.0))
+    incidence = csc_array(
+        (incidence_values, (incidence_rows, incidence_columns)),
+        shape=(workload_count, edge_count),
+    )
+    constraints: list[LinearConstraint] = [
+        LinearConstraint(incidence, np.ones(workload_count), np.ones(workload_count))
+    ]
+    if normalized_costs is not None and normalized_optimum is not None:
+        cost_row = csc_array(
+            np.asarray(normalized_costs, dtype=float).reshape(1, edge_count)
+        )
+        constraints.append(LinearConstraint(cost_row, normalized_optimum, normalized_optimum))
+    if excluded_complete_selection:
+        alternative_row = np.zeros((1, edge_count), dtype=float)
+        alternative_row[0, tuple(excluded_complete_selection)] = 1.0
+        constraints.append(
+            LinearConstraint(
+                csc_array(alternative_row),
+                -np.inf,
+                len(excluded_complete_selection) - 1,
+            )
+        )
+
+    lower = np.zeros(edge_count, dtype=float)
+    upper = np.ones(edge_count, dtype=float)
+    for edge_index in fixed_edges:
+        lower[edge_index] = 1.0
+    result = milp(
+        np.asarray(objective, dtype=float),
+        integrality=np.ones(edge_count, dtype=np.uint8),
+        bounds=Bounds(lower, upper),
+        constraints=constraints,
+        options={"presolve": True, "mip_rel_gap": 0.0},
+    )
+    if not result.success or result.x is None:
+        if result.status == 2:
+            return None
+        raise ValueError(f"Walkie-Talkie matching MILP failed: {result.message}")
+    selected = tuple(index for index, value in enumerate(result.x) if value > 0.5)
+    if len(selected) != workload_count // 2:
+        raise ValueError("Walkie-Talkie matching MILP returned a nonintegral result")
+    degree = [0] * workload_count
+    for edge_index in selected:
+        left, right = edges[edge_index]
+        degree[left] += 1
+        degree[right] += 1
+    if any(value != 1 for value in degree):
+        raise ValueError("Walkie-Talkie matching MILP violated a degree constraint")
+    if normalized_costs is not None and normalized_optimum is not None:
+        if sum(normalized_costs[index] for index in selected) != normalized_optimum:
+            raise ValueError("Walkie-Talkie matching MILP violated the exact optimum")
+    return selected
 
 
 def _batch_pairs(

@@ -50,6 +50,7 @@ def test_internal_cli_contains_only_container_workflow_boundaries():
         "analyze",
         "fit",
         "buflo-study",
+        "class-study",
         "test",
     }
 
@@ -141,12 +142,16 @@ def test_buflo_cohort_version_is_positive_unique_and_defaults_to_one():
 
 
 def test_launcher_routes_only_consolidated_public_commands():
-    launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
+    launcher_path = Path(__file__).parents[1] / "qcsd-lab"
+    launcher = launcher_path.read_text(encoding="utf-8")
     assert (
-        "{build|prepare|derive-chaff-prefix-specs|qualify-chaff|qualify-response-chaff|run|resume|verify|analyze|fit|buflo-study|test}"
+        "{build|prepare|derive-chaff-prefix-specs|qualify-chaff|qualify-response-chaff|run|resume|verify|analyze|fit|buflo-study|class-study|test}"
         in launcher
     )
-    assert 'run|resume|verify|analyze|fit|buflo-study|test) image="${COLLECTION_IMAGE}"' in launcher
+    assert (
+        'run|resume|verify|analyze|fit|buflo-study|class-study|test) '
+        'image="${COLLECTION_IMAGE}"' in launcher
+    )
     assert launcher.count("start_capture_acceptance_server") == 3
     assert "ethtool -K eth0 gro off gso off tso off tx-udp-segmentation off" in launcher
     assert "--cap-drop ALL" in launcher
@@ -164,6 +169,15 @@ def test_launcher_routes_only_consolidated_public_commands():
     assert 'git -C "${ROOT}/neqo-qcsd" status' in fit_preflight
     assert '"${head_gitlink}" != "${image_neqo}"' in fit_preflight
     assert '"${index_gitlink}" != "${image_neqo}"' in fit_preflight
+
+    help_result = subprocess.run(
+        [launcher_path, "--help"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert help_result.returncode == 0
+    assert "Usage: qcsd-lab" in help_result.stderr
     assert '"${image_neqo_dirty}" != "false"' in fit_preflight
     for removed in ("discover", "probe", "collect", "dataset", "--dev", "--dry-run"):
         token = rf"(?<![A-Za-z0-9_-]){re.escape(removed)}(?![A-Za-z0-9_-])"

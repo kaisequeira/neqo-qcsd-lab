@@ -7,6 +7,7 @@ import re
 import subprocess
 import tempfile
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -77,6 +78,7 @@ def prepare_workload(
     stability_runs: int = DEFAULT_STABILITY_RUNS,
     stability_interval_seconds: int = DEFAULT_STABILITY_INTERVAL_SECONDS,
     require_complete_coverage: bool = False,
+    origin_ip_pins: Mapping[str, str] | None = None,
 ) -> PreparedWorkload:
     """Discover, probe, stability-check, and freeze one replay workload.
 
@@ -105,6 +107,7 @@ def prepare_workload(
         source_url,
         allow_origins=approved_origins,
         timeout_ms=timeout_ms,
+        origin_ip_pins=origin_ip_pins,
     )
     coverage_admission = (
         _complete_coverage_admission(discovery) if require_complete_coverage else None
@@ -352,6 +355,49 @@ def resolve_probe_output(
 def _complete_coverage_admission(discovery: DiscoveryResult) -> dict[str, Any]:
     """Bind an opt-in requirement covering every approved origin and rendered GET."""
 
+    expandable = discovery.expandable_origins
+    if not isinstance(expandable, list):
+        raise PreparationError(
+            "complete coverage requires the final browser discovery's "
+            "HTTPS-GET-only expandable-origin ledger"
+        )
+    canonical_expandable: list[str] = []
+    for value in expandable:
+        expandable_origin = origin(value) if isinstance(value, str) else None
+        if expandable_origin is None or expandable_origin != value:
+            raise PreparationError(
+                "complete coverage requires canonical HTTPS origins in the final "
+                "browser discovery's expandable-origin ledger"
+            )
+        canonical_expandable.append(expandable_origin)
+    if canonical_expandable != sorted(set(canonical_expandable)):
+        raise PreparationError(
+            "complete coverage requires a sorted unique final browser "
+            "expandable-origin ledger"
+        )
+    observed_origins = {
+        observed_origin
+        for value in discovery.observed_origins
+        if isinstance(value, str) and (observed_origin := origin(value)) is not None
+    }
+    if not set(canonical_expandable).issubset(observed_origins):
+        raise PreparationError(
+            "complete coverage final browser expandable origins exceed its "
+            "observed-origin ledger"
+        )
+    approved_origin_set = set(discovery.approved_origins)
+    unreported_approved = approved_origin_set - set(canonical_expandable)
+    if unreported_approved:
+        raise PreparationError(
+            "complete coverage final browser expandable-origin ledger omits approved "
+            "HTTPS GET origins: " + ", ".join(sorted(unreported_approved))
+        )
+    newly_observed = set(canonical_expandable) - approved_origin_set
+    if newly_observed:
+        raise PreparationError(
+            "complete coverage final browser discovery observed new HTTPS GET origins "
+            "after convergence: " + ", ".join(sorted(newly_observed))
+        )
     retained_origins = {origin(resource["url"]) for resource in discovery.resources}
     missing = set(discovery.approved_origins) - retained_origins
     if missing:

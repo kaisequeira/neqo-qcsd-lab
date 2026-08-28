@@ -28,6 +28,53 @@ ACCEPTED_ARTIFACTS = {
 _DIGEST = re.compile(r"[0-9a-f]{64}")
 _PATH_COMPONENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 _QUALIFICATION_SET = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
+_CLASS_STUDY_ID = re.compile(
+    r"classifier-multiorigin100-v(?:1|2-[0-9a-f]{12})"
+)
+_CLASS_STUDY_ROLES = frozenset(
+    {
+        "pilot-fitting",
+        "pilot-compatibility",
+        "authoritative-fitting",
+        "certification",
+        "canary",
+        "formal",
+    }
+)
+_CLASS_STUDY_COMMON_CONFIGURATION_KEYS = frozenset(
+    {
+        "evidence_role",
+        "class_study_cohort_sha256",
+        "class_study_cohort_assembly_sha256",
+        "class_study_id",
+        "class_study_launch_sha256",
+        "class_study_foundation_sha256",
+        "public_origin_policy",
+    }
+)
+_CLASS_STUDY_OPTIONAL_CONFIGURATION_KEYS = frozenset(
+    {
+        "class_study_successor_sha256",
+        "class_study_readiness_sha256",
+        "class_study_historical_pre_snapshot_sha256",
+    }
+)
+_CLASS_STUDY_DIGEST_CONFIGURATION_KEYS = frozenset(
+    {
+        "class_study_cohort_sha256",
+        "class_study_cohort_assembly_sha256",
+        "class_study_launch_sha256",
+        "class_study_foundation_sha256",
+        "class_study_successor_sha256",
+        "class_study_readiness_sha256",
+        "class_study_historical_pre_snapshot_sha256",
+    }
+)
+_CLASS_STUDY_PUBLIC_ORIGIN_POLICY = {
+    "environment": "QCSD_PUBLIC_ORIGIN_ONLY",
+    "required_value": "1",
+    "resolution": "resolve-once-reject-any-non-public-connect-exact-address",
+}
 _EXPERIMENT_KEYS = {
     "schema_version",
     "name",
@@ -56,6 +103,18 @@ _OPTIONAL_CONFIGURATION_KEYS = {
     "study_environment_sha256",
     "capture_admission_sha256",
     "formal_cohort_sha256",
+    "evidence_role",
+    "sample_order",
+    "chaff_qualification_set_manifest_sha256",
+    "class_study_cohort_sha256",
+    "class_study_cohort_assembly_sha256",
+    "class_study_id",
+    "class_study_successor_sha256",
+    "class_study_launch_sha256",
+    "class_study_foundation_sha256",
+    "class_study_readiness_sha256",
+    "class_study_historical_pre_snapshot_sha256",
+    "public_origin_policy",
 }
 _SAMPLE_KEYS = {
     "sample_id",
@@ -592,6 +651,49 @@ def _validate_configuration(value: object) -> None:
         value["study_environment_sha256"]
     ):
         raise ValueError("configuration study_environment_sha256 is invalid")
+    _validate_class_study_configuration(value)
+
+
+def _validate_class_study_configuration(value: Mapping[str, Any]) -> None:
+    class_keys = (
+        _CLASS_STUDY_COMMON_CONFIGURATION_KEYS
+        | _CLASS_STUDY_OPTIONAL_CONFIGURATION_KEYS
+    )
+    present = set(value) & class_keys
+    if not present:
+        return
+    if not _CLASS_STUDY_COMMON_CONFIGURATION_KEYS <= set(value):
+        raise ValueError("configuration class-study binding is incomplete")
+
+    role = value["evidence_role"]
+    if not isinstance(role, str) or role not in _CLASS_STUDY_ROLES:
+        raise ValueError("configuration class-study evidence_role is invalid")
+    study_id = value["class_study_id"]
+    if not isinstance(study_id, str) or _CLASS_STUDY_ID.fullmatch(study_id) is None:
+        raise ValueError("configuration class_study_id is invalid")
+
+    for key in _CLASS_STUDY_DIGEST_CONFIGURATION_KEYS & set(value):
+        if not _is_digest(value[key]):
+            raise ValueError(f"configuration {key} is invalid")
+
+    policy = value["public_origin_policy"]
+    if not isinstance(policy, Mapping) or dict(policy) != _CLASS_STUDY_PUBLIC_ORIGIN_POLICY:
+        raise ValueError("configuration public_origin_policy is invalid")
+
+    successor_present = "class_study_successor_sha256" in value
+    if (study_id == "classifier-multiorigin100-v1" and successor_present) or (
+        study_id != "classifier-multiorigin100-v1" and not successor_present
+    ):
+        raise ValueError("configuration class-study successor binding is inconsistent")
+
+    final_authority_keys = {
+        "class_study_readiness_sha256",
+        "class_study_historical_pre_snapshot_sha256",
+    }
+    observed_final_authority = final_authority_keys & set(value)
+    expected_final_authority = final_authority_keys if role in {"canary", "formal"} else set()
+    if observed_final_authority != expected_final_authority:
+        raise ValueError("configuration class-study role authority is inconsistent")
 
 
 def _validate_sample(value: object) -> None:
@@ -691,6 +793,147 @@ def resolved_attempt_directory(root: Path, sample: Mapping[str, Any]) -> Path:
         raise ValueError("sample attempt number is invalid")
     relative = f"failures/{sample['sample_id']}/attempt-{attempts:03d}"
     return _resolved_authoritative_path(root, relative, scope="failures", label="attempt")
+
+
+def validate_durable_attempt_evidence(
+    root: Path,
+    experiment: Mapping[str, Any],
+) -> None:
+    """Reconcile durable launch counts with their exact terminal evidence.
+
+    Legacy campaigns retain their established per-invocation retry semantics.
+    BuFLO-study and schema-two class-study campaigns instead count physical
+    launches across resumes, so their sealed failure tree must prove every
+    consumed attempt without gaps, aliases, or unrecorded extra launches.
+    """
+
+    if not _requires_durable_attempt_evidence(experiment):
+        return
+    root = root.resolve()
+    failures_root = root / "failures"
+    if failures_root.is_symlink() or not failures_root.is_dir():
+        raise ValueError(f"result has no regular failures directory: {root}")
+    configuration = experiment.get("configuration")
+    limits = configuration.get("limits") if isinstance(configuration, Mapping) else None
+    max_attempts = limits.get("max_attempts") if isinstance(limits, Mapping) else None
+    if type(max_attempts) is not int or max_attempts < 1:
+        raise ValueError("durable attempt evidence has no valid configured attempt cap")
+    samples = experiment.get("samples")
+    if not isinstance(samples, Sequence) or isinstance(samples, (str, bytes)):
+        raise TypeError("durable attempt evidence has no sample inventory")
+
+    expected_sample_directories: set[str] = set()
+    for sample in samples:
+        if not isinstance(sample, Mapping):
+            raise TypeError("durable attempt evidence contains a malformed sample")
+        sample_id = sample.get("sample_id")
+        _validate_component(sample_id, "sample ID")
+        state = sample.get("state")
+        attempts = sample.get("attempts")
+        if state not in {"accepted", "failed"}:
+            raise ValueError("sealed durable attempt evidence contains a nonterminal sample")
+        if (
+            type(attempts) is not int
+            or attempts < 1
+            or attempts > max_attempts
+        ):
+            raise ValueError("sample exceeds the durable physical-attempt budget")
+        expected_attempt_count = attempts - 1 if state == "accepted" else attempts
+        expected_attempts = {
+            f"attempt-{attempt:03d}" for attempt in range(1, expected_attempt_count + 1)
+        }
+        sample_failures = failures_root / sample_id
+        if expected_attempts:
+            expected_sample_directories.add(sample_id)
+            if sample_failures.is_symlink() or not sample_failures.is_dir():
+                raise ValueError(
+                    f"sample {sample_id} lacks its durable failed-attempt directory"
+                )
+            actual_attempts = _regular_child_directory_names(
+                sample_failures,
+                label=f"sample {sample_id} failed-attempt inventory",
+            )
+        else:
+            if sample_failures.exists() or sample_failures.is_symlink():
+                raise ValueError(
+                    f"sample {sample_id} has unexpected durable failed-attempt evidence"
+                )
+            actual_attempts = set()
+        if actual_attempts != expected_attempts:
+            raise ValueError(
+                f"sample {sample_id} durable failed-attempt inventory is not exact and contiguous"
+            )
+        current_failure: Mapping[str, Any] | None = None
+        for attempt_name in sorted(expected_attempts):
+            attempt = sample_failures / attempt_name
+            failure = _terminal_attempt_failure(attempt, sample_id=sample_id)
+            if attempt_name == f"attempt-{attempts:03d}":
+                current_failure = failure
+        if state == "failed":
+            recorded_failure = sample.get("failure")
+            if (
+                not isinstance(recorded_failure, Mapping)
+                or not recorded_failure
+                or current_failure != recorded_failure
+            ):
+                raise ValueError(
+                    f"sample {sample_id} terminal failure differs from its attempt receipt"
+                )
+
+    actual_sample_directories = _regular_child_directory_names(
+        failures_root,
+        label="durable failed-sample inventory",
+    )
+    if actual_sample_directories != expected_sample_directories:
+        raise ValueError("durable failed-sample inventory differs from experiment.json")
+
+
+def _requires_durable_attempt_evidence(experiment: Mapping[str, Any]) -> bool:
+    name = experiment.get("name")
+    if isinstance(name, str) and name.startswith("buflo-study-v1-"):
+        return True
+    configuration = experiment.get("configuration")
+    if not isinstance(configuration, Mapping):
+        return False
+    study_id = configuration.get("class_study_id")
+    return isinstance(study_id, str) and _CLASS_STUDY_ID.fullmatch(study_id) is not None
+
+
+def _regular_child_directory_names(directory: Path, *, label: str) -> set[str]:
+    names: set[str] = set()
+    for child in directory.iterdir():
+        if child.is_symlink() or not child.is_dir():
+            raise ValueError(f"{label} contains a non-directory entry: {child.name}")
+        names.add(child.name)
+    return names
+
+
+def _terminal_attempt_failure(attempt: Path, *, sample_id: str) -> Mapping[str, Any]:
+    attempt_receipt = attempt / "attempt.json"
+    exception_receipt = attempt / "failure.json"
+    for receipt in (attempt_receipt, exception_receipt):
+        if receipt.is_symlink() or (receipt.exists() and not receipt.is_file()):
+            raise ValueError(
+                f"sample {sample_id} durable attempt has an unsafe terminal receipt"
+            )
+    receipts = [receipt for receipt in (attempt_receipt, exception_receipt) if receipt.is_file()]
+    if len(receipts) != 1:
+        raise ValueError(
+            f"sample {sample_id} durable attempt must have exactly one terminal receipt"
+        )
+    receipt = receipts[0]
+    value = load_json(receipt)
+    if receipt == attempt_receipt:
+        if not isinstance(value, Mapping) or value.get("success") is not False:
+            raise ValueError(
+                f"sample {sample_id} retained attempt.json is not a terminal failure"
+            )
+        failure = value.get("failure")
+    else:
+        failure = value
+    if not isinstance(failure, Mapping) or not failure:
+        raise ValueError(f"sample {sample_id} terminal failure receipt is invalid")
+    return failure
 
 
 def _sample_root(root: Path, sample: Mapping[str, Any]) -> Path:

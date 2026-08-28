@@ -4,6 +4,15 @@
 !/artifacts/README.md
 /handoffs/
 /config/chaff-response-qualification-store/sets/buflo-study-public5-v*/
+/config/classifier-multiorigin100-v1-campaigns/
+/config/chaff-qualification-store/sets/classifier-multiorigin100-v1-pilot120-full-v1/
+/config/chaff-qualification-store/sets/classifier-multiorigin100-v1-final100-full-v1/
+/config/class-study/v1/classifier-multiorigin100-v1-pilot-cohort.json
+/config/class-study/v1/classifier-multiorigin100-v1-pilot-cohort-assembly.json
+/config/class-study/v1/classifier-multiorigin100-v1-cohort.json
+/config/class-study/v1/classifier-multiorigin100-v1-cohort-assembly.json
+/config/class-study/v1/classifier-multiorigin100-v1-final-selection.json
+/config/workloads/tranco-[0-9][0-9][0-9][0-9][0-9][0-9][0-9].json
 /.cache/
 /.pytest_cache/
 /.ruff_cache/
