@@ -238,6 +238,7 @@ def test_research_preparation_accepts_the_exact_clean_policy():
     value = prepared_manifest()
     source = deepcopy(value)
 
+    assert "coverage_admission" not in value["preparation"]
     validate_research_preparation(value, workload_id="prepared-site")
     runtime = runtime_manifest(value)
 

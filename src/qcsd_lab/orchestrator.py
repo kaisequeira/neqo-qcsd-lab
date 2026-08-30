@@ -23,6 +23,7 @@ from typing import Any
 import yaml
 
 from . import capture_session as capture_engine
+from .class_acquisition import validate_class_study_preparation
 from .defenses import defense_from_runtime_identity
 from .experiment import (
     accepted_sample_hashes,
@@ -464,6 +465,7 @@ def _load_campaign(
         path,
         value["workloads"],
         purpose=purpose,
+        schema_version=schema_version,
         frozen_inputs=frozen_inputs,
         config_root=config_root,
     )
@@ -1593,6 +1595,7 @@ def _load_workloads(
     raw: Any,
     *,
     purpose: str,
+    schema_version: int,
     frozen_inputs: Path | None = None,
     config_root: Path | None = None,
 ) -> tuple[Workload, ...]:
@@ -1630,7 +1633,9 @@ def _load_workloads(
         except UnicodeError as error:
             raise ValueError(f"workload manifest is not valid UTF-8: {manifest_path}") from error
         validate_manifest(manifest)
-        if purpose in {"fitting", "evaluation"}:
+        if schema_version == CLASS_STUDY_SCHEMA_VERSION:
+            validate_class_study_preparation(manifest, workload_id=workload_id)
+        elif purpose in {"fitting", "evaluation"}:
             validate_research_preparation(manifest, workload_id=workload_id)
         runtime = runtime_manifest(manifest)
         runtime_bytes = canonical_bytes(runtime)

@@ -21,6 +21,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Protocol
 
+from .class_acquisition import validate_class_study_preparation
 from .class_cohort import (
     cohort_workload_hashes,
     validate_cohort_assembly_receipt,
@@ -41,7 +42,6 @@ from .fitting_walkie_talkie import (
     minimum_weight_perfect_matching_from_costs,
 )
 from .fitting_wtfpad import fit_wtf_pad
-from .manifest import validate_research_preparation
 from .util import SOURCE_METADATA_KEYS, load_json, sha256_bytes, sha256_file
 from .verification import VerifiedResult, verify_result
 
@@ -183,7 +183,7 @@ class QualificationContext:
     prefix_spec_root: Path
     loader: QualificationLoader | None = None
     prefix_validator: PrefixValidator | None = None
-    preparation_validator: Callable[..., None] = validate_research_preparation
+    preparation_validator: Callable[..., None] = validate_class_study_preparation
     require_current_implementation: bool = True
     qualification_authority: Mapping[str, Any] | None = None
     expected_qualification_set: str | None = None
@@ -239,7 +239,7 @@ def validate_class_fitting_result(
     expected_cohort_assembly_receipt_path: Path | None = None,
     result_verifier: ResultVerifier = verify_result,
     trace_loader: TraceLoader = load_fitting_trace,
-    preparation_validator: Callable[..., None] = validate_research_preparation,
+    preparation_validator: Callable[..., None] = validate_class_study_preparation,
 ) -> ClassFittingInputs:
     """Validate the exact sealed schema-two class-study fitting cross-product."""
 
@@ -792,7 +792,7 @@ def derive_schema_six_prefix_specs(
                 workloads / f"{workload_id}.json", f"workload {workload_id}"
             )
             manifest = load_json(manifest_path)
-            validate_research_preparation(manifest, workload_id=workload_id)
+            validate_class_study_preparation(manifest, workload_id=workload_id)
             spec = build_schema_six_prefix_spec(
                 workload_id,
                 walkie,

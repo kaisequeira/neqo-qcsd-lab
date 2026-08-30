@@ -642,6 +642,101 @@ def test_loaded_fitting_campaigns_preserve_every_complete_two_origin_graph(
             orchestrator.canonical_bytes(runtime)
         )
 
+    tampered = json.loads(json.dumps(complete_by_id[first_id].data))
+    tampered["preparation"].pop("coverage_admission")
+    tampered_path = workload_root / f"{first_id}.json"
+    tampered_path.write_bytes(orchestrator.canonical_bytes(tampered))
+    assembly_envelope = json.loads(assembly.read_text(encoding="utf-8"))
+    assembly_payload = assembly_envelope["payload"]
+    next(
+        record
+        for record in assembly_payload["candidates"]
+        if record["candidate_id"] == first_id
+    )["prepared_workload"]["sha256"] = sha256_file(tampered_path)
+    assembly.write_bytes(
+        canonical_json_bytes(
+            bind_receipt(
+                assembly_payload,
+                receipt_type=ASSEMBLY_RECEIPT_TYPE,
+            )
+        )
+    )
+
+    with pytest.raises(ValueError, match="requires a complete-coverage admission"):
+        orchestrator.load_campaign(campaign_path)
+
+
+def test_loaded_certification_rejects_rebound_incomplete_coverage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from qcsd_lab.class_campaigns import campaign_documents
+    from qcsd_lab.class_cohort import ASSEMBLY_RECEIPT_TYPE
+    from qcsd_lab.class_study import (
+        bind_receipt,
+        canonical_json_bytes,
+        load_study_receipt,
+    )
+    from tests.test_class_campaigns import _assembly_receipt, _cohort_receipt
+
+    config = tmp_path / "config"
+    campaign_root = config / "classifier-multiorigin100-v1-campaigns"
+    study_root = config / "class-study/v1"
+    workload_root = config / "workloads"
+    for root in (campaign_root, study_root, workload_root):
+        root.mkdir(parents=True)
+    monkeypatch.setattr(util, "LAB_ROOT", tmp_path)
+
+    cohort_filename = "classifier-multiorigin100-v1-cohort.json"
+    assembly_filename = "classifier-multiorigin100-v1-cohort-assembly.json"
+    cohort = _cohort_receipt(study_root, cohort_filename)
+    _, selection = load_study_receipt(cohort)
+    selected_ids = tuple(candidate.candidate_id for candidate in selection.final)
+    workload_hashes = {}
+    for index, workload_id in enumerate(selected_ids):
+        manifest = _complete_two_origin_workload(
+            tmp_path,
+            visits=1,
+            workload_id=workload_id,
+        ).data
+        if index == 0:
+            manifest["preparation"].pop("coverage_admission")
+        workload_path = workload_root / f"{workload_id}.json"
+        workload_path.write_bytes(orchestrator.canonical_bytes(manifest))
+        workload_hashes[workload_id] = sha256_file(workload_path)
+
+    assembly = _assembly_receipt(study_root, cohort, assembly_filename)
+    assembly_envelope = json.loads(assembly.read_text(encoding="utf-8"))
+    assembly_payload = assembly_envelope["payload"]
+    for record in assembly_payload["candidates"]:
+        workload_hash = workload_hashes.get(record["candidate_id"])
+        if workload_hash is not None:
+            record["prepared_workload"]["sha256"] = workload_hash
+    assembly.write_bytes(
+        canonical_json_bytes(
+            bind_receipt(
+                assembly_payload,
+                receipt_type=ASSEMBLY_RECEIPT_TYPE,
+            )
+        )
+    )
+
+    documents = campaign_documents(
+        cohort,
+        cohort_assembly_receipt=assembly,
+        cohort_reference=f"../class-study/v1/{cohort_filename}",
+        cohort_assembly_reference=f"../class-study/v1/{assembly_filename}",
+    )
+    filename = "classifier-multiorigin100-v1-certification-900-1200.yml"
+    campaign_path = campaign_root / filename
+    campaign_path.write_text(
+        yaml.safe_dump(documents[filename], sort_keys=False),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="requires a complete-coverage admission"):
+        orchestrator.load_campaign(campaign_path)
+
 
 def test_formal_commands_reuse_complete_two_origin_graph_for_both_visits(
     tmp_path: Path,

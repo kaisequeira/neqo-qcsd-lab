@@ -32,6 +32,7 @@ from qcsd_lab.class_fitting import (
     class_fitting_artifact_type,
     class_research_parameter_record,
     create_numeric_fitting_bundle,
+    derive_schema_six_prefix_specs,
     finalize_fitting_bundle,
     require_successor_fitting_identity,
     validate_class_fitting_result,
@@ -426,6 +427,8 @@ def test_numeric_bundles_bind_exact_120_and_100_class_arithmetic(
 
 
 def test_verified_result_loader_rejects_cross_product_and_source_tampering(tmp_path: Path) -> None:
+    from tests.test_manifest import class_study_prepared_manifest
+
     receipt = _cohort_receipt()
     selection = validate_study_receipt(receipt)
     workload_ids = tuple(candidate.candidate_id for candidate in selection.pilot)
@@ -547,6 +550,31 @@ def test_verified_result_loader_rejects_cross_product_and_source_tampering(tmp_p
             preparation_validator=lambda *_args, **_kwargs: None,
         )
 
+    experiment["source"]["lab_dirty"] = False
+    first_manifest_path = root / workloads[0]["manifest"]
+    incomplete = class_study_prepared_manifest()
+    incomplete["preparation"].pop("coverage_admission")
+    first_manifest_path.write_bytes(canonical_json_bytes(incomplete))
+    workloads[0]["sha256"] = sha256_file(first_manifest_path)
+    assembly_path.write_bytes(
+        canonical_json_bytes(
+            _cohort_assembly(
+                receipt,
+                {record["id"]: record["sha256"] for record in workloads},
+            )
+        )
+    )
+    experiment["configuration"]["class_study_cohort_assembly_sha256"] = sha256_file(
+        assembly_path
+    )
+
+    with pytest.raises(ValueError, match="requires a complete-coverage admission"):
+        validate_class_fitting_result(
+            root,
+            result_verifier=verifier,
+            trace_loader=trace_loader,
+        )
+
 
 def _qualification_context(
     tmp_path: Path,
@@ -643,6 +671,74 @@ def _qualification_context(
         require_current_implementation=False,
         qualification_authority=authority,
     )
+
+
+def test_prefix_derivation_rejects_incomplete_class_coverage(tmp_path: Path) -> None:
+    from tests.test_manifest import class_study_prepared_manifest
+
+    numeric, inputs = _numeric_bundle(tmp_path, PILOT_STAGE, _cohort_receipt())
+    workload_root = tmp_path / "prefix-workloads"
+    artifact_root = tmp_path / "prefix-artifacts"
+    workload_root.mkdir()
+    artifact_root.mkdir()
+    incomplete = class_study_prepared_manifest()
+    incomplete["preparation"].pop("coverage_admission")
+    (workload_root / f"{inputs.workload_ids[0]}.json").write_bytes(
+        canonical_json_bytes(incomplete)
+    )
+
+    with pytest.raises(ValueError, match="requires a complete-coverage admission"):
+        derive_schema_six_prefix_specs(
+            numeric,
+            workload_root=workload_root,
+            artifacts_root=artifact_root,
+        )
+    assert list(artifact_root.iterdir()) == []
+
+
+def test_finalization_default_context_rejects_incomplete_class_coverage(
+    tmp_path: Path,
+) -> None:
+    from tests.test_manifest import class_study_prepared_manifest
+
+    numeric, inputs = _numeric_bundle(tmp_path, PILOT_STAGE, _cohort_receipt())
+    context = _qualification_context(
+        tmp_path,
+        stage=PILOT_STAGE,
+        workload_ids=inputs.workload_ids,
+    )
+    first_id = inputs.workload_ids[0]
+    first_path = context.workload_root / f"{first_id}.json"
+    incomplete = class_study_prepared_manifest()
+    incomplete["preparation"].pop("coverage_admission")
+    first_path.write_bytes(canonical_json_bytes(incomplete))
+    qualification_path = context.sidecar_root / "_qualification-set.json"
+    qualification = json.loads(qualification_path.read_text(encoding="utf-8"))
+    qualification["workloads"][0]["workload_manifest"]["sha256"] = sha256_file(
+        first_path
+    )
+    qualification["bindings_sha256"] = _named_set_bindings_digest(qualification)
+    qualification_path.write_bytes(canonical_json_bytes(qualification))
+    strict_context = QualificationContext(
+        workload_root=context.workload_root,
+        sidecar_root=context.sidecar_root,
+        prefix_spec_root=context.prefix_spec_root,
+        loader=context.loader,
+        prefix_validator=context.prefix_validator,
+        require_current_implementation=False,
+        qualification_authority=context.qualification_authority,
+    )
+    final_root = tmp_path / "strict-final-artifacts"
+    final_root.mkdir()
+
+    with pytest.raises(ValueError, match="requires a complete-coverage admission"):
+        finalize_fitting_bundle(
+            numeric,
+            qualification_manifest_path=qualification_path,
+            qualification_context=strict_context,
+            artifacts_root=final_root,
+        )
+    assert list(final_root.iterdir()) == []
 
 
 def test_final_bundle_policy_qualification_binding_and_tamper_rejection(tmp_path: Path) -> None:
