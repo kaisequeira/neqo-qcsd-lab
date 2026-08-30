@@ -727,8 +727,8 @@ def test_class_result_rejects_sealed_schedule_stop_chronology_mutation(
         reader = csv.DictReader(source)
         rows = list(reader)
         fields = tuple(reader.fieldnames or ())
-    rows[1]["credit_consumed_at_us"] = "10000002"
-    rows[1]["credit_consumption_delay_us"] = "10000002"
+    rows[1]["credit_consumed_at_us"] = "10010002"
+    rows[1]["credit_consumption_delay_us"] = "10010002"
     with schedule_path.open("w", newline="", encoding="utf-8") as destination:
         writer = csv.DictWriter(destination, fieldnames=fields)
         writer.writeheader()

@@ -45,6 +45,45 @@ def _packet(relative_time_ns: int, direction: str, frame_len: int) -> ObserverPa
     )
 
 
+def test_direction_metrics_use_target_order_not_incoming_terminal_order() -> None:
+    fields = (*handoff.SCHEDULE_PREFIX_FIELDS, *SCHEDULE_QCSD_FIELDS)
+
+    def incoming(target_us: int, action_us: int, slot: int) -> dict[str, str]:
+        row = {field: "" for field in fields}
+        row.update(
+            target_time_us=str(target_us),
+            direction="incoming",
+            size="1200",
+            action_time_us=str(action_us),
+            satisfaction="satisfied",
+            slot_id=str(slot),
+            qcsd_outcome_schema_version="3",
+            send_policy="exact",
+            desired_udp_bytes="1200",
+            credit_advertised_at_us=str(action_us),
+            credit_advertisement_delay_us="0",
+            credit_consumed_at_us=str(action_us + 100),
+            credit_consumption_delay_us="100",
+            terminal_defense_elapsed_us=str(target_us + 100),
+        )
+        return row
+
+    metrics = handoff_module._direction_algorithm_metrics(
+        [incoming(0, 0, 1), incoming(40_000, 40_000, 3), incoming(20_000, 80_000, 2)],
+        direction="incoming",
+        runtime_kind="buflo",
+    )
+
+    assert metrics["inter_target_delta_us"] == {
+        "count": 2,
+        "minimum": 20_000,
+        "maximum": 20_000,
+        "mean": 20_000,
+        "p50": 20_000,
+        "p95": 20_000,
+    }
+
+
 def _runner_wakeup_receipt(schema_version: int) -> dict[str, object]:
     semantics = (
         "actual_select_return_source; socket_wins_simultaneous_readiness; "
@@ -927,7 +966,11 @@ def test_buflo_algorithm_diagnostics_bind_typed_tail_action_and_control_packet(
         target_time_us="0",
         direction="incoming",
         size="1200",
-        connection="0",
+        # A logical receive-credit opportunity can be advertised and consumed
+        # across multiple streams or endpoints, so its terminal action has no
+        # singular connection identity.  The slot and typed credit chronology
+        # remain the authoritative binding.
+        connection="",
         action_time_us="0",
         satisfaction="satisfied",
         slot_id="2",
@@ -1759,9 +1802,24 @@ def test_cs_buflo_schema_four_handoff_reconstructs_stop_drain_and_preserves_lega
     write_rows(schedule, schedule_fields, [outgoing, incoming])
     write_rows(packets, packet_fields, [packet])
 
+    buffered_consumption = dict(incoming)
+    buffered_consumption["credit_consumed_at_us"] = "5250"
+    buffered_consumption["credit_consumption_delay_us"] = "5200"
+    write_rows(schedule, schedule_fields, [outgoing, buffered_consumption])
+    assert _algorithm_diagnostics(
+        run,
+        defense="cs-buflo",
+        runtime_kind="cs_buflo",
+        schedule_path=schedule,
+        events_path=events,
+        packets_path=packets,
+    )["directions"]["incoming"]["receive_credit_consumption"]["delay_us"][
+        "maximum"
+    ] == 5200
+
     mismatched_consumption = dict(incoming)
-    mismatched_consumption["credit_consumed_at_us"] = "252"
-    mismatched_consumption["credit_consumption_delay_us"] = "202"
+    mismatched_consumption["credit_consumed_at_us"] = "10251"
+    mismatched_consumption["credit_consumption_delay_us"] = "10201"
     write_rows(schedule, schedule_fields, [outgoing, mismatched_consumption])
     with pytest.raises(
         ValueError, match="terminal time differs from translated credit consumption"

@@ -2427,19 +2427,27 @@ def _buflo_schedule_matches_canonical_parameters(schedule: Mapping[str, Any]) ->
     for direction in ("outgoing", "incoming"):
         directional_targets = targets.get(direction)
         directional_sizes = sizes.get(direction)
+        ordered_targets = (
+            sorted(directional_targets) if isinstance(directional_targets, list) else []
+        )
         if (
             not isinstance(directional_targets, list)
             or not isinstance(directional_sizes, list)
             or not directional_targets
             or len(directional_targets) != len(directional_sizes)
             or len(directional_targets) > 6_000
-            or directional_targets[0] != 0
-            or 10_000_000 not in directional_targets
+            # Incoming opportunities are serialized when their advertised
+            # credit is consumed, not when the target was scheduled.  Under a
+            # bottleneck, independently outstanding credits can therefore
+            # reach terminal state out of target order.  Canonical cadence is
+            # a property of the complete target set, not terminal CSV order.
+            or ordered_targets[0] != 0
+            or 10_000_000 not in ordered_targets
             or any(size != 1_200 for size in directional_sizes)
             or any(
                 current - previous != 20_000
                 for previous, current in zip(
-                    directional_targets[:-1], directional_targets[1:], strict=True
+                    ordered_targets[:-1], ordered_targets[1:], strict=True
                 )
             )
         ):

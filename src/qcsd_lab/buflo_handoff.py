@@ -110,6 +110,7 @@ _DIGEST = re.compile(r"[0-9a-f]{64}")
 _COMMIT = re.compile(r"[0-9a-f]{40}")
 _IMAGE_DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 _EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
+_CONTROLLER_ACTION_REDUCTION_LIMIT_US = 10_000
 _SOURCE_KEYS = frozenset(
     {
         "image_digest",
@@ -1442,13 +1443,20 @@ def _direction_algorithm_metrics(
             raise ValueError("study handoff incoming credit consumption timing is invalid")
         credit_delays.append(delay_us)
         credit_consumption_delays.append(consumption_delay_us)
-    targets = [
-        _csv_unsigned(row["target_time_us"], label="schedule target time") for row in selected
+    targeted_rows = [
+        (
+            _csv_unsigned(row["target_time_us"], label="schedule target time"),
+            row,
+        )
+        for row in selected
     ]
+    targeted_rows.sort(key=lambda item: item[0])
+    targets = [target for target, _ in targeted_rows]
     if any(current <= previous for previous, current in zip(targets, targets[1:])):
-        raise ValueError("study handoff schedule targets are not strictly increasing")
+        raise ValueError("study handoff schedule targets are not unique")
     sizes = [
-        _csv_unsigned(row["size"], label="schedule target size", positive=True) for row in selected
+        _csv_unsigned(row["size"], label="schedule target size", positive=True)
+        for _, row in targeted_rows
     ]
     deltas = [current - previous for previous, current in zip(targets, targets[1:])]
     nominal_intervals: list[int] = []
@@ -1622,11 +1630,13 @@ def _validate_incoming_terminal_clock_bindings(
 ) -> None:
     """Reconcile process-clock credit consumption with controller time.
 
-    ``credit_consumed_at_us`` is the observation-production timestamp relative
-    to the runner trace origin. ``terminal_defense_elapsed_us`` is the
-    controller resolution relative to defense activation. They are therefore
-    compared only after translating the former through the exact recorded
-    defense-start offset, retaining the one-microsecond floor uncertainty.
+    ``credit_consumed_at_us`` is the terminal action's serialization timestamp
+    relative to the runner trace origin. ``terminal_defense_elapsed_us`` is the
+    earlier controller resolution relative to defense activation. Reduction
+    can be delayed while the single-threaded runner reserves an exact outgoing
+    window, so the two are ordered and bounded after translating the former
+    through the exact recorded defense-start offset.  The translation retains
+    the one-microsecond floor uncertainty.
     """
 
     for index, row in enumerate(schedule_rows, 1):
@@ -1654,7 +1664,11 @@ def _validate_incoming_terminal_clock_bindings(
                 defense_start_monotonic_ns=defense_start_monotonic_ns,
                 label=f"schedule.csv row {index} credit-consumption time",
             )
-            if not consumption_bounds[0] <= terminal_us <= consumption_bounds[1]:
+            if (
+                terminal_us > consumption_bounds[1]
+                or consumption_bounds[1] - terminal_us
+                > _CONTROLLER_ACTION_REDUCTION_LIMIT_US
+            ):
                 raise ValueError(
                     f"study handoff {runtime_kind} incoming controller terminal "
                     "time differs from translated credit consumption"
@@ -2113,8 +2127,15 @@ def _algorithm_diagnostics(
         if direction not in {"outgoing", "incoming"}:
             raise ValueError(f"schedule.csv row {index} has an invalid direction")
         size = _csv_unsigned(row["size"], label="schedule target size", positive=True)
-        for field in ("target_time_us", "connection", "action_time_us", "slot_id"):
+        for field in ("target_time_us", "action_time_us", "slot_id"):
             _csv_unsigned(row[field], label=f"schedule {field}")
+        connection = row["connection"]
+        if connection:
+            _csv_unsigned(connection, label="schedule connection")
+        elif direction == "outgoing" and satisfaction != "missed":
+            raise ValueError(
+                f"schedule.csv row {index} realized outgoing event has no connection"
+            )
         if satisfaction not in {"satisfied", "missed", "full", "partial", "suppressed"}:
             raise ValueError(f"schedule.csv row {index} has an invalid satisfaction")
         if require_current_trace:

@@ -4084,6 +4084,47 @@ def test_buflo_fidelity_requires_every_zero_error_and_typed_terminal_once() -> N
         outgoing_size_mismatches=0,
         schedule_metrics=schedule,
     )
+    terminally_reordered = {
+        **schedule,
+        "target_times_us_by_direction": {
+            "outgoing": canonical_targets,
+            # Incoming rows are emitted at credit consumption.  Preserve the
+            # complete cadence while emulating one credit consumed after later
+            # targets on another stream or endpoint.
+            "incoming": [
+                *canonical_targets[:114],
+                *canonical_targets[115:155],
+                canonical_targets[114],
+                *canonical_targets[155:],
+            ],
+        },
+    }
+    assert fidelity_eligible(
+        "buflo",
+        diagnostics,
+        sample_eligible=True,
+        missed_events=0,
+        outgoing_size_mismatches=0,
+        schedule_metrics=terminally_reordered,
+    )
+    missing_cadence_target = {
+        **terminally_reordered,
+        "target_times_us_by_direction": {
+            **terminally_reordered["target_times_us_by_direction"],
+            "incoming": [
+                *terminally_reordered["target_times_us_by_direction"]["incoming"][:-1],
+                canonical_targets[-2],
+            ],
+        },
+    }
+    assert not fidelity_eligible(
+        "buflo",
+        diagnostics,
+        sample_eligible=True,
+        missed_events=0,
+        outgoing_size_mismatches=0,
+        schedule_metrics=missing_cadence_target,
+    )
     inside_advertisement_limit = {
         **schedule,
         "incoming_credit_advertisement_delay_us_max": 4_999,
