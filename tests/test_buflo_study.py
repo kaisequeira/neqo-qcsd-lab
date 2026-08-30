@@ -44,6 +44,9 @@ from qcsd_lab.defenses import (
     DEFENSE_VARIANT_LABELS,
 )
 from qcsd_lab.fidelity import (
+    BUFLO_SCHEDULE_STOP_POLICY,
+    BUFLO_SCHEDULE_STOP_TERMINAL_TIME_SEMANTICS,
+    BUFLO_SCHEDULE_STOP_V4_KEYS,
     BUFLO_TERMINAL_CONTROL_EVIDENCE_SEMANTICS,
     BUFLO_TERMINAL_SUBCELL_OBSERVER_EFFECT,
     BUFLO_TERMINAL_SUBCELL_POLICY,
@@ -562,6 +565,84 @@ def _formal_performance_evaluation_fixture() -> dict[str, object]:
         for workload in workloads
         for block in range(10)
     ]
+    schedule_stop = [
+        {
+            "defense": "buflo",
+            "workload_id": workload,
+            "acquisition_block_index": block,
+            "samples": 10,
+            "policy": [BUFLO_SCHEDULE_STOP_POLICY],
+            "terminal_time_semantics": [
+                BUFLO_SCHEDULE_STOP_TERMINAL_TIME_SEMANTICS
+            ],
+            "latched_samples": 10,
+            "latched_at_us": {
+                "minimum": 10_000_000,
+                "maximum": 10_000_003,
+                "p50": 10_000_001.0,
+                "p90": 10_000_002.0,
+                "p95": 10_000_003.0,
+            },
+            "available_bytes": {
+                "total": 0,
+                "minimum": 0,
+                "maximum": 0,
+                "p50": 0.0,
+                "p90": 0.0,
+                "p95": 0.0,
+            },
+            "required_bytes": [1_200],
+            "samples_with_incoming_drain": 10,
+            "directions": {
+                "outgoing": {
+                    "scheduled_cells_at_stop": 50,
+                    "terminal_cells_at_stop": 50,
+                    "drained_cells_after_stop": 0,
+                    "last_scheduled_target_us": {
+                        "minimum": 10_000_000,
+                        "maximum": 10_000_000,
+                        "p50": 10_000_000.0,
+                        "p90": 10_000_000.0,
+                        "p95": 10_000_000.0,
+                    },
+                    "last_terminal_at_us": {
+                        "minimum": 9_999_990,
+                        "maximum": 9_999_999,
+                        "p50": 9_999_995.0,
+                        "p90": 9_999_998.0,
+                        "p95": 9_999_999.0,
+                    },
+                    "terminal_cells_strictly_before_stop": 50,
+                    "terminal_cells_at_or_before_stop": 50,
+                    "terminal_cells_at_stop_timestamp": 0,
+                },
+                "incoming": {
+                    "scheduled_cells_at_stop": 50,
+                    "terminal_cells_at_stop": 40,
+                    "drained_cells_after_stop": 10,
+                    "last_scheduled_target_us": {
+                        "minimum": 10_000_000,
+                        "maximum": 10_000_000,
+                        "p50": 10_000_000.0,
+                        "p90": 10_000_000.0,
+                        "p95": 10_000_000.0,
+                    },
+                    "last_terminal_at_us": {
+                        "minimum": 10_000_001,
+                        "maximum": 10_000_010,
+                        "p50": 10_000_005.0,
+                        "p90": 10_000_009.0,
+                        "p95": 10_000_010.0,
+                    },
+                    "terminal_cells_strictly_before_stop": 40,
+                    "terminal_cells_at_or_before_stop": 40,
+                    "terminal_cells_at_stop_timestamp": 0,
+                },
+            },
+        }
+        for workload in workloads
+        for block in range(10)
+    ]
     cs_local_et = [
         {
             "defense": "cs-buflo",
@@ -604,11 +685,12 @@ def _formal_performance_evaluation_fixture() -> dict[str, object]:
             "paired_mode_client_block_workload_bootstrap_95": mode_client,
         },
         "algorithm_breakdowns": {
-            "schema_version": 2,
+            "schema_version": 3,
             "available": True,
             "classifier_input": False,
             "strata": algorithm_strata,
             "buflo_terminal_tail_strata": tail,
+            "buflo_schedule_stop_strata": schedule_stop,
             "cs_buflo_local_termination_strata": cs_local_et,
         },
         "paired_per_visit": [{} for _ in range(1_000)],
@@ -624,6 +706,9 @@ def test_formal_performance_gate_requires_exact_axes_and_terminal_tail() -> None
     evidence = buflo_study._validate_formal_performance_evidence(value)
     assert evidence["buflo_terminal_tail_strata"] == 50
     assert evidence["buflo_terminal_tail_samples"] == 500
+    assert evidence["buflo_schedule_stop_strata"] == 50
+    assert evidence["buflo_schedule_stop_samples"] == 500
+    assert evidence["buflo_schedule_stop_incoming_drained_cells"] == 500
     assert evidence["cs_buflo_local_termination_strata"] == 50
 
     mutations = []
@@ -660,6 +745,24 @@ def test_formal_performance_gate_requires_exact_axes_and_terminal_tail() -> None
         "receipt_cancellations"
     ] = 1
     mutations.append(mismatched_counters)
+    wrong_stop_policy = json.loads(json.dumps(value))
+    wrong_stop_policy["algorithm_breakdowns"]["buflo_schedule_stop_strata"][0][
+        "policy"
+    ] = ["drifted"]
+    mutations.append(wrong_stop_policy)
+    wrong_time_semantics = json.loads(json.dumps(value))
+    wrong_time_semantics["algorithm_breakdowns"]["buflo_schedule_stop_strata"][0][
+        "terminal_time_semantics"
+    ] = ["drifted"]
+    mutations.append(wrong_time_semantics)
+    outgoing_drain = json.loads(json.dumps(value))
+    outgoing_drain["algorithm_breakdowns"]["buflo_schedule_stop_strata"][0][
+        "directions"
+    ]["outgoing"]["drained_cells_after_stop"] = 1
+    mutations.append(outgoing_drain)
+    missing_schedule_stop = json.loads(json.dumps(value))
+    missing_schedule_stop["algorithm_breakdowns"]["buflo_schedule_stop_strata"].pop()
+    mutations.append(missing_schedule_stop)
     missing_handoff = json.loads(json.dumps(value))
     missing_handoff["algorithm_breakdowns"]["cs_buflo_local_termination_strata"][0][
         "before_application_complete_samples"
@@ -2335,7 +2438,7 @@ def test_sustained_capacity_gate_requires_all_clean_cells() -> None:
                     **(
                         {
                             "terminal_subcell": {
-                                "schema_version": 2,
+                                "schema_version": 3,
                                 "terminal_subcell_policy": (
                                     BUFLO_TERMINAL_SUBCELL_POLICY
                                 ),
@@ -2362,6 +2465,38 @@ def test_sustained_capacity_gate_requires_all_clean_cells() -> None:
                                 "first_cancellation_monotonic_us": 10_000_010,
                                 "last_exact_outgoing_cell_monotonic_us": 9_999_990,
                                 "last_scheduled_terminal_monotonic_us": 10_000_000,
+                                "schedule_stop": {
+                                    "policy": BUFLO_SCHEDULE_STOP_POLICY,
+                                    "terminal_time_semantics": (
+                                        BUFLO_SCHEDULE_STOP_TERMINAL_TIME_SEMANTICS
+                                    ),
+                                    "latched": True,
+                                    "latched_at_us": 10_000_000,
+                                    "available_bytes": 1_199,
+                                    "required_bytes": 1_200,
+                                    "directions": {
+                                        "outgoing": {
+                                            "scheduled_cells_at_stop": 10,
+                                            "terminal_cells_at_stop": 10,
+                                            "drained_cells_after_stop": 0,
+                                            "last_scheduled_target_us": 10_000_000,
+                                            "last_terminal_at_us": 9_999_990,
+                                            "terminal_cells_strictly_before_stop": 10,
+                                            "terminal_cells_at_or_before_stop": 10,
+                                            "terminal_cells_at_stop_timestamp": 0,
+                                        },
+                                        "incoming": {
+                                            "scheduled_cells_at_stop": 10,
+                                            "terminal_cells_at_stop": 9,
+                                            "drained_cells_after_stop": 1,
+                                            "last_scheduled_target_us": 10_000_000,
+                                            "last_terminal_at_us": 10_000_001,
+                                            "terminal_cells_strictly_before_stop": 9,
+                                            "terminal_cells_at_or_before_stop": 9,
+                                            "terminal_cells_at_stop_timestamp": 0,
+                                        },
+                                    },
+                                },
                                 "post_cancellation_unscheduled_defense_control_packets": 1,
                                 "post_cancellation_unscheduled_defense_control_bytes": 4,
                                 "first_post_cancellation_defense_control_monotonic_us": 10_000_020,
@@ -2411,7 +2546,7 @@ def test_sustained_capacity_gate_requires_all_clean_cells() -> None:
     proof = buflo_study._validate_sustained_cell_capacity(values)
     assert proof["samples"] == 30
     assert proof["profiles"]["buflo"]["cell_size_bytes"] == 1_200
-    assert proof["profiles"]["buflo"]["terminal_subcell"]["schema_version"] == 2
+    assert proof["profiles"]["buflo"]["terminal_subcell"]["schema_version"] == 3
     assert (
         proof["profiles"]["buflo"]["terminal_subcell"][
             "pending_parser_boundaries_at_latch"
@@ -2430,6 +2565,18 @@ def test_sustained_capacity_gate_requires_all_clean_cells() -> None:
         ]["maximum"]
         == 1_199
     )
+    schedule_stop = proof["profiles"]["buflo"]["terminal_subcell"][
+        "schedule_stop"
+    ]
+    assert schedule_stop["policy"] == BUFLO_SCHEDULE_STOP_POLICY
+    assert (
+        schedule_stop["terminal_time_semantics"]
+        == BUFLO_SCHEDULE_STOP_TERMINAL_TIME_SEMANTICS
+    )
+    assert schedule_stop["latched_samples"] == 10
+    assert schedule_stop["samples_with_incoming_drain"] == 10
+    assert schedule_stop["directions"]["outgoing"]["drained_cells_after_stop"] == 0
+    assert schedule_stop["directions"]["incoming"]["drained_cells_after_stop"] == 10
     assert proof["profiles"]["cs-buflo-ctsp"]["minimum_interval_us"] == 4_096
     for index, key, changed in (
         (0, "passed", False),
@@ -2460,6 +2607,10 @@ def test_sustained_capacity_gate_requires_all_clean_cells() -> None:
     with pytest.raises(ValueError, match="does not sustain"):
         buflo_study._validate_sustained_cell_capacity(values)
     tail["pending_parser_boundaries_at_latch"] = 1
+    tail["schedule_stop"]["directions"]["outgoing"]["drained_cells_after_stop"] = 1
+    with pytest.raises(ValueError, match="does not sustain"):
+        buflo_study._validate_sustained_cell_capacity(values)
+    tail["schedule_stop"]["directions"]["outgoing"]["drained_cells_after_stop"] = 0
 
 
 def test_controlled_endpoint_gate_names_all_new_mode_two_origin_cells() -> None:
@@ -3847,6 +3998,8 @@ def test_extended_schedule_reconciles_typed_partial_composition(tmp_path: Path) 
     assert metrics["typed_congestion_reason_column"] is True
     assert metrics["typed_credit_advertisement_columns"] is True
     assert metrics["typed_credit_consumption_columns"] is True
+    assert metrics["typed_controller_terminal_time_column"] is True
+    assert len(metrics["terminal_defense_elapsed_us_values"]) == 4
     assert metrics["incoming_credit_advertised_events"] == 1
     assert metrics["incoming_credit_consumed_events"] == 1
     assert metrics["incoming_credit_advertisement_delay_us_max"] == 100
@@ -3900,6 +4053,14 @@ def test_buflo_fidelity_requires_every_zero_error_and_typed_terminal_once() -> N
         "buflo_terminal_subcell_parser_lease_bytes_at_latch": 0,
         "buflo_terminal_subcell_pending_parser_boundaries_at_latch": 0,
         "buflo_terminal_subcell_pending_application_parser_boundaries_at_latch": 0,
+        "buflo_schedule_stop_latched": True,
+        "buflo_schedule_stop_latched_at_us": 10_000_000,
+        "buflo_schedule_stop_available_bytes": 0,
+        "buflo_schedule_stop_required_bytes": 1_200,
+        "buflo_schedule_stop_scheduled_incoming_cells": 501,
+        "buflo_schedule_stop_scheduled_outgoing_cells": 501,
+        "buflo_schedule_stop_terminal_incoming_cells": 501,
+        "buflo_schedule_stop_terminal_outgoing_cells": 501,
     }
     schedule = _schedule_metrics(outgoing=501, incoming=501)
     canonical_targets = list(range(0, 10_000_001, 20_000))
@@ -3954,7 +4115,7 @@ def test_buflo_fidelity_requires_every_zero_error_and_typed_terminal_once() -> N
         "resolved_configuration": {"schema_version": 2, "defense": {"kind": "buflo"}},
         "defense_diagnostics": diagnostics,
         "buflo_summary": {
-            "schema_version": 3,
+            "schema_version": 4,
             "kind": "buflo",
             "implementation_scope": "client_only_quic",
             "paper_equivalent": False,
@@ -3973,6 +4134,7 @@ def test_buflo_fidelity_requires_every_zero_error_and_typed_terminal_once() -> N
                 "typed_stop_sending_and_reset_stream_defense_control_may_follow_"
                 "the_last_exact_cell"
             ),
+            "terminal_schedule_stop_policy": BUFLO_SCHEDULE_STOP_POLICY,
             "diagnostics": diagnostics,
         },
         "chaff_responses": [],
@@ -4015,7 +4177,22 @@ def test_buflo_fidelity_requires_every_zero_error_and_typed_terminal_once() -> N
         require_application_complete=True,
         require_current_schema=True,
     )
-    legacy_run = json.loads(json.dumps(run))
+    historical_v3 = json.loads(json.dumps(current_wakeups))
+    historical_v3["buflo_summary"]["schema_version"] = 3
+    historical_v3["buflo_summary"].pop("terminal_schedule_stop_policy")
+    for key in BUFLO_SCHEDULE_STOP_V4_KEYS:
+        historical_v3["defense_diagnostics"].pop(key)
+        historical_v3["buflo_summary"]["diagnostics"].pop(key)
+    assert new_defense_terminal_receipts_valid(
+        historical_v3, "buflo", require_application_complete=True
+    )
+    assert not new_defense_terminal_receipts_valid(
+        historical_v3,
+        "buflo",
+        require_application_complete=True,
+        require_current_schema=True,
+    )
+    legacy_run = json.loads(json.dumps(historical_v3))
     legacy_run["buflo_summary"]["schema_version"] = 2
     legacy_run["defense_diagnostics"].pop(
         "buflo_terminal_subcell_pending_application_parser_boundaries_at_latch"
@@ -4025,6 +4202,34 @@ def test_buflo_fidelity_requires_every_zero_error_and_typed_terminal_once() -> N
     )
     assert new_defense_terminal_receipts_valid(
         legacy_run, "buflo", require_application_complete=True
+    )
+    for missing in BUFLO_SCHEDULE_STOP_V4_KEYS:
+        partial = json.loads(json.dumps(current_wakeups))
+        partial["defense_diagnostics"].pop(missing)
+        partial["buflo_summary"]["diagnostics"].pop(missing)
+        assert not new_defense_terminal_receipts_valid(
+            partial, "buflo", require_application_complete=True
+        )
+    for key, changed in (
+        ("buflo_schedule_stop_latched", False),
+        ("buflo_schedule_stop_latched_at_us", 10_000_002),
+        ("buflo_schedule_stop_available_bytes", 1_200),
+        ("buflo_schedule_stop_required_bytes", 1_199),
+        ("buflo_schedule_stop_scheduled_incoming_cells", 500),
+        ("buflo_schedule_stop_scheduled_outgoing_cells", 500),
+        ("buflo_schedule_stop_terminal_incoming_cells", 502),
+        ("buflo_schedule_stop_terminal_outgoing_cells", 500),
+    ):
+        invalid = json.loads(json.dumps(current_wakeups))
+        invalid["defense_diagnostics"][key] = changed
+        invalid["buflo_summary"]["diagnostics"][key] = changed
+        assert not new_defense_terminal_receipts_valid(
+            invalid, "buflo", require_application_complete=True
+        )
+    drifted_policy = json.loads(json.dumps(current_wakeups))
+    drifted_policy["buflo_summary"]["terminal_schedule_stop_policy"] = "drifted"
+    assert not new_defense_terminal_receipts_valid(
+        drifted_policy, "buflo", require_application_complete=True
     )
     for key in (
         "buflo_partial_outgoing_cells",
@@ -4530,6 +4735,7 @@ def _incoming_credit(value: int) -> dict[str, int]:
 
 def _schedule_metrics(*, outgoing: int, incoming: int) -> dict[str, object]:
     return {
+        "scheduled_events": outgoing + incoming,
         "scheduled_outgoing_events": outgoing,
         "scheduled_incoming_events": incoming,
         "terminal_slots_unique": True,
@@ -4538,6 +4744,7 @@ def _schedule_metrics(*, outgoing: int, incoming: int) -> dict[str, object]:
         "typed_congestion_reason_column": True,
         "typed_credit_advertisement_columns": True,
         "typed_credit_consumption_columns": True,
+        "typed_controller_terminal_time_column": True,
         "invalid_congestion_reason_events": 0,
         "invalid_typed_outcome_rows": 0,
         "incoming_credit_advertised_events": incoming,
@@ -4552,6 +4759,7 @@ def _schedule_metrics(*, outgoing: int, incoming: int) -> dict[str, object]:
         "incoming_credit_consumption_delay_us_total": incoming * 500,
         "incoming_credit_consumption_delay_us_max": 500 if incoming else 0,
         "incoming_credit_consumption_delay_us_values": [500] * incoming,
+        "terminal_defense_elapsed_us_values": [0] * (outgoing + incoming),
         "terminal_satisfactions": {"satisfied": outgoing + incoming},
         "terminal_desired_outgoing_bytes": 0,
         "terminal_observed_outgoing_bytes": 0,
@@ -4585,11 +4793,14 @@ def _typed_schedule_row(
         observed_size=("" if observed is None or satisfaction == "suppressed" else observed),
         miss_reason={"congestion_limited": "CongestionLimited"}.get(reason, ""),
         slot_id=slot,
-        qcsd_outcome_schema_version=(2 if direction == "incoming" else 1),
+        qcsd_outcome_schema_version=3,
         send_policy=("exact" if satisfaction == "satisfied" else "congestion_sensitive"),
         desired_udp_bytes=desired,
         observed_udp_bytes="" if observed is None else observed,
         congestion_reason=reason,
+        terminal_defense_elapsed_us=(
+            slot * 1_000 + (500 if direction == "incoming" else (lateness or 0))
+        ),
     )
     if satisfaction in {"full", "partial", "suppressed"}:
         assert observed is not None and lateness is not None

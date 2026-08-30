@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -7,8 +8,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from qcsd_lab import orchestrator, util
 import qcsd_lab.class_pipeline as pipeline
+from qcsd_lab import buflo_handoff, orchestrator, util
 from qcsd_lab.capture_session import Defense, Limits
 from qcsd_lab.class_study import (
     CANDIDATE_COUNT,
@@ -16,6 +17,7 @@ from qcsd_lab.class_study import (
     FORMAL_MODES,
     STUDY_ID,
 )
+from qcsd_lab.fidelity import BUFLO_SCHEDULE_STOP_V4_KEYS, SCHEDULE_QCSD_FIELDS
 from qcsd_lab.verification import VerifiedResult
 
 
@@ -408,11 +410,7 @@ def test_campaign_bridge_passes_exact_assembly_api(monkeypatch, tmp_path):
     def fake_campaign_documents(cohort, **kwargs):
         seen["cohort"] = cohort
         seen.update(kwargs)
-        return {
-            "one.yml": {
-                "class_study_cohort_assembly": kwargs["cohort_assembly_reference"]
-            }
-        }
+        return {"one.yml": {"class_study_cohort_assembly": kwargs["cohort_assembly_reference"]}}
 
     monkeypatch.setattr(pipeline, "campaign_documents", fake_campaign_documents)
     cohort = tmp_path / "cohort.json"
@@ -432,13 +430,17 @@ def test_campaign_bridge_passes_exact_assembly_api(monkeypatch, tmp_path):
     assert seen["cohort_assembly_receipt"] == assembly
 
 
-def test_certification_requires_exact_900_first_launch_pairs(tmp_path):
+def test_certification_requires_exact_900_first_launch_pairs(monkeypatch, tmp_path):
     class_ids = tuple(f"class-{index:03d}" for index in range(100))
     samples = [
         {
             "sample_id": f"{workload_id}-{mode}",
             "workload_id": workload_id,
             "defense": mode,
+            "runtime_kind": {
+                "buflo": "buflo",
+                "cs-buflo": "cs_buflo",
+            }.get(mode),
             "visit": 0,
             "request_policy": "as-defined",
             "state": "accepted",
@@ -451,13 +453,17 @@ def test_certification_requires_exact_900_first_launch_pairs(tmp_path):
     verified = VerifiedResult(
         root=tmp_path,
         experiment={
-            "configuration": {
-                "defenses": [{"name": mode} for mode in COMPATIBILITY_MODES]
-            },
+            "configuration": {"defenses": [{"name": mode} for mode in COMPATIBILITY_MODES]},
             "samples": samples,
         },
         checksums={},
         accepted_samples={sample["sample_id"]: {} for sample in samples},
+    )
+    reopened: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        pipeline,
+        "_validate_current_candidate_sample_receipt",
+        lambda _verified, sample, *, role: reopened.append((role, str(sample["defense"]))),
     )
 
     count, pairs = pipeline._validate_non_fitting_result(
@@ -468,6 +474,8 @@ def test_certification_requires_exact_900_first_launch_pairs(tmp_path):
 
     assert count == 900
     assert pairs == 900
+    assert reopened.count(("certification", "buflo")) == 100
+    assert reopened.count(("certification", "cs-buflo")) == 100
     samples[0]["attempts"] = 2
     with pytest.raises(ValueError, match="first launch|invalid attempt"):
         pipeline._validate_non_fitting_result(
@@ -477,13 +485,17 @@ def test_certification_requires_exact_900_first_launch_pairs(tmp_path):
         )
 
 
-def test_formal_result_accepts_preserved_retry_success_within_budget(tmp_path):
+def test_formal_result_accepts_preserved_retry_success_within_budget(monkeypatch, tmp_path):
     class_ids = tuple(f"class-{index:03d}" for index in range(100))
     samples = [
         {
             "sample_id": f"{workload_id}-{mode}-{visit}",
             "workload_id": workload_id,
             "defense": mode,
+            "runtime_kind": {
+                "buflo": "buflo",
+                "cs-buflo": "cs_buflo",
+            }.get(mode),
             "visit": visit,
             "request_policy": "as-defined",
             "state": "accepted",
@@ -503,12 +515,20 @@ def test_formal_result_accepts_preserved_retry_success_within_budget(tmp_path):
         checksums={},
         accepted_samples={sample["sample_id"]: {} for sample in samples},
     )
+    reopened: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        pipeline,
+        "_validate_current_candidate_sample_receipt",
+        lambda _verified, sample, *, role: reopened.append((role, str(sample["defense"]))),
+    )
 
     assert pipeline._validate_non_fitting_result(
         verified,
         role="formal",
         selected_ids=class_ids,
     ) == (1_600, None)
+    assert reopened.count(("formal", "buflo")) == 200
+    assert reopened.count(("formal", "cs-buflo")) == 200
 
     samples[0]["attempts"] = 4
     with pytest.raises(ValueError, match="invalid attempt"):
@@ -517,6 +537,268 @@ def test_formal_result_accepts_preserved_retry_success_within_budget(tmp_path):
             role="formal",
             selected_ids=class_ids,
         )
+
+
+def _candidate_verified_result(
+    tmp_path: Path, run: dict[str, object]
+) -> tuple[VerifiedResult, dict[str, object]]:
+    root = (tmp_path / "candidate-result").resolve()
+    sample_relative = "samples/class-000/as-defined/visit-001/buflo"
+    sample_root = root / sample_relative
+    (sample_root / "neqo").mkdir(parents=True)
+    (sample_root / "capture.pcapng").write_bytes(b"sealed-pcapng\n")
+    (sample_root / "neqo/run.json").write_text(
+        json.dumps(run, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+    def write_rows(name: str, fields: tuple[str, ...], rows: list[dict[str, str]]) -> None:
+        with (sample_root / f"neqo/{name}").open("w", newline="", encoding="utf-8") as destination:
+            writer = csv.DictWriter(destination, fieldnames=fields)
+            writer.writeheader()
+            writer.writerows(rows)
+
+    schedule_fields = (*buflo_handoff.SCHEDULE_PREFIX_FIELDS, *SCHEDULE_QCSD_FIELDS)
+    outgoing = {field: "" for field in schedule_fields}
+    outgoing.update(
+        target_time_us="0",
+        direction="outgoing",
+        size="1200",
+        connection="0",
+        action_time_us="4999",
+        satisfaction="satisfied",
+        observed_size="1200",
+        slot_id="1",
+        qcsd_outcome_schema_version="3",
+        send_policy="exact",
+        desired_udp_bytes="1200",
+        observed_udp_bytes="1200",
+        terminal_defense_elapsed_us="4999",
+    )
+    incoming = {field: "" for field in schedule_fields}
+    incoming.update(
+        target_time_us="0",
+        direction="incoming",
+        size="1200",
+        connection="0",
+        action_time_us="0",
+        satisfaction="satisfied",
+        slot_id="2",
+        qcsd_outcome_schema_version="3",
+        send_policy="exact",
+        desired_udp_bytes="1200",
+        credit_advertised_at_us="0",
+        credit_advertisement_delay_us="0",
+        credit_consumed_at_us="10000000",
+        credit_consumption_delay_us="10000000",
+        terminal_defense_elapsed_us="10000000",
+    )
+    write_rows("schedule.csv", schedule_fields, [outgoing, incoming])
+
+    event_fields = (*buflo_handoff._EVENT_PREFIX_FIELDS, *SCHEDULE_QCSD_FIELDS)
+    write_rows("events.csv", event_fields, [])
+
+    packet_fields = (*buflo_handoff._PACKET_PREFIX_FIELDS, *SCHEDULE_QCSD_FIELDS)
+    packet = {field: "" for field in packet_fields}
+    packet.update(
+        direction="outgoing",
+        monotonic_us="4999",
+        connection="0",
+        observed_udp_length="1200",
+        scheduled_target="1200",
+        satisfaction="satisfied",
+        slot_id="1",
+        qcsd_outcome_schema_version="2",
+        send_policy="exact",
+        desired_udp_bytes="1200",
+        observed_udp_bytes="1200",
+        application_stream_bytes="0",
+        retransmission_stream_bytes="0",
+        chaff_stream_bytes="1200",
+        defense_control_bytes="0",
+        quic_padding_bytes="0",
+        other_quic_bytes="0",
+        lateness_us="0",
+    )
+    write_rows("packets.csv", packet_fields, [packet])
+    artifacts = {
+        path.relative_to(root).as_posix(): util.sha256_file(path)
+        for path in sorted(sample_root.rglob("*"))
+        if path.is_file()
+    }
+    sample: dict[str, object] = {
+        "sample_id": "class-000-buflo",
+        "path": sample_relative,
+        "defense": "buflo",
+        "runtime_kind": "buflo",
+        "artifacts": artifacts,
+    }
+    return (
+        VerifiedResult(
+            root=root,
+            experiment={"samples": [sample]},
+            checksums=dict(artifacts),
+            accepted_samples={str(sample["sample_id"]): dict(artifacts)},
+        ),
+        sample,
+    )
+
+
+def _reseal_candidate_artifact(
+    verified: VerifiedResult,
+    sample: dict[str, object],
+    path: Path,
+) -> None:
+    relative = path.relative_to(verified.root).as_posix()
+    digest = util.sha256_file(path)
+    artifacts = sample["artifacts"]
+    assert isinstance(artifacts, dict)
+    artifacts[relative] = digest
+    verified.accepted_samples[str(sample["sample_id"])][relative] = digest
+    verified.checksums[relative] = digest
+
+
+def test_class_result_reopens_current_candidate_terminal_receipt(tmp_path: Path) -> None:
+    from tests.test_buflo_handoff import _complete_buflo_run
+
+    verified, sample = _candidate_verified_result(
+        tmp_path,
+        _complete_buflo_run(scheduled_outgoing=1, scheduled_incoming=1),
+    )
+
+    pipeline._validate_current_candidate_sample_receipt(verified, sample, role="certification")
+
+
+def test_class_result_rejects_historical_candidate_summary_even_when_sealed_and_eligible(
+    tmp_path: Path,
+) -> None:
+    from tests.test_buflo_handoff import _complete_buflo_run
+
+    run = json.loads(json.dumps(_complete_buflo_run(scheduled_outgoing=1, scheduled_incoming=1)))
+    run["buflo_summary"]["schema_version"] = 3
+    run["buflo_summary"].pop("terminal_schedule_stop_policy")
+    for key in BUFLO_SCHEDULE_STOP_V4_KEYS:
+        run["defense_diagnostics"].pop(key)
+        run["buflo_summary"]["diagnostics"].pop(key)
+    verified, sample = _candidate_verified_result(tmp_path, run)
+
+    with pytest.raises(ValueError, match="current schema-4 terminal receipt"):
+        pipeline._validate_current_candidate_sample_receipt(verified, sample, role="certification")
+
+
+@pytest.mark.parametrize("missing", sorted(BUFLO_SCHEDULE_STOP_V4_KEYS))
+def test_class_result_rejects_each_missing_schedule_stop_diagnostic(
+    tmp_path: Path, missing: str
+) -> None:
+    from tests.test_buflo_handoff import _complete_buflo_run
+
+    run = json.loads(json.dumps(_complete_buflo_run(scheduled_outgoing=1, scheduled_incoming=1)))
+    run["defense_diagnostics"].pop(missing)
+    run["buflo_summary"]["diagnostics"].pop(missing)
+    verified, sample = _candidate_verified_result(tmp_path, run)
+
+    with pytest.raises(ValueError, match="current schema-4 terminal receipt"):
+        pipeline._validate_current_candidate_sample_receipt(verified, sample, role="certification")
+
+
+def test_class_result_rejects_missing_buflo_defense_clock_binding(
+    tmp_path: Path,
+) -> None:
+    from tests.test_buflo_handoff import _complete_buflo_run
+
+    run = json.loads(json.dumps(_complete_buflo_run(scheduled_outgoing=1, scheduled_incoming=1)))
+    run.pop("defense_start_monotonic_ns")
+    verified, sample = _candidate_verified_result(tmp_path, run)
+
+    with pytest.raises(ValueError, match="terminal/schedule chronology"):
+        pipeline._validate_current_candidate_sample_receipt(verified, sample, role="certification")
+
+
+def test_class_result_rejects_sealed_schedule_stop_chronology_mutation(
+    tmp_path: Path,
+) -> None:
+    from tests.test_buflo_handoff import _complete_buflo_run
+
+    verified, sample = _candidate_verified_result(
+        tmp_path,
+        _complete_buflo_run(scheduled_outgoing=1, scheduled_incoming=1),
+    )
+    schedule_path = verified.root / str(sample["path"]) / "neqo/schedule.csv"
+    with schedule_path.open(newline="", encoding="utf-8") as source:
+        reader = csv.DictReader(source)
+        rows = list(reader)
+        fields = tuple(reader.fieldnames or ())
+    rows[1]["credit_consumed_at_us"] = "10000002"
+    rows[1]["credit_consumption_delay_us"] = "10000002"
+    with schedule_path.open("w", newline="", encoding="utf-8") as destination:
+        writer = csv.DictWriter(destination, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(rows)
+    _reseal_candidate_artifact(verified, sample, schedule_path)
+
+    with pytest.raises(ValueError, match="terminal/schedule chronology"):
+        pipeline._validate_current_candidate_sample_receipt(verified, sample, role="certification")
+
+
+def test_class_result_rejects_sealed_outgoing_packet_binding_mutation(
+    tmp_path: Path,
+) -> None:
+    from tests.test_buflo_handoff import _complete_buflo_run
+
+    verified, sample = _candidate_verified_result(
+        tmp_path,
+        _complete_buflo_run(scheduled_outgoing=1, scheduled_incoming=1),
+    )
+    packets_path = verified.root / str(sample["path"]) / "neqo/packets.csv"
+    with packets_path.open(newline="", encoding="utf-8") as source:
+        reader = csv.DictReader(source)
+        rows = list(reader)
+        fields = tuple(reader.fieldnames or ())
+    rows[0]["slot_id"] = "7"
+    with packets_path.open("w", newline="", encoding="utf-8") as destination:
+        writer = csv.DictWriter(destination, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(rows)
+    _reseal_candidate_artifact(verified, sample, packets_path)
+
+    with pytest.raises(ValueError, match="terminal/schedule chronology"):
+        pipeline._validate_current_candidate_sample_receipt(verified, sample, role="certification")
+
+
+def test_class_result_rejects_sealed_terminal_event_inventory_mutation(
+    tmp_path: Path,
+) -> None:
+    from tests.test_buflo_handoff import _complete_buflo_run
+
+    verified, sample = _candidate_verified_result(
+        tmp_path,
+        _complete_buflo_run(scheduled_outgoing=1, scheduled_incoming=1),
+    )
+    events_path = verified.root / str(sample["path"]) / "neqo/events.csv"
+    event_fields = (*buflo_handoff._EVENT_PREFIX_FIELDS, *SCHEDULE_QCSD_FIELDS)
+    row = {field: "" for field in event_fields}
+    row.update(
+        monotonic_us="10000001",
+        connection="0",
+        event="action",
+        outcome="applied",
+        details=json.dumps(
+            {
+                "type": "cancel_chaff",
+                "endpoint": 0,
+                "stream": 7,
+                "reason": "buflo_terminal_subcell_tail",
+            },
+            sort_keys=True,
+        ),
+    )
+    with events_path.open("w", newline="", encoding="utf-8") as destination:
+        writer = csv.DictWriter(destination, fieldnames=event_fields)
+        writer.writeheader()
+        writer.writerow(row)
+    _reseal_candidate_artifact(verified, sample, events_path)
+
+    with pytest.raises(ValueError, match="terminal/schedule chronology"):
+        pipeline._validate_current_candidate_sample_receipt(verified, sample, role="certification")
 
 
 def test_runtime_input_identities_follow_the_real_frozen_configuration_contract(
@@ -546,9 +828,7 @@ def test_runtime_input_identities_follow_the_real_frozen_configuration_contract(
             mode="chaff-and-shape",
         )
     )
-    defenses.extend(
-        (Defense("front", "front", False), Defense("tamaraw", "tamaraw", False))
-    )
+    defenses.extend((Defense("front", "front", False), Defense("tamaraw", "tamaraw", False)))
     for index, (name, kind) in enumerate(parameter_modes.items(), start=2):
         defenses.append(
             Defense(
@@ -559,9 +839,7 @@ def test_runtime_input_identities_follow_the_real_frozen_configuration_contract(
                 parameters_path=inputs / f"defense-parameters/{name}/parameters.json",
                 parameters_sha256=f"{index:x}" * 64,
                 parameters_provenance="provenance.json",
-                parameters_provenance_path=(
-                    inputs / f"defense-parameters/{name}/provenance.json"
-                ),
+                parameters_provenance_path=(inputs / f"defense-parameters/{name}/provenance.json"),
                 parameters_provenance_sha256="a" * 64,
                 parameters_input_policy="sealed-class-study-fitting-v1",
             )
@@ -615,9 +893,7 @@ def test_formal_capture_requires_matching_canary_and_prior_blocks():
 
 
 def test_prior_capture_records_must_match_certified_runtime_and_manifest() -> None:
-    certification_runtime_inputs = {
-        mode: {"identity": mode} for mode in COMPATIBILITY_MODES
-    }
+    certification_runtime_inputs = {mode: {"identity": mode} for mode in COMPATIBILITY_MODES}
     foundation_sha256 = "1" * 64
     readiness_sha256 = "2" * 64
     historical_pre_sha256 = "3" * 64
@@ -631,9 +907,7 @@ def test_prior_capture_records_must_match_certified_runtime_and_manifest() -> No
         "class_study_foundation_sha256": foundation_sha256,
         "class_study_readiness_sha256": readiness_sha256,
         "class_study_historical_pre_snapshot_sha256": historical_pre_sha256,
-        "defense_runtime_inputs": {
-            "undefended": certification_runtime_inputs["undefended"]
-        },
+        "defense_runtime_inputs": {"undefended": certification_runtime_inputs["undefended"]},
         "chaff_qualification_set_manifest_sha256": None,
     }
     formal = {
@@ -642,8 +916,7 @@ def test_prior_capture_records_must_match_certified_runtime_and_manifest() -> No
         "class_study_readiness_sha256": readiness_sha256,
         "class_study_historical_pre_snapshot_sha256": historical_pre_sha256,
         "defense_runtime_inputs": {
-            mode: certification_runtime_inputs[mode]
-            for mode in pipeline.FORMAL_MODES
+            mode: certification_runtime_inputs[mode] for mode in pipeline.FORMAL_MODES
         },
         "chaff_qualification_set_manifest_sha256": manifest_sha256,
     }
@@ -659,9 +932,7 @@ def test_prior_capture_records_must_match_certified_runtime_and_manifest() -> No
 
     drifted = {**formal, "chaff_qualification_set_manifest_sha256": "f" * 64}
     with pytest.raises(ValueError, match="qualification manifest differs"):
-        pipeline._require_prior_capture_runtime_bindings(
-            (certification, canary, drifted), **kwargs
-        )
+        pipeline._require_prior_capture_runtime_bindings((certification, canary, drifted), **kwargs)
     drifted = {
         **formal,
         "defense_runtime_inputs": {
@@ -670,9 +941,7 @@ def test_prior_capture_records_must_match_certified_runtime_and_manifest() -> No
         },
     }
     with pytest.raises(ValueError, match="runtime inputs differ"):
-        pipeline._require_prior_capture_runtime_bindings(
-            (certification, canary, drifted), **kwargs
-        )
+        pipeline._require_prior_capture_runtime_bindings((certification, canary, drifted), **kwargs)
 
 
 def test_canary_and_formal_capture_require_readiness_and_pre_snapshot(tmp_path):
@@ -743,9 +1012,7 @@ def test_every_capture_role_requires_and_binds_one_foundation_before_launch(
         prerequisite_records=(),
     )
     assert authority is not None
-    assert authority["foundation_attestation"]["sha256"] == pipeline.sha256_file(
-        foundation
-    )
+    assert authority["foundation_attestation"]["sha256"] == pipeline.sha256_file(foundation)
 
 
 def test_capture_foundation_rejects_resume_or_prerequisite_drift(
@@ -777,9 +1044,7 @@ def test_capture_foundation_rejects_resume_or_prerequisite_drift(
             foundation_attestation=foundation,
             capture_started_at=None,
             expected_sha256=None,
-            prerequisite_records=(
-                {"class_study_foundation_sha256": "f" * 64},
-            ),
+            prerequisite_records=({"class_study_foundation_sha256": "f" * 64},),
         )
 
 
@@ -1030,8 +1295,7 @@ def test_qualification_defaults_to_resumable_guidance(monkeypatch, tmp_path):
 def _qualification_coordinator_inputs(monkeypatch, tmp_path):
     admission = _admission(tmp_path)
     roots = {
-        name: tmp_path / name
-        for name in ("numeric", "prefix", "workloads", "sidecars", "sets")
+        name: tmp_path / name for name in ("numeric", "prefix", "workloads", "sidecars", "sets")
     }
     for path in roots.values():
         path.mkdir(exist_ok=True)
@@ -1210,9 +1474,7 @@ def test_qualification_runtime_mismatch_fails_before_checkpoint_mutation(
         source["lab_commit"] = "8" * 40
     else:
         image = "sha256:" + "8" * 64
-    monkeypatch.setattr(
-        pipeline, "_qualification_execution_context", lambda: ({}, source, image)
-    )
+    monkeypatch.setattr(pipeline, "_qualification_execution_context", lambda: ({}, source, image))
     monkeypatch.setattr(
         pipeline,
         "initialize_named_qualification_checkpoint",
@@ -1446,9 +1708,7 @@ def test_cli_exposes_class_study_without_implicit_execution():
     assert parsed.historical_pre_snapshot == Path("pre.json")
 
 
-def test_final_selection_is_recomputed_from_pilot_fit_and_compatibility(
-    monkeypatch, tmp_path
-):
+def test_final_selection_is_recomputed_from_pilot_fit_and_compatibility(monkeypatch, tmp_path):
     monkeypatch.setattr(util, "LAB_ROOT", tmp_path)
     layout = pipeline.class_study_layout()
     admission = _admission(layout.study_config_root, pilot=120, final=100)
@@ -1534,10 +1794,7 @@ def test_final_selection_is_recomputed_from_pilot_fit_and_compatibility(
         pipeline,
         "_qualified_final_pair_selection",
         lambda *_args, **_kwargs: SimpleNamespace(
-            matching=tuple(
-                (pilot_ids[index], pilot_ids[index + 1])
-                for index in range(0, 100, 2)
-            )
+            matching=tuple((pilot_ids[index], pilot_ids[index + 1]) for index in range(0, 100, 2))
         ),
     )
     compatibility = {
@@ -1560,9 +1817,7 @@ def test_final_selection_is_recomputed_from_pilot_fit_and_compatibility(
     )
 
     pilot_cohort = layout.study_config_root / pipeline.PILOT_COHORT_FILENAME
-    pilot_assembly = (
-        layout.study_config_root / pipeline.PILOT_COHORT_ASSEMBLY_FILENAME
-    )
+    pilot_assembly = layout.study_config_root / pipeline.PILOT_COHORT_ASSEMBLY_FILENAME
     pilot_cohort.write_bytes(admission.cohort_path.read_bytes())
     pilot_assembly.write_bytes(admission.assembly_path.read_bytes())
     admission = replace(
@@ -1592,12 +1847,9 @@ def test_final_selection_is_recomputed_from_pilot_fit_and_compatibility(
         value["payload"]["pilot_compatibility"]["fitted_parameter_sha256"]
         == compatibility["defense_parameter_sha256"]
     )
-    assert (
-        value["payload"]["pilot_compatibility"]["finalized_bundle"][
-            "provenance_sha256"
-        ]
-        == pipeline.sha256_file(finalized_root / "provenance.json")
-    )
+    assert value["payload"]["pilot_compatibility"]["finalized_bundle"][
+        "provenance_sha256"
+    ] == pipeline.sha256_file(finalized_root / "provenance.json")
 
     graph = {frozenset(pair) for pair in pairs}
     assert frozenset((pilot_ids[0], pilot_ids[2])) not in graph
@@ -1627,9 +1879,7 @@ def test_final_selection_is_recomputed_from_pilot_fit_and_compatibility(
         )
 
 
-def test_campaign_publication_is_two_stage_and_never_reuses_pilot_for_final(
-    monkeypatch, tmp_path
-):
+def test_campaign_publication_is_two_stage_and_never_reuses_pilot_for_final(monkeypatch, tmp_path):
     monkeypatch.setattr(util, "LAB_ROOT", tmp_path)
     layout = pipeline.class_study_layout()
     study_root = layout.study_config_root
@@ -1660,9 +1910,7 @@ def test_campaign_publication_is_two_stage_and_never_reuses_pilot_for_final(
         return {
             f"campaign-{index:02d}.yml": {
                 "evidence_role": role,
-                "class_study_cohort_assembly": kwargs[
-                    "cohort_assembly_reference"
-                ],
+                "class_study_cohort_assembly": kwargs["cohort_assembly_reference"],
             }
             for index, role in enumerate(roles)
         }
@@ -1713,8 +1961,7 @@ def test_launcher_rewrites_class_paths_and_never_mounts_workspace_rw():
     launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
     assert '"${image_id}" "${class_container_args[@]}"' in launcher
     assert (
-        "--pilot-cohort|--pilot-cohort-assembly|--final-cohort|"
-        "--final-cohort-assembly"
+        "--pilot-cohort|--pilot-cohort-assembly|--final-cohort|--final-cohort-assembly"
     ) in launcher
     assert "--acquisition-completion" in launcher
     assert "--final-selection" in launcher
@@ -1733,8 +1980,7 @@ def test_launcher_rewrites_class_paths_and_never_mounts_workspace_rw():
     assert ".class-study-acquisition.lock" in launcher
     assert "another class-study acquisition process holds the runner lock" in launcher
     assert (
-        "class-study qualify-prefix requires --foundation-attestation as a regular file"
-        in launcher
+        "class-study qualify-prefix requires --foundation-attestation as a regular file" in launcher
     )
     assert "class-study foundation build receipt digest changed" in launcher
     assert 'PREPARE_IMAGE="${class_qualification_fields[0]}"' in launcher

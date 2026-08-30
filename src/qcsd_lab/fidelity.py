@@ -52,24 +52,46 @@ ADVERTISEMENT_SCHEDULE_QCSD_FIELDS = LEGACY_SCHEDULE_QCSD_FIELDS + (
     "credit_advertised_at_us",
     "credit_advertisement_delay_us",
 )
-SCHEDULE_QCSD_FIELDS = ADVERTISEMENT_SCHEDULE_QCSD_FIELDS + (
+CONSUMPTION_SCHEDULE_QCSD_FIELDS = ADVERTISEMENT_SCHEDULE_QCSD_FIELDS + (
     "credit_consumed_at_us",
     "credit_consumption_delay_us",
 )
+SCHEDULE_QCSD_FIELDS = CONSUMPTION_SCHEDULE_QCSD_FIELDS + ("terminal_defense_elapsed_us",)
 DEFAULT_TIMESTAMP_TOLERANCE_NS = 10_000_000
 CLOCK_STEP_MIN_NS = 50_000_000
 BUFLO_INCOMING_CREDIT_ADVERTISEMENT_DELAY_LIMIT_US = 5_000
 BUFLO_TERMINAL_SUBCELL_POLICY = (
-    "drain_whole_cells_then_client_local_http3_cancel_"
-    "unallocatable_reviewed_chaff_tail"
+    "drain_whole_cells_then_client_local_http3_cancel_unallocatable_reviewed_chaff_tail"
 )
 BUFLO_TERMINAL_SUBCELL_OBSERVER_EFFECT = (
-    "typed_stop_sending_and_reset_stream_defense_control_may_follow_"
-    "the_last_exact_cell"
+    "typed_stop_sending_and_reset_stream_defense_control_may_follow_the_last_exact_cell"
 )
 BUFLO_TERMINAL_CONTROL_EVIDENCE_SEMANTICS = (
     "post-cancellation unscheduled packet composition proves defense-control "
     "bytes but does not expose individual QUIC frame identity"
+)
+BUFLO_SCHEDULE_STOP_POLICY = (
+    "stop_new_opportunities_at_first_terminal_whole_cell_capacity_exhaustion_"
+    "then_drain_already_advertised_incoming_credit"
+)
+BUFLO_SCHEDULE_STOP_TERMINAL_TIME_SEMANTICS = (
+    "exact_controller_terminal_resolution_duration_at_relative_to_defense_start_"
+    "floored_to_microseconds"
+)
+BUFLO_SCHEDULE_STOP_V4_INTEGER_KEYS = frozenset(
+    {
+        "buflo_schedule_stop_latched_at_us",
+        "buflo_schedule_stop_available_bytes",
+        "buflo_schedule_stop_required_bytes",
+        "buflo_schedule_stop_scheduled_incoming_cells",
+        "buflo_schedule_stop_scheduled_outgoing_cells",
+        "buflo_schedule_stop_terminal_incoming_cells",
+        "buflo_schedule_stop_terminal_outgoing_cells",
+    }
+)
+BUFLO_SCHEDULE_STOP_V4_BOOLEAN_KEYS = frozenset({"buflo_schedule_stop_latched"})
+BUFLO_SCHEDULE_STOP_V4_KEYS = (
+    BUFLO_SCHEDULE_STOP_V4_INTEGER_KEYS | BUFLO_SCHEDULE_STOP_V4_BOOLEAN_KEYS
 )
 CS_BUFLO_LOCAL_ET_V3_INTEGER_KEYS = frozenset(
     {
@@ -82,12 +104,8 @@ CS_BUFLO_LOCAL_ET_V3_INTEGER_KEYS = frozenset(
         "cs_buflo_post_local_et_natural_incoming_bytes",
     }
 )
-CS_BUFLO_LOCAL_ET_V3_BOOLEAN_KEYS = frozenset(
-    {"cs_buflo_local_et_before_application_complete"}
-)
-CS_BUFLO_LOCAL_ET_V3_KEYS = (
-    CS_BUFLO_LOCAL_ET_V3_INTEGER_KEYS | CS_BUFLO_LOCAL_ET_V3_BOOLEAN_KEYS
-)
+CS_BUFLO_LOCAL_ET_V3_BOOLEAN_KEYS = frozenset({"cs_buflo_local_et_before_application_complete"})
+CS_BUFLO_LOCAL_ET_V3_KEYS = CS_BUFLO_LOCAL_ET_V3_INTEGER_KEYS | CS_BUFLO_LOCAL_ET_V3_BOOLEAN_KEYS
 CS_BUFLO_STOP_DRAIN_V4_INTEGER_KEYS = frozenset(
     {
         "cs_buflo_early_termination_translation_version",
@@ -156,14 +174,95 @@ BUFLO_TERMINAL_STATE_V1_KEYS = frozenset(
         "implementation_scope",
     }
 )
-BUFLO_TERMINAL_STATE_KEYS = BUFLO_TERMINAL_STATE_V1_KEYS | {
+BUFLO_TERMINAL_STATE_V2_KEYS = BUFLO_TERMINAL_STATE_V1_KEYS | {
     "schema_version",
     "pending_application_parser_boundaries_at_latch",
 }
+BUFLO_TERMINAL_STATE_KEYS = BUFLO_TERMINAL_STATE_V2_KEYS | {"schedule_stop"}
+BUFLO_SCHEDULE_STOP_STATE_KEYS = frozenset(
+    {
+        "policy",
+        "terminal_time_semantics",
+        "latched",
+        "latched_at_us",
+        "available_bytes",
+        "required_bytes",
+        "directions",
+    }
+)
+BUFLO_SCHEDULE_STOP_DIRECTION_KEYS = frozenset(
+    {
+        "scheduled_cells_at_stop",
+        "terminal_cells_at_stop",
+        "drained_cells_after_stop",
+        "last_scheduled_target_us",
+        "last_terminal_at_us",
+        "terminal_cells_strictly_before_stop",
+        "terminal_cells_at_or_before_stop",
+        "terminal_cells_at_stop_timestamp",
+    }
+)
+
+
+def _buflo_schedule_stop_state_valid(value: Any, *, terminal_latched_at_us: int) -> bool:
+    """Validate derived schema-3 BuFLO stop-then-drain chronology."""
+
+    if not isinstance(value, Mapping) or set(value) != BUFLO_SCHEDULE_STOP_STATE_KEYS:
+        return False
+    stop_us = value.get("latched_at_us")
+    available = value.get("available_bytes")
+    required = value.get("required_bytes")
+    directions = value.get("directions")
+    if (
+        value.get("policy") != BUFLO_SCHEDULE_STOP_POLICY
+        or value.get("terminal_time_semantics") != BUFLO_SCHEDULE_STOP_TERMINAL_TIME_SEMANTICS
+        or value.get("latched") is not True
+        or type(stop_us) is not int
+        or stop_us < 10_000_000
+        or stop_us > terminal_latched_at_us
+        or type(available) is not int
+        or type(required) is not int
+        or required != 1_200
+        or not 0 <= available < required
+        or not isinstance(directions, Mapping)
+        or set(directions) != {"outgoing", "incoming"}
+    ):
+        return False
+    for direction in ("outgoing", "incoming"):
+        state = directions[direction]
+        if (
+            not isinstance(state, Mapping)
+            or set(state) != BUFLO_SCHEDULE_STOP_DIRECTION_KEYS
+            or any(type(state[key]) is not int or state[key] < 0 for key in state)
+        ):
+            return False
+        scheduled = state["scheduled_cells_at_stop"]
+        terminal = state["terminal_cells_at_stop"]
+        drained = state["drained_cells_after_stop"]
+        strictly_before = state["terminal_cells_strictly_before_stop"]
+        at_or_before = state["terminal_cells_at_or_before_stop"]
+        at_timestamp = state["terminal_cells_at_stop_timestamp"]
+        if (
+            scheduled == 0
+            or not 0 <= terminal <= scheduled
+            or drained != scheduled - terminal
+            or not 0 <= strictly_before <= terminal <= at_or_before <= scheduled
+            or at_timestamp != at_or_before - strictly_before
+            or state["last_scheduled_target_us"] > stop_us
+            or state["last_terminal_at_us"] > terminal_latched_at_us
+            or (direction == "outgoing" and drained != 0)
+        ):
+            return False
+    outgoing = directions["outgoing"]
+    incoming = directions["incoming"]
+    return bool(
+        outgoing["scheduled_cells_at_stop"] == incoming["scheduled_cells_at_stop"]
+        and outgoing["last_scheduled_target_us"] == incoming["last_scheduled_target_us"]
+    )
 
 
 def buflo_terminal_state_valid(value: Any) -> bool:
-    """Validate legacy implicit-v1 or current schema-2 BuFLO tail evidence."""
+    """Validate implicit-v1 or explicit schema-2/3 BuFLO tail evidence."""
 
     if not isinstance(value, Mapping):
         return False
@@ -173,8 +272,10 @@ def buflo_terminal_state_valid(value: Any) -> bool:
     expected_keys = (
         BUFLO_TERMINAL_STATE_V1_KEYS
         if schema_version == 1
-        else BUFLO_TERMINAL_STATE_KEYS
+        else BUFLO_TERMINAL_STATE_V2_KEYS
         if schema_version == 2
+        else BUFLO_TERMINAL_STATE_KEYS
+        if schema_version == 3
         else None
     )
     if expected_keys is None or set(value) != expected_keys:
@@ -193,7 +294,7 @@ def buflo_terminal_state_valid(value: Any) -> bool:
         "post_cancellation_unscheduled_defense_control_packets",
         "post_cancellation_unscheduled_defense_control_bytes",
     }
-    if schema_version == 2:
+    if schema_version in {2, 3}:
         integer_fields.add("pending_application_parser_boundaries_at_latch")
     if any(type(value[field]) is not int or value[field] < 0 for field in integer_fields):
         return False
@@ -202,18 +303,13 @@ def buflo_terminal_state_valid(value: Any) -> bool:
     last_exact = value["last_exact_outgoing_cell_monotonic_us"]
     last_scheduled = value["last_scheduled_terminal_monotonic_us"]
     cancellation = value["first_cancellation_monotonic_us"]
-    first_control = value[
-        "first_post_cancellation_defense_control_monotonic_us"
-    ]
+    first_control = value["first_post_cancellation_defense_control_monotonic_us"]
     last_control = value["last_post_cancellation_defense_control_monotonic_us"]
     common = (
         value["terminal_subcell_policy"] == BUFLO_TERMINAL_SUBCELL_POLICY
-        and value["terminal_subcell_observer_effect"]
-        == BUFLO_TERMINAL_SUBCELL_OBSERVER_EFFECT
+        and value["terminal_subcell_observer_effect"] == BUFLO_TERMINAL_SUBCELL_OBSERVER_EFFECT
         and value["pending_request_cancellations"] == 0
-        and streams
-        == value["receipt_cancellations"]
-        == value["typed_cancellation_action_events"]
+        and streams == value["receipt_cancellations"] == value["typed_cancellation_action_events"]
         and value["whole_cell_floor_bytes"] == 1_200
         and value["terminal_latched"] is True
         and value["terminal_latched_at_us"] >= 10_000_000
@@ -227,8 +323,7 @@ def buflo_terminal_state_valid(value: Any) -> bool:
         )
         and value["paper_equivalent"] is False
         and value["implementation_scope"] == "client_only_quic"
-        and value["control_evidence_semantics"]
-        == BUFLO_TERMINAL_CONTROL_EVIDENCE_SEMANTICS
+        and value["control_evidence_semantics"] == BUFLO_TERMINAL_CONTROL_EVIDENCE_SEMANTICS
         and type(last_exact) is int
         and last_exact >= 0
         and type(last_scheduled) is int
@@ -236,6 +331,10 @@ def buflo_terminal_state_valid(value: Any) -> bool:
         and value["terminal_latched_at_us"] >= last_scheduled
     )
     if not common:
+        return False
+    if schema_version == 3 and not _buflo_schedule_stop_state_valid(
+        value["schedule_stop"], terminal_latched_at_us=value["terminal_latched_at_us"]
+    ):
         return False
     if streams == 0:
         return bool(
@@ -247,6 +346,12 @@ def buflo_terminal_state_valid(value: Any) -> bool:
             and first_control is None
             and last_control is None
         )
+    # Schema 3 translates process-clock CSV microseconds into the defense
+    # clock.  Because the CSV value was floored before a potentially
+    # sub-microsecond-aligned defense-start offset was applied, its stored
+    # lower bound may be one microsecond below the diagnostic latch even when
+    # the underlying cancellation causally followed that latch.
+    cancellation_clock_slack_us = 1 if schema_version == 3 else 0
     return bool(
         0 <= capacity < 1_200
         and value["post_cancellation_unscheduled_defense_control_packets"] > 0
@@ -255,7 +360,7 @@ def buflo_terminal_state_valid(value: Any) -> bool:
         and type(first_control) is int
         and type(last_control) is int
         and max(last_scheduled, value["terminal_latched_at_us"])
-        <= cancellation
+        <= cancellation + cancellation_clock_slack_us
         <= first_control
         <= last_control
     )
@@ -266,20 +371,18 @@ def buflo_terminal_diagnostics_valid(
 ) -> bool:
     """Validate the version-inferred flat BuFLO terminal diagnostic contract."""
 
-    application_key = (
-        "buflo_terminal_subcell_pending_application_parser_boundaries_at_latch"
-    )
-    current = application_key in diagnostics
-    if require_current and not current:
+    application_key = "buflo_terminal_subcell_pending_application_parser_boundaries_at_latch"
+    parser_current = application_key in diagnostics
+    schedule_stop_present = BUFLO_SCHEDULE_STOP_V4_KEYS & set(diagnostics)
+    if schedule_stop_present and schedule_stop_present != BUFLO_SCHEDULE_STOP_V4_KEYS:
+        return False
+    stop_drain_current = schedule_stop_present == BUFLO_SCHEDULE_STOP_V4_KEYS
+    if require_current and (not parser_current or not stop_drain_current):
         return False
     streams = diagnostics.get("buflo_terminal_subcell_stream_cancellations")
     open_streams = diagnostics.get("buflo_terminal_subcell_open_streams_at_latch")
-    capacity = diagnostics.get(
-        "buflo_terminal_subcell_exact_capacity_bytes_cancelled"
-    )
-    total_boundaries = diagnostics.get(
-        "buflo_terminal_subcell_pending_parser_boundaries_at_latch"
-    )
+    capacity = diagnostics.get("buflo_terminal_subcell_exact_capacity_bytes_cancelled")
+    total_boundaries = diagnostics.get("buflo_terminal_subcell_pending_parser_boundaries_at_latch")
     integer_values = (streams, open_streams, capacity, total_boundaries)
     if any(type(value) is not int or value < 0 for value in integer_values):
         return False
@@ -288,13 +391,11 @@ def buflo_terminal_diagnostics_valid(
         or type(diagnostics.get("buflo_terminal_subcell_latched_at_us")) is not int
         or diagnostics["buflo_terminal_subcell_latched_at_us"] < 10_000_000
         or open_streams != streams
-        or diagnostics.get("buflo_terminal_subcell_parser_lease_bytes_at_latch")
-        != 0
-        or diagnostics.get("buflo_terminal_subcell_pending_request_cancellations")
-        != 0
+        or diagnostics.get("buflo_terminal_subcell_parser_lease_bytes_at_latch") != 0
+        or diagnostics.get("buflo_terminal_subcell_pending_request_cancellations") != 0
     ):
         return False
-    if current:
+    if parser_current:
         application_boundaries = diagnostics.get(application_key)
         if (
             type(application_boundaries) is not int
@@ -304,9 +405,38 @@ def buflo_terminal_diagnostics_valid(
             return False
     elif total_boundaries != 0:
         return False
-    return bool(
+    terminal_tail_valid = bool(
         (streams == 0 and capacity == 0 and total_boundaries == 0)
         or (streams > 0 and 0 <= capacity < 1_200)
+    )
+    if not terminal_tail_valid or not stop_drain_current:
+        return terminal_tail_valid
+    if any(
+        type(diagnostics.get(key)) is not int or diagnostics[key] < 0
+        for key in BUFLO_SCHEDULE_STOP_V4_INTEGER_KEYS
+    ):
+        return False
+    stop_us = diagnostics["buflo_schedule_stop_latched_at_us"]
+    available = diagnostics["buflo_schedule_stop_available_bytes"]
+    required = diagnostics["buflo_schedule_stop_required_bytes"]
+    scheduled_incoming = diagnostics["buflo_schedule_stop_scheduled_incoming_cells"]
+    scheduled_outgoing = diagnostics["buflo_schedule_stop_scheduled_outgoing_cells"]
+    terminal_incoming = diagnostics["buflo_schedule_stop_terminal_incoming_cells"]
+    terminal_outgoing = diagnostics["buflo_schedule_stop_terminal_outgoing_cells"]
+    return bool(
+        diagnostics.get("buflo_schedule_stop_latched") is True
+        and stop_us >= 10_000_000
+        and stop_us <= diagnostics["buflo_terminal_subcell_latched_at_us"]
+        and required == 1_200
+        and 0 <= available < required
+        and scheduled_incoming == diagnostics.get("buflo_scheduled_incoming_cells")
+        and scheduled_outgoing == diagnostics.get("buflo_scheduled_outgoing_cells")
+        and scheduled_incoming == scheduled_outgoing
+        and scheduled_outgoing > 0
+        and terminal_outgoing == scheduled_outgoing
+        and 0 <= terminal_incoming <= scheduled_incoming
+        and diagnostics.get("buflo_outgoing_unresolved_cells") == 0
+        and diagnostics.get("buflo_incoming_unresolved_cells") == 0
     )
 
 
@@ -323,13 +453,9 @@ def cs_buflo_local_et_handoff_valid(
     if any(
         type(diagnostics[key]) is not int or diagnostics[key] < 0
         for key in CS_BUFLO_LOCAL_ET_V3_INTEGER_KEYS
-    ) or any(
-        type(diagnostics[key]) is not bool for key in CS_BUFLO_LOCAL_ET_V3_BOOLEAN_KEYS
-    ):
+    ) or any(type(diagnostics[key]) is not bool for key in CS_BUFLO_LOCAL_ET_V3_BOOLEAN_KEYS):
         return False
-    before_application_complete = diagnostics[
-        "cs_buflo_local_et_before_application_complete"
-    ]
+    before_application_complete = diagnostics["cs_buflo_local_et_before_application_complete"]
     handoff_keys = (
         "cs_buflo_local_et_application_receive_streams_handed_off",
         "cs_buflo_local_et_application_parser_boundaries_handed_off",
@@ -347,12 +473,8 @@ def cs_buflo_local_et_handoff_valid(
         return False
     for direction in ("outgoing", "incoming"):
         final_natural = diagnostics.get(f"cs_buflo_natural_{direction}_bytes")
-        frozen_natural = diagnostics.get(
-            f"cs_buflo_{direction}_padding_basis_natural_bytes"
-        )
-        post_natural = diagnostics[
-            f"cs_buflo_post_local_et_natural_{direction}_bytes"
-        ]
+        frozen_natural = diagnostics.get(f"cs_buflo_{direction}_padding_basis_natural_bytes")
+        post_natural = diagnostics[f"cs_buflo_post_local_et_natural_{direction}_bytes"]
         real_bearing = diagnostics.get(f"cs_buflo_real_bearing_{direction}_bytes")
         if (
             type(final_natural) is not int
@@ -363,6 +485,8 @@ def cs_buflo_local_et_handoff_valid(
         ):
             return False
     return True
+
+
 CLOCK_STEP_MAX_NS = 100_000_000
 CLOCK_STEP_CONTEXT_PACKETS = 5
 CLOCK_EPOCH_MIN_PACKETS = 32
@@ -671,6 +795,7 @@ def _read_runner_packets(
         RUNNER_PACKET_FIELDS,
         RUNNER_PACKET_FIELDS + LEGACY_SCHEDULE_QCSD_FIELDS,
         RUNNER_PACKET_FIELDS + ADVERTISEMENT_SCHEDULE_QCSD_FIELDS,
+        RUNNER_PACKET_FIELDS + CONSUMPTION_SCHEDULE_QCSD_FIELDS,
         RUNNER_PACKET_FIELDS + SCHEDULE_QCSD_FIELDS,
     )
     if not rows:
@@ -990,28 +1115,45 @@ def _validate_qcsd_trace_extension(row: Mapping[str, str], *, label: str) -> Non
             raise ValueError(f"{label} has typed QCSD values without a schema version")
         return
     schema = values["qcsd_outcome_schema_version"]
-    if schema not in {"1", "2"}:
+    if schema not in {"1", "2", "3"}:
         raise ValueError(f"{label} has an unsupported QCSD outcome schema")
     advertisement_fields = (
         "credit_advertised_at_us",
         "credit_advertisement_delay_us",
     )
     consumption_fields = ("credit_consumed_at_us", "credit_consumption_delay_us")
+    terminal_field = "terminal_defense_elapsed_us"
     advertisement_present = any(values[field] for field in advertisement_fields)
     consumption_present = any(values[field] for field in consumption_fields)
-    advertisement_complete = all(
-        values[field].isdecimal() for field in advertisement_fields
-    )
+    advertisement_complete = all(values[field].isdecimal() for field in advertisement_fields)
     consumption_complete = all(values[field].isdecimal() for field in consumption_fields)
     if advertisement_present and not advertisement_complete:
         raise ValueError(f"{label} has incomplete receive-credit advertisement evidence")
     if consumption_present and not consumption_complete:
         raise ValueError(f"{label} has incomplete receive-credit consumption evidence")
-    if consumption_present and (schema != "2" or not advertisement_complete):
+    terminal_present = bool(values[terminal_field])
+    terminal_complete = values[terminal_field].isdecimal()
+    if terminal_present != (schema == "3") or (terminal_present and not terminal_complete):
+        raise ValueError(f"{label} has invalid controller terminal-time evidence")
+    if terminal_present and row.get("target_time_us") not in {None, ""}:
+        target = row["target_time_us"]
+        if (
+            not isinstance(target, str)
+            or not target.isdecimal()
+            or int(values[terminal_field]) < int(target)
+        ):
+            raise ValueError(f"{label} has a controller terminal time before its target")
+    if consumption_present and (schema not in {"2", "3"} or not advertisement_complete):
         raise ValueError(f"{label} has unbound receive-credit consumption evidence")
     if not values["send_policy"]:
         if any(values[field] for field in LEGACY_SCHEDULE_QCSD_FIELDS[1:]):
             raise ValueError(f"{label} has credit-only metadata mixed with an outcome")
+        if (
+            schema == "3"
+            and not consumption_present
+            and (not advertisement_present or advertisement_complete)
+        ):
+            return
         if schema != "2" or not advertisement_complete or consumption_present:
             raise ValueError(f"{label} has a schema-only row without typed evidence")
         return
@@ -1031,8 +1173,7 @@ def _validate_qcsd_trace_extension(row: Mapping[str, str], *, label: str) -> Non
     outcome_suffix = (*LEGACY_SCHEDULE_QCSD_FIELDS[4:11], "congestion_reason")
     if not observed_present and not incoming_credit_terminal:
         if any(
-            values[field]
-            for field in (*outcome_suffix, *advertisement_fields, *consumption_fields)
+            values[field] for field in (*outcome_suffix, *advertisement_fields, *consumption_fields)
         ):
             raise ValueError(f"{label} has terminal evidence before an observed size")
         # Serialized action rows carry their typed policy and desired size
@@ -1077,7 +1218,7 @@ def _validate_qcsd_trace_extension(row: Mapping[str, str], *, label: str) -> Non
     if values["congestion_reason"] not in {"", "congestion_limited", "pacing_limited"}:
         raise ValueError(f"{label} has an invalid QCSD congestion reason")
     if values["send_policy"] == "exact" and any(populated_components):
-        if schema != "2" or not values["lateness_us"].isdecimal():
+        if schema not in {"2", "3"} or not values["lateness_us"].isdecimal():
             raise ValueError(f"{label} has incomplete exact packet composition evidence")
     elif values["send_policy"] == "exact" and values["lateness_us"]:
         raise ValueError(f"{label} gives an exact outcome unexplained lateness")
@@ -1158,10 +1299,16 @@ def _schedule_realization_metrics_from_path(path: Path) -> dict[str, Any]:
     typed_schema = fieldnames in {
         SCHEDULE_PREFIX_FIELDS + LEGACY_SCHEDULE_QCSD_FIELDS,
         SCHEDULE_PREFIX_FIELDS + ADVERTISEMENT_SCHEDULE_QCSD_FIELDS,
+        SCHEDULE_PREFIX_FIELDS + CONSUMPTION_SCHEDULE_QCSD_FIELDS,
         SCHEDULE_PREFIX_FIELDS + SCHEDULE_QCSD_FIELDS,
     }
     advertisement_schema = fieldnames in {
         SCHEDULE_PREFIX_FIELDS + ADVERTISEMENT_SCHEDULE_QCSD_FIELDS,
+        SCHEDULE_PREFIX_FIELDS + CONSUMPTION_SCHEDULE_QCSD_FIELDS,
+        SCHEDULE_PREFIX_FIELDS + SCHEDULE_QCSD_FIELDS,
+    }
+    consumption_schema = fieldnames in {
+        SCHEDULE_PREFIX_FIELDS + CONSUMPTION_SCHEDULE_QCSD_FIELDS,
         SCHEDULE_PREFIX_FIELDS + SCHEDULE_QCSD_FIELDS,
     }
     current_schema = fieldnames == SCHEDULE_PREFIX_FIELDS + SCHEDULE_QCSD_FIELDS
@@ -1187,6 +1334,7 @@ def _schedule_realization_metrics_from_path(path: Path) -> dict[str, Any]:
     invalid_credit_consumptions = 0
     credit_advertisement_delays: list[int] = []
     credit_consumption_delays: list[int] = []
+    terminal_defense_elapsed_values: list[int] = []
     for row in rows:
         satisfaction = str(row.get("satisfaction", ""))
         direction = str(row.get("direction", ""))
@@ -1225,6 +1373,16 @@ def _schedule_realization_metrics_from_path(path: Path) -> dict[str, Any]:
                 scheduled_sizes[direction].append(_csv_uint(row, "size"))
             except (KeyError, TypeError, ValueError):
                 invalid_rows += 1
+        if current_schema:
+            try:
+                if row["qcsd_outcome_schema_version"] != "3":
+                    raise ValueError
+                terminal_at = _csv_uint(row, "terminal_defense_elapsed_us")
+                if terminal_at < _csv_uint(row, "target_time_us"):
+                    raise ValueError
+                terminal_defense_elapsed_values.append(terminal_at)
+            except (KeyError, TypeError, ValueError):
+                invalid_typed_rows += 1
         typed_reason = str(row.get("congestion_reason", ""))
         if satisfaction in {"partial", "suppressed"}:
             congestion_reasons[typed_reason] = congestion_reasons.get(typed_reason, 0) + 1
@@ -1270,19 +1428,15 @@ def _schedule_realization_metrics_from_path(path: Path) -> dict[str, Any]:
                     else:
                         advertised_incoming += 1
                         credit_advertisement_delays.append(delay_us)
-                if current_schema:
+                if consumption_schema:
                     if not consumed or not consumption_delay:
                         missing_incoming_consumptions += 1
                     else:
                         try:
                             consumed_at_us = _csv_uint(row, "credit_consumed_at_us")
-                            consumed_delay_us = _csv_uint(
-                                row, "credit_consumption_delay_us"
-                            )
+                            consumed_delay_us = _csv_uint(row, "credit_consumption_delay_us")
                             action_time_us = _csv_uint(row, "action_time_us")
-                            advertised_at_us = _csv_uint(
-                                row, "credit_advertised_at_us"
-                            )
+                            advertised_at_us = _csv_uint(row, "credit_advertised_at_us")
                             if (
                                 consumed_at_us < advertised_at_us
                                 or consumed_delay_us != consumed_at_us - action_time_us
@@ -1298,11 +1452,15 @@ def _schedule_realization_metrics_from_path(path: Path) -> dict[str, Any]:
                 desired = _csv_uint(row, "desired_udp_bytes")
                 size = _csv_uint(row, "size")
                 expected_schema = (
-                    "2"
+                    "3"
                     if current_schema
-                    and direction == "incoming"
-                    and satisfaction == "satisfied"
-                    else "1"
+                    else (
+                        "2"
+                        if consumption_schema
+                        and direction == "incoming"
+                        and satisfaction == "satisfied"
+                        else "1"
+                    )
                 )
                 if row["qcsd_outcome_schema_version"] != expected_schema or desired != size:
                     raise ValueError
@@ -1326,9 +1484,7 @@ def _schedule_realization_metrics_from_path(path: Path) -> dict[str, Any]:
                     if row["send_policy"] != "congestion_sensitive":
                         raise ValueError
                     observed = _csv_uint(row, "observed_udp_bytes")
-                    components = {
-                        key: _csv_uint(row, key) for key in typed_composition_bytes
-                    }
+                    components = {key: _csv_uint(row, key) for key in typed_composition_bytes}
                     if sum(components.values()) != observed:
                         raise ValueError
                     if satisfaction == "suppressed":
@@ -1341,9 +1497,7 @@ def _schedule_realization_metrics_from_path(path: Path) -> dict[str, Any]:
                     typed_lateness_total += lateness
                     typed_lateness_max = max(typed_lateness_max, lateness)
                     if direction == "outgoing" and components["application_stream_bytes"] > 0:
-                        typed_real_bearing_outgoing_bytes += components[
-                            "application_stream_bytes"
-                        ]
+                        typed_real_bearing_outgoing_bytes += components["application_stream_bytes"]
                     for key, value in components.items():
                         typed_composition_bytes[key] += value
                 else:
@@ -1385,7 +1539,8 @@ def _schedule_realization_metrics_from_path(path: Path) -> dict[str, Any]:
         "invalid_terminal_rows": invalid_rows,
         "typed_congestion_reason_column": current_schema,
         "typed_credit_advertisement_columns": advertisement_schema,
-        "typed_credit_consumption_columns": current_schema,
+        "typed_credit_consumption_columns": consumption_schema,
+        "typed_controller_terminal_time_column": current_schema,
         "invalid_congestion_reason_events": invalid_congestion_reasons,
         "congestion_reasons": dict(sorted(congestion_reasons.items())),
         "terminal_desired_outgoing_bytes": terminal_desired_bytes,
@@ -1402,18 +1557,13 @@ def _schedule_realization_metrics_from_path(path: Path) -> dict[str, Any]:
         "incoming_credit_consumption_missing_events": missing_incoming_consumptions,
         "invalid_credit_advertisement_events": invalid_credit_advertisements,
         "invalid_credit_consumption_events": invalid_credit_consumptions,
-        "incoming_credit_advertisement_delay_us_total": sum(
-            credit_advertisement_delays
-        ),
-        "incoming_credit_advertisement_delay_us_max": max(
-            credit_advertisement_delays, default=0
-        ),
+        "incoming_credit_advertisement_delay_us_total": sum(credit_advertisement_delays),
+        "incoming_credit_advertisement_delay_us_max": max(credit_advertisement_delays, default=0),
         "incoming_credit_advertisement_delay_us_values": credit_advertisement_delays,
         "incoming_credit_consumption_delay_us_total": sum(credit_consumption_delays),
-        "incoming_credit_consumption_delay_us_max": max(
-            credit_consumption_delays, default=0
-        ),
+        "incoming_credit_consumption_delay_us_max": max(credit_consumption_delays, default=0),
         "incoming_credit_consumption_delay_us_values": credit_consumption_delays,
+        "terminal_defense_elapsed_us_values": terminal_defense_elapsed_values,
         "target_times_us_by_direction": target_times,
         "scheduled_sizes_by_direction": scheduled_sizes,
     }
@@ -1431,16 +1581,11 @@ _BOOLEAN = "boolean"
 _STRING = "string"
 _BURST_VECTOR = "burst-vector"
 _CS_RATE_TRANSITION_VECTOR = "cs-rate-transition-vector"
-CS_BUFLO_LEGACY_EARLY_TERMINATION_SEMANTICS = (
-    "udp_client_only_observed_udp_power_of_two_crossing"
-)
+CS_BUFLO_LEGACY_EARLY_TERMINATION_SEMANTICS = "udp_client_only_observed_udp_power_of_two_crossing"
 CS_BUFLO_EARLY_TERMINATION_SEMANTICS = (
-    "client_only_outgoing_observed_udp_and_incoming_consumed_credit_"
-    "power_of_two_crossing"
+    "client_only_outgoing_observed_udp_and_incoming_consumed_credit_power_of_two_crossing"
 )
-CS_BUFLO_INCOMING_CADENCE_BOUNDARY = (
-    "complete_local_on_wire_max_stream_data_advertisement"
-)
+CS_BUFLO_INCOMING_CADENCE_BOUNDARY = "complete_local_on_wire_max_stream_data_advertisement"
 CS_BUFLO_INCOMING_TERMINAL_BOUNDARY = "eventual_peer_stream_offset_consumption"
 CS_BUFLO_INCOMING_BOUNDARY_SEPARATION = (
     "advertisement_rearms_cadence_but_does_not_claim_peer_datagram_or_consumption"
@@ -1458,12 +1603,8 @@ CS_BUFLO_TERMINATION_STOP_POLICY = (
     "stop_new_opportunities_at_first_eligible_padding_target_or_power_of_two_"
     "crossing_then_drain_advertised_credit_exactly_once"
 )
-CS_BUFLO_TERMINATION_STOP_REASONS = frozenset(
-    {"padding_target_reached", "power_of_two_crossing"}
-)
-CS_BUFLO_TERMINATION_STOP_PHASES = frozenset(
-    {"application_complete", "strict_quiet"}
-)
+CS_BUFLO_TERMINATION_STOP_REASONS = frozenset({"padding_target_reached", "power_of_two_crossing"})
+CS_BUFLO_TERMINATION_STOP_PHASES = frozenset({"application_complete", "strict_quiet"})
 RUNNER_WAKEUP_SEMANTICS = (
     "actual_select_return_source; socket_wins_simultaneous_readiness; "
     "controller_subset_is_effective_earliest_deadline; "
@@ -1521,6 +1662,7 @@ _DIAGNOSTIC_CONTRACTS: dict[str, dict[str, str]] = {
                 "buflo_terminal_subcell_parser_lease_bytes_at_latch",
                 "buflo_terminal_subcell_pending_parser_boundaries_at_latch",
                 "buflo_terminal_subcell_pending_application_parser_boundaries_at_latch",
+                *BUFLO_SCHEDULE_STOP_V4_INTEGER_KEYS,
             )
         },
         "buflo_paper_equivalent": _BOOLEAN,
@@ -1530,6 +1672,7 @@ _DIAGNOSTIC_CONTRACTS: dict[str, dict[str, str]] = {
         "buflo_minimum_duration_reached": _BOOLEAN,
         "buflo_event_guard_triggered": _BOOLEAN,
         "buflo_terminal_subcell_latched": _BOOLEAN,
+        "buflo_schedule_stop_latched": _BOOLEAN,
     },
     "cs-buflo": {
         **{
@@ -1734,19 +1877,20 @@ def _diagnostics_match_contract(defense: str, diagnostics: dict[str, Any]) -> bo
     elif defense == "buflo":
         selected = {key: value for key, value in diagnostics.items() if key.startswith("buflo_")}
     else:
-        selected = {
-            key: value for key, value in diagnostics.items() if key.startswith("cs_buflo_")
-        }
+        selected = {key: value for key, value in diagnostics.items() if key.startswith("cs_buflo_")}
     expected = set(contract)
     if defense == "buflo" and (
-        "buflo_terminal_subcell_pending_application_parser_boundaries_at_latch"
-        not in selected
+        "buflo_terminal_subcell_pending_application_parser_boundaries_at_latch" not in selected
     ):
         # Historical summary schema 2 predates the application/chaff parser-boundary
         # split.  Its single aggregate was required to be zero.
-        expected.remove(
-            "buflo_terminal_subcell_pending_application_parser_boundaries_at_latch"
-        )
+        expected.remove("buflo_terminal_subcell_pending_application_parser_boundaries_at_latch")
+    if defense == "buflo" and not (BUFLO_SCHEDULE_STOP_V4_KEYS & set(selected)):
+        # Historical summary schemas 2 and 3 predate the explicit
+        # stop-new-opportunities/then-drain receipt. Partial schema-4 evidence
+        # remains invalid because the exact-key comparison still requires all
+        # fields when any one of them is present.
+        expected -= BUFLO_SCHEDULE_STOP_V4_KEYS
     if defense == "cs-buflo" and not (CS_BUFLO_LOCAL_ET_V3_KEYS & set(selected)):
         # Historical summary schema 2 predates the explicit application-state
         # passthrough and post-local-ET natural-byte accounting contract.
@@ -1759,9 +1903,7 @@ def _diagnostics_match_contract(defense: str, diagnostics: dict[str, Any]) -> bo
         expected -= CS_BUFLO_STOP_DRAIN_V4_KEYS
     if set(selected) != expected:
         return False
-    return all(
-        _diagnostic_value_matches(contract[key], selected[key]) for key in expected
-    )
+    return all(_diagnostic_value_matches(contract[key], selected[key]) for key in expected)
 
 
 def _scheduled_incoming_diagnostics_match(diagnostics: dict[str, Any]) -> bool:
@@ -1857,13 +1999,15 @@ def _cs_buflo_rate_transition_vector_valid(value: Any) -> bool:
         if (
             transition.get("schema_version") != 1
             or direction not in direction_counts
-            or any(type(transition.get(field)) is not int or transition[field] < 0 for field in integer_fields)
+            or any(
+                type(transition.get(field)) is not int or transition[field] < 0
+                for field in integer_fields
+            )
             or type(transition.get("retained_current_interval")) is not bool
             or (median is not None and (type(median) is not int or median <= 0))
             or transition["at_us"] < prior_time
             or transition["eligible_samples"] > 1_000
-            or transition["boundary_bytes"]
-            != 16_384 << direction_counts[str(direction)]
+            or transition["boundary_bytes"] != 16_384 << direction_counts[str(direction)]
             or transition["real_bearing_bytes"] < transition["boundary_bytes"]
             or transition["previous_interval_us"] not in {4_096, 8_192, 16_384, 32_768}
             or transition["resulting_interval_us"] not in {4_096, 8_192, 16_384, 32_768}
@@ -1972,15 +2116,14 @@ def new_defense_terminal_receipts_valid(
                 "termination_stop_policy",
             }
         )
-    supported_summary_schemas = {2, 3} if defense_kind == "buflo" else {2, 3, 4}
+    if defense_kind == "buflo" and summary_schema == 4:
+        expected_fields.add("terminal_schedule_stop_policy")
+    supported_summary_schemas = {2, 3, 4}
     if (
         set(summary) != expected_fields
         or type(summary_schema) is not int
         or summary_schema not in supported_summary_schemas
-        or (
-            require_current_schema
-            and summary_schema != (3 if defense_kind == "buflo" else 4)
-        )
+        or (require_current_schema and summary_schema != 4)
         or summary.get("kind") != defense_kind
         or summary.get("implementation_scope") != "client_only_quic"
         or summary.get("paper_equivalent") is not False
@@ -1992,41 +2135,37 @@ def new_defense_terminal_receipts_valid(
     ):
         return False
     if defense_kind == "buflo":
-        current = summary_schema == 3
+        parser_current = summary_schema in {3, 4}
+        stop_drain_current = summary_schema == 4
+        stop_drain_present = bool(BUFLO_SCHEDULE_STOP_V4_KEYS & set(selected))
         responses = run.get("chaff_responses")
         receipt_cancellations = (
             sum(
                 isinstance(response, Mapping)
-                and response.get("outcome")
-                == "buflo_terminal_subcell_tail_cancelled"
+                and response.get("outcome") == "buflo_terminal_subcell_tail_cancelled"
                 for response in responses
             )
             if isinstance(responses, list)
             else None
         )
         return (
-            summary.get("terminal_subcell_policy")
-            == BUFLO_TERMINAL_SUBCELL_POLICY
+            summary.get("terminal_subcell_policy") == BUFLO_TERMINAL_SUBCELL_POLICY
             and summary.get("terminal_subcell_observer_effect")
             == BUFLO_TERMINAL_SUBCELL_OBSERVER_EFFECT
+            and (
+                not stop_drain_current
+                or summary.get("terminal_schedule_stop_policy") == BUFLO_SCHEDULE_STOP_POLICY
+            )
             and selected["buflo_client_only"] is True
-            and current
-            == (
-                "buflo_terminal_subcell_pending_application_parser_boundaries_at_latch"
-                in selected
-            )
-            and buflo_terminal_diagnostics_valid(
-                selected, require_current=current
-            )
+            and parser_current
+            == ("buflo_terminal_subcell_pending_application_parser_boundaries_at_latch" in selected)
+            and stop_drain_current == stop_drain_present
+            and buflo_terminal_diagnostics_valid(selected, require_current=stop_drain_current)
             and (
-                not current
-                or receipt_cancellations
-                == selected["buflo_terminal_subcell_stream_cancellations"]
+                not parser_current
+                or receipt_cancellations == selected["buflo_terminal_subcell_stream_cancellations"]
             )
-            and (
-                not require_application_complete
-                or selected["buflo_application_complete"] is True
-            )
+            and (not require_application_complete or selected["buflo_application_complete"] is True)
         )
     current = summary_schema in {3, 4}
     stop_drain_current = summary_schema == 4
@@ -2036,8 +2175,7 @@ def new_defense_terminal_receipts_valid(
         else CS_BUFLO_LEGACY_EARLY_TERMINATION_SEMANTICS
     )
     return (
-        summary.get("early_termination_semantics")
-        == early_termination_semantics
+        summary.get("early_termination_semantics") == early_termination_semantics
         and (
             not stop_drain_current
             or (
@@ -2048,23 +2186,17 @@ def new_defense_terminal_receipts_valid(
         )
         and (
             not stop_drain_current
-            or summary.get("termination_stop_policy")
-            == CS_BUFLO_TERMINATION_STOP_POLICY
+            or summary.get("termination_stop_policy") == CS_BUFLO_TERMINATION_STOP_POLICY
         )
-        and summary.get("incoming_cadence_boundary")
-        == CS_BUFLO_INCOMING_CADENCE_BOUNDARY
-        and summary.get("incoming_terminal_boundary")
-        == CS_BUFLO_INCOMING_TERMINAL_BOUNDARY
-        and summary.get("incoming_boundary_separation")
-        == CS_BUFLO_INCOMING_BOUNDARY_SEPARATION
-        and selected["cs_buflo_early_termination_semantics"]
-        == early_termination_semantics
+        and summary.get("incoming_cadence_boundary") == CS_BUFLO_INCOMING_CADENCE_BOUNDARY
+        and summary.get("incoming_terminal_boundary") == CS_BUFLO_INCOMING_TERMINAL_BOUNDARY
+        and summary.get("incoming_boundary_separation") == CS_BUFLO_INCOMING_BOUNDARY_SEPARATION
+        and selected["cs_buflo_early_termination_semantics"] == early_termination_semantics
         and selected["cs_buflo_client_only"] is True
         and selected["cs_buflo_quiet_time_reached"] is True
         and selected["cs_buflo_local_termination_latched"] is True
         and current == CS_BUFLO_LOCAL_ET_V3_KEYS.issubset(selected)
-        and stop_drain_current
-        == CS_BUFLO_STOP_DRAIN_V4_KEYS.issubset(selected)
+        and stop_drain_current == CS_BUFLO_STOP_DRAIN_V4_KEYS.issubset(selected)
         and (
             not stop_drain_current
             or (
@@ -2073,18 +2205,13 @@ def new_defense_terminal_receipts_valid(
                 and _cs_buflo_stop_drain_matches(selected)
             )
         )
-        and cs_buflo_local_et_handoff_valid(
-            selected, require_current=current
-        )
+        and cs_buflo_local_et_handoff_valid(selected, require_current=current)
         and (
             not current
             or selected["cs_buflo_application_complete"] is True
             or selected["cs_buflo_local_et_before_application_complete"] is True
         )
-        and (
-            not require_application_complete
-            or selected["cs_buflo_application_complete"] is True
-        )
+        and (not require_application_complete or selected["cs_buflo_application_complete"] is True)
     )
 
 
@@ -2115,9 +2242,7 @@ def _runner_wakeup_metrics_valid(value: Any) -> bool:
             "buflo_exact_release_max_guard_exit_lateness_nanoseconds",
         }
         semantics = (
-            RUNNER_WAKEUP_V2_SEMANTICS
-            if schema_version == 2
-            else RUNNER_WAKEUP_V3_SEMANTICS
+            RUNNER_WAKEUP_V2_SEMANTICS if schema_version == 2 else RUNNER_WAKEUP_V3_SEMANTICS
         )
     else:
         return False
@@ -2133,21 +2258,14 @@ def _runner_wakeup_metrics_valid(value: Any) -> bool:
             value["buflo_exact_release_max_passive_wake_lateness_nanoseconds"],
             value["buflo_exact_release_max_guard_exit_lateness_nanoseconds"],
         )
-        if (
-            value["buflo_exact_release_active_wait_nanoseconds"]
-            > value["buflo_exact_release_guard_wait_nanoseconds"]
-            or (
-                value["buflo_exact_release_guard_entries"] == 0
-                and any(guard_measurements)
-            )
-        ):
+        if value["buflo_exact_release_active_wait_nanoseconds"] > value[
+            "buflo_exact_release_guard_wait_nanoseconds"
+        ] or (value["buflo_exact_release_guard_entries"] == 0 and any(guard_measurements)):
             return False
     return (
-        value["wait_returns"]
-        == value["socket_readiness_wakeups"] + value["timer_wakeups"]
+        value["wait_returns"] == value["socket_readiness_wakeups"] + value["timer_wakeups"]
         and value["timer_wakeups"]
-        == value["controller_deadline_timer_wakeups"]
-        + value["other_timer_wakeups"]
+        == value["controller_deadline_timer_wakeups"] + value["other_timer_wakeups"]
     )
 
 
@@ -2283,6 +2401,9 @@ def _new_schedule_terminal_contract(
         and schedule.get("typed_congestion_reason_column") is True
         and schedule.get("typed_credit_advertisement_columns") is True
         and schedule.get("typed_credit_consumption_columns") is True
+        and schedule.get("typed_controller_terminal_time_column") is True
+        and len(schedule.get("terminal_defense_elapsed_us_values", ()))
+        == schedule.get("scheduled_events")
         and schedule.get("invalid_typed_outcome_rows") == 0
         and schedule.get("incoming_credit_missing_events") == 0
         and schedule.get("incoming_credit_consumption_missing_events") == 0
@@ -2293,9 +2414,7 @@ def _new_schedule_terminal_contract(
         return False
     if not congestion_sensitive:
         return True
-    return (
-        schedule.get("invalid_congestion_reason_events") == 0
-    )
+    return schedule.get("invalid_congestion_reason_events") == 0
 
 
 def _buflo_schedule_matches_canonical_parameters(schedule: Mapping[str, Any]) -> bool:
@@ -2344,8 +2463,7 @@ def _cs_buflo_fidelity_eligible(
     if (
         diagnostics["cs_buflo_paper_equivalent"] is not False
         or diagnostics["cs_buflo_client_only"] is not True
-        or diagnostics["cs_buflo_payload_padding"]
-        == diagnostics["cs_buflo_total_padding"]
+        or diagnostics["cs_buflo_payload_padding"] == diagnostics["cs_buflo_total_padding"]
         or diagnostics["cs_buflo_early_termination_semantics"]
         != expected_early_termination_semantics
         or diagnostics["cs_buflo_rate_boundary_translation_version"]
@@ -2374,12 +2492,8 @@ def _cs_buflo_fidelity_eligible(
     if any(diagnostics[key] != 0 for key in zero_keys):
         return False
     for direction in ("outgoing", "incoming"):
-        opportunities = diagnostics[
-            f"cs_buflo_{direction}_minimum_interval_opportunities"
-        ]
-        terminal_at_minimum = diagnostics[
-            f"cs_buflo_{direction}_minimum_interval_terminal"
-        ]
+        opportunities = diagnostics[f"cs_buflo_{direction}_minimum_interval_opportunities"]
+        terminal_at_minimum = diagnostics[f"cs_buflo_{direction}_minimum_interval_terminal"]
         full_at_minimum = diagnostics[f"cs_buflo_{direction}_minimum_interval_full"]
         if opportunities != terminal_at_minimum or full_at_minimum > terminal_at_minimum:
             return False
@@ -2405,8 +2519,7 @@ def _cs_buflo_fidelity_eligible(
         != schedule.get("scheduled_outgoing_events")
         or diagnostics["cs_buflo_scheduled_incoming_cells"]
         != schedule.get("scheduled_incoming_events")
-        or diagnostics["cs_buflo_scheduled_incoming_cells"]
-        != terminal.get("satisfied", 0)
+        or diagnostics["cs_buflo_scheduled_incoming_cells"] != terminal.get("satisfied", 0)
         or diagnostics["cs_buflo_incoming_local_realized_cells"]
         != diagnostics["cs_buflo_scheduled_incoming_cells"]
         or diagnostics["cs_buflo_desired_udp_bytes"]
@@ -2442,10 +2555,8 @@ def _cs_buflo_fidelity_eligible(
     )
     if (
         composition != diagnostics["cs_buflo_realized_udp_bytes"]
-        or diagnostics["cs_buflo_desired_udp_bytes"]
-        < diagnostics["cs_buflo_realized_udp_bytes"]
-        or diagnostics["cs_buflo_lateness_us_max"]
-        > diagnostics["cs_buflo_lateness_us_total"]
+        or diagnostics["cs_buflo_desired_udp_bytes"] < diagnostics["cs_buflo_realized_udp_bytes"]
+        or diagnostics["cs_buflo_lateness_us_max"] > diagnostics["cs_buflo_lateness_us_total"]
     ):
         return False
     typed_composition = schedule.get("typed_composition_bytes")
@@ -2554,26 +2665,19 @@ def _cs_buflo_stop_drain_matches(diagnostics: Mapping[str, Any]) -> bool:
         present != CS_BUFLO_STOP_DRAIN_V4_KEYS
         or diagnostics["cs_buflo_early_termination_translation_version"]
         != CS_BUFLO_EARLY_TERMINATION_TRANSLATION_VERSION
-        or diagnostics["cs_buflo_termination_stop_policy"]
-        != CS_BUFLO_TERMINATION_STOP_POLICY
+        or diagnostics["cs_buflo_termination_stop_policy"] != CS_BUFLO_TERMINATION_STOP_POLICY
     ):
         return False
 
     for direction in ("outgoing", "incoming"):
-        latched = diagnostics[
-            f"cs_buflo_{direction}_termination_stop_latched"
-        ]
-        crossing_total = diagnostics[
-            f"cs_buflo_{direction}_termination_stop_crossing_total_bytes"
-        ]
+        latched = diagnostics[f"cs_buflo_{direction}_termination_stop_latched"]
+        crossing_total = diagnostics[f"cs_buflo_{direction}_termination_stop_crossing_total_bytes"]
         crossing_increment = diagnostics[
             f"cs_buflo_{direction}_termination_stop_crossing_increment_bytes"
         ]
         reason = diagnostics[f"cs_buflo_{direction}_termination_stop_reason"]
         phase = diagnostics[f"cs_buflo_{direction}_termination_stop_phase"]
-        latched_at_us = diagnostics[
-            f"cs_buflo_{direction}_termination_stop_latched_at_us"
-        ]
+        latched_at_us = diagnostics[f"cs_buflo_{direction}_termination_stop_latched_at_us"]
         scheduled_at_stop = diagnostics[
             f"cs_buflo_{direction}_termination_stop_scheduled_cells_at_stop"
         ]
@@ -2589,9 +2693,7 @@ def _cs_buflo_stop_drain_matches(diagnostics: Mapping[str, Any]) -> bool:
         provisional_invalidations = diagnostics[
             f"cs_buflo_{direction}_termination_stop_provisional_invalidation_count"
         ]
-        final_total = diagnostics[
-            f"cs_buflo_{direction}_termination_accounted_bytes"
-        ]
+        final_total = diagnostics[f"cs_buflo_{direction}_termination_accounted_bytes"]
         target = diagnostics[f"cs_buflo_{direction}_padding_target_bytes"]
         final_scheduled = diagnostics[f"cs_buflo_scheduled_{direction}_cells"]
         unresolved = diagnostics[f"cs_buflo_{direction}_unresolved_cells"]
@@ -2602,9 +2704,7 @@ def _cs_buflo_stop_drain_matches(diagnostics: Mapping[str, Any]) -> bool:
             and type(crossing_increment) is int
             and 0 < crossing_total <= final_total
             and crossing_total > crossing_increment
-            and _cs_buflo_power_of_two_crossed(
-                crossing_total, crossing_increment
-            )
+            and _cs_buflo_power_of_two_crossed(crossing_total, crossing_increment)
         )
         if (
             latched is not True
@@ -2641,10 +2741,7 @@ def _cs_buflo_stop_drain_matches(diagnostics: Mapping[str, Any]) -> bool:
                 reason == "padding_target_reached"
                 and (not no_crossing_evidence or progress_at_stop < target_at_stop)
             )
-            or (
-                reason == "power_of_two_crossing"
-                and not crossing_evidence
-            )
+            or (reason == "power_of_two_crossing" and not crossing_evidence)
         ):
             return False
     return True
@@ -2661,16 +2758,11 @@ def _cs_buflo_padding_targets_match(diagnostics: Mapping[str, Any]) -> bool:
     """
 
     for direction in ("outgoing", "incoming"):
-        frozen_natural = diagnostics[
-            f"cs_buflo_{direction}_padding_basis_natural_bytes"
-        ]
+        frozen_natural = diagnostics[f"cs_buflo_{direction}_padding_basis_natural_bytes"]
         frozen_cover = diagnostics[f"cs_buflo_{direction}_padding_basis_cover_bytes"]
-        post_natural = diagnostics.get(
-            f"cs_buflo_post_local_et_natural_{direction}_bytes", 0
-        )
+        post_natural = diagnostics.get(f"cs_buflo_post_local_et_natural_{direction}_bytes", 0)
         if (
-            diagnostics[f"cs_buflo_natural_{direction}_bytes"]
-            != frozen_natural + post_natural
+            diagnostics[f"cs_buflo_natural_{direction}_bytes"] != frozen_natural + post_natural
             or diagnostics[f"cs_buflo_cover_{direction}_bytes"] < frozen_cover
         ):
             return False
@@ -2689,8 +2781,7 @@ def _cs_buflo_padding_targets_match(diagnostics: Mapping[str, Any]) -> bool:
             diagnostics["cs_buflo_incoming_termination_accounted_bytes"],
             diagnostics["cs_buflo_incoming_last_termination_increment_bytes"],
         )
-        or
-        diagnostics["cs_buflo_realized_udp_bytes"]
+        or diagnostics["cs_buflo_realized_udp_bytes"]
         < diagnostics["cs_buflo_outgoing_padding_basis_total_bytes"]
         or diagnostics["cs_buflo_realized_incoming_credit_bytes"]
         < diagnostics["cs_buflo_incoming_padding_basis_total_bytes"]

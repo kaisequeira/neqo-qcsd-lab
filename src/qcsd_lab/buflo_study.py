@@ -35,6 +35,8 @@ from typing import Any
 import yaml
 
 from .fidelity import (
+    BUFLO_SCHEDULE_STOP_POLICY,
+    BUFLO_SCHEDULE_STOP_TERMINAL_TIME_SEMANTICS,
     BUFLO_TERMINAL_CONTROL_EVIDENCE_SEMANTICS,
     BUFLO_TERMINAL_SUBCELL_OBSERVER_EFFECT,
     BUFLO_TERMINAL_SUBCELL_POLICY,
@@ -8812,8 +8814,59 @@ def _aggregate_controlled_buflo_terminal_subcells(
         int(value["post_cancellation_unscheduled_defense_control_bytes"])
         for value in values
     ]
+    schedule_stop = None
+    if state_version == 3:
+        stops = [value["schedule_stop"] for value in values]
+        direction_totals: dict[str, Any] = {}
+        for direction in ("outgoing", "incoming"):
+            states = [stop["directions"][direction] for stop in stops]
+            direction_totals[direction] = {
+                **{
+                    field: sum(int(state[field]) for state in states)
+                    for field in (
+                        "scheduled_cells_at_stop",
+                        "terminal_cells_at_stop",
+                        "drained_cells_after_stop",
+                        "terminal_cells_strictly_before_stop",
+                        "terminal_cells_at_or_before_stop",
+                        "terminal_cells_at_stop_timestamp",
+                    )
+                },
+                "last_scheduled_target_us": {
+                    "minimum": min(int(state["last_scheduled_target_us"]) for state in states),
+                    "maximum": max(int(state["last_scheduled_target_us"]) for state in states),
+                },
+                "last_terminal_at_us": {
+                    "minimum": min(int(state["last_terminal_at_us"]) for state in states),
+                    "maximum": max(int(state["last_terminal_at_us"]) for state in states),
+                },
+            }
+        available = [int(stop["available_bytes"]) for stop in stops]
+        stop_times = [int(stop["latched_at_us"]) for stop in stops]
+        schedule_stop = {
+            "policy": BUFLO_SCHEDULE_STOP_POLICY,
+            "terminal_time_semantics": (
+                BUFLO_SCHEDULE_STOP_TERMINAL_TIME_SEMANTICS
+            ),
+            "latched_samples": sum(stop["latched"] is True for stop in stops),
+            "latched_at_us": {
+                "minimum": min(stop_times),
+                "maximum": max(stop_times),
+            },
+            "available_bytes": {
+                "total": sum(available),
+                "minimum": min(available),
+                "maximum": max(available),
+            },
+            "required_bytes": 1_200,
+            "samples_with_incoming_drain": sum(
+                int(stop["directions"]["incoming"]["drained_cells_after_stop"]) > 0
+                for stop in stops
+            ),
+            "directions": direction_totals,
+        }
     return {
-        "schema_version": 2 if state_version == 2 else 1,
+        "schema_version": state_version,
         "samples": len(values),
         "terminal_subcell_policy": BUFLO_TERMINAL_SUBCELL_POLICY,
         "terminal_subcell_observer_effect": BUFLO_TERMINAL_SUBCELL_OBSERVER_EFFECT,
@@ -8849,9 +8902,10 @@ def _aggregate_controlled_buflo_terminal_subcells(
                     for value in values
                 )
             }
-            if state_version == 2
+            if state_version in {2, 3}
             else {}
         ),
+        **({"schedule_stop": schedule_stop} if state_version == 3 else {}),
         "post_cancellation_unscheduled_defense_control_packets": sum(
             post_control_packets
         ),
@@ -9996,9 +10050,10 @@ def _validate_formal_performance_evidence(evaluation: Mapping[str, Any]) -> dict
             "classifier_input",
             "strata",
             "buflo_terminal_tail_strata",
+            "buflo_schedule_stop_strata",
             "cs_buflo_local_termination_strata",
         }
-        or algorithm.get("schema_version") != 2
+        or algorithm.get("schema_version") != 3
         or not isinstance(paired, list)
         or len(paired) != 1_000
         or not isinstance(summary, Mapping)
@@ -10417,6 +10472,139 @@ def _validate_formal_performance_evidence(evaluation: Mapping[str, Any]) -> dict
         total_tail_cancellations += streams
     if seen_tail_strata != expected_tail_strata or total_tail_samples != 500:
         raise ValueError("formal BuFLO terminal-tail coverage is incomplete")
+
+    schedule_stop_rows = algorithm.get("buflo_schedule_stop_strata")
+    schedule_stop_keys = {
+        "defense",
+        "workload_id",
+        "acquisition_block_index",
+        "samples",
+        "policy",
+        "terminal_time_semantics",
+        "latched_samples",
+        "latched_at_us",
+        "available_bytes",
+        "required_bytes",
+        "samples_with_incoming_drain",
+        "directions",
+    }
+    direction_keys = {
+        "scheduled_cells_at_stop",
+        "terminal_cells_at_stop",
+        "drained_cells_after_stop",
+        "last_scheduled_target_us",
+        "last_terminal_at_us",
+        "terminal_cells_strictly_before_stop",
+        "terminal_cells_at_or_before_stop",
+        "terminal_cells_at_stop_timestamp",
+    }
+    time_summary_keys = {"minimum", "maximum", "p50", "p90", "p95"}
+
+    def valid_time_summary(value: Any, *, minimum: int = 0) -> bool:
+        return bool(
+            isinstance(value, Mapping)
+            and set(value) == time_summary_keys
+            and all(
+                isinstance(value[field], (int, float))
+                and not isinstance(value[field], bool)
+                and math.isfinite(float(value[field]))
+                and float(value[field]) >= minimum
+                for field in time_summary_keys
+            )
+            and value["minimum"] <= value["p50"] <= value["p90"] <= value["p95"]
+            and value["p95"] <= value["maximum"]
+        )
+
+    seen_schedule_stop_strata: set[tuple[str, int]] = set()
+    total_schedule_stop_samples = 0
+    total_incoming_drained_cells = 0
+    if not isinstance(schedule_stop_rows, list) or len(schedule_stop_rows) != 50:
+        raise ValueError("formal BuFLO schedule-stop stratum inventory is not exact")
+    for row in schedule_stop_rows:
+        if not isinstance(row, Mapping) or set(row) != schedule_stop_keys:
+            raise ValueError("formal BuFLO schedule-stop stratum schema is not exact")
+        workload = row.get("workload_id")
+        block = row.get("acquisition_block_index")
+        key = (workload, block)
+        stop_times = row.get("latched_at_us")
+        available = row.get("available_bytes")
+        directions = row.get("directions")
+        if (
+            row.get("defense") != "buflo"
+            or key not in expected_tail_strata
+            or key in seen_schedule_stop_strata
+            or row.get("samples") != 10
+            or row.get("policy") != [BUFLO_SCHEDULE_STOP_POLICY]
+            or row.get("terminal_time_semantics")
+            != [BUFLO_SCHEDULE_STOP_TERMINAL_TIME_SEMANTICS]
+            or row.get("latched_samples") != 10
+            or row.get("required_bytes") != [1_200]
+            or type(row.get("samples_with_incoming_drain")) is not int
+            or not 0 <= row["samples_with_incoming_drain"] <= 10
+            or not valid_time_summary(stop_times, minimum=10_000_000)
+            or not isinstance(available, Mapping)
+            or set(available) != {"total", *time_summary_keys}
+            or type(available.get("total")) is not int
+            or not 0 <= available["total"] <= 11_990
+            or not valid_time_summary(
+                {field: available[field] for field in time_summary_keys}
+            )
+            or available["maximum"] >= 1_200
+            or not available["minimum"] * 10
+            <= available["total"]
+            <= available["maximum"] * 10
+            or not isinstance(directions, Mapping)
+            or set(directions) != {"outgoing", "incoming"}
+        ):
+            raise ValueError("formal BuFLO schedule-stop stratum identity is invalid")
+        seen_schedule_stop_strata.add(key)
+        for direction in ("outgoing", "incoming"):
+            state = directions[direction]
+            if not isinstance(state, Mapping) or set(state) != direction_keys:
+                raise ValueError("formal BuFLO schedule-stop direction schema is not exact")
+            integers = {
+                field: state.get(field)
+                for field in direction_keys
+                - {"last_scheduled_target_us", "last_terminal_at_us"}
+            }
+            scheduled = integers["scheduled_cells_at_stop"]
+            terminal = integers["terminal_cells_at_stop"]
+            drained = integers["drained_cells_after_stop"]
+            strictly_before = integers["terminal_cells_strictly_before_stop"]
+            at_or_before = integers["terminal_cells_at_or_before_stop"]
+            at_timestamp = integers["terminal_cells_at_stop_timestamp"]
+            if (
+                any(type(value) is not int or value < 0 for value in integers.values())
+                or scheduled == 0
+                or terminal + drained != scheduled
+                or not 0 <= strictly_before <= terminal <= at_or_before <= scheduled
+                or at_timestamp != at_or_before - strictly_before
+                or (direction == "outgoing" and drained != 0)
+                or not valid_time_summary(state.get("last_scheduled_target_us"))
+                or not valid_time_summary(state.get("last_terminal_at_us"))
+                or state["last_scheduled_target_us"]["maximum"]
+                > stop_times["maximum"]
+            ):
+                raise ValueError("formal BuFLO schedule-stop direction evidence is invalid")
+        outgoing = directions["outgoing"]
+        incoming = directions["incoming"]
+        incoming_drained = incoming["drained_cells_after_stop"]
+        if (
+            outgoing["scheduled_cells_at_stop"]
+            != incoming["scheduled_cells_at_stop"]
+            or outgoing["last_scheduled_target_us"]
+            != incoming["last_scheduled_target_us"]
+            or (row["samples_with_incoming_drain"] == 0) != (incoming_drained == 0)
+            or incoming_drained < row["samples_with_incoming_drain"]
+        ):
+            raise ValueError("formal BuFLO schedule-stop cross-direction evidence is invalid")
+        total_schedule_stop_samples += int(row["samples"])
+        total_incoming_drained_cells += int(incoming_drained)
+    if (
+        seen_schedule_stop_strata != expected_tail_strata
+        or total_schedule_stop_samples != 500
+    ):
+        raise ValueError("formal BuFLO schedule-stop coverage is incomplete")
     return {
         "paired_visits": len(paired),
         "performance_strata": dict(expected_lengths),
@@ -10424,6 +10612,9 @@ def _validate_formal_performance_evidence(evaluation: Mapping[str, Any]) -> dict
         "buflo_terminal_tail_strata": len(tail_rows),
         "buflo_terminal_tail_samples": total_tail_samples,
         "buflo_terminal_tail_cancellations": total_tail_cancellations,
+        "buflo_schedule_stop_strata": len(schedule_stop_rows),
+        "buflo_schedule_stop_samples": total_schedule_stop_samples,
+        "buflo_schedule_stop_incoming_drained_cells": total_incoming_drained_cells,
         "cs_buflo_local_termination_strata": len(cs_local_et_rows),
         "paired_client_metrics": sorted(required_costs),
         "passed": True,

@@ -6,6 +6,7 @@ from copy import deepcopy
 import pytest
 
 from qcsd_lab.fidelity import (
+    CONSUMPTION_SCHEDULE_QCSD_FIELDS,
     SCHEDULE_QCSD_FIELDS,
     _schedule_realization_metrics,
     _scheduled_incoming_diagnostics_match,
@@ -16,12 +17,13 @@ from qcsd_lab.fidelity import (
 )
 
 
-def test_current_qcsd_trace_suffix_is_source_stable_v2() -> None:
-    assert SCHEDULE_QCSD_FIELDS[-4:] == (
+def test_current_qcsd_trace_suffix_is_source_stable_v3() -> None:
+    assert SCHEDULE_QCSD_FIELDS[-5:] == (
         "credit_advertised_at_us",
         "credit_advertisement_delay_us",
         "credit_consumed_at_us",
         "credit_consumption_delay_us",
+        "terminal_defense_elapsed_us",
     )
 
 
@@ -30,14 +32,16 @@ def test_incoming_exact_terminal_is_receive_credit_not_udp_realization() -> None
     row.update(
         {
             "direction": "incoming",
+            "target_time_us": "0",
             "action_time_us": "0",
-            "qcsd_outcome_schema_version": "2",
+            "qcsd_outcome_schema_version": "3",
             "send_policy": "exact",
             "desired_udp_bytes": "1200",
             "credit_advertised_at_us": "100",
             "credit_advertisement_delay_us": "100",
             "credit_consumed_at_us": "500",
             "credit_consumption_delay_us": "500",
+            "terminal_defense_elapsed_us": "500",
         }
     )
     _validate_qcsd_trace_extension(row, label="incoming schedule row")
@@ -53,11 +57,13 @@ def test_incoming_exact_terminal_is_receive_credit_not_udp_realization() -> None
     }
     row.update({field: "" for field in credit})
     row["qcsd_outcome_schema_version"] = "1"
+    row["terminal_defense_elapsed_us"] = ""
     row["observed_udp_bytes"] = "1200"
     _validate_qcsd_trace_extension(row, label="incoming observed packet row")
 
     row["observed_udp_bytes"] = ""
-    row["qcsd_outcome_schema_version"] = "2"
+    row["qcsd_outcome_schema_version"] = "3"
+    row["terminal_defense_elapsed_us"] = "500"
     row.update(credit)
     row["application_stream_bytes"] = "1"
     with pytest.raises(ValueError, match="receive-credit event UDP realization"):
@@ -463,6 +469,7 @@ def test_schedule_metrics_report_exact_realization_errors(tmp_path):
         "typed_congestion_reason_column": False,
         "typed_credit_advertisement_columns": False,
         "typed_credit_consumption_columns": False,
+        "typed_controller_terminal_time_column": False,
         "invalid_congestion_reason_events": 0,
         "congestion_reasons": {},
         "terminal_desired_outgoing_bytes": 0,
@@ -492,6 +499,7 @@ def test_schedule_metrics_report_exact_realization_errors(tmp_path):
         "incoming_credit_consumption_delay_us_total": 0,
         "incoming_credit_consumption_delay_us_max": 0,
         "incoming_credit_consumption_delay_us_values": [],
+        "terminal_defense_elapsed_us_values": [],
         "target_times_us_by_direction": {"outgoing": [], "incoming": []},
         "scheduled_sizes_by_direction": {
             "outgoing": [1_200, 1_200],
@@ -513,7 +521,9 @@ def test_runner_packet_reader_accepts_exact_nullable_qcsd_extension(tmp_path):
         "defense_control_bytes,quic_padding_bytes,other_quic_bytes,lateness_us,"
         "congestion_reason"
     )
-    packets.write_text("\n".join([rows[0] + extension, *(row + "," * 12 for row in rows[1:])]) + "\n")
+    packets.write_text(
+        "\n".join([rows[0] + extension, *(row + "," * 12 for row in rows[1:])]) + "\n"
+    )
 
     result = reconcile_direct_runner_artifacts(run, packets, trace)
 
@@ -526,6 +536,22 @@ def test_runner_packet_reader_accepts_current_nullable_qcsd_extension(tmp_path):
     rows = packets.read_text(encoding="utf-8").splitlines()
     header = rows[0] + "," + ",".join(SCHEDULE_QCSD_FIELDS)
     empty_suffix = "," * len(SCHEDULE_QCSD_FIELDS)
+    packets.write_text(
+        "\n".join([header, *(row + empty_suffix for row in rows[1:])]) + "\n",
+        encoding="utf-8",
+    )
+
+    result = reconcile_direct_runner_artifacts(run, packets, trace)
+
+    assert result.evidence_eligible is True
+    assert result.metrics["direct_runner_packets"] == 2
+
+
+def test_runner_packet_reader_accepts_historical_consumption_suffix(tmp_path):
+    run, packets, trace = _reconciliation_artifacts(tmp_path, tail_direction="incoming")
+    rows = packets.read_text(encoding="utf-8").splitlines()
+    header = rows[0] + "," + ",".join(CONSUMPTION_SCHEDULE_QCSD_FIELDS)
+    empty_suffix = "," * len(CONSUMPTION_SCHEDULE_QCSD_FIELDS)
     packets.write_text(
         "\n".join([header, *(row + empty_suffix for row in rows[1:])]) + "\n",
         encoding="utf-8",

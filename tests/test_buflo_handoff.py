@@ -26,7 +26,10 @@ from qcsd_lab.buflo_handoff import (
     validate_study_handoff,
 )
 from qcsd_lab.capture import ObserverPacket
-from qcsd_lab.fidelity import SCHEDULE_QCSD_FIELDS
+from qcsd_lab.fidelity import (
+    CONSUMPTION_SCHEDULE_QCSD_FIELDS,
+    SCHEDULE_QCSD_FIELDS,
+)
 from qcsd_lab.orchestrator import Workload, _redirect_attestation
 from qcsd_lab.verification import VerifiedResult
 
@@ -87,7 +90,10 @@ def _complete_buflo_run(
     stream_cancellations: int = 0,
     cancelled_capacity: int = 0,
     pending_parser_boundaries: int = 0,
+    terminal_incoming_at_stop: int | None = None,
 ) -> dict[str, object]:
+    if terminal_incoming_at_stop is None:
+        terminal_incoming_at_stop = scheduled_incoming
     diagnostics = {
         "buflo_scheduled_outgoing_cells": scheduled_outgoing,
         "buflo_scheduled_incoming_cells": scheduled_incoming,
@@ -107,10 +113,16 @@ def _complete_buflo_run(
         "buflo_terminal_subcell_latched_at_us": 10_000_001,
         "buflo_terminal_subcell_open_streams_at_latch": stream_cancellations,
         "buflo_terminal_subcell_parser_lease_bytes_at_latch": 0,
-        "buflo_terminal_subcell_pending_parser_boundaries_at_latch": (
-            pending_parser_boundaries
-        ),
+        "buflo_terminal_subcell_pending_parser_boundaries_at_latch": (pending_parser_boundaries),
         "buflo_terminal_subcell_pending_application_parser_boundaries_at_latch": 0,
+        "buflo_schedule_stop_latched": True,
+        "buflo_schedule_stop_latched_at_us": 10_000_000,
+        "buflo_schedule_stop_available_bytes": cancelled_capacity,
+        "buflo_schedule_stop_required_bytes": 1_200,
+        "buflo_schedule_stop_scheduled_incoming_cells": scheduled_incoming,
+        "buflo_schedule_stop_scheduled_outgoing_cells": scheduled_outgoing,
+        "buflo_schedule_stop_terminal_incoming_cells": terminal_incoming_at_stop,
+        "buflo_schedule_stop_terminal_outgoing_cells": scheduled_outgoing,
         "buflo_paper_equivalent": False,
         "buflo_client_only": True,
         "buflo_egress_backlog_pending": False,
@@ -121,6 +133,7 @@ def _complete_buflo_run(
     return {
         "completion_status": "complete",
         "error": None,
+        "defense_start_monotonic_ns": 0,
         "resolved_configuration": {
             "schema_version": 2,
             "defense": {"kind": "buflo"},
@@ -132,7 +145,7 @@ def _complete_buflo_run(
             for _ in range(stream_cancellations)
         ],
         "buflo_summary": {
-            "schema_version": 3,
+            "schema_version": 4,
             "kind": "buflo",
             "implementation_scope": "client_only_quic",
             "paper_equivalent": False,
@@ -144,12 +157,14 @@ def _complete_buflo_run(
                 "scheduled_server_datagram_size",
             ],
             "terminal_subcell_policy": (
-                "drain_whole_cells_then_client_local_http3_cancel_"
-                "unallocatable_reviewed_chaff_tail"
+                "drain_whole_cells_then_client_local_http3_cancel_unallocatable_reviewed_chaff_tail"
             ),
             "terminal_subcell_observer_effect": (
-                "typed_stop_sending_and_reset_stream_defense_control_may_follow_"
-                "the_last_exact_cell"
+                "typed_stop_sending_and_reset_stream_defense_control_may_follow_the_last_exact_cell"
+            ),
+            "terminal_schedule_stop_policy": (
+                "stop_new_opportunities_at_first_terminal_whole_cell_capacity_"
+                "exhaustion_then_drain_already_advertised_incoming_credit"
             ),
             "diagnostics": diagnostics,
         },
@@ -186,6 +201,8 @@ def _complete_cs_buflo_run() -> dict[str, object]:
             "cs_buflo_desired_udp_bytes": 600,
             "cs_buflo_realized_udp_bytes": 600,
             "cs_buflo_chaff_stream_bytes": 600,
+            "cs_buflo_lateness_us_total": 100,
+            "cs_buflo_lateness_us_max": 100,
             "cs_buflo_natural_outgoing_bytes": 500,
             "cs_buflo_natural_incoming_bytes": 300,
             "cs_buflo_cover_outgoing_bytes": 100,
@@ -229,9 +246,7 @@ def _complete_cs_buflo_run() -> dict[str, object]:
             "cs_buflo_local_et_latched_at_us": 300,
             "cs_buflo_local_et_before_application_complete": False,
             "cs_buflo_early_termination_translation_version": 2,
-            "cs_buflo_termination_stop_policy": (
-                fidelity_module.CS_BUFLO_TERMINATION_STOP_POLICY
-            ),
+            "cs_buflo_termination_stop_policy": (fidelity_module.CS_BUFLO_TERMINATION_STOP_POLICY),
             "cs_buflo_outgoing_termination_stop_latched": True,
             "cs_buflo_incoming_termination_stop_latched": True,
             "cs_buflo_outgoing_termination_stop_crossing_total_bytes": 1_200,
@@ -270,23 +285,18 @@ def _complete_cs_buflo_run() -> dict[str, object]:
             "scheduled_server_datagram_timing",
             "scheduled_server_datagram_size",
         ],
-        "early_termination_semantics": (
-            fidelity_module.CS_BUFLO_EARLY_TERMINATION_SEMANTICS
-        ),
+        "early_termination_semantics": (fidelity_module.CS_BUFLO_EARLY_TERMINATION_SEMANTICS),
         "early_termination_translation_version": 2,
         "termination_stop_policy": fidelity_module.CS_BUFLO_TERMINATION_STOP_POLICY,
         "incoming_cadence_boundary": fidelity_module.CS_BUFLO_INCOMING_CADENCE_BOUNDARY,
-        "incoming_terminal_boundary": (
-            fidelity_module.CS_BUFLO_INCOMING_TERMINAL_BOUNDARY
-        ),
-        "incoming_boundary_separation": (
-            fidelity_module.CS_BUFLO_INCOMING_BOUNDARY_SEPARATION
-        ),
+        "incoming_terminal_boundary": (fidelity_module.CS_BUFLO_INCOMING_TERMINAL_BOUNDARY),
+        "incoming_boundary_separation": (fidelity_module.CS_BUFLO_INCOMING_BOUNDARY_SEPARATION),
         "diagnostics": diagnostics,
     }
     return {
         "completion_status": "complete",
         "error": None,
+        "defense_start_monotonic_ns": 0,
         "resolved_configuration": {
             "schema_version": 2,
             "defense": {"kind": "cs_buflo"},
@@ -298,7 +308,9 @@ def _complete_cs_buflo_run() -> dict[str, object]:
     }
 
 
-def _formal_source_binding_fixture(tmp_path: Path) -> tuple[
+def _formal_source_binding_fixture(
+    tmp_path: Path,
+) -> tuple[
     Path,
     dict[str, object],
     list[dict[str, object]],
@@ -476,9 +488,7 @@ def test_public_formal_handoff_validation_rechecks_sources_when_not_deep(
         }
     )
     rows[0].update(schema_version=1, packet_count=0)
-    (root / "dataset.json").write_text(
-        json.dumps(dataset, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    (root / "dataset.json").write_text(json.dumps(dataset, sort_keys=True) + "\n", encoding="utf-8")
     (root / "samples.jsonl").write_text(
         json.dumps(rows[0], sort_keys=True, separators=(",", ":")) + "\n",
         encoding="utf-8",
@@ -620,6 +630,41 @@ def test_runner_extension_accepts_current_exact_packet_composition() -> None:
         _validate_runner_extension(row, label="packets.csv row")
 
 
+@pytest.mark.parametrize(
+    "suffix",
+    [
+        fidelity_module.LEGACY_SCHEDULE_QCSD_FIELDS,
+        fidelity_module.ADVERTISEMENT_SCHEDULE_QCSD_FIELDS,
+        fidelity_module.CONSUMPTION_SCHEDULE_QCSD_FIELDS,
+    ],
+)
+def test_extended_runner_reader_preserves_historical_headers(
+    tmp_path: Path,
+    suffix: tuple[str, ...],
+) -> None:
+    path = tmp_path / "schedule.csv"
+    fields = (*handoff.SCHEDULE_PREFIX_FIELDS, *suffix)
+    row = {field: "" for field in fields}
+    with path.open("w", newline="", encoding="utf-8") as destination:
+        writer = csv.DictWriter(destination, fieldnames=fields)
+        writer.writeheader()
+        writer.writerow(row)
+
+    rows = handoff._read_extended_runner_csv(
+        path,
+        handoff.SCHEDULE_PREFIX_FIELDS,
+        label="historical schedule.csv",
+        require_current_schema=False,
+    )
+    assert rows[0]["terminal_defense_elapsed_us"] == ""
+    with pytest.raises(ValueError, match="exact extended schema"):
+        handoff._read_extended_runner_csv(
+            path,
+            handoff.SCHEDULE_PREFIX_FIELDS,
+            label="current schedule.csv",
+        )
+
+
 @pytest.mark.parametrize("detailed", [False, True])
 def test_nonformal_handoff_closed_inventory(tmp_path: Path, detailed: bool) -> None:
     root = tmp_path / "handoff"
@@ -696,36 +741,77 @@ def test_nonformal_handoff_closed_inventory(tmp_path: Path, detailed: bool) -> N
         },
     }
     if detailed:
-        suffix = (
-            "qcsd_outcome_schema_version,send_policy,desired_udp_bytes,"
-            "observed_udp_bytes,application_stream_bytes,retransmission_stream_bytes,"
-            "chaff_stream_bytes,defense_control_bytes,quic_padding_bytes,other_quic_bytes,"
-            "lateness_us,congestion_reason,credit_advertised_at_us,"
-            "credit_advertisement_delay_us,credit_consumed_at_us,"
-            "credit_consumption_delay_us\n"
-        )
         schedule = root / "diagnostics/sample.schedule.csv"
         events = root / "diagnostics/sample.events.csv"
         packets = root / "diagnostics/sample.packets.csv"
-        schedule.write_text(
-            "target_time_us,direction,size,connection,action_time_us,satisfaction,"
-            "observed_size,miss_reason,slot_id,"
-            + suffix
-            + "0,outgoing,1200,0,0,satisfied,1200,,0,1,exact,1200,1200,,,,,,,,,,,,\n"
-            + "0,incoming,1200,0,0,satisfied,,,1,2,exact,1200,,,,,,,,,,100,100,500,500\n",
-            encoding="utf-8",
+        schedule_fields = (*handoff.SCHEDULE_PREFIX_FIELDS, *SCHEDULE_QCSD_FIELDS)
+        outgoing_schedule = {field: "" for field in schedule_fields}
+        outgoing_schedule.update(
+            target_time_us="0",
+            direction="outgoing",
+            size="1200",
+            connection="0",
+            action_time_us="0",
+            satisfaction="satisfied",
+            observed_size="1200",
+            slot_id="0",
+            qcsd_outcome_schema_version="3",
+            send_policy="exact",
+            desired_udp_bytes="1200",
+            observed_udp_bytes="1200",
+            terminal_defense_elapsed_us="0",
         )
-        events.write_text(
-            "monotonic_us,connection,event,outcome,details," + suffix,
-            encoding="utf-8",
+        incoming_schedule = {field: "" for field in schedule_fields}
+        incoming_schedule.update(
+            target_time_us="0",
+            direction="incoming",
+            size="1200",
+            connection="0",
+            action_time_us="0",
+            satisfaction="satisfied",
+            slot_id="1",
+            qcsd_outcome_schema_version="3",
+            send_policy="exact",
+            desired_udp_bytes="1200",
+            credit_advertised_at_us="100",
+            credit_advertisement_delay_us="100",
+            credit_consumed_at_us="500",
+            credit_consumption_delay_us="500",
+            terminal_defense_elapsed_us="500",
         )
-        packets.write_text(
-            "direction,monotonic_us,connection,observed_udp_length,scheduled_target,"
-            "satisfaction,slot_id,"
-            + suffix
-            + "outgoing,0,0,1200,1200,satisfied,0,2,exact,1200,1200,0,0,1200,0,0,0,0,,,,,\n",
-            encoding="utf-8",
+        with schedule.open("w", newline="", encoding="utf-8") as destination:
+            writer = csv.DictWriter(destination, fieldnames=schedule_fields)
+            writer.writeheader()
+            writer.writerows([outgoing_schedule, incoming_schedule])
+        event_fields = (*handoff._EVENT_PREFIX_FIELDS, *SCHEDULE_QCSD_FIELDS)
+        with events.open("w", newline="", encoding="utf-8") as destination:
+            csv.DictWriter(destination, fieldnames=event_fields).writeheader()
+        packet_fields = (*handoff._PACKET_PREFIX_FIELDS, *SCHEDULE_QCSD_FIELDS)
+        packet = {field: "" for field in packet_fields}
+        packet.update(
+            direction="outgoing",
+            monotonic_us="0",
+            connection="0",
+            observed_udp_length="1200",
+            scheduled_target="1200",
+            satisfaction="satisfied",
+            slot_id="0",
+            qcsd_outcome_schema_version="2",
+            send_policy="exact",
+            desired_udp_bytes="1200",
+            observed_udp_bytes="1200",
+            application_stream_bytes="0",
+            retransmission_stream_bytes="0",
+            chaff_stream_bytes="1200",
+            defense_control_bytes="0",
+            quic_padding_bytes="0",
+            other_quic_bytes="0",
+            lateness_us="0",
         )
+        with packets.open("w", newline="", encoding="utf-8") as destination:
+            writer = csv.DictWriter(destination, fieldnames=packet_fields)
+            writer.writeheader()
+            writer.writerow(packet)
         diagnostics_artifacts = {
             "runner_schedule_path": "diagnostics/sample.schedule.csv",
             "runner_events_path": "diagnostics/sample.events.csv",
@@ -830,12 +916,31 @@ def test_buflo_algorithm_diagnostics_bind_typed_tail_action_and_control_packet(
         satisfaction="satisfied",
         observed_size="1200",
         slot_id="1",
-        qcsd_outcome_schema_version="1",
+        qcsd_outcome_schema_version="3",
         send_policy="exact",
         desired_udp_bytes="1200",
         observed_udp_bytes="1200",
+        terminal_defense_elapsed_us="4999",
     )
-    write_rows(schedule, schedule_fields, [schedule_row])
+    incoming_schedule_row = {field: "" for field in schedule_fields}
+    incoming_schedule_row.update(
+        target_time_us="0",
+        direction="incoming",
+        size="1200",
+        connection="0",
+        action_time_us="0",
+        satisfaction="satisfied",
+        slot_id="2",
+        qcsd_outcome_schema_version="3",
+        send_policy="exact",
+        desired_udp_bytes="1200",
+        credit_advertised_at_us="0",
+        credit_advertisement_delay_us="0",
+        credit_consumed_at_us="10000001",
+        credit_consumption_delay_us="10000001",
+        terminal_defense_elapsed_us="10000001",
+    )
+    write_rows(schedule, schedule_fields, [schedule_row, incoming_schedule_row])
 
     event_fields = (*handoff._EVENT_PREFIX_FIELDS, *SCHEDULE_QCSD_FIELDS)
     event_row = {field: "" for field in event_fields}
@@ -860,7 +965,7 @@ def test_buflo_algorithm_diagnostics_bind_typed_tail_action_and_control_packet(
     exact_packet = {field: "" for field in packet_fields}
     exact_packet.update(
         direction="outgoing",
-        monotonic_us="9999990",
+        monotonic_us="4999",
         connection="0",
         observed_udp_length="1200",
         scheduled_target="1200",
@@ -901,9 +1006,10 @@ def test_buflo_algorithm_diagnostics_bind_typed_tail_action_and_control_packet(
 
     run = _complete_buflo_run(
         scheduled_outgoing=1,
-        scheduled_incoming=0,
+        scheduled_incoming=1,
         stream_cancellations=1,
         cancelled_capacity=1_199,
+        terminal_incoming_at_stop=0,
     )
     algorithm = _algorithm_diagnostics(
         run,
@@ -913,26 +1019,184 @@ def test_buflo_algorithm_diagnostics_bind_typed_tail_action_and_control_packet(
         events_path=events,
         packets_path=packets,
     )
-    assert algorithm["schema_version"] == 3
-    assert algorithm["buflo_state"]["schema_version"] == 2
-    assert algorithm["buflo_state"]["typed_cancellation_action_events"] == 1
+    assert algorithm["schema_version"] == 4
+    assert algorithm["buflo_state"]["schema_version"] == 3
     assert (
-        algorithm["buflo_state"][
-            "post_cancellation_unscheduled_defense_control_packets"
+        algorithm["buflo_state"]["schedule_stop"]["directions"]["outgoing"][
+            "drained_cells_after_stop"
+        ]
+        == 0
+    )
+    assert (
+        algorithm["buflo_state"]["schedule_stop"]["terminal_time_semantics"]
+        == fidelity_module.BUFLO_SCHEDULE_STOP_TERMINAL_TIME_SEMANTICS
+    )
+    assert (
+        algorithm["buflo_state"]["schedule_stop"]["directions"]["incoming"][
+            "drained_cells_after_stop"
         ]
         == 1
     )
-    assert (
-        algorithm["buflo_state"][
-            "post_cancellation_unscheduled_defense_control_bytes"
-        ]
-        == 4
+    assert algorithm["buflo_state"]["typed_cancellation_action_events"] == 1
+    assert algorithm["buflo_state"]["post_cancellation_unscheduled_defense_control_packets"] == 1
+    assert algorithm["buflo_state"]["post_cancellation_unscheduled_defense_control_bytes"] == 4
+
+    for _label, packet_rows in (
+        ("missing", [control_packet]),
+        ("duplicate", [exact_packet, dict(exact_packet), control_packet]),
+        (
+            "wrong slot",
+            [{**exact_packet, "slot_id": "99"}, control_packet],
+        ),
+        (
+            "wrong direction",
+            [{**exact_packet, "direction": "incoming"}, control_packet],
+        ),
+        (
+            "wrong target",
+            [{**exact_packet, "scheduled_target": "1199"}, control_packet],
+        ),
+        (
+            "wrong observed UDP length",
+            [{**exact_packet, "observed_udp_length": "1199"}, control_packet],
+        ),
+        (
+            "missing packet composition",
+            [
+                {
+                    **exact_packet,
+                    **{
+                        field: ""
+                        for field in (*handoff._COMPOSITION_FIELDS, "lateness_us")
+                    },
+                },
+                control_packet,
+            ],
+        ),
+        (
+            "extra wrong-policy scheduled packet",
+            [
+                exact_packet,
+                {
+                    **exact_packet,
+                    "monotonic_us": "9999991",
+                    "slot_id": "99",
+                    "send_policy": "congestion_sensitive",
+                },
+                control_packet,
+            ],
+        ),
+        (
+            "extra slot-only packet",
+            [{**control_packet, "slot_id": "99"}, exact_packet, control_packet],
+        ),
+        (
+            "unscheduled packet with exact policy",
+            [{**control_packet, "send_policy": "exact"}, exact_packet],
+        ),
+        (
+            "packet lateness at exclusive boundary",
+            [{**exact_packet, "lateness_us": "5000"}, control_packet],
+        ),
+        (
+            "post-stop",
+            [{**exact_packet, "monotonic_us": "10000001"}, control_packet],
+        ),
+    ):
+        write_rows(packets, packet_fields, packet_rows)
+        with pytest.raises(
+            ValueError,
+            match=(
+                "outgoing terminal packet|outgoing controller terminal time|"
+                "half-open realization window|"
+                "packet-build time follows controller terminalization|"
+                "stop/drain schedule chronology|incomplete scheduled packet identity|"
+                "scheduled incoming datagram|unscheduled packet a scheduled send policy"
+            ),
+        ):
+            _algorithm_diagnostics(
+                run,
+                defense="buflo",
+                runtime_kind="buflo",
+                schedule_path=schedule,
+                events_path=events,
+                packets_path=packets,
+            )
+    write_rows(packets, packet_fields, [exact_packet, control_packet])
+
+    late_schedule_row = dict(schedule_row)
+    late_schedule_row["terminal_defense_elapsed_us"] = "5000"
+    late_packet = {**exact_packet, "monotonic_us": "5000"}
+    write_rows(schedule, schedule_fields, [late_schedule_row, incoming_schedule_row])
+    write_rows(packets, packet_fields, [late_packet, control_packet])
+    with pytest.raises(ValueError, match="half-open realization window"):
+        _algorithm_diagnostics(
+            run,
+            defense="buflo",
+            runtime_kind="buflo",
+            schedule_path=schedule,
+            events_path=events,
+            packets_path=packets,
+        )
+    write_rows(schedule, schedule_fields, [schedule_row, incoming_schedule_row])
+    write_rows(packets, packet_fields, [exact_packet, control_packet])
+
+    offset_run = json.loads(json.dumps(run))
+    offset_run["defense_start_monotonic_ns"] = 21_827_440
+    offset_us = 21_828
+    offset_schedule_row = dict(schedule_row)
+    offset_schedule_row["action_time_us"] = str(offset_us)
+    offset_incoming = dict(incoming_schedule_row)
+    offset_incoming.update(
+        action_time_us=str(offset_us),
+        credit_advertised_at_us=str(offset_us),
+        credit_advertisement_delay_us="0",
+        credit_consumed_at_us=str(10_000_001 + offset_us),
+        credit_consumption_delay_us="10000001",
     )
+    offset_event = dict(event_row)
+    offset_event["monotonic_us"] = str(10_000_010 + offset_us)
+    offset_exact_packet = dict(exact_packet)
+    offset_exact_packet["monotonic_us"] = str(4_999 + offset_us)
+    offset_control_packet = dict(control_packet)
+    offset_control_packet["monotonic_us"] = str(10_000_020 + offset_us)
+    write_rows(schedule, schedule_fields, [offset_schedule_row, offset_incoming])
+    write_rows(events, event_fields, [offset_event])
+    write_rows(
+        packets,
+        packet_fields,
+        [offset_exact_packet, offset_control_packet],
+    )
+    offset_algorithm = _algorithm_diagnostics(
+        offset_run,
+        defense="buflo",
+        runtime_kind="buflo",
+        schedule_path=schedule,
+        events_path=events,
+        packets_path=packets,
+    )
+    offset_state = offset_algorithm["buflo_state"]
+    assert offset_state["last_exact_outgoing_cell_monotonic_us"] == 4_999
+    assert offset_state["last_scheduled_terminal_monotonic_us"] == 10_000_001
+    assert offset_state["schedule_stop"]["directions"]["incoming"]["drained_cells_after_stop"] == 1
+    write_rows(schedule, schedule_fields, [schedule_row, incoming_schedule_row])
+    write_rows(events, event_fields, [event_row])
+    write_rows(packets, packet_fields, [exact_packet, control_packet])
+
+    missing_clock = json.loads(json.dumps(run))
+    missing_clock.pop("defense_start_monotonic_ns")
+    with pytest.raises(ValueError, match="defense clock binding"):
+        _algorithm_diagnostics(
+            missing_clock,
+            defense="buflo",
+            runtime_kind="buflo",
+            schedule_path=schedule,
+            events_path=events,
+            packets_path=packets,
+        )
 
     current_summary_with_v2_wakeups = json.loads(json.dumps(run))
-    current_summary_with_v2_wakeups["runner_wakeup_metrics"] = (
-        _runner_wakeup_receipt(2)
-    )
+    current_summary_with_v2_wakeups["runner_wakeup_metrics"] = _runner_wakeup_receipt(2)
     with pytest.raises(ValueError, match="terminal-tail evidence is unavailable"):
         _algorithm_diagnostics(
             current_summary_with_v2_wakeups,
@@ -943,7 +1207,34 @@ def test_buflo_algorithm_diagnostics_bind_typed_tail_action_and_control_packet(
             packets_path=packets,
         )
 
-    legacy_run = json.loads(json.dumps(run))
+    historical_v3 = json.loads(json.dumps(run))
+    historical_v3["buflo_summary"]["schema_version"] = 3
+    historical_v3["buflo_summary"].pop("terminal_schedule_stop_policy")
+    for key in fidelity_module.BUFLO_SCHEDULE_STOP_V4_KEYS:
+        historical_v3["defense_diagnostics"].pop(key)
+        historical_v3["buflo_summary"]["diagnostics"].pop(key)
+    with pytest.raises(ValueError, match="terminal-tail evidence is unavailable"):
+        _algorithm_diagnostics(
+            historical_v3,
+            defense="buflo",
+            runtime_kind="buflo",
+            schedule_path=schedule,
+            events_path=events,
+            packets_path=packets,
+        )
+    historical_v3_algorithm = _algorithm_diagnostics(
+        historical_v3,
+        defense="buflo",
+        runtime_kind="buflo",
+        schedule_path=schedule,
+        events_path=events,
+        packets_path=packets,
+        require_current=False,
+    )
+    assert historical_v3_algorithm["schema_version"] == 3
+    assert historical_v3_algorithm["buflo_state"]["schema_version"] == 2
+
+    legacy_run = json.loads(json.dumps(historical_v3))
     legacy_run["runner_wakeup_metrics"] = _runner_wakeup_receipt(2)
     legacy_run["buflo_summary"]["schema_version"] = 2
     legacy_run["defense_diagnostics"].pop(
@@ -994,6 +1285,13 @@ def test_buflo_algorithm_diagnostics_bind_typed_tail_action_and_control_packet(
     for diagnostic, changed in (
         ("buflo_terminal_subcell_parser_lease_bytes_at_latch", 1),
         ("buflo_terminal_subcell_exact_capacity_bytes_cancelled", 1_200),
+        ("buflo_schedule_stop_latched", False),
+        ("buflo_schedule_stop_latched_at_us", 10_000_002),
+        ("buflo_schedule_stop_available_bytes", 1_200),
+        ("buflo_schedule_stop_required_bytes", 1_199),
+        ("buflo_schedule_stop_scheduled_incoming_cells", 2),
+        ("buflo_schedule_stop_terminal_incoming_cells", 2),
+        ("buflo_schedule_stop_terminal_outgoing_cells", 0),
     ):
         invalid_run = json.loads(json.dumps(run))
         invalid_run["defense_diagnostics"][diagnostic] = changed
@@ -1007,6 +1305,49 @@ def test_buflo_algorithm_diagnostics_bind_typed_tail_action_and_control_packet(
                 events_path=events,
                 packets_path=packets,
             )
+
+    partial_run = json.loads(json.dumps(run))
+    partial_run["defense_diagnostics"].pop("buflo_schedule_stop_available_bytes")
+    partial_run["buflo_summary"]["diagnostics"].pop("buflo_schedule_stop_available_bytes")
+    with pytest.raises(ValueError, match="terminal-tail evidence"):
+        _algorithm_diagnostics(
+            partial_run,
+            defense="buflo",
+            runtime_kind="buflo",
+            schedule_path=schedule,
+            events_path=events,
+            packets_path=packets,
+        )
+
+    drifted_policy = json.loads(json.dumps(run))
+    drifted_policy["buflo_summary"]["terminal_schedule_stop_policy"] = "drifted"
+    with pytest.raises(ValueError, match="terminal-tail evidence"):
+        _algorithm_diagnostics(
+            drifted_policy,
+            defense="buflo",
+            runtime_kind="buflo",
+            schedule_path=schedule,
+            events_path=events,
+            packets_path=packets,
+        )
+
+    incoming_schedule_row["credit_consumed_at_us"] = "10000002"
+    incoming_schedule_row["credit_consumption_delay_us"] = "10000002"
+    incoming_schedule_row["terminal_defense_elapsed_us"] = "10000002"
+    write_rows(schedule, schedule_fields, [schedule_row, incoming_schedule_row])
+    with pytest.raises(ValueError, match="terminal-tail evidence|stop/drain"):
+        _algorithm_diagnostics(
+            run,
+            defense="buflo",
+            runtime_kind="buflo",
+            schedule_path=schedule,
+            events_path=events,
+            packets_path=packets,
+        )
+    incoming_schedule_row["credit_consumed_at_us"] = "10000001"
+    incoming_schedule_row["credit_consumption_delay_us"] = "10000001"
+    incoming_schedule_row["terminal_defense_elapsed_us"] = "10000001"
+    write_rows(schedule, schedule_fields, [schedule_row, incoming_schedule_row])
 
     second_event = dict(event_row)
     second_event.update(
@@ -1024,9 +1365,10 @@ def test_buflo_algorithm_diagnostics_bind_typed_tail_action_and_control_packet(
     write_rows(events, event_fields, [event_row, second_event])
     two_stream_run = _complete_buflo_run(
         scheduled_outgoing=1,
-        scheduled_incoming=0,
+        scheduled_incoming=1,
         stream_cancellations=2,
         cancelled_capacity=1_199,
+        terminal_incoming_at_stop=0,
     )
     with pytest.raises(ValueError, match="terminal-tail evidence is inconsistent"):
         _algorithm_diagnostics(
@@ -1049,18 +1391,17 @@ def test_buflo_algorithm_diagnostics_bind_typed_tail_action_and_control_packet(
     )
     assert two_stream["buflo_state"]["stream_cancellations"] == 2
     assert (
-        two_stream["buflo_state"][
-            "first_post_cancellation_defense_control_monotonic_us"
-        ]
+        two_stream["buflo_state"]["first_post_cancellation_defense_control_monotonic_us"]
         == 10_000_040
     )
 
     retained_boundary_run = _complete_buflo_run(
         scheduled_outgoing=1,
-        scheduled_incoming=0,
+        scheduled_incoming=1,
         stream_cancellations=2,
         cancelled_capacity=624,
         pending_parser_boundaries=1,
+        terminal_incoming_at_stop=0,
     )
     retained_boundary = _algorithm_diagnostics(
         retained_boundary_run,
@@ -1070,12 +1411,8 @@ def test_buflo_algorithm_diagnostics_bind_typed_tail_action_and_control_packet(
         events_path=events,
         packets_path=packets,
     )
-    assert retained_boundary["buflo_state"][
-        "pending_parser_boundaries_at_latch"
-    ] == 1
-    assert retained_boundary["buflo_state"][
-        "pending_application_parser_boundaries_at_latch"
-    ] == 0
+    assert retained_boundary["buflo_state"]["pending_parser_boundaries_at_latch"] == 1
+    assert retained_boundary["buflo_state"]["pending_application_parser_boundaries_at_latch"] == 0
 
     for diagnostic, changed in (
         (
@@ -1105,9 +1442,7 @@ def test_cs_buflo_schema_four_handoff_reconstructs_stop_drain_and_preserves_lega
     events = tmp_path / "events.csv"
     packets = tmp_path / "packets.csv"
 
-    def write_rows(
-        path: Path, fields: tuple[str, ...], rows: list[dict[str, str]]
-    ) -> None:
+    def write_rows(path: Path, fields: tuple[str, ...], rows: list[dict[str, str]]) -> None:
         with path.open("w", newline="", encoding="utf-8") as destination:
             writer = csv.DictWriter(destination, fieldnames=fields)
             writer.writeheader()
@@ -1124,7 +1459,54 @@ def test_cs_buflo_schema_four_handoff_reconstructs_stop_drain_and_preserves_lega
         satisfaction="full",
         observed_size="600",
         slot_id="1",
-        qcsd_outcome_schema_version="1",
+        qcsd_outcome_schema_version="3",
+        send_policy="congestion_sensitive",
+        desired_udp_bytes="600",
+        observed_udp_bytes="600",
+        application_stream_bytes="0",
+        retransmission_stream_bytes="0",
+        chaff_stream_bytes="600",
+        defense_control_bytes="0",
+        quic_padding_bytes="0",
+        other_quic_bytes="0",
+        lateness_us="100",
+        terminal_defense_elapsed_us="150",
+    )
+    incoming = {field: "" for field in schedule_fields}
+    incoming.update(
+        target_time_us="50",
+        direction="incoming",
+        size="600",
+        connection="0",
+        action_time_us="50",
+        satisfaction="satisfied",
+        slot_id="2",
+        qcsd_outcome_schema_version="3",
+        send_policy="exact",
+        desired_udp_bytes="600",
+        credit_advertised_at_us="150",
+        credit_advertisement_delay_us="100",
+        credit_consumed_at_us="250",
+        credit_consumption_delay_us="200",
+        terminal_defense_elapsed_us="250",
+    )
+    write_rows(schedule, schedule_fields, [outgoing, incoming])
+    write_rows(
+        events,
+        (*handoff._EVENT_PREFIX_FIELDS, *SCHEDULE_QCSD_FIELDS),
+        [],
+    )
+    packet_fields = (*handoff._PACKET_PREFIX_FIELDS, *SCHEDULE_QCSD_FIELDS)
+    packet = {field: "" for field in packet_fields}
+    packet.update(
+        direction="outgoing",
+        monotonic_us="150",
+        connection="0",
+        observed_udp_length="600",
+        scheduled_target="600",
+        satisfaction="full",
+        slot_id="1",
+        qcsd_outcome_schema_version="2",
         send_policy="congestion_sensitive",
         desired_udp_bytes="600",
         observed_udp_bytes="600",
@@ -1136,34 +1518,7 @@ def test_cs_buflo_schema_four_handoff_reconstructs_stop_drain_and_preserves_lega
         other_quic_bytes="0",
         lateness_us="100",
     )
-    incoming = {field: "" for field in schedule_fields}
-    incoming.update(
-        target_time_us="50",
-        direction="incoming",
-        size="600",
-        connection="0",
-        action_time_us="50",
-        satisfaction="satisfied",
-        slot_id="2",
-        qcsd_outcome_schema_version="2",
-        send_policy="exact",
-        desired_udp_bytes="600",
-        credit_advertised_at_us="150",
-        credit_advertisement_delay_us="100",
-        credit_consumed_at_us="250",
-        credit_consumption_delay_us="200",
-    )
-    write_rows(schedule, schedule_fields, [outgoing, incoming])
-    write_rows(
-        events,
-        (*handoff._EVENT_PREFIX_FIELDS, *SCHEDULE_QCSD_FIELDS),
-        [],
-    )
-    write_rows(
-        packets,
-        (*handoff._PACKET_PREFIX_FIELDS, *SCHEDULE_QCSD_FIELDS),
-        [],
-    )
+    write_rows(packets, packet_fields, [packet])
 
     run = _complete_cs_buflo_run()
     current = _algorithm_diagnostics(
@@ -1199,19 +1554,29 @@ def test_cs_buflo_schema_four_handoff_reconstructs_stop_drain_and_preserves_lega
         }
 
     tied_outgoing = dict(outgoing)
-    tied_outgoing["action_time_us"] = "100"
+    tied_outgoing["terminal_defense_elapsed_us"] = "100"
+    tied_outgoing["lateness_us"] = "50"
+    tied_packet = dict(packet)
+    tied_packet["monotonic_us"] = "100"
+    tied_packet["lateness_us"] = "50"
     write_rows(schedule, schedule_fields, [tied_outgoing, incoming])
+    write_rows(packets, packet_fields, [tied_packet])
+    tied_run = json.loads(json.dumps(run))
+    for receipt in (
+        tied_run["defense_diagnostics"],
+        tied_run["cs_buflo_summary"]["diagnostics"],
+    ):
+        receipt["cs_buflo_lateness_us_total"] = 50
+        receipt["cs_buflo_lateness_us_max"] = 50
     tied = _algorithm_diagnostics(
-        run,
+        tied_run,
         defense="cs-buflo",
         runtime_kind="cs_buflo",
         schedule_path=schedule,
         events_path=events,
         packets_path=packets,
     )
-    assert tied["cs_buflo_state"]["directions"]["outgoing"][
-        "stop_drain_ledger"
-    ] == {
+    assert tied["cs_buflo_state"]["directions"]["outgoing"]["stop_drain_ledger"] == {
         "drained_cells_after_stop": 1,
         "last_scheduled_target_us": 50,
         "last_terminal_at_us": 100,
@@ -1220,11 +1585,212 @@ def test_cs_buflo_schema_four_handoff_reconstructs_stop_drain_and_preserves_lega
         "terminal_cells_at_stop_timestamp": 1,
     }
     write_rows(schedule, schedule_fields, [outgoing, incoming])
+    write_rows(packets, packet_fields, [packet])
+
+    before_target = dict(outgoing)
+    before_target["terminal_defense_elapsed_us"] = "49"
+    write_rows(schedule, schedule_fields, [before_target, incoming])
+    with pytest.raises(ValueError, match="terminal time predates its defense target"):
+        _algorithm_diagnostics(
+            run,
+            defense="cs-buflo",
+            runtime_kind="cs_buflo",
+            schedule_path=schedule,
+            events_path=events,
+            packets_path=packets,
+        )
 
     after_stop = dict(outgoing)
     after_stop["target_time_us"] = "101"
+    after_stop["terminal_defense_elapsed_us"] = "201"
+    after_stop_packet = dict(packet)
+    after_stop_packet["monotonic_us"] = "201"
     write_rows(schedule, schedule_fields, [after_stop, incoming])
+    write_rows(packets, packet_fields, [after_stop_packet])
     with pytest.raises(ValueError, match="stop/drain schedule chronology"):
+        _algorithm_diagnostics(
+            run,
+            defense="cs-buflo",
+            runtime_kind="cs_buflo",
+            schedule_path=schedule,
+            events_path=events,
+            packets_path=packets,
+        )
+    write_rows(schedule, schedule_fields, [outgoing, incoming])
+    write_rows(packets, packet_fields, [packet])
+
+    handoff_delayed_outgoing = dict(outgoing)
+    handoff_delayed_outgoing["terminal_defense_elapsed_us"] = "151"
+    handoff_delayed_packet = dict(packet)
+    handoff_delayed_packet["monotonic_us"] = "151"
+    write_rows(schedule, schedule_fields, [handoff_delayed_outgoing, incoming])
+    write_rows(packets, packet_fields, [handoff_delayed_packet])
+    assert (
+        _algorithm_diagnostics(
+            run,
+            defense="cs-buflo",
+            runtime_kind="cs_buflo",
+            schedule_path=schedule,
+            events_path=events,
+            packets_path=packets,
+        )["directions"]["outgoing"]["scheduling_lateness_us"]["maximum"]
+        == 100
+    )
+    write_rows(schedule, schedule_fields, [outgoing, incoming])
+    write_rows(packets, packet_fields, [packet])
+
+    timestamp_mismatch = dict(packet)
+    timestamp_mismatch["monotonic_us"] = "151"
+    write_rows(packets, packet_fields, [timestamp_mismatch])
+    with pytest.raises(ValueError, match="packet/controller timing is inconsistent"):
+        _algorithm_diagnostics(
+            run,
+            defense="cs-buflo",
+            runtime_kind="cs_buflo",
+            schedule_path=schedule,
+            events_path=events,
+            packets_path=packets,
+        )
+    write_rows(packets, packet_fields, [packet])
+
+    write_rows(packets, packet_fields, [])
+    with pytest.raises(ValueError, match="packet inventory is not one-to-one"):
+        _algorithm_diagnostics(
+            run,
+            defense="cs-buflo",
+            runtime_kind="cs_buflo",
+            schedule_path=schedule,
+            events_path=events,
+            packets_path=packets,
+        )
+    write_rows(packets, packet_fields, [packet])
+
+    extra_wrong_policy = {
+        **packet,
+        "monotonic_us": "151",
+        "slot_id": "99",
+        "send_policy": "exact",
+    }
+    write_rows(packets, packet_fields, [packet, extra_wrong_policy])
+    with pytest.raises(ValueError, match="packet inventory is not one-to-one"):
+        _algorithm_diagnostics(
+            run,
+            defense="cs-buflo",
+            runtime_kind="cs_buflo",
+            schedule_path=schedule,
+            events_path=events,
+            packets_path=packets,
+        )
+    write_rows(packets, packet_fields, [packet])
+
+    extra_incoming_scheduled = {
+        **packet,
+        "direction": "incoming",
+        "monotonic_us": "151",
+        "slot_id": "99",
+        "send_policy": "exact",
+    }
+    write_rows(packets, packet_fields, [packet, extra_incoming_scheduled])
+    with pytest.raises(ValueError, match="scheduled incoming datagram"):
+        _algorithm_diagnostics(
+            run,
+            defense="cs-buflo",
+            runtime_kind="cs_buflo",
+            schedule_path=schedule,
+            events_path=events,
+            packets_path=packets,
+        )
+    write_rows(packets, packet_fields, [packet])
+
+    mismatched_packet = dict(packet)
+    mismatched_packet["application_stream_bytes"] = "1"
+    mismatched_packet["chaff_stream_bytes"] = "599"
+    write_rows(packets, packet_fields, [mismatched_packet])
+    with pytest.raises(ValueError, match="outgoing packet binding is invalid"):
+        _algorithm_diagnostics(
+            run,
+            defense="cs-buflo",
+            runtime_kind="cs_buflo",
+            schedule_path=schedule,
+            events_path=events,
+            packets_path=packets,
+        )
+    write_rows(packets, packet_fields, [packet])
+
+    partial_outgoing = dict(outgoing)
+    partial_outgoing.update(
+        satisfaction="partial",
+        observed_size="300",
+        miss_reason="CongestionLimited",
+        observed_udp_bytes="300",
+        chaff_stream_bytes="300",
+        congestion_reason="congestion_limited",
+    )
+    partial_packet = dict(packet)
+    partial_packet.update(
+        observed_udp_length="300",
+        satisfaction="partial",
+        observed_udp_bytes="300",
+        chaff_stream_bytes="300",
+        congestion_reason="congestion_limited",
+    )
+    partial_run = json.loads(json.dumps(run))
+    for receipt in (
+        partial_run["defense_diagnostics"],
+        partial_run["cs_buflo_summary"]["diagnostics"],
+    ):
+        receipt["cs_buflo_full_outgoing_cells"] = 0
+        receipt["cs_buflo_partial_outgoing_cells"] = 1
+        receipt["cs_buflo_realized_udp_bytes"] = 300
+        receipt["cs_buflo_chaff_stream_bytes"] = 300
+    write_rows(schedule, schedule_fields, [partial_outgoing, incoming])
+    write_rows(packets, packet_fields, [partial_packet])
+    assert (
+        _algorithm_diagnostics(
+            partial_run,
+            defense="cs-buflo",
+            runtime_kind="cs_buflo",
+            schedule_path=schedule,
+            events_path=events,
+            packets_path=packets,
+        )["directions"]["outgoing"]["satisfaction_counts"]["partial"]
+        == 1
+    )
+    write_rows(schedule, schedule_fields, [outgoing, incoming])
+    write_rows(packets, packet_fields, [packet])
+
+    mismatched_consumption = dict(incoming)
+    mismatched_consumption["credit_consumed_at_us"] = "252"
+    mismatched_consumption["credit_consumption_delay_us"] = "202"
+    write_rows(schedule, schedule_fields, [outgoing, mismatched_consumption])
+    with pytest.raises(
+        ValueError, match="terminal time differs from translated credit consumption"
+    ):
+        _algorithm_diagnostics(
+            run,
+            defense="cs-buflo",
+            runtime_kind="cs_buflo",
+            schedule_path=schedule,
+            events_path=events,
+            packets_path=packets,
+        )
+    write_rows(schedule, schedule_fields, [outgoing, incoming])
+
+    missed_incoming = {field: "" for field in schedule_fields}
+    missed_incoming.update(
+        target_time_us="50",
+        direction="incoming",
+        size="600",
+        connection="0",
+        action_time_us="50",
+        satisfaction="missed",
+        miss_reason="DeadlineExpired",
+        slot_id="2",
+        qcsd_outcome_schema_version="3",
+        terminal_defense_elapsed_us="250",
+    )
+    write_rows(schedule, schedule_fields, [outgoing, missed_incoming])
+    with pytest.raises(ValueError, match="terminal schedule differs from runner counters"):
         _algorithm_diagnostics(
             run,
             defense="cs-buflo",
@@ -1268,6 +1834,30 @@ def test_cs_buflo_schema_four_handoff_reconstructs_stop_drain_and_preserves_lega
     legacy_v3["cs_buflo_summary"]["early_termination_semantics"] = (
         fidelity_module.CS_BUFLO_LEGACY_EARLY_TERMINATION_SEMANTICS
     )
+    legacy_schedule_fields = (
+        *handoff.SCHEDULE_PREFIX_FIELDS,
+        *CONSUMPTION_SCHEDULE_QCSD_FIELDS,
+    )
+    legacy_outgoing = {field: outgoing[field] for field in legacy_schedule_fields}
+    legacy_outgoing["qcsd_outcome_schema_version"] = "1"
+    legacy_incoming = {field: incoming[field] for field in legacy_schedule_fields}
+    legacy_incoming["qcsd_outcome_schema_version"] = "2"
+    legacy_packet_fields = (
+        *handoff._PACKET_PREFIX_FIELDS,
+        *CONSUMPTION_SCHEDULE_QCSD_FIELDS,
+    )
+    legacy_packet = {field: packet[field] for field in legacy_packet_fields}
+    write_rows(
+        schedule,
+        legacy_schedule_fields,
+        [legacy_outgoing, legacy_incoming],
+    )
+    write_rows(
+        events,
+        (*handoff._EVENT_PREFIX_FIELDS, *CONSUMPTION_SCHEDULE_QCSD_FIELDS),
+        [],
+    )
+    write_rows(packets, legacy_packet_fields, [legacy_packet])
     v3 = _algorithm_diagnostics(
         legacy_v3,
         defense="cs-buflo",
@@ -1398,6 +1988,7 @@ def test_cs_buflo_stop_drain_ledger_accepts_zero_time_empty_vector() -> None:
             "terminal_cells_at_stop_timestamp": 0,
         },
     }
+
 
 def test_formal_result_names_are_ten_ordered_blocks() -> None:
     assert len(FORMAL_RESULT_NAMES) == 10

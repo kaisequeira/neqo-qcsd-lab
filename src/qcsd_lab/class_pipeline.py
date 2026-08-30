@@ -113,6 +113,8 @@ from .class_study import (
 from .class_study import (
     validate_hash_bound_receipt as validate_study_bound_receipt,
 )
+from .experiment import ACCEPTED_ARTIFACTS, resolved_sample_directory
+from .fidelity import new_defense_terminal_receipts_valid
 from .orchestrator import (
     CLASS_STUDY_LAUNCH_INPUT,
     CLASS_STUDY_SUCCESSOR_CONFIGURATION_KEY,
@@ -140,6 +142,10 @@ CLASS_STUDY_READINESS_CONFIGURATION_KEY = "class_study_readiness_sha256"
 CLASS_STUDY_HISTORICAL_PRE_CONFIGURATION_KEY = (
     "class_study_historical_pre_snapshot_sha256"
 )
+_CURRENT_CANDIDATE_RUNTIME_KINDS = {
+    "buflo": "buflo",
+    "cs-buflo": "cs_buflo",
+}
 
 STUDY_ACTIONS = (
     "status",
@@ -4292,6 +4298,109 @@ def _validate_verified_class_result(
     }
 
 
+def _validate_current_candidate_sample_receipt(
+    verified: VerifiedResult,
+    sample: Mapping[str, Any],
+    *,
+    role: str,
+) -> None:
+    """Reopen one sealed candidate run and require the current terminal schema.
+
+    ``verify_result`` proves checksum closure, while this boundary proves that
+    a class-study certification/formal result still contains the current
+    candidate semantics.  In particular, a historical schema-2/3 receipt must
+    never be promoted merely because its experiment checkpoint says
+    ``accepted`` and ``eligible``.
+    """
+
+    mode = sample.get("defense")
+    runtime_kind = _CURRENT_CANDIDATE_RUNTIME_KINDS.get(str(mode))
+    if runtime_kind is None:
+        return
+    sample_id = sample.get("sample_id")
+    sample_path = sample.get("path")
+    artifacts = sample.get("artifacts")
+    accepted = verified.accepted_samples.get(str(sample_id))
+    if (
+        not isinstance(sample_id, str)
+        or not isinstance(sample_path, str)
+        or sample.get("runtime_kind") != runtime_kind
+        or not isinstance(artifacts, Mapping)
+        or not isinstance(accepted, Mapping)
+    ):
+        raise ValueError(
+            f"{role} candidate sample has an invalid accepted-evidence identity"
+        )
+    expected_artifacts = {
+        f"{sample_path}/{relative}" for relative in ACCEPTED_ARTIFACTS
+    }
+    if set(artifacts) != expected_artifacts or dict(artifacts) != dict(accepted):
+        raise ValueError(
+            f"{role} candidate sample differs from its sealed five-file inventory"
+        )
+    sample_root = resolved_sample_directory(
+        verified.root, sample, require_directory=True
+    )
+    run_path = sample_root / "neqo/run.json"
+    run_relative = run_path.relative_to(verified.root).as_posix()
+    run_digest = artifacts.get(run_relative)
+    if (
+        run_path.is_symlink()
+        or not run_path.is_file()
+        or not isinstance(run_digest, str)
+        or verified.checksums.get(run_relative) != run_digest
+        or sha256_file(run_path) != run_digest
+    ):
+        raise ValueError(
+            f"{role} candidate run is not bound to its sealed accepted evidence"
+        )
+    try:
+        run = load_json(run_path)
+    except (OSError, ValueError) as error:
+        raise ValueError(f"{role} candidate run receipt is invalid") from error
+    if not isinstance(run, Mapping) or not new_defense_terminal_receipts_valid(
+        run,
+        runtime_kind,
+        require_application_complete=True,
+        require_current_schema=True,
+    ):
+        summary_key = (
+            "buflo_summary" if runtime_kind == "buflo" else "cs_buflo_summary"
+        )
+        summary = run.get(summary_key) if isinstance(run, Mapping) else None
+        schema = summary.get("schema_version") if isinstance(summary, Mapping) else None
+        raise ValueError(
+            f"{role} {mode} sample {sample_id} lacks a valid current "
+            f"schema-4 terminal receipt (observed {schema!r})"
+        )
+    # Import lazily so the coordinator's core/result metadata import graph stays
+    # independent of the heavier handoff parsers while reusing their exact
+    # schedule, event, and packet chronology validator at this evidence boundary.
+    from .buflo_handoff import _algorithm_diagnostics
+
+    try:
+        algorithm = _algorithm_diagnostics(
+            run,
+            defense=str(mode),
+            runtime_kind=runtime_kind,
+            schedule_path=sample_root / "neqo/schedule.csv",
+            events_path=sample_root / "neqo/events.csv",
+            packets_path=sample_root / "neqo/packets.csv",
+            require_current=True,
+            require_latest_cs=True,
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError(
+            f"{role} {mode} sample {sample_id} has invalid current "
+            "terminal/schedule chronology"
+        ) from error
+    if algorithm.get("schema_version") != 4:
+        raise ValueError(
+            f"{role} {mode} sample {sample_id} did not derive schema-4 "
+            "algorithm evidence"
+        )
+
+
 def _validate_non_fitting_result(
     verified: VerifiedResult,
     *,
@@ -4347,6 +4456,12 @@ def _validate_non_fitting_result(
             raise ValueError(f"{role} result contains an ineligible or invalid attempt")
         if role == "certification" and sample["attempts"] != 1:
             raise ValueError("certification evidence must succeed on its first launch")
+        if identity[1] in _CURRENT_CANDIDATE_RUNTIME_KINDS:
+            _validate_current_candidate_sample_receipt(
+                verified,
+                sample,
+                role=role,
+            )
         observed.add(identity)  # type: ignore[arg-type]
         class_mode_pairs.add((identity[0], identity[1]))  # type: ignore[arg-type]
     if observed != expected:

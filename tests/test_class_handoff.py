@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import csv
 import hashlib
 import json
 from pathlib import Path
@@ -54,9 +55,7 @@ def _write(path: Path, value: bytes) -> None:
 
 
 def _prepared_workload(workload_id: str, origin_count: int) -> dict:
-    origins = [
-        f"https://origin-{index}.{workload_id}.example" for index in range(origin_count)
-    ]
+    origins = [f"https://origin-{index}.{workload_id}.example" for index in range(origin_count)]
     resources = [
         {
             "id": index,
@@ -139,8 +138,7 @@ def _prepared_workload(workload_id: str, origin_count: int) -> dict:
                 "policy": "all-approved-origins-and-rendered-resources",
                 "required_origins": origins,
                 "required_resources": [
-                    {"id": resource["id"], "url": resource["url"]}
-                    for resource in resources
+                    {"id": resource["id"], "url": resource["url"]} for resource in resources
                 ],
             },
         },
@@ -195,9 +193,7 @@ def _source_receipt(root: Path, block: int) -> VerifiedResult:
     authority_inputs = {
         "inputs/class-study-foundation.json": b"sealed foundation authority\n",
         "inputs/class-study-readiness.json": b"sealed readiness authority\n",
-        "inputs/class-study-historical-pre-snapshot.json": (
-            b"sealed historical-pre authority\n"
-        ),
+        "inputs/class-study-historical-pre-snapshot.json": (b"sealed historical-pre authority\n"),
     }
     for relative, value in authority_inputs.items():
         _write(root / relative, value)
@@ -209,10 +205,7 @@ def _source_receipt(root: Path, block: int) -> VerifiedResult:
         "inputs/class-study-cohort-assembly.json": _sha256(
             root / "inputs/class-study-cohort-assembly.json"
         ),
-        **{
-            relative: _sha256(root / relative)
-            for relative in authority_inputs
-        },
+        **{relative: _sha256(root / relative) for relative in authority_inputs},
         **{
             f"inputs/workloads/{workload_id}.json": _sha256(
                 root / f"inputs/workloads/{workload_id}.json"
@@ -277,12 +270,8 @@ def _source_receipt(root: Path, block: int) -> VerifiedResult:
         "limits": {"max_attempts": 3},
         "defense_order": {"scheme": "cyclic-latin-square", "block": block - 1},
         "evidence_role": "formal",
-        "class_study_foundation_sha256": _sha256(
-            root / "inputs/class-study-foundation.json"
-        ),
-        "class_study_readiness_sha256": _sha256(
-            root / "inputs/class-study-readiness.json"
-        ),
+        "class_study_foundation_sha256": _sha256(root / "inputs/class-study-foundation.json"),
+        "class_study_readiness_sha256": _sha256(root / "inputs/class-study-readiness.json"),
         "class_study_historical_pre_snapshot_sha256": _sha256(
             root / "inputs/class-study-historical-pre-snapshot.json"
         ),
@@ -310,9 +299,7 @@ def _source_receipt(root: Path, block: int) -> VerifiedResult:
         campaign_name=_TINY.result_names[block - 1],
         evidence_role="formal",
         cohort_sha256=configuration["class_study_cohort_sha256"],
-        cohort_assembly_sha256=configuration[
-            "class_study_cohort_assembly_sha256"
-        ],
+        cohort_assembly_sha256=configuration["class_study_cohort_assembly_sha256"],
     )
     launch_payload = {
         "study_id": _TINY.study_id,
@@ -321,9 +308,7 @@ def _source_receipt(root: Path, block: int) -> VerifiedResult:
         "campaign_sha256": _DIGEST,
         "evidence_role": "formal",
         "class_study_cohort_sha256": configuration["class_study_cohort_sha256"],
-        "class_study_cohort_assembly_sha256": configuration[
-            "class_study_cohort_assembly_sha256"
-        ],
+        "class_study_cohort_assembly_sha256": configuration["class_study_cohort_assembly_sha256"],
         "result_root": str(root.resolve()),
         "created_at": started_at,
         "source": source,
@@ -445,6 +430,284 @@ def _fixture(tmp_path: Path):
     return receipts, verify
 
 
+def _candidate_fixture(
+    tmp_path: Path,
+    *,
+    mode: str,
+    runtime_kind: str,
+    install_evidence,
+):
+    dimensions = _StudyDimensions(
+        study_id=_TINY.study_id,
+        result_names=_TINY.result_names,
+        modes=("undefended", mode),
+        runtime_kinds={"undefended": "none", mode: runtime_kind},
+        class_count=_TINY.class_count,
+        visits_per_block=_TINY.visits_per_block,
+        require_immutable_source=False,
+    )
+    receipts, _ = _fixture(tmp_path)
+    for receipt in receipts:
+        configuration = receipt.experiment["configuration"]
+        configuration["defenses"][1] = {
+            "name": mode,
+            "kind": runtime_kind,
+            "baseline": False,
+        }
+        configuration["defense_runtime_inputs"].pop("front")
+        configuration["defense_runtime_inputs"][mode] = {
+            "identity_type": "hash-bound-parameter-artifact",
+            "runtime_kind": runtime_kind,
+            "parameters_sha256": "7" * 64,
+            "provenance_sha256": "8" * 64,
+            "input_policy": "fixture-current-candidate",
+        }
+        for sample in receipt.experiment["samples"]:
+            if sample["defense"] != "front":
+                continue
+            sample["defense"] = mode
+            sample["runtime_kind"] = runtime_kind
+            sample_root = receipt.root / sample["path"]
+            install_evidence(sample_root)
+            for name in ("run.json", "schedule.csv", "events.csv", "packets.csv"):
+                path = sample_root / "neqo" / name
+                relative = path.relative_to(receipt.root).as_posix()
+                digest = _sha256(path)
+                sample["artifacts"][relative] = digest
+                receipt.checksums[relative] = digest
+                receipt.accepted_samples[sample["sample_id"]][relative] = digest
+
+    by_root = {receipt.root: receipt for receipt in receipts}
+
+    def verify(path: Path) -> VerifiedResult:
+        return by_root[Path(path).resolve()]
+
+    return dimensions, receipts, verify
+
+
+def _write_runner_rows(path: Path, fields: tuple[str, ...], rows: list[dict[str, str]]) -> None:
+    with path.open("w", newline="", encoding="utf-8") as destination:
+        writer = csv.DictWriter(destination, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def _candidate_schedule_schema(fields: tuple[str, ...]) -> str:
+    assert "terminal_defense_elapsed_us" in fields
+    return "3"
+
+
+def _install_buflo_candidate_evidence(sample_root: Path) -> None:
+    from qcsd_lab import buflo_handoff
+    from qcsd_lab.fidelity import SCHEDULE_QCSD_FIELDS
+    from tests.test_buflo_handoff import _complete_buflo_run
+
+    run = _complete_buflo_run(scheduled_outgoing=1, scheduled_incoming=1)
+    run["endpoints"] = [{"fixture": True}]
+    (sample_root / "neqo/run.json").write_text(
+        json.dumps(run, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    schedule_fields = (*buflo_handoff.SCHEDULE_PREFIX_FIELDS, *SCHEDULE_QCSD_FIELDS)
+    schedule_schema = _candidate_schedule_schema(schedule_fields)
+    outgoing = {field: "" for field in schedule_fields}
+    outgoing.update(
+        target_time_us="0",
+        direction="outgoing",
+        size="1200",
+        connection="0",
+        action_time_us="4999",
+        satisfaction="satisfied",
+        observed_size="1200",
+        slot_id="1",
+        qcsd_outcome_schema_version=schedule_schema,
+        send_policy="exact",
+        desired_udp_bytes="1200",
+        observed_udp_bytes="1200",
+        terminal_defense_elapsed_us="4999",
+    )
+    incoming = {field: "" for field in schedule_fields}
+    incoming.update(
+        target_time_us="0",
+        direction="incoming",
+        size="1200",
+        connection="0",
+        action_time_us="0",
+        satisfaction="satisfied",
+        slot_id="2",
+        qcsd_outcome_schema_version=schedule_schema,
+        send_policy="exact",
+        desired_udp_bytes="1200",
+        credit_advertised_at_us="0",
+        credit_advertisement_delay_us="0",
+        credit_consumed_at_us="10000000",
+        credit_consumption_delay_us="10000000",
+        terminal_defense_elapsed_us="10000000",
+    )
+    _write_runner_rows(sample_root / "neqo/schedule.csv", schedule_fields, [outgoing, incoming])
+    _write_runner_rows(
+        sample_root / "neqo/events.csv",
+        (*buflo_handoff._EVENT_PREFIX_FIELDS, *SCHEDULE_QCSD_FIELDS),
+        [],
+    )
+    packet_fields = (*buflo_handoff._PACKET_PREFIX_FIELDS, *SCHEDULE_QCSD_FIELDS)
+    packet = {field: "" for field in packet_fields}
+    packet.update(
+        direction="outgoing",
+        monotonic_us="4999",
+        connection="0",
+        observed_udp_length="1200",
+        scheduled_target="1200",
+        satisfaction="satisfied",
+        slot_id="1",
+        qcsd_outcome_schema_version="2",
+        send_policy="exact",
+        desired_udp_bytes="1200",
+        observed_udp_bytes="1200",
+        application_stream_bytes="0",
+        retransmission_stream_bytes="0",
+        chaff_stream_bytes="1200",
+        defense_control_bytes="0",
+        quic_padding_bytes="0",
+        other_quic_bytes="0",
+        lateness_us="0",
+    )
+    _write_runner_rows(sample_root / "neqo/packets.csv", packet_fields, [packet])
+
+
+def _install_cs_buflo_candidate_evidence(sample_root: Path) -> None:
+    from qcsd_lab import buflo_handoff
+    from qcsd_lab.fidelity import SCHEDULE_QCSD_FIELDS
+    from tests.test_buflo_handoff import _complete_cs_buflo_run
+
+    run = _complete_cs_buflo_run()
+    run["endpoints"] = [{"fixture": True}]
+    (sample_root / "neqo/run.json").write_text(
+        json.dumps(run, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    schedule_fields = (*buflo_handoff.SCHEDULE_PREFIX_FIELDS, *SCHEDULE_QCSD_FIELDS)
+    schedule_schema = _candidate_schedule_schema(schedule_fields)
+    outgoing = {field: "" for field in schedule_fields}
+    outgoing.update(
+        target_time_us="50",
+        direction="outgoing",
+        size="600",
+        connection="0",
+        action_time_us="150",
+        satisfaction="full",
+        observed_size="600",
+        slot_id="1",
+        qcsd_outcome_schema_version=schedule_schema,
+        send_policy="congestion_sensitive",
+        desired_udp_bytes="600",
+        observed_udp_bytes="600",
+        application_stream_bytes="0",
+        retransmission_stream_bytes="0",
+        chaff_stream_bytes="600",
+        defense_control_bytes="0",
+        quic_padding_bytes="0",
+        other_quic_bytes="0",
+        lateness_us="100",
+        terminal_defense_elapsed_us="150",
+    )
+    incoming = {field: "" for field in schedule_fields}
+    incoming.update(
+        target_time_us="50",
+        direction="incoming",
+        size="600",
+        connection="0",
+        action_time_us="50",
+        satisfaction="satisfied",
+        slot_id="2",
+        qcsd_outcome_schema_version=schedule_schema,
+        send_policy="exact",
+        desired_udp_bytes="600",
+        credit_advertised_at_us="150",
+        credit_advertisement_delay_us="100",
+        credit_consumed_at_us="250",
+        credit_consumption_delay_us="200",
+        terminal_defense_elapsed_us="250",
+    )
+    _write_runner_rows(sample_root / "neqo/schedule.csv", schedule_fields, [outgoing, incoming])
+    _write_runner_rows(
+        sample_root / "neqo/events.csv",
+        (*buflo_handoff._EVENT_PREFIX_FIELDS, *SCHEDULE_QCSD_FIELDS),
+        [],
+    )
+    packet_fields = (*buflo_handoff._PACKET_PREFIX_FIELDS, *SCHEDULE_QCSD_FIELDS)
+    packet = {field: "" for field in packet_fields}
+    packet.update(
+        direction="outgoing",
+        monotonic_us="150",
+        connection="0",
+        observed_udp_length="600",
+        scheduled_target="600",
+        satisfaction="full",
+        slot_id="1",
+        qcsd_outcome_schema_version="2",
+        send_policy="congestion_sensitive",
+        desired_udp_bytes="600",
+        observed_udp_bytes="600",
+        application_stream_bytes="0",
+        retransmission_stream_bytes="0",
+        chaff_stream_bytes="600",
+        defense_control_bytes="0",
+        quic_padding_bytes="0",
+        other_quic_bytes="0",
+        lateness_us="100",
+    )
+    _write_runner_rows(sample_root / "neqo/packets.csv", packet_fields, [packet])
+
+
+def _reseal_source_sample_file(receipt: VerifiedResult, sample: dict, path: Path) -> None:
+    relative = path.relative_to(receipt.root).as_posix()
+    digest = _sha256(path)
+    sample["artifacts"][relative] = digest
+    receipt.checksums[relative] = digest
+    receipt.accepted_samples[sample["sample_id"]][relative] = digest
+
+
+def _export_candidate_fixture(
+    destination: Path,
+    *,
+    dimensions: _StudyDimensions,
+    receipts: tuple[VerifiedResult, ...],
+    verify,
+) -> Path:
+    return _export_class_handoff(
+        [receipt.root for receipt in receipts],
+        destination,
+        dimensions=dimensions,
+        source_verifier=verify,
+        trace_extractor=_trace,
+        classic_pcap_writer=_classic_writer,
+        correctness_validator=_correctness_validator,
+        performance_extractor=_performance_extractor,
+        cohort_loader=_cohort_loader,
+        assembly_validator=_assembly_validator,
+    )
+
+
+def _verify_candidate_fixture(
+    destination: Path,
+    *,
+    dimensions: _StudyDimensions,
+    verify,
+    deep: bool,
+) -> Path:
+    return _verify_class_handoff(
+        destination,
+        dimensions=dimensions,
+        deep=deep,
+        source_verifier=verify,
+        trace_extractor=_trace,
+        classic_pcap_writer=_classic_writer,
+        correctness_validator=_correctness_validator,
+        performance_extractor=_performance_extractor,
+        cohort_loader=_cohort_loader,
+        assembly_validator=_assembly_validator,
+    )
+
+
 def test_default_contract_is_exactly_ten_blocks_and_16000_samples() -> None:
     assert _DIMENSIONS.block_count == 10
     assert _DIMENSIONS.class_count == 100
@@ -521,15 +784,11 @@ def test_compact_export_is_create_only_closed_and_deeply_verifiable(tmp_path: Pa
     assert dataset["capture_authority"] == {
         "foundation": {
             "path": "inputs/class-study-foundation.json",
-            "sha256": receipts[0].experiment["configuration"][
-                "class_study_foundation_sha256"
-            ],
+            "sha256": receipts[0].experiment["configuration"]["class_study_foundation_sha256"],
         },
         "readiness": {
             "path": "inputs/class-study-readiness.json",
-            "sha256": receipts[0].experiment["configuration"][
-                "class_study_readiness_sha256"
-            ],
+            "sha256": receipts[0].experiment["configuration"]["class_study_readiness_sha256"],
         },
         "historical_pre_snapshot": {
             "path": "inputs/class-study-historical-pre-snapshot.json",
@@ -538,14 +797,14 @@ def test_compact_export_is_create_only_closed_and_deeply_verifiable(tmp_path: Pa
             ],
         },
     }
-    assert dataset["runtime_contract"]["defense_runtime_inputs"] == (
-        receipts[0].experiment["configuration"]["defense_runtime_inputs"]
+    assert (
+        dataset["runtime_contract"]["defense_runtime_inputs"]
+        == (receipts[0].experiment["configuration"]["defense_runtime_inputs"])
     )
-    assert dataset["runtime_contract"][
-        "chaff_qualification_set_manifest_sha256"
-    ] == receipts[0].experiment["configuration"][
-        "chaff_qualification_set_manifest_sha256"
-    ]
+    assert (
+        dataset["runtime_contract"]["chaff_qualification_set_manifest_sha256"]
+        == receipts[0].experiment["configuration"]["chaff_qualification_set_manifest_sha256"]
+    )
     assert len(list((result / "inputs/class-study-launches").glob("block-*.json"))) == 3
     trace_path = next((result / "traces").rglob("*.csv"))
     assert trace_path.read_text(encoding="utf-8").splitlines()[0] == ",".join(CLASSIFIER_FIELDS)
@@ -575,6 +834,206 @@ def test_compact_export_is_create_only_closed_and_deeply_verifiable(tmp_path: Pa
             cohort_loader=_cohort_loader,
             assembly_validator=_assembly_validator,
         )
+
+
+@pytest.mark.parametrize(
+    ("mode", "runtime_kind", "installer"),
+    [
+        ("buflo", "buflo", _install_buflo_candidate_evidence),
+        ("cs-buflo", "cs_buflo", _install_cs_buflo_candidate_evidence),
+    ],
+)
+def test_direct_deep_verifier_reopens_current_candidate_algorithm_evidence(
+    tmp_path: Path, mode: str, runtime_kind: str, installer
+) -> None:
+    dimensions, receipts, verify = _candidate_fixture(
+        tmp_path,
+        mode=mode,
+        runtime_kind=runtime_kind,
+        install_evidence=installer,
+    )
+    destination = _export_candidate_fixture(
+        tmp_path / "handoff",
+        dimensions=dimensions,
+        receipts=receipts,
+        verify=verify,
+    )
+
+    assert (
+        _verify_candidate_fixture(
+            destination,
+            dimensions=dimensions,
+            verify=verify,
+            deep=True,
+        )
+        == destination.resolve()
+    )
+
+
+@pytest.mark.parametrize(
+    ("mode", "runtime_kind", "installer", "terminal_time"),
+    [
+        ("buflo", "buflo", _install_buflo_candidate_evidence, "10000002"),
+        ("cs-buflo", "cs_buflo", _install_cs_buflo_candidate_evidence, "301"),
+    ],
+)
+def test_export_is_atomic_for_coherently_sealed_candidate_chronology_mutation(
+    tmp_path: Path,
+    mode: str,
+    runtime_kind: str,
+    installer,
+    terminal_time: str,
+) -> None:
+    dimensions, receipts, verify = _candidate_fixture(
+        tmp_path,
+        mode=mode,
+        runtime_kind=runtime_kind,
+        install_evidence=installer,
+    )
+    receipt = receipts[0]
+    sample = next(item for item in receipt.experiment["samples"] if item["defense"] == mode)
+    schedule = receipt.root / sample["path"] / "neqo/schedule.csv"
+    with schedule.open(newline="", encoding="utf-8") as source:
+        reader = csv.DictReader(source)
+        rows = list(reader)
+        fields = tuple(reader.fieldnames or ())
+    rows[0]["terminal_defense_elapsed_us"] = terminal_time
+    _write_runner_rows(schedule, fields, rows)
+    _reseal_source_sample_file(receipt, sample, schedule)
+    destination = tmp_path / "handoff"
+    with pytest.raises(ValueError, match="invalid current terminal/schedule chronology"):
+        _export_candidate_fixture(
+            destination,
+            dimensions=dimensions,
+            receipts=receipts,
+            verify=verify,
+        )
+    assert not destination.exists()
+
+
+@pytest.mark.parametrize(
+    ("mode", "runtime_kind", "installer"),
+    [
+        ("buflo", "buflo", _install_buflo_candidate_evidence),
+        ("cs-buflo", "cs_buflo", _install_cs_buflo_candidate_evidence),
+    ],
+)
+def test_export_is_atomic_for_coherently_sealed_candidate_outcome_mutation(
+    tmp_path: Path,
+    mode: str,
+    runtime_kind: str,
+    installer,
+) -> None:
+    dimensions, receipts, verify = _candidate_fixture(
+        tmp_path,
+        mode=mode,
+        runtime_kind=runtime_kind,
+        install_evidence=installer,
+    )
+    receipt = receipts[0]
+    sample = next(item for item in receipt.experiment["samples"] if item["defense"] == mode)
+    schedule = receipt.root / sample["path"] / "neqo/schedule.csv"
+    with schedule.open(newline="", encoding="utf-8") as source:
+        reader = csv.DictReader(source)
+        rows = list(reader)
+        fields = tuple(reader.fieldnames or ())
+    incoming = rows[1]
+    incoming.update(
+        satisfaction="missed",
+        miss_reason="DeadlineExpired",
+        qcsd_outcome_schema_version="3",
+    )
+    for field in (
+        "send_policy",
+        "desired_udp_bytes",
+        "observed_udp_bytes",
+        "credit_advertised_at_us",
+        "credit_advertisement_delay_us",
+        "credit_consumed_at_us",
+        "credit_consumption_delay_us",
+    ):
+        incoming[field] = ""
+    _write_runner_rows(schedule, fields, rows)
+    _reseal_source_sample_file(receipt, sample, schedule)
+    destination = tmp_path / "handoff"
+    with pytest.raises(ValueError, match="invalid current terminal/schedule chronology"):
+        _export_candidate_fixture(
+            destination,
+            dimensions=dimensions,
+            receipts=receipts,
+            verify=verify,
+        )
+    assert not destination.exists()
+
+
+def test_export_is_atomic_for_cs_buflo_missing_packet_transcript(
+    tmp_path: Path,
+) -> None:
+    dimensions, receipts, verify = _candidate_fixture(
+        tmp_path,
+        mode="cs-buflo",
+        runtime_kind="cs_buflo",
+        install_evidence=_install_cs_buflo_candidate_evidence,
+    )
+    receipt = receipts[0]
+    sample = next(item for item in receipt.experiment["samples"] if item["defense"] == "cs-buflo")
+    packets = receipt.root / sample["path"] / "neqo/packets.csv"
+    with packets.open(newline="", encoding="utf-8") as source:
+        fields = tuple(csv.DictReader(source).fieldnames or ())
+    _write_runner_rows(packets, fields, [])
+    _reseal_source_sample_file(receipt, sample, packets)
+    destination = tmp_path / "handoff"
+    with pytest.raises(ValueError, match="invalid current terminal/schedule chronology"):
+        _export_candidate_fixture(
+            destination,
+            dimensions=dimensions,
+            receipts=receipts,
+            verify=verify,
+        )
+    assert not destination.exists()
+
+
+@pytest.mark.parametrize(
+    ("mode", "runtime_kind", "installer", "summary_key"),
+    [
+        ("buflo", "buflo", _install_buflo_candidate_evidence, "buflo_summary"),
+        (
+            "cs-buflo",
+            "cs_buflo",
+            _install_cs_buflo_candidate_evidence,
+            "cs_buflo_summary",
+        ),
+    ],
+)
+def test_export_is_atomic_for_coherently_sealed_historical_candidate_schema(
+    tmp_path: Path,
+    mode: str,
+    runtime_kind: str,
+    installer,
+    summary_key: str,
+) -> None:
+    dimensions, receipts, verify = _candidate_fixture(
+        tmp_path,
+        mode=mode,
+        runtime_kind=runtime_kind,
+        install_evidence=installer,
+    )
+    receipt = receipts[0]
+    sample = next(item for item in receipt.experiment["samples"] if item["defense"] == mode)
+    run_path = receipt.root / sample["path"] / "neqo/run.json"
+    run = json.loads(run_path.read_text(encoding="utf-8"))
+    run[summary_key]["schema_version"] = 3
+    run_path.write_text(json.dumps(run, sort_keys=True) + "\n", encoding="utf-8")
+    _reseal_source_sample_file(receipt, sample, run_path)
+    destination = tmp_path / "handoff"
+    with pytest.raises(ValueError, match="invalid current terminal/schedule chronology"):
+        _export_candidate_fixture(
+            destination,
+            dimensions=dimensions,
+            receipts=receipts,
+            verify=verify,
+        )
+    assert not destination.exists()
 
 
 @pytest.mark.parametrize(
@@ -678,9 +1137,9 @@ def test_source_contract_recomputes_workload_cardinality_from_sealed_manifest(
             "requires a complete-coverage admission",
         ),
         (
-            lambda manifest: manifest["preparation"]["coverage_admission"][
-                "required_resources"
-            ][0].update(url="https://substituted.example/resource"),
+            lambda manifest: manifest["preparation"]["coverage_admission"]["required_resources"][
+                0
+            ].update(url="https://substituted.example/resource"),
             "must bind every rendered resource",
         ),
     ],
@@ -851,15 +1310,11 @@ def test_deep_verifier_rejects_coherently_resealed_classic_pcap_substitution(
             "exporter source differs",
         ),
         (
-            lambda dataset: dataset["resource_origin_profile"].update(
-                multi_origin_class_count=0
-            ),
+            lambda dataset: dataset["resource_origin_profile"].update(multi_origin_class_count=0),
             "resource-origin profile",
         ),
         (
-            lambda dataset: dataset["capture_authority"]["readiness"].update(
-                sha256="9" * 64
-            ),
+            lambda dataset: dataset["capture_authority"]["readiness"].update(sha256="9" * 64),
             "capture authority",
         ),
         (

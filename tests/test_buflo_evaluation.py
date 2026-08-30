@@ -40,6 +40,8 @@ from qcsd_lab.buflo_evaluation import (
     write_dlsvm_preflight,
 )
 from qcsd_lab.fidelity import (
+    BUFLO_SCHEDULE_STOP_POLICY,
+    BUFLO_SCHEDULE_STOP_TERMINAL_TIME_SEMANTICS,
     BUFLO_TERMINAL_CONTROL_EVIDENCE_SEMANTICS,
     BUFLO_TERMINAL_SUBCELL_OBSERVER_EFFECT,
     BUFLO_TERMINAL_SUBCELL_POLICY,
@@ -856,15 +858,15 @@ def test_algorithm_breakdown_retains_non_classifier_runner_strata() -> None:
     ]
 
 
-def test_buflo_schema_three_diagnostics_are_exact_and_aggregate_terminal_tail() -> None:
+def test_buflo_schema_four_diagnostics_aggregate_stop_drain_and_preserve_history() -> None:
     empty_summary = {"count": 0}
     direction = {
-        "scheduled_cells": 0,
+        "scheduled_cells": 5,
         "target_size_bytes": {"summary": empty_summary, "histogram": {}},
         "desired_udp_bytes": 0,
         "observed_udp_bytes": 0,
         "realization_ratio": None,
-        "satisfaction_counts": {},
+        "satisfaction_counts": {"full": 5},
         "congestion_reason_counts": {},
         "inter_target_delta_us": empty_summary,
         "estimated_jitter_from_nearest_nominal_us": empty_summary,
@@ -881,7 +883,7 @@ def test_buflo_schema_three_diagnostics_are_exact_and_aggregate_terminal_tail() 
         },
     }
     state = {
-        "schema_version": 2,
+        "schema_version": 3,
         "terminal_subcell_policy": BUFLO_TERMINAL_SUBCELL_POLICY,
         "terminal_subcell_observer_effect": BUFLO_TERMINAL_SUBCELL_OBSERVER_EFFECT,
         "pending_request_cancellations": 0,
@@ -890,25 +892,57 @@ def test_buflo_schema_three_diagnostics_are_exact_and_aggregate_terminal_tail() 
         "exact_capacity_bytes_cancelled": 1_199,
         "whole_cell_floor_bytes": 1_200,
         "terminal_latched": True,
-        "terminal_latched_at_us": 10_000_001,
+        "terminal_latched_at_us": 10_000_020,
         "open_streams_at_latch": 1,
         "parser_lease_bytes_at_latch": 0,
         "pending_parser_boundaries_at_latch": 1,
         "pending_application_parser_boundaries_at_latch": 0,
         "typed_cancellation_action_events": 1,
-        "first_cancellation_monotonic_us": 10_000_010,
+        "first_cancellation_monotonic_us": 10_000_030,
         "last_exact_outgoing_cell_monotonic_us": 9_999_990,
         "last_scheduled_terminal_monotonic_us": 10_000_000,
         "control_evidence_semantics": BUFLO_TERMINAL_CONTROL_EVIDENCE_SEMANTICS,
         "post_cancellation_unscheduled_defense_control_packets": 1,
         "post_cancellation_unscheduled_defense_control_bytes": 4,
-        "first_post_cancellation_defense_control_monotonic_us": 10_000_020,
-        "last_post_cancellation_defense_control_monotonic_us": 10_000_020,
+        "first_post_cancellation_defense_control_monotonic_us": 10_000_040,
+        "last_post_cancellation_defense_control_monotonic_us": 10_000_040,
+        "schedule_stop": {
+            "policy": BUFLO_SCHEDULE_STOP_POLICY,
+            "terminal_time_semantics": (
+                BUFLO_SCHEDULE_STOP_TERMINAL_TIME_SEMANTICS
+            ),
+            "latched": True,
+            "latched_at_us": 10_000_000,
+            "available_bytes": 1_199,
+            "required_bytes": 1_200,
+            "directions": {
+                "outgoing": {
+                    "scheduled_cells_at_stop": 5,
+                    "terminal_cells_at_stop": 5,
+                    "drained_cells_after_stop": 0,
+                    "last_scheduled_target_us": 10_000_000,
+                    "last_terminal_at_us": 9_999_995,
+                    "terminal_cells_strictly_before_stop": 5,
+                    "terminal_cells_at_or_before_stop": 5,
+                    "terminal_cells_at_stop_timestamp": 0,
+                },
+                "incoming": {
+                    "scheduled_cells_at_stop": 5,
+                    "terminal_cells_at_stop": 3,
+                    "drained_cells_after_stop": 2,
+                    "last_scheduled_target_us": 10_000_000,
+                    "last_terminal_at_us": 10_000_015,
+                    "terminal_cells_strictly_before_stop": 3,
+                    "terminal_cells_at_or_before_stop": 3,
+                    "terminal_cells_at_stop_timestamp": 0,
+                },
+            },
+        },
         "paper_equivalent": False,
         "implementation_scope": "client_only_quic",
     }
     diagnostics = {
-        "schema_version": 3,
+        "schema_version": 4,
         "mode": "buflo",
         "runtime_kind": "buflo",
         "classifier_input": False,
@@ -925,12 +959,17 @@ def test_buflo_schema_three_diagnostics_are_exact_and_aggregate_terminal_tail() 
         "cs_buflo_state": None,
     }
     loaded = evaluation._load_algorithm_diagnostics(diagnostics, defense="buflo")
+    wrong_runtime = json.loads(json.dumps(diagnostics))
+    wrong_runtime["runtime_kind"] = "front"
+    wrong_runtime["buflo_state"] = None
+    with pytest.raises(ValueError, match="schema 4 requires BuFLO or CS-BuFLO"):
+        evaluation._load_algorithm_diagnostics(wrong_runtime, defense="buflo")
     sample = StudySample(
         "b", "site", "site", "buflo", 0, "pair", _trace(), None, loaded
     )
     result = algorithm_breakdowns([sample])
     assert result["available"] is True
-    assert result["schema_version"] == 2
+    assert result["schema_version"] == 3
     assert len(result["buflo_terminal_tail_strata"]) == 1
     tail = result["buflo_terminal_tail_strata"][0]
     assert tail["stream_cancellations"] == 1
@@ -945,6 +984,23 @@ def test_buflo_schema_three_diagnostics_are_exact_and_aggregate_terminal_tail() 
         "p95": 1_199.0,
     }
     assert tail["post_cancellation_unscheduled_defense_control_bytes"] == 4
+    schedule_stop = result["buflo_schedule_stop_strata"][0]
+    assert schedule_stop["policy"] == [BUFLO_SCHEDULE_STOP_POLICY]
+    assert schedule_stop["terminal_time_semantics"] == [
+        BUFLO_SCHEDULE_STOP_TERMINAL_TIME_SEMANTICS
+    ]
+    assert schedule_stop["latched_samples"] == 1
+    assert schedule_stop["available_bytes"] == {
+        "total": 1_199,
+        "minimum": 1_199,
+        "maximum": 1_199,
+        "p50": 1_199.0,
+        "p90": 1_199.0,
+        "p95": 1_199.0,
+    }
+    assert schedule_stop["samples_with_incoming_drain"] == 1
+    assert schedule_stop["directions"]["outgoing"]["drained_cells_after_stop"] == 0
+    assert schedule_stop["directions"]["incoming"]["drained_cells_after_stop"] == 2
 
     for field, changed in (
         ("parser_lease_bytes_at_latch", 1),
@@ -958,7 +1014,34 @@ def test_buflo_schema_three_diagnostics_are_exact_and_aggregate_terminal_tail() 
         with pytest.raises(ValueError, match="BuFLO algorithm state"):
             evaluation._load_algorithm_diagnostics(invalid, defense="buflo")
 
-    legacy_state = json.loads(json.dumps(state))
+    for path, changed in (
+        (("terminal_time_semantics",), "drifted"),
+        (("required_bytes",), 1_199),
+        (("available_bytes",), 1_200),
+        (("directions", "outgoing", "drained_cells_after_stop"), 1),
+        (("directions", "incoming", "last_scheduled_target_us"), 10_000_001),
+    ):
+        invalid = json.loads(json.dumps(diagnostics))
+        target = invalid["buflo_state"]["schedule_stop"]
+        for key in path[:-1]:
+            target = target[key]
+        target[path[-1]] = changed
+        with pytest.raises(ValueError, match="BuFLO algorithm state"):
+            evaluation._load_algorithm_diagnostics(invalid, defense="buflo")
+
+    previous_state = json.loads(json.dumps(state))
+    previous_state["schema_version"] = 2
+    previous_state.pop("schedule_stop")
+    previous = json.loads(json.dumps(diagnostics))
+    previous["schema_version"] = 3
+    previous["buflo_state"] = previous_state
+    assert evaluation._load_algorithm_diagnostics(previous, defense="buflo") == previous
+    previous_result = algorithm_breakdowns(
+        [StudySample("p", "site", "site", "buflo", 0, "previous", _trace(), None, previous)]
+    )
+    assert "buflo_schedule_stop_strata" not in previous_result
+
+    legacy_state = json.loads(json.dumps(previous_state))
     legacy_state.pop("schema_version")
     legacy_state.pop("pending_application_parser_boundaries_at_latch")
     legacy_state["pending_parser_boundaries_at_latch"] = 0

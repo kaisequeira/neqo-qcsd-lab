@@ -65,9 +65,7 @@ CLASS_STUDY_LAUNCH_INPUT = "inputs/class-study-launch.json"
 CLASS_STUDY_LAUNCHES_PATH = "inputs/class-study-launches"
 CLASS_STUDY_FOUNDATION_INPUT = "inputs/class-study-foundation.json"
 CLASS_STUDY_READINESS_INPUT = "inputs/class-study-readiness.json"
-CLASS_STUDY_HISTORICAL_PRE_INPUT = (
-    "inputs/class-study-historical-pre-snapshot.json"
-)
+CLASS_STUDY_HISTORICAL_PRE_INPUT = "inputs/class-study-historical-pre-snapshot.json"
 CLASS_MANIFEST_PATH = "inputs/class-manifest.json"
 EXECUTION_SOURCE_PATH = "inputs/execution-source.json"
 CLASSIFIER_FIELDS = (
@@ -226,15 +224,12 @@ _DIMENSIONS = _StudyDimensions(
 
 
 def _dimensions_for_study(study_id: str) -> _StudyDimensions:
-    if study_id != STUDY_ID and not study_id.startswith(
-        "classifier-multiorigin100-v2-"
-    ):
+    if study_id != STUDY_ID and not study_id.startswith("classifier-multiorigin100-v2-"):
         raise ValueError("formal class handoff study identity is invalid")
     return _StudyDimensions(
         study_id=study_id,
         result_names=tuple(
-            f"{study_id}-formal-{block:02d}-1200"
-            for block in range(1, FORMAL_BLOCK_COUNT + 1)
+            f"{study_id}-formal-{block:02d}-1200" for block in range(1, FORMAL_BLOCK_COUNT + 1)
         ),
         modes=FORMAL_MODES,
         runtime_kinds=RUNTIME_KINDS,
@@ -327,9 +322,10 @@ def verify_class_handoff(
 ) -> Path:
     """Reverify the closed inventory, formal lineage, and observer products.
 
-    Deep verification regenerates both observer projections from copied raw
-    PCAPNG evidence.  The classic-PCAP writer is injectable solely so compact
-    synthetic tests do not need to manufacture a valid PCAPNG container.
+    Deep verification reopens current BuFLO/CS-BuFLO terminal chronology and
+    regenerates both observer projections from copied raw evidence.  The
+    classic-PCAP writer is injectable solely so compact synthetic tests do not
+    need to manufacture a valid PCAPNG container.
     """
 
     dataset = _read_json_object(Path(path) / "dataset.json", "formal class dataset")
@@ -619,12 +615,8 @@ def _validate_source_results(
             or not current_qualification_set
             or not _is_digest(current_qualification_manifest_sha256)
         ):
-            raise ValueError(
-                "formal class source has no frozen chaff-qualification identity"
-            )
-        current_successor_sha256 = configuration.get(
-            "class_study_successor_sha256"
-        )
+            raise ValueError("formal class source has no frozen chaff-qualification identity")
+        current_successor_sha256 = configuration.get("class_study_successor_sha256")
         if dimensions.study_id.startswith("classifier-multiorigin100-v2-"):
             if not _is_digest(current_successor_sha256):
                 raise ValueError("formal successor block has no restart authority")
@@ -716,14 +708,10 @@ def _validate_source_results(
             class_study_successor_sha256 = current_successor_sha256
             class_study_foundation_sha256 = current_foundation_sha256
             class_study_readiness_sha256 = current_readiness_sha256
-            class_study_historical_pre_snapshot_sha256 = (
-                current_historical_pre_sha256
-            )
+            class_study_historical_pre_snapshot_sha256 = current_historical_pre_sha256
             defense_runtime_inputs = current_runtime_inputs
             chaff_qualification_set = current_qualification_set
-            chaff_qualification_set_manifest_sha256 = (
-                current_qualification_manifest_sha256
-            )
+            chaff_qualification_set_manifest_sha256 = current_qualification_manifest_sha256
         elif (
             workloads != first_workloads
             or source_value != first_source
@@ -735,12 +723,10 @@ def _validate_source_results(
             or current_successor_sha256 != class_study_successor_sha256
             or current_foundation_sha256 != class_study_foundation_sha256
             or current_readiness_sha256 != class_study_readiness_sha256
-            or current_historical_pre_sha256
-            != class_study_historical_pre_snapshot_sha256
+            or current_historical_pre_sha256 != class_study_historical_pre_snapshot_sha256
             or current_runtime_inputs != defense_runtime_inputs
             or current_qualification_set != chaff_qualification_set
-            or current_qualification_manifest_sha256
-            != chaff_qualification_set_manifest_sha256
+            or current_qualification_manifest_sha256 != chaff_qualification_set_manifest_sha256
         ):
             raise ValueError("formal class blocks do not share one frozen class/source contract")
 
@@ -772,14 +758,10 @@ def _validate_source_results(
         class_study_successor_sha256=class_study_successor_sha256,
         class_study_foundation_sha256=class_study_foundation_sha256,
         class_study_readiness_sha256=class_study_readiness_sha256,
-        class_study_historical_pre_snapshot_sha256=(
-            class_study_historical_pre_snapshot_sha256
-        ),
+        class_study_historical_pre_snapshot_sha256=(class_study_historical_pre_snapshot_sha256),
         defense_runtime_inputs=defense_runtime_inputs,
         chaff_qualification_set=chaff_qualification_set,
-        chaff_qualification_set_manifest_sha256=(
-            chaff_qualification_set_manifest_sha256
-        ),
+        chaff_qualification_set_manifest_sha256=(chaff_qualification_set_manifest_sha256),
         execution_source=first_source,
     )
 
@@ -835,20 +817,19 @@ def _formal_runtime_inputs(
             expected = (
                 identity
                 if (
-                set(identity)
-                == {
-                    "identity_type",
-                    "runtime_kind",
-                    "parameters_sha256",
-                    "provenance_sha256",
-                    "input_policy",
-                }
-                and identity.get("identity_type")
-                == "hash-bound-parameter-artifact"
-                and _is_digest(identity.get("parameters_sha256"))
-                and _is_digest(identity.get("provenance_sha256"))
-                and isinstance(identity.get("input_policy"), str)
-                and identity["input_policy"]
+                    set(identity)
+                    == {
+                        "identity_type",
+                        "runtime_kind",
+                        "parameters_sha256",
+                        "provenance_sha256",
+                        "input_policy",
+                    }
+                    and identity.get("identity_type") == "hash-bound-parameter-artifact"
+                    and _is_digest(identity.get("parameters_sha256"))
+                    and _is_digest(identity.get("provenance_sha256"))
+                    and isinstance(identity.get("input_policy"), str)
+                    and identity["input_policy"]
                 )
                 else None
             )
@@ -944,9 +925,7 @@ def _validate_class_study_launch_receipt(
             or sha256_file(successor_path) != successor_sha256
             or receipt.checksums.get(successor_relative) != successor_sha256
         ):
-            raise ValueError(
-                "formal successor source has no sealed restart authority"
-            )
+            raise ValueError("formal successor source has no sealed restart authority")
         expected[successor_key] = successor_sha256
         expected["launch_namespace"] = f".{dimensions.study_id}-launches"
     elif successor_key in configuration or successor_path.exists() or successor_path.is_symlink():
@@ -1034,9 +1013,7 @@ def _validate_sealed_workloads(
             raise ValueError("formal class prepared workload has no resource inventory")
         resource_origins: set[str] = set()
         for resource in resources:
-            resource_origin = (
-                origin(resource.get("url")) if isinstance(resource, Mapping) else None
-            )
+            resource_origin = origin(resource.get("url")) if isinstance(resource, Mapping) else None
             if resource_origin is None:
                 raise ValueError("formal class prepared workload has an invalid resource URL")
             resource_origins.add(resource_origin)
@@ -1179,6 +1156,15 @@ def _export_sample(
         }
 
     run = load_json(candidate / products["run"]["path"])
+    _verify_current_candidate_algorithm_evidence(
+        run,
+        mode=str(sample["defense"]),
+        runtime_kind=str(sample["runtime_kind"]),
+        sample_id=sample_id,
+        schedule_path=candidate / products["schedule"]["path"],
+        events_path=candidate / products["events"]["path"],
+        packets_path=candidate / products["packets"]["path"],
+    )
     endpoints = run.get("endpoints") if isinstance(run, Mapping) else None
     if not isinstance(endpoints, list) or not endpoints:
         raise ValueError("formal class raw run has no endpoint inventory")
@@ -1271,9 +1257,7 @@ def _block_receipt(
         "class_study_historical_pre_snapshot_sha256": (
             context.class_study_historical_pre_snapshot_sha256
         ),
-        "defense_runtime_inputs_sha256": _canonical_digest(
-            context.defense_runtime_inputs
-        ),
+        "defense_runtime_inputs_sha256": _canonical_digest(context.defense_runtime_inputs),
         "chaff_qualification_set": context.chaff_qualification_set,
         "chaff_qualification_set_manifest_sha256": (
             context.chaff_qualification_set_manifest_sha256
@@ -1387,9 +1371,7 @@ def _dataset_receipt(
         },
         "runtime_contract": {
             "defense_runtime_inputs": context.defense_runtime_inputs,
-            "defense_runtime_inputs_sha256": _canonical_digest(
-                context.defense_runtime_inputs
-            ),
+            "defense_runtime_inputs_sha256": _canonical_digest(context.defense_runtime_inputs),
             "chaff_qualification_set": context.chaff_qualification_set,
             "chaff_qualification_set_manifest_sha256": (
                 context.chaff_qualification_set_manifest_sha256
@@ -1522,16 +1504,13 @@ def _validate_dataset(
         },
     }
     if dataset.get("capture_authority") != expected_authority or any(
-        sha256_file(_safe_handoff_file(root, binding["path"]))
-        != binding["sha256"]
+        sha256_file(_safe_handoff_file(root, binding["path"])) != binding["sha256"]
         for binding in expected_authority.values()
     ):
         raise ValueError("formal class handoff capture authority is invalid")
     if dataset.get("runtime_contract") != {
         "defense_runtime_inputs": context.defense_runtime_inputs,
-        "defense_runtime_inputs_sha256": _canonical_digest(
-            context.defense_runtime_inputs
-        ),
+        "defense_runtime_inputs_sha256": _canonical_digest(context.defense_runtime_inputs),
         "chaff_qualification_set": context.chaff_qualification_set,
         "chaff_qualification_set_manifest_sha256": (
             context.chaff_qualification_set_manifest_sha256
@@ -1800,6 +1779,16 @@ def _validate_rows(
             ):
                 raise ValueError("formal class shape PCAP and trace CSV differ")
             run = load_json(root / products["run"]["path"])
+            if deep:
+                _verify_current_candidate_algorithm_evidence(
+                    run,
+                    mode=mode,
+                    runtime_kind=str(sample["runtime_kind"]),
+                    sample_id=sample_id,
+                    schedule_path=root / products["schedule"]["path"],
+                    events_path=root / products["events"]["path"],
+                    packets_path=root / products["packets"]["path"],
+                )
             correctness_validator(
                 {
                     "workload_id": workload_id,
@@ -1856,6 +1845,52 @@ def _validate_rows(
     actual_files = set(_regular_tree_files(root, exclude={"SHA256SUMS"}))
     if actual_files != expected_files:
         raise ValueError("formal class handoff contains unbound product files")
+
+
+def _verify_current_candidate_algorithm_evidence(
+    run: Any,
+    *,
+    mode: str,
+    runtime_kind: str,
+    sample_id: str,
+    schedule_path: Path,
+    events_path: Path,
+    packets_path: Path,
+) -> None:
+    """Reopen current candidate chronology from the copied raw evidence.
+
+    The source-result coordinator applies the same gate before a result may be
+    promoted, but a handoff is a separately sealed evidence product and its
+    public verifier must not rely on that earlier process having run.  Import
+    lazily to keep the generic class-handoff module independent of the heavier
+    BuFLO parsers for non-candidate rows.
+    """
+
+    if runtime_kind not in {"buflo", "cs_buflo"}:
+        return
+    from .buflo_handoff import _algorithm_diagnostics
+
+    try:
+        diagnostics = _algorithm_diagnostics(
+            run,
+            defense=mode,
+            runtime_kind=runtime_kind,
+            schedule_path=schedule_path,
+            events_path=events_path,
+            packets_path=packets_path,
+            require_current=True,
+            require_latest_cs=True,
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError(
+            f"formal class {mode} sample {sample_id} has invalid current "
+            "terminal/schedule chronology"
+        ) from error
+    if diagnostics.get("schema_version") != 4:
+        raise ValueError(
+            f"formal class {mode} sample {sample_id} did not derive current "
+            "schema-4 algorithm evidence"
+        )
 
 
 def _copy_sealed_file(receipt: VerifiedResult, source: Path, destination: Path) -> None:

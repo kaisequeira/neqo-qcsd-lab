@@ -40,12 +40,16 @@ from .capture import ObserverPacket, extract_trace
 from .defenses import defense_from_runtime_identity
 from .experiment import resolved_sample_directory
 from .fidelity import (
+    ADVERTISEMENT_SCHEDULE_QCSD_FIELDS,
+    BUFLO_SCHEDULE_STOP_POLICY,
+    BUFLO_SCHEDULE_STOP_TERMINAL_TIME_SEMANTICS,
+    BUFLO_SCHEDULE_STOP_V4_KEYS,
     BUFLO_TERMINAL_CONTROL_EVIDENCE_SEMANTICS,
     BUFLO_TERMINAL_SUBCELL_OBSERVER_EFFECT,
     BUFLO_TERMINAL_SUBCELL_POLICY,
     CS_BUFLO_AUTHOR_RATE_BOUNDARY_COUNTER_SEMANTICS,
-    CS_BUFLO_EARLY_TERMINATION_TRANSLATION_VERSION,
     CS_BUFLO_EARLY_TERMINATION_SEMANTICS,
+    CS_BUFLO_EARLY_TERMINATION_TRANSLATION_VERSION,
     CS_BUFLO_INCOMING_BOUNDARY_SEPARATION,
     CS_BUFLO_INCOMING_CADENCE_BOUNDARY,
     CS_BUFLO_INCOMING_TERMINAL_BOUNDARY,
@@ -55,6 +59,7 @@ from .fidelity import (
     CS_BUFLO_RATE_BOUNDARY_TRANSLATION_VERSION,
     CS_BUFLO_STOP_DRAIN_V4_KEYS,
     CS_BUFLO_TERMINATION_STOP_POLICY,
+    CONSUMPTION_SCHEDULE_QCSD_FIELDS,
     LEGACY_SCHEDULE_QCSD_FIELDS,
     SCHEDULE_PREFIX_FIELDS,
     SCHEDULE_QCSD_FIELDS,
@@ -99,6 +104,7 @@ _PCAP_MAGIC_NS = 0xA1B23C4D
 _PCAP_GLOBAL = struct.Struct("<IHHIIII")
 _PCAP_RECORD = struct.Struct("<IIII")
 _MINIMUM_FRAME_BYTES = 14 + 20 + 8
+_BUFLO_EXACT_REALIZATION_WINDOW_US = 5_000
 _COMPONENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 _DIGEST = re.compile(r"[0-9a-f]{64}")
 _COMMIT = re.compile(r"[0-9a-f]{40}")
@@ -587,9 +593,7 @@ def _validate_formal_source_bindings(
         source_by_id: dict[str, Mapping[str, Any]] = {}
         for source_sample in source_samples:
             sample_id = (
-                source_sample.get("sample_id")
-                if isinstance(source_sample, Mapping)
-                else None
+                source_sample.get("sample_id") if isinstance(source_sample, Mapping) else None
             )
             if not isinstance(sample_id, str) or sample_id in source_by_id:
                 raise ValueError("formal handoff source sample identity is invalid")
@@ -899,10 +903,7 @@ def _validate_handoff_sample_correctness(
             for response in responses
             if isinstance(response, Mapping)
             and response.get("complete") is True
-            and not (
-                type(response.get("status")) is int
-                and 300 <= response["status"] < 400
-            )
+            and not (type(response.get("status")) is int and 300 <= response["status"] < 400)
         )
         response_match = len(observed) == len(responses) and observed == expected
     elif formal:
@@ -926,6 +927,7 @@ def _validate_handoff_sample_correctness(
         run,
         runtime_kind,
         require_application_complete=True,
+        require_current_schema=formal,
     ):
         eligible = False
     if not response_match or not eligible:
@@ -1068,7 +1070,10 @@ def _validate_formal_result_admission(
         or admission.get("source") != expected_source
         or cohort.get("source") != expected_source
         or admission.get("formal_cohort")
-        != {"path": str(Path(admission["formal_cohort"]["path"]).resolve()), "sha256": sha256_file(cohort_path)}
+        != {
+            "path": str(Path(admission["formal_cohort"]["path"]).resolve()),
+            "sha256": sha256_file(cohort_path),
+        }
     ):
         raise ValueError("formal result admission/cohort source lineage is invalid")
     campaign_sha256 = sha256_file(campaign_path)
@@ -1082,8 +1087,7 @@ def _validate_formal_result_admission(
     cohort_rows = [
         row
         for row in cohort["formal_campaigns"]
-        if row["campaign_sha256"] == campaign_sha256
-        and Path(row["result_root"]) == result_root
+        if row["campaign_sha256"] == campaign_sha256 and Path(row["result_root"]) == result_root
     ]
     if len(allowed) != 1 or len(cohort_rows) != 1:
         raise ValueError("formal result is not the prospectively selected cohort root")
@@ -1229,6 +1233,7 @@ def _read_extended_runner_csv(
     prefix: tuple[str, ...],
     *,
     label: str,
+    require_current_schema: bool = True,
 ) -> list[dict[str, str]]:
     """Read one exact source-stable runner CSV and validate its typed suffix."""
 
@@ -1238,10 +1243,21 @@ def _read_extended_runner_csv(
         reader = csv.DictReader(source)
         rows = list(reader)
         fieldnames = tuple(reader.fieldnames or ())
-    if fieldnames != prefix + SCHEDULE_QCSD_FIELDS:
+    compatible_suffixes = (
+        SCHEDULE_QCSD_FIELDS,
+        CONSUMPTION_SCHEDULE_QCSD_FIELDS,
+        ADVERTISEMENT_SCHEDULE_QCSD_FIELDS,
+        LEGACY_SCHEDULE_QCSD_FIELDS,
+    )
+    if fieldnames not in {prefix + suffix for suffix in compatible_suffixes} or (
+        require_current_schema and fieldnames != prefix + SCHEDULE_QCSD_FIELDS
+    ):
         raise ValueError(f"study handoff {label} does not use the exact extended schema")
     if any(None in row or any(value is None for value in row.values()) for row in rows):
         raise ValueError(f"study handoff {label} contains a malformed CSV row")
+    for row in rows:
+        for field in SCHEDULE_QCSD_FIELDS:
+            row.setdefault(field, "")
     for index, row in enumerate(rows, 1):
         _validate_runner_extension(row, label=f"{label} row {index}")
     return rows
@@ -1254,28 +1270,43 @@ def _validate_runner_extension(row: Mapping[str, str], *, label: str) -> None:
         if any(values.values()):
             raise ValueError(f"{label} has typed values without a schema version")
         return
-    if schema not in {"1", "2"}:
+    if schema not in {"1", "2", "3"}:
         raise ValueError(f"{label} has an invalid typed outcome identity")
     advertisement_fields = (
         "credit_advertised_at_us",
         "credit_advertisement_delay_us",
     )
     consumption_fields = ("credit_consumed_at_us", "credit_consumption_delay_us")
+    terminal_field = "terminal_defense_elapsed_us"
     advertisement_present = any(values[field] for field in advertisement_fields)
     consumption_present = any(values[field] for field in consumption_fields)
-    advertisement_complete = all(
-        values[field].isdecimal() for field in advertisement_fields
-    )
+    advertisement_complete = all(values[field].isdecimal() for field in advertisement_fields)
     consumption_complete = all(values[field].isdecimal() for field in consumption_fields)
     if advertisement_present and not advertisement_complete:
         raise ValueError(f"{label} has incomplete receive-credit advertisement evidence")
     if consumption_present and not consumption_complete:
         raise ValueError(f"{label} has incomplete receive-credit consumption evidence")
-    if consumption_present and (schema != "2" or not advertisement_complete):
+    terminal_present = bool(values[terminal_field])
+    if terminal_present != (schema == "3") or (
+        terminal_present and not values[terminal_field].isdecimal()
+    ):
+        raise ValueError(f"{label} has invalid controller terminal-time evidence")
+    target = row.get("target_time_us", "")
+    if terminal_present and target and (
+        not target.isdecimal() or int(values[terminal_field]) < int(target)
+    ):
+        raise ValueError(f"{label} terminal time predates its defense target")
+    if consumption_present and (schema not in {"2", "3"} or not advertisement_complete):
         raise ValueError(f"{label} has unbound receive-credit consumption evidence")
     if not values["send_policy"]:
         if any(values[field] for field in LEGACY_SCHEDULE_QCSD_FIELDS[1:]):
             raise ValueError(f"{label} mixes credit-only metadata with an outcome")
+        if (
+            schema == "3"
+            and not consumption_present
+            and (not advertisement_present or advertisement_complete)
+        ):
+            return
         if schema != "2" or not advertisement_complete or consumption_present:
             raise ValueError(f"{label} has a schema-only row without typed evidence")
         return
@@ -1305,7 +1336,7 @@ def _validate_runner_extension(row: Mapping[str, str], *, label: str) -> None:
     if values["send_policy"] == "exact":
         if any(components):
             if (
-                schema != "2"
+                schema not in {"2", "3"}
                 or not all(component.isdecimal() for component in components)
                 or sum(int(component) for component in components) != int(observed)
                 or not values["lateness_us"].isdecimal()
@@ -1412,14 +1443,12 @@ def _direction_algorithm_metrics(
         credit_delays.append(delay_us)
         credit_consumption_delays.append(consumption_delay_us)
     targets = [
-        _csv_unsigned(row["target_time_us"], label="schedule target time")
-        for row in selected
+        _csv_unsigned(row["target_time_us"], label="schedule target time") for row in selected
     ]
     if any(current <= previous for previous, current in zip(targets, targets[1:])):
         raise ValueError("study handoff schedule targets are not strictly increasing")
     sizes = [
-        _csv_unsigned(row["size"], label="schedule target size", positive=True)
-        for row in selected
+        _csv_unsigned(row["size"], label="schedule target size", positive=True) for row in selected
     ]
     deltas = [current - previous for previous, current in zip(targets, targets[1:])]
     nominal_intervals: list[int] = []
@@ -1427,14 +1456,9 @@ def _direction_algorithm_metrics(
         nominal_intervals = [20_000 for _ in deltas]
     elif runtime_kind == "cs_buflo":
         nominal_intervals = [_nearest_cs_interval(delta) for delta in deltas]
-    jitter = [
-        delta - nominal
-        for delta, nominal in zip(deltas, nominal_intervals, strict=True)
-    ]
+    jitter = [delta - nominal for delta, nominal in zip(deltas, nominal_intervals, strict=True)]
     transitions = []
-    for index, (previous, current) in enumerate(
-        zip(nominal_intervals, nominal_intervals[1:]), 1
-    ):
+    for index, (previous, current) in enumerate(zip(nominal_intervals, nominal_intervals[1:]), 1):
         if current != previous:
             transitions.append(
                 {
@@ -1445,12 +1469,9 @@ def _direction_algorithm_metrics(
             )
     satisfactions = Counter(row["satisfaction"] for row in selected)
     congestion = Counter(row["congestion_reason"] for row in selected if row["congestion_reason"])
-    typed = [
-        row for row in selected if row["qcsd_outcome_schema_version"] in {"1", "2"}
-    ]
+    typed = [row for row in selected if row["qcsd_outcome_schema_version"] in {"1", "2", "3"}]
     desired = sum(
-        _csv_unsigned(row["desired_udp_bytes"], label="schedule desired UDP bytes")
-        for row in typed
+        _csv_unsigned(row["desired_udp_bytes"], label="schedule desired UDP bytes") for row in typed
     )
     terminal = [row for row in typed if row["observed_udp_bytes"]]
     observed = sum(
@@ -1459,9 +1480,7 @@ def _direction_algorithm_metrics(
     )
     composition = {
         field: sum(
-            _csv_unsigned(row[field], label=f"schedule {field}")
-            for row in terminal
-            if row[field]
+            _csv_unsigned(row[field], label=f"schedule {field}") for row in terminal if row[field]
         )
         for field in _COMPOSITION_FIELDS
     }
@@ -1478,9 +1497,7 @@ def _direction_algorithm_metrics(
         },
         "desired_udp_bytes": desired,
         "observed_udp_bytes": observed,
-        "realization_ratio": (
-            observed / desired if direction == "outgoing" and desired else None
-        ),
+        "realization_ratio": (observed / desired if direction == "outgoing" and desired else None),
         "realization_semantics": (
             "locally observed outgoing UDP realization"
             if direction == "outgoing"
@@ -1492,9 +1509,7 @@ def _direction_algorithm_metrics(
         "nearest_nominal_interval_us": _numeric_summary(nominal_intervals),
         "estimated_jitter_from_nearest_nominal_us": _numeric_summary(jitter),
         "inferred_nearest_nominal_transitions": transitions,
-        "jitter_semantics": (
-            "target-delta-minus-nearest-allowed-live-interval; descriptive-only"
-        ),
+        "jitter_semantics": ("target-delta-minus-nearest-allowed-live-interval; descriptive-only"),
         "scheduling_lateness_us": _numeric_summary(lateness),
         "traffic_composition_bytes": composition,
         "receive_credit_advertisement": {
@@ -1526,9 +1541,7 @@ def _cs_buflo_stop_drain_ledger(
     evidence: dict[str, dict[str, int]] = {}
     for direction in ("outgoing", "incoming"):
         selected = [row for row in schedule_rows if row["direction"] == direction]
-        stop_us = diagnostics[
-            f"cs_buflo_{direction}_termination_stop_latched_at_us"
-        ]
+        stop_us = diagnostics[f"cs_buflo_{direction}_termination_stop_latched_at_us"]
         scheduled_at_stop = diagnostics[
             f"cs_buflo_{direction}_termination_stop_scheduled_cells_at_stop"
         ]
@@ -1536,24 +1549,17 @@ def _cs_buflo_stop_drain_ledger(
             f"cs_buflo_{direction}_termination_stop_terminal_cells_at_stop"
         ]
         target_times = [
-            _csv_unsigned(row["target_time_us"], label="schedule target time")
-            for row in selected
+            _csv_unsigned(row["target_time_us"], label="schedule target time") for row in selected
         ]
         terminal_times = [
             _csv_unsigned(
-                (
-                    row["credit_consumed_at_us"]
-                    if direction == "incoming"
-                    else row["action_time_us"]
-                ),
-                label=f"{direction} terminal time",
+                row["terminal_defense_elapsed_us"],
+                label=f"{direction} controller terminal time",
             )
             for row in selected
         ]
         terminal_before_stop = sum(terminal < stop_us for terminal in terminal_times)
-        terminal_at_or_before_stop = sum(
-            terminal <= stop_us for terminal in terminal_times
-        )
+        terminal_at_or_before_stop = sum(terminal <= stop_us for terminal in terminal_times)
         if (
             type(local_latch_us) is not int
             or type(stop_us) is not int
@@ -1562,26 +1568,464 @@ def _cs_buflo_stop_drain_ledger(
             or scheduled_at_stop != len(selected)
             or not 0 <= terminal_at_stop <= scheduled_at_stop
             or any(target > stop_us for target in target_times)
-            or not (
-                terminal_before_stop
-                <= terminal_at_stop
-                <= terminal_at_or_before_stop
-            )
+            or not (terminal_before_stop <= terminal_at_stop <= terminal_at_or_before_stop)
             or any(terminal > local_latch_us for terminal in terminal_times)
         ):
-            raise ValueError(
-                "study handoff CS-BuFLO stop/drain schedule chronology is invalid"
-            )
+            raise ValueError("study handoff CS-BuFLO stop/drain schedule chronology is invalid")
         evidence[direction] = {
             "drained_cells_after_stop": scheduled_at_stop - terminal_at_stop,
             "last_scheduled_target_us": max(target_times, default=0),
             "last_terminal_at_us": max(terminal_times, default=0),
             "terminal_cells_strictly_before_stop": terminal_before_stop,
             "terminal_cells_at_or_before_stop": terminal_at_or_before_stop,
-            "terminal_cells_at_stop_timestamp": (
-                terminal_at_or_before_stop - terminal_before_stop
-            ),
+            "terminal_cells_at_stop_timestamp": (terminal_at_or_before_stop - terminal_before_stop),
         }
+    return evidence
+
+
+def _defense_elapsed_us_bounds(
+    process_elapsed_us: int,
+    *,
+    defense_start_monotonic_ns: int,
+    label: str,
+) -> tuple[int, int]:
+    """Translate a process-clock microsecond stamp to exact defense-clock bounds.
+
+    Runner CSV timestamps floor a process-relative nanosecond duration to
+    microseconds, whereas defense diagnostics floor a duration relative to the
+    (generally sub-microsecond-aligned) defense start.  The original nanosecond
+    instant is therefore recoverable only as a one-microsecond interval.  The
+    returned inclusive lower/upper bounds preserve that uncertainty instead of
+    silently comparing the two different clock domains.
+    """
+
+    if (
+        type(process_elapsed_us) is not int
+        or process_elapsed_us < 0
+        or type(defense_start_monotonic_ns) is not int
+        or defense_start_monotonic_ns < 0
+    ):
+        raise ValueError(f"{label} has an invalid process/defense clock binding")
+    start_us_floor, start_ns_remainder = divmod(defense_start_monotonic_ns, 1_000)
+    if process_elapsed_us < start_us_floor:
+        raise ValueError(f"{label} predates the defense clock")
+    upper = process_elapsed_us - start_us_floor
+    lower = upper - int(start_ns_remainder > 0)
+    return max(0, lower), upper
+
+
+def _validate_incoming_terminal_clock_bindings(
+    schedule_rows: Sequence[Mapping[str, str]],
+    *,
+    defense_start_monotonic_ns: int,
+    runtime_kind: str,
+) -> None:
+    """Reconcile process-clock credit consumption with controller time.
+
+    ``credit_consumed_at_us`` is the observation-production timestamp relative
+    to the runner trace origin. ``terminal_defense_elapsed_us`` is the
+    controller resolution relative to defense activation. They are therefore
+    compared only after translating the former through the exact recorded
+    defense-start offset, retaining the one-microsecond floor uncertainty.
+    """
+
+    for index, row in enumerate(schedule_rows, 1):
+        if row["direction"] != "incoming":
+            continue
+        terminal_value = row["terminal_defense_elapsed_us"]
+        if not terminal_value:
+            continue
+        terminal_us = _csv_unsigned(
+            terminal_value,
+            label=f"schedule.csv row {index} incoming controller terminal time",
+        )
+        consumption_value = row["credit_consumed_at_us"]
+        if row["satisfaction"] in {"satisfied", "full"}:
+            if not consumption_value:
+                raise ValueError(
+                    f"study handoff {runtime_kind} incoming terminal row lacks "
+                    "credit-consumption evidence"
+                )
+            consumption_bounds = _defense_elapsed_us_bounds(
+                _csv_unsigned(
+                    consumption_value,
+                    label=f"schedule.csv row {index} credit-consumption time",
+                ),
+                defense_start_monotonic_ns=defense_start_monotonic_ns,
+                label=f"schedule.csv row {index} credit-consumption time",
+            )
+            if not consumption_bounds[0] <= terminal_us <= consumption_bounds[1]:
+                raise ValueError(
+                    f"study handoff {runtime_kind} incoming controller terminal "
+                    "time differs from translated credit consumption"
+                )
+        elif consumption_value:
+            raise ValueError(
+                f"study handoff {runtime_kind} non-realized incoming row carries "
+                "credit-consumption evidence"
+            )
+
+
+def _validate_candidate_schedule_diagnostic_counts(
+    diagnostics: Mapping[str, Any],
+    schedule_rows: Sequence[Mapping[str, str]],
+    *,
+    runtime_kind: str,
+) -> None:
+    """Bind terminal schedule outcomes and CS composition to flat counters."""
+
+    outgoing = [row for row in schedule_rows if row["direction"] == "outgoing"]
+    incoming = [row for row in schedule_rows if row["direction"] == "incoming"]
+    outgoing_counts = Counter(row["satisfaction"] for row in outgoing)
+    incoming_counts = Counter(row["satisfaction"] for row in incoming)
+    prefix = "buflo" if runtime_kind == "buflo" else "cs_buflo"
+    counter_keys = {
+        f"{prefix}_scheduled_outgoing_cells",
+        f"{prefix}_scheduled_incoming_cells",
+        f"{prefix}_full_outgoing_cells",
+        f"{prefix}_partial_outgoing_cells",
+        f"{prefix}_suppressed_outgoing_cells",
+        f"{prefix}_missed_outgoing_cells",
+        f"{prefix}_missed_incoming_cells",
+    }
+    if any(type(diagnostics.get(key)) is not int for key in counter_keys):
+        raise ValueError("study handoff candidate schedule counters are unavailable")
+    full_satisfaction = "satisfied" if runtime_kind == "buflo" else "full"
+    if (
+        diagnostics[f"{prefix}_scheduled_outgoing_cells"] != len(outgoing)
+        or diagnostics[f"{prefix}_scheduled_incoming_cells"] != len(incoming)
+        or diagnostics[f"{prefix}_full_outgoing_cells"] != outgoing_counts[full_satisfaction]
+        or diagnostics[f"{prefix}_partial_outgoing_cells"] != outgoing_counts["partial"]
+        or diagnostics[f"{prefix}_suppressed_outgoing_cells"] != outgoing_counts["suppressed"]
+        or diagnostics[f"{prefix}_missed_outgoing_cells"] != outgoing_counts["missed"]
+        or diagnostics[f"{prefix}_missed_incoming_cells"] != incoming_counts["missed"]
+        or set(incoming_counts) - {"satisfied", "missed"}
+        or (runtime_kind == "buflo" and set(outgoing_counts) - {"satisfied", "missed"})
+        or (
+            runtime_kind == "cs_buflo"
+            and set(outgoing_counts) - {"full", "partial", "suppressed", "missed"}
+        )
+    ):
+        raise ValueError("study handoff candidate terminal schedule differs from runner counters")
+
+    if runtime_kind != "cs_buflo":
+        return
+    realized = [row for row in outgoing if row["satisfaction"] in {"full", "partial"}]
+    desired_bytes = sum(
+        _csv_unsigned(row["desired_udp_bytes"], label="CS schedule desired UDP bytes")
+        for row in outgoing
+        if row["desired_udp_bytes"]
+    )
+    observed_bytes = sum(
+        _csv_unsigned(row["observed_udp_bytes"], label="CS schedule observed UDP bytes")
+        for row in realized
+    )
+    composition = {
+        field: sum(_csv_unsigned(row[field], label=f"CS schedule {field}") for row in realized)
+        for field in _COMPOSITION_FIELDS
+    }
+    lateness = [_csv_unsigned(row["lateness_us"], label="CS schedule lateness") for row in realized]
+    incoming_credit_bytes = sum(
+        _csv_unsigned(row["size"], label="CS incoming cell size", positive=True)
+        for row in incoming
+        if row["satisfaction"] == "satisfied"
+    )
+    if (
+        diagnostics.get("cs_buflo_desired_udp_bytes") != desired_bytes
+        or diagnostics.get("cs_buflo_realized_udp_bytes") != observed_bytes
+        or diagnostics.get("cs_buflo_realized_incoming_credit_bytes") != incoming_credit_bytes
+        or any(
+            diagnostics.get(f"cs_buflo_{field}") != value for field, value in composition.items()
+        )
+        or diagnostics.get("cs_buflo_lateness_us_total") != sum(lateness)
+        or diagnostics.get("cs_buflo_lateness_us_max") != max(lateness, default=0)
+    ):
+        raise ValueError("study handoff CS-BuFLO schedule composition differs from runner counters")
+
+
+def _validate_cs_buflo_outgoing_packet_evidence(
+    schedule_rows: Sequence[Mapping[str, str]],
+    packets_rows: Sequence[Mapping[str, str]],
+    *,
+    defense_start_monotonic_ns: int | None,
+) -> None:
+    """Bind each realized CS opportunity to one packet-builder transcript."""
+
+    scheduled = [
+        row
+        for row in schedule_rows
+        if row["direction"] == "outgoing" and row["satisfaction"] in {"full", "partial"}
+    ]
+    packets = [
+        row
+        for row in packets_rows
+        if row["direction"] == "outgoing"
+        and row["scheduled_target"]
+    ]
+    packets_by_slot: dict[int, list[Mapping[str, str]]] = {}
+    for row in packets:
+        slot = _csv_unsigned(row["slot_id"], label="packets.csv CS-BuFLO slot")
+        packets_by_slot.setdefault(slot, []).append(row)
+    scheduled_slots = {
+        _csv_unsigned(row["slot_id"], label="schedule.csv CS-BuFLO slot") for row in scheduled
+    }
+    if len(scheduled_slots) != len(scheduled) or set(packets_by_slot) != scheduled_slots:
+        raise ValueError("study handoff CS-BuFLO outgoing packet inventory is not one-to-one")
+
+    compared_fields = (
+        *_COMPOSITION_FIELDS,
+        "lateness_us",
+        "congestion_reason",
+    )
+    for row in scheduled:
+        slot = _csv_unsigned(row["slot_id"], label="schedule.csv CS-BuFLO slot")
+        matches = packets_by_slot[slot]
+        packet = matches[0]
+        target_size = _csv_unsigned(row["size"], label="schedule.csv CS-BuFLO size", positive=True)
+        observed = _csv_unsigned(
+            row["observed_udp_bytes"],
+            label="schedule.csv CS-BuFLO observed UDP bytes",
+            positive=True,
+        )
+        if (
+            len(matches) != 1
+            or packet["connection"] != row["connection"]
+            or packet["satisfaction"] != row["satisfaction"]
+            or packet["qcsd_outcome_schema_version"] != "2"
+            or packet["send_policy"] != "congestion_sensitive"
+            or _csv_unsigned(
+                packet["scheduled_target"],
+                label="packets.csv CS-BuFLO scheduled target",
+                positive=True,
+            )
+            != target_size
+            or _csv_unsigned(
+                packet["desired_udp_bytes"],
+                label="packets.csv CS-BuFLO desired UDP bytes",
+                positive=True,
+            )
+            != target_size
+            or _csv_unsigned(
+                packet["observed_udp_bytes"],
+                label="packets.csv CS-BuFLO observed UDP bytes",
+                positive=True,
+            )
+            != observed
+            or _csv_unsigned(
+                packet["observed_udp_length"],
+                label="packets.csv CS-BuFLO observed UDP length",
+                positive=True,
+            )
+            != observed
+            or any(packet[field] != row[field] for field in compared_fields)
+        ):
+            raise ValueError("study handoff CS-BuFLO outgoing packet binding is invalid")
+
+        terminal_value = row["terminal_defense_elapsed_us"]
+        if terminal_value:
+            if type(defense_start_monotonic_ns) is not int or defense_start_monotonic_ns < 0:
+                raise ValueError("study handoff CS-BuFLO defense clock binding is unavailable")
+            packet_bounds = _defense_elapsed_us_bounds(
+                _csv_unsigned(
+                    packet["monotonic_us"],
+                    label="packets.csv CS-BuFLO packet time",
+                ),
+                defense_start_monotonic_ns=defense_start_monotonic_ns,
+                label="packets.csv CS-BuFLO packet time",
+            )
+            terminal_us = _csv_unsigned(
+                terminal_value,
+                label="schedule.csv CS-BuFLO controller terminal time",
+            )
+            realized_us = _csv_unsigned(
+                row["target_time_us"], label="schedule.csv CS-BuFLO target time"
+            ) + _csv_unsigned(row["lateness_us"], label="schedule.csv CS-BuFLO lateness")
+            # The transport computes composition lateness while building the
+            # datagram, then the runner timestamps the packet and controller
+            # resolution at the successful socket handoff.  Those instants
+            # are causally ordered but need not be the same microsecond.
+            if not (
+                packet_bounds[0] <= terminal_us <= packet_bounds[1] and realized_us <= terminal_us
+            ):
+                raise ValueError(
+                    "study handoff CS-BuFLO outgoing packet/controller timing is inconsistent"
+                )
+
+
+def _buflo_terminal_times(
+    schedule_rows: Sequence[Mapping[str, str]],
+    packets_rows: Sequence[Mapping[str, str]],
+    *,
+    defense_start_monotonic_ns: int,
+) -> dict[str, list[int]]:
+    """Bind every BuFLO slot to its exact controller terminal time."""
+
+    outgoing_schedule = [row for row in schedule_rows if row["direction"] == "outgoing"]
+    outgoing_packets = [
+        row
+        for row in packets_rows
+        if row["direction"] == "outgoing"
+        and row["scheduled_target"]
+    ]
+    packets_by_slot: dict[int, list[Mapping[str, str]]] = {}
+    for row in outgoing_packets:
+        slot = _csv_unsigned(row["slot_id"], label="packets.csv BuFLO slot")
+        packets_by_slot.setdefault(slot, []).append(row)
+    scheduled_slots = {
+        _csv_unsigned(row["slot_id"], label="schedule.csv BuFLO slot") for row in outgoing_schedule
+    }
+    if len(scheduled_slots) != len(outgoing_schedule) or set(packets_by_slot) != scheduled_slots:
+        raise ValueError("study handoff BuFLO outgoing terminal packet inventory is not one-to-one")
+
+    outgoing: list[int] = []
+    for row in outgoing_schedule:
+        slot = _csv_unsigned(row["slot_id"], label="schedule.csv BuFLO slot")
+        matches = packets_by_slot[slot]
+        size = _csv_unsigned(row["size"], label="schedule.csv BuFLO size", positive=True)
+        if (
+            len(matches) != 1
+            or row["satisfaction"] != "satisfied"
+            or row["qcsd_outcome_schema_version"] != "3"
+            or matches[0]["connection"] != row["connection"]
+            or matches[0]["satisfaction"] != "satisfied"
+            or matches[0]["qcsd_outcome_schema_version"] != "2"
+            or matches[0]["send_policy"] != "exact"
+            or _csv_unsigned(
+                matches[0]["scheduled_target"],
+                label="packets.csv BuFLO scheduled target",
+                positive=True,
+            )
+            != size
+            or _csv_unsigned(
+                matches[0]["desired_udp_bytes"],
+                label="packets.csv BuFLO desired UDP bytes",
+                positive=True,
+            )
+            != size
+            or _csv_unsigned(
+                matches[0]["observed_udp_length"],
+                label="packets.csv BuFLO observed UDP length",
+                positive=True,
+            )
+            != size
+            or _csv_unsigned(
+                matches[0]["observed_udp_bytes"],
+                label="packets.csv BuFLO observed UDP bytes",
+                positive=True,
+            )
+            != size
+            or any(
+                not matches[0][field].isdecimal()
+                for field in (*_COMPOSITION_FIELDS, "lateness_us")
+            )
+        ):
+            raise ValueError("study handoff BuFLO outgoing terminal packet binding is invalid")
+        terminal_us = _csv_unsigned(
+            row["terminal_defense_elapsed_us"],
+            label="schedule.csv BuFLO controller terminal time",
+        )
+        target_us = _csv_unsigned(
+            row["target_time_us"],
+            label="schedule.csv BuFLO target time",
+        )
+        packet_lateness_us = _csv_unsigned(
+            matches[0]["lateness_us"],
+            label="packets.csv BuFLO lateness",
+        )
+        if (
+            terminal_us - target_us >= _BUFLO_EXACT_REALIZATION_WINDOW_US
+            or packet_lateness_us >= _BUFLO_EXACT_REALIZATION_WINDOW_US
+        ):
+            raise ValueError(
+                "study handoff BuFLO exact outgoing cell exceeds its half-open realization window"
+            )
+        packet_bounds = _defense_elapsed_us_bounds(
+            _csv_unsigned(
+                matches[0]["monotonic_us"],
+                label="packets.csv BuFLO packet time",
+            ),
+            defense_start_monotonic_ns=defense_start_monotonic_ns,
+            label="packets.csv BuFLO packet time",
+        )
+        if not packet_bounds[0] <= terminal_us <= packet_bounds[1]:
+            raise ValueError(
+                "study handoff BuFLO outgoing controller terminal time differs from its packet"
+            )
+        realized_us = target_us + packet_lateness_us
+        if realized_us > terminal_us:
+            raise ValueError(
+                "study handoff BuFLO packet-build time follows controller terminalization"
+            )
+        outgoing.append(terminal_us)
+
+    incoming = [
+        _csv_unsigned(
+            row["terminal_defense_elapsed_us"],
+            label="schedule.csv BuFLO incoming controller terminal time",
+        )
+        for row in schedule_rows
+        if row["direction"] == "incoming"
+    ]
+    return {"outgoing": outgoing, "incoming": incoming}
+
+
+def _buflo_stop_drain_ledger(
+    diagnostics: Mapping[str, Any],
+    schedule_rows: Sequence[Mapping[str, str]],
+    terminal_times_by_direction: Mapping[str, Sequence[int]],
+) -> dict[str, dict[str, int]]:
+    """Bind a schema-4 BuFLO schedule-stop snapshot to terminal rows."""
+
+    stop_us = diagnostics["buflo_schedule_stop_latched_at_us"]
+    terminal_latch_us = diagnostics["buflo_terminal_subcell_latched_at_us"]
+    if (
+        type(stop_us) is not int
+        or type(terminal_latch_us) is not int
+        or stop_us < 10_000_000
+        or stop_us > terminal_latch_us
+    ):
+        raise ValueError("study handoff BuFLO stop/drain latch chronology is invalid")
+    evidence: dict[str, dict[str, int]] = {}
+    for direction in ("outgoing", "incoming"):
+        selected = [row for row in schedule_rows if row["direction"] == direction]
+        scheduled_at_stop = diagnostics[f"buflo_schedule_stop_scheduled_{direction}_cells"]
+        terminal_at_stop = diagnostics[f"buflo_schedule_stop_terminal_{direction}_cells"]
+        target_times = [
+            _csv_unsigned(row["target_time_us"], label="schedule target time") for row in selected
+        ]
+        terminal_times = list(terminal_times_by_direction.get(direction, ()))
+        terminal_before_stop = sum(terminal < stop_us for terminal in terminal_times)
+        terminal_at_or_before_stop = sum(terminal <= stop_us for terminal in terminal_times)
+        drained_after_stop = scheduled_at_stop - terminal_at_stop
+        if (
+            type(scheduled_at_stop) is not int
+            or type(terminal_at_stop) is not int
+            or scheduled_at_stop != len(selected)
+            or scheduled_at_stop != len(terminal_times)
+            or not 0 <= terminal_at_stop <= scheduled_at_stop
+            or any(target > stop_us for target in target_times)
+            or not (terminal_before_stop <= terminal_at_stop <= terminal_at_or_before_stop)
+            or any(terminal > terminal_latch_us for terminal in terminal_times)
+            or (direction == "outgoing" and drained_after_stop != 0)
+        ):
+            raise ValueError("study handoff BuFLO stop/drain schedule chronology is invalid")
+        evidence[direction] = {
+            "scheduled_cells_at_stop": scheduled_at_stop,
+            "terminal_cells_at_stop": terminal_at_stop,
+            "drained_cells_after_stop": drained_after_stop,
+            "last_scheduled_target_us": max(target_times, default=0),
+            "last_terminal_at_us": max(terminal_times, default=0),
+            "terminal_cells_strictly_before_stop": terminal_before_stop,
+            "terminal_cells_at_or_before_stop": terminal_at_or_before_stop,
+            "terminal_cells_at_stop_timestamp": (terminal_at_or_before_stop - terminal_before_stop),
+        }
+    outgoing = evidence["outgoing"]
+    incoming = evidence["incoming"]
+    if (
+        outgoing["scheduled_cells_at_stop"] != incoming["scheduled_cells_at_stop"]
+        or outgoing["last_scheduled_target_us"] != incoming["last_scheduled_target_us"]
+    ):
+        raise ValueError("study handoff BuFLO paired stop schedule is inconsistent")
     return evidence
 
 
@@ -1598,30 +2042,61 @@ def _algorithm_diagnostics(
 ) -> dict[str, Any]:
     if require_latest_cs is None:
         require_latest_cs = require_current
+    require_current_trace = require_latest_cs if runtime_kind == "cs_buflo" else require_current
     if not isinstance(run, Mapping):
         raise ValueError("study handoff runner receipt is invalid")
     schedule_rows = _read_extended_runner_csv(
-        schedule_path, SCHEDULE_PREFIX_FIELDS, label="schedule.csv"
+        schedule_path,
+        SCHEDULE_PREFIX_FIELDS,
+        label="schedule.csv",
+        require_current_schema=require_current_trace,
     )
     events_rows = _read_extended_runner_csv(
-        events_path, _EVENT_PREFIX_FIELDS, label="events.csv"
+        events_path,
+        _EVENT_PREFIX_FIELDS,
+        label="events.csv",
+        require_current_schema=require_current_trace,
     )
     packets_rows = _read_extended_runner_csv(
-        packets_path, _PACKET_PREFIX_FIELDS, label="packets.csv"
+        packets_path,
+        _PACKET_PREFIX_FIELDS,
+        label="packets.csv",
+        require_current_schema=require_current_trace,
     )
     for index, row in enumerate(events_rows, 1):
-        _csv_unsigned(
-            row["monotonic_us"], label=f"events.csv row {index} monotonic_us"
-        )
+        if row["terminal_defense_elapsed_us"]:
+            raise ValueError(f"events.csv row {index} incorrectly carries a schedule terminal time")
+        _csv_unsigned(row["monotonic_us"], label=f"events.csv row {index} monotonic_us")
         if row["connection"]:
-            _csv_unsigned(
-                row["connection"], label=f"events.csv row {index} connection"
-            )
+            _csv_unsigned(row["connection"], label=f"events.csv row {index} connection")
         if not row["event"]:
             raise ValueError(f"events.csv row {index} has no event identity")
     for index, row in enumerate(packets_rows, 1):
+        if row["terminal_defense_elapsed_us"]:
+            raise ValueError(
+                f"packets.csv row {index} incorrectly carries a schedule terminal time"
+            )
         if row["direction"] not in {"outgoing", "incoming"}:
             raise ValueError(f"packets.csv row {index} has an invalid direction")
+        if bool(row["scheduled_target"]) != bool(row["slot_id"]):
+            raise ValueError(
+                f"packets.csv row {index} has an incomplete scheduled packet identity"
+            )
+        if row["direction"] == "incoming" and (
+            row["scheduled_target"] or row["slot_id"]
+        ):
+            raise ValueError(
+                f"packets.csv row {index} incorrectly claims a scheduled incoming datagram"
+            )
+        if (
+            row["direction"] == "outgoing"
+            and not row["scheduled_target"]
+            and row["qcsd_outcome_schema_version"]
+            and row["send_policy"] != "unscheduled"
+        ):
+            raise ValueError(
+                f"packets.csv row {index} gives an unscheduled packet a scheduled send policy"
+            )
         for field in ("monotonic_us", "connection"):
             _csv_unsigned(row[field], label=f"packets.csv row {index} {field}")
         _csv_unsigned(
@@ -1642,20 +2117,43 @@ def _algorithm_diagnostics(
             _csv_unsigned(row[field], label=f"schedule {field}")
         if satisfaction not in {"satisfied", "missed", "full", "partial", "suppressed"}:
             raise ValueError(f"schedule.csv row {index} has an invalid satisfaction")
+        if require_current_trace:
+            if (
+                row["qcsd_outcome_schema_version"] != "3"
+                or not row["terminal_defense_elapsed_us"].isdecimal()
+            ):
+                raise ValueError(
+                    "study handoff current schedule row lacks exact controller terminal time"
+                )
+            if _csv_unsigned(
+                row["terminal_defense_elapsed_us"],
+                label="schedule controller terminal time",
+            ) < _csv_unsigned(row["target_time_us"], label="schedule target time"):
+                raise ValueError("study handoff schedule terminal time predates its defense target")
+        elif row["qcsd_outcome_schema_version"] == "3":
+            _csv_unsigned(
+                row["terminal_defense_elapsed_us"],
+                label="schedule controller terminal time",
+            )
         if satisfaction != "missed":
-            expected_schema = "2" if direction == "incoming" else "1"
+            expected_schema = (
+                "3"
+                if require_current_trace or row["qcsd_outcome_schema_version"] == "3"
+                else ("2" if direction == "incoming" else "1")
+            )
             if row["qcsd_outcome_schema_version"] != expected_schema:
                 raise ValueError("study handoff terminal schedule row lacks typed evidence")
-            if _csv_unsigned(
-                row["desired_udp_bytes"], label="schedule desired size", positive=True
-            ) != size:
+            if (
+                _csv_unsigned(
+                    row["desired_udp_bytes"], label="schedule desired size", positive=True
+                )
+                != size
+            ):
                 raise ValueError("study handoff schedule desired size differs from its target")
         if satisfaction == "satisfied":
             exact_observation_valid = (
                 _csv_unsigned(row["observed_size"], label="schedule observed size") == size
-                and _csv_unsigned(
-                    row["observed_udp_bytes"], label="schedule observed UDP size"
-                )
+                and _csv_unsigned(row["observed_udp_bytes"], label="schedule observed UDP size")
                 == size
                 if direction == "outgoing"
                 else not row["observed_size"] and not row["observed_udp_bytes"]
@@ -1669,9 +2167,7 @@ def _algorithm_diagnostics(
             ):
                 raise ValueError("study handoff exact schedule realization is invalid")
         elif satisfaction in {"full", "partial", "suppressed"}:
-            observed = _csv_unsigned(
-                row["observed_udp_bytes"], label="schedule observed UDP size"
-            )
+            observed = _csv_unsigned(row["observed_udp_bytes"], label="schedule observed UDP size")
             if row["send_policy"] != "congestion_sensitive":
                 raise ValueError("study handoff CS schedule send policy is invalid")
             expected_reason = {
@@ -1698,21 +2194,50 @@ def _algorithm_diagnostics(
     diagnostics = run.get("defense_diagnostics")
     if not isinstance(diagnostics, Mapping):
         diagnostics = {}
+    defense_start_ns = run.get("defense_start_monotonic_ns")
+    if runtime_kind in {"buflo", "cs_buflo"}:
+        _validate_candidate_schedule_diagnostic_counts(
+            diagnostics,
+            schedule_rows,
+            runtime_kind=runtime_kind,
+        )
+        if require_current_trace:
+            if type(defense_start_ns) is not int or defense_start_ns < 0:
+                raise ValueError("study handoff candidate defense clock binding is unavailable")
+            _validate_incoming_terminal_clock_bindings(
+                schedule_rows,
+                defense_start_monotonic_ns=defense_start_ns,
+                runtime_kind=runtime_kind,
+            )
+    if runtime_kind == "cs_buflo":
+        _validate_cs_buflo_outgoing_packet_evidence(
+            schedule_rows,
+            packets_rows,
+            defense_start_monotonic_ns=(
+                defense_start_ns if isinstance(defense_start_ns, int) else None
+            ),
+        )
     buflo_state: dict[str, Any] | None = None
     if runtime_kind == "buflo":
         summary = run.get("buflo_summary")
+        summary_schema = summary.get("schema_version") if isinstance(summary, Mapping) else None
+        parser_current = summary_schema in {3, 4}
+        stop_drain_current = summary_schema == 4
         required = {
             "buflo_terminal_subcell_pending_request_cancellations",
             "buflo_terminal_subcell_stream_cancellations",
             "buflo_terminal_subcell_exact_capacity_bytes_cancelled",
         }
-        if require_current:
-            required.add(
-                "buflo_terminal_subcell_pending_application_parser_boundaries_at_latch"
-            )
+        if parser_current:
+            required.add("buflo_terminal_subcell_pending_application_parser_boundaries_at_latch")
+        required_diagnostics = required | (
+            BUFLO_SCHEDULE_STOP_V4_KEYS if stop_drain_current else set()
+        )
         if (
             not isinstance(summary, Mapping)
-            or not required <= set(diagnostics)
+            or summary_schema not in {2, 3, 4}
+            or (require_current and not stop_drain_current)
+            or not required_diagnostics <= set(diagnostics)
             or not new_defense_terminal_receipts_valid(
                 run,
                 "buflo",
@@ -1729,9 +2254,7 @@ def _algorithm_diagnostics(
         capacity = counters["buflo_terminal_subcell_exact_capacity_bytes_cancelled"]
         terminal_latched = diagnostics["buflo_terminal_subcell_latched"]
         terminal_latched_at_us = diagnostics["buflo_terminal_subcell_latched_at_us"]
-        open_streams_at_latch = diagnostics[
-            "buflo_terminal_subcell_open_streams_at_latch"
-        ]
+        open_streams_at_latch = diagnostics["buflo_terminal_subcell_open_streams_at_latch"]
         parser_lease_bytes_at_latch = diagnostics[
             "buflo_terminal_subcell_parser_lease_bytes_at_latch"
         ]
@@ -1741,6 +2264,15 @@ def _algorithm_diagnostics(
         pending_application_parser_boundaries_at_latch = diagnostics.get(
             "buflo_terminal_subcell_pending_application_parser_boundaries_at_latch"
         )
+        terminal_times: dict[str, list[int]] | None = None
+        if stop_drain_current:
+            if type(defense_start_ns) is not int or defense_start_ns < 0:
+                raise ValueError("study handoff BuFLO defense clock binding is unavailable")
+            terminal_times = _buflo_terminal_times(
+                schedule_rows,
+                packets_rows,
+                defense_start_monotonic_ns=defense_start_ns,
+            )
         responses = run.get("chaff_responses")
         if not isinstance(responses, list):
             raise ValueError("study handoff BuFLO chaff receipts are unavailable")
@@ -1782,36 +2314,54 @@ def _algorithm_diagnostics(
             and item[2]["stream"] >= 0
         ]
         cancellation_targets = {
-            (item[2]["endpoint"], item[2]["stream"])
-            for item in typed_cancellation_events
+            (item[2]["endpoint"], item[2]["stream"]) for item in typed_cancellation_events
         }
-        exact_outgoing_times = [
-            _csv_unsigned(
-                row["monotonic_us"], label="packets.csv exact outgoing time"
-            )
-            for row in packets_rows
-            if row["direction"] == "outgoing"
-            and row["scheduled_target"]
-            and row["send_policy"] == "exact"
-        ]
+        exact_outgoing_times = (
+            terminal_times["outgoing"]
+            if terminal_times is not None
+            else [
+                _csv_unsigned(row["monotonic_us"], label="packets.csv exact outgoing time")
+                for row in packets_rows
+                if row["direction"] == "outgoing"
+                and row["scheduled_target"]
+                and row["send_policy"] == "exact"
+            ]
+        )
+        raw_typed_cancellation_times = [at for at, _, _ in typed_cancellation_events]
+        cancellation_time_bounds = (
+            [
+                _defense_elapsed_us_bounds(
+                    at,
+                    defense_start_monotonic_ns=defense_start_ns,
+                    label="events.csv BuFLO cancellation time",
+                )
+                for at in raw_typed_cancellation_times
+            ]
+            if terminal_times is not None
+            else [(at, at) for at in raw_typed_cancellation_times]
+        )
         first_cancellation_us = (
-            min(at for at, _, _ in typed_cancellation_events)
-            if typed_cancellation_events
+            min(lower for lower, _ in cancellation_time_bounds)
+            if cancellation_time_bounds
             else None
         )
-        last_cancellation_us = (
-            max(at for at, _, _ in typed_cancellation_events)
-            if typed_cancellation_events
+        first_cancellation_upper_us = (
+            min(upper for _, upper in cancellation_time_bounds)
+            if cancellation_time_bounds
             else None
         )
-        incoming_terminal_times = [
-            _csv_unsigned(
-                row["credit_consumed_at_us"],
-                label="schedule incoming terminal consumption time",
-            )
-            for row in schedule_rows
-            if row["direction"] == "incoming" and row["satisfaction"] == "satisfied"
-        ]
+        incoming_terminal_times = (
+            terminal_times["incoming"]
+            if terminal_times is not None
+            else [
+                _csv_unsigned(
+                    row["credit_consumed_at_us"],
+                    label="schedule incoming terminal consumption time",
+                )
+                for row in schedule_rows
+                if row["direction"] == "incoming" and row["satisfaction"] == "satisfied"
+            ]
+        )
         scheduled_terminal_times = exact_outgoing_times + incoming_terminal_times
         last_scheduled_terminal_us = (
             max(scheduled_terminal_times) if scheduled_terminal_times else None
@@ -1819,7 +2369,7 @@ def _algorithm_diagnostics(
         post_cancellation_control_rows = [
             row
             for row in packets_rows
-            if last_cancellation_us is not None
+            if raw_typed_cancellation_times
             and row["direction"] == "outgoing"
             and row["qcsd_outcome_schema_version"] == "2"
             and row["send_policy"] == "unscheduled"
@@ -1828,17 +2378,25 @@ def _algorithm_diagnostics(
                 label="packets.csv terminal defense-control bytes",
             )
             > 0
-            and _csv_unsigned(
-                row["monotonic_us"], label="packets.csv terminal control time"
-            )
-            >= last_cancellation_us
+            and _csv_unsigned(row["monotonic_us"], label="packets.csv terminal control time")
+            >= max(raw_typed_cancellation_times)
         ]
-        post_cancellation_control_times = [
-            _csv_unsigned(
-                row["monotonic_us"], label="packets.csv terminal control time"
-            )
+        raw_post_cancellation_control_times = [
+            _csv_unsigned(row["monotonic_us"], label="packets.csv terminal control time")
             for row in post_cancellation_control_rows
         ]
+        post_cancellation_control_times = (
+            [
+                _defense_elapsed_us_bounds(
+                    at,
+                    defense_start_monotonic_ns=defense_start_ns,
+                    label="packets.csv terminal control time",
+                )[0]
+                for at in raw_post_cancellation_control_times
+            ]
+            if terminal_times is not None
+            else raw_post_cancellation_control_times
+        )
         post_cancellation_control_bytes = sum(
             _csv_unsigned(
                 row["defense_control_bytes"],
@@ -1850,13 +2408,14 @@ def _algorithm_diagnostics(
         policy = BUFLO_TERMINAL_SUBCELL_POLICY
         observer_effect = BUFLO_TERMINAL_SUBCELL_OBSERVER_EFFECT
         if (
-            summary.get("schema_version") != (3 if require_current else 2)
-            or summary.get("terminal_subcell_policy") != policy
+            summary.get("terminal_subcell_policy") != policy
             or summary.get("terminal_subcell_observer_effect") != observer_effect
-            or summary.get("diagnostics") != diagnostics
-            or not buflo_terminal_diagnostics_valid(
-                diagnostics, require_current=require_current
+            or (
+                stop_drain_current
+                and summary.get("terminal_schedule_stop_policy") != BUFLO_SCHEDULE_STOP_POLICY
             )
+            or summary.get("diagnostics") != diagnostics
+            or not buflo_terminal_diagnostics_valid(diagnostics, require_current=stop_drain_current)
             or receipt_cancellations != streams
             or len(cancellation_events) != streams
             or len(typed_cancellation_events) != streams
@@ -1867,10 +2426,11 @@ def _algorithm_diagnostics(
                 streams > 0
                 and (
                     first_cancellation_us is None
+                    or first_cancellation_upper_us is None
                     or not exact_outgoing_times
                     or last_scheduled_terminal_us is None
-                    or first_cancellation_us
-                    < max(last_scheduled_terminal_us, terminal_latched_at_us)
+                    or first_cancellation_us < last_scheduled_terminal_us
+                    or first_cancellation_upper_us < terminal_latched_at_us
                     or not post_cancellation_control_rows
                 )
             )
@@ -1907,25 +2467,37 @@ def _algorithm_diagnostics(
                 post_cancellation_control_bytes
             ),
             "first_post_cancellation_defense_control_monotonic_us": (
-                min(post_cancellation_control_times)
-                if post_cancellation_control_times
-                else None
+                min(post_cancellation_control_times) if post_cancellation_control_times else None
             ),
             "last_post_cancellation_defense_control_monotonic_us": (
-                max(post_cancellation_control_times)
-                if post_cancellation_control_times
-                else None
+                max(post_cancellation_control_times) if post_cancellation_control_times else None
             ),
             "paper_equivalent": False,
             "implementation_scope": "client_only_quic",
         }
-        if require_current:
+        if parser_current:
             buflo_state = {
                 "schema_version": 2,
                 **buflo_state,
                 "pending_application_parser_boundaries_at_latch": (
                     pending_application_parser_boundaries_at_latch
                 ),
+            }
+        if stop_drain_current:
+            assert terminal_times is not None
+            stop_drain_ledger = _buflo_stop_drain_ledger(diagnostics, schedule_rows, terminal_times)
+            buflo_state = {
+                **buflo_state,
+                "schema_version": 3,
+                "schedule_stop": {
+                    "policy": BUFLO_SCHEDULE_STOP_POLICY,
+                    "terminal_time_semantics": (BUFLO_SCHEDULE_STOP_TERMINAL_TIME_SEMANTICS),
+                    "latched": diagnostics["buflo_schedule_stop_latched"],
+                    "latched_at_us": diagnostics["buflo_schedule_stop_latched_at_us"],
+                    "available_bytes": diagnostics["buflo_schedule_stop_available_bytes"],
+                    "required_bytes": diagnostics["buflo_schedule_stop_required_bytes"],
+                    "directions": stop_drain_ledger,
+                },
             }
         if not buflo_terminal_state_valid(buflo_state):
             raise ValueError("study handoff BuFLO terminal-tail state is invalid")
@@ -1989,14 +2561,8 @@ def _algorithm_diagnostics(
             )
         if (
             not required <= set(diagnostics)
-            or (
-                require_current
-                and not current_cs_summary
-            )
-            or (
-                not require_current
-                and cs_summary_schema != 2
-            )
+            or (require_current and not current_cs_summary)
+            or (not require_current and cs_summary_schema != 2)
             or (require_latest_cs and cs_summary_schema != 4)
             or not new_defense_terminal_receipts_valid(
                 run,
@@ -2004,15 +2570,11 @@ def _algorithm_diagnostics(
                 require_application_complete=True,
                 require_current_schema=require_latest_cs,
             )
-            or not cs_buflo_local_et_handoff_valid(
-                diagnostics, require_current=current_cs_summary
-            )
+            or not cs_buflo_local_et_handoff_valid(diagnostics, require_current=current_cs_summary)
         ):
             raise ValueError("study handoff CS-BuFLO runner diagnostics are incomplete")
         stop_drain_ledger = (
-            _cs_buflo_stop_drain_ledger(diagnostics, schedule_rows)
-            if stop_drain_current
-            else None
+            _cs_buflo_stop_drain_ledger(diagnostics, schedule_rows) if stop_drain_current else None
         )
         cs_state = {
             "padding_variant": (
@@ -2024,18 +2586,12 @@ def _algorithm_diagnostics(
                 and diagnostics["cs_buflo_payload_padding"] is False
                 else "invalid"
             ),
-            "early_termination_semantics": diagnostics[
-                "cs_buflo_early_termination_semantics"
-            ],
+            "early_termination_semantics": diagnostics["cs_buflo_early_termination_semantics"],
             **(
                 {
                     "early_termination_translation": {
-                        "version": diagnostics[
-                            "cs_buflo_early_termination_translation_version"
-                        ],
-                        "stop_policy": diagnostics[
-                            "cs_buflo_termination_stop_policy"
-                        ],
+                        "version": diagnostics["cs_buflo_early_termination_translation_version"],
+                        "stop_policy": diagnostics["cs_buflo_termination_stop_policy"],
                     }
                 }
                 if stop_drain_current
@@ -2048,9 +2604,7 @@ def _algorithm_diagnostics(
             },
             "rate_boundary_translation": {
                 "version": diagnostics["cs_buflo_rate_boundary_translation_version"],
-                "live_counter_semantics": diagnostics[
-                    "cs_buflo_rate_boundary_counter_semantics"
-                ],
+                "live_counter_semantics": diagnostics["cs_buflo_rate_boundary_counter_semantics"],
                 "author_counter_semantics": diagnostics[
                     "cs_buflo_author_rate_boundary_counter_semantics"
                 ],
@@ -2066,14 +2620,10 @@ def _algorithm_diagnostics(
                 "pending_request_cancellations": diagnostics[
                     "cs_buflo_local_et_pending_request_cancellations"
                 ],
-                "stream_cancellations": diagnostics[
-                    "cs_buflo_local_et_stream_cancellations"
-                ],
+                "stream_cancellations": diagnostics["cs_buflo_local_et_stream_cancellations"],
                 **(
                     {
-                        "latched_at_us": diagnostics[
-                            "cs_buflo_local_et_latched_at_us"
-                        ],
+                        "latched_at_us": diagnostics["cs_buflo_local_et_latched_at_us"],
                         "before_application_complete": diagnostics[
                             "cs_buflo_local_et_before_application_complete"
                         ],
@@ -2100,16 +2650,12 @@ def _algorithm_diagnostics(
                     else {}
                 ),
             },
-            "incoming_local_realized_cells": diagnostics[
-                "cs_buflo_incoming_local_realized_cells"
-            ],
+            "incoming_local_realized_cells": diagnostics["cs_buflo_incoming_local_realized_cells"],
             "directions": {
                 direction: {
                     **(
                         {
-                            "natural_bytes": diagnostics[
-                                f"cs_buflo_natural_{direction}_bytes"
-                            ],
+                            "natural_bytes": diagnostics[f"cs_buflo_natural_{direction}_bytes"],
                             "real_bearing_bytes": diagnostics[
                                 f"cs_buflo_real_bearing_{direction}_bytes"
                             ],
@@ -2120,18 +2666,12 @@ def _algorithm_diagnostics(
                         if require_current
                         else {}
                     ),
-                    "terminal_interval_us": diagnostics[
-                        f"cs_buflo_{direction}_interval_us"
-                    ],
-                    "rate_adaptations": diagnostics[
-                        f"cs_buflo_{direction}_rate_adaptations"
-                    ],
+                    "terminal_interval_us": diagnostics[f"cs_buflo_{direction}_interval_us"],
+                    "rate_adaptations": diagnostics[f"cs_buflo_{direction}_rate_adaptations"],
                     "next_adaptation_boundary_bytes": diagnostics[
                         f"cs_buflo_next_{direction}_adaptation_boundary_bytes"
                     ],
-                    "estimator_samples": diagnostics[
-                        f"cs_buflo_{direction}_estimator_samples"
-                    ],
+                    "estimator_samples": diagnostics[f"cs_buflo_{direction}_estimator_samples"],
                     "padding_basis_natural_bytes": diagnostics[
                         f"cs_buflo_{direction}_padding_basis_natural_bytes"
                     ],
@@ -2203,9 +2743,7 @@ def _algorithm_diagnostics(
                         f"cs_buflo_{direction}_minimum_interval_full"
                     ],
                     "minimum_interval_local_realized": (
-                        diagnostics[
-                            "cs_buflo_incoming_minimum_interval_local_realized"
-                        ]
+                        diagnostics["cs_buflo_incoming_minimum_interval_local_realized"]
                         if direction == "incoming"
                         else None
                     ),
@@ -2231,8 +2769,7 @@ def _algorithm_diagnostics(
             else CS_BUFLO_LEGACY_EARLY_TERMINATION_SEMANTICS
         )
         if (
-            cs_state["early_termination_semantics"]
-            != expected_early_termination_semantics
+            cs_state["early_termination_semantics"] != expected_early_termination_semantics
             or (
                 stop_drain_current
                 and cs_state.get("early_termination_translation")
@@ -2251,29 +2788,37 @@ def _algorithm_diagnostics(
             != {
                 "version": CS_BUFLO_RATE_BOUNDARY_TRANSLATION_VERSION,
                 "live_counter_semantics": CS_BUFLO_RATE_BOUNDARY_COUNTER_SEMANTICS,
-                "author_counter_semantics": (
-                    CS_BUFLO_AUTHOR_RATE_BOUNDARY_COUNTER_SEMANTICS
-                ),
+                "author_counter_semantics": (CS_BUFLO_AUTHOR_RATE_BOUNDARY_COUNTER_SEMANTICS),
                 "expected_difference": (
                     "author advances on actually transmitted real-plus-junk bytes; "
                     "the client-only QCSD translation advances on exact fresh application "
                     "STREAM bytes and excludes retransmission and defense-added bytes"
                 ),
             }
-            or not _cs_buflo_rate_transition_vector_valid(
-                cs_state["rate_transitions"]
-            )
+            or not _cs_buflo_rate_transition_vector_valid(cs_state["rate_transitions"])
             or cs_state["local_termination"]["latched"] is not True
         ):
             raise ValueError("study handoff CS-BuFLO translation/termination state is invalid")
     return {
         "schema_version": (
             4
-            if runtime_kind == "cs_buflo"
-            and isinstance(cs_state, Mapping)
-            and "early_termination_translation" in cs_state
+            if (
+                runtime_kind == "cs_buflo"
+                and isinstance(cs_state, Mapping)
+                and "early_termination_translation" in cs_state
+            )
+            or (
+                runtime_kind == "buflo"
+                and isinstance(buflo_state, Mapping)
+                and buflo_state.get("schema_version") == 3
+            )
             else 3
             if require_current
+            or (
+                runtime_kind == "buflo"
+                and isinstance(buflo_state, Mapping)
+                and buflo_state.get("schema_version") == 2
+            )
             else 2
         ),
         "mode": defense,
@@ -2300,9 +2845,7 @@ def _algorithm_diagnostics(
             "events": len(events_rows),
             "packets": len(packets_rows),
             "typed_events": sum(bool(row["qcsd_outcome_schema_version"]) for row in events_rows),
-            "typed_packets": sum(
-                bool(row["qcsd_outcome_schema_version"]) for row in packets_rows
-            ),
+            "typed_packets": sum(bool(row["qcsd_outcome_schema_version"]) for row in packets_rows),
         },
         "directions": {
             direction: _direction_algorithm_metrics(
@@ -2321,17 +2864,13 @@ def _validate_handoff_rows(
     expected_files = {"README.md", "dataset.json", "samples.jsonl"}
     seen_samples: set[str] = set()
     seen_paths: set[str] = set()
-    current_detailed_rows = [
-        set(row) == _ROW_KEYS | _RUNNER_DIAGNOSTIC_ROW_KEYS for row in rows
-    ]
+    current_detailed_rows = [set(row) == _ROW_KEYS | _RUNNER_DIAGNOSTIC_ROW_KEYS for row in rows]
     legacy_detailed_rows = [
         set(row) == _ROW_KEYS | _LEGACY_RUNNER_DIAGNOSTIC_ROW_KEYS for row in rows
     ]
     historical_rows = [set(row) == _ROW_KEYS for row in rows]
     if not rows or not (
-        all(current_detailed_rows)
-        or all(legacy_detailed_rows)
-        or all(historical_rows)
+        all(current_detailed_rows) or all(legacy_detailed_rows) or all(historical_rows)
     ):
         raise ValueError("study handoff sample row schema is invalid")
     current_detailed = all(current_detailed_rows)
@@ -2445,9 +2984,7 @@ def _validate_handoff_rows(
                 raise ValueError("study handoff sample artifact digest mismatch")
             expected_files.add(relative)
         if current_detailed:
-            workload_relative = (
-                f"inputs/acquisition-block-{block + 1:03d}/{workload_id}.json"
-            )
+            workload_relative = f"inputs/acquisition-block-{block + 1:03d}/{workload_id}.json"
             workload_digest = row.get("application_workload_sha256")
             workload_path = row.get("application_workload_path")
             if (
@@ -2473,9 +3010,14 @@ def _validate_handoff_rows(
                 if isinstance(stored_diagnostics, Mapping)
                 else None
             )
+            stored_runtime_kind = row.get("runtime_kind")
             supported_stored_schemas = (
-                {3, 4} if row.get("runtime_kind") == "cs_buflo" else {3}
+                {3, 4} if stored_runtime_kind in {"buflo", "cs_buflo"} else {3}
             )
+            if formal and stored_runtime_kind in {"buflo", "cs_buflo"} and stored_schema != 4:
+                raise ValueError(
+                    "formal study handoff requires current candidate algorithm evidence"
+                )
             if current_detailed and stored_schema not in supported_stored_schemas:
                 raise ValueError(
                     "current study handoff requires the current mode-specific "
@@ -2488,7 +3030,11 @@ def _validate_handoff_rows(
                 schedule_path=root / str(row["runner_schedule_path"]),
                 events_path=root / str(row["runner_events_path"]),
                 packets_path=root / str(row["runner_packets_path"]),
-                require_current=stored_schema in {3, 4},
+                require_current=(
+                    stored_schema == 4
+                    if stored_runtime_kind == "buflo"
+                    else stored_schema in {3, 4}
+                ),
                 require_latest_cs=stored_schema == 4,
             )
             if row.get("algorithm_diagnostics") != expected_diagnostics:
@@ -2517,9 +3063,7 @@ def _validate_formal_sample_redirect_attestation(
 
     expected = _redirect_attestation(workload, sample_path)
     if diagnostics.get("redirect_attestation") != expected:
-        raise ValueError(
-            "formal result does not explicitly attest empty prepared/final redirects"
-        )
+        raise ValueError("formal result does not explicitly attest empty prepared/final redirects")
 
 
 def _validate_source_results(receipts: Sequence[VerifiedResult], *, formal: bool) -> None:
@@ -2563,8 +3107,7 @@ def _validate_source_results(receipts: Sequence[VerifiedResult], *, formal: bool
         ):
             raise ValueError("study handoff rejects ineligible samples")
         if formal and any(
-            type(sample.get("attempts")) is not int
-            or not 1 <= sample["attempts"] <= 3
+            type(sample.get("attempts")) is not int or not 1 <= sample["attempts"] <= 3
             for sample in samples
         ):
             raise ValueError("formal result exceeds the prospective three-attempt total cap")
@@ -3261,6 +3804,10 @@ streams, the unallocatable sub-cell capacity, typed client-local cancellation
 actions, and later unscheduled defense-control packet composition. Packet
 composition does not expose individual QUIC frame identity; this is a separately
 classified QCSD-only expected difference, not bilateral BuFLO behavior.
+Schema 4 also binds the first terminal whole-cell-capacity boundary that stops
+new opportunities. Its schedule ledger proves that no later cell was scheduled,
+that outgoing work was already terminal, and that any already-advertised
+incoming credit drained exactly once before the client-local terminal latch.
 
 For CS-BuFLO, `algorithm_diagnostics.cs_buflo_state.local_termination`
 distinguishes a post-onLoad latch from a pre-onLoad latch. The current schema

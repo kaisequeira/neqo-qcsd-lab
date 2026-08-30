@@ -18,6 +18,7 @@ from qcsd_lab import (
     util,
 )
 from qcsd_lab.capture_session import Defense, Limits
+from qcsd_lab.class_acquisition import validate_class_study_preparation
 from qcsd_lab.class_campaigns import FINAL_QUALIFICATION_SET
 from qcsd_lab.orchestrator import Campaign, Workload, plan_campaign
 from qcsd_lab.util import sha256_file
@@ -301,6 +302,202 @@ def test_formal_block_has_exact_class_mode_counts_and_balanced_latin_rows() -> N
     )
     first_mode = Counter(plan[offset]["defense"] for offset in range(0, len(plan), 8))
     assert first_mode == Counter({mode[0]: 25 for mode in FORMAL_MODES})
+
+
+def test_certification_binds_one_complete_two_origin_graph_to_all_nine_modes(
+    tmp_path: Path,
+) -> None:
+    workload_id = "class-000"
+    origins = ["https://class-000.example", "https://cdn.class-000.example"]
+    resources = [
+        {
+            "id": 0,
+            "url": f"{origins[0]}/",
+            "type": "Document",
+            "content_length": 100,
+            "data_length": 100,
+            "chaff_priority": True,
+            "known_valid": True,
+            "depends_on": [],
+            "headers": [],
+        },
+        {
+            "id": 1,
+            "url": f"{origins[1]}/application.js",
+            "type": "Script",
+            "content_length": 200,
+            "data_length": 200,
+            "chaff_priority": False,
+            "known_valid": True,
+            "depends_on": [0],
+            "headers": [["referer", f"{origins[0]}/"]],
+        },
+    ]
+    manifest = {
+        "preparation": {
+            "source_url": resources[0]["url"],
+            "final_url": resources[0]["url"],
+            "chromium_version": "test-chromium",
+            "settle_ms": 3_000,
+            "observed_request_count": len(resources),
+            "observed_origins": origins,
+            "approved_origins": origins,
+            "exclusions": [],
+            "prepare_image_digest": _SOURCE["image_digest"],
+            "lab_source": _SOURCE,
+            "max_response_bytes": 1_048_576,
+            "timeout_seconds": 120,
+            "stability_runs": 3,
+            "stability_profile": "live",
+            "stability_defense": "none",
+            "stability_seed": 0,
+            "udp_payload_qualification": {
+                "schema_version": 1,
+                "configured_udp_payload_ceiling": 1_200,
+                "runs": [
+                    {
+                        "run_index": run_index,
+                        "packets_sha256": f"{run_index + 1:064x}",
+                        "total": {
+                            "packet_count": 2,
+                            "observed_udp_payload_max": 1_200,
+                            "oversized_packet_count": 0,
+                        },
+                        "incoming": {
+                            "packet_count": 1,
+                            "observed_udp_payload_max": 1_200,
+                            "oversized_packet_count": 0,
+                        },
+                        "outgoing": {
+                            "packet_count": 1,
+                            "observed_udp_payload_max": 1_199,
+                            "oversized_packet_count": 0,
+                        },
+                    }
+                    for run_index in range(3)
+                ],
+            },
+            "neqo_version": "test-neqo",
+            "neqo_base_commit": "4" * 40,
+            "published_qcsd_commit": "5" * 40,
+            "migration_commit": "6" * 40,
+            "expected_responses": [
+                {
+                    "resource_id": resource["id"],
+                    "status": 200,
+                    "bytes": resource["content_length"],
+                    "body_sha256": f"{resource['id'] + 1:064x}",
+                }
+                for resource in resources
+            ],
+            "coverage_admission": {
+                "schema_version": 1,
+                "policy": "all-approved-origins-and-rendered-resources",
+                "required_origins": origins,
+                "required_resources": [
+                    {"id": resource["id"], "url": resource["url"]} for resource in resources
+                ],
+            },
+        },
+        "resources": resources,
+    }
+    validate_class_study_preparation(manifest, workload_id=workload_id)
+    source_bytes = orchestrator.canonical_bytes(manifest)
+    manifest_path = tmp_path / f"{workload_id}.json"
+    manifest_path.write_bytes(source_bytes)
+    runtime = orchestrator.runtime_manifest(manifest)
+    runtime_path = tmp_path / f"{workload_id}.runtime.json"
+    runtime_path.write_bytes(orchestrator.canonical_bytes(runtime))
+    complete = Workload(
+        id=workload_id,
+        visits=1,
+        path=manifest_path,
+        source_bytes=source_bytes,
+        sha256=sha256_file(manifest_path),
+        data=manifest,
+        resource_count=len(resources),
+        origin_count=len(origins),
+        runtime_path=runtime_path,
+        runtime_sha256=sha256_file(runtime_path),
+    )
+    workloads = (
+        complete,
+        *(_workload(index, visits=1) for index in range(1, 100)),
+    )
+    compatibility_modes = (
+        ("undefended", "none", True),
+        ("static", "static", False),
+        *(mode for mode in FORMAL_MODES[1:]),
+    )
+    campaign = replace(
+        _campaign(workloads, block=1),
+        path=tmp_path / "classifier-multiorigin100-v1-certification-900-1200.yml",
+        name="classifier-multiorigin100-v1-certification-900-1200",
+        purpose="smoke",
+        defenses=tuple(_defense(*mode) for mode in compatibility_modes),
+        limits=Limits(max_attempts=1),
+        evidence_role="certification",
+    )
+
+    plan = plan_campaign(campaign)
+    cells = [sample for sample in plan if sample["workload_id"] == workload_id]
+    assert len(plan) == 900
+    assert [sample["defense"] for sample in cells] == [mode[0] for mode in compatibility_modes]
+
+    workload_by_id = {workload.id: workload for workload in campaign.workloads}
+    defense_by_name = {defense.name: defense for defense in campaign.defenses}
+    chaff_path = tmp_path / "qualified-chaff.json"
+    chaff_path.write_text("{}\n", encoding="utf-8")
+    context = SimpleNamespace(
+        qcsd_profile="research-1200",
+        request_policy="as-defined",
+        limits=campaign.limits,
+    )
+    bindings = []
+    for sample in cells:
+        selected = workload_by_id[sample["workload_id"]]
+        selected_runtime = orchestrator.runtime_manifest(selected.data)
+        defense = defense_by_name[sample["defense"]]
+        output = tmp_path / "outputs" / defense.name
+        if defense.baseline:
+            command = orchestrator.capture_engine._client_command(
+                selected.runtime_path,
+                selected.id,
+                defense,
+                sample["seed"],
+                context,
+                output,
+            )
+        else:
+            command = orchestrator.capture_engine._client_command(
+                selected.runtime_path,
+                chaff_path,
+                selected.id,
+                defense,
+                sample["seed"],
+                context,
+                output,
+                application_workload_source=selected.path,
+            )
+        bindings.append(
+            {
+                "mode": defense.name,
+                "manifest_sha256": selected.sha256,
+                "resource_ids": [resource["id"] for resource in selected_runtime["resources"]],
+                "runtime_path": command[command.index("--workload") + 1],
+                "application_source": (
+                    command[command.index("--application-workload-source") + 1]
+                    if "--application-workload-source" in command
+                    else None
+                ),
+            }
+        )
+
+    assert {binding["manifest_sha256"] for binding in bindings} == {sha256_file(manifest_path)}
+    assert all(binding["resource_ids"] == [0, 1] for binding in bindings)
+    assert {binding["runtime_path"] for binding in bindings} == {str(runtime_path)}
+    assert bindings[0]["application_source"] is None
+    assert {binding["application_source"] for binding in bindings[1:]} == {str(manifest_path)}
 
 
 def test_origin_aware_plan_is_deterministic_and_separates_available_origins() -> None:

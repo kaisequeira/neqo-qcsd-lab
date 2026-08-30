@@ -10,6 +10,8 @@ import pytest
 import qcsd_lab.class_acquisition as acquisition_module
 from qcsd_lab.class_acquisition import (
     COMPLETION_TYPE,
+    MAX_APPROVED_ORIGINS,
+    MAX_ORIGIN_PASSES,
     ExistingAcquisitionBackend,
     NavigationDiscovery,
     PreparedProbe,
@@ -1581,6 +1583,84 @@ def test_origin_convergence_rejects_instead_of_truncating_over_cap():
 
     with pytest.raises(ValueError, match="exceeded its finite origin cap"):
         _converge_origins(OverCapBackend(), "https://page.example/")
+
+
+def test_origin_convergence_accepts_exactly_the_finite_origin_cap():
+    expected_origins = ["https://page.example"] + [
+        f"https://cdn-{index:02d}.example" for index in range(MAX_APPROVED_ORIGINS - 1)
+    ]
+    calls: list[tuple[str, ...]] = []
+
+    class ExactCapBackend:
+        def discover(self, url, approved_origins):
+            approved = tuple(sorted(approved_origins))
+            calls.append(approved)
+            return DiscoveryResult(
+                source_url=url,
+                final_url=url,
+                chromium_version="test",
+                settle_ms=0,
+                observed_request_count=len(expected_origins),
+                observed_origins=sorted(expected_origins),
+                approved_origins=list(approved),
+                exclusions=[],
+                resources=[
+                    {"id": index, "url": f"{value}/resource-{index}"}
+                    for index, value in enumerate(approved)
+                ],
+                origin_ip_pins={value: "1.1.1.1" for value in approved},
+                expandable_origins=sorted(expected_origins),
+            )
+
+    approved, result = _converge_origins(
+        ExactCapBackend(),
+        "https://page.example/",
+    )
+
+    assert len(approved) == MAX_APPROVED_ORIGINS
+    assert approved == sorted(expected_origins)
+    assert len(calls) == 2
+    assert {resource["url"].split("/resource-")[0] for resource in result.resources} == set(
+        approved
+    )
+
+
+def test_origin_convergence_accepts_a_graph_settling_on_the_eighth_pass():
+    calls: list[tuple[str, ...]] = []
+
+    class EighthPassBackend:
+        def discover(self, url, approved_origins):
+            approved = tuple(sorted(approved_origins))
+            calls.append(approved)
+            observed = set(approved)
+            if len(calls) < MAX_ORIGIN_PASSES:
+                observed.add(f"https://cdn-{len(calls):02d}.example")
+            return DiscoveryResult(
+                source_url=url,
+                final_url=url,
+                chromium_version="test",
+                settle_ms=0,
+                observed_request_count=len(observed),
+                observed_origins=sorted(observed),
+                approved_origins=list(approved),
+                exclusions=[],
+                resources=[
+                    {"id": index, "url": f"{value}/resource-{index}"}
+                    for index, value in enumerate(approved)
+                ],
+                origin_ip_pins={value: "1.1.1.1" for value in approved},
+                expandable_origins=sorted(observed),
+            )
+
+    approved, result = _converge_origins(
+        EighthPassBackend(),
+        "https://page.example/",
+    )
+
+    assert len(calls) == MAX_ORIGIN_PASSES
+    assert len(approved) == MAX_ORIGIN_PASSES
+    assert tuple(result.approved_origins) == calls[-1]
+    assert result.expandable_origins == approved
 
 
 def test_origin_convergence_rejects_instead_of_sealing_an_unsettled_graph():

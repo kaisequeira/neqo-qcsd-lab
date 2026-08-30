@@ -36,17 +36,27 @@ the project status is **five validated defences plus two candidates / nine
 selectable modes**, including the `undefended` and `static` controls.
 
 The BuFLO adaptation drains every allocatable 1,200-byte reviewed-chaff cell
-after the inclusive ten-second minimum. If only a sub-cell response tail
-remains, it latches only after all scheduled work and parser leases are
+after the inclusive ten-second minimum. It now separates schedule stop from
+final drain completion: required STREAM work, unconfirmed application sends,
+unadvertised credit, parser work, and due controller identities keep the
+schedule open, while already-advertised RTT-delayed `MAX_STREAM_DATA` is drain
+debt and cannot authorise a replacement cell. All outgoing cells are terminal
+at stop; previously advertised incoming credit may be consumed later and must
+still reconcile exactly. If only a sub-cell response tail remains, final
+completion latches only after all scheduled work and parser leases are
 terminal and every pending application parser boundary has cleared. Pending
-reviewed-chaff parser boundaries are counted and canceled with their streams by
+reviewed-chaff parser boundaries are counted and cancelled with their streams by
 standard client-local HTTP/3 cancellation. The resulting unscheduled
-defense-control traffic is explicitly receipted and is an expected QCSD-only
+defence-control traffic is explicitly receipted and is an expected QCSD-only
 difference from the bilateral TCP study; it is never described as
 paper-equivalent or as a server padding-complete signal.
 
-Current BuFLO evidence uses runner-wakeup schema 3. The measured client remains
-actively runnable for the complete 5 ms realization window before every exact
+Current-source BuFLO runs use summary schema 4 and runner-wakeup schema 3.
+Summary schema 4 binds the typed schedule-stop policy, stop timestamp,
+sub-cell capacity, direction counts at stop, and exact post-stop advertised
+credit drain; historical summary schemas 2 and 3 remain readable but cannot
+admit a fresh candidate capture. The measured client remains
+actively runnable for the complete 5 ms realisation window before every exact
 20 ms release; after the outgoing handoff it immediately drives only endpoints
 with accepted scheduled receive credit that has not yet produced a
 `MAX_STREAM_DATA` frame. The half-open deadline remains strict: a release or
@@ -58,7 +68,7 @@ while canonical BuFLO is active, so active-wait nanoseconds and measured client
 CPU are retained as performance evidence rather than treated as unavailable
 infrastructure overhead.
 
-CS-BuFLO local early termination stops defense chaff and credit work, not the
+CS-BuFLO local early termination stops defence chaff and credit work, not the
 application. If it occurs before the local onLoad analogue, current receipts
 count the application receive streams, parser state, and send endpoints handed
 back to ordinary HTTP/3 processing. Natural application bytes after that latch
@@ -70,34 +80,35 @@ phase, target or crossing reason, stop time, progress and target, scheduled and
 terminal counters, and provisional invalidation count.  The handoff reconciles
 those counters and timestamps with every schedule row: no new opportunity may
 be scheduled after the stop, and each already-advertised receive-credit
-opportunity must terminalize exactly once before the local latch.  Outgoing
+opportunity must terminalise exactly once before the local latch.  Outgoing
 crossings use observed UDP payload; incoming crossings use fully consumed
 scheduled credit and do not claim peer-datagram timing or size.  A resumed
 natural byte invalidates provisional stop evidence in the implementation, with
 the cumulative invalidation count retained in the final receipt.  This drain
 is not the paper's server padding-done signal.
 
-The latest executed candidate checkpoint is cohort v23. Its fresh pull/no-cache
-build, isolated reference gate, and 18/18 nine-mode regression passed against
-Lab `3ea8490ac8fd1c2b31b0ed828a11ae72d17d79c2` and Neqo
-`b7ca4ad8931001c9baa8ad04b064ade7fa9a405f`. The v23 code gate then ended with
-1,469 tests passed, 19 failed, and six skipped, so it created no immutable
-`code-gate-v23.json` receipt. Seventeen failures exposed collection-image
-launcher layout/help assumptions and two exposed installed-path assumptions.
+The strongest executed candidate checkpoint is cohort v24. It binds clean Lab
+`585945bed7d9d0cb0b3bbdd16ddfb6ac2c665435`, Neqo
+`b7ca4ad8931001c9baa8ad04b064ade7fa9a405f`, and collection image
+`sha256:7d81beb6114d3a962c364d1a1e29f24eec79ca49d024536dd0736859eb03b230`.
+Its fresh pull/no-cache build, isolated reference execution, complete code gate,
+and 18/18 nine-mode regression passed. The code receipt records 1,500 Lab tests
+passed with six skipped, 257 focused candidate tests passed with two skipped,
+and all six Rust gates passed.
 
-V23 also exposed an independent evidence-contract defect. Its live explicit
-two-origin compatibility run exercised all nine modes and physically retained
-a rejected first WTF-PAD attempt before accepting its retry, but the schema-1
-compatibility receipt bound only accepted attempts. It therefore could still
-verify after removal of that rejected attempt. The schema-1 proof is
-non-authoritative, and neither it nor any other v23 receipt can authorise the
-current source. The fixes that bind every contiguous attempt were committed at
-Lab `f8624a07697840071f7f14ccc4b325a8e252e458` and passed the complete host
-suite (1,502 passed, four skipped) and networkless collection-image suite
-(1,500 passed, six skipped). Those are unreceipted engineering preflights, not
-a cohort gate: a fresh clean cohort v24 must still rerun the build, reference,
-18/18 regression, and complete code gate before any controlled qualification
-or class-study acquisition proceeds. No class-study qualification or
+V24's schema-2 explicit two-origin proof passed all nine modes, retained both
+origins and all four resources, and binds all ten attempts: the rejected first
+CS-BuFLO attempt is preserved and its retry passed. Controlled capture then
+completed clean at 40/40 and symmetric 50 ms RTT at 30/40; every one of that
+profile's ten BuFLO cells exhausted three attempts. The 5 Mbit/s and 1% loss
+profiles were not launched. Consequently only 70 of 160 planned controlled
+cells passed and no qualification receipt exists.
+
+V24 is immutable source-specific evidence, not authority for the current
+post-v24 terminal-timestamp, stop/drain, and handoff-verification changes.
+Those changes require a fresh clean v25 build, reference execution, 18/18
+regression, code gate, and 160/160 controlled qualification before public-page
+acquisition may begin. No class-study foundation, qualification, readiness, or
 validation attestation exists yet. The authoritative current heads,
 progression, and evidence ledger are maintained in
 [`../PROJECT.md`](../PROJECT.md); the exact extended-class protocol and
@@ -242,39 +253,42 @@ CODE_GATE="artifacts/buflo-study/code-gate-v${COHORT_VERSION}.json"
   --reference-root "$REFERENCE_ROOT" --destination "$REFERENCE" \
   --cohort-version "$COHORT_VERSION"
 
-# Test-only local captures. The wrapper provisions one shared two-network
-# router with receipted ingress/egress shaping and holds the acquisition lock.
-./qcsd-lab buflo-study capture --stage controlled \
-  --cohort-version "$COHORT_VERSION" --destination "$CONTROLLED_ROOT"
+# Run and bind the nine-mode regression before the code gate. The wrapper
+# provisions the isolated networks and holds the acquisition lock.
 ./qcsd-lab buflo-study capture --stage regression \
   --cohort-version "$COHORT_VERSION" --destination "$REGRESSION_ROOT"
 
-mapfile -t CONTROLLED < <(python3 -c '
-import json,sys
-v=json.load(open(sys.argv[1], encoding="utf-8"))
-for key in sorted(v["profiles"]): print(v["profiles"][key])
-' "$CONTROLLED_ROOT/controlled-results.json")
 mapfile -t REGRESSION < <(python3 -c '
 import json,sys
 v=json.load(open(sys.argv[1], encoding="utf-8"))
 for key in sorted(v["campaigns"]): print(v["campaigns"][key])
 ' "$REGRESSION_ROOT/regression-results.json")
-CONTROLLED_ARGS=()
-for root in "${CONTROLLED[@]}"; do
-  CONTROLLED_ARGS+=(--controlled-result "$root")
-done
 REGRESSION_ARGS=()
 for root in "${REGRESSION[@]}"; do
   REGRESSION_ARGS+=(--result "$root")
 done
 
-# This one action first revalidates controlled160, creates or resumes the exact
-# public5 sustained-chaff set, verifies it, then publishes the typed receipt.
-./qcsd-lab buflo-study qualify "${CONTROLLED_ARGS[@]}" \
-  --cohort-version "$COHORT_VERSION" --destination "$QUALIFICATION"
-
 ./qcsd-lab buflo-study code-gate "${REGRESSION_ARGS[@]}" \
   --cohort-version "$COHORT_VERSION" --destination "$CODE_GATE"
+
+# Execute all four controlled network profiles only after the regression-bound
+# code gate passes.
+./qcsd-lab buflo-study capture --stage controlled \
+  --cohort-version "$COHORT_VERSION" --destination "$CONTROLLED_ROOT"
+mapfile -t CONTROLLED < <(python3 -c '
+import json,sys
+v=json.load(open(sys.argv[1], encoding="utf-8"))
+for key in sorted(v["profiles"]): print(v["profiles"][key])
+' "$CONTROLLED_ROOT/controlled-results.json")
+CONTROLLED_ARGS=()
+for root in "${CONTROLLED[@]}"; do
+  CONTROLLED_ARGS+=(--controlled-result "$root")
+done
+
+# This action revalidates controlled160, creates or resumes the exact public5
+# sustained-chaff set, verifies it, then publishes the typed receipt.
+./qcsd-lab buflo-study qualify "${CONTROLLED_ARGS[@]}" \
+  --cohort-version "$COHORT_VERSION" --destination "$QUALIFICATION"
 
 SMOKE="$(
   ./qcsd-lab buflo-study capture --stage smoke \
@@ -451,7 +465,7 @@ recorded as exclusions. `--require-complete-coverage` additionally requires at
 least one rendered resource from every approved origin and rejects preparation
 if any approved rendered resource is unavailable over HTTP/3. Its frozen
 coverage-admission receipt makes that stricter contract auditable. Without the
-flag, the historical behavior remains: HTTP/3-unavailable resources and their
+flag, the historical behaviour remains: HTTP/3-unavailable resources and their
 orphaned dependency closure may be excluded when the navigation root remains
 valid.
 
@@ -1309,7 +1323,7 @@ earlier when a real reported ordinary nonreserved-capacity snapshot is below
 one full cell, including zero; an unknown snapshot never enables early release.
 Allocation then follows the same coalesced-tail-or-oldest-reserve rules below,
 while the corresponding oldest reserve is discharged exactly once. This closes
-the reserve-capacity deadlock while retaining base-first behavior whenever at
+the reserve-capacity deadlock while retaining base-first behaviour whenever at
 least one ordinary full cell is available. The initial survivor gate still
 applies before either early continuation or base allocation.
 
@@ -1370,7 +1384,7 @@ Each drive reconciles every due fixed event and its incoming credit before
 eligible output and ordinary input, using fresh monotonic time and absolute
 wake instants. Release uses ceiling conversion and deadlines use floor
 conversion, so prearming cannot transmit early or extend a deadline. Static
-and non-FRONT dynamic schedules retain their existing activation behavior.
+and non-FRONT dynamic schedules retain their existing activation behaviour.
 
 Receive-control batches are globally and transactionally preflighted using
 typed lifecycle outcomes. Exact current-batch identities and persistent
@@ -1412,7 +1426,7 @@ wire smoke establishes a general HTTP/3 property or defence effectiveness.
 
 Only fields shown by the schema are accepted. Campaigns do not carry dataset,
 classifier, monitored/unmonitored, open-world, split, projection, or runtime
-header-policy settings, and command behavior is not embedded inside the YAML.
+header-policy settings, and command behaviour is not embedded inside the YAML.
 A campaign with several defences must include exactly one
 undefended baseline so response identity and overhead can be paired. A
 single-defence campaign is valid for capture mechanics, but cannot produce a
@@ -1589,18 +1603,27 @@ Every remaining file has one job:
 - `neqo/packets.csv` is Neqo's transport-datagram record used to reconcile the
   runner with the independently captured PCAP.
 - `neqo/events.csv` records ordered runner, application, and controller events
-  needed to interpret completion and defence behavior.
+  needed to interpret completion and defence behaviour.
 - `neqo/schedule.csv` records one terminal row per scheduled slot and its
-  observed realization. `target_time_us` is the defence's requested time;
+  observed realisation. `target_time_us` is the defence's requested time;
   `action_time_us` is the first adapter action issued for that slot, including
-  an owned parser-liveness lease. For current incoming fixed opportunities,
+  an owned parser-liveness lease. Current terminal rows use outcome schema 3;
+  the appended nullable `terminal_defense_elapsed_us` is the controller's
+  exact terminal-resolution offset from defence start, floored to
+  microseconds. It is populated only in `schedule.csv` and remains blank in
+  `events.csv` and `packets.csv`. Ordinary terminal resolutions cannot predate
+  their targets; a typed failed-attempt cancellation may resolve a future slot
+  early, but such a missed row cannot enter accepted candidate evidence. For
+  current incoming fixed opportunities,
   `credit_advertised_at_us` is the complete local on-wire `MAX_STREAM_DATA`
   boundary that rearms cadence, while `credit_consumed_at_us` is the distinct
-  later peer stream-offset-consumption boundary that terminalizes the slot;
-  both delay columns are measured from `action_time_us`. None of these fields
-  claims scheduled server-datagram timing or size. The same versioned nullable
-  suffix is present in `packets.csv` and `events.csv`. These records provide
-  plot overlays and fidelity metrics.
+  later process-clock peer stream-offset-consumption boundary that terminalises
+  the slot; both delay columns are measured from `action_time_us`. The handoff
+  translates this process clock through the receipted defence-start anchor
+  before reconciling it with the defence-relative terminal time. None of these
+  fields claims scheduled server-datagram timing or size. The same versioned
+  nullable suffix is present in `packets.csv` and `events.csv`. These records
+  provide plot overlays and fidelity metrics.
 
   For schema-4 CS-BuFLO stop/drain evidence, schedule reconstruction reports
   terminal counts strictly before, exactly at, and at or before the stop
@@ -1644,7 +1667,7 @@ profile-wide UDP-payload-ceiling checks, and bounded runner/PCAP reconciliation.
 That reconciliation must have one constant-offset segment, zero clock steps,
 packet residuals no larger than 10 ms, and a bracket-uncertainty-aware Linux
 realtime/monotonic elapsed difference no larger than 10 ms. The paired visit
-then adds response-identity and defence-realization checks.
+then adds response-identity and defence-realisation checks.
 
 When a prepared workload freezes `expected_responses`, every otherwise
 successful attempt must also match the exact prepared response signature:
@@ -2003,7 +2026,7 @@ frozen-compatible; do not regenerate the separate historical full-v2
 sidecars, prefix specs, fitting result, or sealed `research-1200` bundle.
 
 The implementation goal established the profiles, preparation policy,
-fitters, runtime realization, campaign contracts, and evidence boundaries.
+fitters, runtime realisation, campaign contracts, and evidence boundaries.
 The completed sequence was:
 
 ```shell

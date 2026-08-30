@@ -34,6 +34,8 @@ from typing import Any
 import numpy as np
 
 from .fidelity import (
+    BUFLO_SCHEDULE_STOP_POLICY,
+    BUFLO_SCHEDULE_STOP_TERMINAL_TIME_SEMANTICS,
     CS_BUFLO_EARLY_TERMINATION_SEMANTICS,
     CS_BUFLO_EARLY_TERMINATION_TRANSLATION_VERSION,
     CS_BUFLO_INCOMING_BOUNDARY_SEPARATION,
@@ -825,16 +827,24 @@ def _load_algorithm_diagnostics(value: Any, *, defense: str) -> Mapping[str, Any
         runtime_kind = value.get("runtime_kind")
         buflo_state = value.get("buflo_state")
         cs_state = value.get("cs_buflo_state")
-        if value["schema_version"] == 4 and runtime_kind != "cs_buflo":
-            raise ValueError("algorithm diagnostic schema 4 is CS-BuFLO-specific")
+        if value["schema_version"] == 4 and runtime_kind not in {"buflo", "cs_buflo"}:
+            raise ValueError(
+                "algorithm diagnostic schema 4 requires BuFLO or CS-BuFLO state"
+            )
         if runtime_kind == "buflo":
-            expected_state_schema = 2 if value["schema_version"] == 3 else 1
+            expected_state_schema = {1: 1, 2: 1, 3: 2, 4: 3}[value["schema_version"]]
             observed_state_schema = (
                 buflo_state.get("schema_version", 1) if isinstance(buflo_state, Mapping) else None
             )
             if (
                 observed_state_schema != expected_state_schema
                 or not buflo_terminal_state_valid(buflo_state)
+                or (
+                    value["schema_version"] == 4
+                    and not _current_buflo_schedule_stop_state_valid(
+                        buflo_state, value["directions"]
+                    )
+                )
                 or cs_state is not None
             ):
                 raise ValueError("study handoff BuFLO algorithm state is invalid")
@@ -857,6 +867,104 @@ def _load_algorithm_diagnostics(value: Any, *, defense: str) -> Mapping[str, Any
         elif buflo_state is not None or cs_state is not None:
             raise ValueError("study handoff algorithm state contradicts its runtime kind")
     return value
+
+
+_BUFLO_SCHEDULE_STOP_KEYS = frozenset(
+    {
+        "policy",
+        "terminal_time_semantics",
+        "latched",
+        "latched_at_us",
+        "available_bytes",
+        "required_bytes",
+        "directions",
+    }
+)
+_BUFLO_SCHEDULE_STOP_DIRECTION_KEYS = frozenset(
+    {
+        "scheduled_cells_at_stop",
+        "terminal_cells_at_stop",
+        "drained_cells_after_stop",
+        "last_scheduled_target_us",
+        "last_terminal_at_us",
+        "terminal_cells_strictly_before_stop",
+        "terminal_cells_at_or_before_stop",
+        "terminal_cells_at_stop_timestamp",
+    }
+)
+
+
+def _current_buflo_schedule_stop_state_valid(
+    value: Mapping[str, Any], algorithm_directions: Any
+) -> bool:
+    """Cross-check schema-3 BuFLO stop/drain state against final direction totals."""
+
+    schedule_stop = value.get("schedule_stop")
+    if not isinstance(schedule_stop, Mapping) or set(schedule_stop) != _BUFLO_SCHEDULE_STOP_KEYS:
+        return False
+    stop_us = schedule_stop.get("latched_at_us")
+    terminal_us = value.get("terminal_latched_at_us")
+    available = schedule_stop.get("available_bytes")
+    required = schedule_stop.get("required_bytes")
+    directions = schedule_stop.get("directions")
+    if (
+        schedule_stop.get("policy") != BUFLO_SCHEDULE_STOP_POLICY
+        or schedule_stop.get("terminal_time_semantics")
+        != BUFLO_SCHEDULE_STOP_TERMINAL_TIME_SEMANTICS
+        or schedule_stop.get("latched") is not True
+        or type(stop_us) is not int
+        or type(terminal_us) is not int
+        or not 10_000_000 <= stop_us <= terminal_us
+        or type(available) is not int
+        or type(required) is not int
+        or required != 1_200
+        or not 0 <= available < required
+        or not isinstance(directions, Mapping)
+        or set(directions) != {"outgoing", "incoming"}
+        or not isinstance(algorithm_directions, Mapping)
+        or set(algorithm_directions) != {"outgoing", "incoming"}
+    ):
+        return False
+    for direction in ("outgoing", "incoming"):
+        state = directions[direction]
+        metrics = algorithm_directions[direction]
+        if (
+            not isinstance(state, Mapping)
+            or set(state) != _BUFLO_SCHEDULE_STOP_DIRECTION_KEYS
+            or any(type(state[key]) is not int or state[key] < 0 for key in state)
+            or not isinstance(metrics, Mapping)
+        ):
+            return False
+        scheduled = state["scheduled_cells_at_stop"]
+        terminal = state["terminal_cells_at_stop"]
+        drained = state["drained_cells_after_stop"]
+        strictly_before = state["terminal_cells_strictly_before_stop"]
+        at_or_before = state["terminal_cells_at_or_before_stop"]
+        at_timestamp = state["terminal_cells_at_stop_timestamp"]
+        satisfaction = metrics.get("satisfaction_counts")
+        if (
+            type(metrics.get("scheduled_cells")) is not int
+            or metrics["scheduled_cells"] != scheduled
+            or not isinstance(satisfaction, Mapping)
+            or any(type(item) is not int or item < 0 for item in satisfaction.values())
+            or sum(satisfaction.values()) != scheduled
+            or scheduled == 0
+            or not 0 <= terminal <= scheduled
+            or drained != scheduled - terminal
+            or not 0 <= strictly_before <= terminal <= at_or_before <= scheduled
+            or at_timestamp != at_or_before - strictly_before
+            or state["last_scheduled_target_us"] > stop_us
+            or state["last_terminal_at_us"] > terminal_us
+            or (direction == "outgoing" and drained != 0)
+        ):
+            return False
+    outgoing = directions["outgoing"]
+    incoming = directions["incoming"]
+    return bool(
+        outgoing["scheduled_cells_at_stop"] == incoming["scheduled_cells_at_stop"]
+        and outgoing["last_scheduled_target_us"]
+        == incoming["last_scheduled_target_us"]
+    )
 
 
 _CS_BUFLO_STATE_V3_KEYS = frozenset(
@@ -1759,6 +1867,7 @@ def algorithm_breakdowns(samples: Sequence[StudySample]) -> dict[str, Any]:
         raise ValueError("study handoff mixes algorithm diagnostic schema versions")
     groups: dict[tuple[str, str, int, str], list[Mapping[str, Any]]] = defaultdict(list)
     terminal_tail_groups: dict[tuple[str, str, int], list[Mapping[str, Any]]] = defaultdict(list)
+    schedule_stop_groups: dict[tuple[str, str, int], list[Mapping[str, Any]]] = defaultdict(list)
     cs_local_et_groups: dict[tuple[str, str, int], list[Mapping[str, Any]]] = defaultdict(list)
     for sample in samples:
         assert sample.algorithm_diagnostics is not None
@@ -1769,6 +1878,10 @@ def algorithm_breakdowns(samples: Sequence[StudySample]) -> dict[str, Any]:
             terminal_tail_groups[
                 (sample.defense, sample.workload_id, sample.acquisition_block_index)
             ].append(buflo_state)
+            if sample.algorithm_diagnostics["schema_version"] == 4:
+                schedule_stop_groups[
+                    (sample.defense, sample.workload_id, sample.acquisition_block_index)
+                ].append(buflo_state["schedule_stop"])
         sample_diagnostic_version = sample.algorithm_diagnostics["schema_version"]
         if sample_diagnostic_version in {3, 4} and isinstance(cs_state, Mapping):
             cs_local_et_groups[
@@ -2070,6 +2183,66 @@ def algorithm_breakdowns(samples: Sequence[StudySample]) -> dict[str, Any]:
         }
         for (defense, workload, block), group in sorted(terminal_tail_groups.items())
     ]
+
+    def ranged_quantiles(values: Sequence[int]) -> dict[str, int | float]:
+        return {
+            "minimum": min(values),
+            "maximum": max(values),
+            **_numeric_quantiles(values),
+        }
+
+    schedule_stop_rows = []
+    for (defense, workload, block), group in sorted(schedule_stop_groups.items()):
+        direction_rows: dict[str, Any] = {}
+        for direction in ("outgoing", "incoming"):
+            states = [item["directions"][direction] for item in group]
+            direction_rows[direction] = {
+                **{
+                    field: sum(int(item[field]) for item in states)
+                    for field in (
+                        "scheduled_cells_at_stop",
+                        "terminal_cells_at_stop",
+                        "drained_cells_after_stop",
+                        "terminal_cells_strictly_before_stop",
+                        "terminal_cells_at_or_before_stop",
+                        "terminal_cells_at_stop_timestamp",
+                    )
+                },
+                "last_scheduled_target_us": ranged_quantiles(
+                    [int(item["last_scheduled_target_us"]) for item in states]
+                ),
+                "last_terminal_at_us": ranged_quantiles(
+                    [int(item["last_terminal_at_us"]) for item in states]
+                ),
+            }
+        available = [int(item["available_bytes"]) for item in group]
+        incoming_drains = [
+            int(item["directions"]["incoming"]["drained_cells_after_stop"])
+            for item in group
+        ]
+        schedule_stop_rows.append(
+            {
+                "defense": defense,
+                "workload_id": workload,
+                "acquisition_block_index": block,
+                "samples": len(group),
+                "policy": sorted({str(item["policy"]) for item in group}),
+                "terminal_time_semantics": sorted(
+                    {str(item["terminal_time_semantics"]) for item in group}
+                ),
+                "latched_samples": sum(item["latched"] is True for item in group),
+                "latched_at_us": ranged_quantiles(
+                    [int(item["latched_at_us"]) for item in group]
+                ),
+                "available_bytes": {
+                    "total": sum(available),
+                    **ranged_quantiles(available),
+                },
+                "required_bytes": sorted({int(item["required_bytes"]) for item in group}),
+                "samples_with_incoming_drain": sum(value > 0 for value in incoming_drains),
+                "directions": direction_rows,
+            }
+        )
     cs_local_et_rows = [
         {
             "defense": defense,
@@ -2102,6 +2275,8 @@ def algorithm_breakdowns(samples: Sequence[StudySample]) -> dict[str, Any]:
         "strata": rows,
         "buflo_terminal_tail_strata": terminal_tail_rows,
     }
+    if schedule_stop_rows:
+        result["buflo_schedule_stop_strata"] = schedule_stop_rows
     if diagnostic_versions & {3, 4}:
         result["schema_version"] = 3 if 4 in diagnostic_versions else 2
         result["cs_buflo_local_termination_strata"] = cs_local_et_rows
