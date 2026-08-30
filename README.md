@@ -87,7 +87,7 @@ natural byte invalidates provisional stop evidence in the implementation, with
 the cumulative invalidation count retained in the final receipt.  This drain
 is not the paper's server padding-done signal.
 
-The strongest executed candidate checkpoint is cohort v24. It binds clean Lab
+The strongest fully passed candidate checkpoint is cohort v24. It binds clean Lab
 `585945bed7d9d0cb0b3bbdd16ddfb6ac2c665435`, Neqo
 `b7ca4ad8931001c9baa8ad04b064ade7fa9a405f`, and collection image
 `sha256:7d81beb6114d3a962c364d1a1e29f24eec79ca49d024536dd0736859eb03b230`.
@@ -106,11 +106,25 @@ cells passed and no qualification receipt exists.
 
 V24 is immutable source-specific evidence, not authority for the current
 post-v24 terminal-timestamp, stop/drain, and handoff-verification changes.
-Those changes require a fresh clean v25 build, reference execution, 18/18
-regression, code gate, and 160/160 controlled qualification before public-page
-acquisition may begin. No class-study foundation, qualification, readiness, or
-validation attestation exists yet. The authoritative current heads,
-progression, and evidence ledger are maintained in
+V25 is the newest immutable failed attempt. Its clean Lab
+`6794deb692633a3ec3ee73cb6759192c00f6e475` and Neqo
+`f875f6b9e37190ba55341277c2758eb050be0cf9` no-cache build and isolated
+reference execution passed. The established-seven regression passed 14/14,
+but both BuFLO workloads exhausted all three launches and passed 0/2; the
+CS-BuFLO regression was therefore not launched. The v25 code gate and
+controlled qualification were not run.
+
+Investigation traced v25 to an interim terminal-prearm handoff race rather
+than a true release-window miss: the controller had queued the exact typed
+`DefenseTerminal` cancellation while the adapter still held that preview. The
+corrected runner ignores only that exact endpoint/packet/slot transition; every
+other identity divergence remains a hard failure. V25 cannot authorise the
+fix. Any successor lineage, beginning with unused cohort v26, must pass a fresh
+clean build, reference execution, 18/18 regression, code gate, and 160/160
+controlled qualification before public-page acquisition may begin. No
+class-study foundation, qualification, readiness, or validation attestation
+exists yet. The authoritative current heads, progression, and evidence ledger
+are maintained in
 [`../PROJECT.md`](../PROJECT.md); the exact extended-class protocol and
 matrices are maintained in [`../CLASS-STUDY.md`](../CLASS-STUDY.md).
 
@@ -172,7 +186,7 @@ profiles with frozen capacity evidence at both endpoints; untested alternate
 pairs are not inferred feasible. Publications are create-only and fail-closed;
 campaign results resume through `experiment.json`, while acquisition resumes
 only through its own `checkpoint.json`. The full protocol, exact matrices,
-current zero-progress ledger, and claim boundary are in
+current class-study scientific-numerator ledger, and claim boundary are in
 [`../CLASS-STUDY.md`](../CLASS-STUDY.md).
 
 Fresh class-study commands use one canonical path graph: generated campaigns
@@ -263,6 +277,10 @@ import json,sys
 v=json.load(open(sys.argv[1], encoding="utf-8"))
 for key in sorted(v["campaigns"]): print(v["campaigns"][key])
 ' "$REGRESSION_ROOT/regression-results.json")
+[[ "${#REGRESSION[@]}" -eq 3 ]] || {
+  echo "regression checkpoint must report exactly three result roots" >&2
+  exit 1
+}
 REGRESSION_ARGS=()
 for root in "${REGRESSION[@]}"; do
   REGRESSION_ARGS+=(--result "$root")
