@@ -87,44 +87,48 @@ natural byte invalidates provisional stop evidence in the implementation, with
 the cumulative invalidation count retained in the final receipt.  This drain
 is not the paper's server padding-done signal.
 
-The strongest fully passed candidate checkpoint is cohort v24. It binds clean Lab
-`585945bed7d9d0cb0b3bbdd16ddfb6ac2c665435`, Neqo
-`b7ca4ad8931001c9baa8ad04b064ade7fa9a405f`, and collection image
-`sha256:7d81beb6114d3a962c364d1a1e29f24eec79ca49d024536dd0736859eb03b230`.
-Its fresh pull/no-cache build, isolated reference execution, complete code gate,
-and 18/18 nine-mode regression passed. The code receipt records 1,500 Lab tests
-passed with six skipped, 257 focused candidate tests passed with two skipped,
-and all six Rust gates passed.
+The newest immutable candidate checkpoint is cohort v26. It binds clean Lab
+`7f820a7c51f33c0d4a6f7bcd860c9500f6b731e7`, Neqo
+`c20b22de36a34d0d703ff86582f7f496a554b558`, and collection image
+`sha256:414741370a342eb5efe2a8b13de86ea70da5f2080d2859adc4ffa53038f9d9e6`.
+Its fresh pull/no-cache build, isolated reference execution, complete code
+gate, and 18/18 nine-mode regression passed. The separately excluded
+compatibility proof also passed all nine modes while retaining both origins
+and all four resources in every sample.
 
-V24's schema-2 explicit two-origin proof passed all nine modes, retained both
-origins and all four resources, and binds all ten attempts: the rejected first
-CS-BuFLO attempt is preserved and its retry passed. Controlled capture then
-completed clean at 40/40 and symmetric 50 ms RTT at 30/40; every one of that
-profile's ten BuFLO cells exhausted three attempts. The 5 Mbit/s and 1% loss
-profiles were not launched. Consequently only 70 of 160 planned controlled
-cells passed and no qualification receipt exists.
+Controlled capture then passed the clean and symmetric 50 ms RTT shards at
+40/40 each. The symmetric 5 Mbit/s, 50 ms RTT, 100-packet-queue shard passed
+30/40: all ten BuFLO workload/visit cells failed after exhausting exactly three
+attempts, while `undefended`, CTSP CS-BuFLO, and CPSP CS-BuFLO each passed
+10/10. The 1% loss shard was not launched. V26 is therefore immutable
+**failed, non-attesting evidence**; it supplies neither controlled
+qualification nor authority for current or future source.
 
-V24 is immutable source-specific evidence, not authority for the current
-post-v24 terminal-timestamp, stop/drain, and handoff-verification changes.
-V25 is the newest immutable failed attempt. Its clean Lab
-`6794deb692633a3ec3ee73cb6759192c00f6e475` and Neqo
-`f875f6b9e37190ba55341277c2758eb050be0cf9` no-cache build and isolated
-reference execution passed. The established-seven regression passed 14/14,
-but both BuFLO workloads exhausted all three launches and passed 0/2; the
-CS-BuFLO regression was therefore not launched. The v25 code gate and
-controlled qualification were not run.
+Twenty-nine of the 30 bottleneck BuFLO launches exposed the same boundary
+error. A targetless output microstep was admitted before the five-millisecond
+pre-release `guard_at`, but its socket handoff or retry crossed that guard by
+no more than 80.220 microseconds while remaining strictly before the exact
+release. The remaining launch was a true exact-cell deadline failure. Its
+300 ms outgoing and incoming opportunities terminalised at 308.564 ms, beyond
+the unchanged half-open five-millisecond realisation window. Retired incoming
+credit in those 29 cases is abort-cleanup evidence after the outgoing
+boundary failure, not evidence that the qualified chaff reservoir was
+exhausted.
 
-Investigation traced v25 to an interim terminal-prearm handoff race rather
-than a true release-window miss: the controller had queued the exact typed
-`DefenseTerminal` cancellation while the adapter still held that preview. The
-corrected runner ignores only that exact endpoint/packet/slot transition; every
-other identity divergence remains a hard failure. V25 cannot authorise the
-fix. Any successor lineage, beginning with unused cohort v26, must pass a fresh
-clean build, reference execution, 18/18 regression, code gate, and 160/160
-controlled qualification before public-page acquisition may begin. No
-class-study foundation, qualification, readiness, or validation attestation
-exists yet. The authoritative current heads, progression, and evidence ledger
-are maintained in
+The current Rust correction, committed at
+`efd67b11ad5ef05851cca4fd6786e68a6aa4f169`, separates those two bounds. The
+pre-release `guard_at` still closes admission to new ordinary work, but an
+already-admitted targetless handoff is bounded by the hard exact release: it
+may finish inside the reserved pre-release tail and must still fail at or after
+release. This does not change BuFLO's 20 ms cadence, exact release, or
+half-open `[release, release + 5 ms)` realisation window. The correction is not
+part of the immutable v26 source and has no build or campaign authority. A
+fresh pull/no-cache v27 build must bind this commit; v27 must then repeat
+reference execution, 18/18 regression, the code gate, and all four controlled
+shards before public-page acquisition may begin. No class-study
+foundation, qualification, readiness, or validation attestation exists yet.
+The authoritative current heads, progression, and evidence ledger are
+maintained in
 [`../PROJECT.md`](../PROJECT.md); the exact extended-class protocol and
 matrices are maintained in [`../CLASS-STUDY.md`](../CLASS-STUDY.md).
 
@@ -146,23 +150,25 @@ domains in the pinned hash order and never defence, classifier, latency, or
 bandwidth outcomes.
 
 The candidate-domain boundary governs the primary navigation identity and
-redirects, not subresource origins. Discovery iteratively expands a frozen
-public-HTTPS GET origin allow-list and complete preparation retains rendered
-resources from every approved origin. Document-navigation origins are seeded
-per page, so optional pages cannot contaminate one another's origin graphs. The
-32-origin and eight-pass limits are
-fail-closed admission bounds: exceeding either bound or failing to converge
-rejects the class rather than truncating an accepted workload. Every discovered
-public HTTPS GET subresource is retained in an accepted, converged workload.
-The fresh browser load inside final preparation must reproduce the converged
+redirects, not subresource origins. Discovery iteratively converges the full
+set of eligible public HTTPS GET origins and resources, then complete
+preparation retains rendered resources from every approved origin.
+Document-navigation origins are seeded per page, so optional pages cannot
+contaminate one another's origin graphs. The 32-origin and eight-pass limits
+are fail-closed admission bounds: exceeding either cap or failing to converge
+rejects the whole class rather than truncating its accepted workload or
+silently omitting a multi-origin resource. Every discovered eligible public
+HTTPS GET subresource is retained in an accepted, converged workload. The
+fresh browser load inside final preparation must reproduce the converged
 origin set: a newly observed unapproved HTTPS GET fails that probe and forces
 reconvergence on a retry, and persisted complete-coverage evidence rejects any
 `origin not approved` exclusion independently. Both single-origin and
-naturally multi-origin classes are eligible; origin count is not a selection
-criterion or quota, and no acquisition or selection stage intentionally omits
-multi-origin classes. The closed-checksum handoff
-reports the realised per-class origin counts, histogram, and
-single-/multi-origin totals in `dataset.json.resource_origin_profile`.
+naturally multi-origin classes are eligible. Origin count supplies neither a
+selection signal nor a quota, and no acquisition or selection stage
+intentionally omits multi-origin resources or classes. The closed-checksum
+handoff reports each realised class's origin count, together with the origin
+histogram and single-/multi-origin totals, in
+`dataset.json.resource_origin_profile`.
 
 The endpoint is one contemporaneous paired corpus over the same frozen 100
 classes and visit indices under `undefended`, FRONT, Tamaraw, Traffic
