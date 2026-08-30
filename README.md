@@ -51,17 +51,27 @@ defence-control traffic is explicitly receipted and is an expected QCSD-only
 difference from the bilateral TCP study; it is never described as
 paper-equivalent or as a server padding-complete signal.
 
-Current-source BuFLO runs use summary schema 4 and runner-wakeup schema 3.
+Current-source BuFLO runs use summary schema 4 and runner-wakeup schema 4.
 Summary schema 4 binds the typed schedule-stop policy, stop timestamp,
 sub-cell capacity, direction counts at stop, and exact post-stop advertised
 credit drain; historical summary schemas 2 and 3 remain readable but cannot
-admit a fresh candidate capture. The measured client remains
+admit a fresh candidate capture. Historical runner-wakeup schemas 1–3 remain
+readable but cannot admit a fresh candidate capture. Runner-wakeup schema 4
+retains the schema-3 guard and active-wait counters and adds CS exact-incoming
+retry drives, resolutions, and maximum dispatch-phase lateness. The measured
+client remains
 actively runnable for the complete 5 ms realisation window before every exact
-20 ms release; after the outgoing handoff it immediately drives only endpoints
-with accepted scheduled receive credit that has not yet produced a
-`MAX_STREAM_DATA` frame. The half-open deadline remains strict: a release or
-credit advertisement at or after the deadline is a typed hard failure and is
-never caught up. Historical schema 2 receipts retain their exact 250 microsecond
+20 ms release. Fresh ordinary output is stopped one additional 5 ms window
+earlier, leaving an already-admitted targetless socket handoff its complete
+allowance without moving the guard, release, or deadline. After the outgoing
+handoff, the runner immediately drives only endpoints with accepted scheduled
+receive credit that has not yet produced a `MAX_STREAM_DATA` frame. Each
+unresolved CS-BuFLO incoming identity additionally receives at most three
+owning-endpoint transport-output retries at one-quarter, one-half, and
+three-quarters of the same unchanged window. The half-open deadline remains
+strict: a release or credit advertisement at or after the deadline is a typed
+hard failure and is never caught up. Historical schema 2 receipts retain their
+exact 250 microsecond
 active-wait semantics and remain readable, but cannot admit a fresh candidate
 capture. Full-window active waiting can consume approximately 25% of one CPU
 while canonical BuFLO is active, so active-wait nanoseconds and measured client
@@ -87,46 +97,46 @@ natural byte invalidates provisional stop evidence in the implementation, with
 the cumulative invalidation count retained in the final receipt.  This drain
 is not the paper's server padding-done signal.
 
-The newest immutable candidate checkpoint is cohort v26. It binds clean Lab
-`7f820a7c51f33c0d4a6f7bcd860c9500f6b731e7`, Neqo
-`c20b22de36a34d0d703ff86582f7f496a554b558`, and collection image
-`sha256:414741370a342eb5efe2a8b13de86ea70da5f2080d2859adc4ffa53038f9d9e6`.
+The newest immutable executed checkpoint is cohort v28. It binds clean Lab
+`59b88290b4b9a5b6a8705bcbdafba15fc3bb8de4`, Neqo
+`efd67b11ad5ef05851cca4fd6786e68a6aa4f169`, and collection image
+`sha256:322f041c09cecd373d53259796f5eadd0afb23d97c4d2c77477337fed32fd5b4`.
 Its fresh pull/no-cache build, isolated reference execution, complete code
 gate, and 18/18 nine-mode regression passed. The separately excluded
 compatibility proof also passed all nine modes while retaining both origins
 and all four resources in every sample.
 
-Controlled capture then passed the clean and symmetric 50 ms RTT shards at
-40/40 each. The symmetric 5 Mbit/s, 50 ms RTT, 100-packet-queue shard passed
-30/40: all ten BuFLO workload/visit cells failed after exhausting exactly three
-attempts, while `undefended`, CTSP CS-BuFLO, and CPSP CS-BuFLO each passed
-10/10. The 1% loss shard was not launched. V26 is therefore immutable
-**failed, non-attesting evidence**; it supplies neither controlled
-qualification nor authority for current or future source.
+V27 had previously passed its build, reference, code, regression, clean, and
+50 ms RTT gates, but its bottleneck shard ended 38/40 and its loss shard was
+therefore never launched. V28 corrected that bottleneck boundary and passed
+the clean, 50 ms RTT, and 5 Mbit/s bottleneck shards at 40/40 each. Its final
+1% loss shard ended 27/40: `undefended` passed 10/10, BuFLO 1/10, CTSP
+CS-BuFLO 8/10, and CPSP CS-BuFLO 8/10. V27 and v28 are consequently immutable
+**failed, non-attesting evidence**; neither supplies controlled qualification
+or authority for later source.
 
-Twenty-nine of the 30 bottleneck BuFLO launches exposed the same boundary
-error. A targetless output microstep was admitted before the five-millisecond
-pre-release `guard_at`, but its socket handoff or retry crossed that guard by
-no more than 80.220 microseconds while remaining strictly before the exact
-release. The remaining launch was a true exact-cell deadline failure. Its
-300 ms outgoing and incoming opportunities terminalised at 308.564 ms, beyond
-the unchanged half-open five-millisecond realisation window. Retired incoming
-credit in those 29 cases is abort-cleanup evidence after the outgoing
-boundary failure, not evidence that the qualified chaff reservoir was
-exhausted.
+The 47 rejected v28 loss launches comprise 21 BuFLO targetless retries that
+crossed the exact release, three BuFLO exact deadline expiries, 19 CS-BuFLO
+incoming-credit deadline expiries, and four otherwise successful BuFLO runs
+that retained a pre-cancellation aggregate backlog snapshot. The acceptance
+predicate correctly rejected all of them; the current source does not weaken
+that predicate or extend any half-open realisation window.
 
-The current Rust correction, committed at
-`efd67b11ad5ef05851cca4fd6786e68a6aa4f169`, separates those two bounds. The
-pre-release `guard_at` still closes admission to new ordinary work, but an
-already-admitted targetless handoff is bounded by the hard exact release: it
-may finish inside the reserved pre-release tail and must still fail at or after
-release. This does not change BuFLO's 20 ms cadence, exact release, or
-half-open `[release, release + 5 ms)` realisation window. The correction is not
-part of the immutable v26 source and has no build or campaign authority. A
-fresh pull/no-cache v27 build must bind this commit; v27 must then repeat
-reference execution, 18/18 regression, the code gate, and all four controlled
-shards before public-page acquisition may begin. No class-study
-foundation, qualification, readiness, or validation attestation exists yet.
+The post-v28 correction instead reserves two complete BuFLO windows: ordinary
+output admission stops at target minus 10 ms, the exact guard starts at target
+minus 5 ms, and release/deadline remain target and target plus 5 ms. CS-BuFLO
+retains its original one-shot target attempt and gives each still-pending exact
+incoming identity at most three owning-endpoint output retries at the strict
+quarter, half, and three-quarter points of that unchanged window. Finally,
+terminal chaff cancellation cannot reuse the aggregate-empty snapshot that
+preceded RESET/STOP work; completion requires a freshly recomputed empty
+transport snapshot after every `CancelChaff` action crosses the adapter
+boundary. These source changes require a new immutable cohort. V29 must repeat
+the pull/no-cache build, reference execution, 18/18 regression, complete code
+gate, and all 160 controlled captures before public-page acquisition may
+begin. No class-study foundation, qualification, readiness, or validation
+attestation exists yet.
+
 The authoritative current heads, progression, and evidence ledger are
 maintained in
 [`../PROJECT.md`](../PROJECT.md); the exact extended-class protocol and

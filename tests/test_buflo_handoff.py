@@ -99,24 +99,47 @@ def _runner_wakeup_receipt(schema_version: int) -> dict[str, object]:
         "controller_deadline_timer_wakeups": 0,
         "other_timer_wakeups": 0,
     }
-    if schema_version in {2, 3}:
+    if schema_version in {2, 3, 4}:
+        active_wait_tail_us = 250 if schema_version == 2 else 5000
+        if schema_version == 4:
+            semantics = (
+                f"{semantics}; "
+                "buflo_ordinary_output_admission_is_one_realization_window_before_guard; "
+                "buflo_exact_release_guard_reserves_candidate_window; "
+                f"buflo_exact_release_active_wait_tail_us={active_wait_tail_us}; "
+                "buflo_exact_release_guards_are_separately_receipted_active_waits; "
+                "buflo_active_defense_socket_drains_are_single_batch; "
+                "buflo_active_defense_http_drains_are_single_event; "
+                "buflo_ordinary_output_stops_at_admission; "
+                "buflo_exact_release_guard_begins_at_guard; "
+                "cs_exact_incoming_retry_phases=1/4,1/2,3/4"
+            )
+        else:
+            semantics = (
+                f"{semantics}; "
+                "buflo_exact_release_guard_reserves_candidate_window; "
+                f"buflo_exact_release_active_wait_tail_us={active_wait_tail_us}; "
+                "buflo_exact_release_guards_are_separately_receipted_active_waits; "
+                "buflo_active_defense_socket_drains_are_single_batch; "
+                "buflo_active_defense_http_drains_are_single_event; "
+                "buflo_output_is_interrupted_at_guard"
+            )
         receipt.update(
             {
-                "semantics": (
-                    f"{semantics}; "
-                    "buflo_exact_release_guard_reserves_candidate_window; "
-                    "buflo_exact_release_active_wait_tail_us="
-                    f"{250 if schema_version == 2 else 5000}; "
-                    "buflo_exact_release_guards_are_separately_receipted_active_waits; "
-                    "buflo_active_defense_socket_drains_are_single_batch; "
-                    "buflo_active_defense_http_drains_are_single_event; "
-                    "buflo_output_is_interrupted_at_guard"
-                ),
+                "semantics": semantics,
                 "buflo_exact_release_guard_entries": 0,
                 "buflo_exact_release_guard_wait_nanoseconds": 0,
                 "buflo_exact_release_active_wait_nanoseconds": 0,
                 "buflo_exact_release_max_passive_wake_lateness_nanoseconds": 0,
                 "buflo_exact_release_max_guard_exit_lateness_nanoseconds": 0,
+            }
+        )
+    if schema_version == 4:
+        receipt.update(
+            {
+                "cs_exact_incoming_retry_drives": 0,
+                "cs_exact_incoming_retry_resolutions": 0,
+                "cs_exact_incoming_retry_max_phase_lateness_nanoseconds": 0,
             }
         )
     return receipt
@@ -177,7 +200,7 @@ def _complete_buflo_run(
             "schema_version": 2,
             "defense": {"kind": "buflo"},
         },
-        "runner_wakeup_metrics": _runner_wakeup_receipt(3),
+        "runner_wakeup_metrics": _runner_wakeup_receipt(4),
         "defense_diagnostics": diagnostics,
         "chaff_responses": [
             {"outcome": "buflo_terminal_subcell_tail_cancelled"}
@@ -340,7 +363,7 @@ def _complete_cs_buflo_run() -> dict[str, object]:
             "schema_version": 2,
             "defense": {"kind": "cs_buflo"},
         },
-        "runner_wakeup_metrics": _runner_wakeup_receipt(3),
+        "runner_wakeup_metrics": _runner_wakeup_receipt(4),
         "defense_diagnostics": diagnostics,
         "buflo_summary": None,
         "cs_buflo_summary": summary,

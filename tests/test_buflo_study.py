@@ -287,6 +287,31 @@ def _runner_wakeup_receipt_v3() -> dict[str, object]:
     return value
 
 
+def _runner_wakeup_receipt_v4() -> dict[str, object]:
+    value = _runner_wakeup_receipt_v3()
+    value.update(
+        {
+            "schema_version": 4,
+            "semantics": (
+                f'{_runner_wakeup_receipt()["semantics"]}; '
+                "buflo_ordinary_output_admission_is_one_realization_window_before_guard; "
+                "buflo_exact_release_guard_reserves_candidate_window; "
+                "buflo_exact_release_active_wait_tail_us=5000; "
+                "buflo_exact_release_guards_are_separately_receipted_active_waits; "
+                "buflo_active_defense_socket_drains_are_single_batch; "
+                "buflo_active_defense_http_drains_are_single_event; "
+                "buflo_ordinary_output_stops_at_admission; "
+                "buflo_exact_release_guard_begins_at_guard; "
+                "cs_exact_incoming_retry_phases=1/4,1/2,3/4"
+            ),
+            "cs_exact_incoming_retry_drives": 0,
+            "cs_exact_incoming_retry_resolutions": 0,
+            "cs_exact_incoming_retry_max_phase_lateness_nanoseconds": 0,
+        }
+    )
+    return value
+
+
 def test_registry_appends_two_candidate_scientific_identities() -> None:
     assert DEFENSE_ORDER[-2:] == ("buflo", "cs-buflo")
     assert DEFENSE_RUNTIME_KINDS["buflo"] == "buflo"
@@ -3897,8 +3922,8 @@ def test_completed_buflo_resource_receipt_binds_runner_timer_wakeups(tmp_path: P
     )
     assert historical_measured["timer_wakeups"] == 20
 
-    current = dict(historical_v2)
-    current.update(
+    historical_v3 = dict(historical_v2)
+    historical_v3.update(
         {
             "schema_version": 3,
             "semantics": str(historical_v2["semantics"]).replace(
@@ -3907,6 +3932,19 @@ def test_completed_buflo_resource_receipt_binds_runner_timer_wakeups(tmp_path: P
             ),
         }
     )
+    assert _runner_wakeup_metrics_valid(historical_v3)
+    assert _fidelity_runner_wakeup_metrics_valid(historical_v3)
+
+    current = dict(historical_v3)
+    v4_fields = _runner_wakeup_receipt_v4()
+    for key in (
+        "schema_version",
+        "semantics",
+        "cs_exact_incoming_retry_drives",
+        "cs_exact_incoming_retry_resolutions",
+        "cs_exact_incoming_retry_max_phase_lateness_nanoseconds",
+    ):
+        current[key] = v4_fields[key]
     assert _runner_wakeup_metrics_valid(current)
     assert _fidelity_runner_wakeup_metrics_valid(current)
     current_measured = _merge_runner_wakeup_metrics(usage, current, required=True)
@@ -3949,6 +3987,20 @@ def test_completed_buflo_resource_receipt_binds_runner_timer_wakeups(tmp_path: P
         invalid_version = {**current, "schema_version": aliased_version}
         assert not _runner_wakeup_metrics_valid(invalid_version)
         assert not _fidelity_runner_wakeup_metrics_valid(invalid_version)
+
+    invalid_retry_resolution = {
+        **current,
+        "cs_exact_incoming_retry_resolutions": 1,
+    }
+    assert not _runner_wakeup_metrics_valid(invalid_retry_resolution)
+    assert not _fidelity_runner_wakeup_metrics_valid(invalid_retry_resolution)
+
+    invalid_retry_lateness = {
+        **current,
+        "cs_exact_incoming_retry_max_phase_lateness_nanoseconds": 1,
+    }
+    assert not _runner_wakeup_metrics_valid(invalid_retry_lateness)
+    assert not _fidelity_runner_wakeup_metrics_valid(invalid_retry_lateness)
 
     with pytest.raises(ValueError, match="lacks runner wakeup metrics"):
         _merge_runner_wakeup_metrics(usage, None, required=True)
@@ -4206,17 +4258,46 @@ def test_buflo_fidelity_requires_every_zero_error_and_typed_terminal_once() -> N
         require_application_complete=True,
         require_current_schema=True,
     )
-    current_wakeups = json.loads(json.dumps(historical_v2_wakeups))
-    current_wakeups["runner_wakeup_metrics"] = {
+    historical_v3_wakeups = json.loads(json.dumps(historical_v2_wakeups))
+    historical_v3_wakeups["runner_wakeup_metrics"] = {
         **historical_v2_wakeups["runner_wakeup_metrics"],
         "schema_version": 3,
         "semantics": _runner_wakeup_receipt_v3()["semantics"],
     }
     assert new_defense_terminal_receipts_valid(
+        historical_v3_wakeups, "buflo", require_application_complete=True
+    )
+    assert not new_defense_terminal_receipts_valid(
+        historical_v3_wakeups,
+        "buflo",
+        require_application_complete=True,
+        require_current_schema=True,
+    )
+    current_wakeups = json.loads(json.dumps(historical_v3_wakeups))
+    current_wakeups["runner_wakeup_metrics"].update(
+        {
+            key: value
+            for key, value in _runner_wakeup_receipt_v4().items()
+            if key
+            in {
+                "schema_version",
+                "semantics",
+                "cs_exact_incoming_retry_drives",
+                "cs_exact_incoming_retry_resolutions",
+                "cs_exact_incoming_retry_max_phase_lateness_nanoseconds",
+            }
+        }
+    )
+    assert new_defense_terminal_receipts_valid(
         current_wakeups,
         "buflo",
         require_application_complete=True,
         require_current_schema=True,
+    )
+    invalid_cs_retry_metrics = json.loads(json.dumps(current_wakeups))
+    invalid_cs_retry_metrics["runner_wakeup_metrics"]["cs_exact_incoming_retry_drives"] = 1
+    assert not new_defense_terminal_receipts_valid(
+        invalid_cs_retry_metrics, "buflo", require_application_complete=True
     )
     historical_v3 = json.loads(json.dumps(current_wakeups))
     historical_v3["buflo_summary"]["schema_version"] = 3
@@ -4516,8 +4597,24 @@ def test_cs_buflo_fidelity_reconciles_typed_composition_and_rate_state() -> None
         require_application_complete=True,
         require_current_schema=True,
     )
+    historical_v3_wakeups = json.loads(json.dumps(run))
+    historical_v3_wakeups["runner_wakeup_metrics"] = _runner_wakeup_receipt_v3()
+    assert new_defense_terminal_receipts_valid(
+        historical_v3_wakeups, "cs_buflo", require_application_complete=True
+    )
+    assert not new_defense_terminal_receipts_valid(
+        historical_v3_wakeups,
+        "cs_buflo",
+        require_application_complete=True,
+        require_current_schema=True,
+    )
     current_wakeups = json.loads(json.dumps(run))
-    current_wakeups["runner_wakeup_metrics"] = _runner_wakeup_receipt_v3()
+    current_wakeups["runner_wakeup_metrics"] = {
+        **_runner_wakeup_receipt_v4(),
+        "cs_exact_incoming_retry_drives": 3,
+        "cs_exact_incoming_retry_resolutions": 1,
+        "cs_exact_incoming_retry_max_phase_lateness_nanoseconds": 250,
+    }
     assert new_defense_terminal_receipts_valid(
         current_wakeups,
         "cs_buflo",

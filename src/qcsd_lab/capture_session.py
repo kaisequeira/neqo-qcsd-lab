@@ -112,6 +112,11 @@ _RUNNER_WAKEUP_METRICS_V2_KEYS = _RUNNER_WAKEUP_METRICS_V1_KEYS | {
     "buflo_exact_release_max_guard_exit_lateness_nanoseconds",
 }
 _RUNNER_WAKEUP_METRICS_V3_KEYS = _RUNNER_WAKEUP_METRICS_V2_KEYS
+_RUNNER_WAKEUP_METRICS_V4_KEYS = _RUNNER_WAKEUP_METRICS_V3_KEYS | {
+    "cs_exact_incoming_retry_drives",
+    "cs_exact_incoming_retry_resolutions",
+    "cs_exact_incoming_retry_max_phase_lateness_nanoseconds",
+}
 _RUNNER_WAKEUP_METRICS_V1_SEMANTICS = (
     "actual_select_return_source; socket_wins_simultaneous_readiness; "
     "controller_subset_is_effective_earliest_deadline; scheduled_cells_are_not_wakeups"
@@ -133,6 +138,18 @@ _RUNNER_WAKEUP_METRICS_V3_SEMANTICS = (
     "buflo_active_defense_socket_drains_are_single_batch; "
     "buflo_active_defense_http_drains_are_single_event; "
     "buflo_output_is_interrupted_at_guard"
+)
+_RUNNER_WAKEUP_METRICS_V4_SEMANTICS = (
+    f"{_RUNNER_WAKEUP_METRICS_V1_SEMANTICS}; "
+    "buflo_ordinary_output_admission_is_one_realization_window_before_guard; "
+    "buflo_exact_release_guard_reserves_candidate_window; "
+    "buflo_exact_release_active_wait_tail_us=5000; "
+    "buflo_exact_release_guards_are_separately_receipted_active_waits; "
+    "buflo_active_defense_socket_drains_are_single_batch; "
+    "buflo_active_defense_http_drains_are_single_event; "
+    "buflo_ordinary_output_stops_at_admission; "
+    "buflo_exact_release_guard_begins_at_guard; "
+    "cs_exact_incoming_retry_phases=1/4,1/2,3/4"
 )
 _PROCESS_SCHEDULER_KEYS = {
     "schema_version",
@@ -978,6 +995,9 @@ def _runner_wakeup_metrics_valid(value: Any) -> bool:
     elif schema_version == 3:
         required = _RUNNER_WAKEUP_METRICS_V3_KEYS
         semantics = _RUNNER_WAKEUP_METRICS_V3_SEMANTICS
+    elif schema_version == 4:
+        required = _RUNNER_WAKEUP_METRICS_V4_KEYS
+        semantics = _RUNNER_WAKEUP_METRICS_V4_SEMANTICS
     else:
         return False
     if set(value) != required or value.get("semantics") != semantics:
@@ -988,7 +1008,7 @@ def _runner_wakeup_metrics_valid(value: Any) -> bool:
         for key in count_keys
     ):
         return False
-    if schema_version in {2, 3}:
+    if schema_version in {2, 3, 4}:
         guard_measurements = (
             value["buflo_exact_release_guard_wait_nanoseconds"],
             value["buflo_exact_release_active_wait_nanoseconds"],
@@ -1004,6 +1024,15 @@ def _runner_wakeup_metrics_valid(value: Any) -> bool:
             )
         ):
             return False
+    if schema_version == 4 and (
+        value["cs_exact_incoming_retry_resolutions"]
+        > value["cs_exact_incoming_retry_drives"]
+        or (
+            value["cs_exact_incoming_retry_drives"] == 0
+            and value["cs_exact_incoming_retry_max_phase_lateness_nanoseconds"] != 0
+        )
+    ):
+        return False
     return (
         value["wait_returns"]
         == value["socket_readiness_wakeups"] + value["timer_wakeups"]

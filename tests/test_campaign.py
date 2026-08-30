@@ -1805,7 +1805,7 @@ def test_completed_candidate_binding_requires_current_wakeup_schema(
         terminal_validation_calls.append(
             (kind, require_application_complete, require_current_schema, schema)
         )
-        return require_current_schema and schema == 3
+        return require_current_schema and schema == 4
 
     monkeypatch.setattr(
         orchestrator.capture_engine,
@@ -1832,11 +1832,22 @@ def test_completed_candidate_binding_requires_current_wakeup_schema(
 
     run["runner_wakeup_metrics"] = {
         **wakeup_v2,
-        "schema_version": 3,
-        "semantics": str(wakeup_v2["semantics"]).replace(
-            "buflo_exact_release_active_wait_tail_us=250",
-            "buflo_exact_release_active_wait_tail_us=5000",
+        "schema_version": 4,
+        "semantics": (
+            f"{v1_semantics}; "
+            "buflo_ordinary_output_admission_is_one_realization_window_before_guard; "
+            "buflo_exact_release_guard_reserves_candidate_window; "
+            "buflo_exact_release_active_wait_tail_us=5000; "
+            "buflo_exact_release_guards_are_separately_receipted_active_waits; "
+            "buflo_active_defense_socket_drains_are_single_batch; "
+            "buflo_active_defense_http_drains_are_single_event; "
+            "buflo_ordinary_output_stops_at_admission; "
+            "buflo_exact_release_guard_begins_at_guard; "
+            "cs_exact_incoming_retry_phases=1/4,1/2,3/4"
         ),
+        "cs_exact_incoming_retry_drives": 0,
+        "cs_exact_incoming_retry_resolutions": 0,
+        "cs_exact_incoming_retry_max_phase_lateness_nanoseconds": 0,
     }
     _validate_run_binding(
         run,
@@ -1850,7 +1861,7 @@ def test_completed_candidate_binding_requires_current_wakeup_schema(
     )
     assert terminal_validation_calls == [
         (runtime_kind, True, True, 2),
-        (runtime_kind, True, True, 3),
+        (runtime_kind, True, True, 4),
     ]
 
 
