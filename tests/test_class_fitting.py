@@ -162,9 +162,7 @@ def _cohort_assembly(
             "eligibility_policy": {
                 "source": "three-window-page-stability-receipt-only",
                 "probe_windows": ["t+30s", "t+24h", "t+72h"],
-                "page_order": (
-                    "canonical-homepage-then-hash-ordered-safe-same-domain-links"
-                ),
+                "page_order": ("canonical-homepage-then-hash-ordered-safe-same-domain-links"),
                 "outcome_optimisation": False,
                 "classifier_or_defence_measurements_used": False,
                 "prepared_workload_sha256_required": True,
@@ -465,6 +463,7 @@ def test_verified_result_loader_rejects_cross_product_and_source_tampering(tmp_p
                         "defense": "undefended",
                         "runtime_kind": "none",
                         "baseline": True,
+                        "seed": visit + (0 if policy == "as-defined" else 10),
                         "state": "accepted",
                         "eligible": True,
                         "attempts": 1,
@@ -519,17 +518,45 @@ def test_verified_result_loader_rejects_cross_product_and_source_tampering(tmp_p
     def verifier(_root: Path) -> VerifiedResult:
         return verified
 
+    bindings: dict[str, object] = {}
+    resolver_calls: list[str] = []
+
     def trace_loader(_root: Path, **kwargs: Any) -> FittingTrace:
+        workload_id = kwargs["workload_id"]
+        assert kwargs["run_binding"] is bindings[workload_id]
+        assert type(kwargs["seed"]) is int
         return _trace(kwargs["workload_id"], kwargs["request_policy"], kwargs["visit"])
+
+    def run_binding_resolver(
+        _root: Path,
+        _configuration: Mapping[str, Any],
+        sample: Mapping[str, Any],
+        **kwargs: Any,
+    ) -> Any:
+        workload_id = str(sample["workload_id"])
+        resolver_calls.append(workload_id)
+        assert kwargs == {"allow_derived_runtime_without_frozen_copy": True}
+        assert sample == {
+            "workload_id": workload_id,
+            "defense": "undefended",
+            "runtime_kind": "none",
+            "baseline": True,
+        }
+        binding = object()
+        bindings[workload_id] = binding
+        return binding
 
     result = validate_class_fitting_result(
         root,
         result_verifier=verifier,
         trace_loader=trace_loader,
         preparation_validator=lambda *_args, **_kwargs: None,
+        run_binding_resolver=run_binding_resolver,
     )
     assert len(result.workload_ids) == 120
     assert sum(map(len, result.as_defined.values())) == 240
+    assert resolver_calls == list(workload_ids)
+    assert set(bindings) == set(workload_ids)
 
     experiment["samples"] = samples[:-1]
     with pytest.raises(ValueError, match="exactly 480"):
@@ -538,6 +565,7 @@ def test_verified_result_loader_rejects_cross_product_and_source_tampering(tmp_p
             result_verifier=verifier,
             trace_loader=trace_loader,
             preparation_validator=lambda *_args, **_kwargs: None,
+            run_binding_resolver=run_binding_resolver,
         )
 
     experiment["samples"] = samples
@@ -548,6 +576,7 @@ def test_verified_result_loader_rejects_cross_product_and_source_tampering(tmp_p
             result_verifier=verifier,
             trace_loader=trace_loader,
             preparation_validator=lambda *_args, **_kwargs: None,
+            run_binding_resolver=run_binding_resolver,
         )
 
     experiment["source"]["lab_dirty"] = False
@@ -564,15 +593,14 @@ def test_verified_result_loader_rejects_cross_product_and_source_tampering(tmp_p
             )
         )
     )
-    experiment["configuration"]["class_study_cohort_assembly_sha256"] = sha256_file(
-        assembly_path
-    )
+    experiment["configuration"]["class_study_cohort_assembly_sha256"] = sha256_file(assembly_path)
 
     with pytest.raises(ValueError, match="requires a complete-coverage admission"):
         validate_class_fitting_result(
             root,
             result_verifier=verifier,
             trace_loader=trace_loader,
+            run_binding_resolver=run_binding_resolver,
         )
 
 
@@ -683,9 +711,7 @@ def test_prefix_derivation_rejects_incomplete_class_coverage(tmp_path: Path) -> 
     artifact_root.mkdir()
     incomplete = class_study_prepared_manifest()
     incomplete["preparation"].pop("coverage_admission")
-    (workload_root / f"{inputs.workload_ids[0]}.json").write_bytes(
-        canonical_json_bytes(incomplete)
-    )
+    (workload_root / f"{inputs.workload_ids[0]}.json").write_bytes(canonical_json_bytes(incomplete))
 
     with pytest.raises(ValueError, match="requires a complete-coverage admission"):
         derive_schema_six_prefix_specs(
@@ -714,9 +740,7 @@ def test_finalization_default_context_rejects_incomplete_class_coverage(
     first_path.write_bytes(canonical_json_bytes(incomplete))
     qualification_path = context.sidecar_root / "_qualification-set.json"
     qualification = json.loads(qualification_path.read_text(encoding="utf-8"))
-    qualification["workloads"][0]["workload_manifest"]["sha256"] = sha256_file(
-        first_path
-    )
+    qualification["workloads"][0]["workload_manifest"]["sha256"] = sha256_file(first_path)
     qualification["bindings_sha256"] = _named_set_bindings_digest(qualification)
     qualification_path.write_bytes(canonical_json_bytes(qualification))
     strict_context = QualificationContext(
@@ -858,10 +882,7 @@ def test_final_selection_binds_the_qualification_finalized_pilot_bundle(
         artifacts_root=final_parent,
     )
     finalized = verify_class_fitting_bundle(final_root, qualification_context=context)
-    assert (
-        finalized.artifact_hashes["walkie_talkie"]
-        != numeric.artifact_hashes["walkie_talkie"]
-    )
+    assert finalized.artifact_hashes["walkie_talkie"] != numeric.artifact_hashes["walkie_talkie"]
 
     compatibility_root = tmp_path / "compatibility"
     frozen_inputs = compatibility_root / "inputs"
@@ -938,19 +959,13 @@ def test_final_selection_binds_the_qualification_finalized_pilot_bundle(
         "provenance_sha256": sha256_file(final_root / "provenance.json"),
         "artifact_sha256": compatibility["defense_parameter_sha256"],
     }
-    graph = tuple(
-        tuple(pair) for pair in selection["payload"]["feasible_pair_graph"]
-    )
+    graph = tuple(tuple(pair) for pair in selection["payload"]["feasible_pair_graph"])
     assert len(graph) == len(inputs.workload_ids) // 2
-    assert {workload_id for pair in graph for workload_id in pair} == set(
-        inputs.workload_ids
-    )
+    assert {workload_id for pair in graph for workload_id in pair} == set(inputs.workload_ids)
     # Only the pair-specific runtime profiles exercised by the frozen bundle
     # are admitted.  Endpoint qualification under two different profiles does
     # not manufacture an alternate cross-profile edge.
-    assert frozenset((graph[0][0], graph[1][0])) not in {
-        frozenset(pair) for pair in graph
-    }
+    assert frozenset((graph[0][0], graph[1][0])) not in {frozenset(pair) for pair in graph}
     rule = selection["payload"]["feasible_pair_rule"]
     assert rule["qualified_pair_edges"] == 60
     assert rule["unqualified_alternate_pairs_excluded"] == (120 * 119 // 2) - 60

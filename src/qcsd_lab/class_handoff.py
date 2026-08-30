@@ -40,6 +40,10 @@ from .buflo_handoff import (
 from .capture import ObserverPacket, extract_trace
 from .class_acquisition import validate_class_study_preparation
 from .class_cohort import validate_cohort_assembly_receipt
+from .class_run_binding import (
+    resolve_class_sample_run_binding,
+    validate_class_sample_run_binding,
+)
 from .class_study import (
     EVIDENCE_ROLES,
     FINAL_CLASS_COUNT,
@@ -56,7 +60,7 @@ from .experiment import ACCEPTED_ARTIFACTS, resolved_sample_directory
 from .util import LAB_ROOT, load_json, require_disjoint_path, sha256_file, source_metadata
 from .verification import VerifiedResult, verify_result
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 ARTIFACT_TYPE = "qcsd-classifier-multiorigin100-formal-handoff"
 PURPOSE = "closed-world-website-traffic-classification"
 COHORT_INPUT = "inputs/class-study-cohort.json"
@@ -173,6 +177,7 @@ _ROW_KEYS = {
     "acquisition_block",
     "split",
     "paired_class_visit_id",
+    "input_bindings",
     "source",
     "products",
     "observer_packet_count",
@@ -1156,6 +1161,13 @@ def _export_sample(
         }
 
     run = load_json(candidate / products["run"]["path"])
+    run_binding = resolve_class_sample_run_binding(
+        receipt.root,
+        receipt.experiment["configuration"],
+        sample,
+    )
+    input_bindings = run_binding.receipt()
+    validate_class_sample_run_binding(run, sample, run_binding)
     _verify_current_candidate_algorithm_evidence(
         run,
         mode=str(sample["defense"]),
@@ -1217,6 +1229,7 @@ def _export_sample(
         "paired_class_visit_id": (
             f"block-{block_index:02d}/{workload_id}/visit-{sample['visit']:02d}"
         ),
+        "input_bindings": input_bindings,
         "source": {
             "result_name": receipt.experiment["name"],
             "result_root": str(receipt.root),
@@ -1691,6 +1704,12 @@ def _validate_rows(
             workload_id = str(sample["workload_id"])
             visit = int(sample["visit"])
             expected_split = _split_for_block(block, dimensions.block_count)
+            run_binding = resolve_class_sample_run_binding(
+                receipt.root,
+                receipt.experiment["configuration"],
+                sample,
+            )
+            expected_input_bindings = run_binding.receipt()
             expected_source_artifacts = {
                 label: {
                     "path": f"{sample['path']}/{relative}",
@@ -1717,6 +1736,7 @@ def _validate_rows(
                 or row.get("split") != expected_split
                 or row.get("paired_class_visit_id")
                 != f"block-{block:02d}/{workload_id}/visit-{visit:02d}"
+                or row.get("input_bindings") != expected_input_bindings
                 or row.get("classifier_feature_fields") != list(CLASSIFIER_FIELDS)
                 or not isinstance(source, Mapping)
                 or set(source)
@@ -1779,6 +1799,7 @@ def _validate_rows(
             ):
                 raise ValueError("formal class shape PCAP and trace CSV differ")
             run = load_json(root / products["run"]["path"])
+            validate_class_sample_run_binding(run, sample, run_binding)
             if deep:
                 _verify_current_candidate_algorithm_evidence(
                     run,
@@ -2189,9 +2210,12 @@ direction, and observer-frame length. The fixed addresses and ports in shape
 PCAPs are synthetic framing and never copied from source traffic. All non-formal
 campaign roles and the `static` compatibility mode are excluded.
 
-`dataset.json` and `samples.jsonl` bind class labels, paired visits, source
-result seals, cohort/class hashes, modes, blocks, and splits. `SHA256SUMS` is a
-closed inventory. Run the semantic verifier as well as `sha256sum -c` before
-analysis. This is a paper-informed, 100-class closed-world QUIC
+Schema 2 `dataset.json` and `samples.jsonl` bind class labels, paired visits,
+source result seals, cohort/class hashes, modes, blocks, and splits. Every
+sample row also binds its prepared application graph, executed runtime graph,
+qualified chaff inputs, mode-appropriate defense parameters, and launch limits;
+the semantic verifier checks those receipts against copied `run.json` evidence.
+`SHA256SUMS` is a closed inventory. Run the semantic verifier as well as
+`sha256sum -c` before analysis. This is a paper-informed, 100-class closed-world QUIC
 study; it is not a reproduction of a bilateral defense or any paper dataset.
 """

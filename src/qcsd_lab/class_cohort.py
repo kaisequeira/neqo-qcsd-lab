@@ -80,10 +80,6 @@ def build_evidenced_cohort(
         candidate_catalogue_path=catalogue_path,
         runner_root=completion_path.parent,
     )
-    final_selection = _final_selection_binding(
-        final_selection_receipt_path,
-        feasible_pairs=feasible_pairs,
-    )
     known_ids = {candidate.candidate_id for candidate in candidates}
     unexpected = sorted(
         entry.name for entry in stability.iterdir() if entry.name not in known_ids
@@ -121,6 +117,11 @@ def build_evidenced_cohort(
         feasible_pairs=feasible_pairs,
     )
     selection = validate_study_receipt(cohort)
+    final_selection = _final_selection_binding(
+        final_selection_receipt_path,
+        feasible_pairs=selection.feasible_pairs,
+        selected_matching=selection.matching,
+    )
     selected_ids = {
         candidate.candidate_id
         for candidate in (*selection.pilot, *selection.final, *selection.reserves)
@@ -326,33 +327,11 @@ def validate_cohort_assembly_receipt(
                 != final_binding["sha256"]
             ):
                 raise ValueError("final cohort assembly selection hashes do not verify")
-            if embedded_payload.get("feasible_pair_graph") != [
-                list(pair) for pair in selection.feasible_pairs
-            ]:
-                raise ValueError("final cohort assembly feasible graph was substituted")
-            for label in ("pilot_cohort", "pilot_cohort_assembly"):
-                lineage = embedded_payload.get(label)
-                if (
-                    not isinstance(lineage, Mapping)
-                    or set(lineage) != {"sha256", "payload_sha256"}
-                    or not _digest(lineage["sha256"])
-                    or not _digest(lineage["payload_sha256"])
-                ):
-                    raise ValueError(
-                        f"final cohort assembly {label} lineage is invalid"
-                    )
-            for label in (
-                "pilot_numeric_fitting",
-                "pilot_compatibility",
-                "feasible_pair_rule",
-            ):
-                if (
-                    not isinstance(embedded_payload.get(label), Mapping)
-                    or not embedded_payload[label]
-                ):
-                    raise ValueError(
-                        f"final cohort assembly {label} evidence is invalid"
-                    )
+            _validate_final_selection_payload(
+                embedded_payload,
+                feasible_pairs=selection.feasible_pairs,
+                selected_matching=selection.matching,
+            )
     for key in ("stability_root", "workload_root"):
         root_name = payload[key]
         if (
@@ -499,10 +478,6 @@ def _build_evidenced_cohort(
         candidate_catalogue_path=catalogue_path,
         runner_root=completion_path.parent,
     )
-    final_selection = _final_selection_binding(
-        final_selection_receipt_path,
-        feasible_pairs=feasible_pairs,
-    )
     known_ids = {candidate.candidate_id for candidate in candidates}
     unexpected = sorted(
         entry.name for entry in stability.iterdir() if entry.name not in known_ids
@@ -538,6 +513,11 @@ def _build_evidenced_cohort(
         feasible_pairs=feasible_pairs,
     )
     selection = validate_study_receipt(cohort)
+    final_selection = _final_selection_binding(
+        final_selection_receipt_path,
+        feasible_pairs=selection.feasible_pairs,
+        selected_matching=selection.matching,
+    )
     selected_ids = {
         candidate.candidate_id
         for candidate in (*selection.pilot, *selection.final, *selection.reserves)
@@ -851,20 +831,42 @@ def _final_selection_binding(
     path: Path | None,
     *,
     feasible_pairs: Sequence[Sequence[str]] | None,
+    selected_matching: Sequence[Sequence[str]] | None,
 ) -> dict[str, Any] | None:
     if feasible_pairs is None:
-        if path is not None:
+        if path is not None or selected_matching is not None:
             raise ValueError("pilot cohort must not bind a final-selection receipt")
         return None
-    if path is None:
+    if path is None or selected_matching is None:
         raise ValueError(
-            "authoritative cohort requires a typed final-selection receipt"
+            "authoritative cohort requires a typed final-selection receipt and matching"
         )
     source = _regular_file(path, "final-selection receipt")
     value = load_json(source)
     payload = validate_hash_bound_receipt(
         value, expected_type=FINAL_SELECTION_RECEIPT_TYPE
     )
+    _validate_final_selection_payload(
+        payload,
+        feasible_pairs=feasible_pairs,
+        selected_matching=selected_matching,
+    )
+    return {
+        "path": source.name,
+        "sha256": sha256_file(source),
+        "payload_sha256": value["payload_sha256"],
+        "payload": payload,
+    }
+
+
+def _validate_final_selection_payload(
+    payload: Mapping[str, Any],
+    *,
+    feasible_pairs: Sequence[Sequence[str]],
+    selected_matching: Sequence[Sequence[str]],
+) -> None:
+    """Validate the exact current final-selection evidence contract."""
+
     required = {
         "study_id",
         "selection_schema_version",
@@ -874,16 +876,132 @@ def _final_selection_binding(
         "pilot_numeric_fitting",
         "pilot_compatibility",
         "feasible_pair_rule",
+        "feasible_pair_evidence",
         "feasible_pair_graph",
+        "selected_final_perfect_matching",
     }
-    if set(payload) != required or payload["study_id"] != STUDY_ID:
+    if (
+        set(payload) != required
+        or payload["study_id"] != STUDY_ID
+        or type(payload["selection_schema_version"]) is not int
+        or payload["selection_schema_version"] != 1
+        or not isinstance(payload["selection_policy"], str)
+        or payload["selection_policy"] not in {
+            "tranco-bound-order-with-qualified-selected-wt6-pairs",
+            "sealed-class-incompatibility-successor-v2",
+        }
+    ):
         raise ValueError("final-selection receipt fields differ from the contract")
-    graph = payload["feasible_pair_graph"]
+
     expected_graph = [list(pair) for pair in feasible_pairs]
-    if graph != expected_graph:
+    if payload["feasible_pair_graph"] != expected_graph:
         raise ValueError(
             "final cohort feasible graph differs from final-selection receipt"
         )
+    graph_keys, graph_endpoints = _pair_inventory(
+        expected_graph,
+        label="final-selection feasible graph",
+    )
+
+    evidence = payload["feasible_pair_evidence"]
+    if not isinstance(evidence, list) or len(evidence) != len(expected_graph):
+        raise ValueError("final-selection qualified-pair evidence is incomplete")
+    evidence_fields = {
+        "left",
+        "right",
+        "runtime_profile_real",
+        "runtime_profile_decoy",
+        "runtime_profile_sha256",
+        "endpoint_qualification",
+    }
+    endpoint_fields = {
+        "workload_id",
+        "chaff_qualification_sidecar_sha256",
+        "prefix_pack_spec_sha256",
+        "qualified_chaff_manifest_sha256",
+        "qualified_parallel_chaff_streams",
+        "walkie_talkie_required_chaff_streams",
+    }
+    evidence_pairs: list[tuple[str, str]] = []
+    for expected_pair, record in zip(expected_graph, evidence, strict=True):
+        if not isinstance(record, Mapping) or set(record) != evidence_fields:
+            raise ValueError(
+                "final-selection qualified-pair evidence fields differ from the contract"
+            )
+        left, right = record["left"], record["right"]
+        if [left, right] != expected_pair:
+            raise ValueError(
+                "final-selection qualified-pair evidence orientation differs "
+                "from the feasible graph"
+            )
+        evidence_pairs.append((left, right))
+
+        real = record["runtime_profile_real"]
+        decoy = record["runtime_profile_decoy"]
+        if (
+            not isinstance(real, str)
+            or not isinstance(decoy, str)
+            or real == decoy
+            or {real, decoy} != {left, right}
+            or not _digest(record["runtime_profile_sha256"])
+        ):
+            raise ValueError(
+                "final-selection qualified-pair runtime profile is invalid"
+            )
+
+        endpoint_qualification = record["endpoint_qualification"]
+        if (
+            not isinstance(endpoint_qualification, list)
+            or len(endpoint_qualification) != 2
+        ):
+            raise ValueError(
+                "final-selection qualified-pair endpoint evidence is incomplete"
+            )
+        for workload_id, endpoint in zip(
+            (left, right), endpoint_qualification, strict=True
+        ):
+            if not isinstance(endpoint, Mapping) or set(endpoint) != endpoint_fields:
+                raise ValueError(
+                    "final-selection endpoint qualification fields differ "
+                    "from the contract"
+                )
+            required = endpoint["walkie_talkie_required_chaff_streams"]
+            qualified = endpoint["qualified_parallel_chaff_streams"]
+            if (
+                endpoint["workload_id"] != workload_id
+                or not _digest(endpoint["chaff_qualification_sidecar_sha256"])
+                or not _digest(endpoint["prefix_pack_spec_sha256"])
+                or not _digest(endpoint["qualified_chaff_manifest_sha256"])
+                or type(required) is not int
+                or type(qualified) is not int
+                or required < 1
+                or qualified < required
+            ):
+                raise ValueError(
+                    "final-selection endpoint qualification is invalid"
+                )
+
+    evidence_keys, evidence_endpoints = _pair_inventory(
+        evidence_pairs,
+        label="final-selection qualified-pair evidence",
+    )
+    if evidence_keys != graph_keys or evidence_endpoints != graph_endpoints:
+        raise ValueError(
+            "final-selection qualified-pair evidence differs from the feasible graph"
+        )
+
+    expected_matching = [list(pair) for pair in selected_matching]
+    if payload["selected_final_perfect_matching"] != expected_matching:
+        raise ValueError(
+            "final cohort matching differs from final-selection receipt"
+        )
+    matching_keys, _matching_endpoints = _pair_inventory(
+        expected_matching,
+        label="final-selection selected matching",
+    )
+    if not matching_keys.issubset(graph_keys):
+        raise ValueError("final-selection selected matching uses an unqualified edge")
+
     for label in ("pilot_cohort", "pilot_cohort_assembly"):
         binding = payload[label]
         if (
@@ -893,15 +1011,158 @@ def _final_selection_binding(
             or not _digest(binding["payload_sha256"])
         ):
             raise ValueError(f"final-selection {label} binding is invalid")
-    for label in ("pilot_numeric_fitting", "pilot_compatibility", "feasible_pair_rule"):
-        if not isinstance(payload[label], Mapping) or not payload[label]:
-            raise ValueError(f"final-selection {label} evidence is invalid")
-    return {
-        "path": source.name,
-        "sha256": sha256_file(source),
-        "payload_sha256": value["payload_sha256"],
-        "payload": payload,
+    _validate_pilot_numeric_fitting(payload["pilot_numeric_fitting"])
+    _validate_pilot_compatibility(payload["pilot_compatibility"])
+    _validate_feasible_pair_rule(
+        payload["feasible_pair_rule"],
+        selection_policy=payload["selection_policy"],
+        qualified_pair_edges=len(expected_graph),
+    )
+
+
+def _validate_pilot_numeric_fitting(value: object) -> None:
+    if not isinstance(value, Mapping) or set(value) != {
+        "numeric_provenance_sha256",
+        "walkie_talkie_artifact_sha256",
+        "source_result",
+    }:
+        raise ValueError("final-selection pilot_numeric_fitting evidence is invalid")
+    if not _digest(value["numeric_provenance_sha256"]) or not _digest(
+        value["walkie_talkie_artifact_sha256"]
+    ):
+        raise ValueError("final-selection pilot numeric fitting hashes are invalid")
+
+    # Import lazily: class_fitting imports this module for cohort validation.
+    from .class_fitting import PILOT_STAGE, _validate_source_result
+
+    _validate_source_result(value["source_result"], PILOT_STAGE)
+
+
+def _validate_pilot_compatibility(value: object) -> None:
+    fields = {
+        "campaign",
+        "evidence_sha256",
+        "experiment_sha256",
+        "accepted_samples",
+        "unique_class_mode_pairs",
+        "fitted_parameter_sha256",
+        "finalized_bundle",
     }
+    if not isinstance(value, Mapping) or set(value) != fields:
+        raise ValueError("final-selection pilot_compatibility evidence is invalid")
+    if (
+        value["campaign"] != f"{STUDY_ID}-pilot-compatibility-1080-1200"
+        or value["accepted_samples"] != 1_080
+        or value["unique_class_mode_pairs"] != 1_080
+        or not _digest(value["evidence_sha256"])
+        or not _digest(value["experiment_sha256"])
+    ):
+        raise ValueError("final-selection pilot compatibility result is invalid")
+    parameter_hashes = value["fitted_parameter_sha256"]
+    if (
+        not isinstance(parameter_hashes, Mapping)
+        or set(parameter_hashes) != {
+            "traffic-morphing",
+            "wtf-pad",
+            "walkie-talkie",
+        }
+        or not all(_digest(digest) for digest in parameter_hashes.values())
+    ):
+        raise ValueError("final-selection pilot compatibility parameters are invalid")
+    finalized = value["finalized_bundle"]
+    if (
+        not isinstance(finalized, Mapping)
+        or set(finalized) != {
+            "source",
+            "provenance_sha256",
+            "artifact_sha256",
+        }
+        or finalized["source"] != "frozen-pilot-compatibility-inputs"
+        or not _digest(finalized["provenance_sha256"])
+        or finalized["artifact_sha256"] != parameter_hashes
+    ):
+        raise ValueError("final-selection finalized pilot bundle is invalid")
+
+
+def _validate_feasible_pair_rule(
+    value: object,
+    *,
+    selection_policy: object,
+    qualified_pair_edges: int,
+) -> None:
+    if selection_policy == "tranco-bound-order-with-qualified-selected-wt6-pairs":
+        possible_pair_count = 120 * 119 // 2
+        expected = {
+            "source": (
+                "finalized-selected-wt6-profile-and-both-endpoint-qualification"
+            ),
+            "candidate_unordered_pairs": possible_pair_count,
+            "qualified_pair_edges": qualified_pair_edges,
+            "unqualified_alternate_pairs_excluded": (
+                possible_pair_count - qualified_pair_edges
+            ),
+            "pair_specific_finalized_runtime_profile_required": True,
+            "both_endpoint_frozen_prefix_qualification_required": True,
+            "unselected_pairs_inferred_from_endpoint_compatibility": False,
+            "numeric_fit_selected_runtime_profiles_used": True,
+            "final_20_per_stratum_perfect_matching_required": True,
+            "classifier_outcomes_used": False,
+            "measured_bandwidth_latency_or_privacy_outcomes_used": False,
+        }
+        if value != expected:
+            raise ValueError("final-selection root feasible-pair rule is invalid")
+        return
+
+    fields = {
+        "source",
+        "selection",
+        "cumulative_failed_classes_excluded",
+        "replacement_generation",
+        "decision_payload_sha256",
+    }
+    if not isinstance(value, Mapping) or set(value) != fields:
+        raise ValueError("final-selection successor feasible-pair rule is invalid")
+    failed = value["cumulative_failed_classes_excluded"]
+    generation = value["replacement_generation"]
+    if (
+        value["source"] != "qualified-root-120-class-60-edge-graph"
+        or value["selection"] != "decision-bound-successor-50-edge-matching"
+        or not isinstance(failed, list)
+        or not failed
+        or not all(isinstance(candidate_id, str) and candidate_id for candidate_id in failed)
+        or len(set(failed)) != len(failed)
+        or type(generation) is not int
+        or generation < 1
+        or not _digest(value["decision_payload_sha256"])
+    ):
+        raise ValueError("final-selection successor feasible-pair rule is invalid")
+
+
+def _pair_inventory(
+    pairs: Sequence[Sequence[str]],
+    *,
+    label: str,
+) -> tuple[set[frozenset[str]], set[str]]:
+    keys: set[frozenset[str]] = set()
+    endpoints: set[str] = set()
+    for raw_pair in pairs:
+        if (
+            not isinstance(raw_pair, Sequence)
+            or isinstance(raw_pair, (str, bytes))
+            or len(raw_pair) != 2
+            or not all(isinstance(candidate_id, str) for candidate_id in raw_pair)
+            or raw_pair[0] == raw_pair[1]
+        ):
+            raise ValueError(f"{label} contains a malformed edge")
+        left, right = raw_pair
+        key = frozenset((left, right))
+        if key in keys:
+            raise ValueError(f"{label} contains a duplicate edge")
+        if left in endpoints or right in endpoints:
+            raise ValueError(f"{label} contains duplicate endpoints")
+        keys.add(key)
+        endpoints.update((left, right))
+    return keys, endpoints
 
 
 def _write_or_verify(path: Path, value: Mapping[str, Any]) -> Path:

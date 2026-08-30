@@ -8,6 +8,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+from .class_run_binding import (
+    ClassSampleRunBinding,
+    validate_class_sample_run_binding,
+)
 from .util import load_json, sha256_bytes
 
 
@@ -67,6 +71,8 @@ def load_fitting_trace(
     udp_payload_ceiling: int = 1_200,
     require_observations: bool = False,
     accepted_artifacts: Mapping[str, str] | None = None,
+    seed: int | None = None,
+    run_binding: ClassSampleRunBinding | None = None,
 ) -> FittingTrace:
     """Read typed, natural datagrams and application events from ``events.csv`` only."""
 
@@ -81,6 +87,21 @@ def load_fitting_trace(
     run = load_json(run_path)
     if not isinstance(run, Mapping) or run.get("completion_status") != "complete":
         raise ValueError(f"fitting sample did not complete: {sample_id}")
+    if run_binding is not None:
+        if type(seed) is not int:
+            raise ValueError(f"fitting sample has no integer seed: {sample_id}")
+        validate_class_sample_run_binding(
+            run,
+            {
+                "workload_id": workload_id,
+                "defense": "undefended",
+                "runtime_kind": "none",
+                "baseline": True,
+                "seed": seed,
+                "request_policy": request_policy,
+            },
+            run_binding,
+        )
     start_ns = _integer(run.get("defense_start_monotonic_ns"), "defense start", run_path)
     completion_ns = _integer(
         run.get("application_completion_monotonic_ns"),

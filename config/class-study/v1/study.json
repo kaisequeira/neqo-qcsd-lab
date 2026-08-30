@@ -149,6 +149,8 @@
       "maximum_convergence_passes": 8,
       "limit_failure_policy": "reject-the-class-above-32-origins-or-without-convergence-after-eight-passes;never-silently-truncate-an-accepted-workload",
       "complete_coverage_required": "at-least-one-rendered-resource-from-every-approved-origin-and-every-retained-resource",
+      "same_graph_across_modes": "every-accepted-fitting-certification-canary-and-formal-run-must-rederive-the-runtime-manifest-from-the-admitted-prepared-manifest-and-match-the-complete-response-and-endpoint-origin-sets",
+      "defence_specific_resource_projection": "forbidden",
       "realised_origin_count_distribution_must_be_reported": true,
       "formal_handoff_report": "dataset.json.resource_origin_profile"
     },
@@ -278,13 +280,79 @@
       "selection_receipt": "absent",
       "assembly_receipt": "absent"
     },
-    "replacement_rule": "any-need-to-replace-a-frozen-final-class-fails-v1-closed",
+    "replacement_rule": "v1-fails-closed;replacement-is-possible-only-in-a-separately-preregistered-hash-bound-successor-generation-before-any-authorised-formal-capture",
     "reserve_policy": {
       "role": "frozen-attrition-and-successor-planning-inventory",
       "automatic_replacement": false,
       "in_place_v1_replacement": "forbidden",
-      "successor_requirement": "a-separately-preregistered-successor-study-and-cohort-must-select-any-replacement-before-new-evidence",
-      "successor_restart": "authoritative-fitting-final-qualification-certification-readiness-pre-snapshot-canaries-formal-capture-handoff-evaluation-and-attestation"
+      "activation_authority": "sealed-incomplete-first-launch-certification-with-same-class-undefended-StrictPreparedResponseIdentityFailure-authority-and-only-same-class-defended-corroboration",
+      "successor_requirement": "a-separately-preregistered-generational-successor-must-select-any-replacement-from-the-frozen-root-qualified-graph-before-new-evidence",
+      "successor_restart": "fresh-authoritative-fitting-final-qualification-certification-readiness-pre-snapshot-canaries-formal-capture-handoff-evaluation-and-attestation"
+    }
+  },
+  "successor_policy": {
+    "receipt_contract": {
+      "artifact_type": "qcsd-class-study-successor-policy",
+      "policy_schema_version": 2,
+      "state": "absent-prospective-create-only",
+      "predecessor_mutation_permitted": false,
+      "manual_failure_classification_permitted": false
+    },
+    "replacement_authority": {
+      "source": "sealed-incomplete-900-cell-first-launch-certification-only",
+      "authorising_failure": {
+        "stage": "fidelity",
+        "type": "StrictPreparedResponseIdentityFailure",
+        "defense": "undefended",
+        "same_class_proof": "failure-details-contain-the-failed-cell-workload_id"
+      },
+      "corroborating_failure": {
+        "stage": "fidelity",
+        "type": "StrictPreparedResponseIdentityFailure",
+        "defense": "any-defended-certification-mode",
+        "same_class_proof": "failure-details-contain-the-failed-cell-workload_id",
+        "prerequisite": "that-workload-has-an-authorising-undefended-failure",
+        "replacement_authority": false
+      },
+      "at_least_one_authorising_undefended_failure_required": true,
+      "every_failed_cell_outside_authorising_and_corroborating_sets_blocks_the_decision": true,
+      "generic_defense_fidelity_authorises_replacement": false,
+      "defended_only_or_other_correctness_authorises_replacement": false,
+      "capture_failure_authorises_replacement": false,
+      "infrastructure_failure_authorises_replacement": false,
+      "unclassified_failure_authorises_replacement": false
+    },
+    "generation_contract": {
+      "iterative_successors_permitted": true,
+      "root_selection_authority": "exact-original-frozen-120-class-pilot-and-qualified-60-edge-one-to-one-graph",
+      "immediate_predecessor_binding": "exact-cohort-assembly-final-selection-foundation-source-build-and-successor-restart-lineage",
+      "selection_objective": [
+        "exclude-all-cumulative-proven-class-incompatibilities",
+        "maximum-unchanged-immediate-predecessor-final-classes",
+        "frozen-pilot-order"
+      ],
+      "cumulative_failed_classes_may_reenter": false,
+      "study_id_namespace": "classifier-multiorigin100-v2-g<generation>-<first-12-hex-of-hash-bound-decision-basis>",
+      "launch_namespace": ".<successor-study-id>-launches",
+      "distinct_hash_namespace_per_generation": true,
+      "quota_or_reserve_exhaustion": "fail-closed-new-acquisition-cohort-required",
+      "replacement_after_authorised_formal_capture_starts": "forbidden"
+    },
+    "fresh_restart_per_generation": {
+      "authoritative_fitting_samples": 2000,
+      "final_qualification_executions": 600,
+      "first_launch_certification_cells": 900,
+      "certification_scope": "complete-100-class-by-9-mode-cross-product",
+      "predecessor_authoritative_artifact_reuse_permitted": false,
+      "all_downstream_gates_restart": true
+    },
+    "resource_graph_contract": {
+      "single_origin_and_multi_origin_classes_remain_allowed": true,
+      "origin_count_used_for_replacement": false,
+      "origin_count_quota": null,
+      "activated_reserve_graph": "retain-the-exact-admitted-complete-approved-origin-and-resource-graph-from-the-original-acquisition-assembly-lineage",
+      "resource_or_origin_projection_during_successor_selection": "forbidden",
+      "accepted_successor_certification_cells": "reopen-every-accepted-run-against-the-complete-prepared-runtime-response-and-endpoint-origin-graph-before-a-replacement-decision-can-exist"
     }
   },
   "modes": {
@@ -521,6 +589,20 @@
     "pre_launch_infrastructure_failure": "recoverable-only-before-experiment-json-at-the-existing-global-claim",
     "certification": "one-started-launch-only-no-retry-or-substitution",
     "canary_and_formal": "up-to-three-attempts-with-every-failure-preserved-and-no-substitution-or-relabelling",
+    "accepted_run_graph_binding": {
+      "scope": "every-fitting-pilot-compatibility-certification-canary-and-formal-sample-plus-every-accepted-cell-in-an-incomplete-successor-certification",
+      "derived_from": "sealed-campaign-configuration-and-the-admitted-prepared-workload",
+      "requires": [
+        "campaign-sha256",
+        "prepared-application-sha256",
+        "derived-runtime-workload-sha256",
+        "mode-appropriate-chaff-qualification-and-manifest-sha256",
+        "mode-appropriate-defense-parameter-and-provenance-sha256",
+        "response-status-length-body-sha256-outcome-for-every-resource",
+        "canonical-endpoint-origin-set-for-the-complete-runtime-graph",
+        "launch-limits-seed-request-policy-and-runtime-kind"
+      ]
+    },
     "storage_preflight_multiplier": 3
   },
   "temporal_protocol": {
@@ -574,7 +656,19 @@
     ],
     "handoff_dataset_launch_key": "class_study_launches",
     "handoff_launch_policy": "ten-distinct-block-specific-launch-claims-must-hash-verify",
-    "cohort_binding_policy": "selection-and-assembly-receipts-and-every-admitted-prepared-workload-sha256-must-verify"
+    "cohort_binding_policy": "selection-and-assembly-receipts-and-every-admitted-prepared-workload-sha256-must-verify",
+    "handoff_schema_version": 2,
+    "handoff_sample_input_bindings": [
+      "campaign_sha256",
+      "application_workload_sha256",
+      "runtime_workload_sha256",
+      "chaff_qualification_sha256",
+      "chaff_manifest_sha256",
+      "defense_parameters_sha256",
+      "defense_parameters_provenance_sha256",
+      "max_response_bytes",
+      "max_udp_payload_size"
+    ]
   },
   "historical_corpus_guard": {
     "root": "../../../handoffs/classifier-multiorigin5-v2",
@@ -592,7 +686,7 @@
     "fitting_qualification_compatibility_canary_and_formal_data": "mutually-disjoint-evidence-roles",
     "formal_export_source_role": "formal-only",
     "class_replacement_after_final-freeze": "v1-fails-closed-no-automatic-reserve-substitution",
-    "replacement_successor": "separately-preregistered-successor-study-and-cohort-with-full-authoritative-downstream-restart",
+    "replacement_successor": "separately-preregistered-hash-namespaced-generational-successor-over-the-frozen-root-120-class-60-edge-authority-with-cumulative-failure-exclusion-and-full-authoritative-downstream-restart",
     "historical_classifier_corpus": "read-only-byte-for-byte-unchanged"
   },
   "readiness_gates": {

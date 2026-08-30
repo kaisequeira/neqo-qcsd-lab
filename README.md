@@ -131,11 +131,19 @@ quarter, half, and three-quarter points of that unchanged window. Finally,
 terminal chaff cancellation cannot reuse the aggregate-empty snapshot that
 preceded RESET/STOP work; completion requires a freshly recomputed empty
 transport snapshot after every `CancelChaff` action crosses the adapter
-boundary. These source changes require a new immutable cohort. V29 must repeat
-the pull/no-cache build, reference execution, 18/18 regression, complete code
-gate, and all 160 controlled captures before public-page acquisition may
-begin. No class-study foundation, qualification, readiness, or validation
-attestation exists yet.
+boundary. The current checkout additionally makes complete prepared-to-runtime
+graph verification mandatory for fitting, every accepted non-fitting result,
+incomplete successor certification, formal export, and deep handoff
+verification; it also uses exact final-selection and generational successor
+evidence schemas. The complete Lab suite passes 1,576 tests with four skips.
+These source changes require a new immutable cohort. The intervening v29 and
+v30 build attempts emitted no
+build receipt and advance no scientific numerator. Docker/VHD recovery and
+capacity verification remain operational prerequisites, not evidence. The
+next fresh cohort named in the workspace ledger must repeat the pull/no-cache
+build, reference execution, 18/18 regression, complete code gate, and all 160
+controlled captures before public-page acquisition may begin. No class-study
+foundation, qualification, readiness, or validation attestation exists yet.
 
 The authoritative current heads, progression, and evidence ledger are
 maintained in
@@ -180,6 +188,25 @@ handoff reports each realised class's origin count, together with the origin
 histogram and single-/multi-origin totals, in
 `dataset.json.resource_origin_profile`.
 
+The same complete graph is now independently rederived at every downstream
+evidence boundary. For each accepted fitting, pilot-compatibility,
+certification, canary, and formal sample, the verifier derives the runtime
+manifest from the admitted prepared manifest and requires `run.json` to match
+its full response identity and canonical endpoint-origin set. It also checks
+the campaign, application/runtime manifests, qualified chaff, mode-appropriate
+parameter/provenance inputs, seed, request policy, and launch limits. This is
+applied uniformly to all nine selectable modes; no defence may project the
+application workload to one origin or discard a resource. The prospective
+formal handoff uses schema 2 and repeats the nine input hashes/limits in every
+sample row before rechecking them against the sealed source result and copied
+run receipt.
+
+This is an allowance and preservation rule, not a multi-origin sampling quota.
+The final 100 classes have not yet been acquired, so their realised
+single-/multi-origin split is unknown and cannot honestly be promised in
+advance. Whatever split results from the precommitted order and technical
+gates is reported rather than altered.
+
 The endpoint is one contemporaneous paired corpus over the same frozen 100
 classes and visit indices under `undefended`, FRONT, Tamaraw, Traffic
 Morphing, WTF-PAD, Walkie-Talkie, BuFLO, and canonical CTSP CS-BuFLO. Ten
@@ -204,6 +231,58 @@ campaign results resume through `experiment.json`, while acquisition resumes
 only through its own `checkpoint.json`. The full protocol, exact matrices,
 current class-study scientific-numerator ledger, and claim boundary are in
 [`../CLASS-STUDY.md`](../CLASS-STUDY.md).
+
+#### Fail-closed generational successor policy
+
+The 20 reserves are not an automatic substitution queue. A class may be
+removed only through a create-only, hash-bound successor decision reconstructed
+from a sealed, incomplete, exact 900-cell first-launch certification. The sole
+authorising failure is an `undefended` cell whose failure has stage `fidelity`,
+type `StrictPreparedResponseIdentityFailure`, and details naming that same
+cell's `workload_id`. The same typed, same-workload prepared-identity failure
+may occur under a defended mode only as non-authorising corroboration, and only
+when that class already has the undefended proof. It cannot add a class to the
+replacement set. A generic `StrictDefenseFidelityFailure`, defended-only or
+unrelated prepared-identity failure, any other correctness failure, or a
+capture, infrastructure, interruption, or unclassified failure blocks the
+whole successor decision. Manual reclassification is forbidden.
+
+Successors are recursive but remain anchored to the original frozen 120-class
+pilot and its qualified one-to-one 60-edge graph. Every generation also binds
+its exact immediate predecessor cohort, assembly, final selection,
+foundation/source/build identity, and, after generation one, predecessor
+successor-restart receipt. The selection excludes the union of every proven
+failure from all earlier generations, so a failed class can never re-enter;
+subject to that constraint and the fixed rank quotas, it maximises unchanged
+classes from the immediate predecessor and then uses frozen pilot order. Each
+generation receives a distinct hash-derived
+`classifier-multiorigin100-v2-gNN-<digest>` study identity and matching hidden
+launch namespace.
+
+Every generation starts fresh authoritative downstream evidence: all 2,000
+fitting captures, 600 full qualification executions, and the complete 900-cell
+first-launch certification must pass before successor readiness can exist.
+Predecessor fitting, qualification, and certification outputs cannot be reused.
+If cumulative failures leave no quota-feasible 50-edge matching, reserve/graph
+capacity is exhausted and the process stops for a new acquisition cohort; it
+does not relax a quota or infer a new edge. Replacement is forbidden after any
+authorised formal capture has started.
+
+Successor selection does not alter page admission. An activated reserve keeps
+the exact admitted prepared workload and its complete approved-origin/resource
+graph from the original acquisition assembly lineage. Single-origin and
+naturally multi-origin classes remain eligible, origin count remains neither a
+selection signal nor a quota, and projecting a multi-origin graph to fewer
+origins or resources is forbidden. The public `class-study` actions
+`successor-policy`, `successor-decision`, `successor-restart`, and
+`successor-verify` expose these boundaries without reusing the v1 fresh-layout
+namespace.
+
+A sealed incomplete successor certification must also reopen the complete run
+binding for every accepted cell under every mode before it can authorise a
+decision. BuFLO and CS-BuFLO cells additionally reopen their current typed
+algorithm chronology. Only failed cells follow the separately constrained,
+producer-recomputed prepared-response identity path described above.
 
 Fresh class-study commands use one canonical path graph: generated campaigns
 live only in `config/classifier-multiorigin100-v1-campaigns/`, admitted

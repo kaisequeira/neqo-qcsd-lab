@@ -460,10 +460,16 @@ def test_certification_requires_exact_900_first_launch_pairs(monkeypatch, tmp_pa
         accepted_samples={sample["sample_id"]: {} for sample in samples},
     )
     reopened: list[tuple[str, str]] = []
+    bound: list[tuple[str, str]] = []
     monkeypatch.setattr(
         pipeline,
         "_validate_current_candidate_sample_receipt",
         lambda _verified, sample, *, role: reopened.append((role, str(sample["defense"]))),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_validate_class_sample_run_receipt",
+        lambda _verified, sample, *, role: bound.append((role, str(sample["defense"]))),
     )
 
     count, pairs = pipeline._validate_non_fitting_result(
@@ -474,6 +480,10 @@ def test_certification_requires_exact_900_first_launch_pairs(monkeypatch, tmp_pa
 
     assert count == 900
     assert pairs == 900
+    assert len(bound) == 900
+    assert {mode: bound.count(("certification", mode)) for mode in COMPATIBILITY_MODES} == {
+        mode: 100 for mode in COMPATIBILITY_MODES
+    }
     assert reopened.count(("certification", "buflo")) == 100
     assert reopened.count(("certification", "cs-buflo")) == 100
     samples[0]["attempts"] = 2
@@ -516,10 +526,16 @@ def test_formal_result_accepts_preserved_retry_success_within_budget(monkeypatch
         accepted_samples={sample["sample_id"]: {} for sample in samples},
     )
     reopened: list[tuple[str, str]] = []
+    bound: list[tuple[str, str]] = []
     monkeypatch.setattr(
         pipeline,
         "_validate_current_candidate_sample_receipt",
         lambda _verified, sample, *, role: reopened.append((role, str(sample["defense"]))),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_validate_class_sample_run_receipt",
+        lambda _verified, sample, *, role: bound.append((role, str(sample["defense"]))),
     )
 
     assert pipeline._validate_non_fitting_result(
@@ -527,6 +543,10 @@ def test_formal_result_accepts_preserved_retry_success_within_budget(monkeypatch
         role="formal",
         selected_ids=class_ids,
     ) == (1_600, None)
+    assert len(bound) == 1_600
+    assert {mode: bound.count(("formal", mode)) for mode in FORMAL_MODES} == {
+        mode: 200 for mode in FORMAL_MODES
+    }
     assert reopened.count(("formal", "buflo")) == 200
     assert reopened.count(("formal", "cs-buflo")) == 200
 

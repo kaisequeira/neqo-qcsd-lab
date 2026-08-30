@@ -49,6 +49,7 @@ from .class_handoff import (
     CLASSIFIER_FIELDS,
     COHORT_ASSEMBLY_INPUT,
     FORBIDDEN_CLASSIFIER_FIELDS,
+    SCHEMA_VERSION as HANDOFF_SCHEMA_VERSION,
     verify_class_handoff,
 )
 from .class_handoff import (
@@ -130,9 +131,7 @@ _FORMAL_DIMENSIONS = _Dimensions(
 
 
 def _formal_dimensions_for_study(study_id: str) -> _Dimensions:
-    if study_id != STUDY_ID and not study_id.startswith(
-        "classifier-multiorigin100-v2-"
-    ):
+    if study_id != STUDY_ID and not study_id.startswith("classifier-multiorigin100-v2-"):
         raise ValueError("formal class evaluation study identity is invalid")
     return _Dimensions(
         study_id=study_id,
@@ -154,6 +153,8 @@ def _is_formal_dimensions(dimensions: _Dimensions) -> bool:
             or dimensions.study_id.startswith("classifier-multiorigin100-v2-")
         )
     )
+
+
 if _FORMAL_DIMENSIONS.sample_count != FORMAL_SAMPLE_COUNT:
     raise RuntimeError("class evaluation sample constant differs from the study contract")
 if 1.0 / _FORMAL_DIMENSIONS.classes != CLOSED_WORLD_RANDOM_CHANCE:
@@ -1880,6 +1881,7 @@ def _evaluator_source_binding(
     sources = {
         "src/qcsd_lab/class_evaluation.py": module,
         "src/qcsd_lab/class_handoff.py": module.with_name("class_handoff.py"),
+        "src/qcsd_lab/class_run_binding.py": module.with_name("class_run_binding.py"),
         "src/qcsd_lab/buflo_evaluation.py": module.with_name("buflo_evaluation.py"),
         "tools/qcsd_osad.c": LAB_ROOT / "tools/qcsd_osad.c",
     }
@@ -2083,7 +2085,7 @@ def _load_class_handoff(
         raise ValueError("formal class handoff verifier returned a different root")
     dataset = _load_json_object(source / "dataset.json", "formal class dataset")
     if (
-        dataset.get("schema_version") != 1
+        dataset.get("schema_version") != HANDOFF_SCHEMA_VERSION
         or dataset.get("artifact_type") != HANDOFF_ARTIFACT_TYPE
         or dataset.get("study_id") != dimensions.study_id
         or dataset.get("evidence_role") != "formal"
@@ -2169,9 +2171,7 @@ def _load_class_handoff(
         modes=dimensions.modes,
         samples=samples,
     )
-    if _is_formal_dimensions(dimensions) and (
-        result.random_chance != CLOSED_WORLD_RANDOM_CHANCE
-    ):
+    if _is_formal_dimensions(dimensions) and (result.random_chance != CLOSED_WORLD_RANDOM_CHANCE):
         raise ValueError("formal class random-chance baseline is not one percent")
     return result
 

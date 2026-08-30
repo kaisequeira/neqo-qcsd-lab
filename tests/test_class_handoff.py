@@ -13,6 +13,7 @@ from qcsd_lab.capture import ObserverPacket
 from qcsd_lab.class_handoff import (
     _DIMENSIONS,
     CLASSIFIER_FIELDS,
+    SCHEMA_VERSION,
     _export_class_handoff,
     _read_classifier_trace,
     _StudyDimensions,
@@ -22,6 +23,7 @@ from qcsd_lab.class_handoff import (
     _write_checksums,
 )
 from qcsd_lab.class_study import class_study_launch_identity, class_study_launch_key
+from qcsd_lab.manifest import canonical_bytes, runtime_manifest
 from qcsd_lab.util import source_metadata
 from qcsd_lab.verification import VerifiedResult
 
@@ -146,6 +148,23 @@ def _prepared_workload(workload_id: str, origin_count: int) -> dict:
     }
 
 
+def _run_graph_evidence(manifest: dict) -> dict:
+    resources = manifest["resources"]
+    expected = manifest["preparation"]["expected_responses"]
+    origins = tuple(dict.fromkeys(resource["url"].rsplit("/", 1)[0] for resource in resources))
+    return {
+        "endpoints": [{"origin": value + "/"} for value in origins],
+        "responses": [
+            {
+                **response,
+                "complete": True,
+                "outcome": "succeeded",
+            }
+            for response in expected
+        ],
+    }
+
+
 def _source_receipt(root: Path, block: int) -> VerifiedResult:
     root.mkdir()
     (root / "inputs/workloads").mkdir(parents=True)
@@ -158,6 +177,9 @@ def _source_receipt(root: Path, block: int) -> VerifiedResult:
     workloads = []
     for workload_id in _CLASSES:
         workload_path = root / f"inputs/workloads/{workload_id}.json"
+        runtime_path = root / f"inputs/runtime-workloads/{workload_id}.json"
+        qualification_path = root / f"inputs/chaff-qualifications/{workload_id}.json"
+        chaff_path = root / f"inputs/chaff-manifests/{workload_id}.json"
         origin_count = 1 if workload_id == "class-a" else 3
         manifest = _prepared_workload(workload_id, origin_count)
         resources = manifest["resources"]
@@ -165,12 +187,27 @@ def _source_receipt(root: Path, block: int) -> VerifiedResult:
             workload_path,
             (json.dumps(manifest, sort_keys=True) + "\n").encode(),
         )
+        _write(runtime_path, canonical_bytes(runtime_manifest(manifest)))
+        _write(
+            qualification_path,
+            (json.dumps({"workload_id": workload_id, "qualified": True}) + "\n").encode(),
+        )
+        _write(
+            chaff_path,
+            (json.dumps({"workload_id": workload_id, "responses": []}) + "\n").encode(),
+        )
         workloads.append(
             {
                 "id": workload_id,
                 "visits": 1,
                 "manifest": f"inputs/workloads/{workload_id}.json",
                 "sha256": _sha256(workload_path),
+                "runtime_manifest": f"inputs/runtime-workloads/{workload_id}.json",
+                "runtime_manifest_sha256": _sha256(runtime_path),
+                "chaff_qualification": f"inputs/chaff-qualifications/{workload_id}.json",
+                "chaff_qualification_sha256": _sha256(qualification_path),
+                "chaff_manifest": f"inputs/chaff-manifests/{workload_id}.json",
+                "chaff_manifest_sha256": _sha256(chaff_path),
                 "resource_count": len(resources),
                 "origin_count": origin_count,
             }
@@ -207,10 +244,9 @@ def _source_receipt(root: Path, block: int) -> VerifiedResult:
         ),
         **{relative: _sha256(root / relative) for relative in authority_inputs},
         **{
-            f"inputs/workloads/{workload_id}.json": _sha256(
-                root / f"inputs/workloads/{workload_id}.json"
-            )
-            for workload_id in _CLASSES
+            str(record[key]): _sha256(root / str(record[key]))
+            for record in workloads
+            for key in ("manifest", "runtime_manifest", "chaff_qualification", "chaff_manifest")
         },
     }
     for class_index, workload_id in enumerate(_CLASSES):
@@ -218,10 +254,40 @@ def _source_receipt(root: Path, block: int) -> VerifiedResult:
             sample_id = f"b{block:02d}-{workload_id}-{mode}"
             relative_root = f"samples/{workload_id}/as-defined/visit-000/{mode}"
             sample_root = root / relative_root
+            workload = next(record for record in workloads if record["id"] == workload_id)
+            manifest = json.loads((root / workload["manifest"]).read_text(encoding="utf-8"))
+            baseline = mode == "undefended"
+            runtime_kind = "none" if baseline else "front"
+            seed = block * 100 + class_index * 10 + mode_index
             _write(sample_root / "capture.pcapng", b"pcapng fixture\n")
             _write(
                 sample_root / "neqo/run.json",
-                b'{"endpoints":[{"fixture":true}]}\n',
+                (
+                    json.dumps(
+                        {
+                            "completion_status": "complete",
+                            "error": None,
+                            **_run_graph_evidence(manifest),
+                            "seed": seed,
+                            "request_policy": "as-defined",
+                            "workload_hash_sha256": workload["runtime_manifest_sha256"],
+                            "max_response_bytes": 1_048_576,
+                            "resolved_configuration": {
+                                "max_udp_payload_size": 1_200,
+                                "defense": {"kind": runtime_kind},
+                            },
+                            "application_workload_source_hash_sha256": (
+                                None if baseline else workload["sha256"]
+                            ),
+                            "chaff_manifest_hash_sha256": (
+                                None if baseline else workload["chaff_manifest_sha256"]
+                            ),
+                            "defense_parameters": None,
+                        },
+                        sort_keys=True,
+                    )
+                    + "\n"
+                ).encode(),
             )
             _write(sample_root / "neqo/schedule.csv", b"schedule\n")
             _write(sample_root / "neqo/events.csv", b"events\n")
@@ -244,9 +310,9 @@ def _source_receipt(root: Path, block: int) -> VerifiedResult:
                     "request_policy": "as-defined",
                     "visit": 0,
                     "defense": mode,
-                    "runtime_kind": "none" if mode == "undefended" else "front",
-                    "baseline": mode == "undefended",
-                    "seed": block * 100 + class_index * 10 + mode_index,
+                    "runtime_kind": runtime_kind,
+                    "baseline": baseline,
+                    "seed": seed,
                     "path": relative_root,
                     "state": "accepted",
                     "attempts": 1,
@@ -259,7 +325,7 @@ def _source_receipt(root: Path, block: int) -> VerifiedResult:
 
     _write(root / "evidence.sha256", b"sealed fixture\n")
     configuration = {
-        "campaign_sha256": _DIGEST,
+        "campaign_sha256": _sha256(root / "inputs/campaign.yml"),
         "profile": "research-1200",
         "request_policies": ["as-defined"],
         "workloads": workloads,
@@ -267,7 +333,7 @@ def _source_receipt(root: Path, block: int) -> VerifiedResult:
             {"name": "undefended", "kind": "none", "baseline": True},
             {"name": "front", "kind": "front", "baseline": False},
         ],
-        "limits": {"max_attempts": 3},
+        "limits": {"max_attempts": 3, "max_response_bytes": 1_048_576},
         "defense_order": {"scheme": "cyclic-latin-square", "block": block - 1},
         "evidence_role": "formal",
         "class_study_foundation_sha256": _sha256(root / "inputs/class-study-foundation.json"),
@@ -305,7 +371,7 @@ def _source_receipt(root: Path, block: int) -> VerifiedResult:
         "study_id": _TINY.study_id,
         "launch_key": class_study_launch_key(**launch_identity),
         "campaign_name": _TINY.result_names[block - 1],
-        "campaign_sha256": _DIGEST,
+        "campaign_sha256": configuration["campaign_sha256"],
         "evidence_role": "formal",
         "class_study_cohort_sha256": configuration["class_study_cohort_sha256"],
         "class_study_cohort_assembly_sha256": configuration["class_study_cohort_assembly_sha256"],
@@ -430,6 +496,49 @@ def _fixture(tmp_path: Path):
     return receipts, verify
 
 
+def _bind_fixture_run(receipt: VerifiedResult, sample: dict) -> None:
+    configuration = receipt.experiment["configuration"]
+    workload = next(
+        record for record in configuration["workloads"] if record["id"] == sample["workload_id"]
+    )
+    defense = next(
+        record for record in configuration["defenses"] if record["name"] == sample["defense"]
+    )
+    run_path = receipt.root / sample["path"] / "neqo/run.json"
+    run = json.loads(run_path.read_text(encoding="utf-8"))
+    resolved = run.get("resolved_configuration")
+    manifest = json.loads((receipt.root / workload["manifest"]).read_text(encoding="utf-8"))
+    run.update(
+        **_run_graph_evidence(manifest),
+        completion_status="complete",
+        error=None,
+        seed=sample["seed"],
+        request_policy=sample["request_policy"],
+        workload_hash_sha256=workload["runtime_manifest_sha256"],
+        max_response_bytes=configuration["limits"]["max_response_bytes"],
+        resolved_configuration={
+            **(resolved if isinstance(resolved, dict) else {}),
+            "max_udp_payload_size": 1_200,
+            "defense": {"kind": sample["runtime_kind"]},
+        },
+        application_workload_source_hash_sha256=(
+            None if sample["baseline"] else workload["sha256"]
+        ),
+        chaff_manifest_hash_sha256=(
+            None if sample["baseline"] else workload["chaff_manifest_sha256"]
+        ),
+        defense_parameters=(
+            None
+            if defense.get("parameters_sha256") is None
+            else {
+                "kind": sample["runtime_kind"],
+                "sha256": defense["parameters_sha256"],
+            }
+        ),
+    )
+    run_path.write_text(json.dumps(run, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def _candidate_fixture(
     tmp_path: Path,
     *,
@@ -449,17 +558,35 @@ def _candidate_fixture(
     receipts, _ = _fixture(tmp_path)
     for receipt in receipts:
         configuration = receipt.experiment["configuration"]
+        parameter_relative = f"inputs/defense-parameters/{mode}/parameters.json"
+        provenance_relative = f"inputs/defense-parameters/{mode}/provenance.json"
+        parameter_path = receipt.root / parameter_relative
+        provenance_path = receipt.root / provenance_relative
+        _write(parameter_path, (json.dumps({"mode": mode}, sort_keys=True) + "\n").encode())
+        _write(
+            provenance_path,
+            (json.dumps({"mode": mode, "provenance": "fixture"}, sort_keys=True) + "\n").encode(),
+        )
+        parameter_sha256 = _sha256(parameter_path)
+        provenance_sha256 = _sha256(provenance_path)
+        receipt.checksums[parameter_relative] = parameter_sha256
+        receipt.checksums[provenance_relative] = provenance_sha256
         configuration["defenses"][1] = {
             "name": mode,
             "kind": runtime_kind,
             "baseline": False,
+            "parameters": parameter_relative,
+            "parameters_sha256": parameter_sha256,
+            "provenance": provenance_relative,
+            "provenance_sha256": provenance_sha256,
+            "input_policy": "fixture-current-candidate",
         }
         configuration["defense_runtime_inputs"].pop("front")
         configuration["defense_runtime_inputs"][mode] = {
             "identity_type": "hash-bound-parameter-artifact",
             "runtime_kind": runtime_kind,
-            "parameters_sha256": "7" * 64,
-            "provenance_sha256": "8" * 64,
+            "parameters_sha256": parameter_sha256,
+            "provenance_sha256": provenance_sha256,
             "input_policy": "fixture-current-candidate",
         }
         for sample in receipt.experiment["samples"]:
@@ -469,6 +596,7 @@ def _candidate_fixture(
             sample["runtime_kind"] = runtime_kind
             sample_root = receipt.root / sample["path"]
             install_evidence(sample_root)
+            _bind_fixture_run(receipt, sample)
             for name in ("run.json", "schedule.csv", "events.csv", "packets.csv"):
                 path = sample_root / "neqo" / name
                 relative = path.relative_to(receipt.root).as_posix()
@@ -709,6 +837,7 @@ def _verify_candidate_fixture(
 
 
 def test_default_contract_is_exactly_ten_blocks_and_16000_samples() -> None:
+    assert SCHEMA_VERSION == 2
     assert _DIMENSIONS.block_count == 10
     assert _DIMENSIONS.class_count == 100
     assert _DIMENSIONS.visits_per_block == 2
@@ -752,6 +881,7 @@ def test_compact_export_is_create_only_closed_and_deeply_verifiable(tmp_path: Pa
         == result
     )
     dataset = json.loads((result / "dataset.json").read_text(encoding="utf-8"))
+    assert dataset["schema_version"] == 2
     assert dataset["sample_count"] == 12
     assert dataset["counts_by_mode"] == {"front": 6, "undefended": 6}
     assert dataset["counts_by_split"] == {
@@ -815,6 +945,19 @@ def test_compact_export_is_create_only_closed_and_deeply_verifiable(tmp_path: Pa
     assert len(list((result / "raw").rglob("packets.csv"))) == 12
     assert len(list((result / "raw").rglob("capture.pcap"))) == 12
     first_row = json.loads((result / "samples.jsonl").read_text(encoding="utf-8").splitlines()[0])
+    assert first_row["schema_version"] == 2
+    assert set(first_row["input_bindings"]) == {
+        "campaign_sha256",
+        "application_workload_sha256",
+        "runtime_workload_sha256",
+        "chaff_qualification_sha256",
+        "chaff_manifest_sha256",
+        "defense_parameters_sha256",
+        "defense_parameters_provenance_sha256",
+        "max_response_bytes",
+        "max_udp_payload_size",
+    }
+    assert "Schema 2" in (result / "README.md").read_text(encoding="utf-8")
     assert first_row["correctness"]["passed"] is True
     assert first_row["performance"]["udp_payload_lengths_missing"] == {
         "outgoing": 0,
@@ -1209,6 +1352,113 @@ def test_deep_verifier_detects_rewritten_product_bytes(tmp_path: Path) -> None:
 def _reseal_handoff(root: Path) -> None:
     (root / "SHA256SUMS").unlink()
     _write_checksums(root)
+
+
+def test_export_rejects_coherently_resealed_multi_origin_baseline_graph_substitution(
+    tmp_path: Path,
+) -> None:
+    receipts, verify = _fixture(tmp_path)
+    receipt = receipts[0]
+    sample = next(
+        item
+        for item in receipt.experiment["samples"]
+        if item["workload_id"] == "class-b" and item["defense"] == "undefended"
+    )
+    assert (
+        next(
+            record["origin_count"]
+            for record in receipt.experiment["configuration"]["workloads"]
+            if record["id"] == "class-b"
+        )
+        == 3
+    )
+    run_path = receipt.root / sample["path"] / "neqo/run.json"
+    run = json.loads(run_path.read_text(encoding="utf-8"))
+    run["workload_hash_sha256"] = "9" * 64
+    run_path.write_text(json.dumps(run, sort_keys=True) + "\n", encoding="utf-8")
+    _reseal_source_sample_file(receipt, sample, run_path)
+
+    destination = tmp_path / "handoff"
+    with pytest.raises(ValueError, match="run is not bound to its accepted sample"):
+        _export_class_handoff(
+            [item.root for item in receipts],
+            destination,
+            dimensions=_TINY,
+            source_verifier=verify,
+            trace_extractor=_trace,
+            classic_pcap_writer=_classic_writer,
+            correctness_validator=_correctness_validator,
+            performance_extractor=_performance_extractor,
+            cohort_loader=_cohort_loader,
+            assembly_validator=_assembly_validator,
+        )
+    assert not destination.exists()
+
+
+def test_deep_verify_rejects_coherently_resealed_multi_origin_defended_graph_substitution(
+    tmp_path: Path,
+) -> None:
+    receipts, verify = _fixture(tmp_path)
+    destination = tmp_path / "handoff"
+    _export_class_handoff(
+        [receipt.root for receipt in receipts],
+        destination,
+        dimensions=_TINY,
+        source_verifier=verify,
+        trace_extractor=_trace,
+        classic_pcap_writer=_classic_writer,
+        correctness_validator=_correctness_validator,
+        performance_extractor=_performance_extractor,
+        cohort_loader=_cohort_loader,
+        assembly_validator=_assembly_validator,
+    )
+    receipt = receipts[0]
+    sample = next(
+        item
+        for item in receipt.experiment["samples"]
+        if item["workload_id"] == "class-b" and item["defense"] == "front"
+    )
+    assert (
+        next(
+            record["origin_count"]
+            for record in receipt.experiment["configuration"]["workloads"]
+            if record["id"] == "class-b"
+        )
+        == 3
+    )
+    source_run = receipt.root / sample["path"] / "neqo/run.json"
+    run = json.loads(source_run.read_text(encoding="utf-8"))
+    run["chaff_manifest_hash_sha256"] = "9" * 64
+    source_run.write_text(json.dumps(run, sort_keys=True) + "\n", encoding="utf-8")
+    _reseal_source_sample_file(receipt, sample, source_run)
+
+    rows_path = destination / "samples.jsonl"
+    rows = [json.loads(line) for line in rows_path.read_text(encoding="utf-8").splitlines()]
+    row = next(item for item in rows if item["sample_id"] == sample["sample_id"])
+    copied_run = destination / row["products"]["run"]["path"]
+    copied_run.write_bytes(source_run.read_bytes())
+    changed_digest = _sha256(copied_run)
+    row["products"]["run"]["sha256"] = changed_digest
+    row["source"]["artifacts"]["run"]["sha256"] = changed_digest
+    rows_path.write_text(
+        "".join(json.dumps(item, sort_keys=True, separators=(",", ":")) + "\n" for item in rows),
+        encoding="utf-8",
+    )
+    _reseal_handoff(destination)
+
+    with pytest.raises(ValueError, match="defended run graph binding is invalid"):
+        _verify_class_handoff(
+            destination,
+            dimensions=_TINY,
+            deep=True,
+            source_verifier=verify,
+            trace_extractor=_trace,
+            classic_pcap_writer=_classic_writer,
+            correctness_validator=_correctness_validator,
+            performance_extractor=_performance_extractor,
+            cohort_loader=_cohort_loader,
+            assembly_validator=_assembly_validator,
+        )
 
 
 @pytest.mark.parametrize("replacement", [2, True])

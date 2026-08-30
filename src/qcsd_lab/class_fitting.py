@@ -26,6 +26,10 @@ from .class_cohort import (
     cohort_workload_hashes,
     validate_cohort_assembly_receipt,
 )
+from .class_run_binding import (
+    ClassSampleRunBinding,
+    resolve_class_sample_run_binding,
+)
 from .class_study import (
     FINAL_CLASS_COUNT,
     PILOT_COUNT,
@@ -240,6 +244,7 @@ def validate_class_fitting_result(
     result_verifier: ResultVerifier = verify_result,
     trace_loader: TraceLoader = load_fitting_trace,
     preparation_validator: Callable[..., None] = validate_class_study_preparation,
+    run_binding_resolver: Callable[..., ClassSampleRunBinding] = (resolve_class_sample_run_binding),
 ) -> ClassFittingInputs:
     """Validate the exact sealed schema-two class-study fitting cross-product."""
 
@@ -271,8 +276,7 @@ def validate_class_fitting_result(
             successor_input.is_symlink()
             or not successor_input.is_file()
             or sha256_file(successor_input) != successor_sha256
-            or verified.checksums.get("inputs/class-study-successor.json")
-            != successor_sha256
+            or verified.checksums.get("inputs/class-study-successor.json") != successor_sha256
         ):
             raise ValueError("class-study fitting successor authority is not sealed")
         campaign = f"{study_id}-authoritative-fitting-2000-1200"
@@ -336,6 +340,7 @@ def validate_class_fitting_result(
     if not isinstance(workload_records, list) or len(workload_records) != count:
         raise ValueError("class-study fitting workload inventory has the wrong cardinality")
     workload_ids: list[str] = []
+    run_bindings: dict[str, ClassSampleRunBinding] = {}
     admitted_hashes = cohort_workload_hashes(
         frozen_assembly,
         cohort=frozen_receipt,
@@ -359,6 +364,17 @@ def validate_class_fitting_result(
             raise ValueError("class-study fitting workload manifest hash is invalid")
         manifest = load_json(manifest_path)
         preparation_validator(manifest, workload_id=expected_id)
+        run_bindings[expected_id] = run_binding_resolver(
+            verified.root,
+            configuration,
+            {
+                "workload_id": expected_id,
+                "defense": "undefended",
+                "runtime_kind": "none",
+                "baseline": True,
+            },
+            allow_derived_runtime_without_frozen_copy=True,
+        )
         workload_ids.append(expected_id)
     if tuple(workload_ids) != cohort_ids or len(set(workload_ids)) != count:
         raise ValueError("class-study fitting workload identities are invalid")
@@ -408,6 +424,8 @@ def validate_class_fitting_result(
             visit=sample["visit"],
             require_observations=sample["request_policy"] == "half-duplex",
             accepted_artifacts=sample["artifacts"],
+            seed=sample.get("seed"),
+            run_binding=run_bindings.get(str(sample["workload_id"])),
         )
         by_policy[sample["request_policy"]][sample["workload_id"]].append(trace)
     if observed != expected:
@@ -987,12 +1005,9 @@ def require_successor_fitting_identity(
     if (
         not isinstance(source_result, Mapping)
         or source_result.get("study_id") != expected_study_id
-        or source_result.get("class_study_successor_sha256")
-        != expected_restart_sha256
+        or source_result.get("class_study_successor_sha256") != expected_restart_sha256
     ):
-        raise ValueError(
-            "class fitting artifact uses predecessor or another successor restart"
-        )
+        raise ValueError("class fitting artifact uses predecessor or another successor restart")
 
 
 def class_research_parameter_record(
@@ -1020,9 +1035,7 @@ def class_research_parameter_record(
         parameter.parent,
         qualification_context=qualification_context,
     )
-    if (expected_successor_study_id is None) != (
-        expected_successor_restart_sha256 is None
-    ):
+    if (expected_successor_study_id is None) != (expected_successor_restart_sha256 is None):
         raise ValueError("successor fitting identity requires both study and restart")
     if expected_successor_study_id is not None:
         assert expected_successor_restart_sha256 is not None
@@ -1259,10 +1272,7 @@ def _validate_common_provenance(provenance: Mapping[str, Any], stage: str) -> No
     if not isinstance(assembly, Mapping):
         raise TypeError("class fitting cohort-assembly receipt is missing")
     validate_cohort_assembly_receipt(assembly, cohort=receipt)
-    if (
-        sha256_bytes(canonical_json_bytes(assembly))
-        != cohort["assembly_receipt_sha256"]
-    ):
+    if sha256_bytes(canonical_json_bytes(assembly)) != cohort["assembly_receipt_sha256"]:
         raise ValueError("embedded class fitting cohort-assembly hash is invalid")
     expected_ids = tuple(
         item.candidate_id for item in (selection.pilot if stage == PILOT_STAGE else selection.final)
@@ -1559,9 +1569,7 @@ def _verify_qualification(
     if not isinstance(manifest, Mapping) or set(manifest) != _NAMED_SET_KEYS:
         raise ValueError("named qualification-set manifest has an invalid exact schema")
     expected_set = context.expected_qualification_set or (
-        PILOT_QUALIFICATION_SET
-        if stage == PILOT_STAGE
-        else AUTHORITATIVE_QUALIFICATION_SET
+        PILOT_QUALIFICATION_SET if stage == PILOT_STAGE else AUTHORITATIVE_QUALIFICATION_SET
     )
     if (
         manifest.get("schema_version") != 2
@@ -1573,9 +1581,7 @@ def _verify_qualification(
         or manifest.get("workload_ids") != list(workload_ids)
     ):
         raise ValueError("named qualification set differs from the fitting cohort")
-    authority = _validate_qualification_authority(
-        manifest.get("qualification_authority")
-    )
+    authority = _validate_qualification_authority(manifest.get("qualification_authority"))
     if (
         context.qualification_authority is not None
         and authority != _validate_qualification_authority(context.qualification_authority)
@@ -1615,8 +1621,7 @@ def _verify_qualification(
         if (
             not isinstance(sidecar, Mapping)
             or sidecar.get("qualification_source") != authority["prepare_source"]
-            or sidecar.get("qualification_image_digest")
-            != authority["prepare_image_digest"]
+            or sidecar.get("qualification_image_digest") != authority["prepare_image_digest"]
         ):
             raise ValueError(
                 f"qualification sidecar {workload_id} differs from the authorised prepare build"
@@ -1731,12 +1736,7 @@ def _normalise_qualification_context(value: QualificationContext) -> Qualificati
 
 
 def _qualification_set_identity(value: object) -> str:
-    if (
-        not isinstance(value, str)
-        or not value
-        or Path(value).name != value
-        or value in {".", ".."}
-    ):
+    if not isinstance(value, str) or not value or Path(value).name != value or value in {".", ".."}:
         raise ValueError("qualification-set identity must be a safe filename")
     return value
 
@@ -1923,8 +1923,7 @@ def _named_set_bindings_digest(value: Mapping[str, Any]) -> str:
     payload = {key: item for key, item in value.items() if key != "bindings_sha256"}
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     return sha256_bytes(
-        f"qcsd-named-chaff-qualification-set-v{value.get('schema_version')}\0".encode()
-        + encoded
+        f"qcsd-named-chaff-qualification-set-v{value.get('schema_version')}\0".encode() + encoded
     )
 
 

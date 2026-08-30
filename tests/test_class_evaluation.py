@@ -55,6 +55,8 @@ def test_formal_sample_accepts_preserved_retry_success(tmp_path: Path) -> None:
     sample = _load_sample(root, row, dimensions=_DIMENSIONS, classes=_CLASSES)
 
     assert sample.sample_id == row["sample_id"]
+
+
 _PAYLOAD_SHA256 = "f" * 64
 _ASSEMBLY_PAYLOAD_SHA256 = "e" * 64
 
@@ -112,7 +114,7 @@ def _fixture(tmp_path: Path):
                     )
                     rows.append(
                         {
-                            "schema_version": 1,
+                            "schema_version": 2,
                             "sample_id": sample_id,
                             "class_label": class_label,
                             "workload_id": class_label,
@@ -143,7 +145,7 @@ def _fixture(tmp_path: Path):
     per_mode = _DIMENSIONS.classes * _DIMENSIONS.blocks * _DIMENSIONS.visits_per_block
     per_block = _DIMENSIONS.classes * len(_DIMENSIONS.modes) * _DIMENSIONS.visits_per_block
     dataset = {
-        "schema_version": 1,
+        "schema_version": 2,
         "artifact_type": ARTIFACT_TYPE,
         "study_id": _DIMENSIONS.study_id,
         "evidence_role": "formal",

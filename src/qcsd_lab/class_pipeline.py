@@ -77,6 +77,10 @@ from .class_fitting import (
     verify_numeric_fitting_bundle,
 )
 from .class_handoff import export_class_handoff, verify_class_handoff
+from .class_run_binding import (
+    resolve_class_sample_run_binding,
+    validate_class_sample_run_binding,
+)
 from .class_layout import (
     AUTHORITATIVE_COHORT_ASSEMBLY_FILENAME,
     AUTHORITATIVE_COHORT_FILENAME,
@@ -139,9 +143,7 @@ CLASS_STUDY_READINESS_INPUT = "inputs/class-study-readiness.json"
 CLASS_STUDY_HISTORICAL_PRE_INPUT = "inputs/class-study-historical-pre-snapshot.json"
 CLASS_STUDY_FOUNDATION_CONFIGURATION_KEY = "class_study_foundation_sha256"
 CLASS_STUDY_READINESS_CONFIGURATION_KEY = "class_study_readiness_sha256"
-CLASS_STUDY_HISTORICAL_PRE_CONFIGURATION_KEY = (
-    "class_study_historical_pre_snapshot_sha256"
-)
+CLASS_STUDY_HISTORICAL_PRE_CONFIGURATION_KEY = "class_study_historical_pre_snapshot_sha256"
 _CURRENT_CANDIDATE_RUNTIME_KINDS = {
     "buflo": "buflo",
     "cs-buflo": "cs_buflo",
@@ -311,9 +313,7 @@ class CohortAdmission:
             "reserve_classes": len(self.selection.reserves),
             "prepared_workload_count": len(self.prepared_workload_sha256),
             "acquisition_completion_sha256": self.acquisition_completion_sha256,
-            "acquisition_completion_payload_sha256": (
-                self.acquisition_completion_payload_sha256
-            ),
+            "acquisition_completion_payload_sha256": (self.acquisition_completion_payload_sha256),
             "final_selection_sha256": self.final_selection_sha256,
             "final_selection_payload_sha256": self.final_selection_payload_sha256,
         }
@@ -585,14 +585,10 @@ def verify_cohort_admission(
         acquisition_completion_sha256=str(completion["sha256"]),
         acquisition_completion_payload_sha256=str(completion["payload_sha256"]),
         final_selection_sha256=(
-            str(final_selection["sha256"])
-            if isinstance(final_selection, Mapping)
-            else None
+            str(final_selection["sha256"]) if isinstance(final_selection, Mapping) else None
         ),
         final_selection_payload_sha256=(
-            str(final_selection["payload_sha256"])
-            if isinstance(final_selection, Mapping)
-            else None
+            str(final_selection["payload_sha256"]) if isinstance(final_selection, Mapping) else None
         ),
     )
 
@@ -615,9 +611,7 @@ def verify_successor_cohort_admission(restart_receipt: Path) -> CohortAdmission:
     return verify_cohort_admission(
         plan_root / "successor-compatible-cohort.json",
         plan_root / "successor-compatible-cohort-assembly.json",
-        candidate_catalogue_path=(
-            layout.study_config_root / f"{STUDY_ID}-candidates.json"
-        ),
+        candidate_catalogue_path=(layout.study_config_root / f"{STUDY_ID}-candidates.json"),
         stability_root=layout.stability_root,
         workload_root=layout.workload_root,
         acquisition_completion_path=layout.acquisition_root / "completion.json",
@@ -669,12 +663,9 @@ def build_final_selection_input(
         "walkie-talkie": finalized.artifact_hashes["walkie_talkie"],
     }
     if not isinstance(compatibility_parameters, Mapping) or any(
-        compatibility_parameters.get(name) != digest
-        for name, digest in expected_parameters.items()
+        compatibility_parameters.get(name) != digest for name, digest in expected_parameters.items()
     ):
-        raise ValueError(
-            "pilot compatibility did not execute the exact pilot fitted parameters"
-        )
+        raise ValueError("pilot compatibility did not execute the exact pilot fitted parameters")
     cohort = _load_json_object(pilot_admission.cohort_path, "pilot cohort receipt")
     assembly = _load_json_object(pilot_admission.assembly_path, "pilot cohort assembly")
     pairs_tuple, pair_evidence = _qualified_pilot_pair_graph(finalized, pilot_ids)
@@ -699,9 +690,7 @@ def build_final_selection_input(
             "payload_sha256": assembly.get("payload_sha256"),
         },
         "pilot_numeric_fitting": {
-            "numeric_provenance_sha256": sha256_file(
-                numeric.root / NUMERIC_PROVENANCE_FILE
-            ),
+            "numeric_provenance_sha256": sha256_file(numeric.root / NUMERIC_PROVENANCE_FILE),
             "walkie_talkie_artifact_sha256": numeric.artifact_hashes["walkie_talkie"],
             "source_result": numeric.provenance["source_result"],
         },
@@ -710,9 +699,7 @@ def build_final_selection_input(
             "evidence_sha256": compatibility["evidence_sha256"],
             "experiment_sha256": compatibility["experiment_sha256"],
             "accepted_samples": compatibility["accepted"],
-            "unique_class_mode_pairs": compatibility[
-                "unique_class_mode_pairs"
-            ],
+            "unique_class_mode_pairs": compatibility["unique_class_mode_pairs"],
             "fitted_parameter_sha256": expected_parameters,
             "finalized_bundle": {
                 "source": "frozen-pilot-compatibility-inputs",
@@ -735,9 +722,7 @@ def build_final_selection_input(
         },
         "feasible_pair_evidence": list(pair_evidence),
         "feasible_pair_graph": [list(pair) for pair in pairs_tuple],
-        "selected_final_perfect_matching": [
-            list(pair) for pair in final_pair_selection.matching
-        ],
+        "selected_final_perfect_matching": [list(pair) for pair in final_pair_selection.matching],
     }
     return bind_receipt(payload, receipt_type=FINAL_SELECTION_RECEIPT_TYPE)
 
@@ -756,9 +741,7 @@ def _verify_pilot_compatibility_fitting_bundle(
     optimiser receipts came from the supplied pilot staging bundle.
     """
 
-    result = _regular_directory(
-        compatibility_result_root, "pilot compatibility result root"
-    )
+    result = _regular_directory(compatibility_result_root, "pilot compatibility result root")
     inputs = _regular_directory(result / "inputs", "pilot compatibility inputs")
     context = QualificationContext(
         workload_root=inputs / "workloads",
@@ -781,12 +764,9 @@ def _verify_pilot_compatibility_fitting_bundle(
         "algorithms",
     )
     if any(
-        finalized.provenance.get(field) != numeric.provenance.get(field)
-        for field in lineage_fields
+        finalized.provenance.get(field) != numeric.provenance.get(field) for field in lineage_fields
     ):
-        raise ValueError(
-            "pilot compatibility finalized bundle differs from pilot numeric lineage"
-        )
+        raise ValueError("pilot compatibility finalized bundle differs from pilot numeric lineage")
     for kind in ("traffic_morphing", "wtf_pad"):
         if finalized.artifact_hashes[kind] != numeric.artifact_hashes[kind]:
             raise ValueError(
@@ -801,9 +781,7 @@ def _verify_pilot_compatibility_fitting_bundle(
     if unbound_walkie.pop("qualification_bindings", None) is None:
         raise ValueError("pilot finalized Walkie-Talkie artifact lacks qualification bindings")
     if canonical_json_bytes(unbound_walkie) != canonical_json_bytes(numeric_walkie):
-        raise ValueError(
-            "pilot compatibility finalized Walkie-Talkie differs from numeric fitting"
-        )
+        raise ValueError("pilot compatibility finalized Walkie-Talkie differs from numeric fitting")
     return finalized
 
 
@@ -961,9 +939,7 @@ def validate_final_selection_input(
     )
     if canonical_json_bytes(value) != canonical_json_bytes(expected):
         raise ValueError("final-selection input differs from verified pilot evidence")
-    payload = validate_study_bound_receipt(
-        value, expected_type=FINAL_SELECTION_RECEIPT_TYPE
-    )
+    payload = validate_study_bound_receipt(value, expected_type=FINAL_SELECTION_RECEIPT_TYPE)
     return tuple(tuple(pair) for pair in payload["feasible_pair_graph"])  # type: ignore[misc]
 
 
@@ -1117,8 +1093,7 @@ def publish_campaign_set(
             {
                 name: document
                 for name, document in final_documents.items()
-                if document["evidence_role"]
-                not in {"pilot-fitting", "pilot-compatibility"}
+                if document["evidence_role"] not in {"pilot-fitting", "pilot-compatibility"}
             }
         )
         if len(documents) != CAMPAIGN_SET_FILES:
@@ -1176,9 +1151,7 @@ def verify_campaign_set(
             raise TypeError(f"class-study campaign is not an object: {path}")
         role = value.get("evidence_role")
         admission = (
-            pilot_admission
-            if role in {"pilot-fitting", "pilot-compatibility"}
-            else final_admission
+            pilot_admission if role in {"pilot-fitting", "pilot-compatibility"} else final_admission
         )
         if admission is None:
             raise ValueError("post-pilot campaign has no final cohort admission")
@@ -1305,9 +1278,7 @@ def class_study_status(
     qualification_authority: dict[str, Any] | None = None
     if qualification_manifests or final_bundle_roots:
         if foundation_attestation is None:
-            raise ValueError(
-                "qualification/final fitting status requires --foundation-attestation"
-            )
+            raise ValueError("qualification/final fitting status requires --foundation-attestation")
         qualification_authority = class_qualification_authority(
             foundation_attestation,
             deep_code_gate=deep,
@@ -1364,12 +1335,8 @@ def class_study_status(
     else:
         from .class_acquisition import validate_acquisition_completion
 
-        completion_path = _regular_file(
-            acquisition_completion_path, "acquisition completion"
-        )
-        completion_value = _load_json_object(
-            completion_path, "acquisition completion"
-        )
+        completion_path = _regular_file(acquisition_completion_path, "acquisition completion")
+        completion_value = _load_json_object(completion_path, "acquisition completion")
         completion_payload = validate_acquisition_completion(
             completion_value,
             candidate_catalogue_path=candidate_catalogue_path,
@@ -1420,9 +1387,7 @@ def class_study_status(
             }
         else:
             observed_files = len(tuple(Path(campaign_root).iterdir()))
-            campaign_stage = (
-                PILOT_STAGE if observed_files == 2 else AUTHORITATIVE_STAGE
-            )
+            campaign_stage = PILOT_STAGE if observed_files == 2 else AUTHORITATIVE_STAGE
             stages["campaigns"] = {
                 "state": "verified",
                 **verify_campaign_set(
@@ -1448,11 +1413,7 @@ def class_study_status(
     verified_numeric_roots: dict[Path, VerifiedNumericFittingBundle] = {}
     for path in numeric_bundle_roots:
         staged = verify_numeric_fitting_bundle(path)
-        role = (
-            "pilot-fitting"
-            if staged.stage == PILOT_STAGE
-            else "authoritative-fitting"
-        )
+        role = "pilot-fitting" if staged.stage == PILOT_STAGE else "authoritative-fitting"
         matches = [record for record in result_records if record["evidence_role"] == role]
         if len(matches) != 1:
             numeric.append(
@@ -1495,9 +1456,7 @@ def class_study_status(
             and verified.stage == PILOT_STAGE
         ]
         compatibility = [
-            record
-            for record in result_records
-            if record["evidence_role"] == "pilot-compatibility"
+            record for record in result_records if record["evidence_role"] == "pilot-compatibility"
         ]
         if len(pilot_numeric) != 1 or len(compatibility) != 1:
             stages["final_selection"] = {
@@ -1536,8 +1495,7 @@ def class_study_status(
                     "state": "unverified",
                     "root": str(Path(path).resolve()),
                     "reason": (
-                        "prefix verification requires one matching numeric bundle "
-                        "and workload root"
+                        "prefix verification requires one matching numeric bundle and workload root"
                     ),
                 }
             )
@@ -1605,9 +1563,7 @@ def class_study_status(
     for root in final_bundle_roots:
         stage = _stage_from_name(root.name)
         role = "pilot-fitting" if stage == PILOT_STAGE else "authoritative-fitting"
-        matching_results = [
-            record for record in result_records if record["evidence_role"] == role
-        ]
+        matching_results = [record for record in result_records if record["evidence_role"] == role]
         matching_qualification = [
             path
             for path in qualification_manifests
@@ -1743,8 +1699,7 @@ def class_study_status(
             "accepted_and_eligible_required": True,
         },
         "next_required_stage": _next_required_stage(stages, result_records),
-        "attestation_generated": stages["validation_attestation"]["state"]
-        == "verified",
+        "attestation_generated": stages["validation_attestation"]["state"] == "verified",
     }
 
 
@@ -1849,12 +1804,8 @@ def run_class_study_action(
         numeric_bundle_root = successor_context["numeric_bundle_root"]
         prefix_spec_root = successor_context["prefix_spec_root"]
         qualification_checkpoint = successor_context["qualification_checkpoint"]
-        qualification_sidecar_root = successor_context[
-            "qualification_sidecar_root"
-        ]
-        qualification_publication_root = successor_context[
-            "qualification_publication_root"
-        ]
+        qualification_sidecar_root = successor_context["qualification_sidecar_root"]
+        qualification_publication_root = successor_context["qualification_publication_root"]
         qualification_manifest = successor_context["qualification_manifest"]
         final_bundle_root = successor_context["final_bundle_root"]
     else:
@@ -1903,9 +1854,7 @@ def run_class_study_action(
         if action == "acquisition-init":
             if not isinstance(acquisition_started_at, str) or not acquisition_started_at:
                 raise ValueError("acquisition initialisation requires --acquisition-started-at")
-            foundation_path = _required(
-                foundation_attestation, "--foundation-attestation"
-            )
+            foundation_path = _required(foundation_attestation, "--foundation-attestation")
             from .class_attestation import validate_class_foundation_attestation
 
             foundation = validate_class_foundation_attestation(
@@ -1915,9 +1864,7 @@ def run_class_study_action(
             )
             if _class_aware_timestamp(
                 foundation.get("recorded_at"), label="foundation attestation"
-            ) > _class_aware_timestamp(
-                acquisition_started_at, label="acquisition start"
-            ):
+            ) > _class_aware_timestamp(acquisition_started_at, label="acquisition start"):
                 raise ValueError("class acquisition starts before its foundation gate")
             output = initialise_runner(
                 runner,
@@ -1943,9 +1890,7 @@ def run_class_study_action(
             if acquisition_max_candidates < 1:
                 raise ValueError("--acquisition-max-candidates must be positive")
             if not 1 <= acquisition_timeout_ms <= 60_000:
-                raise ValueError(
-                    "--acquisition-timeout-ms must be between 1 and 60000"
-                )
+                raise ValueError("--acquisition-timeout-ms must be between 1 and 60000")
             details = run_due_acquisition(
                 runner,
                 candidate_catalogue_path=catalogue,
@@ -1969,13 +1914,9 @@ def run_class_study_action(
                 ()
                 if details["complete"]
                 else (
-                    (
-                        "rerun now; bounded acquisition work is due and the runner never sleeps"
-                    )
+                    ("rerun now; bounded acquisition work is due and the runner never sleeps")
                     if details.get("work_due_now") is True
-                    else (
-                        "rerun only when next_due is reached; the runner never sleeps"
-                    ),
+                    else ("rerun only when next_due is reached; the runner never sleeps"),
                 ),
             )
         completion = write_acquisition_completion(
@@ -2071,9 +2012,7 @@ def run_class_study_action(
         workloads = _required(workload_root, "--workload-root")
         cohort = _required(cohort_receipt_path, "--cohort")
         assembly = _required(cohort_assembly_path, "--cohort-assembly")
-        completion = _required(
-            acquisition_completion_path, "--acquisition-completion"
-        )
+        completion = _required(acquisition_completion_path, "--acquisition-completion")
         cohort_stage = _required_stage(stage)
         feasible_pairs: tuple[tuple[str, str], ...] | None = None
         if cohort_stage == AUTHORITATIVE_STAGE:
@@ -2096,17 +2035,13 @@ def run_class_study_action(
             selection_path = write_final_selection_input(
                 _required(final_selection_path, "--final-selection"),
                 pilot_admission=pilot_admission,
-                pilot_numeric_bundle_root=_required(
-                    numeric_bundle_root, "--numeric-bundle"
-                ),
+                pilot_numeric_bundle_root=_required(numeric_bundle_root, "--numeric-bundle"),
                 pilot_compatibility_result_root=Path(compatibility["root"]),
             )
             feasible_pairs = validate_final_selection_input(
                 _load_json_object(selection_path, "final-selection input"),
                 pilot_admission=pilot_admission,
-                pilot_numeric_bundle_root=_required(
-                    numeric_bundle_root, "--numeric-bundle"
-                ),
+                pilot_numeric_bundle_root=_required(numeric_bundle_root, "--numeric-bundle"),
                 pilot_compatibility_result_root=Path(compatibility["root"]),
             )
         paths = publish_evidenced_cohort(
@@ -2165,40 +2100,28 @@ def run_class_study_action(
 
         if action == "successor-policy":
             output = create_successor_policy(_required(destination, "--destination"))
-            return ClassStudyActionResult(
-                action, "complete", validate_successor_policy(output)
-            )
+            return ClassStudyActionResult(action, "complete", validate_successor_policy(output))
         if action == "successor-decision":
             output = create_successor_decision(
                 _required(destination, "--destination"),
                 policy_receipt=_required(successor_policy, "--successor-policy"),
-                certification_result_root=_required(
-                    certification_result, "--certification-result"
-                ),
-                predecessor_cohort_receipt=_required(
-                    final_cohort_receipt_path, "--final-cohort"
-                ),
+                certification_result_root=_required(certification_result, "--certification-result"),
+                predecessor_cohort_receipt=_required(final_cohort_receipt_path, "--final-cohort"),
                 predecessor_cohort_assembly=_required(
                     final_cohort_assembly_path, "--final-cohort-assembly"
                 ),
-                predecessor_final_selection=_required(
-                    final_selection_path, "--final-selection"
-                ),
+                predecessor_final_selection=_required(final_selection_path, "--final-selection"),
                 predecessor_foundation_attestation=_required(
                     foundation_attestation, "--foundation-attestation"
                 ),
             )
-            return ClassStudyActionResult(
-                action, "complete", validate_successor_decision(output)
-            )
+            return ClassStudyActionResult(action, "complete", validate_successor_decision(output))
         if action == "successor-restart":
             output = create_successor_restart(
                 _required(destination, "--destination"),
                 decision_receipt=_required(successor_decision, "--successor-decision"),
             )
-            return ClassStudyActionResult(
-                action, "complete", validate_successor_restart(output)
-            )
+            return ClassStudyActionResult(action, "complete", validate_successor_restart(output))
 
         verification_target = _required(target, "--target")
         value = _load_json_object(verification_target, "successor verification target")
@@ -2228,9 +2151,7 @@ def run_class_study_action(
         output = create_class_foundation_attestation(
             _required(destination, "--destination"),
             cohort_version=cohort_version,
-            build_execution_receipt=_required(
-                build_execution_receipt, "--build-execution-receipt"
-            ),
+            build_execution_receipt=_required(build_execution_receipt, "--build-execution-receipt"),
             reference_receipt=_required(reference_receipt, "--reference-receipt"),
             code_gate_receipt=_required(code_gate_receipt, "--code-gate-receipt"),
             controlled_qualification_receipt=_required(
@@ -2240,9 +2161,7 @@ def run_class_study_action(
             regression_result_roots=regression_result_roots,
             controlled_result_roots=controlled_result_roots,
         )
-        details = validate_class_foundation_attestation(
-            output, deep_code_gate=False
-        )
+        details = validate_class_foundation_attestation(output, deep_code_gate=False)
         return ClassStudyActionResult(action, "complete", details)
 
     if action == "readiness" and successor_context is not None:
@@ -2254,27 +2173,17 @@ def run_class_study_action(
         output = create_successor_readiness(
             _required(destination, "--destination"),
             restart_receipt=successor_context["restart_path"],
-            foundation_attestation=_required(
-                foundation_attestation, "--foundation-attestation"
-            ),
+            foundation_attestation=_required(foundation_attestation, "--foundation-attestation"),
             authoritative_fitting_result_root=_required(
                 authoritative_fitting_result, "--authoritative-fitting-result"
             ),
-            authoritative_fitting_bundle_root=_required(
-                final_bundle_root, "--final-bundle"
-            ),
-            qualification_workload_root=_required(
-                workload_root, "--workload-root"
-            ),
+            authoritative_fitting_bundle_root=_required(final_bundle_root, "--final-bundle"),
+            qualification_workload_root=_required(workload_root, "--workload-root"),
             qualification_sidecar_root=_required(
                 qualification_sidecar_root, "--qualification-sidecar-root"
             ),
-            qualification_prefix_root=_required(
-                prefix_spec_root, "--prefix-spec-root"
-            ),
-            certification_result_root=_required(
-                certification_result, "--certification-result"
-            ),
+            qualification_prefix_root=_required(prefix_spec_root, "--prefix-spec-root"),
+            certification_result_root=_required(certification_result, "--certification-result"),
         )
         return ClassStudyActionResult(
             action,
@@ -2292,13 +2201,9 @@ def run_class_study_action(
             raise ValueError("class-study readiness requires --cohort-version")
         output = create_class_readiness_attestation(
             _required(destination, "--destination"),
-            foundation_attestation=_required(
-                foundation_attestation, "--foundation-attestation"
-            ),
+            foundation_attestation=_required(foundation_attestation, "--foundation-attestation"),
             cohort_version=cohort_version,
-            build_execution_receipt=_required(
-                build_execution_receipt, "--build-execution-receipt"
-            ),
+            build_execution_receipt=_required(build_execution_receipt, "--build-execution-receipt"),
             reference_receipt=_required(reference_receipt, "--reference-receipt"),
             code_gate_receipt=_required(code_gate_receipt, "--code-gate-receipt"),
             controlled_qualification_receipt=_required(
@@ -2307,50 +2212,32 @@ def run_class_study_action(
             ),
             regression_result_roots=regression_result_roots,
             controlled_result_roots=controlled_result_roots,
-            candidate_catalogue=_required(
-                candidate_catalogue_path, "--candidate-catalogue"
-            ),
+            candidate_catalogue=_required(candidate_catalogue_path, "--candidate-catalogue"),
             stability_root=_required(stability_root, "--stability-root"),
             workload_root=_required(workload_root, "--workload-root"),
             acquisition_completion=_required(
                 acquisition_completion_path, "--acquisition-completion"
             ),
             pilot_cohort_receipt=_required(pilot_cohort_receipt_path, "--pilot-cohort"),
-            pilot_cohort_assembly=_required(
-                pilot_cohort_assembly_path, "--pilot-cohort-assembly"
-            ),
-            pilot_fitting_result_root=_required(
-                pilot_fitting_result, "--pilot-fitting-result"
-            ),
-            pilot_numeric_bundle_root=_required(
-                numeric_bundle_root, "--numeric-bundle"
-            ),
+            pilot_cohort_assembly=_required(pilot_cohort_assembly_path, "--pilot-cohort-assembly"),
+            pilot_fitting_result_root=_required(pilot_fitting_result, "--pilot-fitting-result"),
+            pilot_numeric_bundle_root=_required(numeric_bundle_root, "--numeric-bundle"),
             pilot_compatibility_result_root=_required(
                 pilot_compatibility_result, "--pilot-compatibility-result"
             ),
-            final_selection_receipt=_required(
-                final_selection_path, "--final-selection"
-            ),
+            final_selection_receipt=_required(final_selection_path, "--final-selection"),
             final_cohort_receipt=_required(final_cohort_receipt_path, "--final-cohort"),
-            final_cohort_assembly=_required(
-                final_cohort_assembly_path, "--final-cohort-assembly"
-            ),
+            final_cohort_assembly=_required(final_cohort_assembly_path, "--final-cohort-assembly"),
             authoritative_fitting_result_root=_required(
                 authoritative_fitting_result, "--authoritative-fitting-result"
             ),
-            authoritative_fitting_bundle_root=_required(
-                final_bundle_root, "--final-bundle"
-            ),
+            authoritative_fitting_bundle_root=_required(final_bundle_root, "--final-bundle"),
             qualification_workload_root=_required(workload_root, "--workload-root"),
             qualification_sidecar_root=_required(
                 qualification_sidecar_root, "--qualification-sidecar-root"
             ),
-            qualification_prefix_root=_required(
-                prefix_spec_root, "--prefix-spec-root"
-            ),
-            certification_result_root=_required(
-                certification_result, "--certification-result"
-            ),
+            qualification_prefix_root=_required(prefix_spec_root, "--prefix-spec-root"),
+            certification_result_root=_required(certification_result, "--certification-result"),
         )
         details = validate_class_readiness_attestation(output, deep_code_gate=False)
         return ClassStudyActionResult(action, "complete", details)
@@ -2365,28 +2252,20 @@ def run_class_study_action(
             raise ValueError(
                 "class historical snapshot requires --snapshot-phase pre-formal or post-formal"
             )
-        readiness_path = _required(
-            readiness_attestation, "--readiness-attestation"
-        )
+        readiness_path = _required(readiness_attestation, "--readiness-attestation")
         if successor_context is not None:
             from .class_attestation import validate_class_readiness_attestation
 
             _require_successor_receipt_lineage(
-                validate_class_readiness_attestation(
-                    readiness_path, deep_code_gate=deep
-                ),
+                validate_class_readiness_attestation(readiness_path, deep_code_gate=deep),
                 successor_context,
                 label="readiness attestation",
                 require_restart=True,
             )
             if snapshot_phase == "post-formal":
-                admission = verify_successor_cohort_admission(
-                    successor_context["restart_path"]
-                )
+                admission = verify_successor_cohort_admission(successor_context["restart_path"])
                 if len(formal_result_roots) != FORMAL_BLOCK_COUNT:
-                    raise ValueError(
-                        "successor post-formal snapshot requires ten formal blocks"
-                    )
+                    raise ValueError("successor post-formal snapshot requires ten formal blocks")
                 records = tuple(
                     verify_class_study_result(
                         root,
@@ -2398,9 +2277,7 @@ def run_class_study_action(
                 )
                 _require_successor_result_records(
                     records,
-                    restart_sha256=sha256_file(
-                        successor_context["restart_path"]
-                    ),
+                    restart_sha256=sha256_file(successor_context["restart_path"]),
                     study_id=successor_context["study_id"],
                 )
         output = create_class_historical_snapshot(
@@ -2410,9 +2287,7 @@ def run_class_study_action(
             formal_result_roots=formal_result_roots,
             pre_snapshot=historical_pre_snapshot,
         )
-        details = validate_class_historical_snapshot(
-            output, expected_phase=snapshot_phase
-        )
+        details = validate_class_historical_snapshot(output, expected_phase=snapshot_phase)
         return ClassStudyActionResult(action, "complete", details)
 
     if action == "comparison-review":
@@ -2423,13 +2298,9 @@ def run_class_study_action(
         )
 
         comparison_handoff = _required(handoff, "--handoff")
-        comparison_evaluation = _required(
-            evaluation_receipt, "--evaluation-receipt"
-        )
+        comparison_evaluation = _required(evaluation_receipt, "--evaluation-receipt")
         if successor_context is not None:
-            _require_successor_handoff_lineage(
-                comparison_handoff, successor_context
-            )
+            _require_successor_handoff_lineage(comparison_handoff, successor_context)
             from .class_evaluation import verify_class_evaluation_receipt
 
             _require_successor_receipt_lineage(
@@ -2462,12 +2333,8 @@ def run_class_study_action(
             comparison_review_input,
             "class comparison review input",
         )
-        if set(review_input) != {"reviews"} or not isinstance(
-            review_input.get("reviews"), list
-        ):
-            raise ValueError(
-                "class comparison review input must contain only a reviews array"
-            )
+        if set(review_input) != {"reviews"} or not isinstance(review_input.get("reviews"), list):
+            raise ValueError("class comparison review input must contain only a reviews array")
         if not isinstance(reviewer, str) or not reviewer.strip():
             raise ValueError("class comparison review requires --reviewer")
         if not isinstance(reviewed_at, str) or not reviewed_at:
@@ -2489,16 +2356,12 @@ def run_class_study_action(
             validate_class_validation_attestation,
         )
 
-        attest_readiness = _required(
-            readiness_attestation, "--readiness-attestation"
-        )
+        attest_readiness = _required(readiness_attestation, "--readiness-attestation")
         if successor_context is not None:
             from .class_attestation import validate_class_readiness_attestation
 
             _require_successor_receipt_lineage(
-                validate_class_readiness_attestation(
-                    attest_readiness, deep_code_gate=deep
-                ),
+                validate_class_readiness_attestation(attest_readiness, deep_code_gate=deep),
                 successor_context,
                 label="readiness attestation",
                 require_restart=True,
@@ -2508,21 +2371,15 @@ def run_class_study_action(
             readiness_attestation=attest_readiness,
             canary_result_roots=canary_result_roots,
             formal_result_roots=formal_result_roots,
-            historical_pre_snapshot=_required(
-                historical_pre_snapshot, "--historical-pre-snapshot"
-            ),
+            historical_pre_snapshot=_required(historical_pre_snapshot, "--historical-pre-snapshot"),
             historical_post_snapshot=_required(
                 historical_post_snapshot, "--historical-post-snapshot"
             ),
             handoff=_required(handoff, "--handoff"),
-            evaluation_receipt=_required(
-                evaluation_receipt, "--evaluation-receipt"
-            ),
+            evaluation_receipt=_required(evaluation_receipt, "--evaluation-receipt"),
             comparison_review=_required(comparison_review, "--comparison-review"),
         )
-        details = validate_class_validation_attestation(
-            output, deep_code_gate=False
-        )
+        details = validate_class_validation_attestation(output, deep_code_gate=False)
         return ClassStudyActionResult(action, "complete", details)
 
     if action == "verify" and target is not None:
@@ -2543,9 +2400,7 @@ def run_class_study_action(
         # would allow predecessor downstream evidence to satisfy successor
         # fitting or capture gates.
         pilot_admission = None
-        final_admission = verify_successor_cohort_admission(
-            successor_context["restart_path"]
-        )
+        final_admission = verify_successor_cohort_admission(successor_context["restart_path"])
     else:
         pilot_admission = _optional_admission(
             pilot_cohort_receipt_path,
@@ -2587,28 +2442,20 @@ def run_class_study_action(
                     "final-selection input",
                 ),
                 pilot_admission=pilot_admission,
-                pilot_numeric_bundle_root=_required(
-                    numeric_bundle_root, "--numeric-bundle"
-                ),
+                pilot_numeric_bundle_root=_required(numeric_bundle_root, "--numeric-bundle"),
                 pilot_compatibility_result_root=Path(compatibility["root"]),
             )
             if final_admission.selection.feasible_pairs != pairs:
-                raise ValueError(
-                    "final cohort is not bound to the verified final-selection input"
-                )
+                raise ValueError("final cohort is not bound to the verified final-selection input")
             if final_admission.selection.matching is None:
-                raise ValueError(
-                    "authoritative campaigns require a matched final cohort"
-                )
+                raise ValueError("authoritative campaigns require a matched final cohort")
         root = _required(campaign_root, "--campaign-root")
         paths = publish_campaign_set(
             campaign_stage,
             pilot_admission,
             root,
             final_admission=final_admission,
-            pilot_cohort_reference=_relative_reference(
-                root, pilot_admission.cohort_path
-            ),
+            pilot_cohort_reference=_relative_reference(root, pilot_admission.cohort_path),
             pilot_cohort_assembly_reference=_relative_reference(
                 root, pilot_admission.assembly_path
             ),
@@ -2634,9 +2481,7 @@ def run_class_study_action(
 
     if action == "fit-numeric":
         fitted_stage = _required_stage(stage)
-        admission = _admission_for_stage(
-            fitted_stage, pilot_admission, final_admission
-        )
+        admission = _admission_for_stage(fitted_stage, pilot_admission, final_admission)
         source = _required(capture_result, "--capture-result")
         source_record = _require_fitting_source(source, fitted_stage, admission)
         if successor_context is not None:
@@ -2695,9 +2540,7 @@ def run_class_study_action(
 
     if action == "qualify-prefix":
         fitted_stage = _required_stage(stage)
-        admission = _admission_for_stage(
-            fitted_stage, pilot_admission, final_admission
-        )
+        admission = _admission_for_stage(fitted_stage, pilot_admission, final_admission)
         return _coordinate_qualification(
             fitted_stage,
             admission=admission,
@@ -2723,9 +2566,7 @@ def run_class_study_action(
                 else None
             ),
             expected_successor_study_id=(
-                successor_context["study_id"]
-                if successor_context is not None
-                else None
+                successor_context["study_id"] if successor_context is not None else None
             ),
             expected_successor_restart_sha256=(
                 sha256_file(successor_context["restart_path"])
@@ -2736,9 +2577,7 @@ def run_class_study_action(
 
     if action == "finalize-fitting":
         fitted_stage = _required_stage(stage)
-        admission = _admission_for_stage(
-            fitted_stage, pilot_admission, final_admission
-        )
+        admission = _admission_for_stage(fitted_stage, pilot_admission, final_admission)
         records = _result_index(
             result_roots,
             pilot_admission=pilot_admission,
@@ -2817,9 +2656,7 @@ def run_class_study_action(
                 else None
             ),
             successor_study_id=(
-                successor_context["study_id"]
-                if successor_context is not None
-                else None
+                successor_context["study_id"] if successor_context is not None else None
             ),
         )
 
@@ -2891,9 +2728,7 @@ def run_class_study_action(
 
     if action == "verify":
         verification_stage = _required_stage(stage)
-        admission = _admission_for_stage(
-            verification_stage, pilot_admission, final_admission
-        )
+        admission = _admission_for_stage(verification_stage, pilot_admission, final_admission)
         details = _verify_target(
             _required(target, "--target"),
             admission=admission,
@@ -2931,9 +2766,7 @@ def _coordinate_qualification(
     if numeric.stage != stage:
         raise ValueError("numeric fitting bundle has the wrong qualification stage")
     _require_numeric_admission(numeric, admission)
-    if (expected_successor_study_id is None) != (
-        expected_successor_restart_sha256 is None
-    ):
+    if (expected_successor_study_id is None) != (expected_successor_restart_sha256 is None):
         raise ValueError("successor qualification identity requires study and restart")
     if expected_successor_study_id is not None:
         assert expected_successor_restart_sha256 is not None
@@ -2963,9 +2796,7 @@ def _coordinate_qualification(
     _validate_qualification_sidecars(sidecars, workloads, authority)
     published_manifest = publications / name / NAMED_QUALIFICATION_SET_MANIFEST
     if published_manifest.exists() or published_manifest.is_symlink():
-        published_prefix_root = (
-            published_manifest.parent / NAMED_QUALIFICATION_PREFIX_DIRECTORY
-        )
+        published_prefix_root = published_manifest.parent / NAMED_QUALIFICATION_PREFIX_DIRECTORY
         selected_prefix_root = (
             published_prefix_root
             if published_prefix_root.exists() or published_prefix_root.is_symlink()
@@ -3113,8 +2944,7 @@ def _validate_qualification_sidecars(
         value = _load_json_object(path, f"qualification sidecar {workload_id}")
         if (
             value.get("qualification_source") != expected["prepare_source"]
-            or value.get("qualification_image_digest")
-            != expected["prepare_image_digest"]
+            or value.get("qualification_image_digest") != expected["prepare_image_digest"]
         ):
             raise ValueError(
                 f"qualification sidecar {workload_id} differs from the foundation prepare build"
@@ -3196,17 +3026,13 @@ def _coordinate_capture(
         role = _campaign_role(preflight)
         block = _campaign_block(preflight)
         if successor_restart_sha256 is not None and (
-            preflight.get(CLASS_STUDY_SUCCESSOR_CONFIGURATION_KEY)
-            != successor_restart_sha256
+            preflight.get(CLASS_STUDY_SUCCESSOR_CONFIGURATION_KEY) != successor_restart_sha256
             or preflight.get("class_study_id") != successor_study_id
         ):
             raise ValueError("successor campaign uses another restart authority")
         admission = _admission_for_role(role, pilot_admission, final_admission)
         _require_capture_admission_binding(preflight, admission=admission, role=role)
-        if not (
-            successor_restart_sha256 is not None
-            and role == "authoritative-fitting"
-        ):
+        if not (successor_restart_sha256 is not None and role == "authoritative-fitting"):
             _validate_capture_prerequisites(role, block, records)
         foundation_authority = _validate_capture_foundation(
             role,
@@ -3250,9 +3076,10 @@ def _coordinate_capture(
                 details,
                 ("repeat with --execute after reviewing the preflight",),
             )
-        with _capture_authority_environment(
-            foundation_authority
-        ), _capture_authority_environment(authority):
+        with (
+            _capture_authority_environment(foundation_authority),
+            _capture_authority_environment(authority),
+        ):
             output = run_campaign(
                 campaign_path,
                 _required(results_root, "--results-root"),
@@ -3267,8 +3094,7 @@ def _coordinate_capture(
         if not isinstance(role, str):
             raise ValueError("resume experiment is not class-study evidence")
         if successor_restart_sha256 is not None and (
-            configuration.get(CLASS_STUDY_SUCCESSOR_CONFIGURATION_KEY)
-            != successor_restart_sha256
+            configuration.get(CLASS_STUDY_SUCCESSOR_CONFIGURATION_KEY) != successor_restart_sha256
             or configuration.get("class_study_id") != successor_study_id
         ):
             raise ValueError("successor resume uses another restart authority")
@@ -3283,18 +3109,13 @@ def _coordinate_capture(
             admission=admission,
             role=role,
         )
-        if not (
-            successor_restart_sha256 is not None
-            and role == "authoritative-fitting"
-        ):
+        if not (successor_restart_sha256 is not None and role == "authoritative-fitting"):
             _validate_capture_prerequisites(role, block, records)
         foundation_authority = _validate_capture_foundation(
             role,
             foundation_attestation=foundation_attestation,
             capture_started_at=experiment.get("started_at"),
-            expected_sha256=configuration.get(
-                CLASS_STUDY_FOUNDATION_CONFIGURATION_KEY
-            ),
+            expected_sha256=configuration.get(CLASS_STUDY_FOUNDATION_CONFIGURATION_KEY),
             prerequisite_records=records,
         )
         authority = _validate_formal_capture_authority(
@@ -3333,9 +3154,10 @@ def _coordinate_capture(
                 details,
                 ("repeat with --execute after reviewing the checkpoint",),
             )
-        with _capture_authority_environment(
-            foundation_authority
-        ), _capture_authority_environment(authority):
+        with (
+            _capture_authority_environment(foundation_authority),
+            _capture_authority_environment(authority),
+        ):
             output = resume_campaign(source)
     record = verify_class_study_result(
         output,
@@ -3382,8 +3204,7 @@ def _validate_capture_foundation(
         "sha256": sha256_file(path),
     }
     if capture_started_at is not None and (
-        not isinstance(expected_sha256, str)
-        or _SHA256.fullmatch(expected_sha256) is None
+        not isinstance(expected_sha256, str) or _SHA256.fullmatch(expected_sha256) is None
     ):
         raise ValueError("resumed class capture has no frozen foundation binding")
     if expected_sha256 is not None and expected_sha256 != binding["sha256"]:
@@ -3417,9 +3238,7 @@ def _validate_formal_capture_authority(
 
     if role not in {"canary", "formal"}:
         if readiness_attestation is not None or historical_pre_snapshot is not None:
-            raise ValueError(
-                f"{role} capture forbids readiness and historical-pre authority"
-            )
+            raise ValueError(f"{role} capture forbids readiness and historical-pre authority")
         if isinstance(capture_configuration, Mapping) and any(
             key in capture_configuration
             for key in (
@@ -3427,14 +3246,10 @@ def _validate_formal_capture_authority(
                 CLASS_STUDY_HISTORICAL_PRE_CONFIGURATION_KEY,
             )
         ):
-            raise ValueError(
-                f"{role} capture has unexpected frozen promotion authority"
-            )
+            raise ValueError(f"{role} capture has unexpected frozen promotion authority")
         return None
     readiness_path = _required(readiness_attestation, "--readiness-attestation")
-    snapshot_path = _required(
-        historical_pre_snapshot, "--historical-pre-snapshot"
-    )
+    snapshot_path = _required(historical_pre_snapshot, "--historical-pre-snapshot")
     from .class_attestation import (
         validate_class_historical_snapshot,
         validate_class_readiness_attestation,
@@ -3461,9 +3276,7 @@ def _validate_formal_capture_authority(
     final_assembly = (
         evidence.get("final_cohort_assembly") if isinstance(evidence, Mapping) else None
     )
-    readiness_foundation = (
-        evidence.get("foundation") if isinstance(evidence, Mapping) else None
-    )
+    readiness_foundation = evidence.get("foundation") if isinstance(evidence, Mapping) else None
     foundation_binding = (
         foundation_authority.get("foundation_attestation")
         if isinstance(foundation_authority, Mapping)
@@ -3492,14 +3305,11 @@ def _validate_formal_capture_authority(
             and (
                 not isinstance(readiness_successor, Mapping)
                 or readiness_successor.get("sha256") != capture_successor_sha256
-                or readiness.get("study_id")
-                != capture_configuration.get("class_study_id")
+                or readiness.get("study_id") != capture_configuration.get("class_study_id")
             )
         )
     ):
-        raise ValueError(
-            "formal capture authority differs from its readiness/cohort admission"
-        )
+        raise ValueError("formal capture authority differs from its readiness/cohort admission")
 
     summary = readiness.get("summary")
     certification_runtime_inputs = (
@@ -3518,9 +3328,7 @@ def _validate_formal_capture_authority(
         or not isinstance(final_qualification_manifest_sha256, str)
         or _SHA256.fullmatch(final_qualification_manifest_sha256) is None
     ):
-        raise ValueError(
-            "formal capture readiness lacks certified runtime/qualification identity"
-        )
+        raise ValueError("formal capture readiness lacks certified runtime/qualification identity")
     if not isinstance(capture_configuration, Mapping):
         raise ValueError("formal capture has no prospective frozen configuration")
     raw_capture_runtime_inputs = capture_configuration.get("defense_runtime_inputs")
@@ -3530,32 +3338,19 @@ def _validate_formal_capture_authority(
         else _defense_runtime_input_identities(capture_configuration)
     )
     expected_modes = ("undefended",) if role == "canary" else FORMAL_MODES
-    expected_runtime_inputs = {
-        mode: certification_runtime_inputs[mode] for mode in expected_modes
-    }
+    expected_runtime_inputs = {mode: certification_runtime_inputs[mode] for mode in expected_modes}
     if capture_runtime_inputs != expected_runtime_inputs:
-        raise ValueError(
-            "formal capture runtime inputs differ from certification/readiness"
-        )
-    observed_manifest = capture_configuration.get(
-        "chaff_qualification_set_manifest_sha256"
-    )
+        raise ValueError("formal capture runtime inputs differ from certification/readiness")
+    observed_manifest = capture_configuration.get("chaff_qualification_set_manifest_sha256")
     observed_set = capture_configuration.get("chaff_qualification_set")
     if role == "formal":
         expected_set = (
             f"{readiness['study_id']}-final-full"
-            if str(readiness.get("study_id", "")).startswith(
-                "classifier-multiorigin100-v2-"
-            )
+            if str(readiness.get("study_id", "")).startswith("classifier-multiorigin100-v2-")
             else AUTHORITATIVE_QUALIFICATION_SET
         )
-        if (
-            observed_manifest != final_qualification_manifest_sha256
-            or observed_set != expected_set
-        ):
-            raise ValueError(
-                "formal capture qualification manifest differs from readiness"
-            )
+        if observed_manifest != final_qualification_manifest_sha256 or observed_set != expected_set:
+            raise ValueError("formal capture qualification manifest differs from readiness")
     elif observed_manifest is not None or observed_set is not None:
         raise ValueError("class canary unexpectedly uses a qualification set")
 
@@ -3569,8 +3364,7 @@ def _validate_formal_capture_authority(
         final_qualification_manifest_sha256=final_qualification_manifest_sha256,
     )
     if capture_started_at is not None and (
-        capture_configuration.get(CLASS_STUDY_FOUNDATION_CONFIGURATION_KEY)
-        != foundation_sha256
+        capture_configuration.get(CLASS_STUDY_FOUNDATION_CONFIGURATION_KEY) != foundation_sha256
         or capture_configuration.get(CLASS_STUDY_READINESS_CONFIGURATION_KEY)
         != readiness_binding["sha256"]
         or capture_configuration.get(CLASS_STUDY_HISTORICAL_PRE_CONFIGURATION_KEY)
@@ -3579,21 +3373,16 @@ def _validate_formal_capture_authority(
         raise ValueError("resumed class capture uses different promotion authority")
 
     certification = evidence.get("certification_result")
-    if not isinstance(certification, Mapping) or not isinstance(
-        certification.get("root"), str
-    ):
+    if not isinstance(certification, Mapping) or not isinstance(certification.get("root"), str):
         raise ValueError("formal capture readiness has no certification binding")
     certification_verified = verify_result(Path(certification["root"]))
     certification_record = _require_role(prerequisite_records, "certification")
-    if (
-        Path(str(certification_record.get("root"))).resolve()
-        != certification_verified.root.resolve()
-        or certification_record.get("evidence_sha256")
-        != certification.get("evidence_sha256")
-    ):
-        raise ValueError(
-            "formal capture certification prerequisite differs from readiness"
-        )
+    if Path(
+        str(certification_record.get("root"))
+    ).resolve() != certification_verified.root.resolve() or certification_record.get(
+        "evidence_sha256"
+    ) != certification.get("evidence_sha256"):
+        raise ValueError("formal capture certification prerequisite differs from readiness")
     certification_time = _class_aware_timestamp(
         certification_verified.experiment.get("completed_at"),
         label="certification completion",
@@ -3634,9 +3423,7 @@ def _validate_formal_capture_authority(
         "cohort_assembly_sha256": admission.assembly_sha256,
         "certification_result_root": str(certification_verified.root),
         "certification_defense_runtime_inputs": dict(certification_runtime_inputs),
-        "final_qualification_set_manifest_sha256": (
-            final_qualification_manifest_sha256
-        ),
+        "final_qualification_set_manifest_sha256": (final_qualification_manifest_sha256),
         "required_environment": {
             "QCSD_CLASS_READINESS_ATTESTATION": readiness_binding["path"],
             "QCSD_CLASS_HISTORICAL_PRE_SNAPSHOT": snapshot_binding["path"],
@@ -3669,21 +3456,15 @@ def _require_prior_capture_runtime_bindings(
                 "prior class capture runtime inputs differ from certification/readiness"
             )
         prior_manifest = record.get("chaff_qualification_set_manifest_sha256")
-        if (
-            prior_role == "formal"
-            and prior_manifest != final_qualification_manifest_sha256
-        ) or (prior_role == "canary" and prior_manifest is not None):
-            raise ValueError(
-                "prior class capture qualification manifest differs from readiness"
-            )
+        if (prior_role == "formal" and prior_manifest != final_qualification_manifest_sha256) or (
+            prior_role == "canary" and prior_manifest is not None
+        ):
+            raise ValueError("prior class capture qualification manifest differs from readiness")
         if (
             record.get("class_study_readiness_sha256") != readiness_sha256
-            or record.get("class_study_historical_pre_snapshot_sha256")
-            != historical_pre_sha256
+            or record.get("class_study_historical_pre_snapshot_sha256") != historical_pre_sha256
         ):
-            raise ValueError(
-                "prior class capture uses different readiness/pre-formal authority"
-            )
+            raise ValueError("prior class capture uses different readiness/pre-formal authority")
 
 
 def _formal_capacity_preflight(
@@ -3722,10 +3503,10 @@ def _formal_capacity_preflight(
     observed_seconds = (completed - started).total_seconds()
     if observed_seconds <= 0:
         raise ValueError("formal certification duration is not positive")
-    evidence_bytes = sum(
-        (certification.root / relative).stat().st_size
-        for relative in certification.checksums
-    ) + (certification.root / "evidence.sha256").stat().st_size
+    evidence_bytes = (
+        sum((certification.root / relative).stat().st_size for relative in certification.checksums)
+        + (certification.root / "evidence.sha256").stat().st_size
+    )
     if evidence_bytes <= 0:
         raise ValueError("formal certification has no measurable evidence bytes")
 
@@ -3787,9 +3568,7 @@ def _formal_capacity_preflight(
         "schema_version": 1,
         "basis": {
             "certification_result_root": str(certification.root),
-            "certification_evidence_sha256": sha256_file(
-                certification.root / "evidence.sha256"
-            ),
+            "certification_evidence_sha256": sha256_file(certification.root / "evidence.sha256"),
             "accepted_samples": 900,
             "authoritative_bytes": evidence_bytes,
             "observed_wall_seconds": observed_seconds,
@@ -3835,11 +3614,7 @@ def _capture_authority_environment(
         "QCSD_CLASS_READINESS_ATTESTATION",
         "QCSD_CLASS_HISTORICAL_PRE_SNAPSHOT",
     }
-    if (
-        not isinstance(required, Mapping)
-        or not required
-        or not set(required) <= allowed
-    ):
+    if not isinstance(required, Mapping) or not required or not set(required) <= allowed:
         raise ValueError("formal capture authority environment is malformed")
     previous: dict[str, str | None] = {}
     for name, raw in required.items():
@@ -3906,8 +3681,7 @@ def _require_capture_admission_binding(
 ) -> None:
     if (
         value.get("class_study_cohort_sha256") != admission.cohort_sha256
-        or value.get("class_study_cohort_assembly_sha256")
-        != admission.assembly_sha256
+        or value.get("class_study_cohort_assembly_sha256") != admission.assembly_sha256
     ):
         raise ValueError("capture input is bound to a different cohort admission")
     selected = (
@@ -3919,17 +3693,13 @@ def _require_capture_admission_binding(
     workloads = value.get("workloads")
     if not isinstance(workloads, list):
         raise TypeError("capture input workload inventory is malformed")
-    observed_ids = tuple(
-        record.get("id") for record in workloads if isinstance(record, Mapping)
-    )
+    observed_ids = tuple(record.get("id") for record in workloads if isinstance(record, Mapping))
     if observed_ids != expected_ids or len(workloads) != len(expected_ids):
         raise ValueError("capture input workload order differs from cohort admission")
     for record in workloads:
-        if (
-            not isinstance(record, Mapping)
-            or record.get("sha256")
-            != admission.prepared_workload_sha256.get(str(record.get("id")))
-        ):
+        if not isinstance(record, Mapping) or record.get(
+            "sha256"
+        ) != admission.prepared_workload_sha256.get(str(record.get("id"))):
             raise ValueError("capture input prepared workload differs from cohort admission")
 
 
@@ -3947,10 +3717,7 @@ def _sealed_configuration_input(
     if path.is_symlink() or not path.is_file():
         raise ValueError(f"{label} is not a sealed regular file")
     digest = sha256_file(path)
-    if (
-        verified.checksums.get(relative) != digest
-        or configuration.get(configuration_key) != digest
-    ):
+    if verified.checksums.get(relative) != digest or configuration.get(configuration_key) != digest:
         raise ValueError(f"{label} is not checksum/configuration bound")
     return digest
 
@@ -4007,9 +3774,7 @@ def _defense_runtime_input_identities(
                 "input_policy",
             )
         )
-        has_schedule_fields = any(
-            key in record for key in ("schedule", "schedule_sha256", "mode")
-        )
+        has_schedule_fields = any(key in record for key in ("schedule", "schedule_sha256", "mode"))
         if name in _EXTERNAL_PARAMETER_MODES:
             parameters_sha256 = record.get("parameters_sha256")
             provenance_sha256 = record.get("provenance_sha256")
@@ -4024,9 +3789,7 @@ def _defense_runtime_input_identities(
                 or not isinstance(input_policy, str)
                 or not input_policy
             ):
-                raise ValueError(
-                    f"class-study {name} runtime parameter binding is incomplete"
-                )
+                raise ValueError(f"class-study {name} runtime parameter binding is incomplete")
             identity = {
                 "identity_type": "hash-bound-parameter-artifact",
                 "runtime_kind": kind,
@@ -4053,14 +3816,10 @@ def _defense_runtime_input_identities(
             }
         else:
             if has_parameter_fields or has_schedule_fields:
-                raise ValueError(
-                    f"class-study source-bound {name} has unexpected external input"
-                )
+                raise ValueError(f"class-study source-bound {name} has unexpected external input")
             identity = {
                 "identity_type": (
-                    "source-bound-no-defense"
-                    if name == "undefended"
-                    else "source-bound-built-in"
+                    "source-bound-no-defense" if name == "undefended" else "source-bound-built-in"
                 ),
                 "runtime_kind": kind,
             }
@@ -4106,8 +3865,7 @@ def _validate_verified_class_result(
         if (
             not isinstance(study_id, str)
             or not study_id.startswith("classifier-multiorigin100-v2-")
-            or role
-            not in {"authoritative-fitting", "certification", "canary", "formal"}
+            or role not in {"authoritative-fitting", "certification", "canary", "formal"}
         ):
             raise ValueError("class-study result successor identity is invalid")
     else:
@@ -4197,26 +3955,20 @@ def _validate_verified_class_result(
     if successor_sha256 is not None and role in {"certification", "formal"}:
         expected_qualification_set = f"{study_id}-final-full"
     qualification_set = configuration.get("chaff_qualification_set")
-    qualification_manifest_sha256 = configuration.get(
-        "chaff_qualification_set_manifest_sha256"
-    )
+    qualification_manifest_sha256 = configuration.get("chaff_qualification_set_manifest_sha256")
     if expected_qualification_set is None:
         if (
             "chaff_qualification_set" in configuration
             or "chaff_qualification_set_manifest_sha256" in configuration
         ):
-            raise ValueError(
-                f"{role} result unexpectedly uses a named qualification set"
-            )
+            raise ValueError(f"{role} result unexpectedly uses a named qualification set")
         qualification_manifest_sha256 = None
     elif (
         qualification_set != expected_qualification_set
         or not isinstance(qualification_manifest_sha256, str)
         or _SHA256.fullmatch(qualification_manifest_sha256) is None
     ):
-        raise ValueError(
-            f"{role} result has no exact named qualification-set manifest binding"
-        )
+        raise ValueError(f"{role} result has no exact named qualification-set manifest binding")
 
     selected = (
         admission.selection.pilot
@@ -4255,9 +4007,7 @@ def _validate_verified_class_result(
             role=role,
             selected_ids=selected_ids,
         )
-    evidence_path = _regular_file(
-        verified.root / "evidence.sha256", "class-study evidence seal"
-    )
+    evidence_path = _regular_file(verified.root / "evidence.sha256", "class-study evidence seal")
     experiment_sha256 = verified.checksums.get("experiment.json")
     if not isinstance(experiment_sha256, str):
         raise TypeError("class-study evidence seal does not bind experiment.json")
@@ -4292,9 +4042,7 @@ def _validate_verified_class_result(
         "defense_parameter_sha256": defense_parameter_sha256,
         "defense_runtime_inputs": defense_runtime_inputs,
         "chaff_qualification_set": qualification_set,
-        "chaff_qualification_set_manifest_sha256": (
-            qualification_manifest_sha256
-        ),
+        "chaff_qualification_set_manifest_sha256": (qualification_manifest_sha256),
     }
 
 
@@ -4328,19 +4076,11 @@ def _validate_current_candidate_sample_receipt(
         or not isinstance(artifacts, Mapping)
         or not isinstance(accepted, Mapping)
     ):
-        raise ValueError(
-            f"{role} candidate sample has an invalid accepted-evidence identity"
-        )
-    expected_artifacts = {
-        f"{sample_path}/{relative}" for relative in ACCEPTED_ARTIFACTS
-    }
+        raise ValueError(f"{role} candidate sample has an invalid accepted-evidence identity")
+    expected_artifacts = {f"{sample_path}/{relative}" for relative in ACCEPTED_ARTIFACTS}
     if set(artifacts) != expected_artifacts or dict(artifacts) != dict(accepted):
-        raise ValueError(
-            f"{role} candidate sample differs from its sealed five-file inventory"
-        )
-    sample_root = resolved_sample_directory(
-        verified.root, sample, require_directory=True
-    )
+        raise ValueError(f"{role} candidate sample differs from its sealed five-file inventory")
+    sample_root = resolved_sample_directory(verified.root, sample, require_directory=True)
     run_path = sample_root / "neqo/run.json"
     run_relative = run_path.relative_to(verified.root).as_posix()
     run_digest = artifacts.get(run_relative)
@@ -4351,9 +4091,7 @@ def _validate_current_candidate_sample_receipt(
         or verified.checksums.get(run_relative) != run_digest
         or sha256_file(run_path) != run_digest
     ):
-        raise ValueError(
-            f"{role} candidate run is not bound to its sealed accepted evidence"
-        )
+        raise ValueError(f"{role} candidate run is not bound to its sealed accepted evidence")
     try:
         run = load_json(run_path)
     except (OSError, ValueError) as error:
@@ -4364,9 +4102,7 @@ def _validate_current_candidate_sample_receipt(
         require_application_complete=True,
         require_current_schema=True,
     ):
-        summary_key = (
-            "buflo_summary" if runtime_kind == "buflo" else "cs_buflo_summary"
-        )
+        summary_key = "buflo_summary" if runtime_kind == "buflo" else "cs_buflo_summary"
         summary = run.get(summary_key) if isinstance(run, Mapping) else None
         schema = summary.get("schema_version") if isinstance(summary, Mapping) else None
         raise ValueError(
@@ -4391,14 +4127,63 @@ def _validate_current_candidate_sample_receipt(
         )
     except (KeyError, TypeError, ValueError) as error:
         raise ValueError(
-            f"{role} {mode} sample {sample_id} has invalid current "
-            "terminal/schedule chronology"
+            f"{role} {mode} sample {sample_id} has invalid current terminal/schedule chronology"
         ) from error
     if algorithm.get("schema_version") != 4:
         raise ValueError(
-            f"{role} {mode} sample {sample_id} did not derive schema-4 "
-            "algorithm evidence"
+            f"{role} {mode} sample {sample_id} did not derive schema-4 algorithm evidence"
         )
+
+
+def _validate_class_sample_run_receipt(
+    verified: VerifiedResult,
+    sample: Mapping[str, Any],
+    *,
+    role: str,
+) -> None:
+    """Reopen one accepted run and bind it to the full admitted workload graph."""
+
+    sample_id = sample.get("sample_id")
+    sample_path = sample.get("path")
+    artifacts = sample.get("artifacts")
+    accepted = verified.accepted_samples.get(str(sample_id))
+    if (
+        not isinstance(sample_id, str)
+        or not isinstance(sample_path, str)
+        or not isinstance(artifacts, Mapping)
+        or not isinstance(accepted, Mapping)
+    ):
+        raise ValueError(f"{role} sample has an invalid accepted-evidence identity")
+    expected_artifacts = {f"{sample_path}/{relative}" for relative in ACCEPTED_ARTIFACTS}
+    if set(artifacts) != expected_artifacts or dict(artifacts) != dict(accepted):
+        raise ValueError(f"{role} sample differs from its sealed five-file inventory")
+    sample_root = resolved_sample_directory(
+        verified.root,
+        sample,
+        require_directory=True,
+    )
+    run_path = sample_root / "neqo/run.json"
+    run_relative = run_path.relative_to(verified.root).as_posix()
+    run_digest = artifacts.get(run_relative)
+    if (
+        run_path.is_symlink()
+        or not run_path.is_file()
+        or not isinstance(run_digest, str)
+        or verified.checksums.get(run_relative) != run_digest
+        or sha256_file(run_path) != run_digest
+    ):
+        raise ValueError(f"{role} run is not bound to its sealed accepted evidence")
+    run = load_json(run_path)
+    configuration = verified.experiment.get("configuration")
+    if not isinstance(configuration, Mapping):
+        raise ValueError(f"{role} result has no frozen configuration")
+    binding = resolve_class_sample_run_binding(
+        verified.root,
+        configuration,
+        sample,
+        allow_derived_runtime_without_frozen_copy=role == "canary",
+    )
+    validate_class_sample_run_binding(run, sample, binding)
 
 
 def _validate_non_fitting_result(
@@ -4456,6 +4241,11 @@ def _validate_non_fitting_result(
             raise ValueError(f"{role} result contains an ineligible or invalid attempt")
         if role == "certification" and sample["attempts"] != 1:
             raise ValueError("certification evidence must succeed on its first launch")
+        _validate_class_sample_run_receipt(
+            verified,
+            sample,
+            role=role,
+        )
         if identity[1] in _CURRENT_CANDIDATE_RUNTIME_KINDS:
             _validate_current_candidate_sample_receipt(
                 verified,
@@ -4466,11 +4256,7 @@ def _validate_non_fitting_result(
         class_mode_pairs.add((identity[0], identity[1]))  # type: ignore[arg-type]
     if observed != expected:
         raise ValueError(f"{role} result is missing required cross-product samples")
-    pair_count = (
-        len(class_mode_pairs)
-        if role in {"pilot-compatibility", "certification"}
-        else None
-    )
+    pair_count = len(class_mode_pairs) if role in {"pilot-compatibility", "certification"} else None
     if role == "certification" and pair_count != CERTIFICATION_PAIR_COUNT:
         raise ValueError("certification does not cover exactly 900 unique class/mode pairs")
     if role == "pilot-compatibility" and pair_count != _NON_FITTING_COUNTS[role]:
@@ -4591,9 +4377,7 @@ def _require_fitting_source(
     admission: CohortAdmission,
 ) -> dict[str, Any]:
     role = "pilot-fitting" if stage == PILOT_STAGE else "authoritative-fitting"
-    record = verify_class_study_result(
-        source, admission=admission, expected_role=role
-    )
+    record = verify_class_study_result(source, admission=admission, expected_role=role)
     validate_class_fitting_result(
         source,
         expected_stage=stage,
@@ -4614,9 +4398,7 @@ def _require_numeric_admission(numeric: Any, admission: CohortAdmission) -> None
     expected = tuple(
         item.candidate_id
         for item in (
-            admission.selection.pilot
-            if numeric.stage == PILOT_STAGE
-            else admission.selection.final
+            admission.selection.pilot if numeric.stage == PILOT_STAGE else admission.selection.final
         )
     )
     if tuple(numeric.provenance["fitting_contract"]["workload_order"]) != expected:
@@ -4642,9 +4424,7 @@ def _require_successor_foundation_sha256(
 ) -> None:
     """Reject any foundation except the predecessor authority frozen by restart."""
 
-    expected_sha256 = successor_context["restart"].get(
-        "predecessor_foundation_sha256"
-    )
+    expected_sha256 = successor_context["restart"].get("predecessor_foundation_sha256")
     if observed_sha256 != expected_sha256:
         raise ValueError("successor action uses another foundation authority")
 
@@ -4667,9 +4447,7 @@ def _qualification_authority_for_action(
     )
     if successor_context is not None:
         foundation = authority.get("foundation_attestation")
-        observed_sha256 = (
-            foundation.get("sha256") if isinstance(foundation, Mapping) else None
-        )
+        observed_sha256 = foundation.get("sha256") if isinstance(foundation, Mapping) else None
         _require_successor_foundation_sha256(
             observed_sha256,
             successor_context,
@@ -4750,9 +4528,7 @@ def _verify_target(
         stage = (
             AUTHORITATIVE_STAGE
             if successor_context is not None
-            else _stage_from_qualification_path(
-                path / NAMED_QUALIFICATION_SET_MANIFEST
-            )
+            else _stage_from_qualification_path(path / NAMED_QUALIFICATION_SET_MANIFEST)
         )
         expected_set = (
             f"{successor_context['study_id']}-final-full"
@@ -4774,9 +4550,7 @@ def _verify_target(
             expected_workload_ids=_stage_workloads(admission, stage),
             expected_qualification_authority=authority,
         )
-        _validate_qualification_sidecars(
-            path, _stage_workloads(admission, stage), authority
-        )
+        _validate_qualification_sidecars(path, _stage_workloads(admission, stage), authority)
         return {
             "valid": True,
             "root": str(output.path),
@@ -4928,9 +4702,7 @@ def _validate_full_campaign_documents(
         pilot_admission.assembly_path,
         enforce_fresh_layout=False,
         cohort_reference=str(pilot_fitting["class_study_cohort"]),
-        cohort_assembly_reference=str(
-            pilot_fitting["class_study_cohort_assembly"]
-        ),
+        cohort_assembly_reference=str(pilot_fitting["class_study_cohort_assembly"]),
         pilot_bundle_reference=pilot_bundle,
         authoritative_bundle_reference=authoritative_bundle,
     )
@@ -4939,9 +4711,7 @@ def _validate_full_campaign_documents(
         final_admission.assembly_path,
         enforce_fresh_layout=False,
         cohort_reference=str(authoritative_fitting["class_study_cohort"]),
-        cohort_assembly_reference=str(
-            authoritative_fitting["class_study_cohort_assembly"]
-        ),
+        cohort_assembly_reference=str(authoritative_fitting["class_study_cohort_assembly"]),
         pilot_bundle_reference=pilot_bundle,
         authoritative_bundle_reference=authoritative_bundle,
     )
@@ -4954,8 +4724,7 @@ def _validate_full_campaign_documents(
         {
             name: value
             for name, value in final_expected.items()
-            if value["evidence_role"]
-            not in {"pilot-fitting", "pilot-compatibility"}
+            if value["evidence_role"] not in {"pilot-fitting", "pilot-compatibility"}
         }
     )
     if canonical_json_bytes(documents) != canonical_json_bytes(expected):
@@ -5140,9 +4909,7 @@ def _validate_fresh_layout_arguments(
     }
     if cohort_receipt_path is not None or cohort_assembly_path is not None:
         if stage not in cohort_filenames:
-            raise ValueError(
-                "fresh cohort receipt paths require --stage pilot or authoritative"
-            )
+            raise ValueError("fresh cohort receipt paths require --stage pilot or authoritative")
         cohort_filename, assembly_filename = cohort_filenames[stage]
         if cohort_receipt_path is not None:
             require_canonical_fresh_child(
@@ -5291,13 +5058,17 @@ def _validate_fresh_layout_arguments(
                 filename=NAMED_QUALIFICATION_SET_MANIFEST,
                 label="qualification manifest",
             )
-    if action in {
-        "foundation",
-        "readiness",
-        "historical-snapshot",
-        "comparison-review",
-        "attest",
-    } and destination is not None:
+    if (
+        action
+        in {
+            "foundation",
+            "readiness",
+            "historical-snapshot",
+            "comparison-review",
+            "attest",
+        }
+        and destination is not None
+    ):
         require_canonical_fresh_child(
             destination,
             field="artifacts_root",
@@ -5363,10 +5134,7 @@ def _successor_action_context(
             },
         )
     canonical_workloads = class_study_layout().workload_root
-    if (
-        workload_root is not None
-        and Path(os.path.abspath(workload_root)) != canonical_workloads
-    ):
+    if workload_root is not None and Path(os.path.abspath(workload_root)) != canonical_workloads:
         raise ValueError(
             "successor workload root must use the canonical prepared workload directory "
             f"{canonical_workloads}"
@@ -5376,12 +5144,8 @@ def _successor_action_context(
     final_set = qualification / f"{study_id}-final-full"
     expected = {
         "artifacts_root": artifacts,
-        "numeric_bundle_root": (
-            artifacts / f"{STUDY_ID}-authoritative-fitting-numeric"
-        ),
-        "prefix_spec_root": (
-            artifacts / f"{STUDY_ID}-authoritative-fitting-prefix-specs"
-        ),
+        "numeric_bundle_root": (artifacts / f"{STUDY_ID}-authoritative-fitting-numeric"),
+        "prefix_spec_root": (artifacts / f"{STUDY_ID}-authoritative-fitting-prefix-specs"),
         "qualification_checkpoint": qualification / "checkpoint.json",
         "qualification_sidecar_root": (
             final_set
@@ -5404,9 +5168,7 @@ def _successor_action_context(
     }
     for label, path in supplied.items():
         if path is not None and Path(os.path.abspath(path)) != expected[label]:
-            raise ValueError(
-                f"successor {label.replace('_', ' ')} must use {expected[label]}"
-            )
+            raise ValueError(f"successor {label.replace('_', ' ')} must use {expected[label]}")
     if campaign is not None:
         candidate = Path(os.path.abspath(campaign))
         campaign_root = root / "plan/campaigns"
@@ -5452,21 +5214,15 @@ def _require_successor_handoff_lineage(
     root = _regular_directory(handoff, "successor class handoff")
     dataset = _load_json_object(root / "dataset.json", "successor class dataset")
     expected_sha256 = sha256_file(successor_context["restart_path"])
-    if (
-        dataset.get("study_id") != successor_context["study_id"]
-        or dataset.get("class_study_successor")
-        != {
-            "path": "inputs/class-study-successor.json",
-            "sha256": expected_sha256,
-        }
-    ):
+    if dataset.get("study_id") != successor_context["study_id"] or dataset.get(
+        "class_study_successor"
+    ) != {
+        "path": "inputs/class-study-successor.json",
+        "sha256": expected_sha256,
+    }:
         raise ValueError("successor handoff uses another study/restart authority")
     frozen = root / "inputs/class-study-successor.json"
-    if (
-        frozen.is_symlink()
-        or not frozen.is_file()
-        or sha256_file(frozen) != expected_sha256
-    ):
+    if frozen.is_symlink() or not frozen.is_file() or sha256_file(frozen) != expected_sha256:
         raise ValueError("successor handoff has no exact frozen restart authority")
 
 
@@ -5483,11 +5239,7 @@ def _require_successor_receipt_lineage(
         raise ValueError(f"successor {label} uses another study identity")
     expected_sha256 = sha256_file(successor_context["restart_path"])
     evidence = value.get("evidence")
-    restart = (
-        evidence.get("successor_restart")
-        if isinstance(evidence, Mapping)
-        else None
-    )
+    restart = evidence.get("successor_restart") if isinstance(evidence, Mapping) else None
     if isinstance(restart, Mapping):
         if restart.get("sha256") != expected_sha256:
             raise ValueError(f"successor {label} uses another restart authority")
@@ -5496,9 +5248,7 @@ def _require_successor_receipt_lineage(
     if isinstance(readiness, Mapping) and isinstance(readiness.get("path"), str):
         from .class_attestation import validate_class_readiness_attestation
 
-        nested = validate_class_readiness_attestation(
-            Path(readiness["path"]), deep_code_gate=True
-        )
+        nested = validate_class_readiness_attestation(Path(readiness["path"]), deep_code_gate=True)
         _require_successor_receipt_lineage(
             nested,
             successor_context,
@@ -5508,9 +5258,7 @@ def _require_successor_receipt_lineage(
         return
     handoff = value.get("handoff")
     if isinstance(handoff, Mapping) and isinstance(handoff.get("root"), str):
-        _require_successor_handoff_lineage(
-            Path(handoff["root"]), successor_context
-        )
+        _require_successor_handoff_lineage(Path(handoff["root"]), successor_context)
         return
     if require_restart:
         raise ValueError(f"successor {label} has no restart lineage")
@@ -5586,9 +5334,7 @@ def _successor_study_status(
     readiness: dict[str, Any] | None = None
     stages["readiness"] = {"state": "absent"}
     if readiness_attestation is not None:
-        readiness = validate_class_readiness_attestation(
-            readiness_attestation, deep_code_gate=deep
-        )
+        readiness = validate_class_readiness_attestation(readiness_attestation, deep_code_gate=deep)
         _require_successor_receipt_lineage(
             readiness,
             successor_context,
@@ -5788,13 +5534,17 @@ def _optional_admission(
 ) -> CohortAdmission | None:
     if cohort_receipt_path is None and cohort_assembly_path is None:
         return None
-    if cohort_receipt_path is None or cohort_assembly_path is None or not all(
-        value is not None
-        for value in (
-            candidate_catalogue_path,
-            stability_root,
-            workload_root,
-            acquisition_completion_path,
+    if (
+        cohort_receipt_path is None
+        or cohort_assembly_path is None
+        or not all(
+            value is not None
+            for value in (
+                candidate_catalogue_path,
+                stability_root,
+                workload_root,
+                acquisition_completion_path,
+            )
         )
     ):
         raise ValueError(
@@ -5853,11 +5603,7 @@ def _admission_for_role(
     pilot_admission: CohortAdmission | None,
     final_admission: CohortAdmission | None,
 ) -> CohortAdmission:
-    stage = (
-        PILOT_STAGE
-        if role in {"pilot-fitting", "pilot-compatibility"}
-        else AUTHORITATIVE_STAGE
-    )
+    stage = PILOT_STAGE if role in {"pilot-fitting", "pilot-compatibility"} else AUTHORITATIVE_STAGE
     return _admission_for_stage(stage, pilot_admission, final_admission)
 
 
@@ -5872,9 +5618,7 @@ def _require_campaign_reference_binding(
     if not isinstance(reference, str) or not reference:
         raise ValueError(f"class-study campaign has no {label} reference")
     path = Path(reference)
-    resolved = (
-        path.resolve() if path.is_absolute() else (campaign_root / path).resolve()
-    )
+    resolved = path.resolve() if path.is_absolute() else (campaign_root / path).resolve()
     expected = expected_path.resolve()
     if resolved != expected:
         raise ValueError(f"class-study campaign references a different {label}")
@@ -5900,10 +5644,10 @@ def _next_required_stage(
         return "complete-30s-24h-72h-acquisition"
     if stages["pilot_cohort"]["state"] != "verified":
         return "pilot-selection-and-assembly-freeze"
-    if (
-        stages["campaigns"]["state"] != "verified"
-        or stages["campaigns"].get("stage") not in {PILOT_STAGE, AUTHORITATIVE_STAGE}
-    ):
+    if stages["campaigns"]["state"] != "verified" or stages["campaigns"].get("stage") not in {
+        PILOT_STAGE,
+        AUTHORITATIVE_STAGE,
+    }:
         return "pilot-campaign-generation"
     roles = {str(record["evidence_role"]) for record in records}
     if "pilot-fitting" not in roles:
@@ -5914,18 +5658,15 @@ def _next_required_stage(
     ):
         return "pilot-numeric-fitting"
     if not any(
-        root.get("stage") == PILOT_STAGE
-        for root in stages["prefix_specs"].get("roots", [])
+        root.get("stage") == PILOT_STAGE for root in stages["prefix_specs"].get("roots", [])
     ):
         return "pilot-prefix-specification"
     if not any(
-        item.get("stage") == PILOT_STAGE
-        for item in stages["qualification"].get("sets", [])
+        item.get("stage") == PILOT_STAGE for item in stages["qualification"].get("sets", [])
     ):
         return "pilot-full-prefix-qualification"
     if not any(
-        bundle.get("stage") == PILOT_STAGE
-        for bundle in stages["final_fitting"].get("bundles", [])
+        bundle.get("stage") == PILOT_STAGE for bundle in stages["final_fitting"].get("bundles", [])
     ):
         return "pilot-fitting-finalisation"
     if "pilot-compatibility" not in roles:
@@ -5944,13 +5685,11 @@ def _next_required_stage(
     ):
         return "authoritative-numeric-fitting"
     if not any(
-        root.get("stage") == AUTHORITATIVE_STAGE
-        for root in stages["prefix_specs"].get("roots", [])
+        root.get("stage") == AUTHORITATIVE_STAGE for root in stages["prefix_specs"].get("roots", [])
     ):
         return "authoritative-prefix-specification"
     if not any(
-        item.get("stage") == AUTHORITATIVE_STAGE
-        for item in stages["qualification"].get("sets", [])
+        item.get("stage") == AUTHORITATIVE_STAGE for item in stages["qualification"].get("sets", [])
     ):
         return "authoritative-full-prefix-qualification"
     if not any(
