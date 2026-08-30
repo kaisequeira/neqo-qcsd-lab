@@ -496,16 +496,46 @@ def test_two_origin_graph_is_preserved_in_both_fitting_campaign_bindings(
         assert command[command.index("--workload") + 1] == str(complete.runtime_path)
 
 
-def test_loaded_authoritative_fitting_campaign_preserves_selected_two_origin_graph(
+@pytest.mark.parametrize(
+    (
+        "role",
+        "cohort_filename",
+        "assembly_filename",
+        "selection_member",
+        "visits",
+        "expected_samples",
+    ),
+    (
+        (
+            "pilot-fitting",
+            "classifier-multiorigin100-v1-pilot-cohort.json",
+            "classifier-multiorigin100-v1-pilot-cohort-assembly.json",
+            "pilot",
+            2,
+            480,
+        ),
+        (
+            "authoritative-fitting",
+            "classifier-multiorigin100-v1-cohort.json",
+            "classifier-multiorigin100-v1-cohort-assembly.json",
+            "final",
+            10,
+            2_000,
+        ),
+    ),
+)
+def test_loaded_fitting_campaigns_preserve_every_complete_two_origin_graph(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    role: str,
+    cohort_filename: str,
+    assembly_filename: str,
+    selection_member: str,
+    visits: int,
+    expected_samples: int,
 ) -> None:
     from qcsd_lab.class_campaigns import campaign_documents
     from qcsd_lab.class_cohort import ASSEMBLY_RECEIPT_TYPE
-    from qcsd_lab.class_layout import (
-        AUTHORITATIVE_COHORT_ASSEMBLY_FILENAME,
-        AUTHORITATIVE_COHORT_FILENAME,
-    )
     from qcsd_lab.class_study import (
         bind_receipt,
         canonical_json_bytes,
@@ -521,24 +551,33 @@ def test_loaded_authoritative_fitting_campaign_preserves_selected_two_origin_gra
         root.mkdir(parents=True)
     monkeypatch.setattr(util, "LAB_ROOT", tmp_path)
 
-    cohort = _cohort_receipt(study_root, AUTHORITATIVE_COHORT_FILENAME)
+    cohort = _cohort_receipt(study_root, cohort_filename)
     _, selection = load_study_receipt(cohort)
-    selected_id = selection.final[0].candidate_id
-    complete = _complete_two_origin_workload(
-        tmp_path,
-        visits=10,
-        workload_id=selected_id,
+    selected_ids = tuple(
+        candidate.candidate_id for candidate in getattr(selection, selection_member)
     )
+    complete_by_id = {
+        workload_id: _complete_two_origin_workload(
+            tmp_path,
+            visits=visits,
+            workload_id=workload_id,
+        )
+        for workload_id in selected_ids
+    }
+    for workload_id, complete in complete_by_id.items():
+        (workload_root / f"{workload_id}.json").write_bytes(complete.source_bytes)
 
     assembly = _assembly_receipt(
         study_root,
         cohort,
-        AUTHORITATIVE_COHORT_ASSEMBLY_FILENAME,
+        assembly_filename,
     )
     assembly_envelope = json.loads(assembly.read_text(encoding="utf-8"))
     assembly_payload = assembly_envelope["payload"]
     for record in assembly_payload["candidates"]:
-        record["prepared_workload"]["sha256"] = complete.sha256
+        workload = complete_by_id.get(record["candidate_id"])
+        if workload is not None:
+            record["prepared_workload"]["sha256"] = workload.sha256
     assembly.write_bytes(
         canonical_json_bytes(
             bind_receipt(
@@ -551,12 +590,13 @@ def test_loaded_authoritative_fitting_campaign_preserves_selected_two_origin_gra
     documents = campaign_documents(
         cohort,
         cohort_assembly_receipt=assembly,
+        cohort_reference=f"../class-study/v1/{cohort_filename}",
+        cohort_assembly_reference=f"../class-study/v1/{assembly_filename}",
     )
-    filename = "classifier-multiorigin100-v1-authoritative-fitting-1200.yml"
+    filename = f"classifier-multiorigin100-v1-{role}-1200.yml"
     document = documents[filename]
-    assert document["workloads"][selected_id] == 10
-    for workload_id in document["workloads"]:
-        (workload_root / f"{workload_id}.json").write_bytes(complete.source_bytes)
+    assert tuple(document["workloads"]) == selected_ids
+    assert set(document["workloads"].values()) == {visits}
     campaign_path = campaign_root / filename
     campaign_path.write_text(
         yaml.safe_dump(document, sort_keys=False),
@@ -564,38 +604,109 @@ def test_loaded_authoritative_fitting_campaign_preserves_selected_two_origin_gra
     )
 
     campaign = orchestrator.load_campaign(campaign_path)
-    selected = next(workload for workload in campaign.workloads if workload.id == selected_id)
-    runtime = orchestrator.runtime_manifest(selected.data)
     plan = plan_campaign(campaign)
-    selected_samples = [sample for sample in plan if sample["workload_id"] == selected_id]
+    first_id = selected_ids[0]
+    selected_samples = [sample for sample in plan if sample["workload_id"] == first_id]
 
     assert campaign.schema_version == 2
-    assert campaign.evidence_role == "authoritative-fitting"
+    assert campaign.evidence_role == role
     assert campaign.purpose == "fitting"
     assert campaign.request_policies == ("as-defined", "half-duplex")
     assert [(defense.name, defense.kind, defense.baseline) for defense in campaign.defenses] == [
         ("undefended", "none", True)
     ]
-    assert len(campaign.workloads) == 100
-    assert all(workload.visits == 10 for workload in campaign.workloads)
-    assert len(plan) == 2_000
+    assert tuple(workload.id for workload in campaign.workloads) == selected_ids
+    assert all(workload.visits == visits for workload in campaign.workloads)
+    assert len(plan) == expected_samples
     assert Counter(sample["request_policy"] for sample in selected_samples) == Counter(
-        {"as-defined": 10, "half-duplex": 10}
+        {"as-defined": visits, "half-duplex": visits}
     )
-    assert selected.path == (workload_root / f"{selected_id}.json").resolve()
-    assert selected.sha256 == complete.sha256
-    assert selected.resource_count == 2
-    assert selected.origin_count == 2
-    assert [resource["url"] for resource in runtime["resources"]] == [
-        f"https://{selected_id}.example/",
-        f"https://cdn.{selected_id}.example/application.js",
-    ]
-    assert runtime["resources"][1]["depends_on"] == [0]
-    assert runtime["resources"][1]["headers"] == [
-        ["referer", f"https://{selected_id}.example/"]
-    ]
-    assert selected.runtime_sha256 == orchestrator.sha256_bytes(
-        orchestrator.canonical_bytes(runtime)
+    assert campaign.class_study_cohort_sha256 == sha256_file(cohort)
+    assert campaign.class_study_cohort_assembly_sha256 == sha256_file(assembly)
+    for selected in campaign.workloads:
+        complete = complete_by_id[selected.id]
+        runtime = orchestrator.runtime_manifest(selected.data)
+        assert selected.path == (workload_root / f"{selected.id}.json").resolve()
+        assert selected.sha256 == complete.sha256
+        assert selected.resource_count == 2
+        assert selected.origin_count == 2
+        assert [resource["url"] for resource in runtime["resources"]] == [
+            f"https://{selected.id}.example/",
+            f"https://cdn.{selected.id}.example/application.js",
+        ]
+        assert runtime["resources"][1]["depends_on"] == [0]
+        assert runtime["resources"][1]["headers"] == [
+            ["referer", f"https://{selected.id}.example/"]
+        ]
+        assert selected.runtime_sha256 == orchestrator.sha256_bytes(
+            orchestrator.canonical_bytes(runtime)
+        )
+
+
+def test_formal_commands_reuse_complete_two_origin_graph_for_both_visits(
+    tmp_path: Path,
+) -> None:
+    complete = _complete_two_origin_workload(tmp_path, visits=2)
+    campaign = _campaign((complete,))
+    cells = plan_campaign(campaign)
+    defenses = {defense.name: defense for defense in campaign.defenses}
+    chaff_path = tmp_path / "qualified-chaff.json"
+    chaff_path.write_text("{}\n", encoding="utf-8")
+    context = SimpleNamespace(
+        qcsd_profile="research-1200",
+        request_policy="as-defined",
+        limits=campaign.limits,
+    )
+    bindings = []
+
+    for sample in cells:
+        defense = defenses[sample["defense"]]
+        output = tmp_path / "outputs" / sample["sample_id"]
+        if defense.baseline:
+            command = orchestrator.capture_engine._client_command(
+                complete.runtime_path,
+                complete.id,
+                defense,
+                sample["seed"],
+                context,
+                output,
+            )
+            application_source = complete.path
+        else:
+            command = orchestrator.capture_engine._client_command(
+                complete.runtime_path,
+                chaff_path,
+                complete.id,
+                defense,
+                sample["seed"],
+                context,
+                output,
+                application_workload_source=complete.path,
+            )
+            application_source = Path(
+                command[command.index("--application-workload-source") + 1]
+            )
+        runtime_path = Path(command[command.index("--workload") + 1])
+        runtime = json.loads(runtime_path.read_text(encoding="utf-8"))
+        bindings.append((runtime_path, application_source, runtime))
+
+    assert len(bindings) == 16
+    assert {
+        (sample["defense"], sample["visit"])
+        for sample in cells
+    } == {
+        (mode[0], visit)
+        for mode in FORMAL_MODES
+        for visit in range(2)
+    }
+    assert {runtime_path for runtime_path, _, _ in bindings} == {complete.runtime_path}
+    assert {source_path for _, source_path, _ in bindings} == {complete.path}
+    assert all(
+        [resource["id"] for resource in runtime["resources"]] == [0, 1]
+        and runtime["resources"][1]["depends_on"] == [0]
+        and runtime["resources"][1]["headers"]
+        == [["referer", "https://class-000.example/"]]
+        for _, _, runtime in bindings
     )
 
 
