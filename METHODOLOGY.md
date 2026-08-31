@@ -279,6 +279,14 @@ coordinator validates the prerequisite ledger and supplies one process-local
 authority bound to the exact campaign identity, while generic `run` and
 `resume` fail closed.
 
+The same terminal boundary applies when a Rust panic prevents the client from
+finalising `run.json` and therefore from emitting its normal typed error class.
+A non-timeout Neqo exit status 101 is promoted to
+`StrictClientDefenseExecutionFailure` only when the measured client stderr
+contains an exact Rust thread-panic marker; the marker, return code, and stderr
+SHA-256 are retained in `attempt.json`. Exit 101 without that marker, an
+ordinary typed runner error, and a host timeout remain operationally distinct.
+
 Bounded retries remain available only for explicitly retryable operational
 capture or transient-network failures. They cannot reclassify, mask, or work
 around a defence/QCSD implementation failure.

@@ -781,8 +781,14 @@ def _collect_attempt(
         and endpoint_count_valid
         and valid
     )
+    terminal_client_defense_failure, runner_process_failure = _terminal_client_execution_failure(
+        runner_error_class=runner_error_class,
+        runner_returncode=client.returncode,
+        runner_timed_out=runner_timed_out,
+        runner_log=diagnostics / "neqo-client.log",
+    )
     terminal_client_defense_failure = bool(
-        not success and _is_terminal_client_defense_error_class(runner_error_class)
+        not success and terminal_client_defense_failure
     )
     failure_stage = (
         "fidelity"
@@ -812,6 +818,7 @@ def _collect_attempt(
         "runner_completion_status": completion_status,
         "runner_error": runner_error,
         "runner_error_class": runner_error_class,
+        "runner_process_failure": runner_process_failure,
         "client_resource_usage": client_resource_usage,
         "runner_complete": runner_complete,
         "runner_binding_valid": runner_binding_valid,
@@ -853,6 +860,7 @@ def _collect_attempt(
                         "completion_status": completion_status,
                         "runner_error": runner_error,
                         "runner_error_class": runner_error_class,
+                        "runner_process_failure": runner_process_failure,
                         "client_resource_usage": client_resource_usage,
                         "runner_binding_error": (
                             None if runner_binding_valid else runner_binding_error
@@ -920,6 +928,45 @@ def _is_terminal_client_defense_error_class(value: object) -> bool:
     """Recognise only versioned runner classes that require client-side repair."""
 
     return isinstance(value, str) and value in _TERMINAL_CLIENT_DEFENSE_ERROR_CLASSES
+
+
+def _terminal_client_execution_failure(
+    *,
+    runner_error_class: object,
+    runner_returncode: int,
+    runner_timed_out: bool,
+    runner_log: Path,
+) -> tuple[bool, dict[str, Any] | None]:
+    """Classify typed failures and unmistakable pre-receipt Rust panics."""
+
+    process_failure: dict[str, Any] | None = None
+    if not runner_timed_out and runner_returncode == 101 and runner_log.is_file():
+        try:
+            lines = runner_log.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            lines = []
+        marker = next(
+            (
+                line
+                for line in lines
+                if line.startswith("thread '") and "' panicked at " in line
+            ),
+            None,
+        )
+        if marker is not None:
+            process_failure = {
+                "schema_version": 1,
+                "source": "neqo-client-stderr-v1",
+                "kind": "rust-panic",
+                "returncode": runner_returncode,
+                "marker": marker,
+                "log_sha256": sha256_file(runner_log),
+            }
+    return (
+        _is_terminal_client_defense_error_class(runner_error_class)
+        or process_failure is not None,
+        process_failure,
+    )
 
 
 def _process_scheduler_valid(value: Any) -> bool:

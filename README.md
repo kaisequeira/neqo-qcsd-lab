@@ -143,13 +143,28 @@ coordinator after it verifies the prerequisite ledger; generic `run` or
 `resume` cannot bypass that ordering.
 
 Docker 29.0.1 is operational again with 12 visible CPUs and approximately
-16.5 GB memory. This is an operational checkpoint only. Because the post-v31
-working source differs from v31, fresh cohort v32 must repeat the pull/no-cache
-build, reference execution, 18/18 regression, complete code gate, all 160
-controlled captures, and the class foundation before public-page acquisition
-may begin. Current-head progress remains 0/18 regression and 0/160 controlled;
-no class-study foundation, qualification, readiness, or validation attestation
-exists.
+16.5 GB memory. This is an operational checkpoint only. Cohort v32 passed its
+fresh pull/no-cache build and isolated reference execution, then stopped in the
+first established-mode regression campaign at 4/14 accepted cells. The two
+undefended and two Walkie-Talkie cells passed; static, FRONT, Tamaraw, Traffic
+Morphing, and WTF-PAD each encountered the same pre-receipt Rust panic on both
+workloads. The trace attribution path used eager `then_some(slots[0])`
+evaluation for a slotless receive-limit observation with no scheduled owner.
+All failed attempts and the incomplete campaign remain preserved. V32 never
+reached the four BuFLO/CS-BuFLO regression cells, its code gate, controlled
+qualification, or any class-study stage, and cannot authorise corrected source.
+
+The client fix selects scalar provenance only by matching an exact one-element
+slot slice and adds a production-path zero-owner regression oracle. The Lab
+also recognises Neqo exit 101 plus an exact Rust-panic stderr marker as a
+`StrictClientDefenseExecutionFailure`, with the log hash retained, when the
+crash prevents `run.json` from finalising its typed error. This closes v32's
+fail-open retry path: a future pre-receipt client panic stops a durable stage
+after its first preserved attempt. Fresh cohort v33 must now repeat the
+pull/no-cache build, reference execution, 18/18 regression, complete code gate,
+all 160 controlled captures, and the class foundation before public-page
+acquisition may begin. V33 progress is zero; no class-study foundation,
+qualification, readiness, or validation attestation exists.
 
 The authoritative current heads, progression, and evidence ledger are
 maintained in

@@ -21,6 +21,7 @@ from qcsd_lab.capture_session import (
     _process_scheduler_valid,
     _runner_error_receipt_coherent,
     _runner_result_complete,
+    _terminal_client_execution_failure,
     _validate_chaff_response_receipts,
     _validate_run_binding,
 )
@@ -1337,6 +1338,60 @@ def test_capture_session_recognises_only_typed_client_defense_failures() -> None
     assert not _is_terminal_client_defense_error_class("runner-execution-v1")
     assert not _is_terminal_client_defense_error_class("timeout-v1")
     assert not _is_terminal_client_defense_error_class(None)
+
+
+def test_capture_session_terminalises_a_pre_receipt_rust_panic(tmp_path: Path) -> None:
+    runner_log = tmp_path / "neqo-client.log"
+    runner_log.write_text(
+        "\nthread 'main' panicked at neqo-bin/src/qcsd/trace_files.rs:668:84:\n"
+        "index out of bounds: the len is 0 but the index is 0\n",
+        encoding="utf-8",
+    )
+
+    terminal, process_failure = _terminal_client_execution_failure(
+        runner_error_class=None,
+        runner_returncode=101,
+        runner_timed_out=False,
+        runner_log=runner_log,
+    )
+    assert terminal
+    assert process_failure == {
+        "schema_version": 1,
+        "source": "neqo-client-stderr-v1",
+        "kind": "rust-panic",
+        "returncode": 101,
+        "marker": "thread 'main' panicked at neqo-bin/src/qcsd/trace_files.rs:668:84:",
+        "log_sha256": sha256_file(runner_log),
+    }
+
+    for returncode, timed_out in ((0, False), (101, True)):
+        terminal, process_failure = _terminal_client_execution_failure(
+            runner_error_class=None,
+            runner_returncode=returncode,
+            runner_timed_out=timed_out,
+            runner_log=runner_log,
+        )
+        assert not terminal
+        assert process_failure is None
+
+    runner_log.write_text("ordinary client error\n", encoding="utf-8")
+    terminal, process_failure = _terminal_client_execution_failure(
+        runner_error_class="runner-execution-v1",
+        runner_returncode=101,
+        runner_timed_out=False,
+        runner_log=runner_log,
+    )
+    assert not terminal
+    assert process_failure is None
+
+    terminal, process_failure = _terminal_client_execution_failure(
+        runner_error_class="client-defense-execution-v1",
+        runner_returncode=1,
+        runner_timed_out=False,
+        runner_log=runner_log,
+    )
+    assert terminal
+    assert process_failure is None
 
 
 def test_runner_error_receipt_rejects_completed_or_malformed_error_classes() -> None:
