@@ -142,8 +142,8 @@ process-local, campaign-identity-bound authority created by the `class-study`
 coordinator after it verifies the prerequisite ledger; generic `run` or
 `resume` cannot bypass that ordering.
 
-Docker 29.0.1 is operational again with 12 visible CPUs and approximately
-16.5 GB memory. This is an operational checkpoint only. Cohort v32 passed its
+Docker 29.0.1 exposed 12 CPUs and approximately 16.5 GB memory before the most
+recent build attempt. This is operational context only. Cohort v32 passed its
 fresh pull/no-cache build and isolated reference execution, then stopped in the
 first established-mode regression campaign at 4/14 accepted cells. The two
 undefended and two Walkie-Talkie cells passed; static, FRONT, Tamaraw, Traffic
@@ -160,10 +160,21 @@ also recognises Neqo exit 101 plus an exact Rust-panic stderr marker as a
 `StrictClientDefenseExecutionFailure`, with the log hash retained, when the
 crash prevents `run.json` from finalising its typed error. This closes v32's
 fail-open retry path: a future pre-receipt client panic stops a durable stage
-after its first preserved attempt. Fresh cohort v33 must now repeat the
+after its first preserved attempt.
+
+Fresh cohort v33 attempted the required pull/no-cache build from the clean
+corrected commits. It completed the collection target and reached
+preparation-image export before Docker's ext4 data device reported write I/O
+errors, aborted its journal, failed a superblock write, and remounted
+read-only. `dockerd` and the waiting `docker-buildx` client terminated with
+`SIGBUS`. The Windows C: backing volume was at 100% usage with approximately
+1.9 GB free. A controlled Docker Desktop restart remained in `starting` with
+engine `_ping` timeouts and was stopped. No v33 build receipt or result exists,
+no scientific numerator advanced, and no partial image may be reused. After
+storage and filesystem recovery, unused cohort v34 must repeat the
 pull/no-cache build, reference execution, 18/18 regression, complete code gate,
 all 160 controlled captures, and the class foundation before public-page
-acquisition may begin. V33 progress is zero; no class-study foundation,
+acquisition may begin. V34 progress is zero; no class-study foundation,
 qualification, readiness, or validation attestation exists.
 
 The authoritative current heads, progression, and evidence ledger are
