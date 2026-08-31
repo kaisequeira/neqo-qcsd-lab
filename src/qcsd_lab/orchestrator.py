@@ -15,6 +15,7 @@ import tempfile
 import time
 from collections.abc import Mapping
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,6 +27,7 @@ from . import capture_session as capture_engine
 from .class_acquisition import validate_class_study_preparation
 from .defenses import defense_from_runtime_identity
 from .experiment import (
+    TERMINAL_DEFENSE_FAILURE_TYPES,
     accepted_sample_hashes,
     resolved_attempt_directory,
     resolved_sample_directory,
@@ -74,6 +76,16 @@ CLASS_STUDY_PUBLIC_ORIGIN_ENV = "QCSD_PUBLIC_ORIGIN_ONLY"
 SUPPORTED_SCHEMA_VERSIONS = frozenset({SCHEMA_VERSION, CLASS_STUDY_SCHEMA_VERSION})
 PURPOSES = {"smoke", "fitting", "evaluation"}
 EVIDENCE_ROLES = frozenset(
+    {
+        "pilot-fitting",
+        "pilot-compatibility",
+        "authoritative-fitting",
+        "certification",
+        "canary",
+        "formal",
+    }
+)
+COORDINATOR_ONLY_CAPTURE_ROLES = frozenset(
     {
         "pilot-fitting",
         "pilot-compatibility",
@@ -2435,9 +2447,191 @@ def _is_class_study_campaign(campaign: Campaign) -> bool:
     )
 
 
+@dataclass(frozen=True)
+class _ClassStudyCoordinatorCaptureAuthority:
+    """Process-local proof that the coordinator validated prerequisite evidence."""
+
+    campaign_identity: tuple[str, str, str, str, str, str, str | None]
+    prerequisite_ledger: tuple[tuple[str, str, int | None, str, str], ...]
+
+
+_CLASS_STUDY_COORDINATOR_CAPTURE_AUTHORITY: ContextVar[
+    _ClassStudyCoordinatorCaptureAuthority | None
+] = ContextVar("qcsd_class_study_coordinator_capture_authority", default=None)
+
+
+def _class_study_coordinator_campaign_identity(
+    campaign_or_configuration: Campaign | Mapping[str, Any],
+) -> tuple[str, str, str, str, str, str, str | None] | None:
+    """Return the immutable identity for a coordinator-only capture role."""
+
+    if isinstance(campaign_or_configuration, Campaign):
+        role = campaign_or_configuration.evidence_role
+        if role not in COORDINATOR_ONLY_CAPTURE_ROLES:
+            return None
+        if not _is_class_study_campaign(campaign_or_configuration):
+            raise ValueError("coordinator-only capture is not a complete class-study campaign")
+        name = campaign_or_configuration.name
+        study_id = campaign_or_configuration.class_study_id or STUDY_ID
+        campaign_sha256 = sha256_bytes(campaign_or_configuration.source_bytes)
+        cohort_sha256 = campaign_or_configuration.class_study_cohort_sha256
+        assembly_sha256 = campaign_or_configuration.class_study_cohort_assembly_sha256
+        successor_sha256 = campaign_or_configuration.class_study_successor_sha256
+    else:
+        role = campaign_or_configuration.get("evidence_role")
+        if role not in COORDINATOR_ONLY_CAPTURE_ROLES:
+            return None
+        name = campaign_or_configuration.get("name")
+        study_id = campaign_or_configuration.get("class_study_id", STUDY_ID)
+        campaign_sha256 = campaign_or_configuration.get("campaign_sha256")
+        cohort_sha256 = campaign_or_configuration.get("class_study_cohort_sha256")
+        assembly_sha256 = campaign_or_configuration.get(
+            "class_study_cohort_assembly_sha256"
+        )
+        successor_sha256 = campaign_or_configuration.get(
+            CLASS_STUDY_SUCCESSOR_CONFIGURATION_KEY
+        )
+    if (
+        not isinstance(name, str)
+        or not isinstance(role, str)
+        or not isinstance(study_id, str)
+        or not name.startswith(f"{study_id}-")
+        or not isinstance(campaign_sha256, str)
+        or _SHA256.fullmatch(campaign_sha256) is None
+        or not isinstance(cohort_sha256, str)
+        or _SHA256.fullmatch(cohort_sha256) is None
+        or not isinstance(assembly_sha256, str)
+        or _SHA256.fullmatch(assembly_sha256) is None
+        or (
+            successor_sha256 is not None
+            and (
+                not isinstance(successor_sha256, str)
+                or _SHA256.fullmatch(successor_sha256) is None
+            )
+        )
+    ):
+        raise ValueError("coordinator-only class-study capture identity is malformed")
+    return (
+        name,
+        role,
+        study_id,
+        campaign_sha256,
+        cohort_sha256,
+        assembly_sha256,
+        successor_sha256,
+    )
+
+
+def _class_study_coordinator_prerequisite_ledger(
+    records: tuple[Mapping[str, Any], ...],
+) -> tuple[tuple[str, str, int | None, str, str], ...]:
+    """Reduce verified prerequisite records to a stable, non-empty ledger."""
+
+    ledger: list[tuple[str, str, int | None, str, str]] = []
+    for record in records:
+        name = record.get("name")
+        role = record.get("evidence_role")
+        block = record.get("block")
+        root = record.get("root")
+        evidence_sha256 = record.get("evidence_sha256")
+        if (
+            not isinstance(name, str)
+            or not isinstance(role, str)
+            or (
+                block is not None
+                and (not isinstance(block, int) or isinstance(block, bool))
+            )
+            or not isinstance(root, str)
+            or not isinstance(evidence_sha256, str)
+            or _SHA256.fullmatch(evidence_sha256) is None
+        ):
+            raise ValueError("class-study prerequisite ledger entry is malformed")
+        ledger.append((name, role, block, root, evidence_sha256))
+    if not ledger or len(set(ledger)) != len(ledger):
+        raise ValueError("class-study prerequisite ledger must be non-empty and unique")
+    return tuple(
+        sorted(
+            ledger,
+            key=lambda item: (
+                item[0],
+                item[1],
+                -1 if item[2] is None else item[2],
+                item[3],
+                item[4],
+            ),
+        )
+    )
+
+
+@contextmanager
+def _class_study_coordinator_capture_authority(
+    campaign_configuration: Mapping[str, Any],
+    prerequisite_records: tuple[Mapping[str, Any], ...],
+):
+    """Authorise one identity-bound launch after coordinator prerequisite checks."""
+
+    identity = _class_study_coordinator_campaign_identity(campaign_configuration)
+    if identity is None:
+        yield
+        return
+    if not prerequisite_records and (
+        identity[1] == "pilot-fitting"
+        or (identity[1] == "authoritative-fitting" and identity[6] is not None)
+    ):
+        # Pilot fitting is the initial capture stage. A successor restart
+        # deliberately begins with fresh authoritative fitting rather than
+        # reusing predecessor results. The latter's immutable restart SHA is
+        # part of the exact coordinator capability identity.
+        ledger = ()
+    else:
+        ledger = _class_study_coordinator_prerequisite_ledger(prerequisite_records)
+    authority = _ClassStudyCoordinatorCaptureAuthority(
+        campaign_identity=identity,
+        prerequisite_ledger=ledger,
+    )
+    token = _CLASS_STUDY_COORDINATOR_CAPTURE_AUTHORITY.set(authority)
+    try:
+        yield
+    finally:
+        _CLASS_STUDY_COORDINATOR_CAPTURE_AUTHORITY.reset(token)
+
+
+def _require_class_study_coordinator_capture_authority(
+    campaign_or_configuration: Campaign | Mapping[str, Any],
+) -> None:
+    """Reject generic launch/resume for every prerequisite-ordered class role."""
+
+    identity = _class_study_coordinator_campaign_identity(campaign_or_configuration)
+    if identity is None:
+        return
+    authority = _CLASS_STUDY_COORDINATOR_CAPTURE_AUTHORITY.get()
+    if authority is None or authority.campaign_identity != identity:
+        raise ValueError(
+            "ordered class-study capture must be launched through the class-study "
+            "coordinator with its validated prerequisite ledger or restart authority"
+        )
+
+
 def _has_durable_attempt_budget(campaign: Campaign) -> bool:
     return campaign.name.startswith("buflo-study-v1-") or _is_class_study_campaign(
         campaign
+    )
+
+
+def _has_terminal_strict_defense_fidelity_failure(
+    experiment: Mapping[str, Any],
+) -> bool:
+    """Whether a durable study must stop for a client-side defence/QCSD repair."""
+
+    if not _has_durable_attempt_name(experiment.get("name")):
+        return False
+    samples = experiment.get("samples")
+    return isinstance(samples, list) and any(
+        isinstance(sample, Mapping)
+        and sample.get("state") == "failed"
+        and isinstance(sample.get("failure"), Mapping)
+        and sample["failure"].get("type") in TERMINAL_DEFENSE_FAILURE_TYPES
+        for sample in samples
     )
 
 
@@ -2467,6 +2661,7 @@ def _require_class_study_public_origin_policy(campaign_or_name: Campaign | objec
 
 def run_campaign(path: Path, results_root: Path = Path("/lab/results")) -> Path:
     campaign = load_campaign(path)
+    _require_class_study_coordinator_capture_authority(campaign)
     lock_held = (
         campaign.name.startswith("buflo-study-v1-")
         and os.environ.get("QCSD_BUFLO_CAPTURE_LOCK_HELD") == "1"
@@ -3947,6 +4142,14 @@ def _execute(root: Path, campaign: Campaign, experiment: dict[str, Any]) -> Path
                     eligible=False,
                 )
                 _checkpoint(root, experiment)
+                if _has_terminal_strict_defense_fidelity_failure(experiment):
+                    # A defence/QCSD fidelity defect is not a stochastic
+                    # collection failure. Freeze the partial study exactly at
+                    # the first typed defect so a later attempt cannot conceal
+                    # it; repair requires a new source/image cohort.
+                    finalize_experiment(root, experiment, status="incomplete")
+                    _seal(root)
+                    raise CampaignIncomplete(root)
             _checkpoint(root, experiment)
         _compare_group(root, members, workload_by_id[members[0]["workload_id"]])
         _checkpoint(root, experiment)
@@ -4618,6 +4821,13 @@ def resume_campaign(root: Path) -> Path:
     experiment_path = root / "experiment.json"
     value = load_json(experiment_path)
     name = value.get("name") if isinstance(value, Mapping) else None
+    configuration = value.get("configuration") if isinstance(value, Mapping) else None
+    if isinstance(configuration, Mapping):
+        coordinator_configuration = dict(configuration)
+        coordinator_configuration["name"] = name
+        _require_class_study_coordinator_capture_authority(
+            coordinator_configuration
+        )
     lock_held = (
         isinstance(name, str)
         and name.startswith("buflo-study-v1-")
@@ -4641,6 +4851,7 @@ def resume_campaign(root: Path) -> Path:
 def _resume_campaign_locked(root: Path) -> Path:
     root = root.resolve()
     from .experiment import (
+        finalize_experiment,
         load_experiment,
         transition_sample,
         validate_accepted_samples,
@@ -4696,6 +4907,17 @@ def _resume_campaign_locked(root: Path) -> Path:
                 return root
     else:
         validate_frozen_experiment_contract(root, verify_result(root).experiment)
+
+    terminal_defect = load_experiment(root)
+    if _has_terminal_strict_defense_fidelity_failure(terminal_defect):
+        if terminal_defect["status"] == "running":
+            finalize_experiment(root, terminal_defect, status="incomplete")
+            seal_result(root)
+        elif terminal_defect["status"] == "incomplete" and not (
+            root / "evidence.sha256"
+        ).is_file():
+            seal_result(root)
+        raise CampaignIncomplete(root)
 
     experiment = prepare_resume(root, expected_source=source_metadata())
     # A running checkpoint means the process stopped before promotion.  The

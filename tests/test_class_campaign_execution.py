@@ -21,6 +21,7 @@ from qcsd_lab import (
 from qcsd_lab.capture_session import Defense, Limits
 from qcsd_lab.class_acquisition import validate_class_study_preparation
 from qcsd_lab.class_campaigns import FINAL_QUALIFICATION_SET
+from qcsd_lab.discover import origin
 from qcsd_lab.orchestrator import Campaign, Workload, plan_campaign
 from qcsd_lab.util import sha256_file
 
@@ -305,10 +306,20 @@ def test_formal_block_has_exact_class_mode_counts_and_balanced_latin_rows() -> N
     assert first_mode == Counter({mode[0]: 25 for mode in FORMAL_MODES})
 
 
-def _complete_two_origin_workload(
-    tmp_path: Path, *, visits: int, workload_id: str = "class-000"
+def _complete_origin_workload(
+    tmp_path: Path,
+    *,
+    visits: int,
+    workload_id: str,
+    origin_count: int,
 ) -> Workload:
-    origins = [f"https://{workload_id}.example", f"https://cdn.{workload_id}.example"]
+    if origin_count not in {1, 2, 3}:
+        raise ValueError("synthetic complete workload supports one to three origins")
+    origins = [f"https://{workload_id}.example"]
+    origins.extend(
+        f"https://{'cdn' if index == 1 else f'cdn-{index}'}.{workload_id}.example"
+        for index in range(1, origin_count)
+    )
     resources = [
         {
             "id": 0,
@@ -321,17 +332,24 @@ def _complete_two_origin_workload(
             "depends_on": [],
             "headers": [],
         },
-        {
-            "id": 1,
-            "url": f"{origins[1]}/application.js",
-            "type": "Script",
-            "content_length": 200,
-            "data_length": 200,
-            "chaff_priority": False,
-            "known_valid": True,
-            "depends_on": [0],
-            "headers": [["referer", f"{origins[0]}/"]],
-        },
+        *(
+            {
+                "id": index,
+                "url": (
+                    f"{resource_origin}/application.js"
+                    if index == 1
+                    else f"{resource_origin}/application-{index}.js"
+                ),
+                "type": "Script",
+                "content_length": 100 * (index + 1),
+                "data_length": 100 * (index + 1),
+                "chaff_priority": False,
+                "known_valid": True,
+                "depends_on": [0],
+                "headers": [["referer", f"{origins[0]}/"]],
+            }
+            for index, resource_origin in enumerate(origins[1:], start=1)
+        ),
     ]
     manifest = {
         "preparation": {
@@ -420,6 +438,17 @@ def _complete_two_origin_workload(
         origin_count=len(origins),
         runtime_path=runtime_path,
         runtime_sha256=sha256_file(runtime_path),
+    )
+
+
+def _complete_two_origin_workload(
+    tmp_path: Path, *, visits: int, workload_id: str = "class-000"
+) -> Workload:
+    return _complete_origin_workload(
+        tmp_path,
+        visits=visits,
+        workload_id=workload_id,
+        origin_count=2,
     )
 
 
@@ -890,6 +919,77 @@ def test_certification_binds_one_complete_two_origin_graph_to_all_nine_modes(
     assert {binding["runtime_path"] for binding in bindings} == {str(runtime_path)}
     assert bindings[0]["application_source"] is None
     assert {binding["application_source"] for binding in bindings[1:]} == {str(manifest_path)}
+
+
+def test_mixed_origin_final_hundred_preserves_each_graph_across_all_modes(
+    tmp_path: Path,
+) -> None:
+    """Certification and formal matrices may not flatten mixed-origin classes."""
+
+    formal_workloads = tuple(
+        _complete_origin_workload(
+            tmp_path,
+            visits=2,
+            workload_id=f"class-{index:03d}",
+            origin_count=(index % 3) + 1,
+        )
+        for index in range(100)
+    )
+    compatibility_modes = (
+        ("undefended", "none", True),
+        ("static", "static", False),
+        *(mode for mode in FORMAL_MODES[1:]),
+    )
+    certification = replace(
+        _campaign(tuple(replace(workload, visits=1) for workload in formal_workloads)),
+        path=tmp_path / "classifier-multiorigin100-v1-certification-900-1200.yml",
+        name="classifier-multiorigin100-v1-certification-900-1200",
+        purpose="smoke",
+        defenses=tuple(_defense(*mode) for mode in compatibility_modes),
+        limits=Limits(max_attempts=1),
+        evidence_role="certification",
+    )
+    formal = _campaign(formal_workloads)
+    expected_graphs = {
+        workload.id: tuple(
+            resource["url"]
+            for resource in orchestrator.runtime_manifest(workload.data)["resources"]
+        )
+        for workload in formal_workloads
+    }
+    expected_origin_counts = {
+        workload.id: workload.origin_count for workload in formal_workloads
+    }
+
+    for campaign, modes, visits, sample_count in (
+        (certification, compatibility_modes, 1, 900),
+        (formal, FORMAL_MODES, 2, 1_600),
+    ):
+        plan = plan_campaign(campaign)
+        workload_by_id = {workload.id: workload for workload in campaign.workloads}
+        assert len(plan) == sample_count
+        assert Counter(
+            (sample["workload_id"], sample["visit"], sample["defense"])
+            for sample in plan
+        ) == Counter(
+            (f"class-{index:03d}", visit, mode[0])
+            for index in range(100)
+            for visit in range(visits)
+            for mode in modes
+        )
+        for sample in plan:
+            workload = workload_by_id[sample["workload_id"]]
+            runtime = orchestrator.runtime_manifest(workload.data)
+            assert tuple(resource["url"] for resource in runtime["resources"]) == expected_graphs[
+                workload.id
+            ]
+            assert workload.origin_count == expected_origin_counts[workload.id]
+            assert len(
+                {
+                    origin(resource["url"])
+                    for resource in runtime["resources"]
+                }
+            ) == expected_origin_counts[workload.id]
 
 
 def test_origin_aware_plan_is_deterministic_and_separates_available_origins() -> None:

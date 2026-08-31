@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import qcsd_lab.buflo_evaluation as evaluation_module
 import qcsd_lab.buflo_handoff as handoff
 import qcsd_lab.buflo_handoff as handoff_module
 import qcsd_lab.buflo_study as study_module
@@ -99,9 +100,9 @@ def _runner_wakeup_receipt(schema_version: int) -> dict[str, object]:
         "controller_deadline_timer_wakeups": 0,
         "other_timer_wakeups": 0,
     }
-    if schema_version in {2, 3, 4}:
+    if schema_version in {2, 3, 4, 5}:
         active_wait_tail_us = 250 if schema_version == 2 else 5000
-        if schema_version == 4:
+        if schema_version in {4, 5}:
             semantics = (
                 f"{semantics}; "
                 "buflo_ordinary_output_admission_is_one_realization_window_before_guard; "
@@ -114,6 +115,22 @@ def _runner_wakeup_receipt(schema_version: int) -> dict[str, object]:
                 "buflo_exact_release_guard_begins_at_guard; "
                 "cs_exact_incoming_retry_phases=1/4,1/2,3/4"
             )
+            if schema_version == 5:
+                semantics = (
+                    f"{semantics}; "
+                    "buflo_exact_incoming_retry_wakeups="
+                    "transport_callback_or_1/4,1/2,3/4,deadline; "
+                    "buflo_exact_incoming_retry_drives="
+                    "count_owner_endpoint_output_drive_invocations_"
+                    "including_immediate_and_error; "
+                    "buflo_exact_incoming_retry_resolutions="
+                    "count_drive_invocations_clearing_at_least_one_captured_identity; "
+                    "buflo_exact_incoming_retry_max_wake_lateness_"
+                    "includes_terminal_deadline=true; "
+                    "buflo_exact_incoming_inventory="
+                    "all_unrealized_slot_owned_adapter_identities_with_same_tick_refresh; "
+                    "buflo_exact_incoming_expiry=one_logical_slot_one_deadline_miss"
+                )
         else:
             semantics = (
                 f"{semantics}; "
@@ -134,12 +151,20 @@ def _runner_wakeup_receipt(schema_version: int) -> dict[str, object]:
                 "buflo_exact_release_max_guard_exit_lateness_nanoseconds": 0,
             }
         )
-    if schema_version == 4:
+    if schema_version in {4, 5}:
         receipt.update(
             {
                 "cs_exact_incoming_retry_drives": 0,
                 "cs_exact_incoming_retry_resolutions": 0,
                 "cs_exact_incoming_retry_max_phase_lateness_nanoseconds": 0,
+            }
+        )
+    if schema_version == 5:
+        receipt.update(
+            {
+                "buflo_exact_incoming_retry_drives": 0,
+                "buflo_exact_incoming_retry_resolutions": 0,
+                "buflo_exact_incoming_retry_max_wake_lateness_nanoseconds": 0,
             }
         )
     return receipt
@@ -200,7 +225,7 @@ def _complete_buflo_run(
             "schema_version": 2,
             "defense": {"kind": "buflo"},
         },
-        "runner_wakeup_metrics": _runner_wakeup_receipt(4),
+        "runner_wakeup_metrics": _runner_wakeup_receipt(5),
         "defense_diagnostics": diagnostics,
         "chaff_responses": [
             {"outcome": "buflo_terminal_subcell_tail_cancelled"}
@@ -363,7 +388,7 @@ def _complete_cs_buflo_run() -> dict[str, object]:
             "schema_version": 2,
             "defense": {"kind": "cs_buflo"},
         },
-        "runner_wakeup_metrics": _runner_wakeup_receipt(4),
+        "runner_wakeup_metrics": _runner_wakeup_receipt(5),
         "defense_diagnostics": diagnostics,
         "buflo_summary": None,
         "cs_buflo_summary": summary,
@@ -1085,7 +1110,11 @@ def test_buflo_algorithm_diagnostics_bind_typed_tail_action_and_control_packet(
         events_path=events,
         packets_path=packets,
     )
+    assert run["runner_wakeup_metrics"]["schema_version"] == 5
     assert algorithm["schema_version"] == 4
+    assert evaluation_module._load_algorithm_diagnostics(
+        algorithm, defense="buflo"
+    ) == algorithm
     assert algorithm["buflo_state"]["schema_version"] == 3
     assert (
         algorithm["buflo_state"]["schedule_stop"]["directions"]["outgoing"][
@@ -1595,6 +1624,10 @@ def test_cs_buflo_schema_four_handoff_reconstructs_stop_drain_and_preserves_lega
         events_path=events,
         packets_path=packets,
     )
+    assert run["runner_wakeup_metrics"]["schema_version"] == 5
+    assert evaluation_module._load_algorithm_diagnostics(
+        current, defense="cs-buflo"
+    ) == current
     reconstructed = _algorithm_diagnostics(
         run,
         defense="cs-buflo",
@@ -2329,6 +2362,11 @@ def test_raw_run_binding_covers_workload_chaff_parameters_and_limits() -> None:
     }
 
     _validate_run_sample_binding(run, sample, bindings)
+
+    run["error_class"] = "client-defense-fidelity-v1"
+    with pytest.raises(ValueError, match="accepted sample"):
+        _validate_run_sample_binding(run, sample, bindings)
+    run["error_class"] = None
 
     run["workload_hash_sha256"] = "0" * 64
     with pytest.raises(ValueError, match="accepted sample"):

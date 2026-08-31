@@ -684,7 +684,11 @@ def reconcile_direct_runner_artifacts(
     if timestamp_tolerance_ns < 0:
         raise ValueError("direct/runner timestamp tolerance must be non-negative")
     run = _object(load_json(run_path), "runner metadata")
-    if run.get("completion_status") != "complete":
+    if (
+        run.get("completion_status") != "complete"
+        or run.get("error") is not None
+        or run.get("error_class") is not None
+    ):
         raise ValueError("runner did not complete before direct reconciliation")
     overheads = _endpoint_frame_overheads(run)
     runner_packets = _read_runner_packets(runner_packets_path, overheads)
@@ -1640,6 +1644,18 @@ RUNNER_WAKEUP_V4_SEMANTICS = (
     "buflo_exact_release_guard_begins_at_guard; "
     "cs_exact_incoming_retry_phases=1/4,1/2,3/4"
 )
+RUNNER_WAKEUP_V5_SEMANTICS = (
+    f"{RUNNER_WAKEUP_V4_SEMANTICS}; "
+    "buflo_exact_incoming_retry_wakeups=transport_callback_or_1/4,1/2,3/4,deadline; "
+    "buflo_exact_incoming_retry_drives="
+    "count_owner_endpoint_output_drive_invocations_including_immediate_and_error; "
+    "buflo_exact_incoming_retry_resolutions="
+    "count_drive_invocations_clearing_at_least_one_captured_identity; "
+    "buflo_exact_incoming_retry_max_wake_lateness_includes_terminal_deadline=true; "
+    "buflo_exact_incoming_inventory="
+    "all_unrealized_slot_owned_adapter_identities_with_same_tick_refresh; "
+    "buflo_exact_incoming_expiry=one_logical_slot_one_deadline_miss"
+)
 _LEGACY_SCHEDULED_INCOMING_CONTRACT = {
     "scheduled_incoming_requested_bytes": _INTEGER,
     "scheduled_incoming_consumed_bytes": _INTEGER,
@@ -2064,6 +2080,7 @@ def new_defense_terminal_receipts_valid(
     if (
         run.get("completion_status") != "complete"
         or run.get("error") is not None
+        or run.get("error_class") is not None
         or not isinstance(resolved, Mapping)
         or resolved.get("schema_version") != 2
         or not isinstance(resolved_defense, Mapping)
@@ -2074,9 +2091,9 @@ def new_defense_terminal_receipts_valid(
     ):
         return False
     wakeup_metrics = run["runner_wakeup_metrics"]
-    if require_current_schema and wakeup_metrics["schema_version"] != 4:
+    if require_current_schema and wakeup_metrics["schema_version"] != 5:
         return False
-    if wakeup_metrics["schema_version"] in {2, 3, 4} and defense_kind != "buflo":
+    if wakeup_metrics["schema_version"] in {2, 3, 4, 5} and defense_kind != "buflo":
         if any(
             wakeup_metrics[key]
             for key in (
@@ -2088,7 +2105,17 @@ def new_defense_terminal_receipts_valid(
             )
         ):
             return False
-    if wakeup_metrics["schema_version"] == 4 and defense_kind != "cs_buflo":
+    if wakeup_metrics["schema_version"] == 5 and defense_kind != "buflo":
+        if any(
+            wakeup_metrics[key]
+            for key in (
+                "buflo_exact_incoming_retry_drives",
+                "buflo_exact_incoming_retry_resolutions",
+                "buflo_exact_incoming_retry_max_wake_lateness_nanoseconds",
+            )
+        ):
+            return False
+    if wakeup_metrics["schema_version"] in {4, 5} and defense_kind != "cs_buflo":
         if any(
             wakeup_metrics[key]
             for key in (
@@ -2255,7 +2282,7 @@ def _runner_wakeup_metrics_valid(value: Any) -> bool:
     if schema_version == 1:
         required = base_required
         semantics = RUNNER_WAKEUP_SEMANTICS
-    elif schema_version in {2, 3, 4}:
+    elif schema_version in {2, 3, 4, 5}:
         required = base_required | {
             "buflo_exact_release_guard_entries",
             "buflo_exact_release_guard_wait_nanoseconds",
@@ -2263,16 +2290,23 @@ def _runner_wakeup_metrics_valid(value: Any) -> bool:
             "buflo_exact_release_max_passive_wake_lateness_nanoseconds",
             "buflo_exact_release_max_guard_exit_lateness_nanoseconds",
         }
-        if schema_version == 4:
+        if schema_version in {4, 5}:
             required |= {
                 "cs_exact_incoming_retry_drives",
                 "cs_exact_incoming_retry_resolutions",
                 "cs_exact_incoming_retry_max_phase_lateness_nanoseconds",
             }
+        if schema_version == 5:
+            required |= {
+                "buflo_exact_incoming_retry_drives",
+                "buflo_exact_incoming_retry_resolutions",
+                "buflo_exact_incoming_retry_max_wake_lateness_nanoseconds",
+            }
         semantics = {
             2: RUNNER_WAKEUP_V2_SEMANTICS,
             3: RUNNER_WAKEUP_V3_SEMANTICS,
             4: RUNNER_WAKEUP_V4_SEMANTICS,
+            5: RUNNER_WAKEUP_V5_SEMANTICS,
         }[schema_version]
     else:
         return False
@@ -2281,7 +2315,7 @@ def _runner_wakeup_metrics_valid(value: Any) -> bool:
     counters = tuple(required - {"schema_version", "semantics"})
     if any(type(value.get(key)) is not int or value[key] < 0 for key in counters):
         return False
-    if schema_version in {2, 3, 4}:
+    if schema_version in {2, 3, 4, 5}:
         guard_measurements = (
             value["buflo_exact_release_guard_wait_nanoseconds"],
             value["buflo_exact_release_active_wait_nanoseconds"],
@@ -2292,13 +2326,19 @@ def _runner_wakeup_metrics_valid(value: Any) -> bool:
             "buflo_exact_release_guard_wait_nanoseconds"
         ] or (value["buflo_exact_release_guard_entries"] == 0 and any(guard_measurements)):
             return False
-    if schema_version == 4 and (
+    if schema_version in {4, 5} and (
         value["cs_exact_incoming_retry_resolutions"]
         > value["cs_exact_incoming_retry_drives"]
         or (
             value["cs_exact_incoming_retry_drives"] == 0
             and value["cs_exact_incoming_retry_max_phase_lateness_nanoseconds"] != 0
         )
+    ):
+        return False
+    if (
+        schema_version == 5
+        and value["buflo_exact_incoming_retry_resolutions"]
+        > value["buflo_exact_incoming_retry_drives"]
     ):
         return False
     return (

@@ -151,13 +151,17 @@ def test_seal_and_verify_enforce_durable_physical_attempt_evidence(
         verify_result(verify_root)
 
 
+@pytest.mark.parametrize(
+    "terminal_type",
+    ["StrictDefenseFidelityFailure", "StrictClientDefenseExecutionFailure"],
+)
 def test_durable_attempt_evidence_requires_exact_contiguous_terminal_receipts(
-    tmp_path: Path,
+    tmp_path: Path, terminal_type: str,
 ) -> None:
     root = tmp_path / "durable"
     (root / "failures").mkdir(parents=True)
     previous_failure = {"stage": "collection", "type": "TransientFailure"}
-    terminal_failure = {"stage": "fidelity", "type": "StrictDefenseFidelityFailure"}
+    terminal_failure = {"stage": "fidelity", "type": terminal_type}
     sample_id = "sample-001"
     first = root / "failures" / sample_id / "attempt-001"
     second = root / "failures" / sample_id / "attempt-002"
@@ -183,6 +187,19 @@ def test_durable_attempt_evidence_requires_exact_contiguous_terminal_receipts(
     }
     validate_durable_attempt_evidence(root, experiment)
 
+    experiment["samples"][0].update(
+        state="accepted",
+        attempts=3,
+        failure=None,
+    )
+    with pytest.raises(ValueError, match="retried after a terminal client defence/QCSD"):
+        validate_durable_attempt_evidence(root, experiment)
+    experiment["samples"][0].update(
+        state="failed",
+        attempts=2,
+        failure=terminal_failure,
+    )
+
     atomic_json(
         second / "attempt.json",
         {"success": True, "failure": terminal_failure},
@@ -205,7 +222,36 @@ def test_durable_attempt_evidence_requires_exact_contiguous_terminal_receipts(
     unknown.rename(extra)
     experiment["samples"][0]["attempts"] = 3
     experiment["samples"][0]["failure"] = {"stage": "fidelity", "type": "OtherFailure"}
-    with pytest.raises(ValueError, match="differs from its attempt receipt"):
+    with pytest.raises(ValueError, match="terminal client defence/QCSD failure"):
+        validate_durable_attempt_evidence(root, experiment)
+
+
+def test_incomplete_durable_result_can_seal_unlaunched_tail_after_defect(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "partial"
+    (root / "failures").mkdir(parents=True)
+    experiment = {
+        "name": "classifier-multiorigin100-v1-formal-01-1200",
+        "status": "incomplete",
+        "configuration": {
+            "class_study_id": "classifier-multiorigin100-v1",
+            "limits": {"max_attempts": 3},
+        },
+        "samples": [
+            {
+                "sample_id": "unlaunched-001",
+                "state": "planned",
+                "attempts": 0,
+                "failure": None,
+            }
+        ],
+    }
+
+    validate_durable_attempt_evidence(root, experiment)
+
+    (root / "failures/unlaunched-001").mkdir()
+    with pytest.raises(ValueError, match="unlaunched sample.*unexpected"):
         validate_durable_attempt_evidence(root, experiment)
 
 

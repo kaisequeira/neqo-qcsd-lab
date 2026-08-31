@@ -62,6 +62,7 @@ def _record(role: str, *, block: int | None = None) -> dict[str, object]:
         "block": block,
         "samples": 1,
         "accepted": 1,
+        "evidence_sha256": "e" * 64,
         "first_launch_unique_class_mode_pairs": (
             pipeline.CERTIFICATION_PAIR_COUNT if role == "certification" else None
         ),
@@ -1193,6 +1194,9 @@ def test_capture_delegates_only_after_prerequisites(monkeypatch, tmp_path):
         lambda path: {
             "name": f"{STUDY_ID}-formal-01-1200",
             "evidence_role": "formal",
+            "class_study_id": STUDY_ID,
+            "class_study_cohort_sha256": admission.cohort_sha256,
+            "class_study_cohort_assembly_sha256": admission.assembly_sha256,
         },
     )
     monkeypatch.setattr(
@@ -1214,10 +1218,25 @@ def test_capture_delegates_only_after_prerequisites(monkeypatch, tmp_path):
         lambda *args, **kwargs: {"passed": True},
     )
     launched = []
+
+    def authorised_run(path, root):
+        orchestrator._require_class_study_coordinator_capture_authority(
+            {
+                "name": f"{STUDY_ID}-formal-01-1200",
+                "evidence_role": "formal",
+                "class_study_id": STUDY_ID,
+                "campaign_sha256": util.sha256_file(campaign),
+                "class_study_cohort_sha256": admission.cohort_sha256,
+                "class_study_cohort_assembly_sha256": admission.assembly_sha256,
+            }
+        )
+        launched.append((path, root))
+        return output
+
     monkeypatch.setattr(
         pipeline,
         "run_campaign",
-        lambda path, root: launched.append((path, root)) or output,
+        authorised_run,
     )
     monkeypatch.setattr(
         pipeline,
@@ -1241,6 +1260,261 @@ def test_capture_delegates_only_after_prerequisites(monkeypatch, tmp_path):
 
     assert result.status == "complete"
     assert launched == [(campaign, tmp_path)]
+    with pytest.raises(ValueError, match="validated prerequisite ledger"):
+        orchestrator._require_class_study_coordinator_capture_authority(
+            {
+                "name": f"{STUDY_ID}-formal-01-1200",
+                "evidence_role": "formal",
+                "class_study_id": STUDY_ID,
+                "campaign_sha256": util.sha256_file(campaign),
+                "class_study_cohort_sha256": admission.cohort_sha256,
+                "class_study_cohort_assembly_sha256": admission.assembly_sha256,
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    ("role", "name"),
+    (
+        ("pilot-fitting", f"{STUDY_ID}-pilot-fitting-600-1200"),
+        ("pilot-compatibility", f"{STUDY_ID}-pilot-compatibility-1080-1200"),
+        ("authoritative-fitting", f"{STUDY_ID}-authoritative-fitting-1200"),
+        ("formal", f"{STUDY_ID}-formal-01-1200"),
+    ),
+)
+def test_generic_run_rejects_coordinator_only_class_capture_before_mutation(
+    monkeypatch,
+    tmp_path,
+    role,
+    name,
+):
+    campaign = orchestrator.Campaign(
+        path=tmp_path / "formal.yml",
+        source_bytes=b"schema: 2\n",
+        name=name,
+        purpose="evaluation",
+        seed=1,
+        profile="live",
+        workloads=(),
+        request_policies=(),
+        defenses=(),
+        limits=Limits(120, 1024, 180, 64, 3, 30.0, 1.0),
+        schema_version=2,
+        evidence_role=role,
+        class_study_cohort_sha256="a" * 64,
+        class_study_cohort_assembly_sha256="b" * 64,
+        class_study_id=STUDY_ID,
+    )
+    monkeypatch.setattr(orchestrator, "load_campaign", lambda _path: campaign)
+    monkeypatch.setattr(
+        orchestrator,
+        "_run_loaded_campaign",
+        lambda *_args, **_kwargs: pytest.fail("generic launch reached result mutation"),
+    )
+
+    with pytest.raises(ValueError, match="validated prerequisite ledger"):
+        orchestrator.run_campaign(campaign.path, tmp_path / "missing-results")
+    assert not (tmp_path / "missing-results").exists()
+
+
+@pytest.mark.parametrize(
+    ("role", "name"),
+    (
+        ("pilot-fitting", f"{STUDY_ID}-pilot-fitting-600-1200"),
+        ("pilot-compatibility", f"{STUDY_ID}-pilot-compatibility-1080-1200"),
+        ("authoritative-fitting", f"{STUDY_ID}-authoritative-fitting-1200"),
+        ("certification", f"{STUDY_ID}-certification-900-1200"),
+    ),
+)
+def test_generic_resume_rejects_coordinator_only_class_capture_before_mutation(
+    monkeypatch,
+    tmp_path,
+    role,
+    name,
+):
+    root = tmp_path / "result"
+    root.mkdir()
+    (root / "experiment.json").write_text(
+        json.dumps(
+            {
+                "name": name,
+                "configuration": {
+                    "evidence_role": role,
+                    "class_study_id": STUDY_ID,
+                    "campaign_sha256": "c" * 64,
+                    "class_study_cohort_sha256": "a" * 64,
+                    "class_study_cohort_assembly_sha256": "b" * 64,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "_resume_campaign_locked",
+        lambda *_args, **_kwargs: pytest.fail("generic resume reached result mutation"),
+    )
+
+    with pytest.raises(ValueError, match="validated prerequisite ledger"):
+        orchestrator.resume_campaign(root)
+
+
+@pytest.mark.parametrize(
+    ("role", "name", "predecessor"),
+    (
+        (
+            "pilot-compatibility",
+            f"{STUDY_ID}-pilot-compatibility-1080-1200",
+            "pilot-fitting",
+        ),
+        (
+            "authoritative-fitting",
+            f"{STUDY_ID}-authoritative-fitting-1200",
+            "pilot-compatibility",
+        ),
+    ),
+)
+def test_coordinator_authorises_ordered_predecessor_roles_only_inside_scope(
+    role,
+    name,
+    predecessor,
+):
+    configuration = {
+        "name": name,
+        "evidence_role": role,
+        "class_study_id": STUDY_ID,
+        "campaign_sha256": "c" * 64,
+        "class_study_cohort_sha256": "a" * 64,
+        "class_study_cohort_assembly_sha256": "b" * 64,
+    }
+    predecessor_record = _record(predecessor)
+
+    with orchestrator._class_study_coordinator_capture_authority(
+        configuration,
+        (predecessor_record,),
+    ):
+        orchestrator._require_class_study_coordinator_capture_authority(configuration)
+
+    with pytest.raises(ValueError, match="validated prerequisite ledger"):
+        orchestrator._require_class_study_coordinator_capture_authority(configuration)
+
+
+def test_successor_authoritative_fitting_uses_exact_restart_authority() -> None:
+    study_id = "classifier-multiorigin100-v2-" + "c" * 16
+    configuration = {
+        "name": f"{study_id}-authoritative-fitting-2000-1200",
+        "evidence_role": "authoritative-fitting",
+        "class_study_id": study_id,
+        "campaign_sha256": "f" * 64,
+        "class_study_cohort_sha256": "a" * 64,
+        "class_study_cohort_assembly_sha256": "b" * 64,
+        orchestrator.CLASS_STUDY_SUCCESSOR_CONFIGURATION_KEY: "d" * 64,
+    }
+
+    with orchestrator._class_study_coordinator_capture_authority(configuration, ()):
+        orchestrator._require_class_study_coordinator_capture_authority(configuration)
+        with pytest.raises(ValueError, match="validated prerequisite ledger"):
+            orchestrator._require_class_study_coordinator_capture_authority(
+                {
+                    **configuration,
+                    orchestrator.CLASS_STUDY_SUCCESSOR_CONFIGURATION_KEY: "e" * 64,
+                }
+            )
+
+
+def test_initial_pilot_fitting_uses_coordinator_authority_without_predecessor() -> None:
+    configuration = {
+        "name": f"{STUDY_ID}-pilot-fitting-600-1200",
+        "evidence_role": "pilot-fitting",
+        "class_study_id": STUDY_ID,
+        "campaign_sha256": "f" * 64,
+        "class_study_cohort_sha256": "a" * 64,
+        "class_study_cohort_assembly_sha256": "b" * 64,
+    }
+
+    with orchestrator._class_study_coordinator_capture_authority(configuration, ()):
+        orchestrator._require_class_study_coordinator_capture_authority(configuration)
+    with pytest.raises(ValueError, match="validated prerequisite ledger"):
+        orchestrator._require_class_study_coordinator_capture_authority(configuration)
+
+
+def test_coordinator_resume_carries_validated_prerequisite_authority(
+    monkeypatch,
+    tmp_path,
+):
+    admission = _admission(tmp_path / "admission")
+    source = tmp_path / "result"
+    source.mkdir()
+    configuration = {
+        "evidence_role": "formal",
+        "class_study_id": STUDY_ID,
+        "campaign_sha256": "c" * 64,
+        "class_study_cohort_sha256": admission.cohort_sha256,
+        "class_study_cohort_assembly_sha256": admission.assembly_sha256,
+    }
+    (source / "experiment.json").write_text(
+        json.dumps(
+            {
+                "name": f"{STUDY_ID}-formal-01-1200",
+                "started_at": "2026-08-31T00:00:00+00:00",
+                "status": "incomplete",
+                "configuration": configuration,
+            }
+        ),
+        encoding="utf-8",
+    )
+    records = [_record("certification"), _record("canary", block=1)]
+    monkeypatch.setattr(pipeline, "_result_index", lambda roots, **kwargs: records)
+    monkeypatch.setattr(
+        pipeline, "_require_capture_admission_binding", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_validate_capture_foundation",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_validate_formal_capture_authority",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_formal_capacity_preflight",
+        lambda *args, **kwargs: {"passed": True},
+    )
+    resumed = []
+
+    def authorised_resume(root):
+        orchestrator._require_class_study_coordinator_capture_authority(
+            {**configuration, "name": f"{STUDY_ID}-formal-01-1200"}
+        )
+        resumed.append(root)
+        return root
+
+    monkeypatch.setattr(pipeline, "resume_campaign", authorised_resume)
+    monkeypatch.setattr(
+        pipeline,
+        "verify_class_study_result",
+        lambda root, **kwargs: {"valid": True, "root": str(root)},
+    )
+
+    result = pipeline._coordinate_capture(
+        "resume",
+        pilot_admission=None,
+        final_admission=admission,
+        campaign=None,
+        results_root=None,
+        capture_result=source,
+        prerequisite_roots=(),
+        foundation_attestation=None,
+        readiness_attestation=None,
+        historical_pre_snapshot=None,
+        execute=True,
+    )
+
+    assert result.status == "complete"
+    assert resumed == [source]
 
 
 def test_qualification_defaults_to_resumable_guidance(monkeypatch, tmp_path):

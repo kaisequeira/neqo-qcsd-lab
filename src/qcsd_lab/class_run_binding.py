@@ -277,6 +277,7 @@ def validate_class_sample_run_binding(
         or sample.get("baseline") is not binding.baseline
         or run.get("completion_status") != "complete"
         or run.get("error") is not None
+        or run.get("error_class") is not None
         or run.get("seed") != sample.get("seed")
         or run.get("request_policy") != sample.get("request_policy")
         or run.get("workload_hash_sha256") != inputs["runtime_workload_sha256"]

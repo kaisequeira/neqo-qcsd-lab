@@ -85,7 +85,12 @@ def load_fitting_trace(
             raise ValueError(f"fitting evidence is missing a regular file: {path}")
 
     run = load_json(run_path)
-    if not isinstance(run, Mapping) or run.get("completion_status") != "complete":
+    if (
+        not isinstance(run, Mapping)
+        or run.get("completion_status") != "complete"
+        or run.get("error") is not None
+        or run.get("error_class") is not None
+    ):
         raise ValueError(f"fitting sample did not complete: {sample_id}")
     if run_binding is not None:
         if type(seed) is not int:

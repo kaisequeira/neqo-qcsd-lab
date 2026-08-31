@@ -24,6 +24,14 @@ ACCEPTED_ARTIFACTS = {
     "neqo/events.csv",
     "neqo/schedule.csv",
 }
+STRICT_DEFENSE_FIDELITY_FAILURE = "StrictDefenseFidelityFailure"
+STRICT_CLIENT_DEFENSE_EXECUTION_FAILURE = "StrictClientDefenseExecutionFailure"
+TERMINAL_DEFENSE_FAILURE_TYPES = frozenset(
+    {
+        STRICT_DEFENSE_FIDELITY_FAILURE,
+        STRICT_CLIENT_DEFENSE_EXECUTION_FAILURE,
+    }
+)
 
 _DIGEST = re.compile(r"[0-9a-f]{64}")
 _PATH_COMPONENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
@@ -822,6 +830,7 @@ def validate_durable_attempt_evidence(
     if not isinstance(samples, Sequence) or isinstance(samples, (str, bytes)):
         raise TypeError("durable attempt evidence has no sample inventory")
 
+    experiment_status = experiment.get("status")
     expected_sample_directories: set[str] = set()
     for sample in samples:
         if not isinstance(sample, Mapping):
@@ -830,6 +839,22 @@ def validate_durable_attempt_evidence(
         _validate_component(sample_id, "sample ID")
         state = sample.get("state")
         attempts = sample.get("attempts")
+        if state == "planned":
+            if (
+                experiment_status != "incomplete"
+                or type(attempts) is not int
+                or attempts != 0
+                or sample.get("failure") is not None
+            ):
+                raise ValueError(
+                    "sealed durable attempt evidence contains an invalid unlaunched sample"
+                )
+            sample_failures = failures_root / sample_id
+            if sample_failures.exists() or sample_failures.is_symlink():
+                raise ValueError(
+                    f"unlaunched sample {sample_id} has unexpected failed-attempt evidence"
+                )
+            continue
         if state not in {"accepted", "failed"}:
             raise ValueError("sealed durable attempt evidence contains a nonterminal sample")
         if (
@@ -864,11 +889,21 @@ def validate_durable_attempt_evidence(
                 f"sample {sample_id} durable failed-attempt inventory is not exact and contiguous"
             )
         current_failure: Mapping[str, Any] | None = None
+        terminal_defense_failure_attempt: int | None = None
         for attempt_name in sorted(expected_attempts):
             attempt = sample_failures / attempt_name
             failure = _terminal_attempt_failure(attempt, sample_id=sample_id)
+            attempt_number = int(attempt_name.removeprefix("attempt-"))
+            if failure.get("type") in TERMINAL_DEFENSE_FAILURE_TYPES:
+                terminal_defense_failure_attempt = attempt_number
             if attempt_name == f"attempt-{attempts:03d}":
                 current_failure = failure
+        if terminal_defense_failure_attempt is not None and (
+            state != "failed" or terminal_defense_failure_attempt != attempts
+        ):
+            raise ValueError(
+                f"sample {sample_id} retried after a terminal client defence/QCSD failure"
+            )
         if state == "failed":
             recorded_failure = sample.get("failure")
             if (

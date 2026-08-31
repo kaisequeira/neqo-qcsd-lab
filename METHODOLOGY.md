@@ -85,6 +85,20 @@ workload graph, and evaluates only an undefended-trained five-class
 closed-world classifier against undefended, FRONT, and Tamaraw traffic. It is
 not a website-population or adaptive-attacker study.
 
+The prospective 100-class study uses the frozen candidate domain only for
+primary navigation and redirects. It deliberately permits cross-origin
+subresources and iteratively retains the complete converged graph of eligible
+public HTTPS GET resources, subject to technical limits of 32 approved origins,
+512 audited origins, and eight convergence passes. Those caps reject rather
+than truncate a graph. Observed non-GET and non-HTTPS requests are recorded as
+audited exclusions outside the replay
+construct; their presence alone neither rejects the whole class nor permits an
+otherwise eligible multi-origin resource to be dropped. Authentication or
+account state remains inadmissible. Multi-origin status and origin count
+affect neither eligibility, ranking, quota, nor cohort membership, so both
+single-origin and naturally multi-origin classes remain eligible under the
+same fitting, certification, and formal graph.
+
 ## Ordering and concurrency
 
 Campaign expansion is deterministic:
@@ -96,6 +110,11 @@ workload -> request policy -> visit -> seeded defence order
 The orchestrator executes one sample at a time. This prevents unrelated
 samples from competing for the capture interface, CPU, or network path and
 makes cooldown enforcement unambiguous.
+
+For the prospective class study, exact endpoint-origin-set overlap only
+reorders already-selected workload/visit groups to separate shared origins
+within the fixed scheduling window. It cannot alter technical eligibility,
+ranking, stratum quota, final membership, or the graph used by any defence.
 
 Concurrency inside a sample is part of the workload realization. Neqo creates
 one QUIC connection per distinct origin. Those connections progress in the
@@ -112,18 +131,31 @@ connection tuples.
 ### Candidate timing realization
 
 Canonical BuFLO uses exact 20 ms cells with a strict half-open 5 ms transport
-realization window. Runner-wakeup schema 3 reserves that whole window and
-actively waits until the release boundary. Once the outgoing cell reaches its
-socket handoff, the runner immediately drives each other endpoint only when
+realisation window. Current runner-wakeup schema 5 reserves that whole window
+and actively waits until the release boundary. Once the outgoing cell reaches
+its socket handoff, the runner immediately drives each other endpoint only when
 transport proves that accepted scheduled receive credit still lacks its first
-physical `MAX_STREAM_DATA` encoding. This preserves outgoing-before-incoming
-ordering across origins without treating already encoded, in-flight, or
-unrelated control as work to flush. A release or credit advertisement at or
-after its deadline terminalizes the opportunity as `DeadlineExpired`; later
-transport or byte-consumption evidence cannot turn it into a satisfied event.
+physical `MAX_STREAM_DATA` encoding. An unresolved identity remains bound to
+its exact slot and endpoint until physical advertisement or the unchanged
+deadline. Transport callbacks trigger owner-only continuation when available;
+otherwise one-quarter, one-half, three-quarter, and terminal-deadline fallback
+wake-ups apply. Schema 5 appends the exact semantics suffix
+`buflo_exact_incoming_retry_wakeups=transport_callback_or_1/4,1/2,3/4,deadline; buflo_exact_incoming_retry_drives=count_owner_endpoint_output_drive_invocations_including_immediate_and_error; buflo_exact_incoming_retry_resolutions=count_drive_invocations_clearing_at_least_one_captured_identity; buflo_exact_incoming_retry_max_wake_lateness_includes_terminal_deadline=true; buflo_exact_incoming_inventory=all_unrealized_slot_owned_adapter_identities_with_same_tick_refresh; buflo_exact_incoming_expiry=one_logical_slot_one_deadline_miss`.
+The final maximum may therefore record a late terminal-deadline wake with zero
+owner-endpoint drive invocations; only resolutions exceeding drives are
+structurally invalid. Same-tick identity refresh preserves legitimate
+multi-stream and multi-origin fan-out or movement while rejecting a foreign
+logical slot. Expiry remains one typed terminal outcome per logical slot,
+rather than one outcome per transport child identity.
+This preserves outgoing-before-incoming ordering across origins without
+treating already encoded, in-flight, or unrelated control as work to flush. A
+release or credit advertisement at or after its deadline terminalises the
+opportunity as `DeadlineExpired`; later transport or byte-consumption evidence
+cannot turn it into a satisfied event.
 
-Schema 2 remains an exact historical reader for the former 250 microsecond
-active-wait tail, but it is not current capture evidence. The schema-3 policy
+Schemas 1–4 remain historical readers, including schema 2's former exact
+250-microsecond active-wait tail, but they are not current capture evidence.
+The current full-window policy
 can actively occupy roughly 5/20, or 25%, of one CPU while BuFLO is running.
 That implementation cost is therefore included in client CPU and wakeup
 reporting. The measured client is pinned to CPU 10 under `SCHED_RR` priority 1,
@@ -217,6 +249,39 @@ Operational success proves that a valid page load was captured. It does not by
 itself prove that a defence realized its intended schedule. The second gate
 uses `schedule.csv` and defence diagnostics to check missed actions, target-size
 realization, causal controller behavior, and defence-specific safety bounds.
+
+A defence or QCSD fidelity failure in regression, controlled qualification,
+fitting, qualification, compatibility, certification, canary, or formal
+evidence is treated as a release-blocking client implementation defect: the
+attempt is preserved, the dependent stage stops, and the defect is
+diagnosed and repaired within the client defence/controller/transport, runner,
+or Lab validation boundary. It cannot justify dropping or relabelling the
+class, activating a reserve, pruning a prepared origin/resource graph,
+weakening a fidelity or acceptance threshold, or fitting around the failure.
+Ordinary HTTP/3 servers remain unmodified and no symmetric or server-side
+defence protocol is introduced. If the unchanged contract cannot be realised
+client-side, the candidate or campaign remains blocked.
+
+A client-side code correction creates a new immutable source/image cohort and
+repeats every affected gate and paired execution from the earliest invalidated
+dependency boundary; old- and new-source results are never combined. Class
+replacement remains a separate, narrow admission mechanism: only a
+producer-recomputed, same-class `undefended`
+`StrictPreparedResponseIdentityFailure` from the sealed incomplete
+first-launch certification can authorise a generational successor. A
+`StrictDefenseFidelityFailure` or `StrictClientDefenseExecutionFailure` cannot.
+Those two types are terminal for durable study samples: the exact failed
+attempt is sealed, execution stops before another cell or retry, and resume
+cannot convert the failure into an accepted sample. Durable verification
+rejects any later-attempt history after either terminal type. Prerequisite-
+ordered class-study captures and resumes are likewise coordinator-only; the
+coordinator validates the prerequisite ledger and supplies one process-local
+authority bound to the exact campaign identity, while generic `run` and
+`resume` fail closed.
+
+Bounded retries remain available only for explicitly retryable operational
+capture or transient-network failures. They cannot reclassify, mask, or work
+around a defence/QCSD implementation failure.
 
 The configuration layers differ because the algorithms require different
 inputs:
@@ -542,11 +607,13 @@ at
 `results/chaff-qualification-diagnostics/q7-b19cb04-7ebcdb0-schema6-203eee42-runtime-falsification/`.
 Its closed outer manifest hashes to
 `4ee68a930a344dc0e5874279e09069f92935a2f4f42bc7bb7e88077153b85aa9`.
-POC5 is separate from the historical pre-final engineering gate. Its own
-30-sample rehearsal and twenty formal campaign definitions are frozen. Its
-latest rehearsal is retained as excluded diagnostic evidence, while all twenty
-formal campaigns remain unexecuted; the historical 42/126 sequence remains
-undefined and on hold.
+The legacy POC5 predecessor is separate from the historical pre-final
+engineering gate. Its own 30-sample rehearsal and twenty formal campaign
+definitions are frozen. Its latest rehearsal is retained as excluded
+diagnostic evidence, while all twenty predecessor formal campaigns remain
+unexecuted; the historical 42/126 sequence remains undefined and on hold. This
+paragraph does not describe the later completed `classifier-multiorigin5-v2`
+replacement lineage documented below.
 
 ## Evidence, sealing, and recovery
 
@@ -1200,8 +1267,10 @@ Its audited five-file aggregate SHA-256 is
 | `rfc9114-text-r2` | `bd528f882ff471fee5bb6e9a21fea44c2d13d46faa863f784b3b67ea10f55f7d` |
 
 The preparation image is qualification provenance, not the final acquisition
-collection image. The exact final image for the rehearsal and 2,500 formal
-captures remains pending.
+collection image. The later sealed acquisition used clean Lab
+`8988a48a8e43cc9d47505cae12ee7758bc7fa5ee`, clean Neqo
+`6aceaac85243d6e0e34354108e010705d3c83088`, and collection image
+`sha256:38c24b0c5c4a06b223a904e896e1e38401c78fffbe6edab0f17846bb66a04de2`.
 
 The experimental design repeats all five classes from scratch in ten temporal
 blocks. Each block has 20 undefended baseline visits per class and ten paired
@@ -1233,12 +1302,18 @@ model inputs are `traces/` or `stripped/`; raw PCAPs and receipts remain
 restricted audit material. No old POC5 or multi-origin v1 row is eligible for
 substitution after a failure.
 
-Current status is implementation/qualification ready and v2 acquisition
-pending. The final acquisition image, excluded rehearsal, 2,500 formal
-captures, per-campaign analyses, and both handoffs are not yet complete. The
-multi-origin v1 rehearsal, B01, P01, and P02 are superseded diagnostic evidence
-and must never be mixed with v2. P02 exposed Cloudflare response-identity
-drift, was stopped at a sample boundary, and remains unsealed.
+The excluded v2 rehearsal completed 30/30 accepted and eligible, its interface
+handoff is sealed, and all twenty formal result roots completed, verified, and
+produced their per-campaign analyses. The create-only formal handoff
+`handoffs/classifier-multiorigin5-v2/` is checksum-closed with 2,500 samples:
+1,500 undefended, 500 FRONT, and 500 Tamaraw. Its `SHA256SUMS` inventory has
+12,503 entries and was deep-verified. This is a five-class
+classifier-*pipeline* pilot, not defence-efficacy or adaptive-attacker
+evidence: only undefended blocks supply train/validation/test observations,
+and FRONT/Tamaraw remain inference-only. The multi-origin v1 rehearsal, B01,
+P01, and P02 are superseded diagnostic evidence and must never be mixed with
+v2. P02 exposed Cloudflare response-identity drift, was stopped at a sample
+boundary, and remains unsealed.
 
 ## Scope and limitations
 

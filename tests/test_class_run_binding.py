@@ -114,6 +114,7 @@ def _fixture(tmp_path: Path, mode: str, runtime_kind: str, baseline: bool):
     run = {
         "completion_status": "complete",
         "error": None,
+        "error_class": None,
         "seed": 19,
         "request_policy": "as-defined",
         "workload_hash_sha256": sha256_file(runtime),
@@ -177,6 +178,10 @@ def test_all_nine_modes_bind_the_same_complete_two_origin_graph(
 
     binding = resolve_class_sample_run_binding(root, configuration, sample)
     validate_class_sample_run_binding(run, sample, binding)
+
+    run["error_class"] = "runner-execution-v1"
+    with pytest.raises(ValueError, match="accepted sample"):
+        validate_class_sample_run_binding(run, sample, binding)
 
     assert binding.expected_origins == (
         "https://cdn.class-000.example",

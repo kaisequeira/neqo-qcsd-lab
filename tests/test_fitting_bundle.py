@@ -741,6 +741,29 @@ def test_fitting_trace_excludes_same_timestamp_tail_after_closure(tmp_path: Path
     ]
 
 
+def test_fitting_trace_rejects_contradictory_completed_runner_error_class(
+    tmp_path: Path,
+) -> None:
+    sample = tmp_path / "sample"
+    _write_fitting_trace(
+        sample,
+        [(200_000, "application_complete", {})],
+    )
+    run_path = sample / "neqo/run.json"
+    run = json.loads(run_path.read_text(encoding="utf-8"))
+    run["error_class"] = "client-defense-execution-v1"
+    atomic_json(run_path, run)
+
+    with pytest.raises(ValueError, match="did not complete"):
+        load_fitting_trace(
+            sample,
+            sample_id="sample",
+            workload_id="alpha",
+            request_policy="as-defined",
+            visit=0,
+        )
+
+
 @pytest.mark.parametrize(
     "marker_rows, message",
     [

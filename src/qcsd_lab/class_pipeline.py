@@ -123,6 +123,7 @@ from .orchestrator import (
     CLASS_STUDY_LAUNCH_INPUT,
     CLASS_STUDY_SUCCESSOR_CONFIGURATION_KEY,
     CLASS_STUDY_SUCCESSOR_INPUT,
+    _class_study_coordinator_capture_authority,
     preflight_campaign,
     resume_campaign,
     run_campaign,
@@ -3032,8 +3033,9 @@ def _coordinate_capture(
             raise ValueError("successor campaign uses another restart authority")
         admission = _admission_for_role(role, pilot_admission, final_admission)
         _require_capture_admission_binding(preflight, admission=admission, role=role)
+        prerequisite_ledger: tuple[Mapping[str, Any], ...] = ()
         if not (successor_restart_sha256 is not None and role == "authoritative-fitting"):
-            _validate_capture_prerequisites(role, block, records)
+            prerequisite_ledger = _validate_capture_prerequisites(role, block, records)
         foundation_authority = _validate_capture_foundation(
             role,
             foundation_attestation=foundation_attestation,
@@ -3077,6 +3079,13 @@ def _coordinate_capture(
                 ("repeat with --execute after reviewing the preflight",),
             )
         with (
+            _class_study_coordinator_capture_authority(
+                {
+                    **preflight,
+                    "campaign_sha256": sha256_file(campaign_path),
+                },
+                prerequisite_ledger,
+            ),
             _capture_authority_environment(foundation_authority),
             _capture_authority_environment(authority),
         ):
@@ -3109,8 +3118,9 @@ def _coordinate_capture(
             admission=admission,
             role=role,
         )
+        prerequisite_ledger = ()
         if not (successor_restart_sha256 is not None and role == "authoritative-fitting"):
-            _validate_capture_prerequisites(role, block, records)
+            prerequisite_ledger = _validate_capture_prerequisites(role, block, records)
         foundation_authority = _validate_capture_foundation(
             role,
             foundation_attestation=foundation_attestation,
@@ -3155,6 +3165,10 @@ def _coordinate_capture(
                 ("repeat with --execute after reviewing the checkpoint",),
             )
         with (
+            _class_study_coordinator_capture_authority(
+                {**dict(configuration), "name": experiment.get("name")},
+                prerequisite_ledger,
+            ),
             _capture_authority_environment(foundation_authority),
             _capture_authority_environment(authority),
         ):
@@ -3651,26 +3665,24 @@ def _validate_capture_prerequisites(
     role: str,
     block: int | None,
     records: Sequence[Mapping[str, Any]],
-) -> None:
+) -> tuple[Mapping[str, Any], ...]:
     if role == "pilot-fitting":
-        return
+        return ()
     if role == "pilot-compatibility":
-        _require_role(records, "pilot-fitting")
-        return
+        return (_require_role(records, "pilot-fitting"),)
     if role == "authoritative-fitting":
-        _require_role(records, "pilot-compatibility")
-        return
+        return (_require_role(records, "pilot-compatibility"),)
     if role == "certification":
-        _require_role(records, "authoritative-fitting")
-        return
+        return (_require_role(records, "authoritative-fitting"),)
     if role not in {"canary", "formal"} or block is None:
         raise ValueError("capture campaign has an unsupported class-study evidence role")
-    _require_role(records, "certification")
+    required = [_require_role(records, "certification")]
     for prior in range(1, block):
-        _require_block(records, "canary", prior)
-        _require_block(records, "formal", prior)
+        required.append(_require_block(records, "canary", prior))
+        required.append(_require_block(records, "formal", prior))
     if role == "formal":
-        _require_block(records, "canary", block)
+        required.append(_require_block(records, "canary", block))
+    return tuple(required)
 
 
 def _require_capture_admission_binding(

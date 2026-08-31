@@ -74,6 +74,16 @@ SUPPORTED_DEFENSE_KINDS = {
     "tamaraw",
     *PARAMETER_FLAG_BY_KIND,
 }
+_TERMINAL_CLIENT_DEFENSE_ERROR_CLASSES = frozenset(
+    {"client-defense-fidelity-v1", "client-defense-execution-v1"}
+)
+_RUNNER_ERROR_CLASSES = frozenset(
+    {
+        *_TERMINAL_CLIENT_DEFENSE_ERROR_CLASSES,
+        "runner-execution-v1",
+        "timeout-v1",
+    }
+)
 RUNNER_KIND_BY_KIND = {
     "traffic_morphing": "traffic-morphing",
     "wtf_pad": "wtf-pad",
@@ -117,6 +127,11 @@ _RUNNER_WAKEUP_METRICS_V4_KEYS = _RUNNER_WAKEUP_METRICS_V3_KEYS | {
     "cs_exact_incoming_retry_resolutions",
     "cs_exact_incoming_retry_max_phase_lateness_nanoseconds",
 }
+_RUNNER_WAKEUP_METRICS_V5_KEYS = _RUNNER_WAKEUP_METRICS_V4_KEYS | {
+    "buflo_exact_incoming_retry_drives",
+    "buflo_exact_incoming_retry_resolutions",
+    "buflo_exact_incoming_retry_max_wake_lateness_nanoseconds",
+}
 _RUNNER_WAKEUP_METRICS_V1_SEMANTICS = (
     "actual_select_return_source; socket_wins_simultaneous_readiness; "
     "controller_subset_is_effective_earliest_deadline; scheduled_cells_are_not_wakeups"
@@ -150,6 +165,18 @@ _RUNNER_WAKEUP_METRICS_V4_SEMANTICS = (
     "buflo_ordinary_output_stops_at_admission; "
     "buflo_exact_release_guard_begins_at_guard; "
     "cs_exact_incoming_retry_phases=1/4,1/2,3/4"
+)
+_RUNNER_WAKEUP_METRICS_V5_SEMANTICS = (
+    f"{_RUNNER_WAKEUP_METRICS_V4_SEMANTICS}; "
+    "buflo_exact_incoming_retry_wakeups=transport_callback_or_1/4,1/2,3/4,deadline; "
+    "buflo_exact_incoming_retry_drives="
+    "count_owner_endpoint_output_drive_invocations_including_immediate_and_error; "
+    "buflo_exact_incoming_retry_resolutions="
+    "count_drive_invocations_clearing_at_least_one_captured_identity; "
+    "buflo_exact_incoming_retry_max_wake_lateness_includes_terminal_deadline=true; "
+    "buflo_exact_incoming_inventory="
+    "all_unrealized_slot_owned_adapter_identities_with_same_tick_refresh; "
+    "buflo_exact_incoming_expiry=one_logical_slot_one_deadline_miss"
 )
 _PROCESS_SCHEDULER_KEYS = {
     "schema_version",
@@ -586,6 +613,8 @@ def _collect_attempt(
     expected_resource_ids = {resource["id"] for resource in manifest_data["resources"]}
     endpoints = run_data.get("endpoints", [])
     completion_status = run_data.get("completion_status")
+    runner_error = run_data.get("error")
+    runner_error_class = run_data.get("error_class")
     responses = run_data.get("responses", [])
     runner_complete = _runner_result_complete(run_data, expected_resource_ids)
     try:
@@ -752,6 +781,28 @@ def _collect_attempt(
         and endpoint_count_valid
         and valid
     )
+    terminal_client_defense_failure = bool(
+        not success and _is_terminal_client_defense_error_class(runner_error_class)
+    )
+    failure_stage = (
+        "fidelity"
+        if terminal_client_defense_failure
+        else (
+            "runner-timeout"
+            if runner_timed_out
+            else (
+                "runner-binding"
+                if not runner_binding_valid
+                else (
+                    "capture"
+                    if client.returncode == 0
+                    and runner_complete
+                    and endpoint_count_valid
+                    else "runner"
+                )
+            )
+        )
+    )
     result = {
         "success": success,
         "runner_returncode": client.returncode,
@@ -759,6 +810,8 @@ def _collect_attempt(
         "runner_host_timeout_seconds": runner_host_timeout_seconds,
         "runner_output_error": runner_output_error,
         "runner_completion_status": completion_status,
+        "runner_error": runner_error,
+        "runner_error_class": runner_error_class,
         "client_resource_usage": client_resource_usage,
         "runner_complete": runner_complete,
         "runner_binding_valid": runner_binding_valid,
@@ -780,18 +833,16 @@ def _collect_attempt(
             None
             if success
             else {
-                "stage": (
-                    "runner-timeout"
-                    if runner_timed_out
-                    else (
-                        "runner-binding"
-                        if not runner_binding_valid
-                        else (
-                            "capture"
-                            if client.returncode == 0 and runner_complete and endpoint_count_valid
-                            else "runner"
-                        )
-                    )
+                "stage": failure_stage,
+                **(
+                    {
+                        "type": "StrictClientDefenseExecutionFailure",
+                        "message": (
+                            "client defence/QCSD execution failed before evidence acceptance"
+                        ),
+                    }
+                    if terminal_client_defense_failure
+                    else {}
                 ),
                 "details": [
                     {
@@ -800,6 +851,8 @@ def _collect_attempt(
                         "runner_host_timeout_seconds": runner_host_timeout_seconds,
                         "runner_output_error": runner_output_error,
                         "completion_status": completion_status,
+                        "runner_error": runner_error,
+                        "runner_error_class": runner_error_class,
                         "client_resource_usage": client_resource_usage,
                         "runner_binding_error": (
                             None if runner_binding_valid else runner_binding_error
@@ -861,6 +914,12 @@ def _run_neqo_client(
     usage = _parse_client_resource_usage(resource_log, time.monotonic() - started)
     setattr(result, "client_resource_usage", usage)
     return result, False, host_timeout
+
+
+def _is_terminal_client_defense_error_class(value: object) -> bool:
+    """Recognise only versioned runner classes that require client-side repair."""
+
+    return isinstance(value, str) and value in _TERMINAL_CLIENT_DEFENSE_ERROR_CLASSES
 
 
 def _process_scheduler_valid(value: Any) -> bool:
@@ -998,6 +1057,9 @@ def _runner_wakeup_metrics_valid(value: Any) -> bool:
     elif schema_version == 4:
         required = _RUNNER_WAKEUP_METRICS_V4_KEYS
         semantics = _RUNNER_WAKEUP_METRICS_V4_SEMANTICS
+    elif schema_version == 5:
+        required = _RUNNER_WAKEUP_METRICS_V5_KEYS
+        semantics = _RUNNER_WAKEUP_METRICS_V5_SEMANTICS
     else:
         return False
     if set(value) != required or value.get("semantics") != semantics:
@@ -1008,7 +1070,7 @@ def _runner_wakeup_metrics_valid(value: Any) -> bool:
         for key in count_keys
     ):
         return False
-    if schema_version in {2, 3, 4}:
+    if schema_version in {2, 3, 4, 5}:
         guard_measurements = (
             value["buflo_exact_release_guard_wait_nanoseconds"],
             value["buflo_exact_release_active_wait_nanoseconds"],
@@ -1024,13 +1086,19 @@ def _runner_wakeup_metrics_valid(value: Any) -> bool:
             )
         ):
             return False
-    if schema_version == 4 and (
+    if schema_version in {4, 5} and (
         value["cs_exact_incoming_retry_resolutions"]
         > value["cs_exact_incoming_retry_drives"]
         or (
             value["cs_exact_incoming_retry_drives"] == 0
             and value["cs_exact_incoming_retry_max_phase_lateness_nanoseconds"] != 0
         )
+    ):
+        return False
+    if (
+        schema_version == 5
+        and value["buflo_exact_incoming_retry_resolutions"]
+        > value["buflo_exact_incoming_retry_drives"]
     ):
         return False
     return (
@@ -1093,6 +1161,7 @@ def _validate_run_binding(
         or run_data.get("request_policy") != context.request_policy
         or run_data.get("workload_hash_sha256") != sha256_file(manifest)
         or run_data.get("max_response_bytes") != context.limits.max_response_bytes
+        or not _runner_error_receipt_coherent(run_data)
         or not _client_resource_usage_valid(resource_usage)
         or (
             completed_new_buflo
@@ -1343,6 +1412,7 @@ def _runner_result_complete(run_data: dict[str, Any], expected_resource_ids: set
     ]
     return (
         run_data.get("completion_status") == "complete"
+        and _runner_error_receipt_coherent(run_data)
         and not padding_event_guard_triggered(run_data)
         and bool(expected_resource_ids)
         and len(observed_ids) == len(responses) == len(expected_resource_ids)
@@ -1355,6 +1425,23 @@ def _runner_result_complete(run_data: dict[str, Any], expected_resource_ids: set
             and response.get("outcome") == "succeeded"
             for response in responses
         )
+    )
+
+
+def _runner_error_receipt_coherent(run_data: dict[str, Any]) -> bool:
+    """Accept historical unclassified failures and reject contradictory fresh receipts."""
+
+    error = run_data.get("error")
+    error_class = run_data.get("error_class")
+    if run_data.get("completion_status") == "complete":
+        return error is None and error_class is None
+    if error_class is None:
+        return True
+    return bool(
+        isinstance(error, str)
+        and error
+        and isinstance(error_class, str)
+        and error_class in _RUNNER_ERROR_CLASSES
     )
 
 

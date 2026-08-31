@@ -216,6 +216,16 @@ def test_direct_runner_reconciliation_preserves_packet_and_tail_evidence(tmp_pat
     assert result.metrics["direct_runner_packets_sha256"]
 
 
+def test_direct_runner_reconciliation_rejects_contradictory_error_class(tmp_path):
+    run, packets, trace = _reconciliation_artifacts(tmp_path, tail_direction="incoming")
+    receipt = json.loads(run.read_text(encoding="utf-8"))
+    receipt["error_class"] = "client-defense-fidelity-v1"
+    run.write_text(json.dumps(receipt), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="did not complete"):
+        reconcile_direct_runner_artifacts(run, packets, trace)
+
+
 def test_direct_runner_reconciliation_rejects_unrecorded_outgoing_tail(tmp_path):
     run, packets, trace = _reconciliation_artifacts(tmp_path, tail_direction="outgoing")
 

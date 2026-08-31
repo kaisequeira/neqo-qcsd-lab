@@ -17,7 +17,9 @@ from qcsd_lab.capture_session import (
     Defense,
     Limits,
     _client_command,
+    _is_terminal_client_defense_error_class,
     _process_scheduler_valid,
+    _runner_error_receipt_coherent,
     _runner_result_complete,
     _validate_chaff_response_receipts,
     _validate_run_binding,
@@ -1318,6 +1320,60 @@ def test_capture_session_requires_a_complete_successful_runner_result() -> None:
         },
         {0},
     )
+    assert not _runner_result_complete(
+        {
+            "completion_status": "complete",
+            "responses": [response],
+            "error": "contradictory failure",
+            "error_class": "client-defense-fidelity-v1",
+        },
+        {0},
+    )
+
+
+def test_capture_session_recognises_only_typed_client_defense_failures() -> None:
+    assert _is_terminal_client_defense_error_class("client-defense-fidelity-v1")
+    assert _is_terminal_client_defense_error_class("client-defense-execution-v1")
+    assert not _is_terminal_client_defense_error_class("runner-execution-v1")
+    assert not _is_terminal_client_defense_error_class("timeout-v1")
+    assert not _is_terminal_client_defense_error_class(None)
+
+
+def test_runner_error_receipt_rejects_completed_or_malformed_error_classes() -> None:
+    assert _runner_error_receipt_coherent(
+        {"completion_status": "complete", "error": None, "error_class": None}
+    )
+    assert not _runner_error_receipt_coherent(
+        {
+            "completion_status": "complete",
+            "error": "contradiction",
+            "error_class": "client-defense-fidelity-v1",
+        }
+    )
+    assert _runner_error_receipt_coherent(
+        {
+            "completion_status": "partial",
+            "error": "typed failure",
+            "error_class": "client-defense-execution-v1",
+        }
+    )
+    assert not _runner_error_receipt_coherent(
+        {
+            "completion_status": "partial",
+            "error": None,
+            "error_class": "client-defense-execution-v1",
+        }
+    )
+    assert not _runner_error_receipt_coherent(
+        {
+            "completion_status": "partial",
+            "error": "unknown",
+            "error_class": "unknown-v1",
+        }
+    )
+    assert _runner_error_receipt_coherent(
+        {"completion_status": "partial", "error": "historical unclassified failure"}
+    )
 
 
 def test_capture_clock_anchor_uses_narrowest_linux_monotonic_bracket(
@@ -1805,7 +1861,7 @@ def test_completed_candidate_binding_requires_current_wakeup_schema(
         terminal_validation_calls.append(
             (kind, require_application_complete, require_current_schema, schema)
         )
-        return require_current_schema and schema == 4
+        return require_current_schema and schema == 5
 
     monkeypatch.setattr(
         orchestrator.capture_engine,
@@ -1832,7 +1888,7 @@ def test_completed_candidate_binding_requires_current_wakeup_schema(
 
     run["runner_wakeup_metrics"] = {
         **wakeup_v2,
-        "schema_version": 4,
+        "schema_version": 5,
         "semantics": (
             f"{v1_semantics}; "
             "buflo_ordinary_output_admission_is_one_realization_window_before_guard; "
@@ -1843,8 +1899,22 @@ def test_completed_candidate_binding_requires_current_wakeup_schema(
             "buflo_active_defense_http_drains_are_single_event; "
             "buflo_ordinary_output_stops_at_admission; "
             "buflo_exact_release_guard_begins_at_guard; "
-            "cs_exact_incoming_retry_phases=1/4,1/2,3/4"
+            "cs_exact_incoming_retry_phases=1/4,1/2,3/4; "
+            "buflo_exact_incoming_retry_wakeups="
+            "transport_callback_or_1/4,1/2,3/4,deadline; "
+            "buflo_exact_incoming_retry_drives="
+            "count_owner_endpoint_output_drive_invocations_including_immediate_and_error; "
+            "buflo_exact_incoming_retry_resolutions="
+            "count_drive_invocations_clearing_at_least_one_captured_identity; "
+            "buflo_exact_incoming_retry_max_wake_lateness_"
+            "includes_terminal_deadline=true; "
+            "buflo_exact_incoming_inventory="
+            "all_unrealized_slot_owned_adapter_identities_with_same_tick_refresh; "
+            "buflo_exact_incoming_expiry=one_logical_slot_one_deadline_miss"
         ),
+        "buflo_exact_incoming_retry_drives": 0,
+        "buflo_exact_incoming_retry_resolutions": 0,
+        "buflo_exact_incoming_retry_max_wake_lateness_nanoseconds": 0,
         "cs_exact_incoming_retry_drives": 0,
         "cs_exact_incoming_retry_resolutions": 0,
         "cs_exact_incoming_retry_max_phase_lateness_nanoseconds": 0,
@@ -1861,7 +1931,7 @@ def test_completed_candidate_binding_requires_current_wakeup_schema(
     )
     assert terminal_validation_calls == [
         (runtime_kind, True, True, 2),
-        (runtime_kind, True, True, 4),
+        (runtime_kind, True, True, 5),
     ]
 
 
@@ -2347,6 +2417,138 @@ def test_collection_success_with_clock_step_is_quarantined_then_retried(
     retained = load_json(root / "failures" / sample["sample_id"] / "attempt-001/attempt.json")
     assert retained["failure"]["type"] == "StrictCaptureClockIntegrityFailure"
     assert "constant-offset" in retained["failure"]["details"][0]["error"]
+
+
+@pytest.mark.parametrize(
+    "failure_type",
+    ["StrictDefenseFidelityFailure", "StrictClientDefenseExecutionFailure"],
+)
+def test_durable_strict_defense_failure_is_a_terminal_repair_boundary(
+    failure_type: str,
+) -> None:
+    failure = {
+        "stage": "fidelity",
+        "type": failure_type,
+    }
+    durable = {
+        "name": "classifier-multiorigin100-v1-formal-01-1200",
+        "samples": [{"state": "failed", "failure": failure}],
+    }
+    assert orchestrator._has_terminal_strict_defense_fidelity_failure(durable)
+    assert not orchestrator._has_terminal_strict_defense_fidelity_failure(
+        {**durable, "name": "generic-smoke"}
+    )
+    assert not orchestrator._has_terminal_strict_defense_fidelity_failure(
+        {
+            **durable,
+            "samples": [
+                {
+                    "state": "failed",
+                    "failure": {
+                        "stage": "fidelity",
+                        "type": "StrictCaptureClockIntegrityFailure",
+                    },
+                }
+            ],
+        }
+    )
+
+
+def test_execute_stops_before_retry_when_terminal_defense_policy_trips(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = _configuration(tmp_path, max_attempts=3)
+    calls = 0
+
+    def collect(
+        attempt: Path,
+        _manifest: Path,
+        workload_id: str,
+        defense: Any,
+        _seed: int,
+        _campaign: Any,
+    ) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        return _write_successful_attempt(attempt, workload_id, defense.name)
+
+    monkeypatch.setattr(orchestrator.capture_engine, "_collect_attempt", collect)
+    monkeypatch.setattr(orchestrator, "fidelity_eligible", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        orchestrator,
+        "_has_terminal_strict_defense_fidelity_failure",
+        lambda experiment: any(
+            sample.get("failure", {}).get("type") == "StrictDefenseFidelityFailure"
+            for sample in experiment["samples"]
+        ),
+    )
+    sealed: list[Path] = []
+    monkeypatch.setattr(orchestrator, "_seal", lambda root: sealed.append(root))
+
+    with pytest.raises(orchestrator.CampaignIncomplete) as raised:
+        run_campaign(path, tmp_path / "results")
+
+    assert calls == 1
+    assert sealed == [raised.value.root]
+    experiment = load_json(raised.value.root / "experiment.json")
+    [sample] = experiment["samples"]
+    assert experiment["status"] == "incomplete"
+    assert sample["state"] == "failed"
+    assert sample["attempts"] == 1
+    assert sample["failure"]["type"] == "StrictDefenseFidelityFailure"
+
+
+def test_execute_stops_before_retry_on_typed_runner_defense_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = _configuration(tmp_path, max_attempts=3)
+    calls = 0
+    terminal = {
+        "stage": "fidelity",
+        "type": "StrictClientDefenseExecutionFailure",
+        "message": "client defence/QCSD execution failed before evidence acceptance",
+    }
+
+    def collect(
+        attempt: Path,
+        _manifest: Path,
+        _workload_id: str,
+        _defense: Any,
+        _seed: int,
+        _campaign: Any,
+    ) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        result = {"success": False, "failure": terminal}
+        atomic_json(attempt / "attempt.json", result)
+        return result
+
+    monkeypatch.setattr(orchestrator.capture_engine, "_collect_attempt", collect)
+    monkeypatch.setattr(
+        orchestrator,
+        "_has_terminal_strict_defense_fidelity_failure",
+        lambda experiment: any(
+            sample.get("failure", {}).get("type")
+            == "StrictClientDefenseExecutionFailure"
+            for sample in experiment["samples"]
+        ),
+    )
+    sealed: list[Path] = []
+    monkeypatch.setattr(orchestrator, "_seal", lambda root: sealed.append(root))
+
+    with pytest.raises(orchestrator.CampaignIncomplete) as raised:
+        run_campaign(path, tmp_path / "results")
+
+    assert calls == 1
+    assert sealed == [raised.value.root]
+    experiment = load_json(raised.value.root / "experiment.json")
+    [sample] = experiment["samples"]
+    assert experiment["status"] == "incomplete"
+    assert sample["state"] == "failed"
+    assert sample["attempts"] == 1
+    assert sample["failure"] == terminal
 
 
 def test_collection_success_with_multiple_primary_views_is_quarantined(

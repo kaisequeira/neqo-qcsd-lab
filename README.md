@@ -51,24 +51,36 @@ defence-control traffic is explicitly receipted and is an expected QCSD-only
 difference from the bilateral TCP study; it is never described as
 paper-equivalent or as a server padding-complete signal.
 
-Current-source BuFLO runs use summary schema 4 and runner-wakeup schema 4.
+Current-source BuFLO runs use summary schema 4 and runner-wakeup schema 5.
 Summary schema 4 binds the typed schedule-stop policy, stop timestamp,
 sub-cell capacity, direction counts at stop, and exact post-stop advertised
 credit drain; historical summary schemas 2 and 3 remain readable but cannot
-admit a fresh candidate capture. Historical runner-wakeup schemas 1–3 remain
-readable but cannot admit a fresh candidate capture. Runner-wakeup schema 4
-retains the schema-3 guard and active-wait counters and adds CS exact-incoming
-retry drives, resolutions, and maximum dispatch-phase lateness. The measured
-client remains
-actively runnable for the complete 5 ms realisation window before every exact
+admit a fresh candidate capture. Historical runner-wakeup schemas 1–4 remain
+readable but cannot admit a fresh candidate capture. Runner-wakeup schema 5
+retains schema 4's guard, active-wait, and CS exact-incoming retry counters. It
+adds BuFLO exact-incoming retry drives, resolutions, maximum wake lateness, and
+the callback, quarter-phase, and terminal-deadline wake-up semantics. Its
+semantics suffix is exactly
+`buflo_exact_incoming_retry_wakeups=transport_callback_or_1/4,1/2,3/4,deadline; buflo_exact_incoming_retry_drives=count_owner_endpoint_output_drive_invocations_including_immediate_and_error; buflo_exact_incoming_retry_resolutions=count_drive_invocations_clearing_at_least_one_captured_identity; buflo_exact_incoming_retry_max_wake_lateness_includes_terminal_deadline=true; buflo_exact_incoming_inventory=all_unrealized_slot_owned_adapter_identities_with_same_tick_refresh; buflo_exact_incoming_expiry=one_logical_slot_one_deadline_miss`.
+Consequently, maximum wake lateness may be nonzero even when there were no
+owner-endpoint drive invocations: the terminal deadline is itself measured.
+The measured client remains actively runnable for the complete 5 ms
+realisation window before every exact
 20 ms release. Fresh ordinary output is stopped one additional 5 ms window
 earlier, leaving an already-admitted targetless socket handoff its complete
 allowance without moving the guard, release, or deadline. After the outgoing
 handoff, the runner immediately drives only endpoints with accepted scheduled
 receive credit that has not yet produced a `MAX_STREAM_DATA` frame. Each
-unresolved CS-BuFLO incoming identity additionally receives at most three
-owning-endpoint transport-output retries at one-quarter, one-half, and
-three-quarters of the same unchanged window. The half-open deadline remains
+unresolved BuFLO incoming identity remains owned by that exact logical slot
+and current endpoint until physical advertisement or the unchanged deadline.
+Same-tick identities are refreshed when a slot legitimately moves or fans out,
+while a foreign slot cannot borrow the window. Transport callbacks can trigger
+another owner-only drive; otherwise the runner falls back to one-quarter,
+one-half, three-quarter, and terminal-deadline wake-ups. A fan-out still has
+one logical terminal outcome and therefore at most one deadline-miss row.
+CS-BuFLO retains its
+three one-quarter, one-half, and three-quarter owner-only retries. The
+half-open deadline remains
 strict: a release or credit advertisement at or after the deadline is a typed
 hard failure and is never caught up. Historical schema 2 receipts retain their
 exact 250 microsecond
@@ -97,53 +109,47 @@ natural byte invalidates provisional stop evidence in the implementation, with
 the cumulative invalidation count retained in the final receipt.  This drain
 is not the paper's server padding-done signal.
 
-The newest immutable executed checkpoint is cohort v28. It binds clean Lab
-`59b88290b4b9a5b6a8705bcbdafba15fc3bb8de4`, Neqo
-`efd67b11ad5ef05851cca4fd6786e68a6aa4f169`, and collection image
-`sha256:322f041c09cecd373d53259796f5eadd0afb23d97c4d2c77477337fed32fd5b4`.
+The newest immutable executed checkpoint is cohort v31. It binds clean Lab
+`5decf36b2806849174e77e183ca7138c743b7d9a`, Neqo
+`e0179ce1bb18110eacc8fa78f48fc0b6a78dc12d`, and collection image
+`sha256:7c9339f11385b2d9dc8dac771e668b6ab8cdc243d76ddb3404d904c364f3bba9`.
 Its fresh pull/no-cache build, isolated reference execution, complete code
-gate, and 18/18 nine-mode regression passed. The separately excluded
-compatibility proof also passed all nine modes while retaining both origins
-and all four resources in every sample.
+gate, and 18/18 regression passed. Its separate nine-mode compatibility proof
+also passed while retaining both origins and all four resources. The clean
+controlled shard then stopped at 39/40 after one BuFLO incoming-credit
+continuation delay measured at 9,150 microseconds. V31 is
+therefore immutable **failed, non-attesting evidence**: it has no controlled
+qualification or class-foundation authority and cannot authorise later source.
 
-V27 had previously passed its build, reference, code, regression, clean, and
-50 ms RTT gates, but its bottleneck shard ended 38/40 and its loss shard was
-therefore never launched. V28 corrected that bottleneck boundary and passed
-the clean, 50 ms RTT, and 5 Mbit/s bottleneck shards at 40/40 each. Its final
-1% loss shard ended 27/40: `undefended` passed 10/10, BuFLO 1/10, CTSP
-CS-BuFLO 8/10, and CPSP CS-BuFLO 8/10. V27 and v28 are consequently immutable
-**failed, non-attesting evidence**; neither supplies controlled qualification
-or authority for later source.
+Post-v31 source keeps the 20 ms cadence, target-minus-5-ms guard, exact target
+release, target-plus-5-ms deadline, and no-catch-up rule. It refreshes the
+complete set of unrealised slot-owned adapter identities, keeps each identity
+with its owning endpoint, and uses transport callbacks or strict quarter-,
+half-, and three-quarter-window fallbacks before one terminal deadline wake.
+Each owner drive is bounded to one datagram, a multi-endpoint fan-out still
+produces only one logical terminal outcome, and an exact slot cannot inherit
+already-advertised unowned parser capacity from before its window. These are
+client-side fidelity corrections; they do not relax the deadline or claim
+control of server packet timing or size.
 
-The 47 rejected v28 loss launches comprise 21 BuFLO targetless retries that
-crossed the exact release, three BuFLO exact deadline expiries, 19 CS-BuFLO
-incoming-credit deadline expiries, and four otherwise successful BuFLO runs
-that retained a pre-cancellation aggregate backlog snapshot. The acceptance
-predicate correctly rejected all of them; the current source does not weaken
-that predicate or extend any half-open realisation window.
+The current Lab boundary additionally classifies typed client defence/QCSD
+runner errors as `StrictClientDefenseExecutionFailure`. That type and
+`StrictDefenseFidelityFailure` are terminal for durable BuFLO/class-study
+samples: the attempt is preserved, the stage seals incomplete and stops, and
+neither automatic retry nor a later resume may turn it into an accepted cell.
+All prerequisite-ordered class-study capture and resume roles also require the
+process-local, campaign-identity-bound authority created by the `class-study`
+coordinator after it verifies the prerequisite ledger; generic `run` or
+`resume` cannot bypass that ordering.
 
-The post-v28 correction instead reserves two complete BuFLO windows: ordinary
-output admission stops at target minus 10 ms, the exact guard starts at target
-minus 5 ms, and release/deadline remain target and target plus 5 ms. CS-BuFLO
-retains its original one-shot target attempt and gives each still-pending exact
-incoming identity at most three owning-endpoint output retries at the strict
-quarter, half, and three-quarter points of that unchanged window. Finally,
-terminal chaff cancellation cannot reuse the aggregate-empty snapshot that
-preceded RESET/STOP work; completion requires a freshly recomputed empty
-transport snapshot after every `CancelChaff` action crosses the adapter
-boundary. The current checkout additionally makes complete prepared-to-runtime
-graph verification mandatory for fitting, every accepted non-fitting result,
-incomplete successor certification, formal export, and deep handoff
-verification; it also uses exact final-selection and generational successor
-evidence schemas. The complete Lab suite passes 1,576 tests with four skips.
-These source changes require a new immutable cohort. The intervening v29 and
-v30 build attempts emitted no
-build receipt and advance no scientific numerator. Docker/VHD recovery and
-capacity verification remain operational prerequisites, not evidence. The
-next fresh cohort named in the workspace ledger must repeat the pull/no-cache
-build, reference execution, 18/18 regression, complete code gate, and all 160
-controlled captures before public-page acquisition may begin. No class-study
-foundation, qualification, readiness, or validation attestation exists yet.
+Docker 29.0.1 is operational again with 12 visible CPUs and approximately
+16.5 GB memory. This is an operational checkpoint only. Because the post-v31
+working source differs from v31, fresh cohort v32 must repeat the pull/no-cache
+build, reference execution, 18/18 regression, complete code gate, all 160
+controlled captures, and the class foundation before public-page acquisition
+may begin. Current-head progress remains 0/18 regression and 0/160 controlled;
+no class-study foundation, qualification, readiness, or validation attestation
+exists.
 
 The authoritative current heads, progression, and evidence ledger are
 maintained in
@@ -172,20 +178,27 @@ redirects, not subresource origins. Discovery iteratively converges the full
 set of eligible public HTTPS GET origins and resources, then complete
 preparation retains rendered resources from every approved origin.
 Document-navigation origins are seeded per page, so optional pages cannot
-contaminate one another's origin graphs. The 32-origin and eight-pass limits
-are fail-closed admission bounds: exceeding either cap or failing to converge
-rejects the whole class rather than truncating its accepted workload or
-silently omitting a multi-origin resource. Every discovered eligible public
-HTTPS GET subresource is retained in an accepted, converged workload. The
-fresh browser load inside final preparation must reproduce the converged
-origin set: a newly observed unapproved HTTPS GET fails that probe and forces
-reconvergence on a retry, and persisted complete-coverage evidence rejects any
-`origin not approved` exclusion independently. Both single-origin and
-naturally multi-origin classes are eligible. Origin count supplies neither a
-selection signal nor a quota, and no acquisition or selection stage
-intentionally omits multi-origin resources or classes. The closed-checksum
-handoff reports each realised class's origin count, together with the origin
-histogram and single-/multi-origin totals, in
+contaminate one another's origin graphs. The limits of 32 approved origins,
+512 audited origins, and eight convergence passes are technical, fail-closed
+admission bounds, not an origin-count selection rule or an intentional
+multi-origin exclusion. Exceeding any cap or failing to converge rejects the
+whole class rather than truncating its accepted workload.
+Every discovered **eligible public HTTPS GET** subresource is retained in an
+accepted, converged workload. Observed non-GET and non-HTTPS requests are
+audited exclusions outside this replay construct; their mere presence does
+not reject the class or authorise omission of an otherwise eligible resource.
+Authentication/account state remains inadmissible, and an eligible graph that
+cannot converge or reproduce complete approved-origin coverage still fails
+closed. The fresh browser load inside final preparation must reproduce the
+converged origin set: a newly observed unapproved eligible HTTPS GET fails that
+probe and forces reconvergence on a retry, and persisted complete-coverage
+evidence rejects any `origin not approved` exclusion independently. Both
+single-origin and naturally multi-origin classes are eligible. Multi-origin
+status and origin count affect neither eligibility, ranking, quota, nor cohort
+membership, and no acquisition or selection stage intentionally omits
+eligible multi-origin resources or classes. The closed-checksum handoff
+reports each realised class's origin count, together with the origin histogram
+and single-/multi-origin totals, in
 `dataset.json.resource_origin_profile`.
 
 The same complete graph is now independently rederived at every downstream
@@ -242,10 +255,38 @@ type `StrictPreparedResponseIdentityFailure`, and details naming that same
 cell's `workload_id`. The same typed, same-workload prepared-identity failure
 may occur under a defended mode only as non-authorising corroboration, and only
 when that class already has the undefended proof. It cannot add a class to the
-replacement set. A generic `StrictDefenseFidelityFailure`, defended-only or
-unrelated prepared-identity failure, any other correctness failure, or a
-capture, infrastructure, interruption, or unclassified failure blocks the
-whole successor decision. Manual reclassification is forbidden.
+replacement set. A `StrictDefenseFidelityFailure`, a
+`StrictClientDefenseExecutionFailure`, a defended-only or unrelated
+prepared-identity failure, any other correctness failure, or a capture,
+infrastructure, interruption, or unclassified failure blocks the whole
+successor decision. Manual reclassification is forbidden.
+
+Defence/QCSD fidelity failures during regression, controlled qualification,
+fitting, qualification, compatibility, certification, canaries, or formal
+capture are release-blocking client implementation defects to preserve,
+diagnose, and repair. They never authorise dropping or relabelling a class,
+activating a reserve, pruning its approved-origin/resource graph, weakening a
+fidelity or acceptance threshold, or selecting/fitting around the failure.
+Repairs may change only the client defence/controller/transport integration,
+runner, or Lab validation path; ordinary HTTP/3 servers remain unchanged and
+no symmetric or server-side defence deployment is permitted. If the unchanged
+contract cannot be met client-side, the stage remains blocked.
+
+Every client-side code repair starts a new create-only immutable cohort with a
+new source/image binding. It repeats the complete build/reference/regression/
+code/controlled foundation and every downstream fitting, qualification,
+compatibility, certification, canary, or formal pairing invalidated by that
+binding; predecessor-source results cannot be spliced into the new cohort.
+Only the producer-recomputed, same-class `undefended`
+`StrictPreparedResponseIdentityFailure` above can authorise generational class
+replacement.
+
+Both `StrictDefenseFidelityFailure` and
+`StrictClientDefenseExecutionFailure` are terminal for the durable sample.
+The exact attempt is preserved, the dependent campaign seals incomplete and
+stops immediately, and neither automatic retry nor a later resume may turn it
+into an accepted cell. Durable verification rejects any receipt history that
+contains such a terminal failure followed by another attempt.
 
 Successors are recursive but remain anchored to the original frozen 120-class
 pilot and its qualified one-to-one 60-edge graph. Every generation also binds
@@ -1032,6 +1073,12 @@ new result directory. A run is successful only when every planned sample is
 accepted and eligible. A terminal incomplete run is still retained and sealed
 for diagnosis.
 
+Generic `run` is intentionally unavailable for prerequisite-ordered
+schema-two class-study roles. Launch those campaigns through `./qcsd-lab
+class-study capture`, which verifies the exact prerequisite ledger and grants
+one process-local authority bound to the campaign, cohort, assembly, and any
+successor identity before delegating to the orchestrator.
+
 The checked-in `smoke.yml` defines the post-fit, 14-sample external evaluation:
 Cloudflare QUIC and Bootstrap Introduction, one independent visit
 each, the `as-defined` request policy, and all seven then-established
@@ -1075,6 +1122,14 @@ launch is retained as a failure tombstone. Accepted samples remain immutable.
 To avoid bypassing timing controls across a process restart, every previously
 attempted origin waits one full configured cooldown before the first resumed
 request.
+
+The same coordinator-only rule applies to prerequisite-ordered class-study
+resume. Use the `class-study` resume action with its required evidence roots;
+generic `resume` cannot recreate the coordinator's identity-bound authority.
+For durable BuFLO/class-study samples, a terminal
+`StrictDefenseFidelityFailure` or `StrictClientDefenseExecutionFailure` is not
+a retryable interruption: resume verifies and preserves the sealed incomplete
+checkpoint, then stops.
 
 ### `verify`
 
