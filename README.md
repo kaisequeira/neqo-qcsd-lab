@@ -177,6 +177,59 @@ all 160 controlled captures, and the class foundation before public-page
 acquisition may begin. V34 progress is zero; no class-study foundation,
 qualification, readiness, or validation attestation exists.
 
+The build launcher now fails closed on the infrastructure condition that
+caused v33. It detects WSL from independent kernel, `/proc`, environment, and
+`/run/WSL` signals. On WSL it resolves only an authoritative registered or
+configured Docker **data** VHDX (never WSL's logical `df` value, Docker's
+`main` VHDX, or an uncorroborated default-path file), maps that exact file to
+its Windows backing volume with `Get-Volume -FilePath`, and requires at least
+68,719,476,736 available bytes (64 GiB). The rounded reserve exceeds three
+times the observed 20,099,104,768-byte VHDX growth between the last two
+documented checkpoints. When both a `docker-desktop-data` registration and a
+Docker settings location exist, they must resolve to the same candidate VHDX;
+conflicting authoritative locations are rejected.
+
+The launcher repeats the storage probe before collection, prepare, and
+reference builds and after the reference build. It binds the probe source,
+location source, VHDX path, backing-volume identifier, drive, and filesystem
+across all four observations. The accepted local Docker context, endpoint,
+server attributes, and daemon ID must also remain stable at each boundary and
+after all image/source inventory reads; every Docker build and inventory
+command names that validated context explicitly. Evidence builds reject all
+image-role overrides, use the three fixed role tags, and hold one non-blocking
+per-user, daemon-ID-derived host lock shared across checkouts and context
+aliases within the current WSL instance. Builds launched by another Unix user
+or WSL distribution are outside that mutex; the immutable-ID checks described
+below make any conflicting tag mutation fail closed. Each target writes its
+immutable ID through a target-specific Docker `--iidfile`; the launcher checks
+the tag against that ID immediately and again after all three builds. It also
+reads source metadata from every immutable role image and build-input metadata
+from collection and prepare, rejecting any cross-role snapshot difference.
+Host-side Python parsers run in isolated mode, load the exact source-controlled
+validator rather than the caller's import path, and canonicalise the checkout
+root before the first command.
+
+The prospective receipt is build-execution schema 2 with four nested schema-1
+storage observations, exact IID-bearing command vectors, three distinct role
+IDs, fixed role tags, and independently re-verifiable per-role provenance. It
+is fully revalidated against the clean source, Docker identity, no-cache
+commands, Dockerfile, lockfiles, checkout root, and probe hash before its
+create-only write. Missing, ambiguous, malformed,
+unhealthy, low-capacity, changing, remote, aliased, concurrent, shadowed, or
+semantically invalid evidence prevents a receipt. Historical build-execution
+schema-1 receipts remain readable and relocatable. No schema-2 build receipt
+has yet been produced.
+
+A read-only probe on 1 September 2026 found only about 2.19 GB available on
+the backing C: volume. This standalone observation is operational context,
+not one of the four observations in a successful build receipt. Between
+00:24:55 and 00:25:05 AEST that day, an accidental Docker Desktop version
+query launched Desktop; the VM again reported data-device I/O/full-filesystem
+errors and a temporary read-only overlay. Desktop was stopped, both Docker WSL
+distributions remain stopped, and no build, campaign, result, receipt, or v34
+gate was launched or advanced. V34 remains unlaunched pending deliberate host
+storage and Docker-data-filesystem recovery.
+
 The authoritative current heads, progression, and evidence ledger are
 maintained in
 [`../PROJECT.md`](../PROJECT.md); the exact extended-class protocol and
@@ -422,8 +475,10 @@ CONTROLLED_ROOT="results/buflo-study-controlled-v${COHORT_VERSION}"
 REGRESSION_ROOT="results/buflo-study-regression-v${COHORT_VERSION}"
 CODE_GATE="artifacts/buflo-study/code-gate-v${COHORT_VERSION}.json"
 
-# Builds all three targets with --pull --no-cache and creates the immutable
-# artifacts/buflo-study/build-execution-v${COHORT_VERSION}.json receipt.
+# On WSL, first require 64 GiB on the actual Docker data-VHDX backing volume.
+# Serially builds the three fixed roles with --pull --no-cache and --iidfile,
+# repeats the backing-volume and daemon checks at every target boundary, and
+# creates the immutable schema-2 build receipt.
 ./qcsd-lab build --cohort-version "$COHORT_VERSION"
 ./qcsd-lab buflo-study reference \
   --reference-root "$REFERENCE_ROOT" --destination "$REFERENCE" \
@@ -566,7 +621,8 @@ done
   --attestation "$ATTESTATION"
 ```
 
-Omitting `--cohort-version` preserves the version-1 command contract. A code,
+Omitting `--cohort-version` preserves the cohort-version-1 command contract;
+new successful builds still emit build-execution schema 2. A code,
 parameter, workload, chaff, or acceptance-rule change after rehearsal instead
 starts a new positive version: first run
 `./qcsd-lab build --cohort-version N`, then pass the same option to every

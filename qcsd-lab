@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 COLLECTION_IMAGE="${QCSD_LAB_COLLECTION_IMAGE:-neqo-qcsd-lab-collection:local}"
 PREPARE_IMAGE="${QCSD_LAB_PREPARE_IMAGE:-neqo-qcsd-lab-prepare:local}"
 REFERENCE_IMAGE="${QCSD_LAB_REFERENCE_IMAGE:-neqo-qcsd-lab-reference:local}"
+WSL_HOST_BUILD_MIN_AVAILABLE_BYTES=68719476736
 
 usage() {
   echo "Usage: qcsd-lab {build|prepare|derive-chaff-prefix-specs|qualify-chaff|qualify-response-chaff|run|resume|verify|analyze|fit|buflo-study|class-study|test} [arguments...]" >&2
@@ -76,15 +77,298 @@ require_docker() {
   fi
 }
 
-# Class-study arguments include security-sensitive canonical host paths.  Parse
-# and reject them before consulting Docker so validation is deterministic even
-# in the collection image's deliberately Docker-free test frame.  All other
-# actions retain the original early Docker/submodule checks.
-if [[ "${1:-}" != "class-study" ]]; then
-  require_docker
-  require_submodule
-fi
+reject_evidence_build_image_overrides() {
+  local variable
+  for variable in QCSD_LAB_COLLECTION_IMAGE QCSD_LAB_PREPARE_IMAGE \
+                  QCSD_LAB_REFERENCE_IMAGE; do
+    if [[ -v "${variable}" ]]; then
+      echo "qcsd-lab evidence build rejects image-role override ${variable}" >&2
+      return 1
+    fi
+  done
+}
 
+acquire_evidence_build_lock() {
+  command -v flock >/dev/null 2>&1 &&
+    command -v sha256sum >/dev/null 2>&1 &&
+    command -v stat >/dev/null 2>&1 || {
+    echo "qcsd-lab evidence build requires flock, sha256sum, and stat on the host" >&2
+    return 1
+  }
+  local current_uid lock_identity lock_root lock_state previous_umask
+  current_uid="$(id -u)"
+  if [[ ! "${current_uid}" =~ ^[0-9]+$ || -z "${build_docker_lock_identity}" ||
+        -L /tmp || ! -d /tmp ]]; then
+    echo "qcsd-lab evidence build cannot establish its shared host-lock root" >&2
+    return 1
+  fi
+  lock_root="/tmp/qcsd-lab-evidence-build-${current_uid}"
+  if ! mkdir -m 700 -- "${lock_root}" 2>/dev/null; then
+    if [[ -L "${lock_root}" || ! -d "${lock_root}" ]]; then
+      echo "qcsd-lab evidence build host-lock root is unsafe" >&2
+      return 1
+    fi
+  fi
+  lock_state="$(stat -c '%u:%a' -- "${lock_root}")"
+  if [[ "${lock_state}" != "${current_uid}:700" ]]; then
+    echo "qcsd-lab evidence build host-lock root has unsafe ownership or mode" >&2
+    return 1
+  fi
+  lock_identity="$(
+    printf '%s' "${build_docker_lock_identity}" | sha256sum | awk '{print $1}'
+  )"
+  if [[ ! "${lock_identity}" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "qcsd-lab evidence build cannot derive the Docker daemon lock identity" >&2
+    return 1
+  fi
+  build_lock_path="${lock_root}/${lock_identity}.lock"
+  if [[ -L "${build_lock_path}" ||
+        ( -e "${build_lock_path}" && ! -f "${build_lock_path}" ) ]]; then
+    echo "qcsd-lab evidence build lock must be a regular non-symlink file" >&2
+    return 1
+  fi
+  previous_umask="$(umask)"
+  umask 077
+  exec {build_host_lock_fd}>>"${build_lock_path}"
+  umask "${previous_umask}"
+  lock_state="$(stat -c '%u:%a' -- "${build_lock_path}")"
+  if [[ "${lock_state}" != "${current_uid}:600" ]]; then
+    echo "qcsd-lab evidence build lock has unsafe ownership or mode" >&2
+    return 1
+  fi
+  if ! flock -n "${build_host_lock_fd}"; then
+    echo "another qcsd-lab evidence build holds this user/WSL instance's Docker-daemon lock" >&2
+    return 1
+  fi
+}
+
+read_built_image_id() {
+  local target="$1"
+  local iidfile="$2"
+  local -a lines=()
+  if [[ -L "${iidfile}" || ! -f "${iidfile}" ]]; then
+    echo "qcsd-lab ${target} build did not create a regular IID file" >&2
+    return 1
+  fi
+  mapfile -t lines <"${iidfile}"
+  if (( ${#lines[@]} != 1 )) ||
+     [[ ! "${lines[0]}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+    echo "qcsd-lab ${target} build returned an invalid immutable image ID" >&2
+    return 1
+  fi
+  printf '%s\n' "${lines[0]}"
+}
+
+verify_built_image_binding() {
+  local target="$1"
+  local tag="$2"
+  local expected_id="$3"
+  local observed_id
+  observed_id="$(
+    docker --context "${build_docker_context}" image inspect \
+      --format '{{.Id}}' "${tag}"
+  )"
+  if [[ "${observed_id}" != "${expected_id}" ]]; then
+    echo "qcsd-lab ${target} image tag no longer binds its build-produced ID" >&2
+    return 1
+  fi
+}
+
+reject_docker_endpoint_overrides() {
+  local variable
+  for variable in DOCKER_HOST DOCKER_CONTEXT DOCKER_CONFIG DOCKER_TLS_VERIFY \
+                  DOCKER_CERT_PATH DOCKER_DEFAULT_PLATFORM BUILDX_BUILDER \
+                  BUILDX_CONFIG BUILDKIT_HOST DOCKER_BUILDKIT; do
+    if [[ -n "${!variable:-}" ]]; then
+      echo "qcsd-lab evidence build rejects Docker endpoint/builder override ${variable}" >&2
+      return 1
+    fi
+  done
+}
+
+validate_local_docker_build_endpoint() {
+  local current_context current_endpoint current_server_name
+  local current_server_operating_system current_server_os_type
+  local current_server_architecture current_server_id current_identity
+  local current_server_json
+  local -a current_server_fields
+  current_context="$(docker context show)"
+  if [[ "${current_context}" != "default" &&
+        "${current_context}" != "desktop-linux" ]]; then
+    echo "qcsd-lab evidence build requires the default local Docker context" >&2
+    return 1
+  fi
+  current_endpoint="$(
+    docker context inspect --format '{{.Endpoints.docker.Host}}' \
+      "${current_context}"
+  )"
+  if [[ "${current_endpoint}" != "unix:///var/run/docker.sock" &&
+        "${current_endpoint}" != "npipe:////./pipe/dockerDesktopLinuxEngine" ]]; then
+    echo "qcsd-lab evidence build requires a local Docker Desktop endpoint" >&2
+    return 1
+  fi
+  current_server_json="$(
+    docker --context "${current_context}" info --format '{{json .}}'
+  )"
+  if ! mapfile -t current_server_fields < <(
+    printf '%s\n' "${current_server_json}" | python3 -I -c '
+import json, sys
+value = json.load(sys.stdin)
+for key in ("Name", "OperatingSystem", "OSType", "Architecture", "ID"):
+    item = value.get(key)
+    if not isinstance(item, str) or not item:
+        raise SystemExit(1)
+    print(item)
+'
+  ) || (( ${#current_server_fields[@]} != 5 )); then
+    echo "qcsd-lab evidence build received invalid local Docker server identity" >&2
+    return 1
+  fi
+  current_server_name="${current_server_fields[0]}"
+  current_server_operating_system="${current_server_fields[1]}"
+  current_server_os_type="${current_server_fields[2]}"
+  current_server_architecture="${current_server_fields[3]}"
+  current_server_id="${current_server_fields[4]}"
+  if [[ -z "${current_server_name}" ||
+        -z "${current_server_operating_system}" ||
+        "${current_server_os_type}" != "linux" ||
+        -z "${current_server_architecture}" ||
+        -z "${current_server_id}" ]]; then
+    echo "qcsd-lab evidence build received invalid local Docker server identity" >&2
+    return 1
+  fi
+  if (( build_host_storage_applicable )) &&
+     [[ "${current_server_operating_system,,}" != *docker\ desktop* ]]; then
+    echo "qcsd-lab WSL evidence build requires the local Docker Desktop Linux engine" >&2
+    return 1
+  fi
+  current_identity="${current_context}"$'\t'"${current_endpoint}"$'\t'\
+"${current_server_name}"$'\t'"${current_server_operating_system}"$'\t'\
+"${current_server_os_type}"$'\t'"${current_server_architecture}"$'\t'\
+"${current_server_id}"
+  if [[ -n "${build_docker_identity}" &&
+        "${current_identity}" != "${build_docker_identity}" ]]; then
+    echo "qcsd-lab evidence build Docker daemon identity changed between build boundaries" >&2
+    return 1
+  fi
+  build_docker_identity="${current_identity}"
+  build_docker_context="${current_context}"
+  build_docker_endpoint="${current_endpoint}"
+  build_docker_server_name="${current_server_name}"
+  build_docker_server_operating_system="${current_server_operating_system}"
+  build_docker_server_os_type="${current_server_os_type}"
+  build_docker_server_architecture="${current_server_architecture}"
+  build_docker_server_id="${current_server_id}"
+  build_docker_lock_identity="${current_server_id}"$'\t'\
+"${current_server_os_type}"$'\t'"${current_server_architecture}"
+}
+
+wsl_host_build_storage_init() {
+  build_host_storage_applicable=0
+  build_host_storage_platform="other-host"
+  build_host_storage_policy="docker-data-vhdx-backing-volume-minimum-v1"
+  build_host_storage_required_bytes="${WSL_HOST_BUILD_MIN_AVAILABLE_BYTES}"
+  build_host_storage_identity=""
+  build_host_storage_observations=()
+  build_docker_identity=""
+  build_docker_lock_identity=""
+  build_host_wsl_interop_env_present=0
+  build_host_wsl_distro_name_env_present=0
+  build_host_run_wsl_directory_present=0
+  if ! build_host_kernel_release="$(uname -r)" ||
+     [[ -z "${build_host_kernel_release}" ]]; then
+    echo "qcsd-lab build cannot establish the host kernel release" >&2
+    return 1
+  fi
+  if ! build_host_proc_version="$(< /proc/version)" ||
+     [[ -z "${build_host_proc_version}" ]]; then
+    echo "qcsd-lab build cannot establish the host kernel version evidence" >&2
+    return 1
+  fi
+  if [[ -n "${WSL_INTEROP:-}" ]]; then
+    build_host_wsl_interop_env_present=1
+  fi
+  if [[ -n "${WSL_DISTRO_NAME:-}" ]]; then
+    build_host_wsl_distro_name_env_present=1
+  fi
+  if [[ -d /run/WSL ]]; then
+    build_host_run_wsl_directory_present=1
+  fi
+  if [[ "${build_host_kernel_release,,}" == *microsoft* ||
+        "${build_host_proc_version,,}" == *microsoft* ]] ||
+     (( build_host_wsl_interop_env_present ||
+        build_host_wsl_distro_name_env_present ||
+        build_host_run_wsl_directory_present )); then
+    build_host_storage_applicable=1
+    build_host_storage_platform="windows-wsl2"
+  fi
+}
+
+wsl_host_build_storage_probe() {
+  local boundary="${1}"
+  if (( ! build_host_storage_applicable )); then
+    return 0
+  fi
+  command -v powershell.exe >/dev/null 2>&1 || {
+    echo "qcsd-lab build cannot verify the Docker data VHDX backing volume: powershell.exe is unavailable" >&2
+    return 1
+  }
+  command -v wslpath >/dev/null 2>&1 || {
+    echo "qcsd-lab build cannot verify the Docker data VHDX backing volume: wslpath is unavailable" >&2
+    return 1
+  }
+
+  local probe_script probe_script_windows raw validated
+  local data_vhd_path backing_volume_unique_id available_bytes identity
+  probe_script="${ROOT}/tools/windows_docker_storage_probe.ps1"
+  if [[ -L "${probe_script}" || ! -f "${probe_script}" ]]; then
+    echo "qcsd-lab build cannot verify the Docker data VHDX backing volume: the source-controlled probe is unavailable" >&2
+    return 1
+  fi
+  if ! probe_script_windows="$(wslpath -w -- "${probe_script}")" ||
+     [[ -z "${probe_script_windows}" ]]; then
+    echo "qcsd-lab build cannot map the Docker data VHDX probe into Windows" >&2
+    return 1
+  fi
+  if ! raw="$(
+    powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass \
+      -File "${probe_script_windows}" -Boundary "${boundary}"
+  )"; then
+    echo "qcsd-lab build cannot establish exactly one healthy Docker data VHDX backing volume at ${boundary}; WSL logical free space is not accepted" >&2
+    return 1
+  fi
+
+  if ! validated="$(
+    printf '%s\n' "${raw}" | python3 -I \
+      "${ROOT}/src/qcsd_lab/build_storage.py" observation --boundary "${boundary}" \
+      --probe-path "${probe_script}"
+  )"; then
+    return 1
+  fi
+  local -a build_host_storage_fields
+  mapfile -t build_host_storage_fields <<< "${validated}"
+  if (( ${#build_host_storage_fields[@]} != 5 )); then
+    echo "qcsd-lab build host-storage probe returned malformed validated evidence" >&2
+    return 1
+  fi
+  data_vhd_path="${build_host_storage_fields[1]}"
+  backing_volume_unique_id="${build_host_storage_fields[2]}"
+  available_bytes="${build_host_storage_fields[3]}"
+  identity="${build_host_storage_fields[4]}"
+  if [[ -n "${build_host_storage_identity}" &&
+        "${identity}" != "${build_host_storage_identity}" ]]; then
+    echo "qcsd-lab build Docker data VHDX backing-volume identity changed at ${boundary}; refusing an evidentiary receipt" >&2
+    return 1
+  fi
+  build_host_storage_identity="${identity}"
+  build_host_storage_observations+=("${build_host_storage_fields[0]}")
+  echo "WSL Docker backing-storage check passed at ${boundary}: ${available_bytes} available bytes" >&2
+}
+
+# Parse a build request and enforce its create-only destination before any
+# host-capacity or Docker probe.  A responsive daemon and large WSL ext4 free
+# count do not prove that the Windows volume backing Docker's VHDX can safely
+# export a new image.
 if [[ "${1:-}" == "build" ]]; then
   build_cohort_version=1
   if (( $# == 3 )) && [[ "${2:-}" == "--cohort-version" ]]; then
@@ -99,6 +383,7 @@ if [[ "${1:-}" == "build" ]]; then
     echo "build cohort version must be a positive integer" >&2
     exit 2
   fi
+  reject_evidence_build_image_overrides
   build_receipt="${ROOT}/artifacts/buflo-study/build-execution-v${build_cohort_version}.json"
   build_receipt_parent="$(dirname "${build_receipt}")"
   if [[ -L "${build_receipt_parent}" || -L "${build_receipt}" ]]; then
@@ -112,46 +397,143 @@ if [[ "${1:-}" == "build" ]]; then
     echo "build requires an absent create-only receipt: ${build_receipt}" >&2
     exit 1
   fi
+  require_submodule
+  wsl_host_build_storage_init
+  wsl_host_build_storage_probe "before-collection"
+  reject_docker_endpoint_overrides
+  require_docker
+  validate_local_docker_build_endpoint
+  acquire_evidence_build_lock
+elif [[ "${1:-}" != "class-study" ]]; then
+  require_docker
+  require_submodule
+fi
+
+if [[ "${1:-}" == "build" ]]; then
   build_started_unix_ns="$(date +%s%N)"
-  docker build --pull --no-cache --target collection \
+  build_iid_dir="$(
+    mktemp -d "${build_receipt_parent}/.build-iids-v${build_cohort_version}.XXXXXX"
+  )"
+  collection_iid_path="${build_iid_dir}/collection.iid"
+  prepare_iid_path="${build_iid_dir}/prepare.iid"
+  reference_iid_path="${build_iid_dir}/reference.iid"
+  cleanup_build_iids() {
+    rm -f -- "${collection_iid_path}" "${prepare_iid_path}" "${reference_iid_path}"
+    rmdir -- "${build_iid_dir}" 2>/dev/null || true
+  }
+  trap cleanup_build_iids EXIT
+  docker --context "${build_docker_context}" build --pull --no-cache \
+    --iidfile "${collection_iid_path}" \
+    --target collection \
     --tag "${COLLECTION_IMAGE}" --file "${ROOT}/Dockerfile" "${ROOT}"
-  docker build --pull --no-cache --target prepare \
+  collection_id="$(read_built_image_id collection "${collection_iid_path}")"
+  verify_built_image_binding collection "${COLLECTION_IMAGE}" "${collection_id}"
+  wsl_host_build_storage_probe "before-prepare"
+  validate_local_docker_build_endpoint
+  docker --context "${build_docker_context}" build --pull --no-cache \
+    --iidfile "${prepare_iid_path}" \
+    --target prepare \
     --tag "${PREPARE_IMAGE}" --file "${ROOT}/Dockerfile" "${ROOT}"
-  docker build --pull --no-cache --target reference \
+  prepare_id="$(read_built_image_id prepare "${prepare_iid_path}")"
+  verify_built_image_binding prepare "${PREPARE_IMAGE}" "${prepare_id}"
+  wsl_host_build_storage_probe "before-reference"
+  validate_local_docker_build_endpoint
+  docker --context "${build_docker_context}" build --pull --no-cache \
+    --iidfile "${reference_iid_path}" \
+    --target reference \
     --tag "${REFERENCE_IMAGE}" --file "${ROOT}/Dockerfile" "${ROOT}"
-  build_finished_unix_ns="$(date +%s%N)"
-  collection_id="$(docker image inspect --format '{{.Id}}' "${COLLECTION_IMAGE}")"
-  prepare_id="$(docker image inspect --format '{{.Id}}' "${PREPARE_IMAGE}")"
-  reference_id="$(docker image inspect --format '{{.Id}}' "${REFERENCE_IMAGE}")"
-  build_source="$(
-    docker run --rm --entrypoint /bin/cat \
+  reference_id="$(read_built_image_id reference "${reference_iid_path}")"
+  verify_built_image_binding reference "${REFERENCE_IMAGE}" "${reference_id}"
+  wsl_host_build_storage_probe "after-reference"
+  validate_local_docker_build_endpoint
+  build_host_storage_observations_json="$(
+    printf '%s\n' "${build_host_storage_observations[@]}" | python3 -I -c '
+import json, sys
+print(json.dumps([json.loads(line) for line in sys.stdin if line.strip()], separators=(",", ":")))
+'
+  )"
+  verify_built_image_binding collection "${COLLECTION_IMAGE}" "${collection_id}"
+  verify_built_image_binding prepare "${PREPARE_IMAGE}" "${prepare_id}"
+  verify_built_image_binding reference "${REFERENCE_IMAGE}" "${reference_id}"
+  collection_source="$(
+    docker --context "${build_docker_context}" run --rm --entrypoint /bin/cat \
       "${collection_id}" /usr/share/qcsd-lab/source.json
   )"
-  build_inputs="$(
-    docker run --rm --entrypoint /bin/cat \
+  prepare_source="$(
+    docker --context "${build_docker_context}" run --rm --entrypoint /bin/cat \
+      "${prepare_id}" /usr/share/qcsd-lab/source.json
+  )"
+  reference_source="$(
+    docker --context "${build_docker_context}" run --rm --entrypoint /bin/cat \
+      "${reference_id}" /usr/share/qcsd-lab/source.json
+  )"
+  if [[ "${collection_source}" != "${prepare_source}" ||
+        "${collection_source}" != "${reference_source}" ]]; then
+    echo "qcsd-lab image roles were built from different source snapshots" >&2
+    exit 1
+  fi
+  collection_build_inputs="$(
+    docker --context "${build_docker_context}" run --rm --entrypoint /bin/cat \
       "${collection_id}" /usr/share/qcsd-lab/study-build-inputs.json
   )"
-  build_docker_version="$(docker version --format '{{json .}}')"
+  prepare_build_inputs="$(
+    docker --context "${build_docker_context}" run --rm --entrypoint /bin/cat \
+      "${prepare_id}" /usr/share/qcsd-lab/study-build-inputs.json
+  )"
+  if [[ "${collection_build_inputs}" != "${prepare_build_inputs}" ]]; then
+    echo "qcsd-lab image roles used different build inputs" >&2
+    exit 1
+  fi
+  collection_repo_digests="$(docker --context "${build_docker_context}" image inspect --format '{{json .RepoDigests}}' "${collection_id}")"
+  prepare_repo_digests="$(docker --context "${build_docker_context}" image inspect --format '{{json .RepoDigests}}' "${prepare_id}")"
+  reference_repo_digests="$(docker --context "${build_docker_context}" image inspect --format '{{json .RepoDigests}}' "${reference_id}")"
+  build_docker_version="$(docker --context "${build_docker_context}" version --format '{{json .}}')"
+  validate_local_docker_build_endpoint
+  build_finished_unix_ns="$(date +%s%N)"
   COLLECTION_ID="${collection_id}" \
-  COLLECTION_REPO_DIGESTS="$(docker image inspect --format '{{json .RepoDigests}}' "${collection_id}")" \
+  COLLECTION_REPO_DIGESTS="${collection_repo_digests}" \
   PREPARE_ID="${prepare_id}" \
-  PREPARE_REPO_DIGESTS="$(docker image inspect --format '{{json .RepoDigests}}' "${prepare_id}")" \
+  PREPARE_REPO_DIGESTS="${prepare_repo_digests}" \
   REFERENCE_ID="${reference_id}" \
-  REFERENCE_REPO_DIGESTS="$(docker image inspect --format '{{json .RepoDigests}}' "${reference_id}")" \
-  BUILD_SOURCE="${build_source}" \
-  BUILD_INPUTS="${build_inputs}" \
+  REFERENCE_REPO_DIGESTS="${reference_repo_digests}" \
+  COLLECTION_SOURCE="${collection_source}" \
+  PREPARE_SOURCE="${prepare_source}" \
+  REFERENCE_SOURCE="${reference_source}" \
+  COLLECTION_BUILD_INPUTS="${collection_build_inputs}" \
+  PREPARE_BUILD_INPUTS="${prepare_build_inputs}" \
   BUILD_DOCKER_VERSION="${build_docker_version}" \
+  BUILD_DOCKER_CONTEXT="${build_docker_context}" \
+  BUILD_DOCKER_ENDPOINT="${build_docker_endpoint}" \
+  BUILD_DOCKER_SERVER_NAME="${build_docker_server_name}" \
+  BUILD_DOCKER_SERVER_OPERATING_SYSTEM="${build_docker_server_operating_system}" \
+  BUILD_DOCKER_SERVER_OS_TYPE="${build_docker_server_os_type}" \
+  BUILD_DOCKER_SERVER_ARCHITECTURE="${build_docker_server_architecture}" \
+  BUILD_DOCKER_SERVER_ID="${build_docker_server_id}" \
   BUILD_STARTED_UNIX_NS="${build_started_unix_ns}" \
   BUILD_FINISHED_UNIX_NS="${build_finished_unix_ns}" \
+  COLLECTION_IID_PATH="${collection_iid_path}" \
+  PREPARE_IID_PATH="${prepare_iid_path}" \
+  REFERENCE_IID_PATH="${reference_iid_path}" \
   BUILD_RECEIPT="${build_receipt}" \
   BUILD_COHORT_VERSION="${build_cohort_version}" \
   BUILD_ROOT="${ROOT}" \
+  BUILD_HOST_STORAGE_APPLICABLE="${build_host_storage_applicable}" \
+  BUILD_HOST_STORAGE_PLATFORM="${build_host_storage_platform}" \
+  BUILD_HOST_STORAGE_POLICY="${build_host_storage_policy}" \
+  BUILD_HOST_STORAGE_OBSERVATIONS="${build_host_storage_observations_json}" \
+  BUILD_HOST_STORAGE_REQUIRED_BYTES="${build_host_storage_required_bytes}" \
+  BUILD_HOST_KERNEL_RELEASE="${build_host_kernel_release}" \
+  BUILD_HOST_PROC_VERSION="${build_host_proc_version}" \
+  BUILD_HOST_WSL_INTEROP_ENV_PRESENT="${build_host_wsl_interop_env_present}" \
+  BUILD_HOST_WSL_DISTRO_NAME_ENV_PRESENT="${build_host_wsl_distro_name_env_present}" \
+  BUILD_HOST_RUN_WSL_DIRECTORY_PRESENT="${build_host_run_wsl_directory_present}" \
   COLLECTION_TAG="${COLLECTION_IMAGE}" \
   PREPARE_TAG="${PREPARE_IMAGE}" \
   REFERENCE_TAG="${REFERENCE_IMAGE}" \
-  python3 - <<'PY'
+  python3 -I - <<'PY'
 import datetime
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -161,8 +543,6 @@ destination = Path(os.environ["BUILD_RECEIPT"])
 started_ns = int(os.environ["BUILD_STARTED_UNIX_NS"])
 finished_ns = int(os.environ["BUILD_FINISHED_UNIX_NS"])
 version = json.loads(os.environ["BUILD_DOCKER_VERSION"])
-source = json.loads(os.environ["BUILD_SOURCE"])
-source["image_digest"] = os.environ["COLLECTION_ID"]
 images = {
     "collection": {
         "tag": os.environ["COLLECTION_TAG"],
@@ -180,15 +560,29 @@ images = {
         "repo_digests": json.loads(os.environ["REFERENCE_REPO_DIGESTS"]),
     },
 }
+sources = {
+    target: {
+        **json.loads(os.environ[f"{target.upper()}_SOURCE"]),
+        "image_digest": images[target]["id"],
+    }
+    for target in ("collection", "prepare", "reference")
+}
+build_inputs_by_image = {
+    "collection": json.loads(os.environ["COLLECTION_BUILD_INPUTS"]),
+    "prepare": json.loads(os.environ["PREPARE_BUILD_INPUTS"]),
+    "reference": None,
+}
 commands = []
 for target in ("collection", "prepare", "reference"):
     commands.append(
         {
             "target": target,
             "argv": [
-                "docker", "build", "--pull", "--no-cache", "--target", target,
-                "--tag", images[target]["tag"], "--file", str(root / "Dockerfile"),
-                str(root),
+                "docker", "--context", os.environ["BUILD_DOCKER_CONTEXT"],
+                "build", "--pull", "--no-cache", "--iidfile",
+                os.environ[f"{target.upper()}_IID_PATH"], "--target", target,
+                "--tag", images[target]["tag"], "--file",
+                str(root / "Dockerfile"), str(root),
             ],
             "exit_code": 0,
             "image_id": images[target]["id"],
@@ -200,8 +594,40 @@ def stamp(unix_ns):
         unix_ns / 1_000_000_000, tz=datetime.timezone.utc
     ).isoformat()
 
-value = {
+host_storage_applicable = os.environ["BUILD_HOST_STORAGE_APPLICABLE"] == "1"
+host_storage_observations = json.loads(os.environ["BUILD_HOST_STORAGE_OBSERVATIONS"])
+host_storage = {
     "schema_version": 1,
+    "applicable": host_storage_applicable,
+    "platform": os.environ["BUILD_HOST_STORAGE_PLATFORM"],
+    "platform_detection": {
+        "schema_version": 1,
+        "probe": "wsl-multi-signal-v1",
+        "kernel_release": os.environ["BUILD_HOST_KERNEL_RELEASE"],
+        "proc_version": os.environ["BUILD_HOST_PROC_VERSION"],
+        "wsl_interop_env_present": (
+            os.environ["BUILD_HOST_WSL_INTEROP_ENV_PRESENT"] == "1"
+        ),
+        "wsl_distro_name_env_present": (
+            os.environ["BUILD_HOST_WSL_DISTRO_NAME_ENV_PRESENT"] == "1"
+        ),
+        "run_wsl_directory_present": (
+            os.environ["BUILD_HOST_RUN_WSL_DIRECTORY_PRESENT"] == "1"
+        ),
+    },
+    "policy": os.environ["BUILD_HOST_STORAGE_POLICY"],
+    "required_available_bytes": int(os.environ["BUILD_HOST_STORAGE_REQUIRED_BYTES"]),
+    "observations": host_storage_observations,
+    "minimum_available_bytes": (
+        min(item["available_bytes"] for item in host_storage_observations)
+        if host_storage_applicable
+        else None
+    ),
+    "passed": True,
+}
+
+value = {
+    "schema_version": 2,
     "artifact_type": "qcsd-buflo-study-no-cache-build-execution",
     "cohort_version": int(os.environ["BUILD_COHORT_VERSION"]),
     "started_at": stamp(started_ns),
@@ -210,20 +636,49 @@ value = {
     "docker": {
         "client_version": version["Client"]["Version"],
         "server_version": version["Server"]["Version"],
+        "context": os.environ["BUILD_DOCKER_CONTEXT"],
+        "endpoint": os.environ["BUILD_DOCKER_ENDPOINT"],
+        "server_name": os.environ["BUILD_DOCKER_SERVER_NAME"],
+        "server_operating_system": os.environ["BUILD_DOCKER_SERVER_OPERATING_SYSTEM"],
+        "server_os_type": os.environ["BUILD_DOCKER_SERVER_OS_TYPE"],
+        "server_architecture": os.environ["BUILD_DOCKER_SERVER_ARCHITECTURE"],
+        "server_id": os.environ["BUILD_DOCKER_SERVER_ID"],
     },
     "commands": commands,
     "images": images,
-    "source": source,
-    "build_inputs": json.loads(os.environ["BUILD_INPUTS"]),
+    "source": sources["collection"],
+    "build_inputs": build_inputs_by_image["collection"],
     "dockerfile_sha256": hashlib.sha256((root / "Dockerfile").read_bytes()).hexdigest(),
     "cache_policy": {
         "pull": True,
         "no_cache": True,
         "scope": "Docker-layer-cache-disabled;declared-BuildKit-dependency-cache-mounts-only",
     },
+    "role_provenance": {
+        "schema_version": 1,
+        "sources": sources,
+        "build_inputs": build_inputs_by_image,
+    },
+    "host_storage_preflight": host_storage,
 }
 payload = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
 value["payload_sha256"] = hashlib.sha256(payload).hexdigest()
+validator_path = root / "src/qcsd_lab/build_storage.py"
+spec = importlib.util.spec_from_file_location("_qcsd_build_storage", validator_path)
+if spec is None or spec.loader is None:
+    raise SystemExit("cannot load the exact build evidence validator")
+validator = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(validator)
+
+validator.validate_build_execution_envelope(
+    value,
+    expected_cohort_version=int(os.environ["BUILD_COHORT_VERSION"]),
+    expected_probe_sha256=hashlib.sha256(
+        (root / "tools/windows_docker_storage_probe.ps1").read_bytes()
+    ).hexdigest(),
+    checkout_root=root,
+    expected_build_root=root,
+)
 encoded = (json.dumps(value, indent=2, sort_keys=True) + "\n").encode()
 with destination.open("xb") as output:
     output.write(encoded)
@@ -293,7 +748,7 @@ read_capture_admission_binding() {
   local admission="$1"
   local -a fields=()
   mapfile -t fields < <(
-    python3 -c '
+    python3 -I -c '
 import json, re, sys
 from pathlib import Path
 path = Path(sys.argv[1])
@@ -353,7 +808,7 @@ if [[ "${1:-}" == "resume" ]]; then
     exit 1
   fi
   study_resume_name="$(
-    python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["name"])' \
+    python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["name"])' \
       "${study_resume_root}/experiment.json"
   )"
   if [[ "${study_resume_name}" =~ ^buflo-study-v1-(public-(smoke|rehearsal)|formal-[0-9]{2})-1200$ ]]; then
@@ -378,41 +833,9 @@ if [[ -n "${study_cohort_version}" ]]; then
     exit 1
   fi
   mapfile -t study_build_fields < <(
-    python3 -c '
-import hashlib, json, re, sys
-from pathlib import Path
-path = Path(sys.argv[1])
-expected = int(sys.argv[2])
-raw = path.read_bytes()
-value = json.loads(raw)
-payload = dict(value)
-claimed = payload.pop("payload_sha256", None)
-actual = hashlib.sha256(
-    json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-).hexdigest()
-images = value.get("images")
-source = value.get("source")
-if (
-    value.get("schema_version") != 1
-    or value.get("artifact_type") != "qcsd-buflo-study-no-cache-build-execution"
-    or value.get("cohort_version") != expected
-    or claimed != actual
-    or not isinstance(images, dict) or set(images) != {"collection", "prepare", "reference"}
-    or not isinstance(source, dict)
-):
-    raise SystemExit("selected build receipt is invalid")
-ids = []
-for target in ("collection", "prepare", "reference"):
-    record = images[target]
-    image_id = record.get("id") if isinstance(record, dict) else None
-    if re.fullmatch(r"sha256:[0-9a-f]{64}", str(image_id)) is None:
-        raise SystemExit("selected build receipt image binding is invalid")
-    ids.append(image_id)
-if source.get("image_digest") != ids[0]:
-    raise SystemExit("selected build source differs from its collection image")
-print(hashlib.sha256(raw).hexdigest())
-print(*ids, sep="\n")
-' "${study_build_execution_path}" "${study_cohort_version}"
+    python3 -I "${ROOT}/src/qcsd_lab/build_storage.py" receipt \
+      "${study_build_execution_path}" --expected-cohort "${study_cohort_version}" \
+      --probe-path "${ROOT}/tools/windows_docker_storage_probe.ps1"
   )
   if (( ${#study_build_fields[@]} != 4 )); then
     echo "selected build receipt is invalid" >&2
@@ -451,7 +874,7 @@ class_rw_files=()
 declare -A class_path_hosts=()
 
 class_host_path() {
-  python3 -c '
+  python3 -I -c '
 import os
 import sys
 from pathlib import Path
@@ -594,7 +1017,12 @@ if [[ "${1:-}" == "class-study" ]]; then
     exit 1
   }
   mapfile -t class_layout_fields < <(
-    QCSD_LAB_ROOT="${ROOT}" PYTHONPATH="${ROOT}/src" python3 -c '
+    QCSD_LAB_ROOT="${ROOT}" python3 -I -c '
+import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(os.environ["QCSD_LAB_ROOT"]).resolve() / "src"))
 from qcsd_lab.class_layout import (
     AUTHORITATIVE_COHORT_ASSEMBLY_FILENAME,
     AUTHORITATIVE_COHORT_FILENAME,
@@ -1085,12 +1513,18 @@ if [[ "${1:-}" == "class-study" &&
       "${class_study_action}" == "qualify-prefix" ]]; then
   class_foundation_path="${class_path_hosts[--foundation-attestation]}"
   mapfile -t class_qualification_fields < <(
-    python3 -c '
-import hashlib, json, os, re, sys
+    python3 -I -c '
+import hashlib, importlib.util, json, os, re, sys
 from pathlib import Path
 
 root = Path(sys.argv[1]).resolve()
 foundation_path = Path(sys.argv[2])
+validator_path = root / "src/qcsd_lab/build_storage.py"
+spec = importlib.util.spec_from_file_location("_qcsd_build_storage", validator_path)
+if spec is None or spec.loader is None:
+    raise SystemExit("cannot load the exact build evidence validator")
+validator = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(validator)
 
 def canonical(value):
     return (json.dumps(value, indent=2, sort_keys=True, allow_nan=False) + "\n").encode()
@@ -1139,27 +1573,20 @@ build_raw = build_path.read_bytes()
 if hashlib.sha256(build_raw).hexdigest() != binding["sha256"]:
     raise SystemExit("class-study foundation build receipt digest changed")
 build = json.loads(build_raw)
-claimed = build.get("payload_sha256")
-unsigned = dict(build)
-unsigned.pop("payload_sha256", None)
-actual = hashlib.sha256(
-    json.dumps(unsigned, sort_keys=True, separators=(",", ":")).encode()
-).hexdigest()
-images = build.get("images")
-source = build.get("source")
-prepare = images.get("prepare") if isinstance(images, dict) else None
-prepare_id = prepare.get("id") if isinstance(prepare, dict) else None
+validated_build = validator.validate_build_execution_envelope(
+    build,
+    expected_probe_sha256=hashlib.sha256(
+        (root / "tools/windows_docker_storage_probe.ps1").read_bytes()
+    ).hexdigest(),
+    checkout_root=root,
+    expected_build_root=root,
+)
+source = validated_build["source"]
+prepare_id = validated_build["image_ids"]["prepare"]
 foundation_source = payload.get("source")
 identity = payload.get("build_execution_identity")
 if (
-    build.get("schema_version") != 1
-    or build.get("artifact_type") != "qcsd-buflo-study-no-cache-build-execution"
-    or claimed != actual
-    or not isinstance(images, dict)
-    or set(images) != {"collection", "prepare", "reference"}
-    or re.fullmatch(r"sha256:[0-9a-f]{64}", str(prepare_id)) is None
-    or not isinstance(source, dict)
-    or source != foundation_source
+    source != foundation_source
     or not isinstance(identity, dict)
     or identity.get("sha256") != binding["sha256"]
     or identity.get("collection_image") != source.get("image_digest")
@@ -1187,40 +1614,9 @@ elif [[ "${1:-}" == "class-study" && "${class_study_execute}" == "1" &&
     exit 2
   fi
   mapfile -t class_build_fields < <(
-    python3 -c '
-import hashlib, json, re, sys
-from pathlib import Path
-path = Path(sys.argv[1])
-raw = path.read_bytes()
-value = json.loads(raw)
-payload = dict(value)
-claimed = payload.pop("payload_sha256", None)
-actual = hashlib.sha256(
-    json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-).hexdigest()
-images = value.get("images")
-source = value.get("source")
-if (
-    value.get("schema_version") != 1
-    or value.get("artifact_type") != "qcsd-buflo-study-no-cache-build-execution"
-    or claimed != actual
-    or not isinstance(images, dict)
-    or set(images) != {"collection", "prepare", "reference"}
-    or not isinstance(source, dict)
-):
-    raise SystemExit("class-study build execution receipt is invalid")
-ids = []
-for target in ("collection", "prepare", "reference"):
-    record = images[target]
-    image_id = record.get("id") if isinstance(record, dict) else None
-    if re.fullmatch(r"sha256:[0-9a-f]{64}", str(image_id)) is None:
-        raise SystemExit("class-study build image binding is invalid")
-    ids.append(image_id)
-if source.get("image_digest") != ids[0]:
-    raise SystemExit("class-study build source differs from its collection image")
-print(hashlib.sha256(raw).hexdigest())
-print(*ids, sep="\n")
-' "${study_build_execution_path}"
+    python3 -I "${ROOT}/src/qcsd_lab/build_storage.py" receipt \
+      "${study_build_execution_path}" \
+      --probe-path "${ROOT}/tools/windows_docker_storage_probe.ps1"
   )
   if (( ${#class_build_fields[@]} != 4 )); then
     echo "class-study build execution receipt is invalid" >&2
@@ -1238,7 +1634,7 @@ elif [[ "${1:-}" == "class-study" && "${class_study_execute}" == "1" &&
     exit 1
   fi
   COLLECTION_IMAGE="$(
-    python3 -c '
+    python3 -I -c '
 import json, re, sys
 value = json.load(open(sys.argv[1], encoding="utf-8"))
 image = value.get("collection_image", {}).get("id")
@@ -1526,7 +1922,7 @@ study_environment_b64=""
 if [[ "${1:-}" == "class-study" && "${class_study_execute}" == "1" &&
       "${class_study_action}" == "resume" ]]; then
   study_environment_b64="$(
-    python3 -c '
+    python3 -I -c '
 import base64, sys
 from pathlib import Path
 print(base64.b64encode(Path(sys.argv[1]).read_bytes()).decode())
@@ -1576,7 +1972,7 @@ print(json.dumps({
     QCSD_STUDY_REPO_DIGESTS="${study_repo_digests}" \
     QCSD_STUDY_IMAGE_ID="${image_id}" \
     QCSD_STUDY_CAPTURE_SCHEDULER_CONTRACT="${study_capture_scheduler_contract}" \
-    python3 -c '
+    python3 -I -c '
 import base64, json, os, subprocess, time
 version = json.loads(os.environ["QCSD_STUDY_DOCKER_VERSION"])
 info = json.loads(os.environ["QCSD_STUDY_DOCKER_INFO"])
@@ -1788,7 +2184,7 @@ verify_qualification_checkout() {
   local -a image_source=()
   metadata="$(docker run --rm --entrypoint /bin/cat "${image_id}" /usr/share/qcsd-lab/source.json)"
   mapfile -t image_source < <(
-    python3 -c 'import json,sys; v=json.load(sys.stdin); print(v["lab_commit"]); print(str(v["lab_dirty"]).lower()); print(v["lab_patch_sha256"]); print(v["neqo_commit"]); print(v["neqo_pinned_commit"]); print(str(v["neqo_dirty"]).lower()); print(v["neqo_patch_sha256"])' <<<"${metadata}"
+    python3 -I -c 'import json,sys; v=json.load(sys.stdin); print(v["lab_commit"]); print(str(v["lab_dirty"]).lower()); print(v["lab_patch_sha256"]); print(v["neqo_commit"]); print(v["neqo_pinned_commit"]); print(str(v["neqo_dirty"]).lower()); print(v["neqo_patch_sha256"])' <<<"${metadata}"
   )
   local empty_sha="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
   local lab_head neqo_head neqo_pin
@@ -1821,7 +2217,7 @@ verify_fit_neqo_checkout() {
   empty_sha="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
   metadata="$(docker run --rm --entrypoint /bin/cat "${image_id}" /usr/share/qcsd-lab/source.json)"
   mapfile -t image_neqo_source < <(
-    python3 -c 'import json,sys; v=json.load(sys.stdin); print(v["neqo_commit"]); print(v["neqo_pinned_commit"]); print(str(v["neqo_dirty"]).lower()); print(v["neqo_patch_sha256"])' <<<"${metadata}"
+    python3 -I -c 'import json,sys; v=json.load(sys.stdin); print(v["neqo_commit"]); print(v["neqo_pinned_commit"]); print(str(v["neqo_dirty"]).lower()); print(v["neqo_patch_sha256"])' <<<"${metadata}"
   )
   image_neqo="${image_neqo_source[0]:-}"
   image_pin="${image_neqo_source[1]:-}"
@@ -2460,7 +2856,7 @@ exec /usr/local/bin/collection-entrypoint "$@"
 }
 
 snapshot_regular_tree() {
-  python3 -c '
+  python3 -I -c '
 import hashlib, json, os, stat, sys
 from pathlib import Path
 root = Path(sys.argv[1])
@@ -2491,7 +2887,7 @@ print(json.dumps(records, sort_keys=True, separators=(",", ":")))
 }
 
 validate_prefix_derivation_delta() {
-  python3 -c '
+  python3 -I -c '
 import json, sys
 from pathlib import Path
 before = json.loads(Path(sys.argv[1]).read_text())
@@ -2537,7 +2933,7 @@ if [[ "${1:-}" == "derive-chaff-prefix-specs" ]]; then
 fi
 
 validate_fit_artifact_delta() {
-  python3 -c '
+  python3 -I -c '
 import json, sys
 from pathlib import Path
 before = json.loads(Path(sys.argv[1]).read_text())
@@ -2569,7 +2965,7 @@ if not preexisting and status == 0 and any(
 }
 
 validate_qualification_store_delta() {
-  python3 -c '
+  python3 -I -c '
 import json, re, sys
 from pathlib import Path
 before = json.loads(Path(sys.argv[1]).read_text())
@@ -2627,7 +3023,7 @@ if [[ "${1:-}" == "qualify-chaff" ]]; then
 fi
 
 validate_response_qualification_store_delta() {
-  python3 -c '
+  python3 -I -c '
 import json, re, sys
 from pathlib import Path
 before = json.loads(Path(sys.argv[1]).read_text())

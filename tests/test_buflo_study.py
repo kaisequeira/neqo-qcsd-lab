@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import base64
 import csv
+import fcntl
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 from collections import Counter
 from pathlib import Path
@@ -12,7 +14,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from qcsd_lab import buflo_evaluation, buflo_handoff, buflo_study, capture_session, orchestrator
+from qcsd_lab import (
+    buflo_evaluation,
+    buflo_handoff,
+    buflo_study,
+    build_storage,
+    capture_session,
+    orchestrator,
+)
 from qcsd_lab.buflo_study import (
     DEBIAN_BASE_IMAGE,
     PARAMETER_FILES,
@@ -117,8 +126,10 @@ def test_rust_code_gate_sidecar_rejects_content_mismatch_and_symlink(
         )
 
 
-def _reference_execution_fixture(tmp_path: Path) -> Path:
-    build_execution = _build_execution_value()
+def _reference_execution_fixture(
+    tmp_path: Path, *, build_schema_version: int = 1
+) -> Path:
+    build_execution = _build_execution_value(schema_version=build_schema_version)
     source = {
         "image_digest": "sha256:" + "e" * 64,
         "lab_commit": "b" * 40,
@@ -161,6 +172,7 @@ def _build_execution_value(
     image_id: str = "sha256:" + "a" * 64,
     *,
     cohort_version: int = 1,
+    schema_version: int = 1,
 ) -> dict[str, object]:
     source = {
         "image_digest": image_id,
@@ -174,7 +186,11 @@ def _build_execution_value(
     }
     images = {
         target: {
-            "tag": f"neqo-qcsd-lab-{target}:test",
+            "tag": (
+                build_storage.BUILD_IMAGE_TAGS[target]
+                if schema_version == 2
+                else f"neqo-qcsd-lab-{target}:test"
+            ),
             "id": image_id if target == "collection" else "sha256:" + digest * 64,
             "repo_digests": [],
         }
@@ -185,9 +201,25 @@ def _build_execution_value(
             "target": target,
             "argv": [
                 "docker",
+                *(["--context", "default"] if schema_version == 2 else []),
                 "build",
                 "--pull",
                 "--no-cache",
+                *(
+                    [
+                        "--iidfile",
+                        str(
+                            LAB_ROOT
+                            / (
+                                "artifacts/buflo-study/"
+                                f".build-iids-v{cohort_version}.ABC123"
+                            )
+                            / f"{target}.iid"
+                        ),
+                    ]
+                    if schema_version == 2
+                    else []
+                ),
                 "--target",
                 target,
                 "--tag",
@@ -202,7 +234,7 @@ def _build_execution_value(
         for target in ("collection", "prepare", "reference")
     ]
     value: dict[str, object] = {
-        "schema_version": 1,
+        "schema_version": schema_version,
         "artifact_type": buflo_study.BUILD_EXECUTION_ARTIFACT_TYPE,
         "cohort_version": cohort_version,
         "started_at": "2026-08-27T00:00:00+00:00",
@@ -229,8 +261,338 @@ def _build_execution_value(
             "scope": "Docker-layer-cache-disabled;declared-BuildKit-dependency-cache-mounts-only",
         },
     }
+    if schema_version == 2:
+        value["docker"] = {
+            **value["docker"],
+            "context": "default",
+            "endpoint": "unix:///var/run/docker.sock",
+            "server_name": "docker-desktop",
+            "server_operating_system": "Docker Desktop",
+            "server_os_type": "linux",
+            "server_architecture": "x86_64",
+            "server_id": "12345678-1234-1234-1234-123456789abc",
+        }
+        boundaries = (
+            ("before-collection", "2026-08-26T23:59:59+00:00"),
+            ("before-prepare", "2026-08-27T00:00:00.200000+00:00"),
+            ("before-reference", "2026-08-27T00:00:00.400000+00:00"),
+            ("after-reference", "2026-08-27T00:00:00.800000+00:00"),
+        )
+        probe_sha256 = buflo_study.sha256_file(
+            LAB_ROOT / "tools/windows_docker_storage_probe.ps1"
+        )
+        observations = [
+            {
+                "schema_version": 1,
+                "probe": "powershell-get-volume-docker-data-vhdx-v1",
+                "probe_sha256": probe_sha256,
+                "boundary": boundary,
+                "observed_at": observed_at,
+                "location_source": "wsl-lxss-docker-desktop-data",
+                "data_vhd_path": "C:\\Docker\\wsl\\data\\ext4.vhdx",
+                "data_vhd_file_length_bytes": 512 * 1024**3,
+                "backing_volume_unique_id": (
+                    r"\\?\Volume{12345678-1234-1234-1234-123456789abc}" + "\\"
+                ),
+                "drive_letter": "C",
+                "file_system": "NTFS",
+                "health_status": "Healthy",
+                "operational_status": ["OK"],
+                "total_bytes": 1024**4,
+                "available_bytes": 128 * 1024**3,
+            }
+            for boundary, observed_at in boundaries
+        ]
+        value["host_storage_preflight"] = {
+            "schema_version": 1,
+            "applicable": True,
+            "platform": "windows-wsl2",
+            "platform_detection": {
+                "schema_version": 1,
+                "probe": "wsl-multi-signal-v1",
+                "kernel_release": "6.6.87.2-microsoft-standard-WSL2",
+                "proc_version": "Linux version 6.6.87.2-microsoft-standard-WSL2",
+                "wsl_interop_env_present": True,
+                "wsl_distro_name_env_present": True,
+                "run_wsl_directory_present": True,
+            },
+            "policy": "docker-data-vhdx-backing-volume-minimum-v1",
+            "required_available_bytes": (
+                buflo_study.BUILD_WSL_HOST_MIN_AVAILABLE_BYTES
+            ),
+            "observations": observations,
+            "minimum_available_bytes": 128 * 1024**3,
+            "passed": True,
+        }
+        value["role_provenance"] = {
+            "schema_version": 1,
+            "sources": {
+                target: {**source, "image_digest": images[target]["id"]}
+                for target in ("collection", "prepare", "reference")
+            },
+            "build_inputs": {
+                "collection": dict(value["build_inputs"]),
+                "prepare": dict(value["build_inputs"]),
+                "reference": None,
+            },
+        }
     value["payload_sha256"] = buflo_study._canonical_digest(value)
     return value
+
+
+def _install_fake_wsl_storage_probe(root: Path, binary_root: Path) -> None:
+    tools = root / "tools"
+    tools.mkdir(exist_ok=True)
+    (tools / "windows_docker_storage_probe.ps1").write_bytes(
+        (LAB_ROOT / "tools/windows_docker_storage_probe.ps1").read_bytes()
+    )
+    package = root / "src/qcsd_lab"
+    package.mkdir(parents=True, exist_ok=True)
+    (package / "__init__.py").write_bytes(
+        (LAB_ROOT / "src/qcsd_lab/__init__.py").read_bytes()
+    )
+    (package / "build_storage.py").write_bytes(
+        (LAB_ROOT / "src/qcsd_lab/build_storage.py").read_bytes()
+    )
+    uname = binary_root / "uname"
+    uname.write_text(
+        "#!/bin/sh\n"
+        "set -eu\n"
+        "[ \"${1:-}\" = \"-r\" ]\n"
+        "printf '%s\\n' '6.6.87.2-microsoft-standard-WSL2'\n",
+        encoding="utf-8",
+    )
+    uname.chmod(0o755)
+    wslpath = binary_root / "wslpath"
+    wslpath.write_text(
+        "#!/bin/sh\n"
+        "set -eu\n"
+        "for argument do last=\"$argument\"; done\n"
+        "printf '%s\\n' \"$last\"\n",
+        encoding="utf-8",
+    )
+    wslpath.chmod(0o755)
+    powershell = binary_root / "powershell.exe"
+    powershell.write_text(
+        """#!/usr/bin/env python3
+import hashlib
+import json
+import os
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+if os.environ.get("QCSD_TEST_WSL_PROBE_FAIL") == "1":
+    raise SystemExit(9)
+if os.environ.get("QCSD_TEST_WSL_MALFORMED") == "1":
+    print("not-json")
+    raise SystemExit(0)
+boundary = sys.argv[sys.argv.index("-Boundary") + 1]
+probe_path = Path(sys.argv[sys.argv.index("-File") + 1])
+marker = os.environ.get("QCSD_TEST_POWERSHELL_MARKER")
+if marker:
+    with Path(marker).open("a", encoding="utf-8") as output:
+        output.write(boundary + "\\n")
+available = int(
+    os.environ.get("QCSD_TEST_WSL_AVAILABLE_BYTES", str(128 * 1024**3))
+)
+if os.environ.get("QCSD_TEST_WSL_LOW_BOUNDARY") == boundary:
+    available = 64 * 1024**3 - 1
+slash = chr(92)
+path = os.environ.get(
+    "QCSD_TEST_WSL_DATA_PATH",
+    "C:" + slash + slash.join(("Docker", "wsl", "data", "ext4.vhdx")),
+)
+volume = slash * 2 + "?" + slash + "Volume{12345678-1234-1234-1234-123456789abc}" + slash
+if os.environ.get("QCSD_TEST_WSL_IDENTITY_CHANGE_BOUNDARY") == boundary:
+    volume = slash * 2 + "?" + slash + "Volume{87654321-4321-4321-4321-cba987654321}" + slash
+value = {
+    "schema_version": 1,
+    "probe": "powershell-get-volume-docker-data-vhdx-v1",
+    "probe_sha256": hashlib.sha256(probe_path.read_bytes()).hexdigest(),
+    "boundary": boundary,
+    "observed_at": datetime.now(timezone.utc).isoformat(),
+    "location_source": os.environ.get(
+        "QCSD_TEST_WSL_LOCATION_SOURCE", "wsl-lxss-docker-desktop-data"
+    ),
+    "data_vhd_path": path,
+    "data_vhd_file_length_bytes": 512 * 1024**3,
+    "backing_volume_unique_id": volume,
+    "drive_letter": path[0].upper(),
+    "file_system": "NTFS",
+    "health_status": "Healthy",
+    "operational_status": ["OK"],
+    "total_bytes": 1024**4,
+    "available_bytes": available,
+}
+print(json.dumps(value, separators=(",", ":")))
+""",
+        encoding="utf-8",
+    )
+    powershell.chmod(0o755)
+
+
+def _install_fake_boundary_docker(binary_root: Path, build_marker: Path) -> None:
+    docker = binary_root / "docker"
+    inventory_marker = build_marker.with_name(f"{build_marker.name}-inventory")
+    docker.write_text(
+        f"""#!/bin/sh
+set -eu
+if [ "${{1:-}}" = "--context" ]; then
+  shift 2
+fi
+command="$1"
+shift
+case "$command" in
+  build)
+    printf 'build\\n' >> {str(build_marker)!r}
+    iidfile=""
+    target=""
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --iidfile) iidfile="$2"; shift 2 ;;
+        --target) target="$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    case "$target" in
+      collection) image_number=1 ;;
+      prepare) image_number=2 ;;
+      reference) image_number=3 ;;
+      *) exit 1 ;;
+    esac
+    [ -n "$iidfile" ] || exit 1
+    if [ "${{QCSD_TEST_IID_TARGET:-}}" = "$target" ]; then
+      case "${{QCSD_TEST_IID_MODE:-}}" in
+        missing) : ;;
+        malformed) printf '%s\\n' 'not-an-image-id' > "$iidfile" ;;
+        mismatch) printf 'sha256:%064d\\n' 9 > "$iidfile" ;;
+        *) exit 1 ;;
+      esac
+    else
+      printf 'sha256:%064d\\n' "$image_number" > "$iidfile"
+    fi
+    ;;
+  context)
+    case "$1" in
+      show) printf '%s\\n' "${{QCSD_TEST_DOCKER_CONTEXT:-default}}" ;;
+      inspect) printf '%s\\n' "${{QCSD_TEST_DOCKER_ENDPOINT:-unix:///var/run/docker.sock}}" ;;
+      *) exit 1 ;;
+    esac
+    ;;
+  info)
+    if [ "$#" -eq 0 ]; then exit 0; fi
+    build_count=0
+    if [ -f {str(build_marker)!r} ]; then
+      build_count="$(wc -l < {str(build_marker)!r})"
+    fi
+    server_name="${{QCSD_TEST_DOCKER_SERVER_NAME:-docker-desktop}}"
+    server_id="${{QCSD_TEST_DOCKER_SERVER_ID:-12345678-1234-1234-1234-123456789abc}}"
+    if [ -n "${{QCSD_TEST_DOCKER_CHANGE_AFTER_BUILDS:-}}" ] &&
+       [ "$build_count" -ge "${{QCSD_TEST_DOCKER_CHANGE_AFTER_BUILDS}}" ]; then
+      server_name="${{server_name}}-changed"
+    fi
+    if [ -n "${{QCSD_TEST_DOCKER_ID_CHANGE_AFTER_BUILDS:-}}" ] &&
+       [ "$build_count" -ge "${{QCSD_TEST_DOCKER_ID_CHANGE_AFTER_BUILDS}}" ]; then
+      server_id="87654321-4321-4321-4321-cba987654321"
+    fi
+    if [ -f {str(inventory_marker)!r} ]; then
+      server_id="87654321-4321-4321-4321-cba987654321"
+    fi
+    case "$2" in
+      '{{{{json .}}}}')
+        printf '{{"Name":"%s","OperatingSystem":"%s","OSType":"linux","Architecture":"x86_64","ID":"%s"}}\\n' \
+          "$server_name" "${{QCSD_TEST_DOCKER_OPERATING_SYSTEM:-Docker Desktop}}" "$server_id"
+        ;;
+      '{{{{.Name}}}}') printf '%s\\n' "$server_name" ;;
+      '{{{{.OperatingSystem}}}}') printf '%s\\n' "${{QCSD_TEST_DOCKER_OPERATING_SYSTEM:-Docker Desktop}}" ;;
+      '{{{{.OSType}}}}') printf '%s\\n' 'linux' ;;
+      '{{{{.Architecture}}}}') printf '%s\\n' 'x86_64' ;;
+      *) exit 1 ;;
+    esac
+    ;;
+  version)
+    if [ "${{QCSD_TEST_DOCKER_ID_CHANGE_AFTER_INVENTORY:-0}}" = "1" ]; then
+      : > {str(inventory_marker)!r}
+    fi
+    printf '%s\\n' '{{"Client":{{"Version":"29.0.1"}},"Server":{{"Version":"29.0.1"}}}}'
+    ;;
+  image)
+    shift
+    format=""
+    last=""
+    while [ "$#" -gt 0 ]; do
+      if [ "$1" = "--format" ]; then format="$2"; shift 2; continue; fi
+      last="$1"; shift
+    done
+    case "$format" in
+      '{{{{.Id}}}}')
+        case "$last" in
+          *collection*) printf 'sha256:%064d\\n' 1 ;;
+          *prepare*) printf 'sha256:%064d\\n' 2 ;;
+          *reference*) printf 'sha256:%064d\\n' 3 ;;
+          *) printf '%s\\n' "$last" ;;
+        esac
+        ;;
+      '{{{{json .RepoDigests}}}}') printf '%s\\n' '[]' ;;
+      *) exit 1 ;;
+    esac
+    ;;
+  run)
+    case "$*" in
+      */source.json)
+        if [ -n "${{QCSD_TEST_SOURCE_CHANGE_IMAGE_ID:-}}" ] &&
+           case "$*" in *"${{QCSD_TEST_SOURCE_CHANGE_IMAGE_ID}}"*) true ;; *) false ;; esac; then
+          printf '%s\\n' '{{"lab_commit":"ffffffffffffffffffffffffffffffffffffffff","lab_dirty":false,"lab_patch_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","neqo_commit":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","neqo_pinned_commit":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","neqo_dirty":false,"neqo_patch_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}}'
+        else
+          printf '%s\\n' '{{"lab_commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","lab_dirty":false,"lab_patch_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","neqo_commit":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","neqo_pinned_commit":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","neqo_dirty":false,"neqo_patch_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}}'
+        fi
+        ;;
+      */study-build-inputs.json)
+        if [ "${{QCSD_TEST_INVALID_BUILD_INPUTS:-0}}" = "1" ]; then
+          printf '%s\\n' '{{}}'
+        else
+          printf '%s\\n' '{{"artifact_type":"qcsd-study-build-inputs","cargo_lock_sha256":"d8c9f2728aa278ebcd33ccedf3ad309a866870ad5fb93a03526b4b7655c9e911","debian_base_image":"docker.io/library/debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818","rust_base_image":"docker.io/library/rust:1.90-bookworm@sha256:3914072ca0c3b8aad871db9169a651ccfce30cf58303e5d6f2db16d1d8a7e58f","schema_version":1,"uv_lock_sha256":"d8c9f2728aa278ebcd33ccedf3ad309a866870ad5fb93a03526b4b7655c9e911"}}'
+        fi
+        ;;
+      *) exit 1 ;;
+    esac
+    ;;
+  *) exit 1 ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    docker.chmod(0o755)
+
+
+def _launcher_boundary_fixture(
+    tmp_path: Path,
+) -> tuple[Path, Path, dict[str, str]]:
+    launcher = tmp_path / "qcsd-lab"
+    launcher.write_bytes((LAB_ROOT / "qcsd-lab").read_bytes())
+    launcher.chmod(0o755)
+    (tmp_path / "neqo-qcsd").mkdir()
+    (tmp_path / "neqo-qcsd/Cargo.lock").write_text("lock\n", encoding="utf-8")
+    (tmp_path / "uv.lock").write_text("lock\n", encoding="utf-8")
+    (tmp_path / "Dockerfile").write_text("FROM scratch\n", encoding="utf-8")
+    binary_root = tmp_path / "bin"
+    binary_root.mkdir()
+    _install_fake_wsl_storage_probe(tmp_path, binary_root)
+    build_marker = tmp_path / "docker-builds"
+    _install_fake_boundary_docker(binary_root, build_marker)
+    environment = dict(os.environ)
+    environment["PATH"] = f"{binary_root}:{environment['PATH']}"
+    identity = hashlib.sha256(str(tmp_path).encode()).hexdigest()[:32]
+    environment["QCSD_TEST_DOCKER_SERVER_ID"] = (
+        f"{identity[:8]}-{identity[8:12]}-{identity[12:16]}-"
+        f"{identity[16:20]}-{identity[20:]}"
+    )
+    return launcher, build_marker, environment
+
+
+def _marked_build_count(path: Path) -> int:
+    return len(path.read_text(encoding="utf-8").splitlines()) if path.exists() else 0
 
 
 def _runner_wakeup_receipt() -> dict[str, object]:
@@ -2905,6 +3267,17 @@ def test_executed_reference_receipt_semantically_binds_all_oracles_and_sources(
     assert "csbuflo-preprint-pdf" in receipt["external_sources"]
 
 
+def test_reference_gate_accepts_a_fully_validated_schema_two_build(
+    tmp_path: Path,
+) -> None:
+    execution = _reference_execution_fixture(tmp_path, build_schema_version=2)
+
+    receipt = validate_reference_gate_receipt(execution)
+
+    assert receipt["build_execution"]["cohort_version"] == 1
+    assert receipt["profiles_checked"] == 8
+
+
 def test_executed_reference_receipt_rejects_self_declared_source_substitution(
     tmp_path: Path,
 ) -> None:
@@ -3326,7 +3699,24 @@ def test_launcher_requires_clean_capture_image_and_no_cache_build() -> None:
     assert '"${1:-}" == "run"' in direct_run_guard
     assert "buflo-study-v1-(smoke|rehearsal|formal-[0-9]{2})" in direct_run_guard
     assert '"${1:-}" == "resume"' not in direct_run_guard
-    assert launcher.count("docker build --pull --no-cache --target") == 3
+    assert (
+        launcher.count(
+            'docker --context "${build_docker_context}" build --pull --no-cache'
+        )
+        == 3
+    )
+    assert "WSL_HOST_BUILD_MIN_AVAILABLE_BYTES=68719476736" in launcher
+    assert launcher.count('wsl_host_build_storage_probe "') == 4
+    assert "windows_docker_storage_probe.ps1" in launcher
+    assert '"schema_version": 2' in launcher
+    assert '"host_storage_preflight": host_storage' in launcher
+    assert launcher.count('"${ROOT}/src/qcsd_lab/build_storage.py" receipt') == 2
+    assert "validate_build_execution_envelope" in launcher
+    assert launcher.count('--iidfile "${') == 3
+    assert "acquire_evidence_build_lock" in launcher
+    assert "reject_evidence_build_image_overrides" in launcher
+    assert "reject_docker_endpoint_overrides" in launcher
+    assert launcher.count("validate_local_docker_build_endpoint") == 6
     assert "artifacts/buflo-study/build-execution-v${study_cohort_version}.json" in launcher
     assert '"artifact_type": "qcsd-buflo-study-no-cache-build-execution"' in launcher
     assert '"build_execution": {' in launcher
@@ -3466,23 +3856,567 @@ def test_launcher_selects_exact_versioned_build_images_and_frozen_resume_admissi
     )
 
 
+@pytest.mark.parametrize(
+    ("variable", "value"),
+    (
+        ("QCSD_TEST_WSL_AVAILABLE_BYTES", str(64 * 1024**3 - 1)),
+        ("QCSD_TEST_WSL_MALFORMED", "1"),
+        ("QCSD_TEST_WSL_PROBE_FAIL", "1"),
+    ),
+)
+def test_build_preflight_failure_prevents_any_docker_build_or_receipt(
+    tmp_path: Path, variable: str, value: str
+) -> None:
+    launcher, build_marker, environment = _launcher_boundary_fixture(tmp_path)
+    environment[variable] = value
+
+    result = subprocess.run(
+        [str(launcher), "build", "--cohort-version", "71"],
+        cwd=tmp_path,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert _marked_build_count(build_marker) == 0
+    assert not (tmp_path / "artifacts/buflo-study/build-execution-v71.json").exists()
+
+
+@pytest.mark.parametrize(
+    ("variable", "value", "expected_builds", "message"),
+    (
+        (
+            "QCSD_TEST_WSL_IDENTITY_CHANGE_BOUNDARY",
+            "before-prepare",
+            1,
+            "backing-volume identity changed",
+        ),
+        (
+            "QCSD_TEST_WSL_LOW_BOUNDARY",
+            "after-reference",
+            3,
+            "requires at least",
+        ),
+        (
+            "QCSD_TEST_DOCKER_CHANGE_AFTER_BUILDS",
+            "1",
+            1,
+            "daemon identity changed",
+        ),
+        (
+            "QCSD_TEST_DOCKER_ID_CHANGE_AFTER_BUILDS",
+            "1",
+            1,
+            "daemon identity changed",
+        ),
+    ),
+)
+def test_build_boundary_failure_stops_at_exact_image_and_creates_no_receipt(
+    tmp_path: Path,
+    variable: str,
+    value: str,
+    expected_builds: int,
+    message: str,
+) -> None:
+    launcher, build_marker, environment = _launcher_boundary_fixture(tmp_path)
+    environment[variable] = value
+
+    result = subprocess.run(
+        [str(launcher), "build", "--cohort-version", "72"],
+        cwd=tmp_path,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert message in result.stderr
+    assert _marked_build_count(build_marker) == expected_builds
+    assert not (tmp_path / "artifacts/buflo-study/build-execution-v72.json").exists()
+
+
+def test_build_final_daemon_recheck_catches_post_inventory_id_change(
+    tmp_path: Path,
+) -> None:
+    launcher, build_marker, environment = _launcher_boundary_fixture(tmp_path)
+    environment["QCSD_TEST_DOCKER_ID_CHANGE_AFTER_INVENTORY"] = "1"
+
+    result = subprocess.run(
+        [str(launcher), "build", "--cohort-version", "74"],
+        cwd=tmp_path,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "daemon identity changed" in result.stderr
+    assert _marked_build_count(build_marker) == 3
+    assert not (tmp_path / "artifacts/buflo-study/build-execution-v74.json").exists()
+
+
+@pytest.mark.parametrize(
+    ("variable", "value", "message"),
+    (
+        ("DOCKER_HOST", "tcp://example.invalid:2375", "rejects Docker endpoint"),
+        (
+            "QCSD_TEST_DOCKER_ENDPOINT",
+            "tcp://example.invalid:2375",
+            "requires a local Docker Desktop endpoint",
+        ),
+        (
+            "QCSD_TEST_DOCKER_OPERATING_SYSTEM",
+            "Remote Linux",
+            "requires the local Docker Desktop Linux engine",
+        ),
+    ),
+)
+def test_build_rejects_endpoint_bypass_before_any_image_build(
+    tmp_path: Path, variable: str, value: str, message: str
+) -> None:
+    launcher, build_marker, environment = _launcher_boundary_fixture(tmp_path)
+    environment[variable] = value
+
+    result = subprocess.run(
+        [str(launcher), "build", "--cohort-version", "73"],
+        cwd=tmp_path,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert message in result.stderr
+    assert _marked_build_count(build_marker) == 0
+    assert not (tmp_path / "artifacts/buflo-study/build-execution-v73.json").exists()
+
+
+@pytest.mark.parametrize(
+    "variable",
+    (
+        "QCSD_LAB_COLLECTION_IMAGE",
+        "QCSD_LAB_PREPARE_IMAGE",
+        "QCSD_LAB_REFERENCE_IMAGE",
+    ),
+)
+def test_build_rejects_image_role_overrides_before_any_image_build(
+    tmp_path: Path, variable: str
+) -> None:
+    launcher, build_marker, environment = _launcher_boundary_fixture(tmp_path)
+    environment[variable] = "neqo-qcsd-lab-collection:aliased"
+
+    result = subprocess.run(
+        [str(launcher), "build", "--cohort-version", "75"],
+        cwd=tmp_path,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "rejects image-role override" in result.stderr
+    assert _marked_build_count(build_marker) == 0
+    assert not (tmp_path / "artifacts/buflo-study/build-execution-v75.json").exists()
+
+
+def test_build_global_lock_rejects_concurrent_role_tag_mutation(
+    tmp_path: Path,
+) -> None:
+    launcher, build_marker, environment = _launcher_boundary_fixture(tmp_path)
+    daemon_lock_identity = "\t".join(
+        (
+            environment["QCSD_TEST_DOCKER_SERVER_ID"],
+            "linux",
+            "x86_64",
+        )
+    )
+    lock_parent = Path(f"/tmp/qcsd-lab-evidence-build-{os.getuid()}")
+    lock_parent.mkdir(mode=0o700, exist_ok=True)
+    lock_parent.chmod(0o700)
+    lock_path = lock_parent / (
+        f"{hashlib.sha256(daemon_lock_identity.encode()).hexdigest()}.lock"
+    )
+    with lock_path.open("a+", encoding="utf-8") as held_lock:
+        lock_path.chmod(0o600)
+        fcntl.flock(held_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        environment["QCSD_TEST_DOCKER_CONTEXT"] = "desktop-linux"
+        result = subprocess.run(
+            [str(launcher), "build", "--cohort-version", "76"],
+            cwd=tmp_path,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+    assert result.returncode != 0
+    assert "user/WSL instance's Docker-daemon lock" in result.stderr
+    assert _marked_build_count(build_marker) == 0
+    assert not (tmp_path / "artifacts/buflo-study/build-execution-v76.json").exists()
+
+
+def test_build_self_validation_rejects_invalid_inputs_before_receipt_write(
+    tmp_path: Path,
+) -> None:
+    launcher, build_marker, environment = _launcher_boundary_fixture(tmp_path)
+    environment["QCSD_TEST_INVALID_BUILD_INPUTS"] = "1"
+
+    result = subprocess.run(
+        [str(launcher), "build", "--cohort-version", "77"],
+        cwd=tmp_path,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "build inputs are invalid" in result.stderr
+    assert _marked_build_count(build_marker) == 3
+    assert not (tmp_path / "artifacts/buflo-study/build-execution-v77.json").exists()
+
+
+def test_build_rejects_cross_role_source_snapshot_change(
+    tmp_path: Path,
+) -> None:
+    launcher, build_marker, environment = _launcher_boundary_fixture(tmp_path)
+    environment["QCSD_TEST_SOURCE_CHANGE_IMAGE_ID"] = "sha256:" + f"{2:064d}"
+
+    result = subprocess.run(
+        [str(launcher), "build", "--cohort-version", "80"],
+        cwd=tmp_path,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "different source snapshots" in result.stderr
+    assert _marked_build_count(build_marker) == 3
+    assert not (tmp_path / "artifacts/buflo-study/build-execution-v80.json").exists()
+
+
+@pytest.mark.parametrize(
+    ("mode", "message"),
+    (
+        ("missing", "did not create a regular IID file"),
+        ("malformed", "invalid immutable image ID"),
+        ("mismatch", "tag no longer binds its build-produced ID"),
+    ),
+)
+def test_build_rejects_missing_malformed_or_mismatched_iid_evidence(
+    tmp_path: Path, mode: str, message: str
+) -> None:
+    launcher, build_marker, environment = _launcher_boundary_fixture(tmp_path)
+    environment["QCSD_TEST_IID_TARGET"] = "collection"
+    environment["QCSD_TEST_IID_MODE"] = mode
+
+    result = subprocess.run(
+        [str(launcher), "build", "--cohort-version", "81"],
+        cwd=tmp_path,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert message in result.stderr
+    assert _marked_build_count(build_marker) == 1
+    assert not (tmp_path / "artifacts/buflo-study/build-execution-v81.json").exists()
+
+
+def test_build_validator_cannot_be_shadowed_from_the_caller_directory(
+    tmp_path: Path,
+) -> None:
+    launcher, build_marker, environment = _launcher_boundary_fixture(tmp_path)
+    shadow_root = tmp_path / "caller"
+    shadow_package = shadow_root / "qcsd_lab"
+    shadow_package.mkdir(parents=True)
+    marker = shadow_root / "shadow-imported"
+    (shadow_package / "__init__.py").write_text("", encoding="utf-8")
+    (shadow_package / "build_storage.py").write_text(
+        f"from pathlib import Path\nPath({str(marker)!r}).write_text('shadowed')\n",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [str(launcher), "build", "--cohort-version", "78"],
+        cwd=shadow_root,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert _marked_build_count(build_marker) == 3
+    assert not marker.exists()
+    assert (tmp_path / "artifacts/buflo-study/build-execution-v78.json").is_file()
+
+
+def test_build_canonicalises_a_symlinked_launcher_root_before_execution(
+    tmp_path: Path,
+) -> None:
+    launcher, build_marker, environment = _launcher_boundary_fixture(tmp_path)
+    symlink_root = tmp_path / "invocation-root"
+    symlink_root.symlink_to(tmp_path, target_is_directory=True)
+
+    result = subprocess.run(
+        [str(symlink_root / launcher.name), "build", "--cohort-version", "79"],
+        cwd=tmp_path,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert _marked_build_count(build_marker) == 3
+    receipt = json.loads(
+        (tmp_path / "artifacts/buflo-study/build-execution-v79.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert {command["argv"][-1] for command in receipt["commands"]} == {
+        str(tmp_path.resolve())
+    }
+    assert all("invocation-root" not in item for command in receipt["commands"] for item in command["argv"])
+
+
+def test_windows_storage_probe_is_valid_windows_powershell_syntax() -> None:
+    if shutil.which("powershell.exe") is None:
+        pytest.skip("Windows PowerShell interop is unavailable")
+    probe = LAB_ROOT / "tools/windows_docker_storage_probe.ps1"
+    parser = subprocess.run(
+        [
+            "powershell.exe",
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            (
+                "$source=[Console]::In.ReadToEnd(); "
+                "$tokens=$null; $errors=$null; "
+                "[System.Management.Automation.Language.Parser]::ParseInput("
+                "$source,[ref]$tokens,[ref]$errors) > $null; "
+                "if ($errors.Count -ne 0) { $errors | Out-String | Write-Error; exit 1 }"
+            ),
+        ],
+        input=probe.read_text(encoding="utf-8"),
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert parser.returncode == 0, parser.stderr
+
+
+def test_windows_storage_probe_rejects_registration_settings_conflict(
+    tmp_path: Path,
+) -> None:
+    if shutil.which("powershell.exe") is None:
+        pytest.skip("Windows PowerShell interop is unavailable")
+    probe = (LAB_ROOT / "tools/windows_docker_storage_probe.ps1").read_text(
+        encoding="utf-8"
+    )
+    function = probe.split("function Get-CanonicalDataVhd {", 1)[1].split(
+        "\n\n$resolved = Get-CanonicalDataVhd", 1
+    )[0]
+    harness = tmp_path / "probe-conflict.ps1"
+    harness.write_text(
+        """
+$ErrorActionPreference = "Stop"
+Set-StrictMode -Version 3.0
+$env:APPDATA = "C:\\Users\\test\\AppData\\Roaming"
+function Test-Path {
+    param([string]$LiteralPath, [string]$PathType)
+    return (
+        $LiteralPath -eq "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Lxss" -or
+        $LiteralPath -eq "C:\\Users\\test\\AppData\\Roaming\\Docker\\settings-store.json"
+    )
+}
+function Get-ChildItem {
+    param([string]$LiteralPath)
+    return [pscustomobject]@{ PSPath = "registry-item" }
+}
+function Get-ItemProperty {
+    param([string]$LiteralPath)
+    return [pscustomobject]@{
+        DistributionName = "docker-desktop-data"
+        BasePath = "C:\\RegisteredDockerData"
+        VhdFileName = "ext4.vhdx"
+    }
+}
+function Get-Content {
+    param([switch]$Raw, [string]$LiteralPath)
+    return '{"diskImageLocation":"C:\\\\ConfiguredDockerData"}'
+}
+function Get-CanonicalDataVhd {
+"""
+        + function
+        + """
+try {
+    Get-CanonicalDataVhd | Out-Null
+    Write-Error "conflicting authoritative locations were accepted"
+    exit 2
+}
+catch {
+    if ($_.Exception.Message -notlike "*registration and settings contain conflicting*") {
+        Write-Error $_
+        exit 3
+    }
+}
+""",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            "powershell.exe",
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(harness),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_windows_storage_probe_smoke_reports_the_actual_backing_volume() -> None:
+    if shutil.which("powershell.exe") is None or shutil.which("wslpath") is None:
+        pytest.skip("Windows PowerShell interop is unavailable")
+    probe = LAB_ROOT / "tools/windows_docker_storage_probe.ps1"
+    mapped = subprocess.run(
+        ["wslpath", "-w", "--", str(probe)],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    result = subprocess.run(
+        [
+            "powershell.exe",
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            mapped,
+            "-Boundary",
+            "before-collection",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if result.returncode != 0:
+        unavailable = (
+            "active data location is not authoritatively configured",
+            "expected exactly one Docker data VHDX; found 0",
+        )
+        if any(reason in result.stderr for reason in unavailable):
+            pytest.skip(f"authoritative Docker data VHDX is unavailable: {result.stderr}")
+        pytest.fail(f"Windows Docker storage probe failed: {result.stderr}")
+    observation = json.loads(result.stdout)
+    probe_sha256 = hashlib.sha256(probe.read_bytes()).hexdigest()
+
+    assert observation["probe_sha256"] == probe_sha256
+    assert observation["location_source"] in (
+        "wsl-lxss-docker-desktop-data",
+        "docker-settings-store",
+        "docker-legacy-settings",
+    )
+    assert observation["data_vhd_path"].lower().endswith(".vhdx")
+    if observation["available_bytes"] < build_storage.BUILD_WSL_HOST_MIN_AVAILABLE_BYTES:
+        with pytest.raises(ValueError, match="requires at least"):
+            build_storage.validate_build_host_storage_observation(
+                observation,
+                expected_boundary="before-collection",
+                expected_probe_sha256=probe_sha256,
+            )
+    else:
+        build_storage.validate_build_host_storage_observation(
+            observation,
+            expected_boundary="before-collection",
+            expected_probe_sha256=probe_sha256,
+        )
+
+
 def test_launcher_build_v2_is_create_only_and_preserves_v1(tmp_path: Path) -> None:
     launcher = tmp_path / "qcsd-lab"
     launcher.write_bytes((LAB_ROOT / "qcsd-lab").read_bytes())
     launcher.chmod(0o755)
     (tmp_path / "neqo-qcsd").mkdir()
     (tmp_path / "neqo-qcsd/Cargo.lock").write_text("lock\n", encoding="utf-8")
+    (tmp_path / "uv.lock").write_text("lock\n", encoding="utf-8")
     (tmp_path / "Dockerfile").write_text("FROM scratch\n", encoding="utf-8")
     binary_root = tmp_path / "bin"
     binary_root.mkdir()
+    _install_fake_wsl_storage_probe(tmp_path, binary_root)
     docker = binary_root / "docker"
     docker.write_text(
         """#!/bin/sh
 set -eu
+if [ "${1:-}" = "--context" ]; then
+  shift 2
+fi
 command="$1"
 shift
 case "$command" in
-  info|build) exit 0 ;;
+  build)
+    iidfile=""
+    target=""
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --iidfile) iidfile="$2"; shift 2 ;;
+        --target) target="$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    case "$target" in
+      collection) image_number=1 ;;
+      prepare) image_number=2 ;;
+      reference) image_number=3 ;;
+      *) exit 1 ;;
+    esac
+    [ -n "$iidfile" ] || exit 1
+    printf 'sha256:%064d\n' "$image_number" > "$iidfile"
+    ;;
+  context)
+    case "$1" in
+      show) printf '%s\n' 'default' ;;
+      inspect) printf '%s\n' 'unix:///var/run/docker.sock' ;;
+      *) exit 1 ;;
+    esac
+    ;;
+  info)
+    if [ "$#" -eq 0 ]; then exit 0; fi
+    case "$2" in
+      '{{json .}}') printf '%s\n' '{"Name":"docker-desktop","OperatingSystem":"Docker Desktop","OSType":"linux","Architecture":"x86_64","ID":"12345678-1234-1234-1234-123456789abc"}' ;;
+      '{{.Name}}') printf '%s\n' 'docker-desktop' ;;
+      '{{.OperatingSystem}}') printf '%s\n' 'Docker Desktop' ;;
+      '{{.OSType}}') printf '%s\n' 'linux' ;;
+      '{{.Architecture}}') printf '%s\n' 'x86_64' ;;
+      *) exit 1 ;;
+    esac
+    ;;
   version)
     printf '%s\n' '{"Client":{"Version":"29.0.1"},"Server":{"Version":"29.0.1"}}'
     ;;
@@ -3512,7 +4446,9 @@ case "$command" in
       */source.json)
         printf '%s\n' '{"lab_commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","lab_dirty":false,"lab_patch_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","neqo_commit":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","neqo_pinned_commit":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","neqo_dirty":false,"neqo_patch_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}'
         ;;
-      */study-build-inputs.json) printf '%s\n' '{}' ;;
+      */study-build-inputs.json)
+        printf '%s\n' '{"artifact_type":"qcsd-study-build-inputs","cargo_lock_sha256":"d8c9f2728aa278ebcd33ccedf3ad309a866870ad5fb93a03526b4b7655c9e911","debian_base_image":"docker.io/library/debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818","rust_base_image":"docker.io/library/rust:1.90-bookworm@sha256:3914072ca0c3b8aad871db9169a651ccfce30cf58303e5d6f2db16d1d8a7e58f","schema_version":1,"uv_lock_sha256":"d8c9f2728aa278ebcd33ccedf3ad309a866870ad5fb93a03526b4b7655c9e911"}'
+        ;;
       *) exit 1 ;;
     esac
     ;;
@@ -3524,6 +4460,10 @@ esac
     docker.chmod(0o755)
     environment = dict(os.environ)
     environment["PATH"] = f"{binary_root}:{environment['PATH']}"
+    environment["QCSD_TEST_WSL_AVAILABLE_BYTES"] = str(64 * 1024**3)
+    environment["QCSD_TEST_WSL_DATA_PATH"] = r"D:\DockerData\disk\docker_data.vhdx"
+    powershell_marker = tmp_path / "powershell-boundaries"
+    environment["QCSD_TEST_POWERSHELL_MARKER"] = str(powershell_marker)
 
     first = subprocess.run(
         [str(launcher), "build"],
@@ -3547,7 +4487,23 @@ esac
     assert second.returncode == 0, second.stderr
     v2 = tmp_path / "artifacts/buflo-study/build-execution-v2.json"
     assert json.loads(v1.read_text(encoding="utf-8"))["cohort_version"] == 1
-    assert json.loads(v2.read_text(encoding="utf-8"))["cohort_version"] == 2
+    v2_value = json.loads(v2.read_text(encoding="utf-8"))
+    assert v2_value["cohort_version"] == 2
+    assert v2_value["schema_version"] == 2
+    assert v2_value["docker"]["context"] == "default"
+    preflight = v2_value["host_storage_preflight"]
+    assert preflight["required_available_bytes"] == 64 * 1024**3
+    assert [item["boundary"] for item in preflight["observations"]] == [
+        "before-collection",
+        "before-prepare",
+        "before-reference",
+        "after-reference",
+    ]
+    assert {item["data_vhd_path"] for item in preflight["observations"]} == {
+        r"D:\DockerData\disk\docker_data.vhdx"
+    }
+    assert {item["drive_letter"] for item in preflight["observations"]} == {"D"}
+    assert len(powershell_marker.read_text(encoding="utf-8").splitlines()) == 8
     assert hashlib.sha256(v1.read_bytes()).hexdigest() == v1_sha256
 
     duplicate = subprocess.run(
@@ -3560,6 +4516,7 @@ esac
     )
     assert duplicate.returncode == 1
     assert "absent create-only receipt" in duplicate.stderr
+    assert len(powershell_marker.read_text(encoding="utf-8").splitlines()) == 8
 
 
 def test_build_execution_receipt_rejects_semantically_rehashed_cache_enabled_command() -> None:
@@ -3590,6 +4547,25 @@ def test_build_execution_receipt_accepts_consistent_host_paths_from_container() 
     value["payload_sha256"] = buflo_study._canonical_digest(payload)
     with pytest.raises(ValueError, match="--pull --no-cache"):
         buflo_study._validate_build_execution_value(value)
+
+
+def test_schema_two_container_reader_preserves_validated_physical_host_paths() -> None:
+    value = json.loads(json.dumps(_build_execution_value(schema_version=2)))
+    host_root = Path("/physical-host-checkout/neqo-qcsd-lab")
+    for command in value["commands"]:
+        iidfile_index = command["argv"].index("--iidfile") + 1
+        command["argv"][iidfile_index] = str(
+            host_root
+            / "artifacts/buflo-study/.build-iids-v1.ABC123"
+            / f"{command['target']}.iid"
+        )
+        command["argv"][-2] = str(host_root / "Dockerfile")
+        command["argv"][-1] = str(host_root)
+    payload = dict(value)
+    del payload["payload_sha256"]
+    value["payload_sha256"] = buflo_study._canonical_digest(payload)
+
+    assert buflo_study._validate_build_execution_value(value)["cohort_version"] == 1
 
     value = json.loads(json.dumps(_build_execution_value()))
     value["commands"][1]["argv"][-2] = "/other-host-checkout/Dockerfile"

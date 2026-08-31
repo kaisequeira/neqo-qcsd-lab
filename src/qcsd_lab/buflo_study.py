@@ -34,6 +34,12 @@ from typing import Any
 
 import yaml
 
+from .build_storage import (
+    BUILD_EXECUTION_ARTIFACT_TYPE as _BUILD_EXECUTION_ARTIFACT_TYPE,
+    BUILD_IMAGE_TAGS,
+    BUILD_WSL_HOST_MIN_AVAILABLE_BYTES as _BUILD_WSL_HOST_MIN_AVAILABLE_BYTES,
+    validate_build_execution_envelope,
+)
 from .fidelity import (
     BUFLO_SCHEDULE_STOP_POLICY,
     BUFLO_SCHEDULE_STOP_TERMINAL_TIME_SEMANTICS,
@@ -53,6 +59,8 @@ from .util import (
     source_metadata,
 )
 
+BUILD_EXECUTION_ARTIFACT_TYPE = _BUILD_EXECUTION_ARTIFACT_TYPE
+BUILD_WSL_HOST_MIN_AVAILABLE_BYTES = _BUILD_WSL_HOST_MIN_AVAILABLE_BYTES
 SCHEMA_VERSION = 1
 PREVIOUS_LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION = 3
 LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION = 4
@@ -132,7 +140,6 @@ REFERENCE_FILES = (
 CONFORMANCE_RECEIPT = REFERENCE_ROOT / "buflo-csbuflo-conformance-v1.receipt.json"
 CONFORMANCE_RECEIPT_SHA256 = "a41d9096a152b5531394fb7f6b4a9936dbe03318da1acc5549d79151b0373dbc"
 REFERENCE_EXECUTION_ARTIFACT_TYPE = "qcsd-buflo-csbuflo-reference-execution"
-BUILD_EXECUTION_ARTIFACT_TYPE = "qcsd-buflo-study-no-cache-build-execution"
 BUILD_EXECUTION_RECEIPT = LAB_ROOT / "artifacts/buflo-study/build-execution-v1.json"
 REFERENCE_INPUT_RELATIVE_PATHS = {
     "dyer-paper-pdf": "trafanal.pdf",
@@ -7455,29 +7462,14 @@ def _validate_build_execution_value(
     expected_collection_image: str | None = None,
     expected_cohort_version: int | None = None,
 ) -> dict[str, Any]:
-    required = {
-        "schema_version",
-        "artifact_type",
-        "cohort_version",
-        "started_at",
-        "finished_at",
-        "duration_seconds",
-        "docker",
-        "commands",
-        "images",
-        "source",
-        "build_inputs",
-        "dockerfile_sha256",
-        "cache_policy",
-        "payload_sha256",
-    }
-    if (
-        not isinstance(value, Mapping)
-        or set(value) != required
-        or value.get("schema_version") != 1
-        or value.get("artifact_type") != BUILD_EXECUTION_ARTIFACT_TYPE
-    ):
-        raise ValueError("study no-cache build execution receipt schema is invalid")
+    validate_build_execution_envelope(
+        value,
+        expected_cohort_version=expected_cohort_version,
+        expected_probe_sha256=sha256_file(
+            LAB_ROOT / "tools/windows_docker_storage_probe.ps1"
+        ),
+        checkout_root=LAB_ROOT,
+    )
     cohort_version = _cohort_version(value["cohort_version"])
     if (
         expected_cohort_version is not None
@@ -7506,9 +7498,20 @@ def _validate_build_execution_value(
     ):
         raise ValueError("study no-cache build duration is invalid")
     docker = value["docker"]
+    expected_docker_keys = {"client_version", "server_version"}
+    if value["schema_version"] == 2:
+        expected_docker_keys |= {
+            "context",
+            "endpoint",
+            "server_name",
+            "server_operating_system",
+            "server_os_type",
+            "server_architecture",
+            "server_id",
+        }
     if (
         not isinstance(docker, Mapping)
-        or set(docker) != {"client_version", "server_version"}
+        or set(docker) != expected_docker_keys
         or any(not isinstance(docker[key], str) or not docker[key] for key in docker)
     ):
         raise ValueError("study no-cache build Docker version binding is invalid")
@@ -7531,6 +7534,12 @@ def _validate_build_execution_value(
             )
         ):
             raise ValueError(f"study no-cache build {target} image binding is invalid")
+        if value["schema_version"] == 2 and record["tag"] != BUILD_IMAGE_TAGS[target]:
+            raise ValueError(f"study no-cache build {target} image role tag is invalid")
+    if value["schema_version"] == 2 and len(
+        {record["id"] for record in images.values()}
+    ) != len(images):
+        raise ValueError("study no-cache build image roles do not have distinct immutable IDs")
     collection_id = images["collection"]["id"]
     if expected_collection_image is not None and collection_id != expected_collection_image:
         raise ValueError("study no-cache build collection image differs from capture image")
@@ -7540,21 +7549,29 @@ def _validate_build_execution_value(
     expected_targets = ("collection", "prepare", "reference")
     recorded_build_root: Path | None = None
     for target, command in zip(expected_targets, commands, strict=True):
-        expected_prefix = [
-            "docker",
-            "build",
-            "--pull",
-            "--no-cache",
-            "--target",
-            target,
-            "--tag",
-            images[target]["tag"],
-            "--file",
-        ]
+        expected_prefix = ["docker"]
+        if value["schema_version"] == 2:
+            expected_prefix.extend(["--context", docker["context"]])
+        expected_prefix.extend(["build", "--pull", "--no-cache"])
         argv = command.get("argv") if isinstance(command, Mapping) else None
+        iidfile_value: str | None = None
+        iidfile: Path | None = None
+        if (
+            value["schema_version"] == 2
+            and isinstance(argv, list)
+            and len(argv) >= len(expected_prefix) + 2
+            and argv[len(expected_prefix)] == "--iidfile"
+            and isinstance(argv[len(expected_prefix) + 1], str)
+        ):
+            iidfile_value = argv[len(expected_prefix) + 1]
+            iidfile = Path(iidfile_value)
+            expected_prefix.extend(["--iidfile", iidfile_value])
+        expected_prefix.extend(
+            ["--target", target, "--tag", images[target]["tag"], "--file"]
+        )
         path_arguments_valid = (
             isinstance(argv, list)
-            and len(argv) == 11
+            and len(argv) == len(expected_prefix) + 2
             and isinstance(argv[-2], str)
             and isinstance(argv[-1], str)
         )
@@ -7579,6 +7596,24 @@ def _validate_build_execution_value(
             or build_root.parent == build_root
             or dockerfile.name != "Dockerfile"
             or dockerfile.parent != build_root
+            or (
+                value["schema_version"] == 2
+                and (
+                    iidfile is None
+                    or not iidfile.is_absolute()
+                    or str(iidfile) != iidfile_value
+                    or str(iidfile).startswith("//")
+                    or ".." in iidfile.parts
+                    or iidfile.name != f"{target}.iid"
+                    or iidfile.parent.parent
+                    != build_root / "artifacts" / "buflo-study"
+                    or re.fullmatch(
+                        rf"[.]build-iids-v{cohort_version}[.][A-Za-z0-9]{{6}}",
+                        iidfile.parent.name,
+                    )
+                    is None
+                )
+            )
             or (recorded_build_root is not None and build_root != recorded_build_root)
             or command.get("exit_code") != 0
             or command.get("image_id") != images[target]["id"]

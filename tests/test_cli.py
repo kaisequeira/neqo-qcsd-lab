@@ -15,7 +15,7 @@ from qcsd_lab.util import atomic_text, sha256_file
 
 def _embedded_python(launcher: str, function: str) -> str:
     body = launcher.split(f"{function}() {{", 1)[1]
-    return body.split("python3 -c '\n", 1)[1].split('\n\' "$1"', 1)[0]
+    return body.split("python3 -I -c '\n", 1)[1].split('\n\' "$1"', 1)[0]
 
 
 def _run_embedded_python(
@@ -179,7 +179,13 @@ def test_launcher_routes_only_consolidated_public_commands():
     assert help_result.returncode == 0
     assert "Usage: qcsd-lab" in help_result.stderr
     assert '"${image_neqo_dirty}" != "false"' in fit_preflight
-    for removed in ("discover", "probe", "collect", "dataset", "--dev", "--dry-run"):
+    usage_contract = launcher.split("usage() {", 1)[1].split("\n}", 1)[0]
+    public_command_guards = set(re.findall(r'\[\[ "\$\{1:-\}" == "([a-z][a-z0-9-]*)"', launcher))
+    for removed in ("discover", "probe", "collect", "dataset"):
+        token = rf"(?<![A-Za-z0-9_-]){re.escape(removed)}(?![A-Za-z0-9_-])"
+        assert re.search(token, usage_contract) is None
+        assert removed not in public_command_guards
+    for removed in ("--dev", "--dry-run"):
         token = rf"(?<![A-Za-z0-9_-]){re.escape(removed)}(?![A-Za-z0-9_-])"
         assert re.search(token, launcher) is None
 
