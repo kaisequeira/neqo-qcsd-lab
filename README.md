@@ -187,8 +187,10 @@ cached full-gate diagnostic then passed formatting plus the `neqo-csdef`,
 `neqo-transport`, and `neqo-http3` gates before one `neqo-bin` partition test
 found a separate stale schema-7 literal: production correctly emitted schema
 8. Rust `fff4f8df…` makes that assertion schema-relative while another test
-continues to pin the public value explicitly to 8; its focused pinned-image
-test passes. This diagnostic is non-evidentiary and did not consume v41. A
+continues to pin the public value explicitly to 8. Rust `225b1e9e…` applies the
+exact pinned-formatter layout; the focused pinned-image test and an unfiltered
+pinned Rust 1.90 formatting check pass. This diagnostic is non-evidentiary and
+did not consume v41. A
 fresh cohort v41 must repeat build, reference conformance, timing stress,
 regression, code, and controlled gates before expanded-class acquisition can
 begin.
