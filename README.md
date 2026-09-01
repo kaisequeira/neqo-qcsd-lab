@@ -125,8 +125,8 @@ therefore immutable **failed, non-attesting evidence** and cannot authorise
 later source.
 
 The clean current source, with Rust/gitlink
-`19bdf9eb03d950bba889410fe7026c4abe05c046`, keeps the 20 ms cadence, exact target release,
-target-plus-5-ms deadline, and no-catch-up rule. Ordinary-output admission
+`fb699636c191e91848ffcce859c43bb4d69f7d94`, keeps the 20 ms cadence,
+exact target release, target-plus-5-ms deadline, and no-catch-up rule. Ordinary-output admission
 remains at target minus 10 ms, while guard entry and active waiting move from
 target minus 5 ms to that existing target-minus-10-ms boundary. It refreshes the
 complete set of unrealised slot-owned adapter identities, keeps each identity
@@ -140,8 +140,18 @@ control of server packet timing or size. They are committed and locally tested:
 the full Lab suite passed 1,737 tests with four skips, and Rust formatting,
 test-target `cargo check`, and warning-fatal Clippy passed. Local Rust test-
 binary linking lacked the pinned NSS symbols supplied by the canonical Docker
-build. The correction remains non-evidentiary until a fresh cohort v35 repeats
-the build and every downstream gate.
+build.
+
+Cohort v35 then began at clean Lab `e8bfd6d5488743fd09474806ae7c8dc039c4f1a4`
+and Rust/gitlink `19bdf9eb03d950bba889410fe7026c4abe05c046`. Its backing-storage
+preflight passed, but the embedded Rust code gate stopped at 155/156
+`neqo-bin` tests because one receipt test still compared the emitted schema 6
+against a literal `5`. No v35 build receipt or image-IID artefact was emitted;
+Docker and both backing filesystems remained healthy. Rust `fb699636…`
+replaces that stale literal with `RUNNER_WAKEUP_METRICS_SCHEMA_VERSION`, and
+the exact failed test passes in the pinned-NSS diagnostic image. The correction
+remains non-evidentiary until fresh cohort v36 repeats the build and every
+downstream gate.
 
 The current Lab boundary additionally classifies typed client defence/QCSD
 runner errors as `StrictClientDefenseExecutionFailure`. That type and
@@ -240,7 +250,7 @@ Docker state and redundant local caches were subsequently removed. Docker
 observations then passed with a minimum 523.92 GiB available. The Ubuntu WSL
 distribution-aware Docker proxy is required so bind mounts resolve against the
 actual checkout. This recovered state enabled v34 but does not transfer its
-source-bound evidence to prospective v35.
+source-bound evidence to prospective v36.
 
 The authoritative current heads, progression, and evidence ledger are
 maintained in
