@@ -182,9 +182,16 @@ rejected wrapping in the large test import list and the schema-8 semantics
 assertion. No image-IID artefact, reference execution, timing stress,
 regression, controlled capture, or class-study evidence exists for v40. A
 cached target reproduction is diagnostic only. V40 is consumed and must not
-be rerun. The wrapping-only correction passes the pinned formatter; a fresh
-cohort v41 must repeat build, reference conformance, timing stress, regression,
-code, and controlled gates before expanded-class acquisition can begin.
+be rerun. The wrapping-only correction passes the pinned formatter. A clean
+cached full-gate diagnostic then passed formatting plus the `neqo-csdef`,
+`neqo-transport`, and `neqo-http3` gates before one `neqo-bin` partition test
+found a separate stale schema-7 literal: production correctly emitted schema
+8. Rust `fff4f8df…` makes that assertion schema-relative while another test
+continues to pin the public value explicitly to 8; its focused pinned-image
+test passes. This diagnostic is non-evidentiary and did not consume v41. A
+fresh cohort v41 must repeat build, reference conformance, timing stress,
+regression, code, and controlled gates before expanded-class acquisition can
+begin.
 
 The current Lab boundary additionally classifies typed client defence/QCSD
 runner errors as `StrictClientDefenseExecutionFailure`. That type and
