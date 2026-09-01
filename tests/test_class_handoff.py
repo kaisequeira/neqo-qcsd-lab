@@ -26,6 +26,7 @@ from qcsd_lab.class_study import class_study_launch_identity, class_study_launch
 from qcsd_lab.manifest import canonical_bytes, runtime_manifest
 from qcsd_lab.util import source_metadata
 from qcsd_lab.verification import VerifiedResult
+from tests.scheduler_fixtures import install_scheduler_runtime_receipt
 
 _DIGEST = "a" * 64
 _CLASSES = ("class-a", "class-b")
@@ -260,34 +261,31 @@ def _source_receipt(root: Path, block: int) -> VerifiedResult:
             runtime_kind = "none" if baseline else "front"
             seed = block * 100 + class_index * 10 + mode_index
             _write(sample_root / "capture.pcapng", b"pcapng fixture\n")
+            run = {
+                "completion_status": "complete",
+                "error": None,
+                **_run_graph_evidence(manifest),
+                "seed": seed,
+                "request_policy": "as-defined",
+                "workload_hash_sha256": workload["runtime_manifest_sha256"],
+                "max_response_bytes": 1_048_576,
+                "resolved_configuration": {
+                    "max_udp_payload_size": 1_200,
+                    "defense": {"kind": runtime_kind},
+                },
+                "application_workload_source_hash_sha256": (
+                    None if baseline else workload["sha256"]
+                ),
+                "chaff_manifest_hash_sha256": (
+                    None if baseline else workload["chaff_manifest_sha256"]
+                ),
+                "defense_parameters": None,
+            }
+            diagnostics: dict = {}
+            install_scheduler_runtime_receipt(run, diagnostics)
             _write(
                 sample_root / "neqo/run.json",
-                (
-                    json.dumps(
-                        {
-                            "completion_status": "complete",
-                            "error": None,
-                            **_run_graph_evidence(manifest),
-                            "seed": seed,
-                            "request_policy": "as-defined",
-                            "workload_hash_sha256": workload["runtime_manifest_sha256"],
-                            "max_response_bytes": 1_048_576,
-                            "resolved_configuration": {
-                                "max_udp_payload_size": 1_200,
-                                "defense": {"kind": runtime_kind},
-                            },
-                            "application_workload_source_hash_sha256": (
-                                None if baseline else workload["sha256"]
-                            ),
-                            "chaff_manifest_hash_sha256": (
-                                None if baseline else workload["chaff_manifest_sha256"]
-                            ),
-                            "defense_parameters": None,
-                        },
-                        sort_keys=True,
-                    )
-                    + "\n"
-                ).encode(),
+                (json.dumps(run, sort_keys=True) + "\n").encode(),
             )
             _write(sample_root / "neqo/schedule.csv", b"schedule\n")
             _write(sample_root / "neqo/events.csv", b"events\n")
@@ -318,7 +316,7 @@ def _source_receipt(root: Path, block: int) -> VerifiedResult:
                     "attempts": 1,
                     "eligible": True,
                     "failure": None,
-                    "diagnostics": {},
+                    "diagnostics": diagnostics,
                     "artifacts": artifacts,
                 }
             )
@@ -536,6 +534,7 @@ def _bind_fixture_run(receipt: VerifiedResult, sample: dict) -> None:
             }
         ),
     )
+    install_scheduler_runtime_receipt(run, sample["diagnostics"])
     run_path.write_text(json.dumps(run, sort_keys=True) + "\n", encoding="utf-8")
 
 

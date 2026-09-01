@@ -56,7 +56,11 @@ from .class_study import (
     load_study_receipt,
 )
 from .discover import origin
-from .experiment import ACCEPTED_ARTIFACTS, resolved_sample_directory
+from .experiment import (
+    ACCEPTED_ARTIFACTS,
+    resolved_sample_directory,
+    validate_accepted_scheduler_runtime_receipt,
+)
 from .util import LAB_ROOT, load_json, require_disjoint_path, sha256_file, source_metadata
 from .verification import VerifiedResult, verify_result
 
@@ -574,6 +578,12 @@ def _validate_source_results(
             for sample in samples
         ):
             raise ValueError("formal class accepted-sample identities differ from their seals")
+        for sample in samples:
+            validate_accepted_scheduler_runtime_receipt(
+                receipt.root,
+                experiment,
+                sample,
+            )
         if experiment.get("execution_order") != [sample["sample_id"] for sample in samples]:
             raise ValueError("formal class source execution order is invalid")
 

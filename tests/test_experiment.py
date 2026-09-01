@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 
 import pytest
 
+from qcsd_lab import experiment as experiment_module
 from qcsd_lab.experiment import (
     accepted_sample_hashes,
     accept_sample,
@@ -18,7 +21,8 @@ from qcsd_lab.experiment import (
     validate_accepted_samples,
     validate_resume_fingerprints,
 )
-from qcsd_lab.util import atomic_text, sha256_file
+from qcsd_lab.util import atomic_json, atomic_text, load_json, sha256_file
+from tests.scheduler_fixtures import install_scheduler_runtime_receipt
 
 
 def _configuration(campaign: Path) -> dict:
@@ -215,6 +219,141 @@ def test_accepted_sample_hashes_are_exact_and_require_canonical_artifacts(tmp_pa
     atomic_text(sample / "neqo/run.json", "{}\n")
     atomic_text(sample / "unexpected.log", "not canonical")
     with pytest.raises(ValueError, match="extra.*unexpected.log"):
+        validate_accepted_samples(root, experiment)
+
+
+def test_generic_schema_seven_without_scheduler_contract_remains_compatible(
+    tmp_path: Path,
+) -> None:
+    root, experiment = _initialize(tmp_path)
+    transition_sample(experiment, _sample()["sample_id"], "running", increment_attempt=True)
+    sample_root = _write_artifacts(root)
+    atomic_json(
+        sample_root / "neqo/run.json",
+        {"runner_wakeup_metrics": {"schema_version": 7}},
+    )
+    accepted = accept_sample(root, experiment, _sample()["sample_id"])
+
+    assert validate_accepted_samples(root, experiment) == {
+        _sample()["sample_id"]: accepted["artifacts"]
+    }
+
+
+def test_generic_nonstudy_schema_six_remains_compatible(tmp_path: Path) -> None:
+    root, experiment = _initialize(tmp_path)
+    transition_sample(experiment, _sample()["sample_id"], "running", increment_attempt=True)
+    sample_root = _write_artifacts(root)
+    atomic_json(
+        sample_root / "neqo/run.json",
+        {"runner_wakeup_metrics": {"schema_version": 6}},
+    )
+    accepted = accept_sample(root, experiment, _sample()["sample_id"])
+
+    assert validate_accepted_samples(root, experiment) == {
+        _sample()["sample_id"]: accepted["artifacts"]
+    }
+
+
+def test_current_class_sample_rejects_historical_runner_wakeup_schema(
+    tmp_path: Path,
+) -> None:
+    root, experiment = _initialize_class_experiment(tmp_path, role="formal")
+    transition_sample(experiment, _sample()["sample_id"], "running", increment_attempt=True)
+    sample_root = _write_artifacts(root)
+    atomic_json(
+        sample_root / "neqo/run.json",
+        {"runner_wakeup_metrics": {"schema_version": 6}},
+    )
+    accept_sample(root, experiment, _sample()["sample_id"])
+
+    with pytest.raises(ValueError, match="class-study.*schema 7"):
+        validate_accepted_samples(root, experiment)
+
+
+def test_buflo_study_schema_seven_rejects_missing_scheduler_runtime_receipt(
+    tmp_path: Path,
+) -> None:
+    root, experiment = _initialize(tmp_path)
+    experiment["name"] = "buflo-study-v1-scheduler-receipt-test"
+    transition_sample(experiment, _sample()["sample_id"], "running", increment_attempt=True)
+    sample_root = _write_artifacts(root)
+    atomic_json(
+        sample_root / "neqo/run.json",
+        {"runner_wakeup_metrics": {"schema_version": 7}},
+    )
+    accept_sample(root, experiment, _sample()["sample_id"])
+
+    with pytest.raises(ValueError, match="lacks its scheduler runtime receipt"):
+        validate_accepted_samples(root, experiment)
+
+
+def test_current_buflo_schema_six_cannot_claim_historical_compatibility(
+    tmp_path: Path,
+) -> None:
+    root, experiment = _initialize(tmp_path)
+    experiment["name"] = "buflo-study-v1-historical-scheduler-test"
+    transition_sample(experiment, _sample()["sample_id"], "running", increment_attempt=True)
+    sample_root = _write_artifacts(root)
+    atomic_json(
+        sample_root / "neqo/run.json",
+        {"runner_wakeup_metrics": {"schema_version": 6}},
+    )
+    accept_sample(root, experiment, _sample()["sample_id"])
+
+    with pytest.raises(ValueError, match="exact pinned v36"):
+        validate_accepted_samples(root, experiment)
+
+
+def test_exact_pinned_v36_buflo_schema_six_remains_readable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, experiment = _initialize(tmp_path)
+    experiment["name"] = "buflo-study-v1-regression-buflo-1200"
+    experiment["source"] = dict(experiment_module._HISTORICAL_BUFLO_V36_SOURCE)
+    transition_sample(experiment, _sample()["sample_id"], "running", increment_attempt=True)
+    sample_root = _write_artifacts(root)
+    atomic_json(
+        sample_root / "neqo/run.json",
+        {"runner_wakeup_metrics": {"schema_version": 6}},
+    )
+    accepted = accept_sample(root, experiment, _sample()["sample_id"])
+    canonical = json.dumps(experiment, indent=2, sort_keys=True).encode("utf-8") + b"\n"
+    monkeypatch.setitem(
+        experiment_module._HISTORICAL_BUFLO_V36_EXPERIMENT_SHA256,
+        experiment["name"],
+        hashlib.sha256(canonical).hexdigest(),
+    )
+
+    assert validate_accepted_samples(root, experiment) == {
+        _sample()["sample_id"]: accepted["artifacts"]
+    }
+
+    experiment["source"] = {"lab_commit": "a" * 40, "image": "sha256:image"}
+    with pytest.raises(ValueError, match="exact pinned v36"):
+        validate_accepted_samples(root, experiment)
+
+
+def test_current_scheduler_receipt_is_deeply_revalidated_after_promotion(
+    tmp_path: Path,
+) -> None:
+    root, experiment = _initialize(tmp_path)
+    transition_sample(experiment, _sample()["sample_id"], "running", increment_attempt=True)
+    sample_root = _write_artifacts(root)
+    run = load_json(sample_root / "neqo/run.json")
+    diagnostics: dict = {}
+    install_scheduler_runtime_receipt(run, diagnostics)
+    atomic_json(sample_root / "neqo/run.json", run)
+    accepted = accept_sample(
+        root,
+        experiment,
+        _sample()["sample_id"],
+        diagnostics=diagnostics,
+    )
+    validate_accepted_samples(root, experiment)
+
+    receipt = accepted["diagnostics"]["scheduler_runtime_receipt"]
+    receipt["scheduler_runtime_evidence"]["cgroup_cpu_stat"]["nr_throttled_delta"] = 1
+    with pytest.raises(ValueError, match="scheduler runtime receipt is invalid"):
         validate_accepted_samples(root, experiment)
 
 

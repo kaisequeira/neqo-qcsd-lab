@@ -23,7 +23,7 @@ import sys
 import tempfile
 import time
 import tomllib
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import nullcontext
 from copy import deepcopy
 from dataclasses import asdict, dataclass
@@ -65,18 +65,36 @@ SCHEMA_VERSION = 1
 PREVIOUS_LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION = 3
 LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION = 4
 MULTI_ORIGIN_COMPATIBILITY_SCHEMA_VERSION = 2
-MULTI_ORIGIN_COMPATIBILITY_ARTIFACT_TYPE = (
-    "qcsd-buflo-nine-mode-multi-origin-compatibility"
-)
-MULTI_ORIGIN_COMPATIBILITY_CHECKPOINT_TYPE = (
-    "qcsd-buflo-multi-origin-compatibility-checkpoint"
-)
+MULTI_ORIGIN_COMPATIBILITY_ARTIFACT_TYPE = "qcsd-buflo-nine-mode-multi-origin-compatibility"
+MULTI_ORIGIN_COMPATIBILITY_CHECKPOINT_TYPE = "qcsd-buflo-multi-origin-compatibility-checkpoint"
 MULTI_ORIGIN_COMPATIBILITY_ATTEMPT_ERROR_TYPE = (
     "qcsd-buflo-multi-origin-compatibility-attempt-error"
 )
+HISTORICAL_MULTI_ORIGIN_V36_RECEIPT_SHA256 = (
+    "d2592cef73c65837322f165120777afc699e32505384737a4554614571536fd6"
+)
+HISTORICAL_MULTI_ORIGIN_V36_SOURCE = {
+    "image_digest": "sha256:bfb6b8dd6581225c3ba748f9e6b1537bc5f0b7c8be8dfb3a74f8969134a0b5d4",
+    "lab_commit": "b87bf2705e4eb76869d05d4be86a54c3be9da79e",
+    "lab_dirty": False,
+    "lab_patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "neqo_commit": "fb699636c191e91848ffcce859c43bb4d69f7d94",
+    "neqo_dirty": False,
+    "neqo_patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "neqo_pinned_commit": "fb699636c191e91848ffcce859c43bb4d69f7d94",
+}
+TIMING_STRESS_SCHEMA_VERSION = 1
+TIMING_STRESS_ARTIFACT_TYPE = "qcsd-buflo-timing-stress-execution"
+TIMING_STRESS_CHECKPOINT_TYPE = "qcsd-buflo-timing-stress-checkpoint"
+TIMING_STRESS_ATTEMPT_ERROR_TYPE = "qcsd-buflo-timing-stress-attempt-error"
+TIMING_STRESS_BOUND_REGRESSION_RECEIPT_SCHEMA_VERSION = 5
 CONTROLLED_NETWORK_RECEIPT_SCHEMA_VERSION = 2
 STUDY_ROOT = LAB_ROOT / "config/buflo-study/v1"
 STUDY_PLAN = STUDY_ROOT / "study.json"
+TIMING_STRESS_PARAMETERS = STUDY_ROOT / "buflo-timing-stress-v1.json"
+TIMING_STRESS_PARAMETERS_PROVENANCE = TIMING_STRESS_PARAMETERS.with_suffix(
+    TIMING_STRESS_PARAMETERS.suffix + ".provenance.json"
+)
 ESTABLISHED_SEVEN_BASELINE = STUDY_ROOT / "established-seven-baseline.json"
 ESTABLISHED_SEVEN_BASELINE_SHA256 = (
     "7705ee77b84f0ba4d7521bb8f63fdca69e4ea14580ecc4c41a603c835cfc73ca"
@@ -101,6 +119,23 @@ COMMON_LIMITS = {
     "per_origin_cooldown_seconds": 30,
     "settle_seconds": 1,
 }
+TIMING_STRESS_VISITS = 12
+TIMING_STRESS_INTERVAL_US = 20_000
+TIMING_STRESS_MINIMUM_DURATION_US = 100_000_000
+TIMING_STRESS_PACKET_SIZE = 1_200
+TIMING_STRESS_MAX_EVENTS_PER_DIRECTION = 6_000
+TIMING_STRESS_WINDOW_US = 5_000
+TIMING_STRESS_OUTGOING_PER_VISIT = 5_001
+TIMING_STRESS_INCOMING_PER_VISIT = 5_001
+TIMING_STRESS_GUARDS_PER_VISIT = 5_000
+TIMING_STRESS_INCOMING_BYTES_PER_VISIT = (
+    TIMING_STRESS_INCOMING_PER_VISIT * TIMING_STRESS_PACKET_SIZE
+)
+TIMING_STRESS_TOTAL_GUARDS = 60_000
+TIMING_STRESS_TOTAL_OUTGOING = 60_012
+TIMING_STRESS_TOTAL_INCOMING = 60_012
+TIMING_STRESS_TOTAL_DIRECTIONAL_EVENTS = 120_024
+TIMING_STRESS_TOTAL_INCOMING_BYTES = TIMING_STRESS_TOTAL_INCOMING * TIMING_STRESS_PACKET_SIZE
 # The controlled CS-BuFLO qualification needs fresh client-to-server
 # application STREAM bytes on which to exercise its first 16 KiB estimator
 # boundary.  A deterministic, incompressible-looking literal field keeps this
@@ -281,15 +316,10 @@ HARD_GATE_IDENTITIES = (
         "paper-metric-and-classifier-comparisons-are-reconciled-with-observation-"
         "layer-and-client-only-limitations"
     ),
-    (
-        "historical-corpus-guard-is-unchanged-and-sealed-results-handoff-"
-        "evaluation-receipts-verify"
-    ),
+    ("historical-corpus-guard-is-unchanged-and-sealed-results-handoff-evaluation-receipts-verify"),
 )
 RUST_CODE_GATE_ROOT = Path(
-    os.environ.get(
-        "QCSD_RUST_CODE_GATE_ROOT", "/usr/share/qcsd-lab/rust-code-gate"
-    )
+    os.environ.get("QCSD_RUST_CODE_GATE_ROOT", "/usr/share/qcsd-lab/rust-code-gate")
 )
 TOP_LEVEL_PLAN_KEYS = {
     "schema_version",
@@ -306,6 +336,7 @@ TOP_LEVEL_PLAN_KEYS = {
     "treatments",
     "controlled",
     "regression",
+    "timing_stress",
     "public_stages",
     "capture_admission",
     "hard_gates",
@@ -350,8 +381,7 @@ def validate_study_plan(value: Mapping[str, Any]) -> None:
         value.get("schema_version") != SCHEMA_VERSION
         or value.get("study_id") != BUFLO_STUDY_ID
         or value.get("default_cohort_version") != 1
-        or value.get("qualification_set_pattern")
-        != "buflo-study-public5-v{cohort_version}"
+        or value.get("qualification_set_pattern") != "buflo-study-public5-v{cohort_version}"
         or value.get("implementation_status") != "candidate"
         or value.get("promotion_rule") != "all-gates-pass-with-no-waivers"
         or value.get("implementation_baselines")
@@ -486,6 +516,35 @@ def validate_study_plan(value: Mapping[str, Any]) -> None:
     ):
         raise ValueError("nine-mode regression matrix is invalid")
 
+    timing_stress = value.get("timing_stress")
+    expected_timing_stress = {
+        "execution_stage": "mandatory-regression-prelude",
+        "evidence_class": "timing-stress-nonformal-excluded",
+        "workload": "complex-two-origin",
+        "treatment": "buflo",
+        "network_profile": "clean",
+        "visits": TIMING_STRESS_VISITS,
+        "max_attempts": 1,
+        "authoritative_checkpoint": "experiment.json",
+        "interval_us": TIMING_STRESS_INTERVAL_US,
+        "minimum_duration_us": TIMING_STRESS_MINIMUM_DURATION_US,
+        "packet_size": TIMING_STRESS_PACKET_SIZE,
+        "max_events_per_direction": TIMING_STRESS_MAX_EVENTS_PER_DIRECTION,
+        "strict_half_open_window_us": TIMING_STRESS_WINDOW_US,
+        "outgoing_opportunities_per_visit": TIMING_STRESS_OUTGOING_PER_VISIT,
+        "incoming_opportunities_per_visit": TIMING_STRESS_INCOMING_PER_VISIT,
+        "guarded_outgoing_releases_per_visit": TIMING_STRESS_GUARDS_PER_VISIT,
+        "full_outgoing_cells_per_visit": TIMING_STRESS_OUTGOING_PER_VISIT,
+        "incoming_bytes_per_visit": TIMING_STRESS_INCOMING_BYTES_PER_VISIT,
+        "expected_guarded_outgoing_releases": TIMING_STRESS_TOTAL_GUARDS,
+        "expected_outgoing_opportunities": TIMING_STRESS_TOTAL_OUTGOING,
+        "expected_incoming_opportunities": TIMING_STRESS_TOTAL_INCOMING,
+        "expected_directional_events": TIMING_STRESS_TOTAL_DIRECTIONAL_EVENTS,
+        "formal_evidence": False,
+    }
+    if timing_stress != expected_timing_stress:
+        raise ValueError("BuFLO timing-stress contract is invalid")
+
     stages = value.get("public_stages")
     if not isinstance(stages, dict) or set(stages) != set(STAGE_TREATMENTS):
         raise ValueError("BuFLO public stages are invalid")
@@ -558,9 +617,7 @@ def validate_study_plan(value: Mapping[str, Any]) -> None:
         },
         "historical_exporter": {
             "path": "tools/classifier_handoff.py",
-            "sha256": (
-                "f91964df8b6af3b1d89a8c2ff2de1997a59e9ffe36124fa8e20c694515152a72"
-            ),
+            "sha256": ("f91964df8b6af3b1d89a8c2ff2de1997a59e9ffe36124fa8e20c694515152a72"),
         },
     }:
         raise ValueError("historical corpus immutability guard is invalid")
@@ -581,8 +638,7 @@ def validate_established_seven_baseline() -> dict[str, Any]:
     if (
         ESTABLISHED_SEVEN_BASELINE.is_symlink()
         or not ESTABLISHED_SEVEN_BASELINE.is_file()
-        or sha256_file(ESTABLISHED_SEVEN_BASELINE)
-        != ESTABLISHED_SEVEN_BASELINE_SHA256
+        or sha256_file(ESTABLISHED_SEVEN_BASELINE) != ESTABLISHED_SEVEN_BASELINE_SHA256
     ):
         raise ValueError("established-seven baseline oracle digest is invalid")
     value = load_json(ESTABLISHED_SEVEN_BASELINE)
@@ -625,9 +681,7 @@ def validate_established_seven_baseline() -> dict[str, Any]:
     ]
     from .defenses import DEFENSE_ORDER, DEFENSE_RUNTIME_KINDS
 
-    current_identities = [
-        [name, DEFENSE_RUNTIME_KINDS[name]] for name in DEFENSE_ORDER[:7]
-    ]
+    current_identities = [[name, DEFENSE_RUNTIME_KINDS[name]] for name in DEFENSE_ORDER[:7]]
     if value["defense_identity_projection"] != expected_identities or current_identities != (
         expected_identities
     ):
@@ -774,9 +828,7 @@ def _rendered_campaign_bytes(path: Path, *, cohort_version: int) -> bytes:
     old = b"chaff_qualification_set: buflo-study-public5-v1\n"
     if source.count(old) != 1:
         raise ValueError("BuFLO campaign has no unique qualification-set declaration")
-    replacement = (
-        f"chaff_qualification_set: {qualification_set_for_cohort(version)}\n".encode()
-    )
+    replacement = f"chaff_qualification_set: {qualification_set_for_cohort(version)}\n".encode()
     return source.replace(old, replacement)
 
 
@@ -985,13 +1037,12 @@ def validate_controlled_campaign_receipt(value: Any) -> dict[str, Any]:
     }
     previous_keys = historical_keys | {"fixture_scope"}
     current_keys = previous_keys | {"cohort_version"}
+    stress_bound_keys = current_keys | {"timing_stress"}
     fields = frozenset(value) if isinstance(value, Mapping) else frozenset()
     schema_version = value.get("schema_version") if isinstance(value, Mapping) else None
     if not isinstance(value, Mapping) or not (
         (schema_version == SCHEMA_VERSION and fields == frozenset(historical_keys))
-        or (
-            schema_version == 2 and fields == frozenset(previous_keys)
-        )
+        or (schema_version == 2 and fields == frozenset(previous_keys))
         or (
             schema_version
             in {
@@ -999,6 +1050,10 @@ def validate_controlled_campaign_receipt(value: Any) -> dict[str, Any]:
                 LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION,
             }
             and fields == frozenset(current_keys)
+        )
+        or (
+            schema_version == TIMING_STRESS_BOUND_REGRESSION_RECEIPT_SCHEMA_VERSION
+            and fields == frozenset(stress_bound_keys)
         )
     ):
         raise ValueError("controlled campaign receipt fields are invalid")
@@ -1029,9 +1084,12 @@ def validate_controlled_campaign_receipt(value: Any) -> dict[str, Any]:
     expected_fixture_scope = "controlled-live-manifests-including-two-origin-local-large"
     if stage == "regression":
         expected_fixture_scope = (
-            "single-origin-prefix-regression-plus-bound-two-origin-"
-            "nine-mode-compatibility"
-            if schema_version == LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION
+            "single-origin-prefix-regression-plus-bound-two-origin-nine-mode-compatibility"
+            if schema_version
+            in {
+                LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION,
+                TIMING_STRESS_BOUND_REGRESSION_RECEIPT_SCHEMA_VERSION,
+            }
             else "same-origin-regression-surrogates"
         )
     if (
@@ -1045,6 +1103,7 @@ def validate_controlled_campaign_receipt(value: Any) -> dict[str, Any]:
                 2,
                 PREVIOUS_LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION,
                 LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION,
+                TIMING_STRESS_BOUND_REGRESSION_RECEIPT_SCHEMA_VERSION,
             }
             and value["fixture_scope"] != expected_fixture_scope
         )
@@ -1062,9 +1121,20 @@ def validate_controlled_campaign_receipt(value: Any) -> dict[str, Any]:
         in {
             PREVIOUS_LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION,
             LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION,
+            TIMING_STRESS_BOUND_REGRESSION_RECEIPT_SCHEMA_VERSION,
         }
         else None,
     )
+    if schema_version == TIMING_STRESS_BOUND_REGRESSION_RECEIPT_SCHEMA_VERSION:
+        if stage != "regression":
+            raise ValueError("timing-stress binding is valid only for regression campaigns")
+        stress = _validate_timing_stress_binding(value["timing_stress"])
+        if (
+            stress["cohort_version"] != value["cohort_version"]
+            or stress["network"] != value["network"]
+            or stress["source"]["image_digest"] != value["network"].get("image_digest")
+        ):
+            raise ValueError("regression timing-stress cohort, image, or network binding differs")
     return dict(value)
 
 
@@ -1079,6 +1149,7 @@ def _validate_network_receipt(
     if campaign_schema_version in {
         PREVIOUS_LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION,
         LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION,
+        TIMING_STRESS_BOUND_REGRESSION_RECEIPT_SCHEMA_VERSION,
     }:
         _validate_shared_router_network_receipt(
             value,
@@ -1094,9 +1165,7 @@ def _validate_network_receipt(
     )
 
 
-def _validate_legacy_network_receipt(
-    value: Any, *, client_qdisc: str, server_qdisc: str
-) -> None:
+def _validate_legacy_network_receipt(value: Any, *, client_qdisc: str, server_qdisc: str) -> None:
     keys = {
         "schema_version",
         "artifact_type",
@@ -1256,9 +1325,7 @@ def _canonical_ipam(value: Any, *, expected_name: str) -> dict[str, str]:
     ipam = item["ipam"]
     if not isinstance(ipam, list) or len(ipam) != 1:
         raise ValueError("controlled Docker network requires one IPv4 IPAM record")
-    row = _exact_mapping(
-        ipam[0], {"Subnet", "IPRange", "Gateway"}, "Docker IPv4 IPAM observation"
-    )
+    row = _exact_mapping(ipam[0], {"Subnet", "IPRange", "Gateway"}, "Docker IPv4 IPAM observation")
     if row["IPRange"] != "":
         raise ValueError("controlled Docker network cannot use a secondary IP range")
     try:
@@ -1287,7 +1354,9 @@ def _canonical_address(value: Any, interface: str) -> dict[str, Any]:
     addr_info = row.get("addr_info")
     if not isinstance(addr_info, list):
         raise ValueError(f"controlled {interface} address list is invalid")
-    ipv4 = [entry for entry in addr_info if isinstance(entry, Mapping) and entry.get("family") == "inet"]
+    ipv4 = [
+        entry for entry in addr_info if isinstance(entry, Mapping) and entry.get("family") == "inet"
+    ]
     if len(ipv4) > 1:
         raise ValueError(f"controlled {interface} has multiple IPv4 addresses")
     address: str | None = None
@@ -1391,9 +1460,7 @@ def _canonical_qdiscs(value: Any, interface: str) -> list[dict[str, Any]]:
                 "kind": kind,
                 "root": raw.get("root") is True,
                 "parent": raw.get("parent") if isinstance(raw.get("parent"), str) else None,
-                "netem": _canonical_netem_options(raw.get("options"))
-                if kind == "netem"
-                else None,
+                "netem": _canonical_netem_options(raw.get("options")) if kind == "netem" else None,
             }
         )
     rows.sort(key=lambda row: (row["kind"], str(row["parent"]), not row["root"]))
@@ -1516,10 +1583,22 @@ def _observe_client_namespace() -> dict[str, Any]:
             if alias in fields[1:]:
                 hosts[alias].append(fields[0])
     return {
-        "addresses": {"eth0": _observe_json(["ip", "-j", "address", "show", "dev", "eth0"], "client address")},
-        "qdiscs": {"eth0": _observe_json(["tc", "-details", "-j", "qdisc", "show", "dev", "eth0"], "client qdisc")},
-        "offloads": {"eth0": _observe_json(["ethtool", "--json", "--show-features", "eth0"], "client offloads")},
-        "routes": _observe_json(["ip", "-j", "-4", "route", "show", "table", "main"], "client routes"),
+        "addresses": {
+            "eth0": _observe_json(["ip", "-j", "address", "show", "dev", "eth0"], "client address")
+        },
+        "qdiscs": {
+            "eth0": _observe_json(
+                ["tc", "-details", "-j", "qdisc", "show", "dev", "eth0"], "client qdisc"
+            )
+        },
+        "offloads": {
+            "eth0": _observe_json(
+                ["ethtool", "--json", "--show-features", "eth0"], "client offloads"
+            )
+        },
+        "routes": _observe_json(
+            ["ip", "-j", "-4", "route", "show", "table", "main"], "client routes"
+        ),
         "hosts": hosts,
     }
 
@@ -1529,7 +1608,9 @@ def _decode_controlled_network_evidence(value: str) -> Mapping[str, Any]:
         decoded = base64.b64decode(value, validate=True).decode("utf-8")
         parsed = json.loads(decoded)
     except (UnicodeError, ValueError, json.JSONDecodeError) as error:
-        raise ValueError("controlled shared-router evidence is not canonical base64 JSON") from error
+        raise ValueError(
+            "controlled shared-router evidence is not canonical base64 JSON"
+        ) from error
     return _exact_mapping(
         parsed,
         {"schema_version", "client_network", "server_network", "router", "servers"},
@@ -1647,15 +1728,12 @@ def _build_shared_router_network_receipt(
         raise ValueError("controlled shared-router launch evidence schema is invalid")
     server_network_name = network.removesuffix("-client") + "-server"
     client_network = _canonical_ipam(evidence["client_network"], expected_name=network)
-    server_network = _canonical_ipam(
-        evidence["server_network"], expected_name=server_network_name
-    )
+    server_network = _canonical_ipam(evidence["server_network"], expected_name=server_network_name)
     expected_client_subnet, expected_server_subnet, base_name = _controlled_network_pair(
         client_network["name"], server_network["name"]
     )
-    if (
-        client_network["subnet"] != str(expected_client_subnet)
-        or server_network["subnet"] != str(expected_server_subnet)
+    if client_network["subnet"] != str(expected_client_subnet) or server_network["subnet"] != str(
+        expected_server_subnet
     ):
         raise ValueError("controlled Docker subnets differ from the fixed cohort allocation")
 
@@ -2238,8 +2316,13 @@ def execute_local_regression(
         server_qdisc=clean["server_qdisc"],
         cohort_version=cohort_version,
     )
+    timing_stress_receipt = execute_buflo_timing_stress(
+        destination,
+        network_receipt=network_receipt,
+        cohort_version=cohort_version,
+    )
     receipt = {
-        "schema_version": LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION,
+        "schema_version": TIMING_STRESS_BOUND_REGRESSION_RECEIPT_SCHEMA_VERSION,
         "stage": "regression",
         "netem_profile": clean["id"],
         "netem_rank": 0,
@@ -2247,13 +2330,13 @@ def execute_local_regression(
         "server_qdisc": clean["server_qdisc"],
         "workload_aliases": {"complex": "local-large", "simple": "local-small"},
         "fixture_scope": (
-            "single-origin-prefix-regression-plus-bound-two-origin-"
-            "nine-mode-compatibility"
+            "single-origin-prefix-regression-plus-bound-two-origin-nine-mode-compatibility"
         ),
         "cohort_version": cohort_version,
         "treatment_order": list(load_study_plan()["regression"]["treatments"]),
         "evidence_class": "controlled-test-only-nonformal",
         "network": network_receipt,
+        "timing_stress": _file_binding(timing_stress_receipt),
     }
     validate_controlled_campaign_receipt(receipt)
 
@@ -2557,9 +2640,7 @@ def _prepare_local_workloads(
             existing = load_json(destination)
             validate_manifest(existing)
             if require_csbuflo_rate_driver:
-                _validate_controlled_csbuflo_rate_driver(
-                    workload_id, existing["resources"]
-                )
+                _validate_controlled_csbuflo_rate_driver(workload_id, existing["resources"])
             continue
         resources = deepcopy(unresolved["resources"])
         probe = {"resources": resources}
@@ -2659,9 +2740,7 @@ def _csbuflo_rate_driver_value(workload_id: str) -> str:
     return "".join(chunks)[:CSBUFLO_RATE_DRIVER_VALUE_BYTES]
 
 
-def _controlled_csbuflo_rate_driver(
-    identifier: int, workload_id: str
-) -> dict[str, Any]:
+def _controlled_csbuflo_rate_driver(identifier: int, workload_id: str) -> dict[str, Any]:
     """Build the application-only request-rate driver for controlled workloads."""
 
     resource = _local_resource(
@@ -2731,8 +2810,7 @@ def _validate_controlled_csbuflo_rate_driver(
                     (
                         item
                         for item in responses
-                        if isinstance(item, Mapping)
-                        and item.get("resource_id") == driver["id"]
+                        if isinstance(item, Mapping) and item.get("resource_id") == driver["id"]
                     ),
                     None,
                 )
@@ -2776,10 +2854,14 @@ def _controlled_csbuflo_rate_driver_observation(
             if not isinstance(response, Mapping):
                 continue
             headers = response.get("request_headers")
-            if isinstance(headers, list) and [
-                CSBUFLO_RATE_DRIVER_HEADER_NAME,
-                expected_value,
-            ] in headers:
+            if (
+                isinstance(headers, list)
+                and [
+                    CSBUFLO_RATE_DRIVER_HEADER_NAME,
+                    expected_value,
+                ]
+                in headers
+            ):
                 matches.append(response)
     if len(matches) != 1:
         raise ValueError(
@@ -2803,9 +2885,8 @@ def _controlled_csbuflo_rate_driver_observation(
         "resource_id": expected_id,
         "request_stream_bytes": size,
         "boundary_bytes": CSBUFLO_RATE_DRIVER_BOUNDARY_BYTES,
-        "post_boundary_cells": (
-            size - CSBUFLO_RATE_DRIVER_BOUNDARY_BYTES
-        ) // CSBUFLO_RATE_DRIVER_CELL_BYTES,
+        "post_boundary_cells": (size - CSBUFLO_RATE_DRIVER_BOUNDARY_BYTES)
+        // CSBUFLO_RATE_DRIVER_CELL_BYTES,
     }
 
 
@@ -3105,12 +3186,9 @@ def _regression_multi_origin_projection(
         or surrogate_preparation["final_url"] != application_preparation["final_url"]
         or surrogate_preparation["expected_responses"]
         != application_preparation["expected_responses"]
-        or surrogate_preparation["approved_origins"]
-        != [MULTI_ORIGIN_COMPATIBILITY_ORIGINS[0]]
-        or application_preparation["approved_origins"]
-        != list(MULTI_ORIGIN_COMPATIBILITY_ORIGINS)
-        or application_preparation["observed_origins"]
-        != list(MULTI_ORIGIN_COMPATIBILITY_ORIGINS)
+        or surrogate_preparation["approved_origins"] != [MULTI_ORIGIN_COMPATIBILITY_ORIGINS[0]]
+        or application_preparation["approved_origins"] != list(MULTI_ORIGIN_COMPATIBILITY_ORIGINS)
+        or application_preparation["observed_origins"] != list(MULTI_ORIGIN_COMPATIBILITY_ORIGINS)
     ):
         raise ValueError("multi-origin compatibility prepared response/origin binding drifted")
     return {
@@ -3151,9 +3229,7 @@ def _regression_multi_origin_run_identity(
     resources = application.get("resources")
     preparation = application.get("preparation")
     expected_responses = (
-        preparation.get("expected_responses")
-        if isinstance(preparation, Mapping)
-        else None
+        preparation.get("expected_responses") if isinstance(preparation, Mapping) else None
     )
     responses = run.get("responses")
     if (
@@ -3258,8 +3334,7 @@ def _regression_multi_origin_walkie_talkie_value(
     if (
         not isinstance(parameter, dict)
         or parameter.get("schema_version") != 6
-        or parameter.get("generated_by")
-        != "qcsd-buflo-study-controlled-regression-v1"
+        or parameter.get("generated_by") != "qcsd-buflo-study-controlled-regression-v1"
         or not isinstance(parameter.get("qualification_bindings"), list)
     ):
         raise ValueError("controlled Walkie-Talkie source parameter is invalid")
@@ -3271,9 +3346,7 @@ def _regression_multi_origin_walkie_talkie_value(
     if len(matches) != 1:
         raise ValueError("controlled Walkie-Talkie source lacks one complex binding")
     matches[0]["qualified_chaff_manifest_sha256"] = projected_manifest_sha256
-    parameter["generated_by"] = (
-        "qcsd-buflo-study-multi-origin-compatibility-v1"
-    )
+    parameter["generated_by"] = "qcsd-buflo-study-multi-origin-compatibility-v1"
     return parameter
 
 
@@ -3436,8 +3509,7 @@ def _regression_multi_origin_defenses(
     if any(
         defense.parameters_path is not None
         and defense.name != "walkie-talkie"
-        and defense.parameters_provenance_path
-        != parameter_provenance_path(defense.parameters_path)
+        and defense.parameters_provenance_path != parameter_provenance_path(defense.parameters_path)
         for defense in defenses
     ):
         raise AssertionError("multi-origin compatibility parameter provenance drifted")
@@ -3566,13 +3638,11 @@ def _regression_multi_origin_rejection_failure(attempt: Path) -> dict[str, Any]:
             or set(value) != {"schema_version", "artifact_type", "failure"}
             or type(value.get("schema_version")) is not int
             or value.get("schema_version") != 1
-            or value.get("artifact_type")
-            != MULTI_ORIGIN_COMPATIBILITY_ATTEMPT_ERROR_TYPE
+            or value.get("artifact_type") != MULTI_ORIGIN_COMPATIBILITY_ATTEMPT_ERROR_TYPE
             or not isinstance(value.get("failure"), Mapping)
             or set(value["failure"]) != {"stage", "type", "message"}
             or not all(
-                isinstance(value["failure"].get(field), str)
-                and bool(value["failure"][field])
+                isinstance(value["failure"].get(field), str) and bool(value["failure"][field])
                 for field in ("stage", "type", "message")
             )
         ):
@@ -3609,6 +3679,7 @@ def _regression_multi_origin_attempt_record(
     defense: Any,
     *,
     seed: int,
+    historical_candidate_source: Mapping[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     """Classify and hash one attempt; accepted evidence is returned separately."""
 
@@ -3618,9 +3689,7 @@ def _regression_multi_origin_attempt_record(
     files = _regression_multi_origin_raw_attempt_inventory(attempt)
     evidence: dict[str, Any] | None = None
     if _regression_multi_origin_has_rejection_marker(attempt):
-        failure: dict[str, Any] | None = (
-            _regression_multi_origin_rejection_failure(attempt)
-        )
+        failure: dict[str, Any] | None = _regression_multi_origin_rejection_failure(attempt)
         outcome = "rejected"
     else:
         try:
@@ -3630,6 +3699,7 @@ def _regression_multi_origin_attempt_record(
                 projected_chaff_path,
                 defense,
                 seed=seed,
+                historical_candidate_source=historical_candidate_source,
             )
         except (OSError, TypeError, ValueError):
             failure = _regression_multi_origin_rejection_failure(attempt)
@@ -3658,6 +3728,8 @@ def _regression_multi_origin_attempt_ledgers(
     defenses: Sequence[Any],
     accepted_attempts: Mapping[str, str],
     samples: Sequence[Mapping[str, Any]],
+    *,
+    historical_candidate_source: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Close the exact on-disk attempt tree through each mode's acceptance."""
 
@@ -3668,16 +3740,12 @@ def _regression_multi_origin_attempt_ledgers(
     actual_modes: set[str] = set()
     for path in attempts_root.iterdir():
         if path.is_symlink() or not path.is_dir():
-            raise ValueError(
-                "multi-origin compatibility attempts root contains an unsafe entry"
-            )
+            raise ValueError("multi-origin compatibility attempts root contains an unsafe entry")
         actual_modes.add(path.name)
     if actual_modes != expected_modes:
         raise ValueError("multi-origin compatibility attempt modes are not exact")
     sample_by_mode = {
-        str(sample.get("mode")): sample
-        for sample in samples
-        if isinstance(sample, Mapping)
+        str(sample.get("mode")): sample for sample in samples if isinstance(sample, Mapping)
     }
     if set(sample_by_mode) != expected_modes or set(accepted_attempts) != expected_modes:
         raise ValueError("multi-origin compatibility accepted mode binding is incomplete")
@@ -3690,9 +3758,7 @@ def _regression_multi_origin_attempt_ledgers(
         for path in mode_root.iterdir():
             match = re.fullmatch(r"attempt-(0[1-3])", path.name)
             if path.is_symlink() or not path.is_dir() or match is None:
-                raise ValueError(
-                    f"multi-origin compatibility {mode} attempt inventory is unsafe"
-                )
+                raise ValueError(f"multi-origin compatibility {mode} attempt inventory is unsafe")
             attempts[int(match.group(1))] = path
         if not attempts or sorted(attempts) != list(range(1, len(attempts) + 1)):
             raise ValueError(
@@ -3709,6 +3775,7 @@ def _regression_multi_origin_attempt_ledgers(
                 projected_chaff_path,
                 defense,
                 seed=seed,
+                historical_candidate_source=historical_candidate_source,
             )
             records.append(record)
             if evidence is not None:
@@ -3718,9 +3785,7 @@ def _regression_multi_origin_attempt_ledgers(
             or records[-1]["outcome"] != "accepted"
             or any(record["outcome"] != "rejected" for record in records[:-1])
         ):
-            raise ValueError(
-                f"multi-origin compatibility {mode} attempt outcomes are not terminal"
-            )
+            raise ValueError(f"multi-origin compatibility {mode} attempt outcomes are not terminal")
         accepted = records[-1]["attempt"]
         sample = sample_by_mode[mode]
         if (
@@ -3729,9 +3794,7 @@ def _regression_multi_origin_attempt_ledgers(
             or sample.get("files") != records[-1]["files"]
             or sample.get("files_sha256") != records[-1]["files_sha256"]
         ):
-            raise ValueError(
-                f"multi-origin compatibility {mode} accepted attempt binding changed"
-            )
+            raise ValueError(f"multi-origin compatibility {mode} accepted attempt binding changed")
         ledgers.append(
             {
                 "mode": mode,
@@ -3759,6 +3822,7 @@ def _regression_multi_origin_attempt_evidence(
     defense: Any,
     *,
     seed: int,
+    historical_candidate_source: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     from types import SimpleNamespace
 
@@ -3797,9 +3861,7 @@ def _regression_multi_origin_attempt_evidence(
         or not _runner_result_complete(run, expected_ids)
     ):
         raise ValueError("multi-origin compatibility attempt is not runner/capture eligible")
-    qcsd_profile = (
-        "research-1200" if defense.name in {"buflo", "cs-buflo"} else "live"
-    )
+    qcsd_profile = "research-1200" if defense.name in {"buflo", "cs-buflo"} else "live"
     limits = SimpleNamespace(
         timeout_seconds=120,
         max_response_bytes=1_048_576,
@@ -3824,6 +3886,7 @@ def _regression_multi_origin_attempt_evidence(
         defense=defense,
         seed=seed,
         context=context,
+        historical_candidate_source=historical_candidate_source,
     )
     sample = {
         "sample_id": f"multi-origin-{defense.name}",
@@ -3905,9 +3968,7 @@ def _regression_multi_origin_runtime_inputs(defenses: Sequence[Any]) -> dict[str
                 {
                     "input_type": "parameter-artifact",
                     "sha256": sha256_file(defense.parameters_path),
-                    "provenance_sha256": sha256_file(
-                        defense.parameters_provenance_path
-                    ),
+                    "provenance_sha256": sha256_file(defense.parameters_provenance_path),
                     "input_policy": defense.parameters_input_policy,
                 }
             )
@@ -3937,11 +3998,7 @@ def _regression_result_bindings(result_roots: Sequence[Path]) -> list[dict[str, 
         if campaign_path.is_symlink() or not campaign_path.is_file():
             raise ValueError("regression compatibility binding lacks its frozen campaign")
         campaign = yaml.safe_load(campaign_path.read_text(encoding="utf-8"))
-        controlled = (
-            campaign.get("study_controlled")
-            if isinstance(campaign, Mapping)
-            else None
-        )
+        controlled = campaign.get("study_controlled") if isinstance(campaign, Mapping) else None
         validate_controlled_campaign_receipt(controlled)
         records.append(
             {
@@ -4042,9 +4099,7 @@ def _execute_regression_multi_origin_compatibility(
         canonical_bytes(strict.manifest),
         "strict surrogate qualified chaff manifest",
     )
-    projection = _regression_multi_origin_projection(
-        load_json(surrogate_workload), application
-    )
+    projection = _regression_multi_origin_projection(load_json(surrogate_workload), application)
     projected = _project_regression_chaff_manifest(
         strict.manifest,
         surrogate_sha256=sha256_file(surrogate_workload),
@@ -4136,9 +4191,7 @@ def _execute_regression_multi_origin_compatibility(
                 else:
                     context = SimpleNamespace(
                         qcsd_profile=(
-                            "research-1200"
-                            if defense.name in {"buflo", "cs-buflo"}
-                            else "live"
+                            "research-1200" if defense.name in {"buflo", "cs-buflo"} else "live"
                         ),
                         request_policy="as-defined",
                         limits=limits,
@@ -4216,9 +4269,9 @@ def _execute_regression_multi_origin_compatibility(
 
     regression_bindings = _regression_result_bindings(result_roots)
     controlled_receipt_sha256 = _canonical_digest(dict(regression_receipt))
-    if {
-        binding["controlled_receipt_sha256"] for binding in regression_bindings
-    } != {controlled_receipt_sha256}:
+    if {binding["controlled_receipt_sha256"] for binding in regression_bindings} != {
+        controlled_receipt_sha256
+    }:
         raise ValueError(
             "multi-origin compatibility receipt differs from the frozen 18-sample campaigns"
         )
@@ -4270,18 +4323,14 @@ def _execute_regression_multi_origin_compatibility(
                 "sha256": sha256_file(projected_chaff_path),
             },
             "walkie_talkie_parameters": {
-                "source_path": compatibility_walkie_talkie_source.relative_to(
-                    root
-                ).as_posix(),
+                "source_path": compatibility_walkie_talkie_source.relative_to(root).as_posix(),
                 "source_sha256": sha256_file(compatibility_walkie_talkie_source),
                 "path": compatibility_walkie_talkie.relative_to(root).as_posix(),
                 "sha256": sha256_file(compatibility_walkie_talkie),
                 "provenance_path": compatibility_walkie_talkie_provenance.relative_to(
                     root
                 ).as_posix(),
-                "provenance_sha256": sha256_file(
-                    compatibility_walkie_talkie_provenance
-                ),
+                "provenance_sha256": sha256_file(compatibility_walkie_talkie_provenance),
             },
             "projection": projection,
             "runtime_inputs": _regression_multi_origin_runtime_inputs(defenses),
@@ -4327,6 +4376,24 @@ def _regression_multi_origin_bound_path(
     ):
         raise ValueError(f"multi-origin compatibility {label} changed")
     return path
+
+
+def _regression_multi_origin_historical_candidate_source(
+    receipt_path: Path, source: Mapping[str, Any]
+) -> dict[str, Any] | None:
+    """Select the one sealed schema-6 proof for read-only deep revalidation."""
+
+    if dict(source) == source_metadata():
+        return None
+    if (
+        receipt_path.parent.parent.name != "buflo-study-regression-v36"
+        or sha256_file(receipt_path) != HISTORICAL_MULTI_ORIGIN_V36_RECEIPT_SHA256
+        or dict(source) != HISTORICAL_MULTI_ORIGIN_V36_SOURCE
+    ):
+        raise ValueError(
+            "multi-origin compatibility does not bind current or explicitly frozen source"
+        )
+    return dict(source)
 
 
 def validate_regression_multi_origin_compatibility(
@@ -4383,8 +4450,9 @@ def validate_regression_multi_origin_compatibility(
     ):
         raise ValueError("multi-origin compatibility receipt contract is invalid")
     _validate_clean_source(value["source"], label="multi-origin compatibility")
-    if dict(value["source"]) != source_metadata():
-        raise ValueError("multi-origin compatibility does not bind the current source")
+    historical_candidate_source = _regression_multi_origin_historical_candidate_source(
+        receipt_path, value["source"]
+    )
     checkpoint_path = _regression_multi_origin_bound_path(
         root,
         value["checkpoint"],
@@ -4395,21 +4463,26 @@ def validate_regression_multi_origin_compatibility(
         require_complete=True,
     )
     controlled = validate_controlled_campaign_receipt(value["controlled_receipt"])
-    if (
-        controlled["stage"] != "regression"
-        or controlled["schema_version"] != LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION
-    ):
+    if controlled["stage"] != "regression" or controlled["schema_version"] not in {
+        LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION,
+        TIMING_STRESS_BOUND_REGRESSION_RECEIPT_SCHEMA_VERSION,
+    }:
         raise ValueError(
             "multi-origin compatibility is not bound to the current regression receipt"
+        )
+    if controlled["schema_version"] == TIMING_STRESS_BOUND_REGRESSION_RECEIPT_SCHEMA_VERSION:
+        _validate_current_regression_timing_stress(
+            [controlled] * len(LOCAL_STAGE_RESULT_NAMES["regression"]),
+            destination=root.parent,
+            lineage=value["source"],
         )
     expected_regression_results = _regression_result_bindings(result_roots)
     if value["regression_results"] != expected_regression_results:
         raise ValueError("multi-origin compatibility 18-sample result binding changed")
     controlled_receipt_sha256 = _canonical_digest(dict(value["controlled_receipt"]))
-    if {
-        binding["controlled_receipt_sha256"]
-        for binding in expected_regression_results
-    } != {controlled_receipt_sha256}:
+    if {binding["controlled_receipt_sha256"] for binding in expected_regression_results} != {
+        controlled_receipt_sha256
+    }:
         raise ValueError(
             "multi-origin compatibility receipt differs from the frozen 18-sample campaigns"
         )
@@ -4445,7 +4518,7 @@ def validate_regression_multi_origin_compatibility(
         workload_id="complex",
         base_manifest_path=application_path,
         expected_sidecar_schema_version=2,
-        require_current_implementation=True,
+        require_current_implementation=historical_candidate_source is None,
     )
     if (
         inputs["application_response_qualification"]["derived_manifest_sha256"]
@@ -4471,7 +4544,7 @@ def validate_regression_multi_origin_compatibility(
         workload_id="complex",
         base_manifest_path=surrogate_workload,
         prefix_spec_path=surrogate_prefix,
-        require_current_implementation=True,
+        require_current_implementation=historical_candidate_source is None,
     )
     if strict_manifest_path.read_bytes() != canonical_bytes(strict.manifest):
         raise ValueError("multi-origin strict prefix-qualified manifest is not derived exactly")
@@ -4577,6 +4650,7 @@ def validate_regression_multi_origin_compatibility(
             projected_chaff_path,
             defense,
             seed=seed,
+            historical_candidate_source=historical_candidate_source,
         )
         expected["attempt"] = relative
         expected["sample_index"] = index
@@ -4590,6 +4664,7 @@ def validate_regression_multi_origin_compatibility(
         defenses,
         accepted_attempts,
         verified_samples,
+        historical_candidate_source=historical_candidate_source,
     )
     _validate_regression_multi_origin_attempt_ledger_receipt(
         value["attempt_ledgers"],
@@ -4604,13 +4679,1437 @@ def validate_regression_multi_origin_compatibility(
         "origins": list(MULTI_ORIGIN_COMPATIBILITY_ORIGINS),
         "resources_per_sample": 4,
         "attempts": sum(record["attempt_count"] for record in expected_ledgers),
-        "rejected_attempts": sum(
-            record["rejected_attempts"] for record in expected_ledgers
-        ),
+        "rejected_attempts": sum(record["rejected_attempts"] for record in expected_ledgers),
         "source": dict(value["source"]),
         "excluded_from_regression_matrix": True,
         "passed": True,
     }
+
+
+def _timing_stress_parameter_inputs() -> dict[str, Any]:
+    """Validate the narrowly scoped tau=100 s derivative of canonical live BuFLO."""
+
+    canonical_path = PARAMETER_FILES["buflo"][1]
+    canonical_artifact = validate_parameter_artifact(
+        canonical_path,
+        expected_kind="buflo",
+        allow_study_candidate=True,
+        expected_qcsd_profile="research-1200",
+        expected_udp_payload_ceiling=1_200,
+    )
+    for path, label in (
+        (TIMING_STRESS_PARAMETERS, "timing-stress parameters"),
+        (TIMING_STRESS_PARAMETERS_PROVENANCE, "timing-stress provenance"),
+    ):
+        if path.is_symlink() or not path.is_file():
+            raise ValueError(f"{label} is not a regular file: {path}")
+    canonical = load_json(canonical_path)
+    expected_parameter = dict(canonical)
+    expected_parameter["minimum_duration_us"] = TIMING_STRESS_MINIMUM_DURATION_US
+    parameter = load_json(TIMING_STRESS_PARAMETERS)
+    if parameter != expected_parameter:
+        raise ValueError("timing-stress parameters must change only canonical minimum_duration_us")
+    expected_provenance = {
+        "schema_version": 1,
+        "artifact_type": "qcsd-buflo-timing-stress-parameters",
+        "status": "controlled-test-only",
+        "production_ready": False,
+        "evidence_class": "timing-stress-nonformal-excluded",
+        "study_id": BUFLO_STUDY_ID,
+        "defense_kind": "buflo",
+        "qcsd_profile": "research-1200",
+        "udp_payload_ceiling": 1_200,
+        "implementation_scope": "client_only_quic",
+        "paper_equivalent": False,
+        "canonical_parameter": {
+            "path": "../../defense-params/buflo-live.json",
+            "sha256": canonical_artifact.sha256,
+        },
+        "parameter_file": {
+            "path": TIMING_STRESS_PARAMETERS.name,
+            "sha256": sha256_file(TIMING_STRESS_PARAMETERS),
+        },
+        "derivation": {
+            "policy": (
+                "canonical-live-buflo-with-only-minimum-duration-extended-for-"
+                "excluded-captured-timing-stress"
+            ),
+            "changed_field": "minimum_duration_us",
+            "canonical_value": 10_000_000,
+            "stress_value": TIMING_STRESS_MINIMUM_DURATION_US,
+        },
+        "capture_contract": {
+            "visits": TIMING_STRESS_VISITS,
+            "max_attempts": 1,
+            "authoritative_checkpoint": "experiment.json",
+            "outgoing_opportunities_per_visit": TIMING_STRESS_OUTGOING_PER_VISIT,
+            "incoming_opportunities_per_visit": TIMING_STRESS_INCOMING_PER_VISIT,
+            "guarded_outgoing_releases_per_visit": TIMING_STRESS_GUARDS_PER_VISIT,
+            "full_outgoing_cells_per_visit": TIMING_STRESS_OUTGOING_PER_VISIT,
+            "incoming_bytes_per_visit": TIMING_STRESS_INCOMING_BYTES_PER_VISIT,
+            "strict_half_open_window_us": TIMING_STRESS_WINDOW_US,
+            "catch_up": False,
+        },
+    }
+    stress_artifact = validate_parameter_artifact(
+        TIMING_STRESS_PARAMETERS,
+        provenance_path=TIMING_STRESS_PARAMETERS_PROVENANCE,
+        expected_kind="buflo",
+        allow_timing_stress=True,
+        expected_qcsd_profile="research-1200",
+        expected_udp_payload_ceiling=1_200,
+    )
+    if load_json(TIMING_STRESS_PARAMETERS_PROVENANCE) != expected_provenance:
+        raise ValueError("timing-stress parameter provenance is invalid")
+    return {
+        "canonical_parameter": _file_binding(canonical_path),
+        "canonical_provenance": _file_binding(canonical_artifact.provenance_path),
+        "parameter": _file_binding(TIMING_STRESS_PARAMETERS),
+        "provenance": _file_binding(TIMING_STRESS_PARAMETERS_PROVENANCE),
+        "input_policy": stress_artifact.input_policy,
+        "derivation": expected_provenance["derivation"],
+    }
+
+
+def _timing_stress_defense() -> Any:
+    from .capture_session import Defense
+
+    inputs = _timing_stress_parameter_inputs()
+    return Defense(
+        name="buflo",
+        kind="buflo",
+        baseline=False,
+        parameters=str(TIMING_STRESS_PARAMETERS),
+        parameters_path=TIMING_STRESS_PARAMETERS,
+        parameters_sha256=inputs["parameter"]["sha256"],
+        parameters_provenance=str(TIMING_STRESS_PARAMETERS_PROVENANCE),
+        parameters_provenance_path=TIMING_STRESS_PARAMETERS_PROVENANCE,
+        parameters_provenance_sha256=inputs["provenance"]["sha256"],
+        parameters_input_policy=inputs["input_policy"],
+    )
+
+
+def _validate_timing_stress_checkpoint(value: object, *, require_complete: bool) -> dict[str, str]:
+    if (
+        not isinstance(value, Mapping)
+        or set(value)
+        != {
+            "schema_version",
+            "artifact_type",
+            "launched_visits",
+            "accepted_visits",
+        }
+        or value.get("schema_version") != TIMING_STRESS_SCHEMA_VERSION
+        or value.get("artifact_type") != TIMING_STRESS_CHECKPOINT_TYPE
+        or not isinstance(value.get("launched_visits"), Mapping)
+        or not isinstance(value.get("accepted_visits"), Mapping)
+    ):
+        raise ValueError("timing-stress checkpoint is invalid")
+    expected_visits = {f"visit-{visit:03d}" for visit in range(TIMING_STRESS_VISITS)}
+    launched = value["launched_visits"]
+    accepted = value["accepted_visits"]
+    if not set(launched) <= expected_visits or not set(accepted) <= expected_visits:
+        raise ValueError("timing-stress checkpoint contains an unknown visit")
+    if not set(accepted) <= set(launched):
+        raise ValueError("timing-stress checkpoint accepts a visit without a launch")
+    if require_complete and (set(launched) != expected_visits or set(accepted) != expected_visits):
+        raise ValueError("timing-stress checkpoint is incomplete")
+
+    def normalized_visits(visits: Mapping[object, object]) -> dict[str, str]:
+        normalized: dict[str, str] = {}
+        for visit, relative in visits.items():
+            expected = Path("attempts") / str(visit) / "attempt-01"
+            if (
+                not isinstance(visit, str)
+                or not isinstance(relative, str)
+                or Path(relative).is_absolute()
+                or ".." in Path(relative).parts
+                or Path(relative) != expected
+            ):
+                raise ValueError("timing-stress checkpoint attempt path is invalid")
+            normalized[visit] = relative
+        return normalized
+
+    normalized_launched = normalized_visits(launched)
+    normalized_accepted = normalized_visits(accepted)
+    if any(
+        normalized_launched[visit] != relative for visit, relative in normalized_accepted.items()
+    ):
+        raise ValueError("timing-stress checkpoint changed its physical launch")
+    return normalized_accepted
+
+
+def _timing_stress_reserve_launch(
+    state_path: Path,
+    state: dict[str, Any],
+    *,
+    visit_name: str,
+    relative_attempt: str,
+) -> bool:
+    """Durably reserve the sole launch before any collection process starts."""
+
+    _validate_timing_stress_checkpoint(state, require_complete=False)
+    launched = state["launched_visits"]
+    recorded = launched.get(visit_name)
+    if recorded is not None:
+        if recorded != relative_attempt:
+            raise ValueError("timing-stress checkpoint changed its physical launch")
+        return False
+    launched[visit_name] = relative_attempt
+    try:
+        _validate_timing_stress_checkpoint(state, require_complete=False)
+        atomic_json(state_path, state)
+    except BaseException:
+        launched.pop(visit_name, None)
+        raise
+    return True
+
+
+def _timing_stress_attempt_rejected(attempt: Path) -> bool:
+    error_path = attempt / "timing-stress-error.json"
+    if error_path.exists() or error_path.is_symlink():
+        return True
+    result_path = attempt / "attempt.json"
+    if result_path.is_file() and not result_path.is_symlink():
+        try:
+            result = load_json(result_path)
+        except (OSError, TypeError, ValueError):
+            return True
+        return isinstance(result, Mapping) and result.get("success") is False
+    return False
+
+
+def _timing_stress_collect_or_resume(
+    attempt: Path,
+    collect: Callable[[], None],
+    *,
+    recorded_attempt: str | None = None,
+    newly_reserved: bool = False,
+) -> bool:
+    """Use a durable reservation once; never relaunch a lost first attempt."""
+
+    if recorded_attempt is None:
+        raise ValueError("timing-stress first launch lacks a durable reservation")
+    if not attempt.exists() and not attempt.is_symlink():
+        if not newly_reserved:
+            raise ValueError("timing-stress recorded first-launch evidence is missing and terminal")
+        collect()
+        return True
+    if newly_reserved:
+        raise ValueError("timing-stress newly reserved launch path already exists")
+    if attempt.is_symlink() or not attempt.is_dir() or _timing_stress_attempt_rejected(attempt):
+        raise ValueError("timing-stress first launch is rejected and terminal")
+    result_path = attempt / "attempt.json"
+    if result_path.is_symlink() or not result_path.is_file():
+        raise ValueError("timing-stress first launch is incomplete and terminal")
+    try:
+        result = load_json(result_path)
+    except (OSError, TypeError, ValueError) as error:
+        raise ValueError("timing-stress first launch is malformed and terminal") from error
+    if not isinstance(result, Mapping) or result.get("success") is not True:
+        raise ValueError("timing-stress first launch is rejected and terminal")
+    return False
+
+
+def _timing_stress_persist_rejection(attempt: Path, error: BaseException, *, stage: str) -> None:
+    """Persist the sole physical launch failure; the visit is never retried."""
+
+    attempt.mkdir(parents=True, exist_ok=True)
+    if _timing_stress_attempt_rejected(attempt):
+        return
+    path = attempt / "timing-stress-error.json"
+    value = {
+        "schema_version": TIMING_STRESS_SCHEMA_VERSION,
+        "artifact_type": TIMING_STRESS_ATTEMPT_ERROR_TYPE,
+        "failure": {
+            "stage": stage,
+            "type": type(error).__name__,
+            "message": str(error) or type(error).__name__,
+        },
+    }
+    _create_only_json(path, value)
+
+
+def _timing_stress_attempt_inventory(attempt: Path) -> dict[str, str]:
+    files = _regression_multi_origin_raw_attempt_inventory(attempt)
+    required = {
+        "attempt.json",
+        "captures/direct-quic.pcapng",
+        "traces/direct-quic.csv",
+        "neqo/run.json",
+        "neqo/packets.csv",
+        "neqo/events.csv",
+        "neqo/schedule.csv",
+    }
+    if not required <= set(files):
+        raise ValueError("timing-stress attempt lacks captured transport evidence")
+    if "timing-stress-error.json" in files:
+        raise ValueError("timing-stress attempt is durably rejected")
+    return files
+
+
+def _timing_stress_schedule_evidence(attempt: Path, run: Mapping[str, Any]) -> dict[str, Any]:
+    """Recompute exact opportunity, guard, cadence, size, and lateness counts."""
+
+    import csv
+
+    from .fidelity import (
+        RUNNER_WAKEUP_V7_WORST_TIME_KEYS,
+        _runner_wakeup_metrics_valid,
+        _schedule_realization_metrics,
+    )
+
+    schedule_path = attempt / "neqo/schedule.csv"
+    if schedule_path.is_symlink() or not schedule_path.is_file():
+        raise ValueError("timing-stress schedule is not a regular file")
+    with schedule_path.open(newline="", encoding="utf-8") as source:
+        reader = csv.DictReader(source)
+        rows = list(reader)
+        fields = set(reader.fieldnames or ())
+    required_fields = {
+        "target_time_us",
+        "direction",
+        "size",
+        "action_time_us",
+        "satisfaction",
+        "observed_size",
+        "miss_reason",
+        "slot_id",
+        "qcsd_outcome_schema_version",
+        "send_policy",
+        "desired_udp_bytes",
+        "observed_udp_bytes",
+        "congestion_reason",
+        "credit_advertised_at_us",
+        "credit_advertisement_delay_us",
+        "credit_consumed_at_us",
+        "credit_consumption_delay_us",
+        "terminal_defense_elapsed_us",
+    }
+    if not required_fields <= fields:
+        raise ValueError("timing-stress schedule lacks current typed outcome columns")
+    expected_targets = list(
+        range(
+            0,
+            TIMING_STRESS_MINIMUM_DURATION_US + TIMING_STRESS_INTERVAL_US,
+            TIMING_STRESS_INTERVAL_US,
+        )
+    )
+    by_direction: dict[str, dict[int, Mapping[str, str]]] = {
+        "outgoing": {},
+        "incoming": {},
+    }
+    outgoing_lateness: list[int] = []
+    incoming_advertisement_delays: list[int] = []
+    observed_slots: list[int] = []
+    for row in rows:
+        try:
+            direction = row["direction"]
+            target = int(row["target_time_us"])
+            size = int(row["size"])
+            slot = int(row["slot_id"])
+            terminal = int(row["terminal_defense_elapsed_us"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("timing-stress schedule contains a malformed row") from error
+        if direction not in by_direction or target in by_direction[direction]:
+            raise ValueError("timing-stress schedule direction/target inventory is invalid")
+        tick = target // TIMING_STRESS_INTERVAL_US
+        expected_slot = 2 * tick + (1 if direction == "incoming" else 0)
+        if (
+            target % TIMING_STRESS_INTERVAL_US != 0
+            or size != TIMING_STRESS_PACKET_SIZE
+            or slot != expected_slot
+            or row["satisfaction"] != "satisfied"
+            or row["miss_reason"]
+            or row["qcsd_outcome_schema_version"] != "3"
+            or row["send_policy"] != "exact"
+            or row["desired_udp_bytes"] != str(TIMING_STRESS_PACKET_SIZE)
+            or row["congestion_reason"]
+        ):
+            raise ValueError("timing-stress schedule violates exact no-catch-up ordering")
+        observed_slots.append(slot)
+        if direction == "outgoing":
+            lateness = terminal - target
+            if (
+                row["observed_size"] != str(TIMING_STRESS_PACKET_SIZE)
+                or row["observed_udp_bytes"] != str(TIMING_STRESS_PACKET_SIZE)
+                or not 0 <= lateness < TIMING_STRESS_WINDOW_US
+            ):
+                raise ValueError("timing-stress outgoing release missed its half-open window")
+            outgoing_lateness.append(lateness)
+        else:
+            try:
+                advertised = int(row["credit_advertised_at_us"])
+                advertisement_delay = int(row["credit_advertisement_delay_us"])
+                consumed = int(row["credit_consumed_at_us"])
+                consumption_delay = int(row["credit_consumption_delay_us"])
+                action = int(row["action_time_us"])
+            except (TypeError, ValueError) as error:
+                raise ValueError(
+                    "timing-stress incoming opportunity lacks exact credit evidence"
+                ) from error
+            if (
+                row["observed_size"]
+                or row["observed_udp_bytes"]
+                or advertised - action != advertisement_delay
+                or consumed - action != consumption_delay
+                or consumed < advertised
+                or not 0 <= advertisement_delay < TIMING_STRESS_WINDOW_US
+            ):
+                raise ValueError(
+                    "timing-stress incoming credit was late, incomplete, or mismatched"
+                )
+            incoming_advertisement_delays.append(advertisement_delay)
+        by_direction[direction][target] = row
+    if any(sorted(records) != expected_targets for records in by_direction.values()):
+        raise ValueError("timing-stress schedule is not the exact inclusive 100-second cadence")
+    if observed_slots != list(range(len(rows))):
+        raise ValueError("timing-stress schedule is not outgoing-before-incoming at every tick")
+
+    metrics = _schedule_realization_metrics(attempt)
+    expected_events = TIMING_STRESS_OUTGOING_PER_VISIT + TIMING_STRESS_INCOMING_PER_VISIT
+    if (
+        metrics.get("scheduled_events") != expected_events
+        or metrics.get("scheduled_outgoing_events") != TIMING_STRESS_OUTGOING_PER_VISIT
+        or metrics.get("scheduled_incoming_events") != TIMING_STRESS_INCOMING_PER_VISIT
+        or metrics.get("satisfied_events") != expected_events
+        or metrics.get("terminal_satisfactions") != {"satisfied": expected_events}
+        or metrics.get("missed_events") != 0
+        or metrics.get("outgoing_size_mismatch_events") != 0
+        or metrics.get("catch_up_events") != 0
+        or metrics.get("duplicate_terminal_slots") != 0
+        or metrics.get("invalid_terminal_rows") != 0
+        or metrics.get("invalid_typed_outcome_rows") != 0
+        or metrics.get("incoming_credit_advertised_events") != TIMING_STRESS_INCOMING_PER_VISIT
+        or metrics.get("incoming_credit_consumed_events") != TIMING_STRESS_INCOMING_PER_VISIT
+        or metrics.get("incoming_credit_missing_events") != 0
+        or metrics.get("incoming_credit_consumption_missing_events") != 0
+        or metrics.get("invalid_credit_advertisement_events") != 0
+        or metrics.get("invalid_credit_consumption_events") != 0
+    ):
+        raise ValueError("timing-stress aggregate schedule fidelity is invalid")
+
+    wakeups = run.get("runner_wakeup_metrics")
+    if not isinstance(wakeups, Mapping):
+        raise TypeError("timing-stress run lacks runner wakeup metrics")
+    guard_entries = wakeups.get("buflo_exact_release_guard_entries")
+    max_guard_exit_lateness_ns = wakeups.get(
+        "buflo_exact_release_max_guard_exit_lateness_nanoseconds"
+    )
+    dispatch_histogram = wakeups.get("buflo_exact_release_dispatch_lateness_histogram")
+    active_gap_histogram = wakeups.get("buflo_exact_release_active_spin_gap_histogram")
+    dispatch_counts = (
+        dispatch_histogram.get("counts") if isinstance(dispatch_histogram, Mapping) else None
+    )
+    active_gap_counts = (
+        active_gap_histogram.get("counts") if isinstance(active_gap_histogram, Mapping) else None
+    )
+    worst_guard = wakeups.get("buflo_exact_release_worst_guard")
+    if (
+        not _runner_wakeup_metrics_valid(wakeups)
+        or wakeups.get("schema_version") != 7
+        or guard_entries != TIMING_STRESS_GUARDS_PER_VISIT
+        or type(max_guard_exit_lateness_ns) is not int
+        or not 0 <= max_guard_exit_lateness_ns < TIMING_STRESS_WINDOW_US * 1_000
+        or wakeups.get("buflo_exact_release_dispatch_at_or_after_deadline_guards") != 0
+        or wakeups.get("buflo_exact_release_aux_clock_source")
+        != "linux-clock-gettime-monotonic-raw-and-thread-cputime-id-v1"
+        or wakeups.get("buflo_exact_release_active_wait_aux_clock_guards")
+        != TIMING_STRESS_GUARDS_PER_VISIT
+        or wakeups.get("buflo_exact_release_active_wait_aux_clock_unavailable_guards") != 0
+        or wakeups.get("buflo_exact_release_active_wait_aux_clock_nonmonotonic_guards") != 0
+        or not isinstance(dispatch_counts, list)
+        or sum(dispatch_counts) != TIMING_STRESS_GUARDS_PER_VISIT
+        or not isinstance(active_gap_counts, list)
+        or sum(active_gap_counts) != TIMING_STRESS_GUARDS_PER_VISIT
+        or not isinstance(worst_guard, Mapping)
+        or any(type(worst_guard.get(key)) is not int for key in RUNNER_WAKEUP_V7_WORST_TIME_KEYS)
+    ):
+        raise ValueError(
+            "timing-stress current Linux guard timing evidence is incomplete or invalid"
+        )
+
+    diagnostics = run.get("defense_diagnostics")
+    zero_diagnostics = (
+        "buflo_partial_outgoing_cells",
+        "buflo_suppressed_outgoing_cells",
+        "buflo_missed_outgoing_cells",
+        "buflo_missed_incoming_cells",
+        "buflo_outgoing_unresolved_cells",
+        "buflo_incoming_unresolved_cells",
+        "buflo_catch_up_outgoing_cells",
+        "buflo_catch_up_incoming_cells",
+    )
+    if (
+        not isinstance(diagnostics, Mapping)
+        or any(diagnostics.get(key) != 0 for key in zero_diagnostics)
+        or diagnostics.get("buflo_event_guard_triggered") is not False
+        or diagnostics.get("buflo_scheduled_outgoing_cells") != TIMING_STRESS_OUTGOING_PER_VISIT
+        or diagnostics.get("buflo_scheduled_incoming_cells") != TIMING_STRESS_INCOMING_PER_VISIT
+        or diagnostics.get("buflo_full_outgoing_cells") != TIMING_STRESS_OUTGOING_PER_VISIT
+        or diagnostics.get("scheduled_incoming_requested_bytes")
+        != TIMING_STRESS_INCOMING_BYTES_PER_VISIT
+        or diagnostics.get("scheduled_incoming_advertised_bytes")
+        != TIMING_STRESS_INCOMING_BYTES_PER_VISIT
+        or diagnostics.get("scheduled_incoming_consumed_bytes")
+        != TIMING_STRESS_INCOMING_BYTES_PER_VISIT
+        or diagnostics.get("scheduled_incoming_retired_bytes") != 0
+        or diagnostics.get("scheduled_incoming_unresolved_bytes") != 0
+    ):
+        raise ValueError("timing-stress BuFLO terminal diagnostics are invalid")
+    return {
+        "scheduled_outgoing_opportunities": TIMING_STRESS_OUTGOING_PER_VISIT,
+        "scheduled_incoming_opportunities": TIMING_STRESS_INCOMING_PER_VISIT,
+        "directional_events": expected_events,
+        "full_outgoing_cells": TIMING_STRESS_OUTGOING_PER_VISIT,
+        "incoming_credit_bytes": {
+            "requested": TIMING_STRESS_INCOMING_BYTES_PER_VISIT,
+            "advertised": TIMING_STRESS_INCOMING_BYTES_PER_VISIT,
+            "consumed": TIMING_STRESS_INCOMING_BYTES_PER_VISIT,
+            "retired": 0,
+            "unresolved": 0,
+        },
+        "guarded_outgoing_releases": guard_entries,
+        "max_outgoing_release_lateness_us": max(outgoing_lateness, default=0),
+        "max_incoming_credit_advertisement_delay_us": max(incoming_advertisement_delays, default=0),
+        "max_guard_exit_lateness_nanoseconds": max_guard_exit_lateness_ns,
+        "strict_half_open_window_us": TIMING_STRESS_WINDOW_US,
+        "runner_wakeup_schema_version": 7,
+        "aux_clock": {
+            "source": wakeups["buflo_exact_release_aux_clock_source"],
+            "complete_guards": wakeups["buflo_exact_release_active_wait_aux_clock_guards"],
+            "unavailable_guards": wakeups[
+                "buflo_exact_release_active_wait_aux_clock_unavailable_guards"
+            ],
+            "nonmonotonic_guards": wakeups[
+                "buflo_exact_release_active_wait_aux_clock_nonmonotonic_guards"
+            ],
+            "monotonic_raw_nanoseconds": wakeups[
+                "buflo_exact_release_active_wait_monotonic_raw_nanoseconds"
+            ],
+            "thread_cpu_nanoseconds": wakeups[
+                "buflo_exact_release_active_wait_thread_cpu_nanoseconds"
+            ],
+            "estimated_off_cpu_nanoseconds": wakeups[
+                "buflo_exact_release_active_wait_estimated_off_cpu_nanoseconds"
+            ],
+            "max_estimated_off_cpu_nanoseconds": wakeups[
+                "buflo_exact_release_max_active_wait_estimated_off_cpu_nanoseconds"
+            ],
+        },
+        "dispatch_at_or_after_deadline_guards": 0,
+        "dispatch_lateness_histogram": deepcopy(dict(dispatch_histogram)),
+        "active_spin_gap_histogram": deepcopy(dict(active_gap_histogram)),
+        "worst_guard": deepcopy(dict(worst_guard)),
+        "zero_failure_diagnostics": {key: diagnostics[key] for key in zero_diagnostics},
+        "passed": True,
+    }
+
+
+def _timing_stress_environment_input(
+    root: Path, source: Mapping[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    encoded = os.environ.get("QCSD_STUDY_ENVIRONMENT_B64")
+    if not encoded:
+        raise ValueError("timing-stress capture requires the host Docker environment receipt")
+    try:
+        raw = base64.b64decode(encoded, validate=True)
+        value = json.loads(raw.decode("utf-8"))
+    except (UnicodeError, ValueError, json.JSONDecodeError) as error:
+        raise ValueError("timing-stress Docker environment receipt is malformed") from error
+    validated = validate_study_environment_receipt(
+        value,
+        expected_image_digest=source.get("image_digest"),
+    )
+    path = root / "inputs/study-environment.json"
+    _create_or_verify_bytes(path, raw, "timing-stress Docker environment")
+    return _file_binding(path), validated
+
+
+def _timing_stress_attempt_evidence(
+    attempt: Path,
+    *,
+    root: Path,
+    application_path: Path,
+    runtime_path: Path,
+    chaff_path: Path,
+    defense: Any,
+    visit: int,
+) -> dict[str, Any]:
+    from types import SimpleNamespace
+
+    from .capture_session import _runner_result_complete, _validate_run_binding
+    from .manifest import runtime_manifest
+    from .orchestrator import _intrinsic_fidelity_failure
+    from .process_scheduler import capture_scheduler_runtime_evidence_valid
+
+    if _timing_stress_attempt_rejected(attempt):
+        raise ValueError("timing-stress visit has a durable rejected first launch")
+    application = load_json(application_path)
+    if load_json(runtime_path) != runtime_manifest(application):
+        raise ValueError("timing-stress runtime workload binding changed")
+    result_path = attempt / "attempt.json"
+    run_path = attempt / "neqo/run.json"
+    if (
+        result_path.is_symlink()
+        or run_path.is_symlink()
+        or not result_path.is_file()
+        or not run_path.is_file()
+    ):
+        raise ValueError("timing-stress attempt lacks regular terminal receipts")
+    result = load_json(result_path)
+    run = load_json(run_path)
+    expected_ids = {resource["id"] for resource in application["resources"]}
+    scheduler_relative = result.get("scheduler_runtime_evidence_path")
+    scheduler_path = (
+        attempt / scheduler_relative
+        if isinstance(scheduler_relative, str)
+        and not Path(scheduler_relative).is_absolute()
+        and ".." not in Path(scheduler_relative).parts
+        else None
+    )
+    scheduler_evidence = result.get("scheduler_runtime_evidence")
+    if (
+        not isinstance(result, dict)
+        or result.get("success") is not True
+        or result.get("runner_complete") is not True
+        or result.get("runner_binding_valid") is not True
+        or result.get("endpoint_count") != 2
+        or result.get("expected_endpoint_count") != 2
+        or result.get("endpoint_count_valid") is not True
+        or result.get("process_scheduler_required") is not True
+        or result.get("process_scheduler_valid") is not True
+        or result.get("scheduler_runtime_evidence_valid") is not True
+        or scheduler_path is None
+        or scheduler_path.is_symlink()
+        or not scheduler_path.is_file()
+        or result.get("scheduler_runtime_evidence_sha256") != sha256_file(scheduler_path)
+        or load_json(scheduler_path) != scheduler_evidence
+        or not capture_scheduler_runtime_evidence_valid(scheduler_evidence)
+        or not _runner_result_complete(run, expected_ids)
+    ):
+        raise ValueError(
+            "timing-stress attempt is not captured, scheduler-valid, and runner-complete"
+        )
+    limits = SimpleNamespace(
+        timeout_seconds=120,
+        max_response_bytes=1_048_576,
+        capture_seconds=180,
+        capture_megabytes=64,
+        max_attempts=1,
+        per_origin_cooldown_seconds=0,
+        settle_seconds=1,
+    )
+    context = SimpleNamespace(
+        qcsd_profile="research-1200",
+        request_policy="as-defined",
+        limits=limits,
+        udp_payload_ceiling=1_200,
+    )
+    seed = _stable_seed("buflo-timing-stress-v1", f"visit-{visit:03d}")
+    _validate_run_binding(
+        run,
+        manifest=runtime_path,
+        chaff_manifest=chaff_path,
+        application_workload_source=application_path,
+        workload_id="complex",
+        defense=defense,
+        seed=seed,
+        context=context,
+    )
+    sample = {
+        "sample_id": f"timing-stress-visit-{visit:03d}",
+        "defense": "buflo",
+        "runtime_kind": "buflo",
+    }
+    fidelity_failure = _intrinsic_fidelity_failure(sample, result, attempt)
+    if fidelity_failure is not None:
+        raise ValueError(
+            f"timing-stress attempt failed strict ordinary fidelity eligibility: {fidelity_failure}"
+        )
+    timing = _timing_stress_schedule_evidence(attempt, run)
+    identity = _regression_multi_origin_run_identity(run, application, mode="buflo")
+    files = _timing_stress_attempt_inventory(attempt)
+    return {
+        "visit": visit,
+        "seed": seed,
+        "attempt": attempt.relative_to(root).as_posix(),
+        "attempt_index": 1,
+        "files": files,
+        "files_sha256": _canonical_digest(files),
+        "scheduler_runtime_evidence_sha256": sha256_file(scheduler_path),
+        "identity": identity,
+        "timing": timing,
+        "fidelity_eligible": True,
+        "passed": True,
+    }
+
+
+def _timing_stress_attempt_ledgers(
+    root: Path,
+    *,
+    application_path: Path,
+    runtime_path: Path,
+    chaff_path: Path,
+    defense: Any,
+    accepted_visits: Mapping[str, str],
+    samples: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    attempts_root = root / "attempts"
+    expected_visit_names = [f"visit-{visit:03d}" for visit in range(TIMING_STRESS_VISITS)]
+    if attempts_root.is_symlink() or not attempts_root.is_dir():
+        raise ValueError("timing-stress attempts root is invalid")
+    actual_visit_names = sorted(path.name for path in attempts_root.iterdir())
+    if actual_visit_names != expected_visit_names or any(
+        path.is_symlink() or not path.is_dir() for path in attempts_root.iterdir()
+    ):
+        raise ValueError("timing-stress visit directory inventory is not exact")
+    if set(accepted_visits) != set(expected_visit_names) or len(samples) != TIMING_STRESS_VISITS:
+        raise ValueError("timing-stress accepted visit inventory is incomplete")
+    ledgers: list[dict[str, Any]] = []
+    for visit, record in enumerate(samples):
+        visit_name = expected_visit_names[visit]
+        visit_root = attempts_root / visit_name
+        children = list(visit_root.iterdir())
+        attempt = visit_root / "attempt-01"
+        if (
+            len(children) != 1
+            or children[0] != attempt
+            or attempt.is_symlink()
+            or not attempt.is_dir()
+            or _timing_stress_attempt_rejected(attempt)
+        ):
+            raise ValueError("timing-stress visit is not one accepted physical launch")
+        expected = _timing_stress_attempt_evidence(
+            attempt,
+            root=root,
+            application_path=application_path,
+            runtime_path=runtime_path,
+            chaff_path=chaff_path,
+            defense=defense,
+            visit=visit,
+        )
+        if dict(record) != expected or accepted_visits[visit_name] != expected["attempt"]:
+            raise ValueError("timing-stress accepted visit binding changed")
+        ledgers.append(
+            {
+                "visit": visit,
+                "attempt_count": 1,
+                "accepted_attempt": expected["attempt"],
+                "rejected_attempts": 0,
+                "files_sha256": expected["files_sha256"],
+            }
+        )
+    return ledgers
+
+
+def _timing_stress_aggregate(samples: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    timings = [sample.get("timing") for sample in samples]
+    if len(timings) != TIMING_STRESS_VISITS or any(
+        not isinstance(timing, Mapping) for timing in timings
+    ):
+        raise ValueError("timing-stress timing evidence is incomplete")
+    typed_timings = [dict(timing) for timing in timings if isinstance(timing, Mapping)]
+    dispatch_histograms = [timing["dispatch_lateness_histogram"] for timing in typed_timings]
+    gap_histograms = [timing["active_spin_gap_histogram"] for timing in typed_timings]
+
+    def aggregate_histograms(values: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+        [first, *rest] = values
+        bounds = first.get("upper_bounds_nanoseconds")
+        counts = first.get("counts")
+        if not isinstance(bounds, list) or not isinstance(counts, list):
+            raise TypeError("timing-stress histogram is malformed")
+        aggregate = list(counts)
+        for value in rest:
+            if value.get("upper_bounds_nanoseconds") != bounds:
+                raise ValueError("timing-stress histogram bounds changed between visits")
+            candidate = value.get("counts")
+            if not isinstance(candidate, list) or len(candidate) != len(aggregate):
+                raise ValueError("timing-stress histogram bucket inventory changed")
+            aggregate = [left + right for left, right in zip(aggregate, candidate, strict=True)]
+        if sum(aggregate) != TIMING_STRESS_TOTAL_GUARDS:
+            raise ValueError("timing-stress aggregate histogram does not cover every guard")
+        return {"upper_bounds_nanoseconds": list(bounds), "counts": aggregate}
+
+    return {
+        "visits": TIMING_STRESS_VISITS,
+        "physical_attempts": TIMING_STRESS_VISITS,
+        "rejected_attempts": 0,
+        "guarded_outgoing_releases": sum(
+            int(timing["guarded_outgoing_releases"]) for timing in typed_timings
+        ),
+        "outgoing_opportunities": sum(
+            int(timing["scheduled_outgoing_opportunities"]) for timing in typed_timings
+        ),
+        "incoming_opportunities": sum(
+            int(timing["scheduled_incoming_opportunities"]) for timing in typed_timings
+        ),
+        "directional_events": sum(int(timing["directional_events"]) for timing in typed_timings),
+        "full_outgoing_cells": sum(int(timing["full_outgoing_cells"]) for timing in typed_timings),
+        "incoming_credit_bytes": {
+            key: sum(int(timing["incoming_credit_bytes"][key]) for timing in typed_timings)
+            for key in ("requested", "advertised", "consumed", "retired", "unresolved")
+        },
+        "max_outgoing_release_lateness_us": max(
+            int(timing["max_outgoing_release_lateness_us"]) for timing in typed_timings
+        ),
+        "max_incoming_credit_advertisement_delay_us": max(
+            int(timing["max_incoming_credit_advertisement_delay_us"]) for timing in typed_timings
+        ),
+        "max_guard_exit_lateness_nanoseconds": max(
+            int(timing["max_guard_exit_lateness_nanoseconds"]) for timing in typed_timings
+        ),
+        "aux_clock_complete_guards": sum(
+            int(timing["aux_clock"]["complete_guards"]) for timing in typed_timings
+        ),
+        "aux_clock_unavailable_guards": sum(
+            int(timing["aux_clock"]["unavailable_guards"]) for timing in typed_timings
+        ),
+        "aux_clock_nonmonotonic_guards": sum(
+            int(timing["aux_clock"]["nonmonotonic_guards"]) for timing in typed_timings
+        ),
+        "estimated_off_cpu_nanoseconds": sum(
+            int(timing["aux_clock"]["estimated_off_cpu_nanoseconds"]) for timing in typed_timings
+        ),
+        "max_estimated_off_cpu_nanoseconds": max(
+            int(timing["aux_clock"]["max_estimated_off_cpu_nanoseconds"])
+            for timing in typed_timings
+        ),
+        "dispatch_lateness_histogram": aggregate_histograms(dispatch_histograms),
+        "active_spin_gap_histogram": aggregate_histograms(gap_histograms),
+        "zero_failure_counts": {
+            "rejected_attempts": 0,
+            "late_outgoing_releases": 0,
+            "late_incoming_advertisements": 0,
+            "partial_outgoing_cells": 0,
+            "suppressed_outgoing_cells": 0,
+            "missed_directional_events": 0,
+            "mismatched_outgoing_cells": 0,
+            "catch_up_directional_events": 0,
+            "unresolved_directional_events": 0,
+            "retired_incoming_bytes": 0,
+            "unresolved_incoming_bytes": 0,
+        },
+        "passed": True,
+    }
+
+
+def _timing_stress_local_binding(root: Path, path: Path) -> dict[str, str]:
+    path = path.resolve()
+    if not path.is_relative_to(root.resolve()):
+        raise ValueError("timing-stress local binding escapes its evidence root")
+    return {"path": path.relative_to(root.resolve()).as_posix(), "sha256": sha256_file(path)}
+
+
+def _validate_timing_stress_root_inventory(root: Path) -> None:
+    """Close the stress receipt and its immutable input tree against stray files."""
+
+    def exact_directory(
+        directory: Path,
+        *,
+        files: set[str],
+        directories: set[str] | None = None,
+    ) -> None:
+        directory_names = directories or set()
+        if directory.is_symlink() or not directory.is_dir():
+            raise ValueError(f"timing-stress evidence directory is invalid: {directory}")
+        entries = {entry.name: entry for entry in directory.iterdir()}
+        if set(entries) != files | directory_names:
+            raise ValueError(f"timing-stress evidence inventory is not closed: {directory}")
+        if any(
+            entry.is_symlink()
+            or (name in files and not entry.is_file())
+            or (name in directory_names and not entry.is_dir())
+            for name, entry in entries.items()
+        ):
+            raise ValueError(f"timing-stress evidence entry type is invalid: {directory}")
+
+    exact_directory(
+        root,
+        files={"receipt.json", "experiment.json"},
+        directories={"attempts", "inputs"},
+    )
+    inputs = root / "inputs"
+    exact_directory(
+        inputs,
+        files={"study-environment.json"},
+        directories={"application", "application-response-qualification", "chaff"},
+    )
+    exact_directory(
+        inputs / "application",
+        files={"complex.json", "runtime-complex.json"},
+    )
+    exact_directory(
+        inputs / "application-response-qualification",
+        files={"complex.json"},
+    )
+    exact_directory(inputs / "chaff", files={"qualified-manifest.json"})
+
+
+def _timing_stress_sensitivity() -> dict[str, Any]:
+    return {
+        "guard_population": TIMING_STRESS_TOTAL_GUARDS,
+        "iid_sensitivity_target_failures_per_guard": 1 / 20_000,
+        "iid_detection_probability_at_target": 1 - (1 - 1 / 20_000) ** TIMING_STRESS_TOTAL_GUARDS,
+        "zero_failure_one_sided_95_percent_upper_rate": (
+            1 - 0.05 ** (1 / TIMING_STRESS_TOTAL_GUARDS)
+        ),
+        "interpretation": (
+            "descriptive-iid-sensitivity-only;temporally-correlated-guards-"
+            "make-zero-observed-failures-the-actual-gate"
+        ),
+    }
+
+
+def execute_buflo_timing_stress(
+    destination: Path,
+    *,
+    network_receipt: Mapping[str, Any],
+    cohort_version: int,
+) -> Path:
+    """Run/resume twelve captured, one-launch, two-origin BuFLO stress visits."""
+
+    from types import SimpleNamespace
+
+    from . import capture_session
+    from .chaff_qualification import load_response_qualified_chaff
+    from .manifest import canonical_bytes, runtime_manifest
+
+    version = _cohort_version(cohort_version)
+    root = destination.resolve() / "buflo-timing-stress"
+    receipt_path = root / "receipt.json"
+    if receipt_path.exists() or receipt_path.is_symlink():
+        validate_buflo_timing_stress_receipt(receipt_path)
+        return receipt_path
+    for directory in (
+        root,
+        root / "inputs/application",
+        root / "inputs/application-response-qualification",
+        root / "inputs/chaff",
+        root / "attempts",
+    ):
+        if directory.is_symlink():
+            raise ValueError(f"timing-stress path cannot be a symlink: {directory}")
+        directory.mkdir(parents=True, exist_ok=True)
+
+    source = source_metadata()
+    _validate_clean_source(source, label="timing-stress source")
+    _validate_shared_router_network_receipt(
+        network_receipt,
+        client_qdisc="none",
+        server_qdisc="none",
+        cohort_version=version,
+    )
+    if network_receipt.get("image_digest") != source["image_digest"]:
+        raise ValueError("timing-stress network and current source images differ")
+    environment_binding, environment = _timing_stress_environment_input(root, source)
+    if environment["build_execution"].get("cohort_version") != version:
+        raise ValueError("timing-stress build execution belongs to another cohort")
+    parameter_inputs = _timing_stress_parameter_inputs()
+    defense = _timing_stress_defense()
+
+    application_root = root / "inputs/application"
+    _create_regression_multi_origin_workload(application_root)
+    application_path = application_root / "complex.json"
+    application = load_json(application_path)
+    runtime_path = application_root / "runtime-complex.json"
+    _create_or_verify_bytes(
+        runtime_path,
+        canonical_bytes(runtime_manifest(application)),
+        "timing-stress runtime workload",
+    )
+    qualification_root = root / "inputs/application-response-qualification"
+    sidecar_path = qualification_root / "complex.json"
+    if not sidecar_path.exists() and not sidecar_path.is_symlink():
+        _qualify_local_workloads_named(("complex",), application_root, qualification_root)
+    qualified = load_response_qualified_chaff(
+        sidecar_path,
+        workload_id="complex",
+        base_manifest_path=application_path,
+        expected_sidecar_schema_version=2,
+        require_current_implementation=True,
+    )
+    chaff_path = root / "inputs/chaff/qualified-manifest.json"
+    _create_or_verify_bytes(
+        chaff_path,
+        canonical_bytes(qualified.manifest),
+        "timing-stress qualified chaff manifest",
+    )
+
+    state_path = root / "experiment.json"
+    if state_path.exists() or state_path.is_symlink():
+        if state_path.is_symlink() or not state_path.is_file():
+            raise ValueError("timing-stress checkpoint is not a regular file")
+        state = load_json(state_path)
+    else:
+        state = {
+            "schema_version": TIMING_STRESS_SCHEMA_VERSION,
+            "artifact_type": TIMING_STRESS_CHECKPOINT_TYPE,
+            "launched_visits": {},
+            "accepted_visits": {},
+        }
+    _validate_timing_stress_checkpoint(state, require_complete=False)
+    limits = capture_session.Limits(
+        timeout_seconds=120,
+        max_response_bytes=1_048_576,
+        capture_seconds=180,
+        capture_megabytes=64,
+        max_attempts=1,
+        per_origin_cooldown_seconds=0,
+        settle_seconds=1,
+    )
+    context = SimpleNamespace(
+        qcsd_profile="research-1200",
+        request_policy="as-defined",
+        limits=limits,
+        udp_payload_ceiling=1_200,
+    )
+    samples: list[dict[str, Any]] = []
+    for visit in range(TIMING_STRESS_VISITS):
+        visit_name = f"visit-{visit:03d}"
+        visit_root = root / "attempts" / visit_name
+        if visit_root.is_symlink():
+            raise ValueError("timing-stress visit root cannot be a symlink")
+        visit_root.mkdir(parents=True, exist_ok=True)
+        attempt = visit_root / "attempt-01"
+        relative = attempt.relative_to(root).as_posix()
+        recorded = state["accepted_visits"].get(visit_name)
+        recorded_launch = state["launched_visits"].get(visit_name)
+        if (recorded is not None and recorded != relative) or (
+            recorded_launch is not None and recorded_launch != relative
+        ):
+            raise ValueError("timing-stress checkpoint changed its physical launch")
+        newly_reserved = False
+        if recorded_launch is None:
+            if attempt.exists() or attempt.is_symlink():
+                raise ValueError("timing-stress unrecorded first-launch evidence is terminal")
+            newly_reserved = _timing_stress_reserve_launch(
+                state_path,
+                state,
+                visit_name=visit_name,
+                relative_attempt=relative,
+            )
+            recorded_launch = relative
+        seed = _stable_seed("buflo-timing-stress-v1", visit_name)
+        try:
+            _timing_stress_collect_or_resume(
+                attempt,
+                lambda attempt=attempt, seed=seed: capture_session._collect_attempt(
+                    attempt,
+                    runtime_path,
+                    chaff_path,
+                    "complex",
+                    defense,
+                    seed,
+                    context,
+                    application_workload_source=application_path,
+                ),
+                recorded_attempt=recorded_launch,
+                newly_reserved=newly_reserved,
+            )
+        except (
+            OSError,
+            RuntimeError,
+            subprocess.SubprocessError,
+            TypeError,
+            ValueError,
+        ) as error:
+            if not attempt.is_symlink() and (not attempt.exists() or attempt.is_dir()):
+                _timing_stress_persist_rejection(
+                    attempt,
+                    error,
+                    stage="timing-stress-collection",
+                )
+            atomic_json(state_path, state)
+            raise ValueError(
+                f"timing-stress {visit_name} first launch failed; no retry is allowed"
+            ) from error
+        try:
+            evidence = _timing_stress_attempt_evidence(
+                attempt,
+                root=root,
+                application_path=application_path,
+                runtime_path=runtime_path,
+                chaff_path=chaff_path,
+                defense=defense,
+                visit=visit,
+            )
+        except (OSError, TypeError, ValueError) as error:
+            _timing_stress_persist_rejection(
+                attempt,
+                error,
+                stage="timing-stress-eligibility",
+            )
+            atomic_json(state_path, state)
+            raise ValueError(
+                f"timing-stress {visit_name} is ineligible; no retry is allowed"
+            ) from error
+        state["accepted_visits"][visit_name] = relative
+        atomic_json(state_path, state)
+        samples.append(evidence)
+
+    accepted_visits = _validate_timing_stress_checkpoint(state, require_complete=True)
+    ledgers = _timing_stress_attempt_ledgers(
+        root,
+        application_path=application_path,
+        runtime_path=runtime_path,
+        chaff_path=chaff_path,
+        defense=defense,
+        accepted_visits=accepted_visits,
+        samples=samples,
+    )
+    aggregate = _timing_stress_aggregate(samples)
+    if (
+        aggregate["guarded_outgoing_releases"] != TIMING_STRESS_TOTAL_GUARDS
+        or aggregate["outgoing_opportunities"] != TIMING_STRESS_TOTAL_OUTGOING
+        or aggregate["incoming_opportunities"] != TIMING_STRESS_TOTAL_INCOMING
+        or aggregate["directional_events"] != TIMING_STRESS_TOTAL_DIRECTIONAL_EVENTS
+        or aggregate["full_outgoing_cells"] != TIMING_STRESS_TOTAL_OUTGOING
+        or aggregate["incoming_credit_bytes"]
+        != {
+            "requested": TIMING_STRESS_TOTAL_INCOMING_BYTES,
+            "advertised": TIMING_STRESS_TOTAL_INCOMING_BYTES,
+            "consumed": TIMING_STRESS_TOTAL_INCOMING_BYTES,
+            "retired": 0,
+            "unresolved": 0,
+        }
+        or aggregate["aux_clock_complete_guards"] != TIMING_STRESS_TOTAL_GUARDS
+        or aggregate["aux_clock_unavailable_guards"] != 0
+        or aggregate["aux_clock_nonmonotonic_guards"] != 0
+        or aggregate["max_guard_exit_lateness_nanoseconds"] >= TIMING_STRESS_WINDOW_US * 1_000
+    ):
+        raise ValueError("timing-stress aggregate zero-failure gate did not pass")
+    value = {
+        "schema_version": TIMING_STRESS_SCHEMA_VERSION,
+        "artifact_type": TIMING_STRESS_ARTIFACT_TYPE,
+        "status": "passed",
+        "evidence_class": "timing-stress-nonformal-excluded",
+        "source": dict(source),
+        "cohort_version": version,
+        "study_plan": _file_binding(STUDY_PLAN),
+        "network": deepcopy(dict(network_receipt)),
+        "environment": environment_binding,
+        "inputs": {
+            "parameters": parameter_inputs,
+            "application_workload": _timing_stress_local_binding(root, application_path),
+            "runtime_workload": _timing_stress_local_binding(root, runtime_path),
+            "response_qualification": {
+                **_timing_stress_local_binding(root, sidecar_path),
+                "derived_manifest_sha256": qualified.manifest_sha256,
+            },
+            "qualified_chaff_manifest": _timing_stress_local_binding(root, chaff_path),
+        },
+        "experiment": _timing_stress_local_binding(root, state_path),
+        "resume_authority": {
+            "path": "experiment.json",
+            "semantics": "authoritative-single-physical-launch-per-visit",
+            "max_attempts_per_visit": 1,
+            "launch_reserved_atomically_before_collection": True,
+            "completed_first_launch_revalidated_without_relaunch": True,
+            "rejected_or_incomplete_first_launch_terminal": True,
+        },
+        "opportunity_contract": deepcopy(load_study_plan()["timing_stress"]),
+        "sensitivity": _timing_stress_sensitivity(),
+        "attempt_ledgers": ledgers,
+        "samples": samples,
+        "aggregate": aggregate,
+        "regression_matrix_samples": 18,
+        "excluded_from_regression_matrix": True,
+        "passed": True,
+    }
+    if environment["image_id"] != source["image_digest"]:
+        raise ValueError("timing-stress environment differs from its source image")
+    _create_only_json(receipt_path, value)
+    validate_buflo_timing_stress_receipt(receipt_path)
+    return receipt_path
+
+
+def validate_buflo_timing_stress_receipt(receipt_path: Path) -> dict[str, Any]:
+    """Deep-reconstruct the excluded 60,000-guard captured timing gate."""
+
+    from .chaff_qualification import load_response_qualified_chaff
+    from .manifest import canonical_bytes, runtime_manifest, validate_research_preparation
+
+    receipt_path = receipt_path.absolute()
+    if receipt_path.is_symlink() or not receipt_path.is_file():
+        raise ValueError("timing-stress receipt is not a regular file")
+    receipt_path = receipt_path.resolve()
+    root = receipt_path.parent
+    _validate_timing_stress_root_inventory(root)
+    value = load_json(receipt_path)
+    required = {
+        "schema_version",
+        "artifact_type",
+        "status",
+        "evidence_class",
+        "source",
+        "cohort_version",
+        "study_plan",
+        "network",
+        "environment",
+        "inputs",
+        "experiment",
+        "resume_authority",
+        "opportunity_contract",
+        "sensitivity",
+        "attempt_ledgers",
+        "samples",
+        "aggregate",
+        "regression_matrix_samples",
+        "excluded_from_regression_matrix",
+        "passed",
+    }
+    if (
+        not isinstance(value, Mapping)
+        or set(value) != required
+        or value.get("schema_version") != TIMING_STRESS_SCHEMA_VERSION
+        or value.get("artifact_type") != TIMING_STRESS_ARTIFACT_TYPE
+        or value.get("status") != "passed"
+        or value.get("evidence_class") != "timing-stress-nonformal-excluded"
+        or value.get("regression_matrix_samples") != 18
+        or value.get("excluded_from_regression_matrix") is not True
+        or value.get("passed") is not True
+    ):
+        raise ValueError("timing-stress receipt contract is invalid")
+    version = _cohort_version(value.get("cohort_version"))
+    _validate_clean_source(value["source"], label="timing-stress receipt")
+    if dict(value["source"]) != source_metadata():
+        raise ValueError("timing-stress receipt does not bind the current source")
+    if value["study_plan"] != _file_binding(STUDY_PLAN):
+        raise ValueError("timing-stress study-plan binding changed")
+    if value["opportunity_contract"] != load_study_plan()["timing_stress"]:
+        raise ValueError("timing-stress opportunity contract changed")
+    if value["sensitivity"] != _timing_stress_sensitivity():
+        raise ValueError("timing-stress statistical sensitivity disclosure changed")
+    if value["resume_authority"] != {
+        "path": "experiment.json",
+        "semantics": "authoritative-single-physical-launch-per-visit",
+        "max_attempts_per_visit": 1,
+        "launch_reserved_atomically_before_collection": True,
+        "completed_first_launch_revalidated_without_relaunch": True,
+        "rejected_or_incomplete_first_launch_terminal": True,
+    }:
+        raise ValueError("timing-stress experiment.json resume authority changed")
+
+    network = value["network"]
+    _validate_shared_router_network_receipt(
+        network,
+        client_qdisc="none",
+        server_qdisc="none",
+        cohort_version=version,
+    )
+    if network.get("image_digest") != value["source"]["image_digest"]:
+        raise ValueError("timing-stress network image differs from its source")
+    environment_path = _regression_multi_origin_bound_path(
+        root, value["environment"], label="timing-stress environment"
+    )
+    environment = validate_study_environment_receipt(
+        load_json(environment_path),
+        expected_image_digest=value["source"]["image_digest"],
+    )
+    if environment["image_id"] != value["source"]["image_digest"]:
+        raise ValueError("timing-stress environment does not use the current image")
+    if environment["build_execution"].get("cohort_version") != version:
+        raise ValueError("timing-stress build execution belongs to another cohort")
+
+    inputs = value["inputs"]
+    if not isinstance(inputs, Mapping) or set(inputs) != {
+        "parameters",
+        "application_workload",
+        "runtime_workload",
+        "response_qualification",
+        "qualified_chaff_manifest",
+    }:
+        raise ValueError("timing-stress input inventory is invalid")
+    expected_parameters = _timing_stress_parameter_inputs()
+    if inputs["parameters"] != expected_parameters:
+        raise ValueError("timing-stress parameter derivation changed")
+    application_path = _regression_multi_origin_bound_path(
+        root, inputs["application_workload"], label="timing-stress application"
+    )
+    runtime_path = _regression_multi_origin_bound_path(
+        root, inputs["runtime_workload"], label="timing-stress runtime workload"
+    )
+    application = load_json(application_path)
+    validate_research_preparation(application, workload_id="complex")
+    if load_json(runtime_path) != runtime_manifest(application):
+        raise ValueError("timing-stress runtime workload is not exactly derived")
+    sidecar_path = _regression_multi_origin_bound_path(
+        root,
+        inputs["response_qualification"],
+        fields={"path", "sha256", "derived_manifest_sha256"},
+        label="timing-stress response qualification",
+    )
+    qualified = load_response_qualified_chaff(
+        sidecar_path,
+        workload_id="complex",
+        base_manifest_path=application_path,
+        expected_sidecar_schema_version=2,
+        require_current_implementation=True,
+    )
+    if inputs["response_qualification"]["derived_manifest_sha256"] != qualified.manifest_sha256:
+        raise ValueError("timing-stress response qualification derivation changed")
+    chaff_path = _regression_multi_origin_bound_path(
+        root,
+        inputs["qualified_chaff_manifest"],
+        label="timing-stress qualified chaff manifest",
+    )
+    if chaff_path.read_bytes() != canonical_bytes(qualified.manifest):
+        raise ValueError("timing-stress chaff manifest is not exactly derived")
+
+    checkpoint_path = _regression_multi_origin_bound_path(
+        root, value["experiment"], label="timing-stress experiment checkpoint"
+    )
+    if checkpoint_path != root / "experiment.json":
+        raise ValueError("timing-stress experiment.json is not the authoritative checkpoint")
+    accepted_visits = _validate_timing_stress_checkpoint(
+        load_json(checkpoint_path), require_complete=True
+    )
+    defense = _timing_stress_defense()
+    samples = value["samples"]
+    if not isinstance(samples, list) or len(samples) != TIMING_STRESS_VISITS:
+        raise ValueError("timing-stress sample inventory is incomplete")
+    verified_samples: list[dict[str, Any]] = []
+    for visit, record in enumerate(samples):
+        if not isinstance(record, Mapping) or record.get("visit") != visit:
+            raise ValueError("timing-stress sample order is invalid")
+        relative = record.get("attempt")
+        expected_relative = f"attempts/visit-{visit:03d}/attempt-01"
+        if relative != expected_relative:
+            raise ValueError("timing-stress sample does not bind its sole physical launch")
+        attempt = root / expected_relative
+        expected = _timing_stress_attempt_evidence(
+            attempt,
+            root=root,
+            application_path=application_path,
+            runtime_path=runtime_path,
+            chaff_path=chaff_path,
+            defense=defense,
+            visit=visit,
+        )
+        if dict(record) != expected:
+            raise ValueError("timing-stress sample evidence changed")
+        verified_samples.append(expected)
+    expected_ledgers = _timing_stress_attempt_ledgers(
+        root,
+        application_path=application_path,
+        runtime_path=runtime_path,
+        chaff_path=chaff_path,
+        defense=defense,
+        accepted_visits=accepted_visits,
+        samples=verified_samples,
+    )
+    if value["attempt_ledgers"] != expected_ledgers:
+        raise ValueError("timing-stress attempt ledger changed")
+    aggregate = _timing_stress_aggregate(verified_samples)
+    if value["aggregate"] != aggregate:
+        raise ValueError("timing-stress aggregate evidence changed")
+    if (
+        aggregate["guarded_outgoing_releases"] != TIMING_STRESS_TOTAL_GUARDS
+        or aggregate["outgoing_opportunities"] != TIMING_STRESS_TOTAL_OUTGOING
+        or aggregate["incoming_opportunities"] != TIMING_STRESS_TOTAL_INCOMING
+        or aggregate["directional_events"] != TIMING_STRESS_TOTAL_DIRECTIONAL_EVENTS
+        or aggregate["full_outgoing_cells"] != TIMING_STRESS_TOTAL_OUTGOING
+        or aggregate["incoming_credit_bytes"]
+        != {
+            "requested": TIMING_STRESS_TOTAL_INCOMING_BYTES,
+            "advertised": TIMING_STRESS_TOTAL_INCOMING_BYTES,
+            "consumed": TIMING_STRESS_TOTAL_INCOMING_BYTES,
+            "retired": 0,
+            "unresolved": 0,
+        }
+        or aggregate["physical_attempts"] != TIMING_STRESS_VISITS
+        or aggregate["rejected_attempts"] != 0
+        or aggregate["aux_clock_complete_guards"] != TIMING_STRESS_TOTAL_GUARDS
+        or aggregate["aux_clock_unavailable_guards"] != 0
+        or aggregate["aux_clock_nonmonotonic_guards"] != 0
+        or aggregate["max_guard_exit_lateness_nanoseconds"] >= TIMING_STRESS_WINDOW_US * 1_000
+    ):
+        raise ValueError("timing-stress aggregate acceptance gate failed")
+    return {
+        "schema_version": TIMING_STRESS_SCHEMA_VERSION,
+        "path": str(receipt_path),
+        "sha256": sha256_file(receipt_path),
+        "source": dict(value["source"]),
+        "cohort_version": version,
+        "environment": environment,
+        "network": deepcopy(dict(network)),
+        "visits": TIMING_STRESS_VISITS,
+        "physical_attempts": TIMING_STRESS_VISITS,
+        "rejected_attempts": 0,
+        "guarded_outgoing_releases": TIMING_STRESS_TOTAL_GUARDS,
+        "outgoing_opportunities": TIMING_STRESS_TOTAL_OUTGOING,
+        "incoming_opportunities": TIMING_STRESS_TOTAL_INCOMING,
+        "directional_events": TIMING_STRESS_TOTAL_DIRECTIONAL_EVENTS,
+        "full_outgoing_cells": TIMING_STRESS_TOTAL_OUTGOING,
+        "incoming_credit_bytes": {
+            "requested": TIMING_STRESS_TOTAL_INCOMING_BYTES,
+            "advertised": TIMING_STRESS_TOTAL_INCOMING_BYTES,
+            "consumed": TIMING_STRESS_TOTAL_INCOMING_BYTES,
+            "retired": 0,
+            "unresolved": 0,
+        },
+        "excluded_from_regression_matrix": True,
+        "passed": True,
+    }
+
+
+def _validate_timing_stress_binding(value: object) -> dict[str, Any]:
+    if (
+        not isinstance(value, Mapping)
+        or set(value) != {"path", "sha256"}
+        or not isinstance(value.get("path"), str)
+        or re.fullmatch(r"[0-9a-f]{64}", str(value.get("sha256"))) is None
+    ):
+        raise ValueError("regression timing-stress binding is malformed")
+    path = Path(value["path"])
+    if (
+        path.name != "receipt.json"
+        or path.parent.name != "buflo-timing-stress"
+        or path.is_symlink()
+        or not path.is_file()
+        or sha256_file(path) != value["sha256"]
+    ):
+        raise ValueError("regression timing-stress receipt changed")
+    return validate_buflo_timing_stress_receipt(path)
+
+
+def _validate_current_regression_timing_stress(
+    regression_receipts: Sequence[Mapping[str, Any]],
+    *,
+    destination: Path,
+    lineage: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Require one exact sibling stress gate across all current regression shards."""
+
+    if (
+        len(regression_receipts) != len(LOCAL_STAGE_RESULT_NAMES["regression"])
+        or any(
+            receipt.get("schema_version") != TIMING_STRESS_BOUND_REGRESSION_RECEIPT_SCHEMA_VERSION
+            for receipt in regression_receipts
+        )
+        or len({_canonical_digest(receipt) for receipt in regression_receipts}) != 1
+    ):
+        raise ValueError("current regression shards lack one exact mandatory timing-stress binding")
+    receipt = regression_receipts[0]
+    timing_binding = receipt["timing_stress"]
+    timing_stress = _validate_timing_stress_binding(timing_binding)
+    expected_path = destination.resolve() / "buflo-timing-stress/receipt.json"
+    if Path(timing_binding["path"]).resolve() != expected_path:
+        raise ValueError("regression timing-stress receipt is not its exact sibling gate")
+    stress_value = load_json(expected_path)
+    network = stress_value.get("network") if isinstance(stress_value, Mapping) else None
+    if (
+        timing_stress["source"] != lineage
+        or timing_stress["network"] != network
+        or receipt["network"] != network
+        or timing_stress["cohort_version"] != receipt["cohort_version"]
+        or timing_stress["source"].get("image_digest") != receipt["network"].get("image_digest")
+    ):
+        raise ValueError(
+            "regression timing-stress source, image, network, or cohort binding differs"
+        )
+    return timing_stress
 
 
 def _local_controlled_campaign_document(
@@ -5286,7 +6785,12 @@ def _result_binding(path: Path) -> dict[str, str]:
         raise ValueError(f"result evidence binding cannot be a symlink: {candidate}")
     resolved = candidate.resolve()
     evidence = resolved / "evidence.sha256"
-    if resolved.is_symlink() or not resolved.is_dir() or evidence.is_symlink() or not evidence.is_file():
+    if (
+        resolved.is_symlink()
+        or not resolved.is_dir()
+        or evidence.is_symlink()
+        or not evidence.is_file()
+    ):
         raise ValueError(f"result evidence binding is invalid: {resolved}")
     return {"root": str(resolved), "evidence_sha256": sha256_file(evidence)}
 
@@ -5344,10 +6848,7 @@ def _historical_snapshot_value(
             phase="pre-formal",
             expected_cohort_version=version,
         )
-        if (
-            pre["source"] != source
-            or pre["build_execution_receipt"] != selected_build_binding
-        ):
+        if pre["source"] != source or pre["build_execution_receipt"] != selected_build_binding:
             raise ValueError("pre/post historical snapshots do not share one source/image")
         from .buflo_handoff import _validate_source_results
         from .verification import verify_result
@@ -5422,16 +6923,17 @@ def validate_historical_guard_snapshot(
     if not isinstance(value, dict):
         raise ValueError("historical corpus snapshot is not an object")
     stored_version = _cohort_version(value.get("cohort_version"))
-    if (
-        expected_cohort_version is not None
-        and stored_version != _cohort_version(expected_cohort_version)
+    if expected_cohort_version is not None and stored_version != _cohort_version(
+        expected_cohort_version
     ):
         raise ValueError("historical snapshot cohort version does not match the request")
     if phase == "post-formal" and not formal_result_roots:
         formal = value.get("formal_results")
         if not isinstance(formal, list):
             raise ValueError("post-formal snapshot result bindings are invalid")
-        formal_result_roots = tuple(Path(item["root"]) for item in formal if isinstance(item, Mapping))
+        formal_result_roots = tuple(
+            Path(item["root"]) for item in formal if isinstance(item, Mapping)
+        )
     if phase == "post-formal" and pre_snapshot is None:
         pre = value.get("pre_formal_snapshot")
         if not isinstance(pre, Mapping) or not isinstance(pre.get("path"), str):
@@ -5525,9 +7027,7 @@ def _formal_cohort_value(
         "src/qcsd_lab/orchestrator.py",
     )
     value = {
-        "schema_version": (
-            2 if version >= FORMAL_FAIL_CLOSED_COHORT_VERSION else 1
-        ),
+        "schema_version": (2 if version >= FORMAL_FAIL_CLOSED_COHORT_VERSION else 1),
         "artifact_type": COHORT_MANIFEST_ARTIFACT_TYPE,
         "cohort_id": cohort_id,
         "cohort_version": version,
@@ -5594,9 +7094,8 @@ def validate_formal_cohort_manifest(
     if not isinstance(value, Mapping):
         raise ValueError("formal cohort manifest is not an object")
     stored_version = _cohort_version(value.get("cohort_version"))
-    if (
-        expected_cohort_version is not None
-        and stored_version != _cohort_version(expected_cohort_version)
+    if expected_cohort_version is not None and stored_version != _cohort_version(
+        expected_cohort_version
     ):
         raise ValueError("formal cohort version does not match the request")
     pre = value.get("historical_pre_formal_snapshot")
@@ -5631,8 +7130,7 @@ def validate_formal_cohort_manifest(
             not isinstance(experiment, Mapping)
             or experiment.get("name") != row["campaign_name"]
             or experiment.get("source") != expected["source"]
-            or experiment.get("configuration", {}).get("campaign_sha256")
-            != row["campaign_sha256"]
+            or experiment.get("configuration", {}).get("campaign_sha256") != row["campaign_sha256"]
         ):
             raise ValueError("formal cohort root differs from its prospective block binding")
         if (root / "evidence.sha256").is_file():
@@ -5706,15 +7204,10 @@ def _capture_admission_value(
         "sha256": selected_build["sha256"],
     }
     build_environments = [
-        record["environment"]
-        for record in qualification["controlled_results"]["results"]
+        record["environment"] for record in qualification["controlled_results"]["results"]
     ]
-    build_environments.extend(
-        record["environment"] for record in staged["regression"]["results"]
-    )
-    build_environments.extend(
-        record["environment"] for record in staged["public"].values()
-    )
+    build_environments.extend(record["environment"] for record in staged["regression"]["results"])
+    build_environments.extend(record["environment"] for record in staged["public"].values())
     capture_scheduler = None
     if version >= 9:
         expected_scheduler = _capture_scheduler_environment_contract()
@@ -5724,9 +7217,7 @@ def _capture_admission_value(
             or environment.get("docker", {}).get("ncpu") != 12
             for environment in build_environments
         ):
-            raise ValueError(
-                "capture admission requires one exact 12-CPU RR1 affinity contract"
-            )
+            raise ValueError("capture admission requires one exact 12-CPU RR1 affinity contract")
         capture_scheduler = {
             "docker_ncpu": 12,
             **expected_scheduler,
@@ -5758,10 +7249,7 @@ def _capture_admission_value(
     if stage == "formal":
         if formal_cohort_manifest is None or historical_pre_snapshot is None:
             raise ValueError("formal admission requires cohort and pre-formal snapshot receipts")
-        if (
-            version >= FORMAL_FAIL_CLOSED_COHORT_VERSION
-            and code_gate_receipt is None
-        ):
+        if version >= FORMAL_FAIL_CLOSED_COHORT_VERSION and code_gate_receipt is None:
             raise ValueError("formal admission requires a validated code-gate receipt")
         if code_gate_receipt is not None:
             regression_rows = staged.get("regression", {}).get("results", [])
@@ -5794,12 +7282,9 @@ def _capture_admission_value(
         if (
             cohort["cohort_version"] != version
             or cohort["qualification_set"] != qualification_set_for_cohort(version)
-            or
-            historical["source"] != source
+            or historical["source"] != source
             or cohort["source"] != source
-            or cohort["historical_pre_formal_snapshot"] != _file_binding(
-                historical_pre_snapshot
-            )
+            or cohort["historical_pre_formal_snapshot"] != _file_binding(historical_pre_snapshot)
             or Path(cohort["results_root"]) != results_root
         ):
             raise ValueError("formal cohort/history/staged source lineage differs")
@@ -5857,9 +7342,7 @@ def _capture_admission_value(
         raise ValueError("capture admission selected result root escapes its bound results root")
     value = {
         "schema_version": (
-            3
-            if code_gate is not None
-            else (2 if capture_scheduler is not None else 1)
+            3 if code_gate is not None else (2 if capture_scheduler is not None else 1)
         ),
         "artifact_type": CAPTURE_ADMISSION_ARTIFACT_TYPE,
         "stage": stage,
@@ -5874,14 +7357,10 @@ def _capture_admission_value(
         "qualification": qualification,
         "staged_prerequisites": staged,
         "historical_pre_formal_snapshot": (
-            _file_binding(historical_pre_snapshot)
-            if historical_pre_snapshot is not None
-            else None
+            _file_binding(historical_pre_snapshot) if historical_pre_snapshot is not None else None
         ),
         "formal_cohort": (
-            _file_binding(formal_cohort_manifest)
-            if formal_cohort_manifest is not None
-            else None
+            _file_binding(formal_cohort_manifest) if formal_cohort_manifest is not None else None
         ),
         "formal_capacity": capacity,
         "allowed_campaigns": allowed,
@@ -5950,9 +7429,8 @@ def validate_capture_admission(
     if not isinstance(value, Mapping):
         raise ValueError("capture admission is not an object")
     stored_version = _cohort_version(value.get("cohort_version"))
-    if (
-        expected_cohort_version is not None
-        and stored_version != _cohort_version(expected_cohort_version)
+    if expected_cohort_version is not None and stored_version != _cohort_version(
+        expected_cohort_version
     ):
         raise ValueError("capture admission cohort version does not match the request")
     reference = value.get("reference_gate")
@@ -5984,15 +7462,11 @@ def validate_capture_admission(
         qualification_receipt=Path(str(qualification.get("path"))),
         prerequisite_result_roots=tuple(prerequisite_roots),
         results_root=Path(str(value.get("results_root"))),
-        formal_cohort_manifest=(
-            Path(cohort["path"]) if isinstance(cohort, Mapping) else None
-        ),
+        formal_cohort_manifest=(Path(cohort["path"]) if isinstance(cohort, Mapping) else None),
         historical_pre_snapshot=(
             Path(historical["path"]) if isinstance(historical, Mapping) else None
         ),
-        code_gate_receipt=(
-            Path(code_gate["path"]) if isinstance(code_gate, Mapping) else None
-        ),
+        code_gate_receipt=(Path(code_gate["path"]) if isinstance(code_gate, Mapping) else None),
         formal_window_hours=(
             value.get("formal_capacity", {}).get("available_window_hours")
             if isinstance(value.get("formal_capacity"), Mapping)
@@ -6178,14 +7652,9 @@ def _qualification_receipt_value(
         "finished_at": build["finished_at"],
     }
     if controlled_build != expected_build_identity:
-        raise ValueError(
-            "controlled qualification did not use the exact no-cache build execution"
-        )
+        raise ValueError("controlled qualification did not use the exact no-cache build execution")
     set_root = QUALIFICATION_SET_ROOT / qualification_set_for_cohort(version)
-    sidecars = [
-        _file_binding(set_root / f"{workload}.json")
-        for workload in WORKLOADS
-    ]
+    sidecars = [_file_binding(set_root / f"{workload}.json") for workload in WORKLOADS]
     return {
         "schema_version": 1,
         "artifact_type": QUALIFICATION_RECEIPT_ARTIFACT_TYPE,
@@ -6242,9 +7711,8 @@ def validate_qualification_receipt(
     if not isinstance(value, Mapping):
         raise ValueError("qualification receipt is not an object")
     stored_version = _cohort_version(value.get("cohort_version"))
-    if (
-        expected_cohort_version is not None
-        and stored_version != _cohort_version(expected_cohort_version)
+    if expected_cohort_version is not None and stored_version != _cohort_version(
+        expected_cohort_version
     ):
         raise ValueError("qualification receipt cohort version does not match the request")
     if not controlled_result_roots:
@@ -6402,21 +7870,19 @@ def validate_rust_code_gate(root: Path = RUST_CODE_GATE_ROOT) -> dict[str, Any]:
         or value.get("target_arch") not in {"amd64", "arm64"}
     ):
         raise ValueError("Rust code-gate receipt identity is invalid")
-    commands = [
-        {"gate": gate, "argv": list(argv)} for gate, argv in _RUST_CODE_GATE_COMMANDS
-    ]
+    commands = [{"gate": gate, "argv": list(argv)} for gate, argv in _RUST_CODE_GATE_COMMANDS]
     if value.get("commands") != commands:
         raise ValueError("Rust code-gate command inventory is not exact")
     logs = value.get("logs")
     if not isinstance(logs, Mapping) or set(logs) != {gate for gate, _ in _RUST_CODE_GATE_COMMANDS}:
         raise ValueError("Rust code-gate log inventory is not exact")
     actual_log_names = {
-        path.name
-        for path in logs_root.iterdir()
-        if path.is_file() and not path.is_symlink()
+        path.name for path in logs_root.iterdir() if path.is_file() and not path.is_symlink()
     }
     expected_log_names = {f"{gate}.log" for gate, _ in _RUST_CODE_GATE_COMMANDS}
-    if actual_log_names != expected_log_names or any(path.is_symlink() for path in logs_root.iterdir()):
+    if actual_log_names != expected_log_names or any(
+        path.is_symlink() for path in logs_root.iterdir()
+    ):
         raise ValueError("Rust code-gate log directory is not a closed inventory")
     for gate, _argv in _RUST_CODE_GATE_COMMANDS:
         record = logs[gate]
@@ -6442,8 +7908,7 @@ def validate_rust_code_gate(root: Path = RUST_CODE_GATE_ROOT) -> dict[str, Any]:
         or build_inputs.get("rust_base_image") != RUST_BASE_IMAGE
         or build_inputs.get("debian_base_image") != DEBIAN_BASE_IMAGE
         or build_inputs.get("uv_lock_sha256") != sha256_file(LAB_ROOT / "uv.lock")
-        or build_inputs.get("cargo_lock_sha256")
-        != sha256_file(LAB_ROOT / "neqo-qcsd/Cargo.lock")
+        or build_inputs.get("cargo_lock_sha256") != sha256_file(LAB_ROOT / "neqo-qcsd/Cargo.lock")
     ):
         raise ValueError("Rust code-gate build-input receipt is invalid")
     # The build receipt hashes the exact metadata files copied into the image.
@@ -6489,7 +7954,9 @@ def validate_rust_code_gate(root: Path = RUST_CODE_GATE_ROOT) -> dict[str, Any]:
 def _run_lab_code_gate_commands() -> list[dict[str, Any]]:
     records = []
     for gate, template in _LAB_CODE_GATE_COMMANDS:
-        argv = [os.fspath(Path(os.sys.executable)) if value == "python" else value for value in template]
+        argv = [
+            os.fspath(Path(os.sys.executable)) if value == "python" else value for value in template
+        ]
         completed = subprocess.run(
             argv,
             cwd=LAB_ROOT,
@@ -6543,9 +8010,10 @@ def create_code_gate_receipt(
         "started_at": selected_build["started_at"],
         "finished_at": selected_build["finished_at"],
     }
-    if _one_build_execution_identity(
-        [record["environment"] for record in regression["results"]]
-    ) != expected_build_identity:
+    if (
+        _one_build_execution_identity([record["environment"] for record in regression["results"]])
+        != expected_build_identity
+    ):
         raise ValueError("code-gate regression did not use the selected cohort build")
     commands = _run_lab_code_gate_commands()
     value = {
@@ -6604,9 +8072,8 @@ def validate_code_gate_receipt(
     ):
         raise ValueError("study code-gate receipt identity or source is invalid")
     stored_version = _cohort_version(value["cohort_version"])
-    if (
-        expected_cohort_version is not None
-        and stored_version != _cohort_version(expected_cohort_version)
+    if expected_cohort_version is not None and stored_version != _cohort_version(
+        expected_cohort_version
     ):
         raise ValueError("study code-gate cohort version differs from the request")
     selected_build = validate_build_execution_receipt(
@@ -6629,8 +8096,7 @@ def validate_code_gate_receipt(
         raise ValueError("study code-gate Lab command inventory is invalid")
     for record, (gate, template) in zip(commands, _LAB_CODE_GATE_COMMANDS, strict=True):
         expected_argv = [
-            os.fspath(Path(os.sys.executable)) if item == "python" else item
-            for item in template
+            os.fspath(Path(os.sys.executable)) if item == "python" else item for item in template
         ]
         output = record.get("stdout") if isinstance(record, Mapping) else None
         if (
@@ -6651,8 +8117,7 @@ def validate_code_gate_receipt(
             or record.get("exit_code") != 0
             or not isinstance(output, str)
             or record.get("stdout_bytes") != len(output.encode("utf-8"))
-            or record.get("stdout_sha256")
-            != hashlib.sha256(output.encode("utf-8")).hexdigest()
+            or record.get("stdout_sha256") != hashlib.sha256(output.encode("utf-8")).hexdigest()
         ):
             raise ValueError(f"study code-gate command receipt is invalid: {gate}")
     regression = value.get("live_regression")
@@ -6671,9 +8136,12 @@ def validate_code_gate_receipt(
         "started_at": selected_build["started_at"],
         "finished_at": selected_build["finished_at"],
     }
-    if _one_build_execution_identity(
-        [record["environment"] for record in expected_regression["results"]]
-    ) != expected_build_identity:
+    if (
+        _one_build_execution_identity(
+            [record["environment"] for record in expected_regression["results"]]
+        )
+        != expected_build_identity
+    ):
         raise ValueError("study code-gate regression build differs from the selected cohort")
     if value.get("established_seven_baseline") != validate_established_seven_baseline():
         raise ValueError("study code gate does not bind the pre-change seven-mode oracle")
@@ -6751,9 +8219,7 @@ _COMPARISON_EXPLANATION_CONTEXT_TERMS = frozenset(
 )
 
 
-def _substantive_comparison_explanation(
-    value: Any, *, identifiers: Sequence[str]
-) -> bool:
+def _substantive_comparison_explanation(value: Any, *, identifiers: Sequence[str]) -> bool:
     if not isinstance(value, str):
         return False
     explanation = " ".join(value.split())
@@ -6888,9 +8354,7 @@ def validate_comparison_review(
     if value.get("handoff") != expected_handoff:
         raise ValueError("comparison review handoff binding is invalid")
     qcsd_rows = evaluation.get("original_study_comparison", {}).get("qcsd_rows")
-    historical_rows = evaluation.get("original_study_comparison", {}).get(
-        "historical_rows"
-    )
+    historical_rows = evaluation.get("original_study_comparison", {}).get("historical_rows")
     anchor_inventory = evaluation.get("original_study_comparison", {}).get(
         "anchor_metric_inventory"
     )
@@ -6902,9 +8366,7 @@ def validate_comparison_review(
         or not isinstance(reviews, list)
     ):
         raise ValueError("comparison review rows are invalid")
-    expected = _comparison_required_anchor_metrics(
-        qcsd_rows, historical_rows, anchor_inventory
-    )
+    expected = _comparison_required_anchor_metrics(qcsd_rows, historical_rows, anchor_inventory)
     observed: set[tuple[str, str, str]] = set()
     for row in reviews:
         if (
@@ -6927,10 +8389,8 @@ def validate_comparison_review(
         if (
             key in observed
             or row_binding is None
-            or row.get("evaluation_row_sha256")
-            != row_binding["evaluation_row_sha256"]
-            or row.get("historical_row_sha256")
-            != row_binding["historical_row_sha256"]
+            or row.get("evaluation_row_sha256") != row_binding["evaluation_row_sha256"]
+            or row.get("historical_row_sha256") != row_binding["historical_row_sha256"]
             or not _substantive_comparison_explanation(
                 row.get("explanation"), identifiers=(key[1], key[2])
             )
@@ -7262,9 +8722,10 @@ def _reference_input_inventory() -> list[dict[str, str]]:
 def _reference_runtime_isolation() -> dict[str, Any]:
     """Prove the reference process has only loopback and read-only author inputs."""
 
-    if os.environ.get("QCSD_REFERENCE_ISOLATED") != "1" or os.environ.get(
-        "QCSD_REFERENCE_NETWORK_MODE"
-    ) != "none":
+    if (
+        os.environ.get("QCSD_REFERENCE_ISOLATED") != "1"
+        or os.environ.get("QCSD_REFERENCE_NETWORK_MODE") != "none"
+    ):
         raise ValueError("reference execution lacks the isolated wrapper markers")
     interfaces_root = Path("/sys/class/net")
     interfaces = sorted(path.name for path in interfaces_root.iterdir())
@@ -7465,15 +8926,12 @@ def _validate_build_execution_value(
     validate_build_execution_envelope(
         value,
         expected_cohort_version=expected_cohort_version,
-        expected_probe_sha256=sha256_file(
-            LAB_ROOT / "tools/windows_docker_storage_probe.ps1"
-        ),
+        expected_probe_sha256=sha256_file(LAB_ROOT / "tools/windows_docker_storage_probe.ps1"),
         checkout_root=LAB_ROOT,
     )
     cohort_version = _cohort_version(value["cohort_version"])
-    if (
-        expected_cohort_version is not None
-        and cohort_version != _cohort_version(expected_cohort_version)
+    if expected_cohort_version is not None and cohort_version != _cohort_version(
+        expected_cohort_version
     ):
         raise ValueError("study no-cache build cohort version differs from the request")
     payload = dict(value)
@@ -7528,17 +8986,16 @@ def _validate_build_execution_value(
             or re.fullmatch(r"sha256:[0-9a-f]{64}", record["id"]) is None
             or not isinstance(record["repo_digests"], list)
             or any(
-                not isinstance(digest, str)
-                or re.search(r"@sha256:[0-9a-f]{64}$", digest) is None
+                not isinstance(digest, str) or re.search(r"@sha256:[0-9a-f]{64}$", digest) is None
                 for digest in record["repo_digests"]
             )
         ):
             raise ValueError(f"study no-cache build {target} image binding is invalid")
         if value["schema_version"] == 2 and record["tag"] != BUILD_IMAGE_TAGS[target]:
             raise ValueError(f"study no-cache build {target} image role tag is invalid")
-    if value["schema_version"] == 2 and len(
-        {record["id"] for record in images.values()}
-    ) != len(images):
+    if value["schema_version"] == 2 and len({record["id"] for record in images.values()}) != len(
+        images
+    ):
         raise ValueError("study no-cache build image roles do not have distinct immutable IDs")
     collection_id = images["collection"]["id"]
     if expected_collection_image is not None and collection_id != expected_collection_image:
@@ -7566,9 +9023,7 @@ def _validate_build_execution_value(
             iidfile_value = argv[len(expected_prefix) + 1]
             iidfile = Path(iidfile_value)
             expected_prefix.extend(["--iidfile", iidfile_value])
-        expected_prefix.extend(
-            ["--target", target, "--tag", images[target]["tag"], "--file"]
-        )
+        expected_prefix.extend(["--target", target, "--tag", images[target]["tag"], "--file"])
         path_arguments_valid = (
             isinstance(argv, list)
             and len(argv) == len(expected_prefix) + 2
@@ -7605,8 +9060,7 @@ def _validate_build_execution_value(
                     or str(iidfile).startswith("//")
                     or ".." in iidfile.parts
                     or iidfile.name != f"{target}.iid"
-                    or iidfile.parent.parent
-                    != build_root / "artifacts" / "buflo-study"
+                    or iidfile.parent.parent != build_root / "artifacts" / "buflo-study"
                     or re.fullmatch(
                         rf"[.]build-iids-v{cohort_version}[.][A-Za-z0-9]{{6}}",
                         iidfile.parent.name,
@@ -7668,9 +9122,7 @@ def validate_build_execution_receipt(
     )
     expected_path = build_execution_receipt_path(validated["cohort_version"]).resolve()
     if Path(binding["path"]) != expected_path:
-        raise ValueError(
-            "study no-cache build receipt path does not match its cohort version"
-        )
+        raise ValueError("study no-cache build receipt path does not match its cohort version")
     return {"path": binding["path"], "sha256": binding["sha256"], **validated}
 
 
@@ -7688,9 +9140,7 @@ def _capture_scheduler_environment_contract() -> dict[str, Any]:
         "rlimit_rtprio": {"soft": 1, "hard": 1},
         "cap_sys_nice": False,
         "docker_cpu_rt_runtime_configured": False,
-        "affinity_scope": (
-            "qcsd_container_affinity_partition_not_physical_cpu_isolation"
-        ),
+        "affinity_scope": ("qcsd_container_affinity_partition_not_physical_cpu_isolation"),
     }
 
 
@@ -7710,9 +9160,7 @@ def validate_study_environment_receipt(
     }
     if not isinstance(value, Mapping) or value.get("schema_version") not in {1, 2}:
         raise ValueError("study environment receipt schema is invalid")
-    expected_keys = base_keys | (
-        {"capture_scheduler"} if value["schema_version"] == 2 else set()
-    )
+    expected_keys = base_keys | ({"capture_scheduler"} if value["schema_version"] == 2 else set())
     if set(value) != expected_keys:
         raise ValueError("study environment receipt schema is invalid")
     if value["artifact_type"] != "qcsd-buflo-study-environment":
@@ -7767,9 +9215,7 @@ def validate_study_environment_receipt(
     if not isinstance(execution, Mapping) or set(execution) != {"sha256", "receipt"}:
         raise ValueError("study no-cache build execution binding is invalid")
     embedded = execution["receipt"]
-    encoded_execution = (json.dumps(embedded, indent=2, sort_keys=True) + "\n").encode(
-        "utf-8"
-    )
+    encoded_execution = (json.dumps(embedded, indent=2, sort_keys=True) + "\n").encode("utf-8")
     if (
         not isinstance(execution["sha256"], str)
         or execution["sha256"] != hashlib.sha256(encoded_execution).hexdigest()
@@ -7841,7 +9287,10 @@ def validate_study_environment_receipt(
             or record.get("unavailable_reason") is not None
         ):
             raise ValueError(f"study {label} clock synchronization status is malformed")
-    if abs(clock["host"]["realtime_unix_ns"] - clock["container"]["realtime_unix_ns"]) > 60_000_000_000:
+    if (
+        abs(clock["host"]["realtime_unix_ns"] - clock["container"]["realtime_unix_ns"])
+        > 60_000_000_000
+    ):
         raise ValueError("study host/container realtime samples differ by more than 60 seconds")
     capture_scheduler = value.get("capture_scheduler")
     expected_capture_scheduler = _capture_scheduler_environment_contract()
@@ -8196,6 +9645,7 @@ def _validate_local_stage_results(
     capacity_samples: list[dict[str, Any]] = []
     multi_endpoint_samples: list[dict[str, Any]] = []
     controlled_costs: dict[tuple[str, str, int], dict[str, dict[str, int]]] = {}
+    regression_receipts: list[dict[str, Any]] = []
     for root in result_roots:
         verified = verify_result(Path(root))
         name = verified.experiment["name"]
@@ -8219,6 +9669,13 @@ def _validate_local_stage_results(
         _validate_clean_source(source, label=f"{stage} result {name}")
         environment = _validate_result_environment(verified, source)
         sources.append(source)
+        if stage == "regression":
+            campaign_path = verified.root / "inputs/campaign.yml"
+            if campaign_path.is_symlink() or not campaign_path.is_file():
+                raise ValueError("regression result lacks its frozen campaign")
+            campaign = yaml.safe_load(campaign_path.read_text(encoding="utf-8"))
+            controlled = campaign.get("study_controlled") if isinstance(campaign, Mapping) else None
+            regression_receipts.append(validate_controlled_campaign_receipt(controlled))
         result_bytes = _verified_result_bytes(verified)
         authoritative_bytes += result_bytes
         bindings.append(
@@ -8300,9 +9757,7 @@ def _validate_local_stage_results(
         "results": bindings,
     }
     if stage == "controlled":
-        result["sustained_cell_capacity"] = _validate_sustained_cell_capacity(
-            capacity_samples
-        )
+        result["sustained_cell_capacity"] = _validate_sustained_cell_capacity(capacity_samples)
         result["multiple_endpoint_coverage"] = _validate_controlled_multi_endpoint_coverage(
             multi_endpoint_samples
         )
@@ -8313,18 +9768,22 @@ def _validate_local_stage_results(
         )
     else:
         result["established_seven_baseline"] = validate_established_seven_baseline()
-        destinations = {
-            Path(binding["root"]).resolve().parents[2] for binding in bindings
-        }
+        destinations = {Path(binding["root"]).resolve().parents[2] for binding in bindings}
         if len(destinations) != 1:
             raise ValueError("regression shards do not share one compatibility root")
         [destination] = destinations
+        timing_stress = _validate_current_regression_timing_stress(
+            regression_receipts,
+            destination=destination,
+            lineage=lineage,
+        )
         compatibility = validate_regression_multi_origin_compatibility(
             destination / "multi-origin-nine-mode-compatibility/receipt.json",
             result_roots,
         )
         if compatibility["source"] != lineage:
             raise ValueError("regression compatibility source differs from the 18-sample shards")
+        result["buflo_timing_stress"] = timing_stress
         result["multi_origin_nine_mode_compatibility"] = compatibility
     return result
 
@@ -8368,9 +9827,7 @@ def _controlled_sample_capacity_and_cost(
             packets_path=sample_path / "neqo/packets.csv",
         )
     if treatment == "buflo":
-        terminal_subcell = (
-            algorithm.get("buflo_state") if isinstance(algorithm, Mapping) else None
-        )
+        terminal_subcell = algorithm.get("buflo_state") if isinstance(algorithm, Mapping) else None
         targets = schedule.get("target_times_us_by_direction")
         sizes = schedule.get("scheduled_sizes_by_direction")
         capacity = {
@@ -8379,12 +9836,8 @@ def _controlled_sample_capacity_and_cost(
             "outgoing_opportunities": schedule.get("scheduled_outgoing_events"),
             "incoming_opportunities": schedule.get("scheduled_incoming_events"),
             "outgoing_full_cells": diagnostics.get("buflo_full_outgoing_cells"),
-            "incoming_consumed_bytes": diagnostics.get(
-                "scheduled_incoming_consumed_bytes"
-            ),
-            "incoming_advertised_bytes": diagnostics.get(
-                "scheduled_incoming_advertised_bytes"
-            ),
+            "incoming_consumed_bytes": diagnostics.get("scheduled_incoming_consumed_bytes"),
+            "incoming_advertised_bytes": diagnostics.get("scheduled_incoming_advertised_bytes"),
             "incoming_terminal_cells": schedule.get("incoming_credit_consumed_events"),
             "incoming_consumption_delay_us_max": schedule.get(
                 "incoming_credit_consumption_delay_us_max"
@@ -8425,28 +9878,19 @@ def _controlled_sample_capacity_and_cost(
             and type(capacity["incoming_opportunities"]) is int
             and capacity["incoming_opportunities"] > 0
             and capacity["outgoing_full_cells"] == capacity["outgoing_opportunities"]
-            and capacity["incoming_consumed_bytes"]
-            == capacity["incoming_opportunities"] * 1_200
-            and capacity["incoming_advertised_bytes"]
-            == capacity["incoming_consumed_bytes"]
-            and capacity["incoming_terminal_cells"]
-            == capacity["incoming_opportunities"]
+            and capacity["incoming_consumed_bytes"] == capacity["incoming_opportunities"] * 1_200
+            and capacity["incoming_advertised_bytes"] == capacity["incoming_consumed_bytes"]
+            and capacity["incoming_terminal_cells"] == capacity["incoming_opportunities"]
             and capacity["no_unresolved_credit"]
             and _controlled_buflo_terminal_subcell_valid(terminal_subcell)
         )
     elif treatment in {"cs-buflo-ctsp", "cs-buflo-cpsp"}:
         sizes = schedule.get("scheduled_sizes_by_direction")
-        rate_driver = _controlled_csbuflo_rate_driver_observation(
-            str(cell["workload"]), run
-        )
+        rate_driver = _controlled_csbuflo_rate_driver_observation(str(cell["workload"]), run)
 
         def minimum_exercised(direction: str) -> bool:
-            opportunities = diagnostics.get(
-                f"cs_buflo_{direction}_minimum_interval_opportunities"
-            )
-            terminal = diagnostics.get(
-                f"cs_buflo_{direction}_minimum_interval_terminal"
-            )
+            opportunities = diagnostics.get(f"cs_buflo_{direction}_minimum_interval_opportunities")
+            terminal = diagnostics.get(f"cs_buflo_{direction}_minimum_interval_terminal")
             full = diagnostics.get(f"cs_buflo_{direction}_minimum_interval_full")
             common = bool(
                 diagnostics.get(f"cs_buflo_{direction}_interval_us") == 4_096
@@ -8457,9 +9901,7 @@ def _controlled_sample_capacity_and_cost(
             if direction == "incoming":
                 return bool(
                     common
-                    and diagnostics.get(
-                        "cs_buflo_incoming_minimum_interval_local_realized"
-                    )
+                    and diagnostics.get("cs_buflo_incoming_minimum_interval_local_realized")
                     == opportunities
                 )
             return common
@@ -8470,12 +9912,8 @@ def _controlled_sample_capacity_and_cost(
             "outgoing_opportunities": schedule.get("scheduled_outgoing_events"),
             "incoming_opportunities": schedule.get("scheduled_incoming_events"),
             "outgoing_full_cells": diagnostics.get("cs_buflo_full_outgoing_cells"),
-            "incoming_consumed_bytes": diagnostics.get(
-                "scheduled_incoming_consumed_bytes"
-            ),
-            "incoming_advertised_bytes": diagnostics.get(
-                "scheduled_incoming_advertised_bytes"
-            ),
+            "incoming_consumed_bytes": diagnostics.get("scheduled_incoming_consumed_bytes"),
+            "incoming_advertised_bytes": diagnostics.get("scheduled_incoming_advertised_bytes"),
             "incoming_terminal_cells": schedule.get("incoming_credit_consumed_events"),
             "incoming_consumption_delay_us_max": schedule.get(
                 "incoming_credit_consumption_delay_us_max"
@@ -8499,13 +9937,9 @@ def _controlled_sample_capacity_and_cost(
                 "cs_buflo_incoming_minimum_interval_local_realized"
             ),
             "request_rate_driver_resource_id": rate_driver["resource_id"],
-            "request_rate_driver_request_stream_bytes": rate_driver[
-                "request_stream_bytes"
-            ],
+            "request_rate_driver_request_stream_bytes": rate_driver["request_stream_bytes"],
             "request_rate_driver_boundary_bytes": rate_driver["boundary_bytes"],
-            "request_rate_driver_post_boundary_cells": rate_driver[
-                "post_boundary_cells"
-            ],
+            "request_rate_driver_post_boundary_cells": rate_driver["post_boundary_cells"],
             "exact_target_sizes": bool(
                 isinstance(sizes, Mapping)
                 and all(
@@ -8532,14 +9966,10 @@ def _controlled_sample_capacity_and_cost(
             and capacity["outgoing_full_cells"] == capacity["outgoing_opportunities"]
             and diagnostics.get("cs_buflo_partial_outgoing_cells") == 0
             and diagnostics.get("cs_buflo_suppressed_outgoing_cells") == 0
-            and capacity["incoming_consumed_bytes"]
-            == capacity["incoming_opportunities"] * 600
-            and capacity["incoming_advertised_bytes"]
-            == capacity["incoming_consumed_bytes"]
-            and capacity["incoming_terminal_cells"]
-            == capacity["incoming_opportunities"]
-            and capacity["incoming_local_realized_cells"]
-            == capacity["incoming_opportunities"]
+            and capacity["incoming_consumed_bytes"] == capacity["incoming_opportunities"] * 600
+            and capacity["incoming_advertised_bytes"] == capacity["incoming_consumed_bytes"]
+            and capacity["incoming_terminal_cells"] == capacity["incoming_opportunities"]
+            and capacity["incoming_local_realized_cells"] == capacity["incoming_opportunities"]
             and capacity["request_rate_driver_request_stream_bytes"]
             >= CSBUFLO_RATE_DRIVER_MIN_REQUEST_STREAM_BYTES
             and capacity["request_rate_driver_post_boundary_cells"]
@@ -8558,9 +9988,7 @@ def _controlled_sample_capacity_and_cost(
     }
 
 
-def _controlled_endpoint_coverage(
-    endpoints: Sequence[Any], *, workload: str
-) -> dict[str, Any]:
+def _controlled_endpoint_coverage(endpoints: Sequence[Any], *, workload: str) -> dict[str, Any]:
     """Bind each controlled sample to its exact live endpoint set."""
 
     from .manifest import https_origin
@@ -8610,9 +10038,7 @@ def _validate_controlled_multi_endpoint_coverage(
     """Require every new defense on every profile to exercise both origins."""
 
     treatments = ("buflo", "cs-buflo-ctsp", "cs-buflo-cpsp")
-    profiles = tuple(
-        profile["id"] for profile in load_study_plan()["controlled"]["netem_profiles"]
-    )
+    profiles = tuple(profile["id"] for profile in load_study_plan()["controlled"]["netem_profiles"])
     expected = {
         (treatment, profile, visit)
         for treatment in treatments
@@ -8664,8 +10090,7 @@ def _validate_sustained_cell_capacity(values: Sequence[Mapping[str, Any]]) -> di
         for visit in range(5)
     }
     observed = {
-        (str(value["treatment"]), str(value["workload"]), int(value["visit"]))
-        for value in values
+        (str(value["treatment"]), str(value["workload"]), int(value["visit"])) for value in values
     }
     if observed != expected or len(values) != len(expected):
         raise ValueError("controlled clean capacity evidence does not cover all 30 cells")
@@ -8690,8 +10115,7 @@ def _validate_sustained_cell_capacity(values: Sequence[Mapping[str, Any]]) -> di
             and incoming > 0
             and capacity.get("outgoing_full_cells") == outgoing
             and capacity.get("incoming_consumed_bytes") == incoming * cell_size
-            and capacity.get("incoming_advertised_bytes")
-            == capacity.get("incoming_consumed_bytes")
+            and capacity.get("incoming_advertised_bytes") == capacity.get("incoming_consumed_bytes")
             and capacity.get("incoming_terminal_cells") == incoming
             and type(capacity.get("incoming_consumption_delay_us_max")) is int
             and capacity.get("incoming_consumption_delay_us_max") >= 0
@@ -8706,13 +10130,9 @@ def _validate_sustained_cell_capacity(values: Sequence[Mapping[str, Any]]) -> di
         if not common:
             return False
         if treatment == "buflo":
-            return _controlled_buflo_terminal_subcell_valid(
-                capacity.get("terminal_subcell")
-            )
+            return _controlled_buflo_terminal_subcell_valid(capacity.get("terminal_subcell"))
         for direction in ("outgoing", "incoming"):
-            opportunities = capacity.get(
-                f"{direction}_minimum_interval_opportunities"
-            )
+            opportunities = capacity.get(f"{direction}_minimum_interval_opportunities")
             if not (
                 type(opportunities) is int
                 and opportunities > 0
@@ -8721,9 +10141,7 @@ def _validate_sustained_cell_capacity(values: Sequence[Mapping[str, Any]]) -> di
                 == capacity.get(f"{direction}_minimum_interval_full")
             ):
                 return False
-        expected_driver_id = {"local-small": 1, "local-large": 4}.get(
-            str(value["workload"])
-        )
+        expected_driver_id = {"local-small": 1, "local-large": 4}.get(str(value["workload"]))
         return bool(
             capacity.get("incoming_minimum_interval_local_realized")
             == capacity.get("incoming_minimum_interval_opportunities")
@@ -8777,11 +10195,7 @@ def _validate_sustained_cell_capacity(values: Sequence[Mapping[str, Any]]) -> di
                     {
                         **{
                             f"{direction}_{field}": sum(
-                                int(
-                                    value["capacity"][
-                                        f"{direction}_minimum_interval_{field}"
-                                    ]
-                                )
+                                int(value["capacity"][f"{direction}_minimum_interval_{field}"])
                                 for value in values
                                 if value["treatment"] == treatment
                             )
@@ -8789,11 +10203,7 @@ def _validate_sustained_cell_capacity(values: Sequence[Mapping[str, Any]]) -> di
                             for field in ("opportunities", "terminal", "full")
                         },
                         "incoming_local_realized": sum(
-                            int(
-                                value["capacity"][
-                                    "incoming_minimum_interval_local_realized"
-                                ]
-                            )
+                            int(value["capacity"]["incoming_minimum_interval_local_realized"])
                             for value in values
                             if value["treatment"] == treatment
                         ),
@@ -8842,12 +10252,10 @@ def _aggregate_controlled_buflo_terminal_subcells(
     streams = [int(value["stream_cancellations"]) for value in values]
     latch_times = [int(value["terminal_latched_at_us"]) for value in values]
     post_control_packets = [
-        int(value["post_cancellation_unscheduled_defense_control_packets"])
-        for value in values
+        int(value["post_cancellation_unscheduled_defense_control_packets"]) for value in values
     ]
     post_control_bytes = [
-        int(value["post_cancellation_unscheduled_defense_control_bytes"])
-        for value in values
+        int(value["post_cancellation_unscheduled_defense_control_bytes"]) for value in values
     ]
     schedule_stop = None
     if state_version == 3:
@@ -8880,9 +10288,7 @@ def _aggregate_controlled_buflo_terminal_subcells(
         stop_times = [int(stop["latched_at_us"]) for stop in stops]
         schedule_stop = {
             "policy": BUFLO_SCHEDULE_STOP_POLICY,
-            "terminal_time_semantics": (
-                BUFLO_SCHEDULE_STOP_TERMINAL_TIME_SEMANTICS
-            ),
+            "terminal_time_semantics": (BUFLO_SCHEDULE_STOP_TERMINAL_TIME_SEMANTICS),
             "latched_samples": sum(stop["latched"] is True for stop in stops),
             "latched_at_us": {
                 "minimum": min(stop_times),
@@ -8916,12 +10322,8 @@ def _aggregate_controlled_buflo_terminal_subcells(
         },
         "samples_with_cancellation": sum(value > 0 for value in streams),
         "stream_cancellations": sum(streams),
-        "open_streams_at_latch": sum(
-            int(value["open_streams_at_latch"]) for value in values
-        ),
-        "receipt_cancellations": sum(
-            int(value["receipt_cancellations"]) for value in values
-        ),
+        "open_streams_at_latch": sum(int(value["open_streams_at_latch"]) for value in values),
+        "receipt_cancellations": sum(int(value["receipt_cancellations"]) for value in values),
         "typed_cancellation_action_events": sum(
             int(value["typed_cancellation_action_events"]) for value in values
         ),
@@ -8933,26 +10335,21 @@ def _aggregate_controlled_buflo_terminal_subcells(
         **(
             {
                 "pending_application_parser_boundaries_at_latch": sum(
-                    int(value["pending_application_parser_boundaries_at_latch"])
-                    for value in values
+                    int(value["pending_application_parser_boundaries_at_latch"]) for value in values
                 )
             }
             if state_version in {2, 3}
             else {}
         ),
         **({"schedule_stop": schedule_stop} if state_version == 3 else {}),
-        "post_cancellation_unscheduled_defense_control_packets": sum(
-            post_control_packets
-        ),
+        "post_cancellation_unscheduled_defense_control_packets": sum(post_control_packets),
         "post_cancellation_unscheduled_defense_control_bytes": sum(post_control_bytes),
         "exact_capacity_bytes_cancelled": {
             "total": sum(capacities),
             "minimum": min(capacities),
             "maximum": max(capacities),
         },
-        "every_residual_below_whole_cell_floor": all(
-            capacity < 1_200 for capacity in capacities
-        ),
+        "every_residual_below_whole_cell_floor": all(capacity < 1_200 for capacity in capacities),
         "passed": True,
     }
 
@@ -8983,8 +10380,7 @@ def _ctsp_cpsp_oracle_proof() -> dict[str, Any]:
         "anchors": [
             vector
             for vector in vectors
-            if (vector["natural_bytes"], vector["cover_bytes"])
-            in {(1_000, 24), (1_000, 1_100)}
+            if (vector["natural_bytes"], vector["cover_bytes"]) in {(1_000, 24), (1_000, 1_100)}
         ],
         "ctsp_greater_than_or_equal_cpsp": True,
     }
@@ -9008,12 +10404,10 @@ def _validate_ctsp_cpsp_ordering(
             "ctsp": dict(group["cs-buflo-ctsp"]),
             "cpsp": dict(group["cs-buflo-cpsp"]),
         }
-        row["ctsp_minus_cpsp_wire_bytes"] = row["ctsp"]["wire_bytes"] - row["cpsp"][
-            "wire_bytes"
-        ]
-        row["ctsp_minus_cpsp_udp_payload_bytes"] = row["ctsp"][
-            "udp_payload_bytes"
-        ] - row["cpsp"]["udp_payload_bytes"]
+        row["ctsp_minus_cpsp_wire_bytes"] = row["ctsp"]["wire_bytes"] - row["cpsp"]["wire_bytes"]
+        row["ctsp_minus_cpsp_udp_payload_bytes"] = (
+            row["ctsp"]["udp_payload_bytes"] - row["cpsp"]["udp_payload_bytes"]
+        )
         pairs.append(row)
     aggregate = {
         treatment: {
@@ -9023,15 +10417,13 @@ def _validate_ctsp_cpsp_ordering(
         for treatment in required
     }
     aggregate_passed = all(
-        aggregate["cs-buflo-ctsp"][metric]
-        >= aggregate["cs-buflo-cpsp"][metric]
+        aggregate["cs-buflo-ctsp"][metric] >= aggregate["cs-buflo-cpsp"][metric]
         for metric in ("wire_bytes", "udp_payload_bytes")
     )
     contrary_pairs = [
         row
         for row in pairs
-        if row["ctsp_minus_cpsp_wire_bytes"] < 0
-        or row["ctsp_minus_cpsp_udp_payload_bytes"] < 0
+        if row["ctsp_minus_cpsp_wire_bytes"] < 0 or row["ctsp_minus_cpsp_udp_payload_bytes"] < 0
     ]
     passed = aggregate_passed and not contrary_pairs
     comparison_binding = {
@@ -9133,9 +10525,7 @@ def _public_campaign_name(stage: str) -> str:
 def _experiment_elapsed_seconds(experiment: Mapping[str, Any]) -> float:
     try:
         started = datetime.fromisoformat(str(experiment["started_at"]).replace("Z", "+00:00"))
-        completed = datetime.fromisoformat(
-            str(experiment["completed_at"]).replace("Z", "+00:00")
-        )
+        completed = datetime.fromisoformat(str(experiment["completed_at"]).replace("Z", "+00:00"))
     except (KeyError, ValueError) as error:
         raise ValueError("study result has invalid acquisition timestamps") from error
     if started.tzinfo is None or completed.tzinfo is None:
@@ -9165,8 +10555,7 @@ def _validate_public_stage_result(
     if (
         not isinstance(frozen_admission, Mapping)
         or frozen_admission.get("cohort_version") != version
-        or frozen_admission.get("qualification_set")
-        != qualification_set_for_cohort(version)
+        or frozen_admission.get("qualification_set") != qualification_set_for_cohort(version)
     ):
         raise ValueError(f"{stage} result cohort version does not match the requested cohort")
     campaign_path = campaign_paths(stage, cohort_version=version)[0]
@@ -9518,9 +10907,7 @@ def run_study_action(
 
             destination = destination.absolute()
             if destination.exists() or destination.is_symlink():
-                raise FileExistsError(
-                    f"reference execution receipt already exists: {destination}"
-                )
+                raise FileExistsError(f"reference execution receipt already exists: {destination}")
             reference_source = source_metadata()
             _validate_clean_source(reference_source, label="reference execution")
             build_receipt = validate_build_execution_receipt(
@@ -9575,9 +10962,7 @@ def run_study_action(
         )
     if action == "historical-snapshot":
         if destination is None or snapshot_phase not in {"pre-formal", "post-formal"}:
-            raise ValueError(
-                "historical snapshot requires --destination and --snapshot-phase"
-            )
+            raise ValueError("historical snapshot requires --destination and --snapshot-phase")
         output = create_historical_guard_snapshot(
             destination,
             phase=snapshot_phase,
@@ -9711,33 +11096,21 @@ def run_study_action(
                 raise ValueError("capture admission stage does not match requested stage")
             if admitted["cohort_version"] != version:
                 raise ValueError("capture admission cohort version does not match the request")
-            if (
-                reference_receipt is not None
-                and _file_binding(reference_receipt)
-                != {
-                    "path": admitted["reference_gate"]["path"],
-                    "sha256": admitted["reference_gate"]["sha256"],
-                }
-            ):
+            if reference_receipt is not None and _file_binding(reference_receipt) != {
+                "path": admitted["reference_gate"]["path"],
+                "sha256": admitted["reference_gate"]["sha256"],
+            }:
                 raise ValueError("supplied reference receipt differs from the frozen admission")
-            if (
-                qualification_receipt is not None
-                and _file_binding(qualification_receipt)
-                != {
-                    "path": admitted["qualification"]["path"],
-                    "sha256": admitted["qualification"]["sha256"],
-                }
-            ):
+            if qualification_receipt is not None and _file_binding(qualification_receipt) != {
+                "path": admitted["qualification"]["path"],
+                "sha256": admitted["qualification"]["sha256"],
+            }:
                 raise ValueError("supplied qualification receipt differs from the frozen admission")
             frozen_code_gate = admitted.get("code_gate")
-            if (
-                code_gate_receipt is not None
-                and _file_binding(code_gate_receipt)
-                != (
-                    {"path": frozen_code_gate["path"], "sha256": frozen_code_gate["sha256"]}
-                    if isinstance(frozen_code_gate, Mapping)
-                    else None
-                )
+            if code_gate_receipt is not None and _file_binding(code_gate_receipt) != (
+                {"path": frozen_code_gate["path"], "sha256": frozen_code_gate["sha256"]}
+                if isinstance(frozen_code_gate, Mapping)
+                else None
             ):
                 raise ValueError("supplied code-gate receipt differs from the frozen admission")
             if result_roots:
@@ -9825,10 +11198,7 @@ def run_study_action(
                 expected_cohort_version=version,
             )
         if stage == "formal" and admitted is None:
-            if (
-                version >= FORMAL_FAIL_CLOSED_COHORT_VERSION
-                and code_gate_receipt is None
-            ):
+            if version >= FORMAL_FAIL_CLOSED_COHORT_VERSION and code_gate_receipt is None:
                 blockers.append("formal capture requires --code-gate-receipt")
             if "staged_prerequisites" in details:
                 try:
@@ -9874,9 +11244,7 @@ def run_study_action(
                     results_root=LAB_ROOT / "results",
                     formal_cohort_manifest=formal_cohort_manifest,
                     historical_pre_snapshot=historical_pre_snapshot,
-                    code_gate_receipt=(
-                        code_gate_receipt if stage == "formal" else None
-                    ),
+                    code_gate_receipt=(code_gate_receipt if stage == "formal" else None),
                     formal_window_hours=formal_window_hours,
                     cohort_version=version,
                 )
@@ -9887,7 +11255,9 @@ def run_study_action(
             if admitted["stage"] != stage:
                 raise ValueError("capture admission stage does not match requested stage")
             if admitted["cohort_version"] != version:
-                raise ValueError("capture admission cohort version does not match requested version")
+                raise ValueError(
+                    "capture admission cohort version does not match requested version"
+                )
             details["capture_admission"] = _file_binding(capture_admission)
             if stage == "formal" and not any(
                 Path(row["result_root"]).exists() for row in admitted["allowed_campaigns"]
@@ -9915,9 +11285,7 @@ def run_study_action(
                 old_network_condition = os.environ.get("QCSD_STUDY_NETWORK_CONDITION")
                 os.environ["QCSD_BUFLO_CAPTURE_LOCK_HELD"] = "1"
                 os.environ["QCSD_BUFLO_CAPTURE_ADMISSION"] = str(capture_admission)
-                os.environ["QCSD_STUDY_NETWORK_CONDITION"] = (
-                    "public-docker-bridge-no-netem"
-                )
+                os.environ["QCSD_STUDY_NETWORK_CONDITION"] = "public-docker-bridge-no-netem"
                 try:
                     for path in selected:
                         root = admitted_result_root(
@@ -10011,9 +11379,7 @@ def run_study_action(
         if not formal_result_roots:
             missing.append("formal result roots")
         if missing:
-            blockers.append(
-                "typed validation attestation requires: " + ", ".join(missing)
-            )
+            blockers.append("typed validation attestation requires: " + ", ".join(missing))
             details["hard_gates"] = plan["hard_gates"]
             return StudyActionResult(
                 action,
@@ -10189,11 +11555,7 @@ def _validate_formal_performance_evidence(evaluation: Mapping[str, Any]) -> dict
     require_axes(
         performance["paired_mode_direction_block_workload_bootstrap_95"],
         fields=("defense", "direction"),
-        expected={
-            (mode, direction)
-            for mode in defended
-            for direction in ("outgoing", "incoming")
-        },
+        expected={(mode, direction) for mode in defended for direction in ("outgoing", "incoming")},
         count_field="pairs",
         count=500,
         label="mode-direction performance",
@@ -10369,9 +11731,7 @@ def _validate_formal_performance_evidence(evaluation: Mapping[str, Any]) -> dict
         "post_cancellation_unscheduled_defense_control_packets",
         "post_cancellation_unscheduled_defense_control_bytes",
     }
-    expected_tail_strata = {
-        (workload, block) for workload in WORKLOADS for block in range(10)
-    }
+    expected_tail_strata = {(workload, block) for workload in WORKLOADS for block in range(10)}
     seen_tail_strata: set[tuple[str, int]] = set()
     total_tail_samples = 0
     total_tail_cancellations = 0
@@ -10390,12 +11750,10 @@ def _validate_formal_performance_evidence(evaluation: Mapping[str, Any]) -> dict
             or not 0 <= block < 10
             or key in seen_tail_strata
             or row.get("samples") != 10
-            or row.get("terminal_subcell_policy")
-            != [BUFLO_TERMINAL_SUBCELL_POLICY]
+            or row.get("terminal_subcell_policy") != [BUFLO_TERMINAL_SUBCELL_POLICY]
             or row.get("terminal_subcell_observer_effect")
             != [BUFLO_TERMINAL_SUBCELL_OBSERVER_EFFECT]
-            or row.get("control_evidence_semantics")
-            != [BUFLO_TERMINAL_CONTROL_EVIDENCE_SEMANTICS]
+            or row.get("control_evidence_semantics") != [BUFLO_TERMINAL_CONTROL_EVIDENCE_SEMANTICS]
         ):
             raise ValueError("formal BuFLO terminal-tail stratum identity is invalid")
         seen_tail_strata.add(key)
@@ -10419,42 +11777,24 @@ def _validate_formal_performance_evidence(evaluation: Mapping[str, Any]) -> dict
             raise ValueError("formal BuFLO terminal-tail counters are invalid")
         samples_with_cancellation = integer_fields["samples_with_cancellation"]
         streams = integer_fields["stream_cancellations"]
-        control_packets = integer_fields[
-            "post_cancellation_unscheduled_defense_control_packets"
-        ]
-        control_bytes = integer_fields[
-            "post_cancellation_unscheduled_defense_control_bytes"
-        ]
+        control_packets = integer_fields["post_cancellation_unscheduled_defense_control_packets"]
+        control_bytes = integer_fields["post_cancellation_unscheduled_defense_control_bytes"]
         capacity = row.get("exact_capacity_bytes_cancelled")
         latch = row.get("terminal_latched_at_us")
         if (
             not 0 <= samples_with_cancellation <= 10
             or (samples_with_cancellation == 0) != (streams == 0)
             or streams < samples_with_cancellation
-            or streams
-            != integer_fields["receipt_cancellations"]
-            or streams
-            != integer_fields["typed_cancellation_action_events"]
+            or streams != integer_fields["receipt_cancellations"]
+            or streams != integer_fields["typed_cancellation_action_events"]
             or streams != integer_fields["open_streams_at_latch"]
             or integer_fields["pending_request_cancellations"] != 0
             or integer_fields["parser_lease_bytes_at_latch"] != 0
-            or integer_fields[
-                "pending_application_parser_boundaries_at_latch"
-            ]
-            != 0
+            or integer_fields["pending_application_parser_boundaries_at_latch"] != 0
             or integer_fields["pending_parser_boundaries_at_latch"] > streams
-            or (
-                streams == 0
-                and integer_fields["pending_parser_boundaries_at_latch"] != 0
-            )
-            or (
-                streams == 0
-                and (control_packets != 0 or control_bytes != 0)
-            )
-            or (
-                streams > 0
-                and (control_packets == 0 or control_bytes == 0)
-            )
+            or (streams == 0 and integer_fields["pending_parser_boundaries_at_latch"] != 0)
+            or (streams == 0 and (control_packets != 0 or control_bytes != 0))
+            or (streams > 0 and (control_packets == 0 or control_bytes == 0))
             or control_packets < samples_with_cancellation
             or control_bytes < control_packets
             or not isinstance(capacity, Mapping)
@@ -10464,9 +11804,7 @@ def _validate_formal_performance_evidence(evaluation: Mapping[str, Any]) -> dict
                 for field in ("total", "minimum", "maximum")
             )
             or not 0 <= capacity["minimum"] <= capacity["maximum"] < 1_200
-            or not capacity["minimum"] * 10
-            <= capacity["total"]
-            <= capacity["maximum"] * 10
+            or not capacity["minimum"] * 10 <= capacity["total"] <= capacity["maximum"] * 10
             or (
                 streams == 0
                 and any(
@@ -10485,9 +11823,7 @@ def _validate_formal_performance_evidence(evaluation: Mapping[str, Any]) -> dict
                 not isinstance(capacity[field], (int, float))
                 or isinstance(capacity[field], bool)
                 or not math.isfinite(float(capacity[field]))
-                or not capacity["minimum"]
-                <= float(capacity[field])
-                <= capacity["maximum"]
+                or not capacity["minimum"] <= float(capacity[field]) <= capacity["maximum"]
                 for field in ("p50", "p90", "p95")
             )
             or not capacity["p50"] <= capacity["p90"] <= capacity["p95"]
@@ -10570,8 +11906,7 @@ def _validate_formal_performance_evidence(evaluation: Mapping[str, Any]) -> dict
             or key in seen_schedule_stop_strata
             or row.get("samples") != 10
             or row.get("policy") != [BUFLO_SCHEDULE_STOP_POLICY]
-            or row.get("terminal_time_semantics")
-            != [BUFLO_SCHEDULE_STOP_TERMINAL_TIME_SEMANTICS]
+            or row.get("terminal_time_semantics") != [BUFLO_SCHEDULE_STOP_TERMINAL_TIME_SEMANTICS]
             or row.get("latched_samples") != 10
             or row.get("required_bytes") != [1_200]
             or type(row.get("samples_with_incoming_drain")) is not int
@@ -10581,13 +11916,9 @@ def _validate_formal_performance_evidence(evaluation: Mapping[str, Any]) -> dict
             or set(available) != {"total", *time_summary_keys}
             or type(available.get("total")) is not int
             or not 0 <= available["total"] <= 11_990
-            or not valid_time_summary(
-                {field: available[field] for field in time_summary_keys}
-            )
+            or not valid_time_summary({field: available[field] for field in time_summary_keys})
             or available["maximum"] >= 1_200
-            or not available["minimum"] * 10
-            <= available["total"]
-            <= available["maximum"] * 10
+            or not available["minimum"] * 10 <= available["total"] <= available["maximum"] * 10
             or not isinstance(directions, Mapping)
             or set(directions) != {"outgoing", "incoming"}
         ):
@@ -10599,8 +11930,7 @@ def _validate_formal_performance_evidence(evaluation: Mapping[str, Any]) -> dict
                 raise ValueError("formal BuFLO schedule-stop direction schema is not exact")
             integers = {
                 field: state.get(field)
-                for field in direction_keys
-                - {"last_scheduled_target_us", "last_terminal_at_us"}
+                for field in direction_keys - {"last_scheduled_target_us", "last_terminal_at_us"}
             }
             scheduled = integers["scheduled_cells_at_stop"]
             terminal = integers["terminal_cells_at_stop"]
@@ -10617,28 +11947,22 @@ def _validate_formal_performance_evidence(evaluation: Mapping[str, Any]) -> dict
                 or (direction == "outgoing" and drained != 0)
                 or not valid_time_summary(state.get("last_scheduled_target_us"))
                 or not valid_time_summary(state.get("last_terminal_at_us"))
-                or state["last_scheduled_target_us"]["maximum"]
-                > stop_times["maximum"]
+                or state["last_scheduled_target_us"]["maximum"] > stop_times["maximum"]
             ):
                 raise ValueError("formal BuFLO schedule-stop direction evidence is invalid")
         outgoing = directions["outgoing"]
         incoming = directions["incoming"]
         incoming_drained = incoming["drained_cells_after_stop"]
         if (
-            outgoing["scheduled_cells_at_stop"]
-            != incoming["scheduled_cells_at_stop"]
-            or outgoing["last_scheduled_target_us"]
-            != incoming["last_scheduled_target_us"]
+            outgoing["scheduled_cells_at_stop"] != incoming["scheduled_cells_at_stop"]
+            or outgoing["last_scheduled_target_us"] != incoming["last_scheduled_target_us"]
             or (row["samples_with_incoming_drain"] == 0) != (incoming_drained == 0)
             or incoming_drained < row["samples_with_incoming_drain"]
         ):
             raise ValueError("formal BuFLO schedule-stop cross-direction evidence is invalid")
         total_schedule_stop_samples += int(row["samples"])
         total_incoming_drained_cells += int(incoming_drained)
-    if (
-        seen_schedule_stop_strata != expected_tail_strata
-        or total_schedule_stop_samples != 500
-    ):
+    if seen_schedule_stop_strata != expected_tail_strata or total_schedule_stop_samples != 500:
         raise ValueError("formal BuFLO schedule-stop coverage is incomplete")
     return {
         "paired_visits": len(paired),
@@ -10695,14 +12019,12 @@ def _validate_attestation_hard_gates(value: Any, *, schema_version: int) -> None
             or not evidence
             or evidence != sorted(set(evidence))
             or any(
-                not isinstance(digest, str)
-                or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+                not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None
                 for digest in evidence
             )
             or (
                 schema_version >= 2
-                and record.get("gate_identity_sha256")
-                != _hard_gate_identity_sha256(ordinal, gate)
+                and record.get("gate_identity_sha256") != _hard_gate_identity_sha256(ordinal, gate)
             )
         ):
             raise ValueError(
@@ -10826,8 +12148,7 @@ def _validation_attestation_value(
         historical_pre["historical_corpus_guard_sha256"]
         != historical_post["historical_corpus_guard_sha256"]
         or cohort["historical_pre_formal_snapshot"] != _file_binding(historical_pre_snapshot)
-        or admission["historical_pre_formal_snapshot"]
-        != _file_binding(historical_pre_snapshot)
+        or admission["historical_pre_formal_snapshot"] != _file_binding(historical_pre_snapshot)
     ):
         raise ValueError("validation attestation historical before/after binding is invalid")
     source = regression["source"]
@@ -10930,12 +12251,8 @@ def _validation_attestation_value(
             evidence["handoff"]["sha256sums_sha256"],
         }
     )
-    attestation_schema_version = (
-        2 if cohort_version >= FORMAL_FAIL_CLOSED_COHORT_VERSION else 1
-    )
-    hard_gates = _hard_gate_records(
-        evidence_digests, schema_version=attestation_schema_version
-    )
+    attestation_schema_version = 2 if cohort_version >= FORMAL_FAIL_CLOSED_COHORT_VERSION else 1
+    hard_gates = _hard_gate_records(evidence_digests, schema_version=attestation_schema_version)
     return {
         "schema_version": attestation_schema_version,
         "artifact_type": ATTESTATION_ARTIFACT_TYPE,
@@ -10958,21 +12275,15 @@ def _validation_attestation_value(
             + len(code["rust_code_gate"]["commands"]),
             "regression_samples": regression["samples"],
             "controlled_samples": controlled["samples"],
-            "controlled_capacity_sha256": _canonical_digest(
-                controlled["sustained_cell_capacity"]
-            ),
-            "ctsp_cpsp_ordering_sha256": _canonical_digest(
-                controlled["ctsp_cpsp_ordering"]
-            ),
+            "controlled_capacity_sha256": _canonical_digest(controlled["sustained_cell_capacity"]),
+            "ctsp_cpsp_ordering_sha256": _canonical_digest(controlled["ctsp_cpsp_ordering"]),
             "smoke_samples": smoke["samples"],
             "rehearsal_samples": rehearsal["samples"],
             "formal_samples": evaluation["sample_count"],
             "formal_temporal_acquisition": dataset["temporal_acquisition"],
             "performance": performance,
             "comparison_review": comparison,
-            "historical_guard_sha256": historical_post[
-                "historical_corpus_guard_sha256"
-            ],
+            "historical_guard_sha256": historical_post["historical_corpus_guard_sha256"],
         },
         "hard_gates": hard_gates,
         "all_hard_gates_passed": True,
@@ -11029,21 +12340,17 @@ def validate_validation_attestation(
     if not isinstance(evidence, Mapping):
         raise ValueError("validation attestation typed evidence is missing")
     stored_version = _cohort_version(value.get("cohort_version"))
-    if (
-        expected_cohort_version is not None
-        and stored_version != _cohort_version(expected_cohort_version)
+    if expected_cohort_version is not None and stored_version != _cohort_version(
+        expected_cohort_version
     ):
         raise ValueError("validation attestation cohort version differs from the request")
-    expected_schema_version = (
-        2 if stored_version >= FORMAL_FAIL_CLOSED_COHORT_VERSION else 1
-    )
+    expected_schema_version = 2 if stored_version >= FORMAL_FAIL_CLOSED_COHORT_VERSION else 1
     if (
         value.get("schema_version") != expected_schema_version
         or value.get("artifact_type") != ATTESTATION_ARTIFACT_TYPE
         or value.get("study_id") != BUFLO_STUDY_ID
         or value.get("implementation_status") != VALIDATED_STATUS
-        or value.get("implementation_status_description")
-        != VALIDATED_STATUS_DESCRIPTION
+        or value.get("implementation_status_description") != VALIDATED_STATUS_DESCRIPTION
         or value.get("implementation_scope") != "client_only_quic"
         or value.get("paper_equivalent") is not False
         or value.get("no_waivers") is not True
@@ -11063,8 +12370,7 @@ def validate_validation_attestation(
     def result_paths(key: str) -> tuple[Path, ...]:
         items = evidence.get(key)
         if not isinstance(items, list) or any(
-            not isinstance(item, Mapping) or not isinstance(item.get("root"), str)
-            for item in items
+            not isinstance(item, Mapping) or not isinstance(item.get("root"), str) for item in items
         ):
             raise ValueError(f"validation attestation result evidence is missing: {key}")
         return tuple(Path(item["root"]) for item in items)

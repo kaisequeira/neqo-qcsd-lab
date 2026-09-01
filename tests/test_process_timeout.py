@@ -14,6 +14,7 @@ import qcsd_lab.util as util
 
 class _TimeoutProcess:
     def __init__(self, expirations: int) -> None:
+        self.pid = 4242
         self.expirations = expirations
         self.returncode: int | None = None
         self.terminated = False
@@ -88,6 +89,24 @@ def test_bounded_process_is_killed_when_terminate_grace_expires(
     )
 
 
+def test_bounded_process_reports_the_exact_started_process_group(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    process = _TimeoutProcess(expirations=0)
+    _install_process(monkeypatch, process)
+    observed: list[int] = []
+
+    util.run(
+        ["neqo", "run"],
+        check=False,
+        timeout=7,
+        terminate_process_group=True,
+        process_started=observed.append,
+    )
+
+    assert observed == [process.pid]
+
+
 def test_prepare_client_adds_host_grace_and_reports_timeout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -128,9 +147,7 @@ def test_prepare_client_applies_the_measured_rr1_scheduler_contract(
         observed.update(command=command, options=options)
         return subprocess.CompletedProcess(command, 0, "")
 
-    monkeypatch.setenv(
-        "QCSD_CAPTURE_SCHEDULER_CONTRACT", "qcsd-client-rr1-cpu10-v1"
-    )
+    monkeypatch.setenv("QCSD_CAPTURE_SCHEDULER_CONTRACT", "qcsd-client-rr1-cpu10-v1")
     monkeypatch.setattr(process_scheduler.os, "sched_getaffinity", lambda _pid: {11})
     monkeypatch.setattr(
         process_scheduler.resource,
@@ -217,9 +234,7 @@ def test_collection_client_applies_rr1_only_after_gnu_time(
         observed.update(command=command, options=options)
         raise util.ProcessTimeoutError(timeout_result, 50, killed=False)
 
-    monkeypatch.setenv(
-        "QCSD_CAPTURE_SCHEDULER_CONTRACT", "qcsd-client-rr1-cpu10-v1"
-    )
+    monkeypatch.setenv("QCSD_CAPTURE_SCHEDULER_CONTRACT", "qcsd-client-rr1-cpu10-v1")
     monkeypatch.setattr(process_scheduler.os, "sched_getaffinity", lambda _pid: {11})
     monkeypatch.setattr(
         process_scheduler.resource,
@@ -271,9 +286,7 @@ def test_collection_client_scheduler_contract_fails_closed(
     rtprio: tuple[int, int],
     message: str,
 ) -> None:
-    monkeypatch.setenv(
-        "QCSD_CAPTURE_SCHEDULER_CONTRACT", "qcsd-client-rr1-cpu10-v1"
-    )
+    monkeypatch.setenv("QCSD_CAPTURE_SCHEDULER_CONTRACT", "qcsd-client-rr1-cpu10-v1")
     monkeypatch.setattr(process_scheduler.os, "sched_getaffinity", lambda _pid: affinity)
     monkeypatch.setattr(process_scheduler.resource, "getrlimit", lambda _limit: rtprio)
 

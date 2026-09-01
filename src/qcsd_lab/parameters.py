@@ -25,6 +25,8 @@ BUFLO_STUDY_CANDIDATE_STATUS = "candidate-validation-required"
 BUFLO_STUDY_ID = "buflo-csbuflo-qcsd-v1"
 CONTROLLED_REGRESSION_ARTIFACT_TYPE = "qcsd-controlled-regression-parameters"
 CONTROLLED_REGRESSION_INPUT_POLICY = "controlled-regression-test-only-v1"
+TIMING_STRESS_ARTIFACT_TYPE = "qcsd-buflo-timing-stress-parameters"
+TIMING_STRESS_INPUT_POLICY = "controlled-test-only-timing-stress-v1"
 PARAMETER_ARTIFACT_NAME = "defense-parameters.json"
 PARAMETER_PROVENANCE_ARTIFACT_NAME = "defense-parameters.provenance.json"
 
@@ -82,9 +84,7 @@ _BUFLO_TERMINAL_SEMANTICS_KEYS = {
     "expected_difference",
 }
 _PARAMETER_FILE_KEYS = {"path", "sha256"}
-SEALED_RESEARCH_PARAMETER_KINDS = frozenset(
-    {"traffic_morphing", "wtf_pad", "walkie_talkie"}
-)
+SEALED_RESEARCH_PARAMETER_KINDS = frozenset({"traffic_morphing", "wtf_pad", "walkie_talkie"})
 BUFLO_STUDY_PARAMETER_KINDS = frozenset({"buflo", "cs_buflo"})
 _PARAMETERIZED_KINDS = set(SEALED_RESEARCH_PARAMETER_KINDS)
 _BUFLO_STUDY_VALIDATION_REQUIREMENTS = (
@@ -214,6 +214,7 @@ def validate_parameter_artifact(
     expected_kind: str | None = None,
     allow_reviewed_fixture: bool = False,
     allow_study_candidate: bool = False,
+    allow_timing_stress: bool = False,
     expected_qcsd_profile: str | None = None,
     expected_udp_payload_ceiling: int | None = None,
     expected_workloads: Mapping[str, object] | Collection[str] | None = None,
@@ -237,6 +238,7 @@ def validate_parameter_artifact(
         expected_kind=expected_kind,
         allow_reviewed_fixture=allow_reviewed_fixture,
         allow_study_candidate=allow_study_candidate,
+        allow_timing_stress=allow_timing_stress,
         expected_qcsd_profile=expected_qcsd_profile,
         expected_udp_payload_ceiling=expected_udp_payload_ceiling,
         expected_workloads=expected_workloads,
@@ -290,6 +292,7 @@ def validate_frozen_parameter_artifact(
         expected_kind=expected_kind,
         allow_reviewed_fixture=allow_reviewed_fixture,
         allow_study_candidate=allow_study_candidate,
+        allow_timing_stress=False,
         expected_qcsd_profile=expected_qcsd_profile,
         expected_udp_payload_ceiling=expected_udp_payload_ceiling,
         expected_workloads=expected_workloads,
@@ -313,6 +316,7 @@ def _validate_parameter_artifact(
     expected_kind: str | None,
     allow_reviewed_fixture: bool,
     allow_study_candidate: bool,
+    allow_timing_stress: bool,
     expected_qcsd_profile: str | None,
     expected_udp_payload_ceiling: int | None,
     expected_workloads: Mapping[str, object] | Collection[str] | None,
@@ -345,6 +349,20 @@ def _validate_parameter_artifact(
 
     parameter = _mapping(load_json(parameter_path), "defense parameters")
     receipt = _mapping(load_json(receipt_path), "parameter provenance")
+    if receipt.get("artifact_type") == TIMING_STRESS_ARTIFACT_TYPE:
+        return _validate_timing_stress_parameter_artifact(
+            parameter,
+            receipt,
+            parameter_path=parameter_path,
+            receipt_path=receipt_path,
+            receipt_parameter_name=receipt_parameter_name,
+            require_checked_in_fixture=require_checked_in_fixture,
+            allow_timing_stress=allow_timing_stress,
+            expected_kind=expected_kind,
+            expected_qcsd_profile=expected_qcsd_profile,
+            expected_udp_payload_ceiling=expected_udp_payload_ceiling,
+            expected_workloads=expected_workloads,
+        )
     if receipt.get("artifact_type") == "qcsd-class-study-research-defense-bundle":
         from .class_fitting import (
             BUNDLE_FILES as CLASS_BUNDLE_FILES,
@@ -357,9 +375,9 @@ def _validate_parameter_artifact(
         if qualification_inputs_root is None and qualification_context is None:
             raise ValueError("class-study parameters require qualification evidence")
         expected_parameter_name = receipt_parameter_name or parameter_path.name
-        inferred = {
-            filename: kind for kind, filename in CLASS_BUNDLE_FILES.items()
-        }.get(expected_parameter_name)
+        inferred = {filename: kind for kind, filename in CLASS_BUNDLE_FILES.items()}.get(
+            expected_parameter_name
+        )
         kind = expected_kind or inferred
         if kind not in SEALED_RESEARCH_PARAMETER_KINDS or inferred != kind:
             raise ValueError("class-study parameter defense kind cannot be inferred")
@@ -369,9 +387,7 @@ def _validate_parameter_artifact(
             raise ValueError("class-study parameter UDP ceiling does not match campaign")
         qualification = receipt.get("qualification_inputs")
         qualification_set = (
-            qualification.get("qualification_set")
-            if isinstance(qualification, Mapping)
-            else None
+            qualification.get("qualification_set") if isinstance(qualification, Mapping) else None
         )
         if not isinstance(qualification_set, str) or not qualification_set:
             raise ValueError("class-study provenance has no qualification-set binding")
@@ -385,18 +401,13 @@ def _validate_parameter_artifact(
                     "class-study qualification root and explicit context are mutually exclusive"
                 )
             if not isinstance(qualification_context, QualificationContext):
-                raise TypeError(
-                    "class-study qualification context must be a QualificationContext"
-                )
+                raise TypeError("class-study qualification context must be a QualificationContext")
             context = qualification_context
             if (
                 expected_qualification_set is not None
-                and context.expected_qualification_set
-                != expected_qualification_set
+                and context.expected_qualification_set != expected_qualification_set
             ):
-                raise ValueError(
-                    "class-study qualification context has another named set"
-                )
+                raise ValueError("class-study qualification context has another named set")
         elif frozen_qualification_inputs:
             root = Path(qualification_inputs_root).resolve()
             context = QualificationContext(
@@ -609,8 +620,10 @@ def _validate_buflo_study_parameter_artifact(
     )
     _require_exact_keys(receipt, expected_receipt_keys, "BuFLO study provenance")
     if type(receipt_schema) is not int or not (
-        receipt_kind == "cs_buflo" and receipt_schema in {1, 2}
-        or receipt_kind == "buflo" and receipt_schema == PROVENANCE_SCHEMA_VERSION
+        receipt_kind == "cs_buflo"
+        and receipt_schema in {1, 2}
+        or receipt_kind == "buflo"
+        and receipt_schema == PROVENANCE_SCHEMA_VERSION
     ):
         raise ValueError(f"unsupported BuFLO study provenance schema: {receipt_path}")
     if (
@@ -653,10 +666,7 @@ def _validate_buflo_study_parameter_artifact(
         raise ValueError(f"BuFLO study defense kind does not match campaign: {receipt_path}")
     profile = receipt.get("qcsd_profile")
     ceiling = receipt.get("udp_payload_ceiling")
-    if (
-        profile != "research-1200"
-        or ceiling != UDP_PAYLOAD_CEILING_BY_PROFILE["research-1200"]
-    ):
+    if profile != "research-1200" or ceiling != UDP_PAYLOAD_CEILING_BY_PROFILE["research-1200"]:
         raise ValueError(f"BuFLO study parameters require research-1200: {receipt_path}")
     if expected_qcsd_profile not in {None, profile}:
         raise ValueError(f"BuFLO study QCSD profile does not match campaign: {receipt_path}")
@@ -682,8 +692,7 @@ def _validate_buflo_study_parameter_artifact(
                 "inclusive-tau-drain-whole-reviewed-chaff-cells-then-client-local-"
                 "http3-cancel-unallocatable-subcell-tail"
             )
-            or receipt.get("terminal_subcell_policy")
-            != BUFLO_TERMINAL_SUBCELL_POLICY
+            or receipt.get("terminal_subcell_policy") != BUFLO_TERMINAL_SUBCELL_POLICY
             or receipt.get("terminal_subcell_observer_effect")
             != BUFLO_TERMINAL_SUBCELL_OBSERVER_EFFECT
             or receipt.get("terminal_parser_safety")
@@ -697,9 +706,7 @@ def _validate_buflo_study_parameter_artifact(
             or receipt.get("expected_difference")
             != "typed-http3-defense-control-may-follow-the-last-exact-buflo-cell"
         ):
-            raise ValueError(
-                f"BuFLO terminal-subcell translation is not explicit: {receipt_path}"
-            )
+            raise ValueError(f"BuFLO terminal-subcell translation is not explicit: {receipt_path}")
         expected_variant = "QCSD-BuFLO-udp1200-rho20-tau10"
         expected_semantics = (
             "qcsd-udp1200-adaptation-with-120-second-event-guard-and-versioned-"
@@ -761,8 +768,7 @@ def _validate_buflo_study_parameter_artifact(
                 "stored-but-has-zero-active-consumers;paper-algorithm-4-power-"
                 "crossing-is-not-an-active-source-stop-predicate"
             )
-            or type(receipt.get("pinned_author_padding_done_active_consumers"))
-            is not int
+            or type(receipt.get("pinned_author_padding_done_active_consumers")) is not int
             or receipt.get("pinned_author_padding_done_active_consumers") != 0
             or receipt.get("paper_source_early_termination_discrepancy")
             != (
@@ -793,9 +799,7 @@ def _validate_buflo_study_parameter_artifact(
             raise ValueError(
                 f"CS-BuFLO source/live translation divergence is not explicit: {receipt_path}"
             )
-        expected_variant = (
-            "CTSP" if parameter["outgoing_padding_mode"] == "total" else "CPSP"
-        )
+        expected_variant = "CTSP" if parameter["outgoing_padding_mode"] == "total" else "CPSP"
         expected_semantics = "paper-source-values-mapped-to-quic-udp-payload"
     if (
         receipt.get("paper_variant") != expected_variant
@@ -809,6 +813,128 @@ def _validate_buflo_study_parameter_artifact(
         provenance_path=receipt_path,
         provenance_sha256=sha256_file(receipt_path),
         input_policy=BUFLO_STUDY_PARAMETER_INPUT_POLICY,
+    )
+
+
+def _validate_timing_stress_parameter_artifact(
+    parameter: Mapping[str, Any],
+    receipt: Mapping[str, Any],
+    *,
+    parameter_path: Path,
+    receipt_path: Path,
+    receipt_parameter_name: str | None,
+    require_checked_in_fixture: bool,
+    allow_timing_stress: bool,
+    expected_kind: str | None,
+    expected_qcsd_profile: str | None,
+    expected_udp_payload_ceiling: int | None,
+    expected_workloads: Mapping[str, object] | Collection[str] | None,
+) -> ParameterArtifact:
+    """Admit only the frozen, excluded 100-second BuFLO stress derivative."""
+
+    expected_parameter_path = (
+        LAB_ROOT / "config/buflo-study/v1/buflo-timing-stress-v1.json"
+    ).resolve()
+    expected_receipt_path = expected_parameter_path.with_suffix(
+        expected_parameter_path.suffix + ".provenance.json"
+    )
+    if not allow_timing_stress:
+        raise ValueError(
+            "BuFLO timing-stress parameters require an explicit timing-stress admission"
+        )
+    if (
+        not require_checked_in_fixture
+        or receipt_parameter_name is not None
+        or parameter_path != expected_parameter_path
+        or receipt_path != expected_receipt_path
+        or expected_workloads is not None
+    ):
+        raise ValueError(
+            "BuFLO timing-stress parameters are valid only at their checked-in "
+            "excluded-campaign identity"
+        )
+
+    receipt_keys = {
+        "schema_version",
+        "artifact_type",
+        "status",
+        "production_ready",
+        "evidence_class",
+        "study_id",
+        "defense_kind",
+        "qcsd_profile",
+        "udp_payload_ceiling",
+        "implementation_scope",
+        "paper_equivalent",
+        "canonical_parameter",
+        "parameter_file",
+        "derivation",
+        "capture_contract",
+    }
+    _require_exact_keys(receipt, receipt_keys, "BuFLO timing-stress provenance")
+    if (
+        receipt.get("schema_version") != PROVENANCE_SCHEMA_VERSION
+        or receipt.get("artifact_type") != TIMING_STRESS_ARTIFACT_TYPE
+        or receipt.get("status") != "controlled-test-only"
+        or receipt.get("production_ready") is not False
+        or receipt.get("evidence_class") != "timing-stress-nonformal-excluded"
+        or receipt.get("study_id") != BUFLO_STUDY_ID
+        or receipt.get("defense_kind") != "buflo"
+        or receipt.get("qcsd_profile") != "research-1200"
+        or receipt.get("udp_payload_ceiling") != 1_200
+        or receipt.get("implementation_scope") != "client_only_quic"
+        or receipt.get("paper_equivalent") is not False
+        or expected_kind not in {None, "buflo"}
+        or expected_qcsd_profile not in {None, "research-1200"}
+        or expected_udp_payload_ceiling not in {None, 1_200}
+    ):
+        raise ValueError(f"BuFLO timing-stress provenance is invalid: {receipt_path}")
+
+    canonical_path = (LAB_ROOT / "config/defense-params/buflo-live.json").resolve()
+    canonical = _mapping(load_json(canonical_path), "canonical BuFLO parameters")
+    expected_parameter = dict(canonical)
+    expected_parameter["minimum_duration_us"] = 100_000_000
+    if parameter != expected_parameter:
+        raise ValueError("BuFLO timing-stress parameters may change only minimum_duration_us")
+    parameter_sha256 = sha256_file(parameter_path)
+    if receipt.get("canonical_parameter") != {
+        "path": "../../defense-params/buflo-live.json",
+        "sha256": sha256_file(canonical_path),
+    } or receipt.get("parameter_file") != {
+        "path": expected_parameter_path.name,
+        "sha256": parameter_sha256,
+    }:
+        raise ValueError("BuFLO timing-stress parameter file binding is invalid")
+    if receipt.get("derivation") != {
+        "policy": (
+            "canonical-live-buflo-with-only-minimum-duration-extended-for-"
+            "excluded-captured-timing-stress"
+        ),
+        "changed_field": "minimum_duration_us",
+        "canonical_value": 10_000_000,
+        "stress_value": 100_000_000,
+    }:
+        raise ValueError("BuFLO timing-stress derivation is invalid")
+    if receipt.get("capture_contract") != {
+        "visits": 12,
+        "max_attempts": 1,
+        "authoritative_checkpoint": "experiment.json",
+        "outgoing_opportunities_per_visit": 5_001,
+        "incoming_opportunities_per_visit": 5_001,
+        "guarded_outgoing_releases_per_visit": 5_000,
+        "full_outgoing_cells_per_visit": 5_001,
+        "incoming_bytes_per_visit": 6_001_200,
+        "strict_half_open_window_us": 5_000,
+        "catch_up": False,
+    }:
+        raise ValueError("BuFLO timing-stress capture contract is invalid")
+    _validate_buflo(parameter, 1_200, receipt_path)
+    return ParameterArtifact(
+        path=parameter_path,
+        sha256=parameter_sha256,
+        provenance_path=receipt_path,
+        provenance_sha256=sha256_file(receipt_path),
+        input_policy=TIMING_STRESS_INPUT_POLICY,
     )
 
 
@@ -1030,9 +1156,7 @@ def _validate_buflo(parameter: Mapping[str, Any], ceiling: int, receipt_path: Pa
         raise ValueError(f"buflo parameter runtime shape is invalid: {receipt_path}")
 
 
-def _validate_cs_buflo(
-    parameter: Mapping[str, Any], ceiling: int, receipt_path: Path
-) -> None:
+def _validate_cs_buflo(parameter: Mapping[str, Any], ceiling: int, receipt_path: Path) -> None:
     fields = {
         "schema_version",
         "packet_size",

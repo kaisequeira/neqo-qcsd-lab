@@ -24,6 +24,7 @@ from qcsd_lab.verification import (
     seal_result,
     verify_result,
 )
+from tests.scheduler_fixtures import install_scheduler_runtime_receipt
 
 
 def _make_result(tmp_path: Path, *, complete: bool = False) -> tuple[Path, dict]:
@@ -84,6 +85,15 @@ def _make_result(tmp_path: Path, *, complete: bool = False) -> tuple[Path, dict]
 def _make_durable_result(tmp_path: Path) -> tuple[Path, dict]:
     root, experiment = _make_result(tmp_path, complete=True)
     experiment["name"] = "buflo-study-v1-attempt-evidence-test"
+    [sample] = experiment["samples"]
+    run_path = root / sample["path"] / "neqo/run.json"
+    run: dict = {}
+    diagnostics: dict = {}
+    install_scheduler_runtime_receipt(run, diagnostics)
+    atomic_json(run_path, run)
+    sample["diagnostics"] = diagnostics
+    relative = run_path.relative_to(root).as_posix()
+    sample["artifacts"][relative] = sha256_file(run_path)
     atomic_json(root / "experiment.json", experiment)
     return root, experiment
 
@@ -119,6 +129,38 @@ def test_seal_is_deterministic_and_excludes_rebuildable_derived_files(tmp_path):
     assert (root / "evidence.sha256").read_bytes() == first
 
 
+def test_verify_rejects_coherently_resealed_scheduler_runtime_tampering(
+    tmp_path: Path,
+) -> None:
+    root, experiment = _make_result(tmp_path, complete=True)
+    [sample] = experiment["samples"]
+    run_path = root / sample["path"] / "neqo/run.json"
+    run = {}
+    diagnostics: dict = {}
+    install_scheduler_runtime_receipt(run, diagnostics)
+    atomic_json(run_path, run)
+    sample["diagnostics"] = diagnostics
+    relative = run_path.relative_to(root).as_posix()
+    sample["artifacts"][relative] = sha256_file(run_path)
+    atomic_json(root / "experiment.json", experiment)
+    seal_result(root)
+    verify_result(root)
+
+    receipt = sample["diagnostics"]["scheduler_runtime_receipt"]
+    receipt["scheduler_runtime_evidence"]["proc_stat_steal"]["steal_ticks_delta"] = 1
+    atomic_json(root / "experiment.json", experiment)
+    checksums = {
+        relative: sha256_file(path) for relative, path in authoritative_files(root).items()
+    }
+    atomic_text(
+        root / "evidence.sha256",
+        "".join(f"{checksums[path]}  {path}\n" for path in sorted(checksums)),
+    )
+
+    with pytest.raises(ValueError, match="scheduler runtime receipt is invalid"):
+        verify_result(root)
+
+
 def test_seal_and_verify_enforce_durable_physical_attempt_evidence(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -140,8 +182,7 @@ def test_seal_and_verify_enforce_durable_physical_attempt_evidence(
     verify_experiment["samples"][0]["attempts"] = 2
     atomic_json(verify_root / "experiment.json", verify_experiment)
     checksums = {
-        relative: sha256_file(path)
-        for relative, path in authoritative_files(verify_root).items()
+        relative: sha256_file(path) for relative, path in authoritative_files(verify_root).items()
     }
     atomic_text(
         verify_root / "evidence.sha256",
@@ -156,7 +197,8 @@ def test_seal_and_verify_enforce_durable_physical_attempt_evidence(
     ["StrictDefenseFidelityFailure", "StrictClientDefenseExecutionFailure"],
 )
 def test_durable_attempt_evidence_requires_exact_contiguous_terminal_receipts(
-    tmp_path: Path, terminal_type: str,
+    tmp_path: Path,
+    terminal_type: str,
 ) -> None:
     root = tmp_path / "durable"
     (root / "failures").mkdir(parents=True)

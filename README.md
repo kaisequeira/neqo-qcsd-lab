@@ -51,20 +51,25 @@ defence-control traffic is explicitly receipted and is an expected QCSD-only
 difference from the bilateral TCP study; it is never described as
 paper-equivalent or as a server padding-complete signal.
 
-Current-source BuFLO runs use summary schema 4 and runner-wakeup schema 6.
+Current-source BuFLO runs use summary schema 4 and runner-wakeup schema 7.
 Summary schema 4 binds the typed schedule-stop policy, stop timestamp,
 sub-cell capacity, direction counts at stop, and exact post-stop advertised
 credit drain; historical summary schemas 2 and 3 remain readable but cannot
-admit a fresh candidate capture. Historical runner-wakeup schemas 1–5 remain
-readable but cannot admit a fresh candidate capture. Schema 6 retains schema
-5's complete metric inventory, including BuFLO exact-incoming retry drives,
+admit a fresh candidate capture. Historical runner-wakeup schemas 1–6 remain
+readable for their pinned source cohorts but cannot admit a fresh candidate
+capture; an apparent current-source downgrade is rejected. Schema 7 retains
+schema 6's complete metric inventory, including BuFLO exact-incoming retry drives,
 resolutions, maximum wake lateness, and callback, quarter-phase, and terminal-
 deadline wake-up semantics. Their retained semantics suffix is exactly
 `buflo_exact_incoming_retry_wakeups=transport_callback_or_1/4,1/2,3/4,deadline; buflo_exact_incoming_retry_drives=count_owner_endpoint_output_drive_invocations_including_immediate_and_error; buflo_exact_incoming_retry_resolutions=count_drive_invocations_clearing_at_least_one_captured_identity; buflo_exact_incoming_retry_max_wake_lateness_includes_terminal_deadline=true; buflo_exact_incoming_inventory=all_unrealized_slot_owned_adapter_identities_with_same_tick_refresh; buflo_exact_incoming_expiry=one_logical_slot_one_deadline_miss`.
 Consequently, maximum wake lateness may be nonzero even when there were no
 owner-endpoint drive invocations: the terminal deadline is itself measured.
-Schema 6 additionally binds a 10,000-microsecond ordinary-output admission
-lead, guard lead, and active-wait tail, with admission and guard coincident.
+Schema 7 additionally distinguishes nominal controller timestamps from the
+adapter's ceil-normalised not-before instant and floor-normalised deadline,
+binds aligned 5 ms and fractional 4.999 ms strict windows, and records the
+worst guard's relative entry, release, exit, and deadline instants. It retains
+the 10,000-microsecond ordinary-output admission lead, guard lead, and active-
+wait tail, with admission and guard coincident.
 The measured client therefore remains actively runnable for the final 10 ms
 before every exact 20 ms release. The exact release and strict half-open
 `[target, target + 5 ms)` physical realisation interval are unchanged. After the outgoing
@@ -108,50 +113,45 @@ natural byte invalidates provisional stop evidence in the implementation, with
 the cumulative invalidation count retained in the final receipt.  This drain
 is not the paper's server padding-done signal.
 
-The newest immutable executed checkpoint is cohort v34. It binds clean Lab
-`31156fba761226fdb88b40742d1240fae25afb11`, Neqo/gitlink
-`1c220cdbb49a1837657b6a0c454b8114d3454521`, and collection image
-`sha256:a1307693373eefb605834c3ecb32380b068db3d69f25f0643e2528d9f38ba63e`.
-Its clean pull/no-cache schema-2 build, isolated reference execution, and
-established-seven regression at 14/14 passed. The first `simple` BuFLO attempt
-then failed paired slots 580/581 at its 5.8-second target: passive guard entry
-was 13.148603 ms late and dispatch began 8.149603 ms after release, already
-3.149603 ms beyond the strict deadline. The process nevertheless satisfied its
-`SCHED_RR` priority, CPU-affinity and cgroup contract and recorded zero
-involuntary context switches; packet prearming, congestion, loss, and receive-
-credit capacity were not the cause. CS-BuFLO regression, the code gate,
-controlled qualification, and every class-study stage did not run. V34 is
-therefore immutable **failed, non-attesting evidence** and cannot authorise
-later source.
+The newest immutable executed checkpoint is cohort v36. It binds clean Lab
+`b87bf2705e4eb76869d05d4be86a54c3be9da79e`, Neqo/gitlink
+`fb699636c191e91848ffcce859c43bb4d69f7d94`, and collection image
+`sha256:bfb6b8dd6581225c3ba748f9e6b1537bc5f0b7c8be8dfb3a74f8969134a0b5d4`.
+Its clean pull/no-cache schema-2 build and isolated reference execution passed,
+and its final ledgers show 18/18 regression cells plus 9/9 multi-origin modes
+accepted. Those headline counts are **not a valid first-launch gate**. The
+local-large BuFLO cell required three launches after two direct/runner clock
+reconciliation errors of 10.098264 ms and 10.444794 ms exceeded the 10 ms
+tolerance. The multi-origin BuFLO cell required a second launch after one
+actual hard fidelity failure: one outgoing and one incoming cell missed, 1,200
+scheduled incoming bytes retired, and maximum guard-exit lateness reached
+6.032033 ms. The retry-capable v36 workflow concealed those rejected launches
+inside an eventually complete ledger. V36 is therefore immutable diagnostic,
+non-attesting evidence; it did not authorise the code gate, controlled
+qualification, or any class-study numerator.
 
-The clean current source, with Rust/gitlink
-`fb699636c191e91848ffcce859c43bb4d69f7d94`, keeps the 20 ms cadence,
-exact target release, target-plus-5-ms deadline, and no-catch-up rule. Ordinary-output admission
-remains at target minus 10 ms, while guard entry and active waiting move from
-target minus 5 ms to that existing target-minus-10-ms boundary. It refreshes the
-complete set of unrealised slot-owned adapter identities, keeps each identity
-with its owning endpoint, and uses transport callbacks or strict quarter-,
-half-, and three-quarter-window fallbacks before one terminal deadline wake.
-Each owner drive is bounded to one datagram, a multi-endpoint fan-out still
-produces only one logical terminal outcome, and an exact slot cannot inherit
-already-advertised unowned parser capacity from before its window. These are
-client-side fidelity corrections; they do not relax the deadline or claim
-control of server packet timing or size. They are committed and locally tested:
-the full Lab suite passed 1,737 tests with four skips, and Rust formatting,
-test-target `cargo check`, and warning-fatal Clippy passed. Local Rust test-
-binary linking lacked the pinned NSS symbols supplied by the canonical Docker
-build.
+Current engineering source keeps the 20 ms cadence, exact target release,
+strict adapter-normalised deadline, and no-catch-up rule. It adds fail-closed
+capture scheduling and evidence rather than weakening fidelity: all running
+Docker containers are enumerated, study sidecars are confined to CPUs 0–9, the
+collection container to CPUs 10–11, and the measured client must run as
+`SCHED_RR` priority 1 on CPU 10. In-container monitoring rejects competing
+tasks eligible for CPU 10, cgroup throttling, guest-visible steal time, or a
+monitor failure. Physical host and hypervisor isolation remain unavailable
+and are not claimed.
 
-Cohort v35 then began at clean Lab `e8bfd6d5488743fd09474806ae7c8dc039c4f1a4`
-and Rust/gitlink `19bdf9eb03d950bba889410fe7026c4abe05c046`. Its backing-storage
-preflight passed, but the embedded Rust code gate stopped at 155/156
-`neqo-bin` tests because one receipt test still compared the emitted schema 6
-against a literal `5`. No v35 build receipt or image-IID artefact was emitted;
-Docker and both backing filesystems remained healthy. Rust `fb699636…`
-replaces that stale literal with `RUNNER_WAKEUP_METRICS_SCHEMA_VERSION`, and
-the exact failed test passes in the pinned-NSS diagnostic image. The correction
-remains non-evidentiary until fresh cohort v36 repeats the build and every
-downstream gate.
+Before the ordinary 18-cell regression can run, a mandatory excluded timing
+stress now captures twelve 100-second canonical-cadence BuFLO visits with
+exactly one launch per visit. It exercises 60,000 guarded outgoing releases
+and 120,024 directional opportunities, preserves every launch in the
+authoritative `experiment.json`, and cannot pass after a missing, rejected, or
+incomplete reserved attempt. The regression receipt is source-, image-,
+network-, parameter-, and cohort-bound to that stress evidence. Current-source
+captures require runner-wakeup schema 7 plus the complete scheduler receipt;
+the exact pinned v36 ledgers remain readable only as historical evidence. A
+fresh cohort v37 must repeat build, reference conformance, timing stress,
+regression, code, and controlled gates before expanded-class acquisition can
+begin.
 
 The current Lab boundary additionally classifies typed client defence/QCSD
 runner errors as `StrictClientDefenseExecutionFailure`. That type and
@@ -250,7 +250,7 @@ Docker state and redundant local caches were subsequently removed. Docker
 observations then passed with a minimum 523.92 GiB available. The Ubuntu WSL
 distribution-aware Docker proxy is required so bind mounts resolve against the
 actual checkout. This recovered state enabled v34 but does not transfer its
-source-bound evidence to prospective v36.
+source-bound evidence to v36 or the prospective fresh v37 source.
 
 The authoritative current heads, progression, and evidence ledger are
 maintained in

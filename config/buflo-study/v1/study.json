@@ -101,6 +101,31 @@
     ],
     "formal_evidence": false
   },
+  "timing_stress": {
+    "execution_stage": "mandatory-regression-prelude",
+    "evidence_class": "timing-stress-nonformal-excluded",
+    "workload": "complex-two-origin",
+    "treatment": "buflo",
+    "network_profile": "clean",
+    "visits": 12,
+    "max_attempts": 1,
+    "authoritative_checkpoint": "experiment.json",
+    "interval_us": 20000,
+    "minimum_duration_us": 100000000,
+    "packet_size": 1200,
+    "max_events_per_direction": 6000,
+    "strict_half_open_window_us": 5000,
+    "outgoing_opportunities_per_visit": 5001,
+    "incoming_opportunities_per_visit": 5001,
+    "guarded_outgoing_releases_per_visit": 5000,
+    "full_outgoing_cells_per_visit": 5001,
+    "incoming_bytes_per_visit": 6001200,
+    "expected_guarded_outgoing_releases": 60000,
+    "expected_outgoing_opportunities": 60012,
+    "expected_incoming_opportunities": 60012,
+    "expected_directional_events": 120024,
+    "formal_evidence": false
+  },
   "public_stages": {
     "smoke": {
       "blocks": 1,

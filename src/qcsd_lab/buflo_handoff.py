@@ -38,7 +38,10 @@ from .buflo_evaluation import (
 )
 from .capture import ObserverPacket, extract_trace
 from .defenses import defense_from_runtime_identity
-from .experiment import resolved_sample_directory
+from .experiment import (
+    resolved_sample_directory,
+    validate_accepted_scheduler_runtime_receipt,
+)
 from .fidelity import (
     ADVERTISEMENT_SCHEDULE_QCSD_FIELDS,
     BUFLO_SCHEDULE_STOP_POLICY,
@@ -1294,8 +1297,10 @@ def _validate_runner_extension(row: Mapping[str, str], *, label: str) -> None:
     ):
         raise ValueError(f"{label} has invalid controller terminal-time evidence")
     target = row.get("target_time_us", "")
-    if terminal_present and target and (
-        not target.isdecimal() or int(values[terminal_field]) < int(target)
+    if (
+        terminal_present
+        and target
+        and (not target.isdecimal() or int(values[terminal_field]) < int(target))
     ):
         raise ValueError(f"{label} terminal time predates its defense target")
     if consumption_present and (schema not in {"2", "3"} or not advertisement_complete):
@@ -1667,8 +1672,7 @@ def _validate_incoming_terminal_clock_bindings(
             )
             if (
                 terminal_us > consumption_bounds[1]
-                or consumption_bounds[1] - terminal_us
-                > _CONTROLLER_ACTION_REDUCTION_LIMIT_US
+                or consumption_bounds[1] - terminal_us > _CONTROLLER_ACTION_REDUCTION_LIMIT_US
             ):
                 raise ValueError(
                     f"study handoff {runtime_kind} incoming controller terminal "
@@ -1772,10 +1776,7 @@ def _validate_cs_buflo_outgoing_packet_evidence(
         if row["direction"] == "outgoing" and row["satisfaction"] in {"full", "partial"}
     ]
     packets = [
-        row
-        for row in packets_rows
-        if row["direction"] == "outgoing"
-        and row["scheduled_target"]
+        row for row in packets_rows if row["direction"] == "outgoing" and row["scheduled_target"]
     ]
     packets_by_slot: dict[int, list[Mapping[str, str]]] = {}
     for row in packets:
@@ -1877,10 +1878,7 @@ def _buflo_terminal_times(
 
     outgoing_schedule = [row for row in schedule_rows if row["direction"] == "outgoing"]
     outgoing_packets = [
-        row
-        for row in packets_rows
-        if row["direction"] == "outgoing"
-        and row["scheduled_target"]
+        row for row in packets_rows if row["direction"] == "outgoing" and row["scheduled_target"]
     ]
     packets_by_slot: dict[int, list[Mapping[str, str]]] = {}
     for row in outgoing_packets:
@@ -1930,8 +1928,7 @@ def _buflo_terminal_times(
             )
             != size
             or any(
-                not matches[0][field].isdecimal()
-                for field in (*_COMPOSITION_FIELDS, "lateness_us")
+                not matches[0][field].isdecimal() for field in (*_COMPOSITION_FIELDS, "lateness_us")
             )
         ):
             raise ValueError("study handoff BuFLO outgoing terminal packet binding is invalid")
@@ -2094,12 +2091,8 @@ def _algorithm_diagnostics(
         if row["direction"] not in {"outgoing", "incoming"}:
             raise ValueError(f"packets.csv row {index} has an invalid direction")
         if bool(row["scheduled_target"]) != bool(row["slot_id"]):
-            raise ValueError(
-                f"packets.csv row {index} has an incomplete scheduled packet identity"
-            )
-        if row["direction"] == "incoming" and (
-            row["scheduled_target"] or row["slot_id"]
-        ):
+            raise ValueError(f"packets.csv row {index} has an incomplete scheduled packet identity")
+        if row["direction"] == "incoming" and (row["scheduled_target"] or row["slot_id"]):
             raise ValueError(
                 f"packets.csv row {index} incorrectly claims a scheduled incoming datagram"
             )
@@ -2134,9 +2127,7 @@ def _algorithm_diagnostics(
         if connection:
             _csv_unsigned(connection, label="schedule connection")
         elif direction == "outgoing" and satisfaction != "missed":
-            raise ValueError(
-                f"schedule.csv row {index} realized outgoing event has no connection"
-            )
+            raise ValueError(f"schedule.csv row {index} realized outgoing event has no connection")
         if satisfaction not in {"satisfied", "missed", "full", "partial", "suppressed"}:
             raise ValueError(f"schedule.csv row {index} has an invalid satisfaction")
         if require_current_trace:
@@ -3128,6 +3119,12 @@ def _validate_source_results(receipts: Sequence[VerifiedResult], *, formal: bool
             for sample in samples
         ):
             raise ValueError("study handoff rejects ineligible samples")
+        for sample in samples:
+            validate_accepted_scheduler_runtime_receipt(
+                receipt.root,
+                experiment,
+                sample,
+            )
         if formal and any(
             type(sample.get("attempts")) is not int or not 1 <= sample["attempts"] <= 3
             for sample in samples

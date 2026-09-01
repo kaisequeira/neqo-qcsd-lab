@@ -18,7 +18,7 @@ import subprocess
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Mapping, Protocol
 
 from .capture import (
     OFFLOAD_DISABLED,
@@ -32,6 +32,7 @@ from .capture import (
     write_normalized_trace,
 )
 from .fidelity import (
+    _runner_wakeup_v7_valid,
     new_defense_terminal_receipts_valid,
     reconcile_direct_runner_artifacts,
     validate_primary_capture_clock_integrity,
@@ -45,8 +46,10 @@ from .parameters import (
 from .process_scheduler import (
     CAPTURE_CLIENT_CPU as _CAPTURE_CLIENT_CPU,
     CAPTURE_SCHEDULER_CONTRACT as _CAPTURE_SCHEDULER_CONTRACT,
+    CaptureSchedulerMonitor as _CaptureSchedulerMonitor,
     capture_scheduler_contract as _capture_scheduler_contract,
     capture_scheduler_launch_prefix as _capture_scheduler_launch_prefix,
+    capture_scheduler_runtime_evidence_valid as _capture_scheduler_runtime_evidence_valid,
 )
 from .util import (
     ProcessTimeoutError,
@@ -217,9 +220,7 @@ _PROCESS_SCHEDULER_KEYS = {
     "contract_valid",
 }
 _PROCESS_SCHEDULER_SOURCE = "linux-sched-and-procfs-v1"
-_PROCESS_SCHEDULER_AFFINITY_SCOPE = (
-    "qcsd_container_affinity_partition_not_physical_cpu_isolation"
-)
+_PROCESS_SCHEDULER_AFFINITY_SCOPE = "qcsd_container_affinity_partition_not_physical_cpu_isolation"
 _GNU_TIME_FORMAT = "\n".join(
     (
         "user_cpu_seconds=%U",
@@ -229,6 +230,17 @@ _GNU_TIME_FORMAT = "\n".join(
         "involuntary_context_switches=%c",
     )
 )
+_EMPTY_PATCH_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+_HISTORICAL_CANDIDATE_SOURCE_KEYS = {
+    "image_digest",
+    "lab_commit",
+    "lab_dirty",
+    "lab_patch_sha256",
+    "neqo_commit",
+    "neqo_dirty",
+    "neqo_patch_sha256",
+    "neqo_pinned_commit",
+}
 
 
 @dataclass(frozen=True)
@@ -441,9 +453,7 @@ def _public_study_network_condition(
         raise ValueError("public study qdisc observation is not JSON") from error
     if not isinstance(qdisc, list):
         raise ValueError("public study qdisc observation is not an array")
-    netem_present = any(
-        isinstance(row, dict) and row.get("kind") == "netem" for row in qdisc
-    )
+    netem_present = any(isinstance(row, dict) and row.get("kind") == "netem" for row in qdisc)
     receipt = {
         "schema_version": 1,
         "artifact_type": "qcsd-buflo-study-network-condition",
@@ -457,9 +467,7 @@ def _public_study_network_condition(
         "capture_offloads_verified": offload.get("verified") is True,
     }
     receipt["valid"] = bool(
-        observed.returncode == 0
-        and not netem_present
-        and receipt["capture_offloads_verified"]
+        observed.returncode == 0 and not netem_present and receipt["capture_offloads_verified"]
     )
     return receipt
 
@@ -575,6 +583,7 @@ def _collect_attempt(
             configured_timeout_seconds=context.limits.timeout_seconds,
         )
         client_resource_usage = getattr(client, "client_resource_usage", None)
+        scheduler_runtime_evidence = getattr(client, "scheduler_runtime_evidence", None)
         if neqo.is_dir():
             _copy_defense_parameter_artifacts(defense, neqo)
         if context.limits.settle_seconds:
@@ -610,6 +619,14 @@ def _collect_attempt(
     process_scheduler_valid = (
         _process_scheduler_valid(process_scheduler) if scheduler_required else None
     )
+    scheduler_runtime_evidence_valid = (
+        _capture_scheduler_runtime_evidence_valid(scheduler_runtime_evidence)
+        if scheduler_required
+        else None
+    )
+    scheduler_runtime_evidence_path = diagnostics / "scheduler-runtime-evidence.json"
+    if scheduler_runtime_evidence is not None:
+        atomic_json(scheduler_runtime_evidence_path, scheduler_runtime_evidence)
     if run_data:
         if not _client_resource_usage_valid(client_resource_usage):
             runner_output_error = (
@@ -802,6 +819,7 @@ def _collect_attempt(
         and _client_resource_usage_valid(client_resource_usage)
         and runner_complete
         and runner_binding_valid
+        and (not scheduler_required or scheduler_runtime_evidence_valid is True)
         and endpoint_count_valid
         and valid
     )
@@ -811,9 +829,7 @@ def _collect_attempt(
         runner_timed_out=runner_timed_out,
         runner_log=diagnostics / "neqo-client.log",
     )
-    terminal_client_defense_failure = bool(
-        not success and terminal_client_defense_failure
-    )
+    terminal_client_defense_failure = bool(not success and terminal_client_defense_failure)
     failure_stage = (
         "fidelity"
         if terminal_client_defense_failure
@@ -821,14 +837,16 @@ def _collect_attempt(
             "runner-timeout"
             if runner_timed_out
             else (
-                "runner-binding"
-                if not runner_binding_valid
+                "scheduler"
+                if scheduler_required and scheduler_runtime_evidence_valid is not True
                 else (
-                    "capture"
-                    if client.returncode == 0
-                    and runner_complete
-                    and endpoint_count_valid
-                    else "runner"
+                    "runner-binding"
+                    if not runner_binding_valid
+                    else (
+                        "capture"
+                        if client.returncode == 0 and runner_complete and endpoint_count_valid
+                        else "runner"
+                    )
                 )
             )
         )
@@ -846,12 +864,22 @@ def _collect_attempt(
         "client_resource_usage": client_resource_usage,
         "runner_complete": runner_complete,
         "runner_binding_valid": runner_binding_valid,
-        "process_scheduler_receipt_path": (
-            "neqo/run.json" if run_json.is_file() else None
-        ),
+        "process_scheduler_receipt_path": ("neqo/run.json" if run_json.is_file() else None),
         "process_scheduler": process_scheduler,
         "process_scheduler_required": scheduler_required,
         "process_scheduler_valid": process_scheduler_valid,
+        "scheduler_runtime_evidence_path": (
+            "diagnostics/scheduler-runtime-evidence.json"
+            if scheduler_runtime_evidence_path.is_file()
+            else None
+        ),
+        "scheduler_runtime_evidence_sha256": (
+            sha256_file(scheduler_runtime_evidence_path)
+            if scheduler_runtime_evidence_path.is_file()
+            else None
+        ),
+        "scheduler_runtime_evidence": scheduler_runtime_evidence,
+        "scheduler_runtime_evidence_valid": scheduler_runtime_evidence_valid,
         "endpoint_count": len(endpoints),
         "expected_endpoint_count": expected_endpoint_count,
         "endpoint_count_valid": endpoint_count_valid,
@@ -886,6 +914,7 @@ def _collect_attempt(
                         "runner_error_class": runner_error_class,
                         "runner_process_failure": runner_process_failure,
                         "client_resource_usage": client_resource_usage,
+                        "scheduler_runtime_evidence_valid": (scheduler_runtime_evidence_valid),
                         "runner_binding_error": (
                             None if runner_binding_valid else runner_binding_error
                         ),
@@ -920,6 +949,9 @@ def _run_neqo_client(
     host_timeout = neqo_host_timeout(configured_timeout_seconds)
     resource_log = log.with_name(f"{log.stem}-resource-usage.txt")
     scheduler_prefix = _capture_scheduler_launch_prefix()
+    scheduler_monitor = (
+        _CaptureSchedulerMonitor() if _capture_scheduler_contract() is not None else None
+    )
     wrapped_command = [
         "/usr/bin/time",
         "--quiet",
@@ -932,17 +964,31 @@ def _run_neqo_client(
         *command,
     ]
     started = time.monotonic()
+    timed_out = False
+    run_options: dict[str, Any] = {
+        "log": log,
+        "check": False,
+        "timeout": host_timeout,
+        "terminate_process_group": True,
+    }
+    if scheduler_monitor is not None:
+        run_options["process_started"] = scheduler_monitor.process_started
     try:
-        result = run(
-            wrapped_command,
-            log=log,
-            check=False,
-            timeout=host_timeout,
-            terminate_process_group=True,
-        )
+        result = run(wrapped_command, **run_options)
     except ProcessTimeoutError as error:
-        setattr(error.result, "client_resource_usage", None)
-        return error.result, True, host_timeout
+        result = error.result
+        timed_out = True
+    except Exception:
+        if scheduler_monitor is not None:
+            scheduler_monitor.finish()
+        raise
+    scheduler_runtime_evidence = (
+        scheduler_monitor.finish() if scheduler_monitor is not None else None
+    )
+    setattr(result, "scheduler_runtime_evidence", scheduler_runtime_evidence)
+    if timed_out:
+        setattr(result, "client_resource_usage", None)
+        return result, True, host_timeout
     usage = _parse_client_resource_usage(resource_log, time.monotonic() - started)
     setattr(result, "client_resource_usage", usage)
     return result, False, host_timeout
@@ -970,11 +1016,7 @@ def _terminal_client_execution_failure(
         except OSError:
             lines = []
         marker = next(
-            (
-                line
-                for line in lines
-                if line.startswith("thread '") and "' panicked at " in line
-            ),
+            (line for line in lines if line.startswith("thread '") and "' panicked at " in line),
             None,
         )
         if marker is not None:
@@ -987,8 +1029,7 @@ def _terminal_client_execution_failure(
                 "log_sha256": sha256_file(runner_log),
             }
     return (
-        _is_terminal_client_defense_error_class(runner_error_class)
-        or process_failure is not None,
+        _is_terminal_client_defense_error_class(runner_error_class) or process_failure is not None,
         process_failure,
     )
 
@@ -1085,9 +1126,7 @@ def _client_resource_usage_valid(value: Any) -> bool:
         "involuntary_context_switches",
     )
     if any(
-        isinstance(value[key], bool)
-        or not isinstance(value[key], (int, float))
-        or value[key] < 0
+        isinstance(value[key], bool) or not isinstance(value[key], (int, float)) or value[key] < 0
         for key in numeric
     ):
         return False
@@ -1116,6 +1155,8 @@ def _runner_wakeup_metrics_valid(value: Any) -> bool:
     schema_version = value.get("schema_version")
     if type(schema_version) is not int:
         return False
+    if schema_version == 7:
+        return _runner_wakeup_v7_valid(value)
     if schema_version == 1:
         required = _RUNNER_WAKEUP_METRICS_V1_KEYS
         semantics = _RUNNER_WAKEUP_METRICS_V1_SEMANTICS
@@ -1151,18 +1192,12 @@ def _runner_wakeup_metrics_valid(value: Any) -> bool:
             value["buflo_exact_release_max_passive_wake_lateness_nanoseconds"],
             value["buflo_exact_release_max_guard_exit_lateness_nanoseconds"],
         )
-        if (
-            value["buflo_exact_release_active_wait_nanoseconds"]
-            > value["buflo_exact_release_guard_wait_nanoseconds"]
-            or (
-                value["buflo_exact_release_guard_entries"] == 0
-                and any(guard_measurements)
-            )
-        ):
+        if value["buflo_exact_release_active_wait_nanoseconds"] > value[
+            "buflo_exact_release_guard_wait_nanoseconds"
+        ] or (value["buflo_exact_release_guard_entries"] == 0 and any(guard_measurements)):
             return False
     if schema_version in {4, 5, 6} and (
-        value["cs_exact_incoming_retry_resolutions"]
-        > value["cs_exact_incoming_retry_drives"]
+        value["cs_exact_incoming_retry_resolutions"] > value["cs_exact_incoming_retry_drives"]
         or (
             value["cs_exact_incoming_retry_drives"] == 0
             and value["cs_exact_incoming_retry_max_phase_lateness_nanoseconds"] != 0
@@ -1176,8 +1211,7 @@ def _runner_wakeup_metrics_valid(value: Any) -> bool:
     ):
         return False
     return (
-        value["wait_returns"]
-        == value["socket_readiness_wakeups"] + value["timer_wakeups"]
+        value["wait_returns"] == value["socket_readiness_wakeups"] + value["timer_wakeups"]
         and value["timer_wakeups"]
         == value["controller_deadline_timer_wakeups"] + value["other_timer_wakeups"]
     )
@@ -1217,16 +1251,25 @@ def _validate_run_binding(
     defense: Defense,
     seed: int,
     context: CaptureContext,
+    historical_candidate_source: Mapping[str, Any] | None = None,
 ) -> None:
     """Bind the runner receipt to every immutable launch input."""
+
+    historical_candidate = historical_candidate_source is not None
+    if historical_candidate and (
+        _capture_scheduler_contract() is not None
+        or not _historical_candidate_source_valid(historical_candidate_source)
+    ):
+        raise ValueError(
+            "historical candidate schema is restricted to read-only clean-source revalidation"
+        )
 
     resolved = run_data.get("resolved_configuration")
     resolved_defense = resolved.get("defense") if isinstance(resolved, dict) else None
     resource_usage = run_data.get("client_resource_usage")
     wakeup_metrics = run_data.get("runner_wakeup_metrics")
     completed_new_buflo = (
-        defense.kind in {"buflo", "cs_buflo"}
-        and run_data.get("completion_status") == "complete"
+        defense.kind in {"buflo", "cs_buflo"} and run_data.get("completion_status") == "complete"
     )
     scheduler_required = _capture_scheduler_contract() is not None
     process_scheduler = run_data.get("process_scheduler")
@@ -1239,12 +1282,18 @@ def _validate_run_binding(
         or not _client_resource_usage_valid(resource_usage)
         or (
             completed_new_buflo
+            and historical_candidate
+            and (
+                not isinstance(wakeup_metrics, Mapping)
+                or wakeup_metrics.get("schema_version") not in {1, 2, 3, 4, 5, 6}
+            )
+        )
+        or (
+            completed_new_buflo
             and (
                 not _runner_wakeup_metrics_valid(wakeup_metrics)
-                or resource_usage.get("source")
-                != "gnu-time-python-monotonic-and-runner-select-v1"
-                or resource_usage.get("timer_wakeups")
-                != wakeup_metrics.get("timer_wakeups")
+                or resource_usage.get("source") != "gnu-time-python-monotonic-and-runner-select-v1"
+                or resource_usage.get("timer_wakeups") != wakeup_metrics.get("timer_wakeups")
                 or resource_usage.get("timer_wakeups_unavailable_reason") is not None
             )
         )
@@ -1254,16 +1303,14 @@ def _validate_run_binding(
                 run_data,
                 defense.kind,
                 require_application_complete=True,
-                require_current_schema=True,
+                require_current_schema=not historical_candidate,
             )
         )
         or not isinstance(resolved, dict)
         or resolved.get("max_udp_payload_size") != context.udp_payload_ceiling
         or not isinstance(resolved_defense, dict)
         or resolved_defense.get("kind") != defense.kind
-        or (
-            scheduler_required and not _process_scheduler_valid(process_scheduler)
-        )
+        or (scheduler_required and not _process_scheduler_valid(process_scheduler))
     ):
         raise ValueError("runner receipt does not match the frozen sample inputs")
     expected_chaff_hash = (
@@ -1310,6 +1357,29 @@ def _validate_run_binding(
         )
     elif run_data.get("defense_parameters") is not None:
         raise ValueError("runner receipt contains unexpected defense parameters")
+
+
+def _historical_candidate_source_valid(value: Any) -> bool:
+    """Validate the frozen outer source receipt used for read-only old-schema checks."""
+
+    if not isinstance(value, Mapping) or set(value) != _HISTORICAL_CANDIDATE_SOURCE_KEYS:
+        return False
+    commit_fields = ("lab_commit", "neqo_commit", "neqo_pinned_commit")
+    patch_fields = ("lab_patch_sha256", "neqo_patch_sha256")
+    image_digest = value.get("image_digest")
+    return bool(
+        all(
+            isinstance(value.get(field), str)
+            and re.fullmatch(r"[0-9a-f]{40}", value[field]) is not None
+            for field in commit_fields
+        )
+        and value["neqo_commit"] == value["neqo_pinned_commit"]
+        and value.get("lab_dirty") is False
+        and value.get("neqo_dirty") is False
+        and all(value.get(field) == _EMPTY_PATCH_SHA256 for field in patch_fields)
+        and isinstance(image_digest, str)
+        and re.fullmatch(r"sha256:[0-9a-f]{64}", image_digest) is not None
+    )
 
 
 def _validate_chaff_response_receipts(
@@ -1457,10 +1527,8 @@ def _validate_chaff_response_receipts(
     buflo_cancellations = typed_cancellations["buflo_terminal_subcell_tail_cancelled"]
     cs_cancellations = typed_cancellations["local_early_termination_cancelled"]
     if (
-        buflo_cancellations
-        != diagnostics.get("buflo_terminal_subcell_stream_cancellations", 0)
-        or cs_cancellations
-        != diagnostics.get("cs_buflo_local_et_stream_cancellations", 0)
+        buflo_cancellations != diagnostics.get("buflo_terminal_subcell_stream_cancellations", 0)
+        or cs_cancellations != diagnostics.get("cs_buflo_local_et_stream_cancellations", 0)
         or (buflo_cancellations > 0 and defense_kind != "buflo")
         or (cs_cancellations > 0 and defense_kind != "cs_buflo")
     ):

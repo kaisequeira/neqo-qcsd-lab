@@ -29,6 +29,8 @@ from qcsd_lab.buflo_handoff import (
 from qcsd_lab.capture import ObserverPacket
 from qcsd_lab.fidelity import (
     CONSUMPTION_SCHEDULE_QCSD_FIELDS,
+    RUNNER_WAKEUP_V7_HISTOGRAM_UPPER_BOUNDS,
+    RUNNER_WAKEUP_V7_SEMANTICS,
     SCHEDULE_QCSD_FIELDS,
 )
 from qcsd_lab.orchestrator import Workload, _redirect_attestation
@@ -100,9 +102,9 @@ def _runner_wakeup_receipt(schema_version: int) -> dict[str, object]:
         "controller_deadline_timer_wakeups": 0,
         "other_timer_wakeups": 0,
     }
-    if schema_version in {2, 3, 4, 5, 6}:
+    if schema_version in {2, 3, 4, 5, 6, 7}:
         active_wait_tail_us = 250 if schema_version == 2 else 5000
-        if schema_version == 6:
+        if schema_version in {6, 7}:
             semantics = (
                 f"{semantics}; "
                 "buflo_ordinary_output_admission_lead_us=10000; "
@@ -178,7 +180,7 @@ def _runner_wakeup_receipt(schema_version: int) -> dict[str, object]:
                 "buflo_exact_release_max_guard_exit_lateness_nanoseconds": 0,
             }
         )
-    if schema_version in {4, 5, 6}:
+    if schema_version in {4, 5, 6, 7}:
         receipt.update(
             {
                 "cs_exact_incoming_retry_drives": 0,
@@ -186,12 +188,48 @@ def _runner_wakeup_receipt(schema_version: int) -> dict[str, object]:
                 "cs_exact_incoming_retry_max_phase_lateness_nanoseconds": 0,
             }
         )
-    if schema_version in {5, 6}:
+    if schema_version in {5, 6, 7}:
         receipt.update(
             {
                 "buflo_exact_incoming_retry_drives": 0,
                 "buflo_exact_incoming_retry_resolutions": 0,
                 "buflo_exact_incoming_retry_max_wake_lateness_nanoseconds": 0,
+            }
+        )
+    if schema_version == 7:
+        receipt.update(
+            {
+                "semantics": RUNNER_WAKEUP_V7_SEMANTICS,
+                "buflo_exact_release_max_guard_entry_lateness_nanoseconds": 0,
+                "buflo_exact_release_passive_sleep_calls": 0,
+                "buflo_exact_release_passive_sleep_requested_nanoseconds": 0,
+                "buflo_exact_release_passive_sleep_elapsed_nanoseconds": 0,
+                "buflo_exact_release_max_passive_sleep_overrun_nanoseconds": 0,
+                "buflo_exact_release_active_wait_iterations": 0,
+                "buflo_exact_release_active_spin_interruptions": 0,
+                "buflo_exact_release_active_spin_interruption_nanoseconds": 0,
+                "buflo_exact_release_max_active_spin_gap_nanoseconds": 0,
+                "buflo_exact_release_aux_clock_source": (
+                    "linux-clock-gettime-monotonic-raw-and-thread-cputime-id-v1"
+                ),
+                "buflo_exact_release_active_wait_aux_clock_guards": 0,
+                "buflo_exact_release_active_wait_aux_clock_unavailable_guards": 0,
+                "buflo_exact_release_active_wait_aux_clock_nonmonotonic_guards": 0,
+                "buflo_exact_release_active_wait_monotonic_raw_nanoseconds": 0,
+                "buflo_exact_release_active_wait_thread_cpu_nanoseconds": 0,
+                "buflo_exact_release_active_wait_estimated_off_cpu_nanoseconds": 0,
+                "buflo_exact_release_max_active_wait_estimated_off_cpu_nanoseconds": 0,
+                "buflo_exact_release_max_active_wait_monotonic_raw_divergence_nanoseconds": 0,
+                "buflo_exact_release_dispatch_at_or_after_deadline_guards": 0,
+                "buflo_exact_release_dispatch_lateness_histogram": {
+                    "upper_bounds_nanoseconds": RUNNER_WAKEUP_V7_HISTOGRAM_UPPER_BOUNDS,
+                    "counts": [0] * 8,
+                },
+                "buflo_exact_release_active_spin_gap_histogram": {
+                    "upper_bounds_nanoseconds": RUNNER_WAKEUP_V7_HISTOGRAM_UPPER_BOUNDS,
+                    "counts": [0] * 8,
+                },
+                "buflo_exact_release_worst_guard": None,
             }
         )
     return receipt
@@ -252,7 +290,7 @@ def _complete_buflo_run(
             "schema_version": 2,
             "defense": {"kind": "buflo"},
         },
-        "runner_wakeup_metrics": _runner_wakeup_receipt(6),
+        "runner_wakeup_metrics": _runner_wakeup_receipt(7),
         "defense_diagnostics": diagnostics,
         "chaff_responses": [
             {"outcome": "buflo_terminal_subcell_tail_cancelled"}
@@ -415,7 +453,7 @@ def _complete_cs_buflo_run() -> dict[str, object]:
             "schema_version": 2,
             "defense": {"kind": "cs_buflo"},
         },
-        "runner_wakeup_metrics": _runner_wakeup_receipt(6),
+        "runner_wakeup_metrics": _runner_wakeup_receipt(7),
         "defense_diagnostics": diagnostics,
         "buflo_summary": None,
         "cs_buflo_summary": summary,
@@ -1137,11 +1175,9 @@ def test_buflo_algorithm_diagnostics_bind_typed_tail_action_and_control_packet(
         events_path=events,
         packets_path=packets,
     )
-    assert run["runner_wakeup_metrics"]["schema_version"] == 6
+    assert run["runner_wakeup_metrics"]["schema_version"] == 7
     assert algorithm["schema_version"] == 4
-    assert evaluation_module._load_algorithm_diagnostics(
-        algorithm, defense="buflo"
-    ) == algorithm
+    assert evaluation_module._load_algorithm_diagnostics(algorithm, defense="buflo") == algorithm
     assert algorithm["buflo_state"]["schema_version"] == 3
     assert (
         algorithm["buflo_state"]["schedule_stop"]["directions"]["outgoing"][
@@ -1187,10 +1223,7 @@ def test_buflo_algorithm_diagnostics_bind_typed_tail_action_and_control_packet(
             [
                 {
                     **exact_packet,
-                    **{
-                        field: ""
-                        for field in (*handoff._COMPOSITION_FIELDS, "lateness_us")
-                    },
+                    **{field: "" for field in (*handoff._COMPOSITION_FIELDS, "lateness_us")},
                 },
                 control_packet,
             ],
@@ -1651,10 +1684,8 @@ def test_cs_buflo_schema_four_handoff_reconstructs_stop_drain_and_preserves_lega
         events_path=events,
         packets_path=packets,
     )
-    assert run["runner_wakeup_metrics"]["schema_version"] == 6
-    assert evaluation_module._load_algorithm_diagnostics(
-        current, defense="cs-buflo"
-    ) == current
+    assert run["runner_wakeup_metrics"]["schema_version"] == 7
+    assert evaluation_module._load_algorithm_diagnostics(current, defense="cs-buflo") == current
     reconstructed = _algorithm_diagnostics(
         run,
         defense="cs-buflo",
@@ -1889,16 +1920,17 @@ def test_cs_buflo_schema_four_handoff_reconstructs_stop_drain_and_preserves_lega
     buffered_consumption["credit_consumed_at_us"] = "5250"
     buffered_consumption["credit_consumption_delay_us"] = "5200"
     write_rows(schedule, schedule_fields, [outgoing, buffered_consumption])
-    assert _algorithm_diagnostics(
-        run,
-        defense="cs-buflo",
-        runtime_kind="cs_buflo",
-        schedule_path=schedule,
-        events_path=events,
-        packets_path=packets,
-    )["directions"]["incoming"]["receive_credit_consumption"]["delay_us"][
-        "maximum"
-    ] == 5200
+    assert (
+        _algorithm_diagnostics(
+            run,
+            defense="cs-buflo",
+            runtime_kind="cs_buflo",
+            schedule_path=schedule,
+            events_path=events,
+            packets_path=packets,
+        )["directions"]["incoming"]["receive_credit_consumption"]["delay_us"]["maximum"]
+        == 5200
+    )
 
     mismatched_consumption = dict(incoming)
     mismatched_consumption["credit_consumed_at_us"] = "10251"

@@ -2278,7 +2278,136 @@ if [[ "${1:-}" == "class-study" &&
           "${class_study_execute}" == "1" ) ) ]]; then
   verify_qualification_checkout "class-study ${class_study_action}"
 fi
+
+capture_scheduler_host_partition_b64() {
+  local docker_ncpu inspect_json
+  local -a study_container_ids=()
+  docker_ncpu="$(docker info --format '{{.NCPU}}')"
+  if [[ ! "${docker_ncpu}" =~ ^[0-9]+$ ]] || (( docker_ncpu <= 11 )); then
+    echo "capture scheduler requires at least 12 Docker CPUs" >&2
+    return 1
+  fi
+  mapfile -t study_container_ids < <(
+    docker ps --format '{{.ID}}'
+  )
+  if (( ${#study_container_ids[@]} )); then
+    inspect_json="$(docker container inspect "${study_container_ids[@]}")"
+  else
+    inspect_json='[]'
+  fi
+  printf '%s' "${inspect_json}" | /usr/bin/python3 -I -c '
+import base64
+import json
+import re
+import sys
+import time
+
+CLIENT_CPU = 10
+docker_ncpu = int(sys.argv[1])
+expected = sys.argv[2:]
+if len(expected) != len(set(expected)) or any(not item for item in expected):
+    raise SystemExit("capture scheduler expected-sidecar list is invalid")
+try:
+    inspected = json.load(sys.stdin)
+except json.JSONDecodeError as error:
+    raise SystemExit(f"Docker inspect output is invalid JSON: {error}")
+if not isinstance(inspected, list):
+    raise SystemExit("Docker inspect output is not a list")
+
+def cpus(value):
+    if value == "":
+        return list(range(docker_ncpu))
+    selected = set()
+    for component in value.split(","):
+        if re.fullmatch(r"[0-9]+(?:-[0-9]+)?", component) is None:
+            raise SystemExit(f"Docker cpuset is invalid: {value!r}")
+        bounds = [int(item) for item in component.split("-")]
+        start, end = (bounds[0], bounds[-1])
+        if end < start:
+            raise SystemExit(f"Docker cpuset is reversed: {value!r}")
+        selected.update(range(start, end + 1))
+    return sorted(selected)
+
+containers = []
+for item in inspected:
+    labels = item.get("Config", {}).get("Labels") or {}
+    if labels.get("org.qcsd.owner") != "qcsd-lab":
+        raise SystemExit(
+            "capture scheduler refuses a running Docker container without the "
+            "qcsd-lab owner label"
+        )
+    if item.get("State", {}).get("Running") is not True:
+        raise SystemExit("Docker inspect selection contains a stopped container")
+    name = str(item.get("Name", "")).removeprefix("/")
+    configured = item.get("HostConfig", {}).get("CpusetCpus")
+    if not isinstance(configured, str):
+        raise SystemExit(f"Docker container {name!r} lacks a cpuset value")
+    effective = cpus(configured)
+    containers.append({
+        "id": item.get("Id"),
+        "name": name,
+        "study": labels.get("org.qcsd.study", ""),
+        "role": labels.get("org.qcsd.role", ""),
+        "configured_cpuset": configured,
+        "effective_cpus": effective,
+        "client_cpu_overlap": CLIENT_CPU in effective,
+        "expected_sidecar": name in expected,
+    })
+containers.sort(key=lambda item: (item["name"], item["id"]))
+observed_names = {item["name"] for item in containers}
+container_set_matches_expected = set(expected) == observed_names
+for item in containers:
+    if item["expected_sidecar"] and item["effective_cpus"] != list(range(CLIENT_CPU)):
+        raise SystemExit(
+            "study sidecar {!r} is not confined to CPUs 0-9".format(item["name"])
+        )
+overlaps = sorted(
+    item["id"] for item in containers if item["client_cpu_overlap"]
+)
+value = {
+    "schema_version": 1,
+    "source": "docker-inspect-all-running-containers-prelaunch-v1",
+    "captured_at_unix_ns": time.time_ns(),
+    "client_cpu": CLIENT_CPU,
+    "owner_label": "org.qcsd.owner=qcsd-lab",
+    "docker_ncpu": docker_ncpu,
+    "expected_sidecar_names": expected,
+    "running_study_containers": containers,
+    "overlapping_container_ids": overlaps,
+    "running_container_set_matches_expected": container_set_matches_expected,
+    "valid": container_set_matches_expected and not overlaps,
+    "verified_scope": (
+        "all running Docker containers at prelaunch; each must carry the qcsd-lab owner label"
+    ),
+    "unavailable_scope": [
+        "non-container host processes",
+        "the measured client container itself, which does not exist at prelaunch",
+        "containers or cpuset changes after the prelaunch observation",
+        "host-kernel and hypervisor scheduling of the selected logical CPUs",
+    ],
+}
+if not value["valid"]:
+    raise SystemExit(
+        "capture scheduler Docker partition is invalid: "
+        f"container_set_matches_expected={container_set_matches_expected}, "
+        f"CPU10 overlaps={overlaps}"
+    )
+encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+print(base64.b64encode(encoded).decode("ascii"))
+' "${docker_ncpu}" "$@"
+}
+
+scheduler_host_partition_b64=""
+if [[ -n "${study_capture_scheduler_contract}" ]]; then
+  scheduler_host_partition_b64="$(capture_scheduler_host_partition_b64)"
+fi
+
 runtime=(--rm --security-opt no-new-privileges)
+runtime+=(
+  --label "org.qcsd.owner=qcsd-lab"
+  --label "org.qcsd.study=qcsd-workspace"
+  --label "org.qcsd.role=command"
+)
 network_mode="bridge"
 if [[ "${1:-}" == "fit" || "${1:-}" == "derive-chaff-prefix-specs" ||
       ( "${1:-}" == "buflo-study" && "${2:-}" == "reference" ) ||
@@ -2375,6 +2504,7 @@ fi
 if [[ -n "${study_capture_scheduler_contract}" ]]; then
   container+=(
     --env "QCSD_CAPTURE_SCHEDULER_CONTRACT=${study_capture_scheduler_contract}"
+    --env "QCSD_CAPTURE_SCHEDULER_HOST_PARTITION_B64=${scheduler_host_partition_b64}"
   )
 fi
 if [[ -n "${study_environment_b64}" ]]; then
@@ -2592,6 +2722,9 @@ start_capture_acceptance_server() {
   docker run --detach --name "${server_name}" \
     --network bridge \
     --cpuset-cpus 0-9 \
+    --label "org.qcsd.owner=qcsd-lab" \
+    --label "org.qcsd.study=live-capture-acceptance" \
+    --label "org.qcsd.role=ordinary-server" \
     --security-opt no-new-privileges \
     --cap-drop ALL --cap-add NET_ADMIN \
     --env "QCSD_ACCEPTANCE_SERVER_PORT=${server_port}" \
@@ -2611,6 +2744,9 @@ start_buflo_controlled_server() {
   docker run --detach --name "${server_name}" \
     --network "${server_network}" --network-alias "${server_alias}" \
     --cpuset-cpus 0-9 \
+    --label "org.qcsd.owner=qcsd-lab" \
+    --label "org.qcsd.study=buflo-controlled" \
+    --label "org.qcsd.role=ordinary-server" \
     --security-opt no-new-privileges \
     --cap-drop ALL --cap-add NET_ADMIN \
     --env "QCSD_CONTROLLED_SERVER_PORT=${server_port}" \
@@ -2631,6 +2767,9 @@ start_buflo_controlled_router() {
   docker run --detach --name "${router_name}" \
     --network "${client_network}" \
     --cpuset-cpus 0-9 \
+    --label "org.qcsd.owner=qcsd-lab" \
+    --label "org.qcsd.study=buflo-controlled" \
+    --label "org.qcsd.role=network-router" \
     --security-opt no-new-privileges \
     --cap-drop ALL --cap-add NET_ADMIN \
     --sysctl net.ipv4.ip_forward=1 \
@@ -2807,6 +2946,7 @@ run_buflo_controlled_profile() {
   local first_server_ip="${11}"
   local second_server_ip="${12}"
   local network_evidence_b64
+  local scheduler_host_partition_b64
   local controlled_results_mount="${ROOT}/results:/lab/results:rw"
   local -a study_environment_argument=()
   if [[ -n "${study_environment_b64}" ]]; then
@@ -2818,12 +2958,17 @@ run_buflo_controlled_profile() {
   network_evidence_b64="$(buflo_controlled_evidence_base64 \
     "${client_network}" "${server_network}" "${router_name}" \
     "${first_server}" "${second_server}")"
+  scheduler_host_partition_b64="$(capture_scheduler_host_partition_b64 \
+    "${router_name}" "${first_server}" "${second_server}")"
   docker run --rm \
     --network "${client_network}" \
     --add-host "qcsd-buflo-server-one:${first_server_ip}" \
     --add-host "qcsd-buflo-server-two:${second_server_ip}" \
     --cpuset-cpus 10-11 \
     --ulimit rtprio=1:1 \
+    --label "org.qcsd.owner=qcsd-lab" \
+    --label "org.qcsd.study=buflo-controlled" \
+    --label "org.qcsd.role=measured-client" \
     --security-opt no-new-privileges \
     --cap-drop ALL --cap-add NET_RAW --cap-add NET_ADMIN \
     --cap-add SETUID --cap-add SETGID --cap-add SETPCAP \
@@ -2833,6 +2978,7 @@ run_buflo_controlled_profile() {
     --env "QCSD_LAB_UID=$(id -u)" \
     --env "QCSD_LAB_GID=$(id -g)" \
     --env "QCSD_CAPTURE_SCHEDULER_CONTRACT=qcsd-client-rr1-cpu10-v1" \
+    --env "QCSD_CAPTURE_SCHEDULER_HOST_PARTITION_B64=${scheduler_host_partition_b64}" \
     --env "QCSD_CONTROLLED_ROUTER_CLIENT_IP=${router_client_ip}" \
     --env "QCSD_CONTROLLED_SERVER_SUBNET=${server_subnet}" \
     --env "QCSD_BUFLO_CAPTURE_LOCK_HELD=1" \

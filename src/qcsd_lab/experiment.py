@@ -24,6 +24,41 @@ ACCEPTED_ARTIFACTS = {
     "neqo/events.csv",
     "neqo/schedule.csv",
 }
+SCHEDULER_RUNTIME_RECEIPT_KEY = "scheduler_runtime_receipt"
+SCHEDULER_RUNTIME_RECEIPT_SCHEMA_VERSION = 1
+SCHEDULER_RUNTIME_RECEIPT_SOURCE = "accepted-attempt-scheduler-runtime-evidence-v1"
+SCHEDULER_RUNTIME_EVIDENCE_PATH = "diagnostics/scheduler-runtime-evidence.json"
+_HISTORICAL_BUFLO_V36_SOURCE = {
+    "image_digest": ("sha256:bfb6b8dd6581225c3ba748f9e6b1537bc5f0b7c8be8dfb3a74f8969134a0b5d4"),
+    "lab_commit": "b87bf2705e4eb76869d05d4be86a54c3be9da79e",
+    "lab_dirty": False,
+    "lab_patch_sha256": ("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
+    "neqo_commit": "fb699636c191e91848ffcce859c43bb4d69f7d94",
+    "neqo_dirty": False,
+    "neqo_patch_sha256": ("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
+    "neqo_pinned_commit": "fb699636c191e91848ffcce859c43bb4d69f7d94",
+}
+_HISTORICAL_BUFLO_V36_EXPERIMENT_SHA256 = {
+    "buflo-study-v1-regression-buflo-1200": (
+        "7188b4b2487faa2a9e8d1feaed92c881d268a763daaee12da1da9372bcd7417f"
+    ),
+    "buflo-study-v1-regression-established-seven-1200": (
+        "24f34697a77fe5d45dca00306659f2105141a9fa90c48753bf1692efe46a2570"
+    ),
+    "buflo-study-v1-regression-cs-buflo-1200": (
+        "542c143025f5eabc48608c3a613165c34d906c5d34e98fad92fda6b0ad07147e"
+    ),
+}
+_SCHEDULER_RUNTIME_RECEIPT_KEYS = {
+    "schema_version",
+    "source",
+    "original_path",
+    "original_sha256",
+    "process_scheduler_required",
+    "process_scheduler_valid",
+    "scheduler_runtime_evidence_valid",
+    "scheduler_runtime_evidence",
+}
 STRICT_DEFENSE_FIDELITY_FAILURE = "StrictDefenseFidelityFailure"
 STRICT_CLIENT_DEFENSE_EXECUTION_FAILURE = "StrictClientDefenseExecutionFailure"
 TERMINAL_DEFENSE_FAILURE_TYPES = frozenset(
@@ -36,9 +71,7 @@ TERMINAL_DEFENSE_FAILURE_TYPES = frozenset(
 _DIGEST = re.compile(r"[0-9a-f]{64}")
 _PATH_COMPONENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 _QUALIFICATION_SET = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
-_CLASS_STUDY_ID = re.compile(
-    r"classifier-multiorigin100-v(?:1|2-[0-9a-f]{12})"
-)
+_CLASS_STUDY_ID = re.compile(r"classifier-multiorigin100-v(?:1|2-[0-9a-f]{12})")
 _CLASS_STUDY_ROLES = frozenset(
     {
         "pilot-fitting",
@@ -448,6 +481,7 @@ def validate_accepted_samples(
             raise ValueError(
                 f"accepted sample hash mismatch for {sample['sample_id']}: " + "; ".join(details)
             )
+        validate_accepted_scheduler_runtime_receipt(root, value, sample)
         validated[sample["sample_id"]] = actual
         recorded_paths.update(actual)
     samples_root = root / "samples"
@@ -467,6 +501,153 @@ def validate_accepted_samples(
     if unbound:
         raise ValueError(f"unbound files in authoritative samples directory: {', '.join(unbound)}")
     return validated
+
+
+def _buflo_study_experiment(experiment: Mapping[str, Any] | None) -> bool:
+    name = experiment.get("name") if isinstance(experiment, Mapping) else None
+    return isinstance(name, str) and name.startswith("buflo-study-v1-")
+
+
+def _historical_buflo_v36_experiment(experiment: Mapping[str, Any]) -> bool:
+    """Recognize only an unchanged immutable v36 regression experiment ledger."""
+
+    name = experiment.get("name")
+    if not isinstance(name, str):
+        return False
+    expected_digest = _HISTORICAL_BUFLO_V36_EXPERIMENT_SHA256.get(name)
+    if expected_digest is None or experiment.get("source") != _HISTORICAL_BUFLO_V36_SOURCE:
+        return False
+    canonical = json.dumps(experiment, indent=2, sort_keys=True).encode("utf-8") + b"\n"
+    return hashlib.sha256(canonical).hexdigest() == expected_digest
+
+
+def scheduler_runtime_receipt_required(
+    run: Any,
+    experiment: Mapping[str, Any] | None = None,
+) -> bool:
+    """Classify the immutable runner schema at the compatibility boundary.
+
+    Generic runner-wakeup schemas 1--6 predate the portable scheduler monitor.
+    BuFLO-study use of those schemas is separately restricted to exact pinned
+    v36 ledgers by :func:`validate_accepted_scheduler_runtime_receipt`.  Schema
+    7 and later requires the separate receipt for a BuFLO/class-study result or
+    whenever the measured process proves that the scheduler contract was
+    active.  Generic schema-seven runs made outside the measured-study launcher
+    remain compatible.
+    """
+
+    wakeups = run.get("runner_wakeup_metrics") if isinstance(run, Mapping) else None
+    schema = wakeups.get("schema_version") if isinstance(wakeups, Mapping) else None
+    if type(schema) is not int or schema < 7:
+        return False
+
+    from .capture_session import _process_scheduler_valid
+
+    process_scheduler_active = _process_scheduler_valid(run.get("process_scheduler"))
+    if experiment is None:
+        return process_scheduler_active
+    return _requires_durable_attempt_evidence(experiment) or process_scheduler_active
+
+
+def scheduler_runtime_receipt(
+    *,
+    evidence: Mapping[str, Any],
+    evidence_sha256: str,
+    process_scheduler_required: bool,
+    process_scheduler_valid: bool,
+    evidence_valid: bool,
+) -> dict[str, Any]:
+    """Build the exact receipt retained after the attempt directory is removed."""
+
+    return {
+        "schema_version": SCHEDULER_RUNTIME_RECEIPT_SCHEMA_VERSION,
+        "source": SCHEDULER_RUNTIME_RECEIPT_SOURCE,
+        "original_path": SCHEDULER_RUNTIME_EVIDENCE_PATH,
+        "original_sha256": evidence_sha256,
+        "process_scheduler_required": process_scheduler_required,
+        "process_scheduler_valid": process_scheduler_valid,
+        "scheduler_runtime_evidence_valid": evidence_valid,
+        "scheduler_runtime_evidence": dict(evidence),
+    }
+
+
+def validate_accepted_scheduler_runtime_receipt(
+    root: Path,
+    experiment: Mapping[str, Any],
+    sample: Mapping[str, Any],
+) -> None:
+    """Reopen scheduler evidence embedded in one accepted sample checkpoint.
+
+    The receipt is deliberately stored in ``experiment.json`` rather than as a
+    sixth sample file.  This preserves the stable five-file sample inventory
+    while making scheduler evidence part of every seal, verification and
+    handoff that consumes the accepted checkpoint.
+    """
+
+    if sample.get("state") != "accepted":
+        raise ValueError("scheduler runtime validation requires an accepted sample")
+    sample_root = resolved_sample_directory(root, sample, require_directory=True)
+    run_path = sample_root / "neqo/run.json"
+    if run_path.is_symlink() or not run_path.is_file():
+        raise ValueError("accepted sample runner receipt is missing or unsafe")
+    run = load_json(run_path)
+    diagnostics = sample.get("diagnostics")
+    retained = (
+        diagnostics.get(SCHEDULER_RUNTIME_RECEIPT_KEY) if isinstance(diagnostics, Mapping) else None
+    )
+    wakeups = run.get("runner_wakeup_metrics") if isinstance(run, Mapping) else None
+    runner_schema = wakeups.get("schema_version") if isinstance(wakeups, Mapping) else None
+    if (
+        _buflo_study_experiment(experiment)
+        and (type(runner_schema) is not int or runner_schema < 7)
+        and not _historical_buflo_v36_experiment(experiment)
+    ):
+        raise ValueError(
+            "current BuFLO-study sample requires runner-wakeup schema 7 or an exact "
+            "pinned v36 experiment ledger"
+        )
+    required = scheduler_runtime_receipt_required(run, experiment)
+    configuration = experiment.get("configuration")
+    current_class_role = bool(
+        isinstance(configuration, Mapping) and "evidence_role" in configuration
+    )
+    if not required:
+        if retained is not None:
+            raise ValueError(
+                "historical runner-wakeup schemas must not claim current scheduler runtime evidence"
+            )
+        if current_class_role:
+            raise ValueError("current class-study sample requires runner-wakeup schema 7 or later")
+        return
+
+    # Imports stay local so the generic experiment state machine does not
+    # create an import cycle with the capture implementation.
+    from .capture_session import _process_scheduler_valid
+    from .process_scheduler import capture_scheduler_runtime_evidence_valid
+
+    if not isinstance(retained, Mapping) or set(retained) != _SCHEDULER_RUNTIME_RECEIPT_KEYS:
+        raise ValueError("current accepted sample lacks its scheduler runtime receipt")
+    evidence = retained.get("scheduler_runtime_evidence")
+    digest = retained.get("original_sha256")
+    canonical = (
+        json.dumps(evidence, indent=2, sort_keys=True).encode("utf-8") + b"\n"
+        if isinstance(evidence, Mapping)
+        else b""
+    )
+    if (
+        retained.get("schema_version") != SCHEDULER_RUNTIME_RECEIPT_SCHEMA_VERSION
+        or retained.get("source") != SCHEDULER_RUNTIME_RECEIPT_SOURCE
+        or retained.get("original_path") != SCHEDULER_RUNTIME_EVIDENCE_PATH
+        or not isinstance(digest, str)
+        or _DIGEST.fullmatch(digest) is None
+        or hashlib.sha256(canonical).hexdigest() != digest
+        or retained.get("process_scheduler_required") is not True
+        or retained.get("process_scheduler_valid") is not True
+        or retained.get("scheduler_runtime_evidence_valid") is not True
+        or not capture_scheduler_runtime_evidence_valid(evidence)
+        or not _process_scheduler_valid(run.get("process_scheduler"))
+    ):
+        raise ValueError("accepted sample scheduler runtime receipt is invalid")
 
 
 def input_artifact_hashes(root: Path) -> dict[str, str]:
@@ -655,18 +836,13 @@ def _validate_configuration(value: object) -> None:
             or defense_order["block"] < 0
         ):
             raise ValueError("configuration defense_order is invalid")
-    if "study_environment_sha256" in value and not _is_digest(
-        value["study_environment_sha256"]
-    ):
+    if "study_environment_sha256" in value and not _is_digest(value["study_environment_sha256"]):
         raise ValueError("configuration study_environment_sha256 is invalid")
     _validate_class_study_configuration(value)
 
 
 def _validate_class_study_configuration(value: Mapping[str, Any]) -> None:
-    class_keys = (
-        _CLASS_STUDY_COMMON_CONFIGURATION_KEYS
-        | _CLASS_STUDY_OPTIONAL_CONFIGURATION_KEYS
-    )
+    class_keys = _CLASS_STUDY_COMMON_CONFIGURATION_KEYS | _CLASS_STUDY_OPTIONAL_CONFIGURATION_KEYS
     present = set(value) & class_keys
     if not present:
         return
@@ -857,11 +1033,7 @@ def validate_durable_attempt_evidence(
             continue
         if state not in {"accepted", "failed"}:
             raise ValueError("sealed durable attempt evidence contains a nonterminal sample")
-        if (
-            type(attempts) is not int
-            or attempts < 1
-            or attempts > max_attempts
-        ):
+        if type(attempts) is not int or attempts < 1 or attempts > max_attempts:
             raise ValueError("sample exceeds the durable physical-attempt budget")
         expected_attempt_count = attempts - 1 if state == "accepted" else attempts
         expected_attempts = {
@@ -871,9 +1043,7 @@ def validate_durable_attempt_evidence(
         if expected_attempts:
             expected_sample_directories.add(sample_id)
             if sample_failures.is_symlink() or not sample_failures.is_dir():
-                raise ValueError(
-                    f"sample {sample_id} lacks its durable failed-attempt directory"
-                )
+                raise ValueError(f"sample {sample_id} lacks its durable failed-attempt directory")
             actual_attempts = _regular_child_directory_names(
                 sample_failures,
                 label=f"sample {sample_id} failed-attempt inventory",
@@ -948,9 +1118,7 @@ def _terminal_attempt_failure(attempt: Path, *, sample_id: str) -> Mapping[str, 
     exception_receipt = attempt / "failure.json"
     for receipt in (attempt_receipt, exception_receipt):
         if receipt.is_symlink() or (receipt.exists() and not receipt.is_file()):
-            raise ValueError(
-                f"sample {sample_id} durable attempt has an unsafe terminal receipt"
-            )
+            raise ValueError(f"sample {sample_id} durable attempt has an unsafe terminal receipt")
     receipts = [receipt for receipt in (attempt_receipt, exception_receipt) if receipt.is_file()]
     if len(receipts) != 1:
         raise ValueError(
@@ -960,9 +1128,7 @@ def _terminal_attempt_failure(attempt: Path, *, sample_id: str) -> Mapping[str, 
     value = load_json(receipt)
     if receipt == attempt_receipt:
         if not isinstance(value, Mapping) or value.get("success") is not False:
-            raise ValueError(
-                f"sample {sample_id} retained attempt.json is not a terminal failure"
-            )
+            raise ValueError(f"sample {sample_id} retained attempt.json is not a terminal failure")
         failure = value.get("failure")
     else:
         failure = value

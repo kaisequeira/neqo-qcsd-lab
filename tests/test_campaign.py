@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import inspect
 from collections import Counter
 from dataclasses import replace
 from pathlib import Path
@@ -34,6 +35,7 @@ from qcsd_lab.orchestrator import (
 from qcsd_lab.manifest import canonical_bytes
 from qcsd_lab.util import atomic_json, load_json, sha256_bytes, sha256_file
 from qcsd_lab.verification import verify_result
+from tests.scheduler_fixtures import install_scheduler_runtime_receipt
 
 
 def _resource(
@@ -1190,6 +1192,29 @@ def _write_successful_attempt(
     }
 
 
+def _install_attempt_scheduler_evidence(
+    attempt: Path,
+    result: dict[str, Any],
+) -> None:
+    run_path = attempt / "neqo/run.json"
+    run = load_json(run_path)
+    diagnostics: dict[str, Any] = {}
+    install_scheduler_runtime_receipt(run, diagnostics)
+    atomic_json(run_path, run)
+    retained = diagnostics["scheduler_runtime_receipt"]
+    evidence = retained["scheduler_runtime_evidence"]
+    evidence_path = attempt / "diagnostics/scheduler-runtime-evidence.json"
+    atomic_json(evidence_path, evidence)
+    result.update(
+        process_scheduler_required=True,
+        process_scheduler_valid=True,
+        scheduler_runtime_evidence_path=("diagnostics/scheduler-runtime-evidence.json"),
+        scheduler_runtime_evidence_sha256=sha256_file(evidence_path),
+        scheduler_runtime_evidence=evidence,
+        scheduler_runtime_evidence_valid=True,
+    )
+
+
 def _write_pacing_miss(attempt: Path) -> None:
     (attempt / "neqo/schedule.csv").write_text(
         "direction,satisfaction,miss_reason,size,observed_size\noutgoing,missed,pacing,1200,\n",
@@ -1662,9 +1687,7 @@ def test_runtime_chaff_receipts_reject_known_contradictions(
     receipt["outcome"] = outcome
 
     with pytest.raises(ValueError, match="qualified|contradicts"):
-        _validate_chaff_response_receipts(
-            _runtime_chaff_run([receipt]), manifest, "static"
-        )
+        _validate_chaff_response_receipts(_runtime_chaff_run([receipt]), manifest, "static")
 
 
 @pytest.mark.parametrize(
@@ -1697,9 +1720,7 @@ def test_partial_runtime_chaff_receipts_reject_raw_identity_contradictions(
     )
 
     with pytest.raises(ValueError, match="contradict|invalid identity claim"):
-        _validate_chaff_response_receipts(
-            _runtime_chaff_run([receipt]), manifest, "static"
-        )
+        _validate_chaff_response_receipts(_runtime_chaff_run([receipt]), manifest, "static")
 
 
 def test_runner_receipt_is_bound_to_frozen_launch_inputs(
@@ -1759,9 +1780,7 @@ def test_runner_receipt_is_bound_to_frozen_launch_inputs(
         context=context,
     )
     run.pop("process_scheduler")
-    monkeypatch.setenv(
-        "QCSD_CAPTURE_SCHEDULER_CONTRACT", "qcsd-client-rr1-cpu10-v1"
-    )
+    monkeypatch.setenv("QCSD_CAPTURE_SCHEDULER_CONTRACT", "qcsd-client-rr1-cpu10-v1")
     with pytest.raises(ValueError, match="frozen sample inputs"):
         _validate_run_binding(
             run,
@@ -1781,9 +1800,7 @@ def test_runner_receipt_is_bound_to_frozen_launch_inputs(
         "no_new_privileges": True,
         "effective_capabilities_hex": "0000000000000000",
         "cgroup_effective_cpuset": "10-11",
-        "affinity_scope": (
-            "qcsd_container_affinity_partition_not_physical_cpu_isolation"
-        ),
+        "affinity_scope": ("qcsd_container_affinity_partition_not_physical_cpu_isolation"),
         "contract": "qcsd-client-rr1-cpu10-v1",
         "contract_valid": True,
     }
@@ -1916,12 +1933,19 @@ def test_completed_candidate_binding_requires_current_wakeup_schema(
         terminal_validation_calls.append(
             (kind, require_application_complete, require_current_schema, schema)
         )
-        return require_current_schema and schema == 6
+        return (require_current_schema and schema == 7) or (
+            not require_current_schema and 1 <= schema <= 6
+        )
 
     monkeypatch.setattr(
         orchestrator.capture_engine,
         "new_defense_terminal_receipts_valid",
         terminal_receipts_valid,
+    )
+    monkeypatch.setattr(
+        orchestrator.capture_engine,
+        "_runner_wakeup_metrics_valid",
+        lambda value: value.get("schema_version") in {2, 5, 6, 7},
     )
     monkeypatch.setattr(
         orchestrator.capture_engine,
@@ -2016,6 +2040,51 @@ def test_completed_candidate_binding_requires_current_wakeup_schema(
             ),
         }
     )
+    with pytest.raises(ValueError, match="frozen sample inputs"):
+        _validate_run_binding(
+            run,
+            manifest=manifest,
+            chaff_manifest=chaff_manifest,
+            application_workload_source=application_source,
+            workload_id="site",
+            defense=defense,
+            seed=7,
+            context=context,
+        )
+    historical_source = {
+        "image_digest": "sha256:" + "a" * 64,
+        "lab_commit": "b" * 40,
+        "lab_dirty": False,
+        "lab_patch_sha256": ("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
+        "neqo_commit": "c" * 40,
+        "neqo_dirty": False,
+        "neqo_patch_sha256": ("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
+        "neqo_pinned_commit": "c" * 40,
+    }
+    _validate_run_binding(
+        run,
+        manifest=manifest,
+        chaff_manifest=chaff_manifest,
+        application_workload_source=application_source,
+        workload_id="site",
+        defense=defense,
+        seed=7,
+        context=context,
+        historical_candidate_source=historical_source,
+    )
+    with pytest.raises(ValueError, match="historical candidate schema"):
+        _validate_run_binding(
+            run,
+            manifest=manifest,
+            chaff_manifest=chaff_manifest,
+            application_workload_source=application_source,
+            workload_id="site",
+            defense=defense,
+            seed=7,
+            context=context,
+            historical_candidate_source={**historical_source, "lab_dirty": True},
+        )
+    run["runner_wakeup_metrics"]["schema_version"] = 7
     _validate_run_binding(
         run,
         manifest=manifest,
@@ -2030,6 +2099,8 @@ def test_completed_candidate_binding_requires_current_wakeup_schema(
         (runtime_kind, True, True, 2),
         (runtime_kind, True, True, 5),
         (runtime_kind, True, True, 6),
+        (runtime_kind, True, False, 6),
+        (runtime_kind, True, True, 7),
     ]
 
 
@@ -2071,11 +2142,7 @@ def test_controlled_regression_parameters_bind_loaded_chaff_evidence(tmp_path: P
     orchestrator._validate_loaded_qualification_bindings((defense,), (workload,))
     atomic_json(
         parameter,
-        {
-            "qualification_bindings": [
-                {**binding, "qualified_chaff_manifest_sha256": "d" * 64}
-            ]
-        },
+        {"qualification_bindings": [{**binding, "qualified_chaff_manifest_sha256": "d" * 64}]},
     )
     with pytest.raises(ValueError, match="loaded chaff qualifications"):
         orchestrator._validate_loaded_qualification_bindings((defense,), (workload,))
@@ -2467,6 +2534,67 @@ def test_run_writes_only_the_canonical_result_and_retains_failed_attempts(
     assert str(retained.relative_to(root)) in verified.checksums
 
 
+def test_promotion_retains_scheduler_runtime_evidence_without_a_sixth_sample_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = _configuration(tmp_path, max_attempts=1)
+
+    def collect(
+        attempt: Path,
+        _manifest: Path,
+        workload_id: str,
+        defense: Any,
+        _seed: int,
+        _campaign: Any,
+    ) -> dict[str, Any]:
+        result = _write_successful_attempt(attempt, workload_id, defense.name)
+        _install_attempt_scheduler_evidence(attempt, result)
+        return result
+
+    monkeypatch.setattr(orchestrator.capture_engine, "_collect_attempt", collect)
+    root = run_campaign(path, tmp_path / "results")
+    verified = verify_result(root)
+    [sample] = verified.experiment["samples"]
+    receipt = sample["diagnostics"]["scheduler_runtime_receipt"]
+    sample_root = root / sample["path"]
+
+    assert receipt["process_scheduler_required"] is True
+    assert receipt["process_scheduler_valid"] is True
+    assert receipt["scheduler_runtime_evidence_valid"] is True
+    assert receipt["original_path"] == "diagnostics/scheduler-runtime-evidence.json"
+    assert {
+        artifact.relative_to(sample_root).as_posix()
+        for artifact in sample_root.rglob("*")
+        if artifact.is_file()
+    } == {
+        "capture.pcapng",
+        "neqo/run.json",
+        "neqo/packets.csv",
+        "neqo/events.csv",
+        "neqo/schedule.csv",
+    }
+    assert not (root / "failures" / sample["sample_id"] / "attempt-001").exists()
+
+
+def test_promotion_rejects_scheduler_evidence_file_tampering(tmp_path: Path) -> None:
+    attempt = tmp_path / "attempt"
+    result = _write_successful_attempt(attempt, "alpha", "undefended")
+    _install_attempt_scheduler_evidence(attempt, result)
+    atomic_json(
+        attempt / "diagnostics/scheduler-runtime-evidence.json",
+        {"tampered": True},
+    )
+
+    with pytest.raises(ValueError, match="scheduler runtime evidence is invalid"):
+        orchestrator._success_diagnostics(result, attempt)
+
+
+def test_accepted_scheduler_validation_does_not_reload_experiment_per_sample() -> None:
+    assert "load_json" not in inspect.getsource(orchestrator._validate_accepted)
+    assert "load_json" not in inspect.getsource(orchestrator._compare_group)
+
+
 def test_collection_success_with_pacing_miss_is_quarantined_then_retried(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2628,8 +2756,7 @@ def test_execute_stops_before_retry_on_typed_runner_defense_failure(
         orchestrator,
         "_has_terminal_strict_defense_fidelity_failure",
         lambda experiment: any(
-            sample.get("failure", {}).get("type")
-            == "StrictClientDefenseExecutionFailure"
+            sample.get("failure", {}).get("type") == "StrictClientDefenseExecutionFailure"
             for sample in experiment["samples"]
         ),
     )

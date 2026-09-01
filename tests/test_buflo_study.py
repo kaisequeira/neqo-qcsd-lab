@@ -61,6 +61,8 @@ from qcsd_lab.fidelity import (
     BUFLO_TERMINAL_SUBCELL_POLICY,
     CS_BUFLO_STOP_DRAIN_V4_KEYS,
     CS_BUFLO_TERMINATION_STOP_POLICY,
+    RUNNER_WAKEUP_V7_HISTOGRAM_UPPER_BOUNDS,
+    RUNNER_WAKEUP_V7_SEMANTICS,
     SCHEDULE_PREFIX_FIELDS,
     SCHEDULE_QCSD_FIELDS,
     _cs_buflo_padding_targets_match,
@@ -126,9 +128,7 @@ def test_rust_code_gate_sidecar_rejects_content_mismatch_and_symlink(
         )
 
 
-def _reference_execution_fixture(
-    tmp_path: Path, *, build_schema_version: int = 1
-) -> Path:
+def _reference_execution_fixture(tmp_path: Path, *, build_schema_version: int = 1) -> Path:
     build_execution = _build_execution_value(schema_version=build_schema_version)
     source = {
         "image_digest": "sha256:" + "e" * 64,
@@ -210,10 +210,7 @@ def _build_execution_value(
                         "--iidfile",
                         str(
                             LAB_ROOT
-                            / (
-                                "artifacts/buflo-study/"
-                                f".build-iids-v{cohort_version}.ABC123"
-                            )
+                            / (f"artifacts/buflo-study/.build-iids-v{cohort_version}.ABC123")
                             / f"{target}.iid"
                         ),
                     ]
@@ -250,9 +247,7 @@ def _build_execution_value(
             "rust_base_image": RUST_BASE_IMAGE,
             "debian_base_image": DEBIAN_BASE_IMAGE,
             "uv_lock_sha256": buflo_study.sha256_file(LAB_ROOT / "uv.lock"),
-            "cargo_lock_sha256": buflo_study.sha256_file(
-                LAB_ROOT / "neqo-qcsd/Cargo.lock"
-            ),
+            "cargo_lock_sha256": buflo_study.sha256_file(LAB_ROOT / "neqo-qcsd/Cargo.lock"),
         },
         "dockerfile_sha256": buflo_study.sha256_file(LAB_ROOT / "Dockerfile"),
         "cache_policy": {
@@ -278,9 +273,7 @@ def _build_execution_value(
             ("before-reference", "2026-08-27T00:00:00.400000+00:00"),
             ("after-reference", "2026-08-27T00:00:00.800000+00:00"),
         )
-        probe_sha256 = buflo_study.sha256_file(
-            LAB_ROOT / "tools/windows_docker_storage_probe.ps1"
-        )
+        probe_sha256 = buflo_study.sha256_file(LAB_ROOT / "tools/windows_docker_storage_probe.ps1")
         observations = [
             {
                 "schema_version": 1,
@@ -317,9 +310,7 @@ def _build_execution_value(
                 "run_wsl_directory_present": True,
             },
             "policy": "docker-data-vhdx-backing-volume-minimum-v1",
-            "required_available_bytes": (
-                buflo_study.BUILD_WSL_HOST_MIN_AVAILABLE_BYTES
-            ),
+            "required_available_bytes": (buflo_study.BUILD_WSL_HOST_MIN_AVAILABLE_BYTES),
             "observations": observations,
             "minimum_available_bytes": 128 * 1024**3,
             "passed": True,
@@ -348,9 +339,7 @@ def _install_fake_wsl_storage_probe(root: Path, binary_root: Path) -> None:
     )
     package = root / "src/qcsd_lab"
     package.mkdir(parents=True, exist_ok=True)
-    (package / "__init__.py").write_bytes(
-        (LAB_ROOT / "src/qcsd_lab/__init__.py").read_bytes()
-    )
+    (package / "__init__.py").write_bytes((LAB_ROOT / "src/qcsd_lab/__init__.py").read_bytes())
     (package / "build_storage.py").write_bytes(
         (LAB_ROOT / "src/qcsd_lab/build_storage.py").read_bytes()
     )
@@ -358,17 +347,14 @@ def _install_fake_wsl_storage_probe(root: Path, binary_root: Path) -> None:
     uname.write_text(
         "#!/bin/sh\n"
         "set -eu\n"
-        "[ \"${1:-}\" = \"-r\" ]\n"
+        '[ "${1:-}" = "-r" ]\n'
         "printf '%s\\n' '6.6.87.2-microsoft-standard-WSL2'\n",
         encoding="utf-8",
     )
     uname.chmod(0o755)
     wslpath = binary_root / "wslpath"
     wslpath.write_text(
-        "#!/bin/sh\n"
-        "set -eu\n"
-        "for argument do last=\"$argument\"; done\n"
-        "printf '%s\\n' \"$last\"\n",
+        '#!/bin/sh\nset -eu\nfor argument do last="$argument"; done\nprintf \'%s\\n\' "$last"\n',
         encoding="utf-8",
     )
     wslpath.chmod(0o755)
@@ -585,8 +571,7 @@ def _launcher_boundary_fixture(
     environment["PATH"] = f"{binary_root}:{environment['PATH']}"
     identity = hashlib.sha256(str(tmp_path).encode()).hexdigest()[:32]
     environment["QCSD_TEST_DOCKER_SERVER_ID"] = (
-        f"{identity[:8]}-{identity[8:12]}-{identity[12:16]}-"
-        f"{identity[16:20]}-{identity[20:]}"
+        f"{identity[:8]}-{identity[8:12]}-{identity[12:16]}-{identity[16:20]}-{identity[20:]}"
     )
     return launcher, build_marker, environment
 
@@ -617,7 +602,7 @@ def _runner_wakeup_receipt_v2() -> dict[str, object]:
         {
             "schema_version": 2,
             "semantics": (
-                f'{value["semantics"]}; '
+                f"{value['semantics']}; "
                 "buflo_exact_release_guard_reserves_candidate_window; "
                 "buflo_exact_release_active_wait_tail_us=250; "
                 "buflo_exact_release_guards_are_separately_receipted_active_waits; "
@@ -655,7 +640,7 @@ def _runner_wakeup_receipt_v4() -> dict[str, object]:
         {
             "schema_version": 4,
             "semantics": (
-                f'{_runner_wakeup_receipt()["semantics"]}; '
+                f"{_runner_wakeup_receipt()['semantics']}; "
                 "buflo_ordinary_output_admission_is_one_realization_window_before_guard; "
                 "buflo_exact_release_guard_reserves_candidate_window; "
                 "buflo_exact_release_active_wait_tail_us=5000; "
@@ -680,7 +665,7 @@ def _runner_wakeup_receipt_v5() -> dict[str, object]:
         {
             "schema_version": 5,
             "semantics": (
-                f'{value["semantics"]}; '
+                f"{value['semantics']}; "
                 "buflo_exact_incoming_retry_wakeups="
                 "transport_callback_or_1/4,1/2,3/4,deadline; "
                 "buflo_exact_incoming_retry_drives="
@@ -708,7 +693,7 @@ def _runner_wakeup_receipt_v6() -> dict[str, object]:
         {
             "schema_version": 6,
             "semantics": (
-                f'{_runner_wakeup_receipt()["semantics"]}; '
+                f"{_runner_wakeup_receipt()['semantics']}; "
                 "buflo_ordinary_output_admission_lead_us=10000; "
                 "buflo_exact_release_guard_reserves_candidate_window; "
                 "buflo_exact_release_guard_lead_us=10000; "
@@ -732,6 +717,123 @@ def _runner_wakeup_receipt_v6() -> dict[str, object]:
                 "buflo_exact_incoming_inventory="
                 "all_unrealized_slot_owned_adapter_identities_with_same_tick_refresh; "
                 "buflo_exact_incoming_expiry=one_logical_slot_one_deadline_miss"
+            ),
+        }
+    )
+    return value
+
+
+def _runner_wakeup_receipt_v7(
+    *,
+    guard_entries: int = 0,
+    dispatch_lateness_nanoseconds: int = 7,
+    release_skew_nanoseconds: int = 0,
+) -> dict[str, object]:
+    if not 0 <= release_skew_nanoseconds <= 999:
+        raise ValueError("release skew must fit the sub-microsecond normalisation")
+    if guard_entries == 0:
+        dispatch_lateness_nanoseconds = 0
+        release_skew_nanoseconds = 0
+    deadline_skew_nanoseconds = (
+        0 if release_skew_nanoseconds == 0 else 1_000 - release_skew_nanoseconds
+    )
+    release_nanoseconds = 20_000_000 + release_skew_nanoseconds
+    deadline_nanoseconds = 25_000_000 - deadline_skew_nanoseconds
+    actual_window_nanoseconds = deadline_nanoseconds - release_nanoseconds
+    guard_nanoseconds = release_nanoseconds - 2 * actual_window_nanoseconds
+    active_wait_per_guard = 2 * actual_window_nanoseconds + dispatch_lateness_nanoseconds
+    active_wait_total = guard_entries * active_wait_per_guard
+    dispatch_counts = [0] * 8
+    spin_counts = [0] * 8
+    if guard_entries:
+        dispatch_bucket = sum(
+            dispatch_lateness_nanoseconds > upper
+            for upper in RUNNER_WAKEUP_V7_HISTOGRAM_UPPER_BOUNDS
+        )
+        dispatch_counts[dispatch_bucket] = guard_entries
+        spin_counts[0] = guard_entries
+    value = _runner_wakeup_receipt_v6()
+    value.update(
+        {
+            "schema_version": 7,
+            "semantics": RUNNER_WAKEUP_V7_SEMANTICS,
+            "buflo_exact_release_guard_entries": guard_entries,
+            "buflo_exact_release_guard_wait_nanoseconds": active_wait_total,
+            "buflo_exact_release_active_wait_nanoseconds": active_wait_total,
+            "buflo_exact_release_max_passive_wake_lateness_nanoseconds": 0,
+            "buflo_exact_release_max_guard_exit_lateness_nanoseconds": (
+                dispatch_lateness_nanoseconds
+            ),
+            "buflo_exact_release_max_guard_entry_lateness_nanoseconds": 0,
+            "buflo_exact_release_passive_sleep_calls": 0,
+            "buflo_exact_release_passive_sleep_requested_nanoseconds": 0,
+            "buflo_exact_release_passive_sleep_elapsed_nanoseconds": 0,
+            "buflo_exact_release_max_passive_sleep_overrun_nanoseconds": 0,
+            "buflo_exact_release_active_wait_iterations": guard_entries,
+            "buflo_exact_release_active_spin_interruptions": 0,
+            "buflo_exact_release_active_spin_interruption_nanoseconds": 0,
+            "buflo_exact_release_max_active_spin_gap_nanoseconds": 0,
+            "buflo_exact_release_aux_clock_source": (
+                "linux-clock-gettime-monotonic-raw-and-thread-cputime-id-v1"
+            ),
+            "buflo_exact_release_active_wait_aux_clock_guards": guard_entries,
+            "buflo_exact_release_active_wait_aux_clock_unavailable_guards": 0,
+            "buflo_exact_release_active_wait_aux_clock_nonmonotonic_guards": 0,
+            "buflo_exact_release_active_wait_monotonic_raw_nanoseconds": (active_wait_total),
+            "buflo_exact_release_active_wait_thread_cpu_nanoseconds": (active_wait_total),
+            "buflo_exact_release_active_wait_estimated_off_cpu_nanoseconds": 0,
+            "buflo_exact_release_max_active_wait_estimated_off_cpu_nanoseconds": 0,
+            "buflo_exact_release_max_active_wait_monotonic_raw_divergence_nanoseconds": 0,
+            "buflo_exact_release_dispatch_at_or_after_deadline_guards": (
+                guard_entries if dispatch_lateness_nanoseconds >= actual_window_nanoseconds else 0
+            ),
+            "buflo_exact_release_dispatch_lateness_histogram": {
+                "upper_bounds_nanoseconds": RUNNER_WAKEUP_V7_HISTOGRAM_UPPER_BOUNDS,
+                "counts": dispatch_counts,
+            },
+            "buflo_exact_release_active_spin_gap_histogram": {
+                "upper_bounds_nanoseconds": RUNNER_WAKEUP_V7_HISTOGRAM_UPPER_BOUNDS,
+                "counts": spin_counts,
+            },
+            "buflo_exact_release_worst_guard": (
+                {
+                    "endpoint": 0,
+                    "slot": 1,
+                    "phase": "committed",
+                    "packet_timestamp_us": 20_000,
+                    "guard_at_defense_nanoseconds": guard_nanoseconds,
+                    "entered_at_defense_nanoseconds": guard_nanoseconds,
+                    "active_wait_at_defense_nanoseconds": guard_nanoseconds,
+                    "active_wait_started_at_defense_nanoseconds": guard_nanoseconds,
+                    "release_at_defense_nanoseconds": release_nanoseconds,
+                    "deadline_at_defense_nanoseconds": deadline_nanoseconds,
+                    "dispatch_at_defense_nanoseconds": (
+                        release_nanoseconds + dispatch_lateness_nanoseconds
+                    ),
+                    "guard_entry_lateness_nanoseconds": 0,
+                    "passive_sleep_calls": 0,
+                    "passive_sleep_requested_nanoseconds": 0,
+                    "passive_sleep_elapsed_nanoseconds": 0,
+                    "max_passive_sleep_overrun_nanoseconds": 0,
+                    "active_wait_iterations": 1,
+                    "active_wait_monotonic_nanoseconds": active_wait_per_guard,
+                    "active_wait_monotonic_raw_nanoseconds": active_wait_per_guard,
+                    "active_wait_thread_cpu_nanoseconds": active_wait_per_guard,
+                    "active_wait_estimated_off_cpu_nanoseconds": 0,
+                    "active_wait_monotonic_raw_divergence_nanoseconds": 0,
+                    "active_spin_interruptions": 0,
+                    "active_spin_interruption_nanoseconds": 0,
+                    "max_active_spin_gap_nanoseconds": 0,
+                    "dispatch_lateness_nanoseconds": dispatch_lateness_nanoseconds,
+                    "dispatch_at_or_after_deadline": (
+                        dispatch_lateness_nanoseconds >= actual_window_nanoseconds
+                    ),
+                    "dispatch_after_deadline_nanoseconds": max(
+                        dispatch_lateness_nanoseconds - actual_window_nanoseconds, 0
+                    ),
+                }
+                if guard_entries
+                else None
             ),
         }
     )
@@ -777,6 +879,220 @@ def test_runner_wakeup_schema_six_has_exact_semantics_and_v5_metric_keys() -> No
     assert not _fidelity_runner_wakeup_metrics_valid(wrong_semantics)
     assert not _runner_wakeup_metrics_valid({**current_v6, "unexpected": 0})
     assert not _fidelity_runner_wakeup_metrics_valid({**current_v6, "unexpected": 0})
+
+
+def test_runner_wakeup_schema_seven_binds_exact_release_timing_evidence() -> None:
+    historical_v6 = _runner_wakeup_receipt_v6()
+    current_v7 = _runner_wakeup_receipt_v7(guard_entries=2)
+
+    assert _runner_wakeup_metrics_valid(historical_v6)
+    assert _fidelity_runner_wakeup_metrics_valid(historical_v6)
+    assert _runner_wakeup_metrics_valid(current_v7)
+    assert _fidelity_runner_wakeup_metrics_valid(current_v7)
+    assert current_v7["semantics"].endswith(
+        "buflo_exact_release_10000us_lead_fields_are_configured_maxima=true"
+    )
+    assert (
+        sum(current_v7["buflo_exact_release_dispatch_lateness_histogram"]["counts"])
+        == current_v7["buflo_exact_release_guard_entries"]
+    )
+
+    at_deadline = _runner_wakeup_receipt_v7(
+        guard_entries=1, dispatch_lateness_nanoseconds=5_000_000
+    )
+    assert _runner_wakeup_metrics_valid(at_deadline)
+    assert _fidelity_runner_wakeup_metrics_valid(at_deadline)
+    assert at_deadline["buflo_exact_release_dispatch_at_or_after_deadline_guards"] == 1
+    assert at_deadline["buflo_exact_release_worst_guard"]["dispatch_at_or_after_deadline"] is True
+
+    late_inside_window = _runner_wakeup_receipt_v7(
+        guard_entries=1, dispatch_lateness_nanoseconds=2_000_000
+    )
+    late_inside_window.update(
+        {
+            "buflo_exact_release_guard_wait_nanoseconds": 0,
+            "buflo_exact_release_active_wait_nanoseconds": 0,
+            "buflo_exact_release_max_passive_wake_lateness_nanoseconds": 12_000_000,
+            "buflo_exact_release_max_guard_entry_lateness_nanoseconds": 12_000_000,
+            "buflo_exact_release_active_wait_monotonic_raw_nanoseconds": 0,
+            "buflo_exact_release_active_wait_thread_cpu_nanoseconds": 0,
+        }
+    )
+    late_worst = late_inside_window["buflo_exact_release_worst_guard"]
+    late_worst.update(
+        {
+            "entered_at_defense_nanoseconds": 22_000_000,
+            "active_wait_started_at_defense_nanoseconds": 22_000_000,
+            "dispatch_at_defense_nanoseconds": 22_000_000,
+            "guard_entry_lateness_nanoseconds": 12_000_000,
+            "active_wait_monotonic_nanoseconds": 0,
+            "active_wait_monotonic_raw_nanoseconds": 0,
+            "active_wait_thread_cpu_nanoseconds": 0,
+        }
+    )
+    assert _runner_wakeup_metrics_valid(late_inside_window)
+    assert _fidelity_runner_wakeup_metrics_valid(late_inside_window)
+
+    raw_clock_divergence = _runner_wakeup_receipt_v7(guard_entries=1)
+    active_wait = raw_clock_divergence["buflo_exact_release_active_wait_nanoseconds"]
+    raw_elapsed = active_wait - 1_000_000
+    raw_clock_divergence.update(
+        {
+            "buflo_exact_release_active_wait_monotonic_raw_nanoseconds": raw_elapsed,
+            "buflo_exact_release_active_wait_thread_cpu_nanoseconds": 0,
+            "buflo_exact_release_active_wait_estimated_off_cpu_nanoseconds": active_wait,
+            "buflo_exact_release_max_active_wait_estimated_off_cpu_nanoseconds": active_wait,
+            "buflo_exact_release_max_active_wait_monotonic_raw_divergence_nanoseconds": 1_000_000,
+        }
+    )
+    divergent_worst = raw_clock_divergence["buflo_exact_release_worst_guard"]
+    divergent_worst.update(
+        {
+            "active_wait_monotonic_raw_nanoseconds": raw_elapsed,
+            "active_wait_thread_cpu_nanoseconds": 0,
+            "active_wait_estimated_off_cpu_nanoseconds": active_wait,
+            "active_wait_monotonic_raw_divergence_nanoseconds": 1_000_000,
+        }
+    )
+    assert _runner_wakeup_metrics_valid(raw_clock_divergence)
+    assert _fidelity_runner_wakeup_metrics_valid(raw_clock_divergence)
+
+    invalid_histogram = json.loads(json.dumps(current_v7))
+    invalid_histogram["buflo_exact_release_dispatch_lateness_histogram"]["counts"][0] -= 1
+    assert not _runner_wakeup_metrics_valid(invalid_histogram)
+    assert not _fidelity_runner_wakeup_metrics_valid(invalid_histogram)
+
+    invalid_spin = json.loads(json.dumps(current_v7))
+    invalid_spin["buflo_exact_release_max_active_spin_gap_nanoseconds"] = 50_001
+    assert not _runner_wakeup_metrics_valid(invalid_spin)
+    assert not _fidelity_runner_wakeup_metrics_valid(invalid_spin)
+
+
+def test_runner_wakeup_schema_seven_accepts_fractional_adapter_window() -> None:
+    fractional = _runner_wakeup_receipt_v7(
+        guard_entries=1,
+        dispatch_lateness_nanoseconds=4_999_000,
+        release_skew_nanoseconds=456,
+    )
+    worst = fractional["buflo_exact_release_worst_guard"]
+
+    assert worst["guard_at_defense_nanoseconds"] == 10_002_456
+    assert worst["release_at_defense_nanoseconds"] == 20_000_456
+    assert worst["deadline_at_defense_nanoseconds"] == 24_999_456
+    assert worst["dispatch_at_or_after_deadline"] is True
+    assert worst["dispatch_after_deadline_nanoseconds"] == 0
+    assert _runner_wakeup_metrics_valid(fractional)
+    assert _fidelity_runner_wakeup_metrics_valid(fractional)
+
+    malformed_ceil_floor = json.loads(json.dumps(fractional))
+    malformed_ceil_floor["buflo_exact_release_worst_guard"]["deadline_at_defense_nanoseconds"] += 1
+    assert not _runner_wakeup_metrics_valid(malformed_ceil_floor)
+    assert not _fidelity_runner_wakeup_metrics_valid(malformed_ceil_floor)
+
+
+def test_runner_wakeup_schema_seven_accepts_mixed_window_deadline_count() -> None:
+    mixed = _runner_wakeup_receipt_v7(guard_entries=2, dispatch_lateness_nanoseconds=4_999_800)
+    mixed["buflo_exact_release_dispatch_at_or_after_deadline_guards"] = 1
+
+    assert mixed["buflo_exact_release_worst_guard"]["dispatch_at_or_after_deadline"] is False
+    assert _runner_wakeup_metrics_valid(mixed)
+    assert _fidelity_runner_wakeup_metrics_valid(mixed)
+
+    impossible_all_outside = json.loads(json.dumps(mixed))
+    impossible_all_outside["buflo_exact_release_dispatch_at_or_after_deadline_guards"] = 2
+    assert not _runner_wakeup_metrics_valid(impossible_all_outside)
+    assert not _fidelity_runner_wakeup_metrics_valid(impossible_all_outside)
+
+    impossible_zero_outside = _runner_wakeup_receipt_v7(
+        guard_entries=1,
+        dispatch_lateness_nanoseconds=4_999_000,
+        release_skew_nanoseconds=456,
+    )
+    impossible_zero_outside["buflo_exact_release_dispatch_at_or_after_deadline_guards"] = 0
+    assert not _runner_wakeup_metrics_valid(impossible_zero_outside)
+    assert not _fidelity_runner_wakeup_metrics_valid(impossible_zero_outside)
+
+
+def test_runner_wakeup_schema_seven_binds_aux_pairs_and_spin_histogram() -> None:
+    partial_aux = _runner_wakeup_receipt_v7(guard_entries=1)
+    partial_aux.update(
+        {
+            "buflo_exact_release_active_wait_aux_clock_guards": 0,
+            "buflo_exact_release_active_wait_aux_clock_unavailable_guards": 1,
+            "buflo_exact_release_active_wait_thread_cpu_nanoseconds": 0,
+        }
+    )
+    partial_worst = partial_aux["buflo_exact_release_worst_guard"]
+    partial_worst["active_wait_thread_cpu_nanoseconds"] = None
+    partial_worst["active_wait_estimated_off_cpu_nanoseconds"] = None
+    assert _runner_wakeup_metrics_valid(partial_aux)
+    assert _fidelity_runner_wakeup_metrics_valid(partial_aux)
+
+    invalid_aux_formula = json.loads(json.dumps(partial_aux))
+    invalid_aux_formula["buflo_exact_release_worst_guard"][
+        "active_wait_monotonic_raw_divergence_nanoseconds"
+    ] = 1
+    invalid_aux_formula[
+        "buflo_exact_release_max_active_wait_monotonic_raw_divergence_nanoseconds"
+    ] = 1
+    assert not _runner_wakeup_metrics_valid(invalid_aux_formula)
+    assert not _fidelity_runner_wakeup_metrics_valid(invalid_aux_formula)
+
+    interrupted = _runner_wakeup_receipt_v7(guard_entries=1)
+    interrupted.update(
+        {
+            "buflo_exact_release_active_spin_interruptions": 1,
+            "buflo_exact_release_active_spin_interruption_nanoseconds": 60_000,
+            "buflo_exact_release_max_active_spin_gap_nanoseconds": 60_000,
+            "buflo_exact_release_active_spin_gap_histogram": {
+                "upper_bounds_nanoseconds": RUNNER_WAKEUP_V7_HISTOGRAM_UPPER_BOUNDS,
+                "counts": [0, 1, 0, 0, 0, 0, 0, 0],
+            },
+        }
+    )
+    interrupted_worst = interrupted["buflo_exact_release_worst_guard"]
+    interrupted_worst.update(
+        {
+            "active_spin_interruptions": 1,
+            "active_spin_interruption_nanoseconds": 60_000,
+            "max_active_spin_gap_nanoseconds": 60_000,
+        }
+    )
+    assert _runner_wakeup_metrics_valid(interrupted)
+    assert _fidelity_runner_wakeup_metrics_valid(interrupted)
+
+    missing_spin_bucket = json.loads(json.dumps(interrupted))
+    missing_spin_bucket["buflo_exact_release_active_spin_gap_histogram"]["counts"] = [
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+    ]
+    assert not _runner_wakeup_metrics_valid(missing_spin_bucket)
+    assert not _fidelity_runner_wakeup_metrics_valid(missing_spin_bucket)
+
+    threshold_is_strict = json.loads(json.dumps(interrupted))
+    threshold_is_strict["buflo_exact_release_max_active_spin_gap_nanoseconds"] = 50_000
+    threshold_is_strict["buflo_exact_release_active_spin_interruption_nanoseconds"] = 50_000
+    threshold_is_strict["buflo_exact_release_active_spin_gap_histogram"]["counts"] = [
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+    ]
+    threshold_worst = threshold_is_strict["buflo_exact_release_worst_guard"]
+    threshold_worst["active_spin_interruption_nanoseconds"] = 50_000
+    threshold_worst["max_active_spin_gap_nanoseconds"] = 50_000
+    assert not _runner_wakeup_metrics_valid(threshold_is_strict)
+    assert not _fidelity_runner_wakeup_metrics_valid(threshold_is_strict)
 
 
 def test_registry_appends_two_candidate_scientific_identities() -> None:
@@ -884,8 +1200,7 @@ def test_cs_buflo_provenance_explicitly_receipts_source_live_estimator_divergenc
         ),
         "translation_classification": "expected-client-only-qcsd-adaptation-difference",
         "early_termination_semantics": (
-            "client_only_outgoing_observed_udp_and_incoming_consumed_credit_"
-            "power_of_two_crossing"
+            "client_only_outgoing_observed_udp_and_incoming_consumed_credit_power_of_two_crossing"
         ),
         "expected_difference": (
             "adaptation-boundary-crossings-and-rate-transition-times-may-differ-"
@@ -903,23 +1218,16 @@ def test_cs_buflo_provenance_explicitly_receipts_source_live_estimator_divergenc
 def test_buflo_provenance_binds_exact_terminal_summary_contract() -> None:
     parameter = PARAMETER_FILES["buflo"][1]
     provenance = json.loads(
-        parameter.with_name(parameter.name + ".provenance.json").read_text(
-            encoding="utf-8"
-        )
+        parameter.with_name(parameter.name + ".provenance.json").read_text(encoding="utf-8")
     )
     assert provenance["terminal_subcell_policy"] == (
-        "drain_whole_cells_then_client_local_http3_cancel_"
-        "unallocatable_reviewed_chaff_tail"
+        "drain_whole_cells_then_client_local_http3_cancel_unallocatable_reviewed_chaff_tail"
     )
     assert provenance["terminal_subcell_observer_effect"] == (
-        "typed_stop_sending_and_reset_stream_defense_control_may_follow_"
-        "the_last_exact_cell"
+        "typed_stop_sending_and_reset_stream_defense_control_may_follow_the_last_exact_cell"
     )
     assert provenance["terminal_subcell_policy"] == BUFLO_TERMINAL_SUBCELL_POLICY
-    assert (
-        provenance["terminal_subcell_observer_effect"]
-        == BUFLO_TERMINAL_SUBCELL_OBSERVER_EFFECT
-    )
+    assert provenance["terminal_subcell_observer_effect"] == BUFLO_TERMINAL_SUBCELL_OBSERVER_EFFECT
     assert provenance["terminal_translation_version"] == 2
     assert provenance["terminal_parser_safety"] == (
         "latch-requires-zero-live-parser-lease-bytes-and-zero-pending-"
@@ -994,9 +1302,7 @@ def _formal_performance_evaluation_fixture() -> dict[str, object]:
         {
             "defense": mode,
             "pairs": 500,
-            "paired_client_costs": {
-                metric: {"available": True} for metric in required_costs
-            },
+            "paired_client_costs": {metric: {"available": True} for metric in required_costs},
             "completion_ratio_block_workload_bootstrap_95": {},
             "added_seconds_block_workload_bootstrap_95": {},
             "goodput_ratio_block_workload_bootstrap_95": {},
@@ -1024,12 +1330,8 @@ def _formal_performance_evaluation_fixture() -> dict[str, object]:
             "samples": 10,
             "samples_with_cancellation": 0,
             "terminal_subcell_policy": [BUFLO_TERMINAL_SUBCELL_POLICY],
-            "terminal_subcell_observer_effect": [
-                BUFLO_TERMINAL_SUBCELL_OBSERVER_EFFECT
-            ],
-            "control_evidence_semantics": [
-                BUFLO_TERMINAL_CONTROL_EVIDENCE_SEMANTICS
-            ],
+            "terminal_subcell_observer_effect": [BUFLO_TERMINAL_SUBCELL_OBSERVER_EFFECT],
+            "control_evidence_semantics": [BUFLO_TERMINAL_CONTROL_EVIDENCE_SEMANTICS],
             "stream_cancellations": 0,
             "receipt_cancellations": 0,
             "typed_cancellation_action_events": 0,
@@ -1064,9 +1366,7 @@ def _formal_performance_evaluation_fixture() -> dict[str, object]:
             "acquisition_block_index": block,
             "samples": 10,
             "policy": [BUFLO_SCHEDULE_STOP_POLICY],
-            "terminal_time_semantics": [
-                BUFLO_SCHEDULE_STOP_TERMINAL_TIME_SEMANTICS
-            ],
+            "terminal_time_semantics": [BUFLO_SCHEDULE_STOP_TERMINAL_TIME_SEMANTICS],
             "latched_samples": 10,
             "latched_at_us": {
                 "minimum": 10_000_000,
@@ -1215,12 +1515,10 @@ def test_formal_performance_gate_requires_exact_axes_and_terminal_tail() -> None
     )
     mutations.append(duplicate_performance)
     nonzero_zero_tail = json.loads(json.dumps(value))
-    capacity = nonzero_zero_tail["algorithm_breakdowns"][
-        "buflo_terminal_tail_strata"
-    ][0]["exact_capacity_bytes_cancelled"]
-    capacity.update(
-        {"total": 10, "minimum": 1, "maximum": 1, "p50": 1, "p90": 1, "p95": 1}
-    )
+    capacity = nonzero_zero_tail["algorithm_breakdowns"]["buflo_terminal_tail_strata"][0][
+        "exact_capacity_bytes_cancelled"
+    ]
+    capacity.update({"total": 10, "minimum": 1, "maximum": 1, "p50": 1, "p90": 1, "p95": 1})
     mutations.append(nonzero_zero_tail)
     parser_backlog = json.loads(json.dumps(value))
     parser_backlog["algorithm_breakdowns"]["buflo_terminal_tail_strata"][0][
@@ -1238,9 +1536,9 @@ def test_formal_performance_gate_requires_exact_axes_and_terminal_tail() -> None
     ] = 1
     mutations.append(mismatched_counters)
     wrong_stop_policy = json.loads(json.dumps(value))
-    wrong_stop_policy["algorithm_breakdowns"]["buflo_schedule_stop_strata"][0][
-        "policy"
-    ] = ["drifted"]
+    wrong_stop_policy["algorithm_breakdowns"]["buflo_schedule_stop_strata"][0]["policy"] = [
+        "drifted"
+    ]
     mutations.append(wrong_stop_policy)
     wrong_time_semantics = json.loads(json.dumps(value))
     wrong_time_semantics["algorithm_breakdowns"]["buflo_schedule_stop_strata"][0][
@@ -1248,9 +1546,9 @@ def test_formal_performance_gate_requires_exact_axes_and_terminal_tail() -> None
     ] = ["drifted"]
     mutations.append(wrong_time_semantics)
     outgoing_drain = json.loads(json.dumps(value))
-    outgoing_drain["algorithm_breakdowns"]["buflo_schedule_stop_strata"][0][
-        "directions"
-    ]["outgoing"]["drained_cells_after_stop"] = 1
+    outgoing_drain["algorithm_breakdowns"]["buflo_schedule_stop_strata"][0]["directions"][
+        "outgoing"
+    ]["drained_cells_after_stop"] = 1
     mutations.append(outgoing_drain)
     missing_schedule_stop = json.loads(json.dumps(value))
     missing_schedule_stop["algorithm_breakdowns"]["buflo_schedule_stop_strata"].pop()
@@ -1261,14 +1559,14 @@ def test_formal_performance_gate_requires_exact_axes_and_terminal_tail() -> None
     ] = 1
     mutations.append(missing_handoff)
     post_without_early_et = json.loads(json.dumps(value))
-    post_without_early_et["algorithm_breakdowns"][
-        "cs_buflo_local_termination_strata"
-    ][0]["post_local_et_natural_outgoing_bytes"] = 1
+    post_without_early_et["algorithm_breakdowns"]["cs_buflo_local_termination_strata"][0][
+        "post_local_et_natural_outgoing_bytes"
+    ] = 1
     mutations.append(post_without_early_et)
     zero_latch = json.loads(json.dumps(value))
-    zero_latch["algorithm_breakdowns"]["cs_buflo_local_termination_strata"][0][
-        "latched_at_us"
-    ]["p50"] = 0
+    zero_latch["algorithm_breakdowns"]["cs_buflo_local_termination_strata"][0]["latched_at_us"][
+        "p50"
+    ] = 0
     mutations.append(zero_latch)
 
     for changed in mutations:
@@ -1579,15 +1877,11 @@ def _shared_router_receipt(
         "schema_version": 1,
         "client_network": {
             "name": client_name,
-            "ipam": [
-                {"Subnet": str(client_subnet), "IPRange": "", "Gateway": client_gateway}
-            ],
+            "ipam": [{"Subnet": str(client_subnet), "IPRange": "", "Gateway": client_gateway}],
         },
         "server_network": {
             "name": server_name,
-            "ipam": [
-                {"Subnet": str(server_subnet), "IPRange": "", "Gateway": server_gateway}
-            ],
+            "ipam": [{"Subnet": str(server_subnet), "IPRange": "", "Gateway": server_gateway}],
         },
         "router": {
             "container": f"{base}-router",
@@ -1678,8 +1972,7 @@ def test_regression_receipt_binds_the_separate_two_origin_nine_mode_proof(
             "stage": "regression",
             "workload_aliases": {"complex": "local-large", "simple": "local-small"},
             "fixture_scope": (
-                "single-origin-prefix-regression-plus-bound-two-origin-"
-                "nine-mode-compatibility"
+                "single-origin-prefix-regression-plus-bound-two-origin-nine-mode-compatibility"
             ),
             "treatment_order": list(load_study_plan()["regression"]["treatments"]),
         }
@@ -1717,9 +2010,9 @@ def test_shared_router_receipt_normalizes_nondeterministic_qdisc_handles(
     ),
 )
 def test_shared_router_netem_rejects_unknown_raw_options(location: str, key: str) -> None:
-    options = _shared_router_netem(
-        "netem delay 25ms rate 5mbit limit 100 loss 1%", "10:"
-    )["options"]
+    options = _shared_router_netem("netem delay 25ms rate 5mbit limit 100 loss 1%", "10:")[
+        "options"
+    ]
     assert isinstance(options, dict)
     if location == "top":
         options[key] = 1
@@ -1779,19 +2072,15 @@ def test_shared_router_receipt_rejects_network_evidence_tampering(
     elif tamper == "client-hosts":
         network["client"]["observed_hosts"]["qcsd-buflo-server-one"] = ["10.0.0.9"]
     elif tamper == "ifb-netem":
-        network["router"]["observed_qdiscs"]["ifb0"][0]["netem"][
-            "rate_bytes_per_second"
-        ] = 1_250_000
+        network["router"]["observed_qdiscs"]["ifb0"][0]["netem"]["rate_bytes_per_second"] = (
+            1_250_000
+        )
     elif tamper == "ingress-filter":
         network["router"]["observed_client_ingress_filter"]["action"]["to_device"] = "eth1"
     elif tamper == "client-qdisc":
-        network["client"]["observed_qdiscs"] = network["router"]["observed_qdiscs"][
-            "ifb0"
-        ]
+        network["client"]["observed_qdiscs"] = network["router"]["observed_qdiscs"]["ifb0"]
     elif tamper == "server-qdisc":
-        network["servers"][0]["observed_qdiscs"] = network["router"]["observed_qdiscs"][
-            "eth0"
-        ]
+        network["servers"][0]["observed_qdiscs"] = network["router"]["observed_qdiscs"]["eth0"]
     elif tamper == "router-offload":
         network["router"]["observed_offloads"]["eth0"]["gso"] = True
     elif tamper == "coverage-count":
@@ -1825,9 +2114,7 @@ def test_new_formal_artifacts_cannot_bypass_v15_contract(tmp_path: Path) -> None
             cohort_version=14,
         )
 
-    with pytest.raises(
-        ValueError, match="formal capture admission requires cohort version 15"
-    ):
+    with pytest.raises(ValueError, match="formal capture admission requires cohort version 15"):
         buflo_study.create_capture_admission(
             tmp_path / "admission.json",
             stage="formal",
@@ -1874,9 +2161,7 @@ def test_validation_attestation_rejects_each_hard_gate_identity_tamper(
         "source": {},
         "evidence": evidence,
         "validation_summary": {},
-        "hard_gates": buflo_study._hard_gate_records(
-            ["a" * 64], schema_version=2
-        ),
+        "hard_gates": buflo_study._hard_gate_records(["a" * 64], schema_version=2),
         "all_hard_gates_passed": True,
     }
     monkeypatch.setattr(
@@ -2055,9 +2340,10 @@ def test_controlled_rate_driver_is_separate_bounded_and_live_size_gated() -> Non
         resources,
         runs=[{"responses": [response]} for _index in range(3)],
     )
-    assert proof["encoded_request_stream_bytes"] == [
-        buflo_study.CSBUFLO_RATE_DRIVER_MIN_REQUEST_STREAM_BYTES
-    ] * 3
+    assert (
+        proof["encoded_request_stream_bytes"]
+        == [buflo_study.CSBUFLO_RATE_DRIVER_MIN_REQUEST_STREAM_BYTES] * 3
+    )
     observation = buflo_study._controlled_csbuflo_rate_driver_observation(
         "local-small", {"responses": [response]}
     )
@@ -2101,16 +2387,13 @@ def test_controlled_driver_does_not_change_regression_manifests(
     ]
     assert [len(regression[name]["resources"]) for name in ("simple", "complex")] == [1, 4]
     assert {
-        resource["url"].split("/", 3)[2]
-        for resource in controlled["local-large"]["resources"]
+        resource["url"].split("/", 3)[2] for resource in controlled["local-large"]["resources"]
     } == {"qcsd-buflo-server-one:4433", "qcsd-buflo-server-two:4434"}
     assert {
-        resource["url"].split("/", 3)[2]
-        for resource in regression["complex"]["resources"]
+        resource["url"].split("/", 3)[2] for resource in regression["complex"]["resources"]
     } == {"qcsd-buflo-server-one:4433"}
     assert {
-        resource["url"].split("/", 3)[2]
-        for resource in compatibility["complex"]["resources"]
+        resource["url"].split("/", 3)[2] for resource in compatibility["complex"]["resources"]
     } == {"qcsd-buflo-server-one:4433", "qcsd-buflo-server-two:4434"}
     for workload_id in ("local-small", "local-large"):
         proof = buflo_study._validate_controlled_csbuflo_rate_driver(
@@ -2191,12 +2474,8 @@ def _regression_multi_origin_identity_manifest() -> dict[str, object]:
             )
     preparation = manifest["preparation"]
     assert isinstance(preparation, dict)
-    preparation["approved_origins"] = list(
-        buflo_study.MULTI_ORIGIN_COMPATIBILITY_ORIGINS
-    )
-    preparation["observed_origins"] = list(
-        buflo_study.MULTI_ORIGIN_COMPATIBILITY_ORIGINS
-    )
+    preparation["approved_origins"] = list(buflo_study.MULTI_ORIGIN_COMPATIBILITY_ORIGINS)
+    preparation["observed_origins"] = list(buflo_study.MULTI_ORIGIN_COMPATIBILITY_ORIGINS)
     return manifest
 
 
@@ -2241,7 +2520,9 @@ def _multi_origin_attempt_ledger_fixture(
         defense: SimpleNamespace,
         *,
         seed: int,
+        historical_candidate_source: dict[str, object] | None = None,
     ) -> dict[str, object]:
+        assert historical_candidate_source is None
         result = json.loads((attempt / "attempt.json").read_text(encoding="utf-8"))
         if result.get("success") is not True:
             raise ValueError("attempt is rejected")
@@ -2509,6 +2790,51 @@ def test_regression_multi_origin_existing_terminal_rejection_is_resume_skipped(
     assert reason_path.read_bytes() == before
 
 
+def test_v36_historical_candidate_schema_path_requires_exact_sealed_binding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    receipt = (
+        tmp_path
+        / "buflo-study-regression-v36"
+        / "multi-origin-nine-mode-compatibility"
+        / "receipt.json"
+    )
+    receipt.parent.mkdir(parents=True)
+    receipt.write_text("{}\n", encoding="utf-8")
+    monkeypatch.setattr(
+        buflo_study,
+        "source_metadata",
+        lambda: {
+            **buflo_study.HISTORICAL_MULTI_ORIGIN_V36_SOURCE,
+            "lab_commit": "0" * 40,
+        },
+    )
+    monkeypatch.setattr(
+        buflo_study,
+        "sha256_file",
+        lambda path: (
+            buflo_study.HISTORICAL_MULTI_ORIGIN_V36_RECEIPT_SHA256
+            if Path(path) == receipt
+            else "0" * 64
+        ),
+    )
+
+    selected = buflo_study._regression_multi_origin_historical_candidate_source(
+        receipt,
+        buflo_study.HISTORICAL_MULTI_ORIGIN_V36_SOURCE,
+    )
+
+    assert selected == buflo_study.HISTORICAL_MULTI_ORIGIN_V36_SOURCE
+    with pytest.raises(ValueError, match="explicitly frozen source"):
+        buflo_study._regression_multi_origin_historical_candidate_source(
+            receipt,
+            {
+                **buflo_study.HISTORICAL_MULTI_ORIGIN_V36_SOURCE,
+                "neqo_commit": "0" * 40,
+            },
+        )
+
+
 def test_regression_multi_origin_checkpoint_binding_rejects_tamper_and_wrong_acceptance(
     tmp_path: Path,
 ) -> None:
@@ -2516,8 +2842,7 @@ def test_regression_multi_origin_checkpoint_binding_rejects_tamper_and_wrong_acc
     root.mkdir()
     checkpoint = root / "checkpoint.json"
     accepted = {
-        mode: f"attempts/{mode}/attempt-01"
-        for mode in buflo_study.MULTI_ORIGIN_COMPATIBILITY_MODES
+        mode: f"attempts/{mode}/attempt-01" for mode in buflo_study.MULTI_ORIGIN_COMPATIBILITY_MODES
     }
     value = {
         "schema_version": 1,
@@ -2537,10 +2862,13 @@ def test_regression_multi_origin_checkpoint_binding_rejects_tamper_and_wrong_acc
         )
         == checkpoint.resolve()
     )
-    assert buflo_study._validate_regression_multi_origin_checkpoint(
-        value,
-        require_complete=True,
-    ) == accepted
+    assert (
+        buflo_study._validate_regression_multi_origin_checkpoint(
+            value,
+            require_complete=True,
+        )
+        == accepted
+    )
 
     value["accepted_attempts"]["wtf-pad"] = "attempts/front/attempt-01"
     checkpoint.write_text(json.dumps(value), encoding="utf-8")
@@ -2590,10 +2918,7 @@ def test_regression_multi_origin_identity_retains_both_endpoints_and_all_resourc
     resources = manifest["resources"]
     preparation = manifest["preparation"]
     assert isinstance(resources, list) and isinstance(preparation, dict)
-    expected = {
-        response["resource_id"]: response
-        for response in preparation["expected_responses"]
-    }
+    expected = {response["resource_id"]: response for response in preparation["expected_responses"]}
     run = {
         "endpoints": [
             {"id": 0, "origin": "https://qcsd-buflo-server-one:4433"},
@@ -2613,9 +2938,7 @@ def test_regression_multi_origin_identity_retains_both_endpoints_and_all_resourc
         ],
     }
 
-    source_value = buflo_study.load_json(
-        LAB_ROOT / "config/defense-params/walkie-talkie-live.json"
-    )
+    source_value = buflo_study.load_json(LAB_ROOT / "config/defense-params/walkie-talkie-live.json")
     source_value.update(
         {
             "schema_version": 6,
@@ -2660,9 +2983,7 @@ def test_regression_multi_origin_identity_retains_both_endpoints_and_all_resourc
         for defense in defenses
     ]
 
-    assert [row["mode"] for row in evidence] == list(
-        buflo_study.MULTI_ORIGIN_COMPATIBILITY_MODES
-    )
+    assert [row["mode"] for row in evidence] == list(buflo_study.MULTI_ORIGIN_COMPATIBILITY_MODES)
     assert [defense.kind for defense in defenses] == [
         "none",
         "static",
@@ -2707,16 +3028,10 @@ def test_regression_prefix_spec_uses_current_full_capacity_schema(
 
     manifest = _regression_prefix_manifest(workload_id)
     historical = json.loads(
-        (LAB_ROOT / "config/defense-params/walkie-talkie-live.json").read_text(
-            encoding="utf-8"
-        )
+        (LAB_ROOT / "config/defense-params/walkie-talkie-live.json").read_text(encoding="utf-8")
     )
     profile = buflo_study._current_regression_walkie_talkie_profile(
-        next(
-            profile
-            for profile in historical["profiles"]
-            if profile["real"] == workload_id
-        ),
+        next(profile for profile in historical["profiles"] if profile["real"] == workload_id),
         historical["packet_size"],
     )
     destination = tmp_path / f"{workload_id}.json"
@@ -2760,9 +3075,7 @@ def test_local_regression_prefix_spec_source_policy_is_fail_closed(tmp_path: Pat
 
     manifest = _regression_prefix_manifest("simple")
     historical = json.loads(
-        (LAB_ROOT / "config/defense-params/walkie-talkie-live.json").read_text(
-            encoding="utf-8"
-        )
+        (LAB_ROOT / "config/defense-params/walkie-talkie-live.json").read_text(encoding="utf-8")
     )
     profile = buflo_study._current_regression_walkie_talkie_profile(
         next(profile for profile in historical["profiles"] if profile["real"] == "simple"),
@@ -2905,131 +3218,121 @@ def test_sustained_capacity_gate_requires_all_clean_cells() -> None:
             "treatment": treatment,
             "workload": workload,
             "visit": visit,
-                "capacity": {
-                    "passed": True,
-                    "cell_size_bytes": 1_200 if treatment == "buflo" else 600,
-                    "minimum_interval_us": (
-                        20_000 if treatment == "buflo" else 4_096
-                    ),
-                    "outgoing_opportunities": 10,
-                    "incoming_opportunities": 10,
-                    "outgoing_full_cells": 10,
-                    "incoming_consumed_bytes": (
-                        12_000 if treatment == "buflo" else 6_000
-                    ),
-                    "incoming_advertised_bytes": (
-                        12_000 if treatment == "buflo" else 6_000
-                    ),
-                    "incoming_terminal_cells": 10,
-                    "incoming_consumption_delay_us_max": 1_000,
-                    "runner_full_extended_schema_validated": True,
-                    "runner_algorithm_evidence_sha256": "a" * 64,
-                    "minimum_interval_exercised": True,
-                    "exact_target_sizes": True,
-                    "no_unresolved_credit": True,
-                    **(
-                        {
-                            "terminal_subcell": {
-                                "schema_version": 3,
-                                "terminal_subcell_policy": (
-                                    BUFLO_TERMINAL_SUBCELL_POLICY
+            "capacity": {
+                "passed": True,
+                "cell_size_bytes": 1_200 if treatment == "buflo" else 600,
+                "minimum_interval_us": (20_000 if treatment == "buflo" else 4_096),
+                "outgoing_opportunities": 10,
+                "incoming_opportunities": 10,
+                "outgoing_full_cells": 10,
+                "incoming_consumed_bytes": (12_000 if treatment == "buflo" else 6_000),
+                "incoming_advertised_bytes": (12_000 if treatment == "buflo" else 6_000),
+                "incoming_terminal_cells": 10,
+                "incoming_consumption_delay_us_max": 1_000,
+                "runner_full_extended_schema_validated": True,
+                "runner_algorithm_evidence_sha256": "a" * 64,
+                "minimum_interval_exercised": True,
+                "exact_target_sizes": True,
+                "no_unresolved_credit": True,
+                **(
+                    {
+                        "terminal_subcell": {
+                            "schema_version": 3,
+                            "terminal_subcell_policy": (BUFLO_TERMINAL_SUBCELL_POLICY),
+                            "terminal_subcell_observer_effect": (
+                                BUFLO_TERMINAL_SUBCELL_OBSERVER_EFFECT
+                            ),
+                            "control_evidence_semantics": (
+                                "post-cancellation unscheduled packet composition "
+                                "proves defense-control bytes but does not expose "
+                                "individual QUIC frame identity"
+                            ),
+                            "terminal_latched": True,
+                            "terminal_latched_at_us": 10_000_001,
+                            "open_streams_at_latch": 1,
+                            "stream_cancellations": 1,
+                            "receipt_cancellations": 1,
+                            "typed_cancellation_action_events": 1,
+                            "pending_request_cancellations": 0,
+                            "parser_lease_bytes_at_latch": 0,
+                            "pending_parser_boundaries_at_latch": 1,
+                            "pending_application_parser_boundaries_at_latch": 0,
+                            "exact_capacity_bytes_cancelled": 1_199,
+                            "whole_cell_floor_bytes": 1_200,
+                            "first_cancellation_monotonic_us": 10_000_010,
+                            "last_exact_outgoing_cell_monotonic_us": 9_999_990,
+                            "last_scheduled_terminal_monotonic_us": 10_000_000,
+                            "schedule_stop": {
+                                "policy": BUFLO_SCHEDULE_STOP_POLICY,
+                                "terminal_time_semantics": (
+                                    BUFLO_SCHEDULE_STOP_TERMINAL_TIME_SEMANTICS
                                 ),
-                                "terminal_subcell_observer_effect": (
-                                    BUFLO_TERMINAL_SUBCELL_OBSERVER_EFFECT
-                                ),
-                                "control_evidence_semantics": (
-                                    "post-cancellation unscheduled packet composition "
-                                    "proves defense-control bytes but does not expose "
-                                    "individual QUIC frame identity"
-                                ),
-                                "terminal_latched": True,
-                                "terminal_latched_at_us": 10_000_001,
-                                "open_streams_at_latch": 1,
-                                "stream_cancellations": 1,
-                                "receipt_cancellations": 1,
-                                "typed_cancellation_action_events": 1,
-                                "pending_request_cancellations": 0,
-                                "parser_lease_bytes_at_latch": 0,
-                                "pending_parser_boundaries_at_latch": 1,
-                                "pending_application_parser_boundaries_at_latch": 0,
-                                "exact_capacity_bytes_cancelled": 1_199,
-                                "whole_cell_floor_bytes": 1_200,
-                                "first_cancellation_monotonic_us": 10_000_010,
-                                "last_exact_outgoing_cell_monotonic_us": 9_999_990,
-                                "last_scheduled_terminal_monotonic_us": 10_000_000,
-                                "schedule_stop": {
-                                    "policy": BUFLO_SCHEDULE_STOP_POLICY,
-                                    "terminal_time_semantics": (
-                                        BUFLO_SCHEDULE_STOP_TERMINAL_TIME_SEMANTICS
-                                    ),
-                                    "latched": True,
-                                    "latched_at_us": 10_000_000,
-                                    "available_bytes": 1_199,
-                                    "required_bytes": 1_200,
-                                    "directions": {
-                                        "outgoing": {
-                                            "scheduled_cells_at_stop": 10,
-                                            "terminal_cells_at_stop": 10,
-                                            "drained_cells_after_stop": 0,
-                                            "last_scheduled_target_us": 10_000_000,
-                                            "last_terminal_at_us": 9_999_990,
-                                            "terminal_cells_strictly_before_stop": 10,
-                                            "terminal_cells_at_or_before_stop": 10,
-                                            "terminal_cells_at_stop_timestamp": 0,
-                                        },
-                                        "incoming": {
-                                            "scheduled_cells_at_stop": 10,
-                                            "terminal_cells_at_stop": 9,
-                                            "drained_cells_after_stop": 1,
-                                            "last_scheduled_target_us": 10_000_000,
-                                            "last_terminal_at_us": 10_000_001,
-                                            "terminal_cells_strictly_before_stop": 9,
-                                            "terminal_cells_at_or_before_stop": 9,
-                                            "terminal_cells_at_stop_timestamp": 0,
-                                        },
+                                "latched": True,
+                                "latched_at_us": 10_000_000,
+                                "available_bytes": 1_199,
+                                "required_bytes": 1_200,
+                                "directions": {
+                                    "outgoing": {
+                                        "scheduled_cells_at_stop": 10,
+                                        "terminal_cells_at_stop": 10,
+                                        "drained_cells_after_stop": 0,
+                                        "last_scheduled_target_us": 10_000_000,
+                                        "last_terminal_at_us": 9_999_990,
+                                        "terminal_cells_strictly_before_stop": 10,
+                                        "terminal_cells_at_or_before_stop": 10,
+                                        "terminal_cells_at_stop_timestamp": 0,
+                                    },
+                                    "incoming": {
+                                        "scheduled_cells_at_stop": 10,
+                                        "terminal_cells_at_stop": 9,
+                                        "drained_cells_after_stop": 1,
+                                        "last_scheduled_target_us": 10_000_000,
+                                        "last_terminal_at_us": 10_000_001,
+                                        "terminal_cells_strictly_before_stop": 9,
+                                        "terminal_cells_at_or_before_stop": 9,
+                                        "terminal_cells_at_stop_timestamp": 0,
                                     },
                                 },
-                                "post_cancellation_unscheduled_defense_control_packets": 1,
-                                "post_cancellation_unscheduled_defense_control_bytes": 4,
-                                "first_post_cancellation_defense_control_monotonic_us": 10_000_020,
-                                "last_post_cancellation_defense_control_monotonic_us": 10_000_020,
-                                "paper_equivalent": False,
-                                "implementation_scope": "client_only_quic",
-                            }
+                            },
+                            "post_cancellation_unscheduled_defense_control_packets": 1,
+                            "post_cancellation_unscheduled_defense_control_bytes": 4,
+                            "first_post_cancellation_defense_control_monotonic_us": 10_000_020,
+                            "last_post_cancellation_defense_control_monotonic_us": 10_000_020,
+                            "paper_equivalent": False,
+                            "implementation_scope": "client_only_quic",
                         }
-                        if treatment == "buflo"
-                        else {}
-                    ),
-                    **(
-                        {
-                            f"{direction}_minimum_interval_{field}": 2
-                            for direction in ("outgoing", "incoming")
-                            for field in ("opportunities", "terminal", "full")
-                        }
-                        if treatment != "buflo"
-                        else {}
-                    ),
-                    **(
-                        {
-                            "incoming_minimum_interval_local_realized": 2,
-                            "incoming_local_realized_cells": 10,
-                            "request_rate_driver_resource_id": (
-                                1 if workload == "local-small" else 4
-                            ),
-                            "request_rate_driver_request_stream_bytes": (
-                                buflo_study.CSBUFLO_RATE_DRIVER_MIN_REQUEST_STREAM_BYTES
-                            ),
-                            "request_rate_driver_boundary_bytes": (
-                                buflo_study.CSBUFLO_RATE_DRIVER_BOUNDARY_BYTES
-                            ),
-                            "request_rate_driver_post_boundary_cells": (
-                                buflo_study.CSBUFLO_RATE_DRIVER_POST_BOUNDARY_CELLS
-                            ),
-                        }
-                        if treatment != "buflo"
-                        else {}
-                    ),
-                },
+                    }
+                    if treatment == "buflo"
+                    else {}
+                ),
+                **(
+                    {
+                        f"{direction}_minimum_interval_{field}": 2
+                        for direction in ("outgoing", "incoming")
+                        for field in ("opportunities", "terminal", "full")
+                    }
+                    if treatment != "buflo"
+                    else {}
+                ),
+                **(
+                    {
+                        "incoming_minimum_interval_local_realized": 2,
+                        "incoming_local_realized_cells": 10,
+                        "request_rate_driver_resource_id": (1 if workload == "local-small" else 4),
+                        "request_rate_driver_request_stream_bytes": (
+                            buflo_study.CSBUFLO_RATE_DRIVER_MIN_REQUEST_STREAM_BYTES
+                        ),
+                        "request_rate_driver_boundary_bytes": (
+                            buflo_study.CSBUFLO_RATE_DRIVER_BOUNDARY_BYTES
+                        ),
+                        "request_rate_driver_post_boundary_cells": (
+                            buflo_study.CSBUFLO_RATE_DRIVER_POST_BOUNDARY_CELLS
+                        ),
+                    }
+                    if treatment != "buflo"
+                    else {}
+                ),
+            },
         }
         for treatment in ("buflo", "cs-buflo-ctsp", "cs-buflo-cpsp")
         for workload in ("local-small", "local-large")
@@ -3040,10 +3343,7 @@ def test_sustained_capacity_gate_requires_all_clean_cells() -> None:
     assert proof["profiles"]["buflo"]["cell_size_bytes"] == 1_200
     assert proof["profiles"]["buflo"]["terminal_subcell"]["schema_version"] == 3
     assert (
-        proof["profiles"]["buflo"]["terminal_subcell"][
-            "pending_parser_boundaries_at_latch"
-        ]
-        == 10
+        proof["profiles"]["buflo"]["terminal_subcell"]["pending_parser_boundaries_at_latch"] == 10
     )
     assert (
         proof["profiles"]["buflo"]["terminal_subcell"][
@@ -3052,19 +3352,12 @@ def test_sustained_capacity_gate_requires_all_clean_cells() -> None:
         == 0
     )
     assert (
-        proof["profiles"]["buflo"]["terminal_subcell"][
-            "exact_capacity_bytes_cancelled"
-        ]["maximum"]
+        proof["profiles"]["buflo"]["terminal_subcell"]["exact_capacity_bytes_cancelled"]["maximum"]
         == 1_199
     )
-    schedule_stop = proof["profiles"]["buflo"]["terminal_subcell"][
-        "schedule_stop"
-    ]
+    schedule_stop = proof["profiles"]["buflo"]["terminal_subcell"]["schedule_stop"]
     assert schedule_stop["policy"] == BUFLO_SCHEDULE_STOP_POLICY
-    assert (
-        schedule_stop["terminal_time_semantics"]
-        == BUFLO_SCHEDULE_STOP_TERMINAL_TIME_SEMANTICS
-    )
+    assert schedule_stop["terminal_time_semantics"] == BUFLO_SCHEDULE_STOP_TERMINAL_TIME_SEMANTICS
     assert schedule_stop["latched_samples"] == 10
     assert schedule_stop["samples_with_incoming_drain"] == 10
     assert schedule_stop["directions"]["outgoing"]["drained_cells_after_stop"] == 0
@@ -3279,7 +3572,9 @@ def test_pre_formal_snapshot_binds_selected_cohort_campaigns(
     assert snapshot["cohort_version"] == 2
     assert snapshot["qualification_set"] == "buflo-study-public5-v2"
     assert len(snapshot["formal_campaigns"]) == 10
-    assert all("/cohort-inputs/v2/campaigns/" in row["path"] for row in snapshot["formal_campaigns"])
+    assert all(
+        "/cohort-inputs/v2/campaigns/" in row["path"] for row in snapshot["formal_campaigns"]
+    )
 
 
 def test_live_parameters_bind_scope_modes_sampling_and_guard() -> None:
@@ -3428,9 +3723,7 @@ def test_executed_reference_receipt_binds_rate_quantization_discrepancy(
         buflo_study._validate_canonical_reference_receipt(substituted)
 
     value = json.loads(canonical.read_text(encoding="utf-8"))
-    value["csbuflo_estimator_contract"]["rate_quantization_resolution"] = (
-        "paper-prose-round-up"
-    )
+    value["csbuflo_estimator_contract"]["rate_quantization_resolution"] = "paper-prose-round-up"
     substituted = tmp_path / "substituted-rate-resolution-receipt.json"
     substituted.write_text(json.dumps(value), encoding="utf-8")
 
@@ -3620,9 +3913,9 @@ def test_v15_formal_capture_admission_requires_code_gate_before_freeze_replay(
         "controlled_results": {"results": [{"environment": environment}]},
     }
     monkeypatch.setattr(
-        buflo_study, "validate_reference_gate_receipt", lambda *_args, **_kwargs: {
-            "build_execution": identity
-        }
+        buflo_study,
+        "validate_reference_gate_receipt",
+        lambda *_args, **_kwargs: {"build_execution": identity},
     )
     monkeypatch.setattr(
         buflo_study, "validate_qualification_receipt", lambda *_args, **_kwargs: qualification
@@ -3635,9 +3928,7 @@ def test_v15_formal_capture_admission_requires_code_gate_before_freeze_replay(
     monkeypatch.setattr(
         buflo_study, "validate_build_execution_receipt", lambda *_args, **_kwargs: build
     )
-    monkeypatch.setattr(
-        buflo_study, "_one_build_execution_identity", lambda _values: identity
-    )
+    monkeypatch.setattr(buflo_study, "_one_build_execution_identity", lambda _values: identity)
     results_root = tmp_path / "results"
     results_root.mkdir()
 
@@ -3776,12 +4067,7 @@ def test_launcher_requires_clean_capture_image_and_no_cache_build() -> None:
     assert '"${1:-}" == "run"' in direct_run_guard
     assert "buflo-study-v1-(smoke|rehearsal|formal-[0-9]{2})" in direct_run_guard
     assert '"${1:-}" == "resume"' not in direct_run_guard
-    assert (
-        launcher.count(
-            'docker --context "${build_docker_context}" build --pull --no-cache'
-        )
-        == 3
-    )
+    assert launcher.count('docker --context "${build_docker_context}" build --pull --no-cache') == 3
     assert "WSL_HOST_BUILD_MIN_AVAILABLE_BYTES=68719476736" in launcher
     assert launcher.count('wsl_host_build_storage_probe "') == 4
     assert "windows_docker_storage_probe.ps1" in launcher
@@ -3801,9 +4087,7 @@ def test_launcher_requires_clean_capture_image_and_no_cache_build() -> None:
 
 def test_launcher_applies_least_privilege_rr1_capture_partition() -> None:
     launcher = (LAB_ROOT / "qcsd-lab").read_text(encoding="utf-8")
-    entrypoint = (LAB_ROOT / "docker/collection-entrypoint").read_text(
-        encoding="utf-8"
-    )
+    entrypoint = (LAB_ROOT / "docker/collection-entrypoint").read_text(encoding="utf-8")
     network_probe = launcher.split("buflo_namespace_evidence()", 1)[1].split(
         "buflo_controlled_evidence_base64()", 1
     )[0]
@@ -3812,6 +4096,12 @@ def test_launcher_applies_least_privilege_rr1_capture_partition() -> None:
     assert 'runtime+=(--cpuset-cpus "10-11" --ulimit "rtprio=1:1")' in launcher
     assert "--cpuset-cpus 10-11" in launcher
     assert "--ulimit rtprio=1:1" in launcher
+    assert "docker ps --format '{{.ID}}'" in launcher
+    assert "docker-inspect-all-running-containers-prelaunch-v1" in launcher
+    assert "container_set_matches_expected = set(expected) == observed_names" in launcher
+    assert "refuses a running Docker container without the" in launcher
+    assert "QCSD_CAPTURE_SCHEDULER_HOST_PARTITION_B64" in launcher
+    assert launcher.count('--label "org.qcsd.owner=qcsd-lab"') >= 5
     # Acceptance server, ordinary controlled server, and shared router helpers
     # remain outside the isolated client CPU partition.
     assert launcher.count("--cpuset-cpus 0-9") == 3
@@ -3827,10 +4117,7 @@ def test_launcher_applies_least_privilege_rr1_capture_partition() -> None:
 def test_versioned_build_receipts_coexist_and_reject_path_or_request_mismatch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    paths = {
-        version: tmp_path / f"build-execution-v{version}.json"
-        for version in (1, 2)
-    }
+    paths = {version: tmp_path / f"build-execution-v{version}.json" for version in (1, 2)}
     monkeypatch.setattr(
         buflo_study,
         "build_execution_receipt_path",
@@ -3848,17 +4135,21 @@ def test_versioned_build_receipts_coexist_and_reject_path_or_request_mismatch(
         )
     v1_sha256 = buflo_study.sha256_file(paths[1])
 
-    assert buflo_study.validate_build_execution_receipt(
-        paths[1], expected_cohort_version=1
-    )["cohort_version"] == 1
-    assert buflo_study.validate_build_execution_receipt(
-        paths[2], expected_cohort_version=2
-    )["cohort_version"] == 2
+    assert (
+        buflo_study.validate_build_execution_receipt(paths[1], expected_cohort_version=1)[
+            "cohort_version"
+        ]
+        == 1
+    )
+    assert (
+        buflo_study.validate_build_execution_receipt(paths[2], expected_cohort_version=2)[
+            "cohort_version"
+        ]
+        == 2
+    )
     assert buflo_study.sha256_file(paths[1]) == v1_sha256
     with pytest.raises(ValueError, match="cohort version differs from the request"):
-        buflo_study.validate_build_execution_receipt(
-            paths[1], expected_cohort_version=2
-        )
+        buflo_study.validate_build_execution_receipt(paths[1], expected_cohort_version=2)
 
     copied = tmp_path / "copied-v1-as-v2.json"
     copied.write_bytes(paths[1].read_bytes())
@@ -3872,22 +4163,13 @@ def test_all_public_v2_campaign_matrices_render_and_validate(
     monkeypatch.setattr(buflo_study, "COHORT_INPUT_ROOT", tmp_path / "cohort-inputs")
 
     assert buflo_study.validate_campaign_matrix("smoke", cohort_version=2)["samples"] == 20
-    assert (
-        buflo_study.validate_campaign_matrix("rehearsal", cohort_version=2)["samples"]
-        == 40
-    )
+    assert buflo_study.validate_campaign_matrix("rehearsal", cohort_version=2)["samples"] == 40
     assert buflo_study.validate_campaign_matrix("formal", cohort_version=2)["samples"] == 1_500
 
 
 def test_versioned_public5_outputs_are_narrowly_ignored() -> None:
-    versioned = (
-        "config/chaff-response-qualification-store/sets/"
-        "buflo-study-public5-v2/receipt.json"
-    )
-    unrelated = (
-        "config/chaff-response-qualification-store/sets/"
-        "unrelated-public5-v2/receipt.json"
-    )
+    versioned = "config/chaff-response-qualification-store/sets/buflo-study-public5-v2/receipt.json"
+    unrelated = "config/chaff-response-qualification-store/sets/unrelated-public5-v2/receipt.json"
     ignored = subprocess.run(
         ["git", "check-ignore", "--no-index", "--quiet", versioned],
         cwd=LAB_ROOT,
@@ -3909,10 +4191,7 @@ def test_versioned_public5_outputs_are_narrowly_ignored() -> None:
     assert ignored.returncode == 0
     assert visible.returncode == 1
     assert "git" in collection_packages
-    assert (
-        "config/chaff-response-qualification-store/sets/buflo-study-public5-v*/"
-        in dockerignore
-    )
+    assert "config/chaff-response-qualification-store/sets/buflo-study-public5-v*/" in dockerignore
     assert "config/chaff-response-qualification-store/sets/*" not in dockerignore
 
 
@@ -3925,8 +4204,11 @@ def test_launcher_selects_exact_versioned_build_images_and_frozen_resume_admissi
     assert 'PREPARE_IMAGE="${study_build_fields[2]}"' in launcher
     assert 'REFERENCE_IMAGE="${study_build_fields[3]}"' in launcher
     assert 'QCSD_LAB_PREPARE_IMAGE="${PREPARE_IMAGE}"' in launcher
-    assert 'study_capture_admission_host="${study_resume_root}/inputs/capture-admission.json"' in launcher
-    assert "read_capture_admission_binding \"${study_capture_admission_host}\"" in launcher
+    assert (
+        'study_capture_admission_host="${study_resume_root}/inputs/capture-admission.json"'
+        in launcher
+    )
+    assert 'read_capture_admission_binding "${study_capture_admission_host}"' in launcher
     assert (
         '--volume "${reference_cohort_inputs}:'
         '/lab/artifacts/buflo-study/cohort-inputs:rw"' in launcher
@@ -4116,9 +4398,7 @@ def test_build_global_lock_rejects_concurrent_role_tag_mutation(
     lock_parent = Path(f"/tmp/qcsd-lab-evidence-build-{os.getuid()}")
     lock_parent.mkdir(mode=0o700, exist_ok=True)
     lock_parent.chmod(0o700)
-    lock_path = lock_parent / (
-        f"{hashlib.sha256(daemon_lock_identity.encode()).hexdigest()}.lock"
-    )
+    lock_path = lock_parent / (f"{hashlib.sha256(daemon_lock_identity.encode()).hexdigest()}.lock")
     with lock_path.open("a+", encoding="utf-8") as held_lock:
         lock_path.chmod(0o600)
         fcntl.flock(held_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -4258,14 +4538,12 @@ def test_build_canonicalises_a_symlinked_launcher_root_before_execution(
     assert result.returncode == 0, result.stderr
     assert _marked_build_count(build_marker) == 3
     receipt = json.loads(
-        (tmp_path / "artifacts/buflo-study/build-execution-v79.json").read_text(
-            encoding="utf-8"
-        )
+        (tmp_path / "artifacts/buflo-study/build-execution-v79.json").read_text(encoding="utf-8")
     )
-    assert {command["argv"][-1] for command in receipt["commands"]} == {
-        str(tmp_path.resolve())
-    }
-    assert all("invocation-root" not in item for command in receipt["commands"] for item in command["argv"])
+    assert {command["argv"][-1] for command in receipt["commands"]} == {str(tmp_path.resolve())}
+    assert all(
+        "invocation-root" not in item for command in receipt["commands"] for item in command["argv"]
+    )
 
 
 def test_windows_storage_probe_is_valid_windows_powershell_syntax() -> None:
@@ -4301,9 +4579,7 @@ def test_windows_storage_probe_rejects_registration_settings_conflict(
 ) -> None:
     if shutil.which("powershell.exe") is None:
         pytest.skip("Windows PowerShell interop is unavailable")
-    probe = (LAB_ROOT / "tools/windows_docker_storage_probe.ps1").read_text(
-        encoding="utf-8"
-    )
+    probe = (LAB_ROOT / "tools/windows_docker_storage_probe.ps1").read_text(encoding="utf-8")
     function = probe.split("function Get-CanonicalDataVhd {", 1)[1].split(
         "\n\n$resolved = Get-CanonicalDataVhd", 1
     )[0]
@@ -4632,9 +4908,7 @@ def test_schema_two_container_reader_preserves_validated_physical_host_paths() -
     for command in value["commands"]:
         iidfile_index = command["argv"].index("--iidfile") + 1
         command["argv"][iidfile_index] = str(
-            host_root
-            / "artifacts/buflo-study/.build-iids-v1.ABC123"
-            / f"{command['target']}.iid"
+            host_root / "artifacts/buflo-study/.build-iids-v1.ABC123" / f"{command['target']}.iid"
         )
         command["argv"][-2] = str(host_root / "Dockerfile")
         command["argv"][-1] = str(host_root)
@@ -4833,9 +5107,7 @@ def test_study_environment_receipt_binds_minimized_docker_bases_and_locks() -> N
     scheduled = json.loads(json.dumps(value))
     scheduled["schema_version"] = 2
     scheduled["docker"]["ncpu"] = 12
-    scheduled["capture_scheduler"] = (
-        buflo_study._capture_scheduler_environment_contract()
-    )
+    scheduled["capture_scheduler"] = buflo_study._capture_scheduler_environment_contract()
     validated = validate_study_environment_receipt(
         scheduled, expected_image_digest="sha256:" + "a" * 64
     )
@@ -4981,7 +5253,7 @@ def test_completed_buflo_resource_receipt_binds_runner_timer_wakeups(tmp_path: P
         {
             "schema_version": 2,
             "semantics": (
-                f'{metrics["semantics"]}; '
+                f"{metrics['semantics']}; "
                 "buflo_exact_release_guard_reserves_candidate_window; "
                 "buflo_exact_release_active_wait_tail_us=250; "
                 "buflo_exact_release_guards_are_separately_receipted_active_waits; "
@@ -4998,9 +5270,7 @@ def test_completed_buflo_resource_receipt_binds_runner_timer_wakeups(tmp_path: P
     )
     assert _runner_wakeup_metrics_valid(historical_v2)
     assert _fidelity_runner_wakeup_metrics_valid(historical_v2)
-    historical_measured = _merge_runner_wakeup_metrics(
-        usage, historical_v2, required=True
-    )
+    historical_measured = _merge_runner_wakeup_metrics(usage, historical_v2, required=True)
     assert historical_measured["timer_wakeups"] == 20
 
     historical_v3 = dict(historical_v2)
@@ -5028,9 +5298,7 @@ def test_completed_buflo_resource_receipt_binds_runner_timer_wakeups(tmp_path: P
         historical_v4[key] = v4_fields[key]
     assert _runner_wakeup_metrics_valid(historical_v4)
     assert _fidelity_runner_wakeup_metrics_valid(historical_v4)
-    historical_v4_measured = _merge_runner_wakeup_metrics(
-        usage, historical_v4, required=True
-    )
+    historical_v4_measured = _merge_runner_wakeup_metrics(usage, historical_v4, required=True)
     assert historical_v4_measured["timer_wakeups"] == 20
 
     historical_v5 = dict(historical_v4)
@@ -5053,14 +5321,21 @@ def test_completed_buflo_resource_receipt_binds_runner_timer_wakeups(tmp_path: P
     assert _runner_wakeup_metrics_valid(historical_v5)
     assert _fidelity_runner_wakeup_metrics_valid(historical_v5)
 
-    current = dict(historical_v5)
-    v6_fields = _runner_wakeup_receipt_v6()
-    current.update(
-        {
-            "schema_version": v6_fields["schema_version"],
-            "semantics": v6_fields["semantics"],
-        }
-    )
+    current = _runner_wakeup_receipt_v7(guard_entries=19)
+    for key in (
+        "wait_returns",
+        "socket_readiness_wakeups",
+        "timer_wakeups",
+        "controller_deadline_timer_wakeups",
+        "other_timer_wakeups",
+        "buflo_exact_incoming_retry_drives",
+        "buflo_exact_incoming_retry_resolutions",
+        "buflo_exact_incoming_retry_max_wake_lateness_nanoseconds",
+        "cs_exact_incoming_retry_drives",
+        "cs_exact_incoming_retry_resolutions",
+        "cs_exact_incoming_retry_max_phase_lateness_nanoseconds",
+    ):
+        current[key] = historical_v5[key]
     assert _runner_wakeup_metrics_valid(current)
     assert _fidelity_runner_wakeup_metrics_valid(current)
     current_measured = _merge_runner_wakeup_metrics(usage, current, required=True)
@@ -5135,9 +5410,7 @@ def test_completed_buflo_resource_receipt_binds_runner_timer_wakeups(tmp_path: P
         "buflo_exact_incoming_retry_max_wake_lateness_nanoseconds": 1,
     }
     assert _runner_wakeup_metrics_valid(terminal_deadline_lateness_without_retry_drives)
-    assert _fidelity_runner_wakeup_metrics_valid(
-        terminal_deadline_lateness_without_retry_drives
-    )
+    assert _fidelity_runner_wakeup_metrics_valid(terminal_deadline_lateness_without_retry_drives)
 
     with pytest.raises(ValueError, match="lacks runner wakeup metrics"):
         _merge_runner_wakeup_metrics(usage, None, required=True)
@@ -5357,12 +5630,10 @@ def test_buflo_fidelity_requires_every_zero_error_and_typed_terminal_once() -> N
                 "scheduled_server_datagram_size",
             ],
             "terminal_subcell_policy": (
-                "drain_whole_cells_then_client_local_http3_cancel_"
-                "unallocatable_reviewed_chaff_tail"
+                "drain_whole_cells_then_client_local_http3_cancel_unallocatable_reviewed_chaff_tail"
             ),
             "terminal_subcell_observer_effect": (
-                "typed_stop_sending_and_reset_stream_defense_control_may_follow_"
-                "the_last_exact_cell"
+                "typed_stop_sending_and_reset_stream_defense_control_may_follow_the_last_exact_cell"
             ),
             "terminal_schedule_stop_policy": BUFLO_SCHEDULE_STOP_POLICY,
             "diagnostics": diagnostics,
@@ -5471,19 +5742,12 @@ def test_buflo_fidelity_requires_every_zero_error_and_typed_terminal_once() -> N
         require_current_schema=True,
     )
     current_wakeups = json.loads(json.dumps(historical_v5_wakeups))
-    current_wakeups["runner_wakeup_metrics"].update(
-        {
-            "schema_version": _runner_wakeup_receipt_v6()["schema_version"],
-            "semantics": _runner_wakeup_receipt_v6()["semantics"],
-        }
-    )
-    current_wakeups["runner_wakeup_metrics"].update(
-        {
-            "buflo_exact_incoming_retry_drives": 3,
-            "buflo_exact_incoming_retry_resolutions": 1,
-            "buflo_exact_incoming_retry_max_wake_lateness_nanoseconds": 250,
-        }
-    )
+    current_wakeups["runner_wakeup_metrics"] = {
+        **_runner_wakeup_receipt_v7(guard_entries=500),
+        "buflo_exact_incoming_retry_drives": 3,
+        "buflo_exact_incoming_retry_resolutions": 1,
+        "buflo_exact_incoming_retry_max_wake_lateness_nanoseconds": 250,
+    }
     assert new_defense_terminal_receipts_valid(
         current_wakeups,
         "buflo",
@@ -5583,8 +5847,7 @@ def test_cs_buflo_fidelity_reconciles_typed_composition_and_rate_state() -> None
         "cs_buflo_payload_padding": True,
         "cs_buflo_total_padding": False,
         "cs_buflo_early_termination_semantics": (
-            "client_only_outgoing_observed_udp_and_incoming_consumed_credit_"
-            "power_of_two_crossing"
+            "client_only_outgoing_observed_udp_and_incoming_consumed_credit_power_of_two_crossing"
         ),
         "cs_buflo_scheduled_outgoing_cells": 2,
         "cs_buflo_scheduled_incoming_cells": 1,
@@ -5731,9 +5994,7 @@ def test_cs_buflo_fidelity_reconciles_typed_composition_and_rate_state() -> None
                 "scheduled_server_datagram_timing",
                 "scheduled_server_datagram_size",
             ],
-            "incoming_cadence_boundary": (
-                "complete_local_on_wire_max_stream_data_advertisement"
-            ),
+            "incoming_cadence_boundary": ("complete_local_on_wire_max_stream_data_advertisement"),
             "incoming_terminal_boundary": "eventual_peer_stream_offset_consumption",
             "incoming_boundary_separation": (
                 "advertisement_rearms_cadence_but_does_not_claim_peer_datagram_or_consumption"
@@ -5755,16 +6016,12 @@ def test_cs_buflo_fidelity_reconciles_typed_composition_and_rate_state() -> None
         require_current_schema=True,
     )
     invalid_summary_version = json.loads(json.dumps(run))
-    invalid_summary_version["cs_buflo_summary"][
-        "early_termination_translation_version"
-    ] = 2.0
+    invalid_summary_version["cs_buflo_summary"]["early_termination_translation_version"] = 2.0
     assert not new_defense_terminal_receipts_valid(
         invalid_summary_version, "cs_buflo", require_application_complete=True
     )
     invalid_stop = json.loads(json.dumps(run))
-    invalid_stop["defense_diagnostics"][
-        "cs_buflo_incoming_termination_stop_latched"
-    ] = False
+    invalid_stop["defense_diagnostics"]["cs_buflo_incoming_termination_stop_latched"] = False
     invalid_stop["cs_buflo_summary"]["diagnostics"][
         "cs_buflo_incoming_termination_stop_latched"
     ] = False
@@ -5837,12 +6094,12 @@ def test_cs_buflo_fidelity_reconciles_typed_composition_and_rate_state() -> None
         require_current_schema=True,
     )
     current_wakeups = json.loads(json.dumps(historical_v5_wakeups))
-    current_wakeups["runner_wakeup_metrics"].update(
-        {
-            "schema_version": _runner_wakeup_receipt_v6()["schema_version"],
-            "semantics": _runner_wakeup_receipt_v6()["semantics"],
-        }
-    )
+    current_wakeups["runner_wakeup_metrics"] = {
+        **_runner_wakeup_receipt_v7(),
+        "cs_exact_incoming_retry_drives": 3,
+        "cs_exact_incoming_retry_resolutions": 1,
+        "cs_exact_incoming_retry_max_phase_lateness_nanoseconds": 250,
+    }
     assert new_defense_terminal_receipts_valid(
         current_wakeups,
         "cs_buflo",
@@ -5850,19 +6107,13 @@ def test_cs_buflo_fidelity_reconciles_typed_composition_and_rate_state() -> None
         require_current_schema=True,
     )
     invalid_wakeups = json.loads(json.dumps(current_wakeups))
-    invalid_wakeups["runner_wakeup_metrics"][
-        "buflo_exact_release_guard_entries"
-    ] = 1
-    invalid_wakeups["runner_wakeup_metrics"][
-        "buflo_exact_release_guard_wait_nanoseconds"
-    ] = 1
+    invalid_wakeups["runner_wakeup_metrics"]["buflo_exact_release_guard_entries"] = 1
+    invalid_wakeups["runner_wakeup_metrics"]["buflo_exact_release_guard_wait_nanoseconds"] = 1
     assert not new_defense_terminal_receipts_valid(
         invalid_wakeups, "cs_buflo", require_application_complete=True
     )
     invalid_buflo_retry_wakeups = json.loads(json.dumps(current_wakeups))
-    invalid_buflo_retry_wakeups["runner_wakeup_metrics"][
-        "buflo_exact_incoming_retry_drives"
-    ] = 1
+    invalid_buflo_retry_wakeups["runner_wakeup_metrics"]["buflo_exact_incoming_retry_drives"] = 1
     assert not new_defense_terminal_receipts_valid(
         invalid_buflo_retry_wakeups, "cs_buflo", require_application_complete=True
     )
@@ -5877,9 +6128,9 @@ def test_cs_buflo_fidelity_reconciles_typed_composition_and_rate_state() -> None
     legacy_v3["cs_buflo_summary"]["early_termination_semantics"] = (
         "udp_client_only_observed_udp_power_of_two_crossing"
     )
-    legacy_v3["cs_buflo_summary"]["diagnostics"][
-        "cs_buflo_early_termination_semantics"
-    ] = "udp_client_only_observed_udp_power_of_two_crossing"
+    legacy_v3["cs_buflo_summary"]["diagnostics"]["cs_buflo_early_termination_semantics"] = (
+        "udp_client_only_observed_udp_power_of_two_crossing"
+    )
     for key in CS_BUFLO_STOP_DRAIN_V4_KEYS:
         legacy_v3["defense_diagnostics"].pop(key)
         legacy_v3["cs_buflo_summary"]["diagnostics"].pop(key)
@@ -5911,31 +6162,23 @@ def test_cs_buflo_fidelity_reconciles_typed_composition_and_rate_state() -> None
         legacy, "cs_buflo", require_application_complete=True
     )
     wrong_boundary = json.loads(json.dumps(run))
-    wrong_boundary["cs_buflo_summary"]["incoming_terminal_boundary"] = (
-        "local-advertisement"
-    )
+    wrong_boundary["cs_buflo_summary"]["incoming_terminal_boundary"] = "local-advertisement"
     assert not new_defense_terminal_receipts_valid(
         wrong_boundary, "cs_buflo", require_application_complete=True
     )
     wrong_nested = json.loads(json.dumps(run))
-    wrong_nested["cs_buflo_summary"]["diagnostics"][
-        "scheduled_incoming_consumed_bytes"
-    ] -= 1
+    wrong_nested["cs_buflo_summary"]["diagnostics"]["scheduled_incoming_consumed_bytes"] -= 1
     assert not new_defense_terminal_receipts_valid(
         wrong_nested, "cs_buflo", require_application_complete=True
     )
     quiet_only = json.loads(json.dumps(run))
     quiet_only["defense_diagnostics"]["cs_buflo_application_complete"] = False
     quiet_only["cs_buflo_summary"]["diagnostics"]["cs_buflo_application_complete"] = False
-    quiet_only["defense_diagnostics"][
-        "cs_buflo_local_et_before_application_complete"
-    ] = True
+    quiet_only["defense_diagnostics"]["cs_buflo_local_et_before_application_complete"] = True
     quiet_only["cs_buflo_summary"]["diagnostics"][
         "cs_buflo_local_et_before_application_complete"
     ] = True
-    quiet_only["defense_diagnostics"][
-        "cs_buflo_local_et_application_send_endpoints_released"
-    ] = 1
+    quiet_only["defense_diagnostics"]["cs_buflo_local_et_application_send_endpoints_released"] = 1
     quiet_only["cs_buflo_summary"]["diagnostics"][
         "cs_buflo_local_et_application_send_endpoints_released"
     ] = 1
@@ -6216,11 +6459,7 @@ def test_comparison_review_cannot_omit_declared_csbuflo_incoming_boundary(
             "defense": "buflo",
             "known_expected_differences": [
                 *common,
-                {
-                    "difference": (
-                        "buflo-terminal-subcell-client-local-cancellation"
-                    )
-                },
+                {"difference": ("buflo-terminal-subcell-client-local-cancellation")},
             ],
         },
         {
@@ -6236,8 +6475,7 @@ def test_comparison_review_cannot_omit_declared_csbuflo_incoming_boundary(
                 {"difference": "csbuflo-incoming-boundary-translation"},
                 {
                     "difference": (
-                        "csbuflo-paper-source-and-client-only-early-"
-                        "termination-translation"
+                        "csbuflo-paper-source-and-client-only-early-termination-translation"
                     )
                 },
             ],
@@ -6253,9 +6491,7 @@ def test_comparison_review_cannot_omit_declared_csbuflo_incoming_boundary(
             "metrics": {"bandwidth_ratio": 2.796},
         },
     ]
-    anchor_inventory = list(
-        buflo_evaluation.historical_anchor_metric_inventory(historical_rows)
-    )
+    anchor_inventory = list(buflo_evaluation.historical_anchor_metric_inventory(historical_rows))
     evaluation = {
         "original_study_comparison": {
             "qcsd_rows": qcsd_rows,
@@ -6286,33 +6522,21 @@ def test_comparison_review_cannot_omit_declared_csbuflo_incoming_boundary(
         "evaluation": buflo_study._file_binding(evaluation_receipt),
         "handoff": {
             "root": str(handoff.resolve()),
-            "sha256sums_sha256": hashlib.sha256(
-                (handoff / "SHA256SUMS").read_bytes()
-            ).hexdigest(),
-            "dataset_sha256": hashlib.sha256(
-                (handoff / "dataset.json").read_bytes()
-            ).hexdigest(),
-            "samples_sha256": hashlib.sha256(
-                (handoff / "samples.jsonl").read_bytes()
-            ).hexdigest(),
+            "sha256sums_sha256": hashlib.sha256((handoff / "SHA256SUMS").read_bytes()).hexdigest(),
+            "dataset_sha256": hashlib.sha256((handoff / "dataset.json").read_bytes()).hexdigest(),
+            "samples_sha256": hashlib.sha256((handoff / "samples.jsonl").read_bytes()).hexdigest(),
         },
         "reviewer": "independent-reviewer",
         "reviewed_at": "2026-08-27T00:00:00+00:00",
         "rows": [
             {
-                "defense": (
-                    "buflo" if item["anchor_id"].startswith("buflo-") else "cs-buflo"
-                ),
+                "defense": ("buflo" if item["anchor_id"].startswith("buflo-") else "cs-buflo"),
                 "evaluation_row_sha256": buflo_study._canonical_digest(
                     next(
                         row
                         for row in qcsd_rows
                         if row["defense"]
-                        == (
-                            "buflo"
-                            if item["anchor_id"].startswith("buflo-")
-                            else "cs-buflo"
-                        )
+                        == ("buflo" if item["anchor_id"].startswith("buflo-") else "cs-buflo")
                     )
                 ),
                 "anchor_id": item["anchor_id"],
@@ -6366,21 +6590,20 @@ def test_comparison_review_cannot_omit_declared_csbuflo_incoming_boundary(
             ),
         }
     )
-    review_path.write_text(
-        json.dumps(complete, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    review_path.write_text(json.dumps(complete, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    assert (
+        buflo_study.validate_comparison_review(
+            review_path,
+            evaluation_receipt=evaluation_receipt,
+            handoff=handoff,
+            formal=True,
+        )["passed"]
+        is True
     )
-    assert buflo_study.validate_comparison_review(
-        review_path,
-        evaluation_receipt=evaluation_receipt,
-        handoff=handoff,
-        formal=True,
-    )["passed"] is True
 
     generic = json.loads(json.dumps(complete))
     generic["rows"][0]["explanation"] = "reviewed"
-    review_path.write_text(
-        json.dumps(generic, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    review_path.write_text(json.dumps(generic, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     with pytest.raises(ValueError, match="row inventory or digest"):
         buflo_study.validate_comparison_review(
             review_path,

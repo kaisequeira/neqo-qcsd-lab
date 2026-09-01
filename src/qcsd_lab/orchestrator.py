@@ -27,10 +27,14 @@ from . import capture_session as capture_engine
 from .class_acquisition import validate_class_study_preparation
 from .defenses import defense_from_runtime_identity
 from .experiment import (
+    SCHEDULER_RUNTIME_EVIDENCE_PATH,
+    SCHEDULER_RUNTIME_RECEIPT_KEY,
     TERMINAL_DEFENSE_FAILURE_TYPES,
     accepted_sample_hashes,
     resolved_attempt_directory,
     resolved_sample_directory,
+    scheduler_runtime_receipt,
+    validate_accepted_scheduler_runtime_receipt,
     validate_planned_sample_identity,
 )
 from .fidelity import (
@@ -101,15 +105,11 @@ CLASS_STUDY_LAUNCH_SCHEMA_VERSION = 1
 CLASS_STUDY_LAUNCH_INPUT = "inputs/class-study-launch.json"
 CLASS_STUDY_FOUNDATION_INPUT = "inputs/class-study-foundation.json"
 CLASS_STUDY_READINESS_INPUT = "inputs/class-study-readiness.json"
-CLASS_STUDY_HISTORICAL_PRE_INPUT = (
-    "inputs/class-study-historical-pre-snapshot.json"
-)
+CLASS_STUDY_HISTORICAL_PRE_INPUT = "inputs/class-study-historical-pre-snapshot.json"
 CLASS_STUDY_SUCCESSOR_INPUT = "inputs/class-study-successor.json"
 CLASS_STUDY_FOUNDATION_CONFIGURATION_KEY = "class_study_foundation_sha256"
 CLASS_STUDY_READINESS_CONFIGURATION_KEY = "class_study_readiness_sha256"
-CLASS_STUDY_HISTORICAL_PRE_CONFIGURATION_KEY = (
-    "class_study_historical_pre_snapshot_sha256"
-)
+CLASS_STUDY_HISTORICAL_PRE_CONFIGURATION_KEY = "class_study_historical_pre_snapshot_sha256"
 CLASS_STUDY_SUCCESSOR_CONFIGURATION_KEY = "class_study_successor_sha256"
 CLASS_STUDY_FOUNDATION_ENV = "QCSD_CLASS_FOUNDATION_ATTESTATION"
 CLASS_STUDY_READINESS_ENV = "QCSD_CLASS_READINESS_ATTESTATION"
@@ -149,9 +149,7 @@ DEFENSE_KEYS = {"name", "kind", "schedule", "mode", "parameters"}
 EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 WALKIE_TALKIE_RECEIVER_RAW_HEADROOM_BYTES = 1_200
-RESPONSE_ONLY_CHAFF_DEFENSE_KINDS = frozenset(
-    {"front", "tamaraw", *BUFLO_STUDY_PARAMETER_KINDS}
-)
+RESPONSE_ONLY_CHAFF_DEFENSE_KINDS = frozenset({"front", "tamaraw", *BUFLO_STUDY_PARAMETER_KINDS})
 RESPONSE_ONLY_CHAFF_SCOPE = "response-only"
 FULL_CHAFF_SCOPE = "full"
 RESPONSE_ONLY_MANIFEST_TO_SIDECAR_SCHEMA = {3: 1, 4: 2}
@@ -302,9 +300,7 @@ def _load_successor_campaign_context(
         from .class_successor import RESTART_RECEIPT_TYPE
 
         restart_value = load_json(restart_path)
-        restart = validate_hash_bound_receipt(
-            restart_value, expected_type=RESTART_RECEIPT_TYPE
-        )
+        restart = validate_hash_bound_receipt(restart_value, expected_type=RESTART_RECEIPT_TYPE)
         restart_root = restart_path.parent
     artifacts = restart.get("immutable_plan_artifacts")
     if isinstance(artifacts, Mapping) and frozen_inputs is not None:
@@ -323,16 +319,13 @@ def _load_successor_campaign_context(
             if isinstance(artifacts, Mapping)
             else None
         )
-    if (
-        not isinstance(campaign_binding, Mapping)
-        or campaign_binding.get("sha256") != sha256_bytes(source_bytes)
+    if not isinstance(campaign_binding, Mapping) or campaign_binding.get("sha256") != sha256_bytes(
+        source_bytes
     ):
         raise ValueError("successor campaign bytes differ from the immutable restart plan")
     study_id = restart.get("study_id")
     namespace = restart.get("namespace")
-    launch_namespace = (
-        namespace.get("launch_namespace") if isinstance(namespace, Mapping) else None
-    )
+    launch_namespace = namespace.get("launch_namespace") if isinstance(namespace, Mapping) else None
     if (
         not isinstance(study_id, str)
         or not study_id.startswith("classifier-multiorigin100-v2-")
@@ -499,11 +492,7 @@ def _load_campaign(
         workload_hashes={workload.id: workload.sha256 for workload in workloads},
     )
     class_qualification_context = None
-    if (
-        successor_context is not None
-        and frozen_inputs is None
-        and qualification_set is not None
-    ):
+    if successor_context is not None and frozen_inputs is None and qualification_set is not None:
         from .class_fitting import QualificationContext
 
         restart_root = Path(successor_context["restart_root"])
@@ -511,9 +500,7 @@ def _load_campaign(
             workload_root=config_root / "workloads",
             sidecar_root=Path(successor_context["qualification_set_root"]),
             prefix_spec_root=(
-                restart_root
-                / "artifacts"
-                / f"{STUDY_ID}-authoritative-fitting-prefix-specs"
+                restart_root / "artifacts" / f"{STUDY_ID}-authoritative-fitting-prefix-specs"
             ),
             expected_qualification_set=qualification_set,
         )
@@ -533,14 +520,10 @@ def _load_campaign(
         class_qualification_context=class_qualification_context,
         qualification_set=qualification_set,
         expected_successor_study_id=(
-            str(successor_context["study_id"])
-            if successor_context is not None
-            else None
+            str(successor_context["study_id"]) if successor_context is not None else None
         ),
         expected_successor_restart_sha256=(
-            str(successor_context["restart_sha256"])
-            if successor_context is not None
-            else None
+            str(successor_context["restart_sha256"]) if successor_context is not None else None
         ),
     )
     has_defended_run = any(not defense.baseline for defense in defenses)
@@ -644,17 +627,15 @@ def _load_campaign(
         class_study_id=(
             str(successor_context["study_id"])
             if successor_context is not None
-            else STUDY_ID if schema_version == CLASS_STUDY_SCHEMA_VERSION else None
+            else STUDY_ID
+            if schema_version == CLASS_STUDY_SCHEMA_VERSION
+            else None
         ),
         class_study_successor_path=(
-            Path(successor_context["restart_path"])
-            if successor_context is not None
-            else None
+            Path(successor_context["restart_path"]) if successor_context is not None else None
         ),
         class_study_successor_sha256=(
-            str(successor_context["restart_sha256"])
-            if successor_context is not None
-            else None
+            str(successor_context["restart_sha256"]) if successor_context is not None else None
         ),
         class_study_launch_namespace=(
             str(successor_context["launch_namespace"])
@@ -668,10 +649,7 @@ def _load_campaign(
         _validate_fitting_campaign(campaign, raw_limits=raw_limits)
     _validate_evidence_role(campaign)
     if schema_version == CLASS_STUDY_SCHEMA_VERSION:
-        if (
-            class_study_cohort_path is None
-            or class_study_cohort_assembly_path is None
-        ):
+        if class_study_cohort_path is None or class_study_cohort_assembly_path is None:
             raise AssertionError("class-study campaign lost its admission receipts")
         if successor_context is None:
             from .class_campaigns import validate_campaign_document
@@ -711,9 +689,7 @@ def _load_class_study_cohort_binding(
         "formal",
     }
     if raw_path is None or raw_assembly_path is None:
-        raise ValueError(
-            f"{evidence_role} evidence requires cohort and cohort-assembly receipts"
-        )
+        raise ValueError(f"{evidence_role} evidence requires cohort and cohort-assembly receipts")
     for field, raw in (
         ("class_study_cohort", raw_path),
         ("class_study_cohort_assembly", raw_assembly_path),
@@ -732,20 +708,12 @@ def _load_class_study_cohort_binding(
     )
     receipt_path = _trusted_regular_input(
         cohort_candidate,
-        root=(
-            frozen_inputs
-            if frozen_inputs is not None
-            else (cohort_trust_root or config_root)
-        ),
+        root=(frozen_inputs if frozen_inputs is not None else (cohort_trust_root or config_root)),
         label="class-study cohort receipt",
     )
     assembly_path = _trusted_regular_input(
         assembly_candidate,
-        root=(
-            frozen_inputs
-            if frozen_inputs is not None
-            else (cohort_trust_root or config_root)
-        ),
+        root=(frozen_inputs if frozen_inputs is not None else (cohort_trust_root or config_root)),
         label="class-study cohort-assembly receipt",
     )
     from .class_cohort import cohort_workload_hashes, validate_cohort_assembly_receipt
@@ -765,9 +733,7 @@ def _load_class_study_cohort_binding(
         workload_ids=expected_ids,
     )
     if dict(workload_hashes) != expected_hashes:
-        raise ValueError(
-            f"{evidence_role} prepared workload bytes differ from cohort admission"
-        )
+        raise ValueError(f"{evidence_role} prepared workload bytes differ from cohort admission")
     return (
         receipt_path,
         sha256_file(receipt_path),
@@ -817,14 +783,11 @@ def _validate_evidence_role(campaign: Campaign) -> None:
         "formal": "evaluation",
     }[str(campaign.evidence_role)]
     if campaign.purpose != expected_purpose:
-        raise ValueError(
-            f"{campaign.evidence_role} evidence requires purpose {expected_purpose}"
-        )
+        raise ValueError(f"{campaign.evidence_role} evidence requires purpose {expected_purpose}")
     expected_attempts = 1 if campaign.evidence_role == "certification" else 3
     if campaign.limits.max_attempts != expected_attempts:
         raise ValueError(
-            f"{campaign.evidence_role} evidence requires max_attempts "
-            f"{expected_attempts}"
+            f"{campaign.evidence_role} evidence requires max_attempts {expected_attempts}"
         )
     _validate_class_study_campaign_contract(campaign)
 
@@ -850,9 +813,7 @@ def _validate_class_study_campaign_contract(campaign: Campaign) -> None:
     study_id = campaign.class_study_id or STUDY_ID
     successor = campaign.class_study_successor_sha256 is not None
     expected_workloads = (
-        PILOT_COUNT
-        if role in {"pilot-fitting", "pilot-compatibility"}
-        else FINAL_CLASS_COUNT
+        PILOT_COUNT if role in {"pilot-fitting", "pilot-compatibility"} else FINAL_CLASS_COUNT
     )
     expected_visits = {
         "pilot-fitting": 2,
@@ -903,9 +864,7 @@ def _validate_class_study_campaign_contract(campaign: Campaign) -> None:
         campaign.sample_order_scheme != "origin-aware-windowed"
         or campaign.sample_order_window != ORIGIN_AWARE_WINDOW
     ):
-        raise ValueError(
-            f"{role} evidence requires the fixed origin-aware sample window"
-        )
+        raise ValueError(f"{role} evidence requires the fixed origin-aware sample window")
     expected_name = {
         "pilot-fitting": f"{STUDY_ID}-pilot-fitting-1200",
         "pilot-compatibility": "classifier-multiorigin100-v1-pilot-compatibility-1080-1200",
@@ -957,9 +916,7 @@ def _validate_class_study_campaign_contract(campaign: Campaign) -> None:
         block = int(match.group(1))
         if not 1 <= block <= 10 or campaign.defense_order_block != block - 1:
             raise ValueError(f"{role} defense-order block differs from its campaign name")
-    elif role in {"pilot-compatibility", "certification"} and (
-        campaign.defense_order_block != 0
-    ):
+    elif role in {"pilot-compatibility", "certification"} and (campaign.defense_order_block != 0):
         raise ValueError(f"{role} defense-order block must be zero")
 
 
@@ -1042,10 +999,7 @@ def _load_qualified_chaff_inputs(
                 selected_root = (
                     qualification_set_root_override
                     if qualification_set_root_override is not None
-                    else config_root
-                    / "chaff-qualification-store"
-                    / "sets"
-                    / qualification_set
+                    else config_root / "chaff-qualification-store" / "sets" / qualification_set
                 )
                 trust_root = (
                     qualification_set_root_override.parent
@@ -1058,18 +1012,12 @@ def _load_qualified_chaff_inputs(
                     root=trust_root,
                     label="selected full qualification set",
                 )
-                published_prefix_root = (
-                    qualification_root / NAMED_QUALIFICATION_PREFIX_DIRECTORY
-                )
+                published_prefix_root = qualification_root / NAMED_QUALIFICATION_PREFIX_DIRECTORY
                 prefix_root = _trusted_regular_directory(
                     (
                         published_prefix_root
-                        if published_prefix_root.exists()
-                        or published_prefix_root.is_symlink()
-                        else config_root
-                        / "chaff-prefix-specs"
-                        / "sets"
-                        / qualification_set
+                        if published_prefix_root.exists() or published_prefix_root.is_symlink()
+                        else config_root / "chaff-prefix-specs" / "sets" / qualification_set
                     ),
                     root=qualification_trust_root,
                     label="selected full qualification prefix specifications",
@@ -1335,21 +1283,14 @@ def _validate_loaded_qualification_bindings(
             bindings = {
                 record.get("workload_id"): dict(record)
                 for record in raw_bindings
-                if isinstance(record, Mapping)
-                and isinstance(record.get("workload_id"), str)
+                if isinstance(record, Mapping) and isinstance(record.get("workload_id"), str)
             }
-            if any(
-                bindings.get(workload_id) != record
-                for workload_id, record in expected.items()
-            ):
+            if any(bindings.get(workload_id) != record for workload_id, record in expected.items()):
                 raise ValueError(
                     "controlled regression parameters do not match loaded chaff qualifications"
                 )
             continue
-        if (
-            provenance.get("artifact_type")
-            == "qcsd-class-study-research-defense-bundle"
-        ):
+        if provenance.get("artifact_type") == "qcsd-class-study-research-defense-bundle":
             qualification = provenance.get("qualification_inputs")
             raw_bindings = (
                 qualification.get("qualification_bindings")
@@ -1363,8 +1304,7 @@ def _validate_loaded_qualification_bindings(
             bindings = {
                 record.get("workload_id"): dict(record)
                 for record in raw_bindings
-                if isinstance(record, Mapping)
-                and isinstance(record.get("workload_id"), str)
+                if isinstance(record, Mapping) and isinstance(record.get("workload_id"), str)
             }
             if any(bindings.get(workload_id) != record for workload_id, record in expected.items()):
                 raise ValueError(
@@ -1633,9 +1573,7 @@ def _load_workloads(
         manifest_path = _trusted_regular_input(
             root / f"{workload_id}.json",
             root=(
-                frozen_inputs
-                if frozen_inputs is not None
-                else (config_root or path.parent.parent)
+                frozen_inputs if frozen_inputs is not None else (config_root or path.parent.parent)
             ),
             label="workload manifest",
         )
@@ -1766,9 +1704,7 @@ def _load_defenses(
 ) -> tuple[capture_engine.Defense, ...]:
     if not isinstance(raw, list) or not raw:
         raise ValueError("defenses must be a non-empty list")
-    if (expected_successor_study_id is None) != (
-        expected_successor_restart_sha256 is None
-    ):
+    if (expected_successor_study_id is None) != (expected_successor_restart_sha256 is None):
         raise ValueError("successor defense loading requires study and restart identity")
     defenses: list[capture_engine.Defense] = []
     names: set[str] = set()
@@ -1946,24 +1882,19 @@ def _load_defenses(
                     expected_kind=kind,
                     allow_reviewed_fixture=purpose == "smoke",
                     allow_study_candidate=(
-                        purpose in {"smoke", "evaluation"}
-                        and kind in BUFLO_STUDY_PARAMETER_KINDS
+                        purpose in {"smoke", "evaluation"} and kind in BUFLO_STUDY_PARAMETER_KINDS
                     ),
                     expected_qcsd_profile=profile,
                     expected_udp_payload_ceiling=UDP_PAYLOAD_CEILING_BY_PROFILE[profile],
                     expected_workloads=workloads,
                     qualification_inputs_root=(
-                        None
-                        if class_qualification_context is not None
-                        else base.parent
+                        None if class_qualification_context is not None else base.parent
                     ),
                     qualification_context=class_qualification_context,
                     expected_qualification_set=qualification_set,
                     campaign_evidence_role=evidence_role,
                     expected_successor_study_id=expected_successor_study_id,
-                    expected_successor_restart_sha256=(
-                        expected_successor_restart_sha256
-                    ),
+                    expected_successor_restart_sha256=(expected_successor_restart_sha256),
                 )
             else:
                 artifact = validate_frozen_parameter_artifact(
@@ -1973,8 +1904,7 @@ def _load_defenses(
                     expected_kind=kind,
                     allow_reviewed_fixture=purpose == "smoke",
                     allow_study_candidate=(
-                        purpose in {"smoke", "evaluation"}
-                        and kind in BUFLO_STUDY_PARAMETER_KINDS
+                        purpose in {"smoke", "evaluation"} and kind in BUFLO_STUDY_PARAMETER_KINDS
                     ),
                     expected_qcsd_profile=profile,
                     expected_udp_payload_ceiling=UDP_PAYLOAD_CEILING_BY_PROFILE[profile],
@@ -1985,9 +1915,7 @@ def _load_defenses(
                     expected_qualification_set=qualification_set,
                     campaign_evidence_role=evidence_role,
                     expected_successor_study_id=expected_successor_study_id,
-                    expected_successor_restart_sha256=(
-                        expected_successor_restart_sha256
-                    ),
+                    expected_successor_restart_sha256=(expected_successor_restart_sha256),
                 )
             defenses.append(
                 capture_engine.Defense(
@@ -2080,9 +2008,7 @@ def plan_campaign(campaign: Campaign) -> list[dict[str, Any]]:
     groups: list[list[dict[str, Any]]] = []
     workload_ranks = {
         workload_id: index
-        for index, workload_id in enumerate(
-            sorted(workload.id for workload in campaign.workloads)
-        )
+        for index, workload_id in enumerate(sorted(workload.id for workload in campaign.workloads))
     }
     for workload in campaign.workloads:
         for policy in campaign.request_policies:
@@ -2254,15 +2180,11 @@ def preflight_campaign(path: Path) -> dict[str, Any]:
     if campaign.class_study_cohort_sha256 is not None:
         result["class_study_cohort_sha256"] = campaign.class_study_cohort_sha256
     if campaign.class_study_cohort_assembly_sha256 is not None:
-        result["class_study_cohort_assembly_sha256"] = (
-            campaign.class_study_cohort_assembly_sha256
-        )
+        result["class_study_cohort_assembly_sha256"] = campaign.class_study_cohort_assembly_sha256
     if campaign.class_study_id is not None:
         result["class_study_id"] = campaign.class_study_id
     if campaign.class_study_successor_sha256 is not None:
-        result[CLASS_STUDY_SUCCESSOR_CONFIGURATION_KEY] = (
-            campaign.class_study_successor_sha256
-        )
+        result[CLASS_STUDY_SUCCESSOR_CONFIGURATION_KEY] = campaign.class_study_successor_sha256
     if campaign.defense_order_scheme != "seeded-shuffle":
         result["defense_order"] = {
             "scheme": campaign.defense_order_scheme,
@@ -2271,9 +2193,7 @@ def preflight_campaign(path: Path) -> dict[str, Any]:
     if campaign.evidence_role is not None:
         result["schema"] = campaign.schema_version
         result["evidence_role"] = campaign.evidence_role
-        result["defense_runtime_inputs"] = _class_study_campaign_runtime_inputs(
-            campaign
-        )
+        result["defense_runtime_inputs"] = _class_study_campaign_runtime_inputs(campaign)
     if campaign.sample_order_scheme != "grouped":
         result["sample_order"] = {
             "scheme": campaign.sample_order_scheme,
@@ -2323,9 +2243,7 @@ def _class_study_campaign_runtime_inputs(
                 or defense.mode not in capture_engine.STATIC_MODES
                 or defense.parameters_path is not None
             ):
-                raise ValueError(
-                    "class-study static runtime schedule binding is incomplete"
-                )
+                raise ValueError("class-study static runtime schedule binding is incomplete")
             identity = {
                 "identity_type": "hash-bound-static-schedule",
                 "runtime_kind": defense.kind,
@@ -2343,9 +2261,7 @@ def _class_study_campaign_runtime_inputs(
                 )
             identity = {
                 "identity_type": (
-                    "source-bound-no-defense"
-                    if defense.kind == "none"
-                    else "source-bound-built-in"
+                    "source-bound-no-defense" if defense.kind == "none" else "source-bound-built-in"
                 ),
                 "runtime_kind": defense.kind,
             }
@@ -2365,24 +2281,18 @@ def _class_study_campaign_qualification_manifest_sha256(
     }
     if campaign.chaff_qualification_set is None:
         if values or any(
-            workload.qualification_set_manifest_path is not None
-            for workload in campaign.workloads
+            workload.qualification_set_manifest_path is not None for workload in campaign.workloads
         ):
             raise ValueError(
                 "class-study campaign has qualification-set evidence without a named set"
             )
         return None
-    if (
-        len(values) != 1
-        or any(
-            workload.qualification_set_manifest_path is None
-            or workload.qualification_set_manifest_sha256 is None
-            for workload in campaign.workloads
-        )
+    if len(values) != 1 or any(
+        workload.qualification_set_manifest_path is None
+        or workload.qualification_set_manifest_sha256 is None
+        for workload in campaign.workloads
     ):
-        raise ValueError(
-            "class-study named qualification-set binding is inconsistent"
-        )
+        raise ValueError("class-study named qualification-set binding is inconsistent")
     [digest] = values
     if _SHA256.fullmatch(digest) is None:
         raise ValueError("class-study named qualification-set digest is invalid")
@@ -2485,12 +2395,8 @@ def _class_study_coordinator_campaign_identity(
         study_id = campaign_or_configuration.get("class_study_id", STUDY_ID)
         campaign_sha256 = campaign_or_configuration.get("campaign_sha256")
         cohort_sha256 = campaign_or_configuration.get("class_study_cohort_sha256")
-        assembly_sha256 = campaign_or_configuration.get(
-            "class_study_cohort_assembly_sha256"
-        )
-        successor_sha256 = campaign_or_configuration.get(
-            CLASS_STUDY_SUCCESSOR_CONFIGURATION_KEY
-        )
+        assembly_sha256 = campaign_or_configuration.get("class_study_cohort_assembly_sha256")
+        successor_sha256 = campaign_or_configuration.get(CLASS_STUDY_SUCCESSOR_CONFIGURATION_KEY)
     if (
         not isinstance(name, str)
         or not isinstance(role, str)
@@ -2505,8 +2411,7 @@ def _class_study_coordinator_campaign_identity(
         or (
             successor_sha256 is not None
             and (
-                not isinstance(successor_sha256, str)
-                or _SHA256.fullmatch(successor_sha256) is None
+                not isinstance(successor_sha256, str) or _SHA256.fullmatch(successor_sha256) is None
             )
         )
     ):
@@ -2537,10 +2442,7 @@ def _class_study_coordinator_prerequisite_ledger(
         if (
             not isinstance(name, str)
             or not isinstance(role, str)
-            or (
-                block is not None
-                and (not isinstance(block, int) or isinstance(block, bool))
-            )
+            or (block is not None and (not isinstance(block, int) or isinstance(block, bool)))
             or not isinstance(root, str)
             or not isinstance(evidence_sha256, str)
             or _SHA256.fullmatch(evidence_sha256) is None
@@ -2613,9 +2515,7 @@ def _require_class_study_coordinator_capture_authority(
 
 
 def _has_durable_attempt_budget(campaign: Campaign) -> bool:
-    return campaign.name.startswith("buflo-study-v1-") or _is_class_study_campaign(
-        campaign
-    )
+    return campaign.name.startswith("buflo-study-v1-") or _is_class_study_campaign(campaign)
 
 
 def _has_terminal_strict_defense_fidelity_failure(
@@ -2654,9 +2554,7 @@ def _require_class_study_public_origin_policy(campaign_or_name: Campaign | objec
         )
     )
     if is_class_study and os.environ.get(CLASS_STUDY_PUBLIC_ORIGIN_ENV) != "1":
-        raise ValueError(
-            "class-study capture requires QCSD_PUBLIC_ORIGIN_ONLY=1 before launch"
-        )
+        raise ValueError("class-study capture requires QCSD_PUBLIC_ORIGIN_ONLY=1 before launch")
 
 
 def run_campaign(path: Path, results_root: Path = Path("/lab/results")) -> Path:
@@ -2666,8 +2564,7 @@ def run_campaign(path: Path, results_root: Path = Path("/lab/results")) -> Path:
         campaign.name.startswith("buflo-study-v1-")
         and os.environ.get("QCSD_BUFLO_CAPTURE_LOCK_HELD") == "1"
     ) or (
-        _is_class_study_campaign(campaign)
-        and os.environ.get("QCSD_CLASS_CAPTURE_LOCK_HELD") == "1"
+        _is_class_study_campaign(campaign) and os.environ.get("QCSD_CLASS_CAPTURE_LOCK_HELD") == "1"
     )
     if _has_durable_attempt_budget(campaign) and not lock_held:
         with _study_capture_lock(results_root):
@@ -2704,29 +2601,21 @@ def _class_study_launch_payload(
         "campaign_sha256": sha256_bytes(campaign.source_bytes),
         "evidence_role": campaign.evidence_role,
         "class_study_cohort_sha256": campaign.class_study_cohort_sha256,
-        "class_study_cohort_assembly_sha256": (
-            campaign.class_study_cohort_assembly_sha256
-        ),
+        "class_study_cohort_assembly_sha256": (campaign.class_study_cohort_assembly_sha256),
         "result_root": str(result_root.resolve()),
         "created_at": created_at,
         "source": dict(source),
         "policy": "one-result-root-per-campaign-and-cohort-assembly",
     }
     if campaign.class_study_successor_sha256 is not None:
-        payload["class_study_successor_sha256"] = (
-            campaign.class_study_successor_sha256
-        )
+        payload["class_study_successor_sha256"] = campaign.class_study_successor_sha256
         payload["launch_namespace"] = campaign.class_study_launch_namespace
     return payload
 
 
 def _bind_class_study_launch(payload: Mapping[str, Any]) -> dict[str, Any]:
-    detached = json.loads(
-        json.dumps(payload, sort_keys=True, separators=(",", ":"))
-    )
-    digest = sha256_bytes(
-        json.dumps(detached, sort_keys=True, separators=(",", ":")).encode()
-    )
+    detached = json.loads(json.dumps(payload, sort_keys=True, separators=(",", ":")))
+    digest = sha256_bytes(json.dumps(detached, sort_keys=True, separators=(",", ":")).encode())
     return {
         "schema_version": CLASS_STUDY_LAUNCH_SCHEMA_VERSION,
         "artifact_type": CLASS_STUDY_LAUNCH_ARTIFACT_TYPE,
@@ -2755,9 +2644,7 @@ def _validate_class_study_launch_value(
         or value.get("artifact_type") != CLASS_STUDY_LAUNCH_ARTIFACT_TYPE
         or not isinstance(payload, Mapping)
         or value.get("payload_sha256")
-        != sha256_bytes(
-            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-        )
+        != sha256_bytes(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode())
     ):
         raise ValueError("class-study first-launch claim does not verify")
     expected = _class_study_launch_payload(
@@ -2808,20 +2695,14 @@ def _class_study_authority_paths(campaign: Campaign) -> dict[str, Path]:
     environment = {
         CLASS_STUDY_FOUNDATION_ENV: os.environ.get(CLASS_STUDY_FOUNDATION_ENV),
         CLASS_STUDY_READINESS_ENV: os.environ.get(CLASS_STUDY_READINESS_ENV),
-        CLASS_STUDY_HISTORICAL_PRE_ENV: os.environ.get(
-            CLASS_STUDY_HISTORICAL_PRE_ENV
-        ),
+        CLASS_STUDY_HISTORICAL_PRE_ENV: os.environ.get(CLASS_STUDY_HISTORICAL_PRE_ENV),
     }
     required = _class_study_authority_specification(campaign)
     unexpected = sorted(
-        name
-        for name, value in environment.items()
-        if value is not None and name not in required
+        name for name, value in environment.items() if value is not None and name not in required
     )
     if unexpected:
-        raise ValueError(
-            "unexpected class-study authority environment: " + ", ".join(unexpected)
-        )
+        raise ValueError("unexpected class-study authority environment: " + ", ".join(unexpected))
 
     resolved: dict[str, Path] = {}
     for name, (relative, _configuration_key) in required.items():
@@ -2851,9 +2732,7 @@ def _validate_class_study_authority_files(
 
     required_relatives = {
         relative
-        for relative, _configuration_key in _class_study_authority_specification(
-            campaign
-        ).values()
+        for relative, _configuration_key in _class_study_authority_specification(campaign).values()
     }
     if set(paths) != required_relatives:
         raise ValueError("class-study authority file set differs from its role")
@@ -2875,15 +2754,12 @@ def _validate_class_study_authority_files(
             expected_type=RESTART_RECEIPT_TYPE,
         )
         if (
-            successor.get("predecessor_foundation_sha256")
-            != sha256_file(foundation_path)
+            successor.get("predecessor_foundation_sha256") != sha256_file(foundation_path)
             or successor.get("source_sha256") != canonical_json_sha256(source)
             or successor.get("build_execution_identity_sha256")
             != canonical_json_sha256(foundation.get("build_execution_identity"))
         ):
-            raise ValueError(
-                "successor campaign foundation/source/build differs from its restart"
-            )
+            raise ValueError("successor campaign foundation/source/build differs from its restart")
     validated: dict[str, Mapping[str, Any]] = {"foundation": foundation}
     if campaign.evidence_role not in {"canary", "formal"}:
         return validated
@@ -2903,20 +2779,15 @@ def _validate_class_study_authority_files(
     final_assembly = (
         evidence.get("final_cohort_assembly") if isinstance(evidence, Mapping) else None
     )
-    readiness_foundation = (
-        evidence.get("foundation") if isinstance(evidence, Mapping) else None
-    )
+    readiness_foundation = evidence.get("foundation") if isinstance(evidence, Mapping) else None
     snapshot_readiness = snapshot.get("readiness")
     readiness_successor = (
-        evidence.get("successor_restart")
-        if isinstance(evidence, Mapping)
-        else None
+        evidence.get("successor_restart") if isinstance(evidence, Mapping) else None
     )
     if (
         readiness.get("source") != dict(source)
         or snapshot.get("source") != dict(source)
-        or readiness.get("build_execution_identity")
-        != foundation.get("build_execution_identity")
+        or readiness.get("build_execution_identity") != foundation.get("build_execution_identity")
         or not isinstance(readiness_foundation, Mapping)
         or readiness_foundation.get("sha256") != sha256_file(foundation_path)
         or not isinstance(snapshot_readiness, Mapping)
@@ -2924,22 +2795,18 @@ def _validate_class_study_authority_files(
         or not isinstance(final_cohort, Mapping)
         or final_cohort.get("sha256") != campaign.class_study_cohort_sha256
         or not isinstance(final_assembly, Mapping)
-        or final_assembly.get("sha256")
-        != campaign.class_study_cohort_assembly_sha256
+        or final_assembly.get("sha256") != campaign.class_study_cohort_assembly_sha256
         or (
             campaign.class_study_successor_sha256 is not None
             and (
                 not isinstance(readiness_successor, Mapping)
-                or readiness_successor.get("sha256")
-                != campaign.class_study_successor_sha256
+                or readiness_successor.get("sha256") != campaign.class_study_successor_sha256
                 or readiness.get("study_id") != campaign.class_study_id
                 or snapshot.get("study_id") != campaign.class_study_id
             )
         )
     ):
-        raise ValueError(
-            "class-study capture authority differs from source, build, or cohort"
-        )
+        raise ValueError("class-study capture authority differs from source, build, or cohort")
     validated.update(readiness=readiness, historical_pre_snapshot=snapshot)
     return validated
 
@@ -2951,14 +2818,10 @@ def _study_environment_from_environment(
     """Decode and validate the prospective host environment without writing it."""
 
     encoded = os.environ.get("QCSD_STUDY_ENVIRONMENT_B64")
-    is_study = campaign.name.startswith("buflo-study-v1-") or _is_class_study_campaign(
-        campaign
-    )
+    is_study = campaign.name.startswith("buflo-study-v1-") or _is_class_study_campaign(campaign)
     if not is_study:
         if encoded is not None:
-            raise ValueError(
-                "study environment receipt cannot be applied to a non-study campaign"
-            )
+            raise ValueError("study environment receipt cannot be applied to a non-study campaign")
         return None
     if not encoded:
         raise ValueError("research campaign requires a host Docker environment receipt")
@@ -2996,9 +2859,7 @@ def _validate_class_study_preclaim_authority(
         # loading so no replacement can cross the load-to-claim boundary.
         _revalidate_loaded_class_study_runtime_files(campaign)
     try:
-        foundation_recorded_at = datetime.fromisoformat(
-            str(authority["foundation"]["recorded_at"])
-        )
+        foundation_recorded_at = datetime.fromisoformat(str(authority["foundation"]["recorded_at"]))
     except (KeyError, ValueError) as error:
         raise ValueError("class-study foundation timestamp is invalid") from error
     if (
@@ -3010,41 +2871,28 @@ def _validate_class_study_preclaim_authority(
     historical_pre = authority.get("historical_pre_snapshot")
     if historical_pre is not None:
         try:
-            historical_recorded_at = datetime.fromisoformat(
-                str(historical_pre["recorded_at"])
-            )
+            historical_recorded_at = datetime.fromisoformat(str(historical_pre["recorded_at"]))
         except (KeyError, ValueError) as error:
-            raise ValueError(
-                "class-study historical pre-snapshot timestamp is invalid"
-            ) from error
+            raise ValueError("class-study historical pre-snapshot timestamp is invalid") from error
         if (
             historical_recorded_at.tzinfo is None
             or historical_recorded_at.utcoffset() is None
             or historical_recorded_at > started_at
         ):
-            raise ValueError(
-                "class-study launch precedes its historical pre-snapshot"
-            )
+            raise ValueError("class-study launch precedes its historical pre-snapshot")
     environment_record = _study_environment_from_environment(campaign, source)
     if environment_record is None:  # pragma: no cover - class campaigns are studies.
         raise AssertionError("class-study environment validation was bypassed")
     _raw, _value, environment = environment_record
     foundation_build = authority["foundation"].get("build_execution_identity")
     environment_build = environment.get("build_execution")
-    if not isinstance(foundation_build, Mapping) or not isinstance(
-        environment_build, Mapping
-    ):
+    if not isinstance(foundation_build, Mapping) or not isinstance(environment_build, Mapping):
         raise ValueError("class-study authority has no typed no-cache build identity")
     observed_build = {key: environment_build.get(key) for key in foundation_build}
     if observed_build != dict(foundation_build):
-        raise ValueError(
-            "class-study Docker environment uses a different no-cache build"
-        )
+        raise ValueError("class-study Docker environment uses a different no-cache build")
     readiness = authority.get("readiness")
-    if (
-        readiness is not None
-        and readiness.get("build_execution_identity") != foundation_build
-    ):
+    if readiness is not None and readiness.get("build_execution_identity") != foundation_build:
         raise ValueError("class-study readiness and foundation use different builds")
     if readiness is not None:
         _validate_class_study_runtime_authority(campaign, readiness=readiness)
@@ -3068,18 +2916,15 @@ def _validate_class_study_runtime_authority(
         if isinstance(summary, Mapping)
         else None
     )
-    if (
-        not isinstance(certification_inputs, Mapping)
-        or set(certification_inputs) != set(COMPATIBILITY_MODES)
+    if not isinstance(certification_inputs, Mapping) or set(certification_inputs) != set(
+        COMPATIBILITY_MODES
     ):
         raise ValueError("class-study readiness has no complete certified runtime map")
     expected_modes = ("undefended",) if campaign.evidence_role == "canary" else FORMAL_MODES
     observed = _class_study_campaign_runtime_inputs(campaign)
     expected = {mode: certification_inputs[mode] for mode in expected_modes}
     if observed != expected:
-        raise ValueError(
-            "class-study campaign runtime inputs differ from certification/readiness"
-        )
+        raise ValueError("class-study campaign runtime inputs differ from certification/readiness")
 
     final_manifest_sha256 = (
         summary.get("final_qualification_set_manifest_sha256")
@@ -3090,15 +2935,11 @@ def _validate_class_study_runtime_authority(
         not isinstance(final_manifest_sha256, str)
         or _SHA256.fullmatch(final_manifest_sha256) is None
     ):
-        raise ValueError(
-            "class-study readiness has no final qualification-set manifest identity"
-        )
+        raise ValueError("class-study readiness has no final qualification-set manifest identity")
     observed_manifest = _class_study_campaign_qualification_manifest_sha256(campaign)
     if campaign.evidence_role == "formal":
         if observed_manifest != final_manifest_sha256:
-            raise ValueError(
-                "class-study formal qualification manifest differs from readiness"
-            )
+            raise ValueError("class-study formal qualification manifest differs from readiness")
     elif observed_manifest is not None:
         raise ValueError("class-study canary unexpectedly uses a qualification set")
 
@@ -3148,10 +2989,7 @@ def _revalidate_loaded_class_study_runtime_files(campaign: Campaign) -> None:
                 label=f"{defense.name} parameter provenance",
             )
             provenance_path = defense.parameters_provenance_path.resolve()
-            if (
-                successor_restart_sha256 is not None
-                and provenance_path not in seen_provenance
-            ):
+            if successor_restart_sha256 is not None and provenance_path not in seen_provenance:
                 provenance = load_json(provenance_path)
                 is_class_bundle = (
                     isinstance(provenance, Mapping)
@@ -3225,9 +3063,7 @@ def _claim_class_study_launch(
     if marker.exists():
         value = load_json(marker)
         payload = value.get("payload") if isinstance(value, Mapping) else None
-        if not isinstance(payload, Mapping) or not isinstance(
-            payload.get("result_root"), str
-        ):
+        if not isinstance(payload, Mapping) or not isinstance(payload.get("result_root"), str):
             raise ValueError("class-study launch claim is malformed")
         claimed_root = Path(payload["result_root"])
         _validate_class_study_launch_value(
@@ -3308,11 +3144,7 @@ def _validate_class_study_launch(root: Path, campaign: Campaign) -> str:
         raise ValueError("class-study launch namespace is invalid")
     registry = root.parents[1] / namespace
     marker = registry / f"{payload['launch_key']}.json"
-    if (
-        marker.is_symlink()
-        or not marker.is_file()
-        or sha256_file(marker) != sha256_file(frozen)
-    ):
+    if marker.is_symlink() or not marker.is_file() or sha256_file(marker) != sha256_file(frozen):
         raise ValueError("class-study global first-launch claim differs from the result")
     return sha256_file(frozen)
 
@@ -3332,9 +3164,7 @@ def _run_loaded_campaign(campaign: Campaign, results_root: Path) -> Path:
             raise ValueError("public BuFLO-study run requires a typed capture admission")
         from .buflo_study import admitted_result_root
 
-        root = admitted_result_root(
-            Path(admission_value), campaign.path, require_sequence=True
-        )
+        root = admitted_result_root(Path(admission_value), campaign.path, require_sequence=True)
         expected_results_root = root.parents[1]
         if expected_results_root != results_root.resolve():
             raise ValueError("capture admission selected a different results root")
@@ -3429,10 +3259,7 @@ def _materialize_inputs(
             campaign.class_study_successor_path,
             class_study_successor_destination,
         )
-        if (
-            sha256_file(class_study_successor_destination)
-            != campaign.class_study_successor_sha256
-        ):
+        if sha256_file(class_study_successor_destination) != campaign.class_study_successor_sha256:
             raise ValueError("successor restart receipt changed during materialization")
     class_study_cohort_destination: Path | None = None
     class_study_cohort_assembly_destination: Path | None = None
@@ -3693,9 +3520,7 @@ def _materialize_inputs(
                     if campaign.class_study_successor_sha256 is not None
                     else None
                 ),
-                expected_successor_restart_sha256=(
-                    campaign.class_study_successor_sha256
-                ),
+                expected_successor_restart_sha256=(campaign.class_study_successor_sha256),
             )
             if (
                 frozen_artifact.sha256 != defense.parameters_sha256
@@ -3750,9 +3575,7 @@ def _materialize_class_study_authority(inputs: Path, campaign: Campaign) -> None
                 CLASS_STUDY_HISTORICAL_PRE_ENV,
             )
         ):
-            raise ValueError(
-                "class-study authority cannot be applied to a non-class campaign"
-            )
+            raise ValueError("class-study authority cannot be applied to a non-class campaign")
         return
 
     for relative, source in _class_study_authority_paths(campaign).items():
@@ -3761,9 +3584,7 @@ def _materialize_class_study_authority(inputs: Path, campaign: Campaign) -> None
     _validate_frozen_class_study_authority(inputs.parent, campaign)
 
 
-def _validate_frozen_class_study_authority(
-    root: Path, campaign: Campaign
-) -> dict[str, str]:
+def _validate_frozen_class_study_authority(root: Path, campaign: Campaign) -> dict[str, str]:
     """Revalidate frozen authority and derive its configuration bindings."""
 
     required = tuple(_class_study_authority_specification(campaign).values())
@@ -3776,9 +3597,7 @@ def _validate_frozen_class_study_authority(
     for relative in all_relatives - required_relatives:
         unexpected = root / relative
         if unexpected.exists() or unexpected.is_symlink():
-            raise ValueError(
-                f"{campaign.evidence_role} result has unexpected authority {relative}"
-            )
+            raise ValueError(f"{campaign.evidence_role} result has unexpected authority {relative}")
     if not required:
         return {}
 
@@ -3787,9 +3606,7 @@ def _validate_frozen_class_study_authority(
     for relative, key in required:
         path = root / relative
         if path.is_symlink() or not path.is_file():
-            raise ValueError(
-                f"{campaign.evidence_role} result lacks frozen authority {relative}"
-            )
+            raise ValueError(f"{campaign.evidence_role} result lacks frozen authority {relative}")
         frozen[relative] = path
         configuration[key] = sha256_file(path)
 
@@ -4013,7 +3830,7 @@ def _execute(root: Path, campaign: Campaign, experiment: dict[str, Any]) -> Path
     for members in groups.values():
         for sample in members:
             if sample["state"] == "accepted":
-                _validate_accepted(root, sample)
+                _validate_accepted(root, experiment, sample)
                 continue
             workload = workload_by_id[sample["workload_id"]]
             defense = defense_by_name[sample["defense"]]
@@ -4111,7 +3928,7 @@ def _execute(root: Path, campaign: Campaign, experiment: dict[str, Any]) -> Path
                     if fidelity_failure is None:
                         fidelity_failure = _prepared_response_identity_failure(workload, attempt)
                     if fidelity_failure is None:
-                        diagnostics = _success_diagnostics(result)
+                        diagnostics = _success_diagnostics(result, attempt)
                         controlled_cell = _controlled_study_cell(campaign, sample)
                         if controlled_cell is not None:
                             diagnostics["buflo_study_controlled_cell"] = controlled_cell
@@ -4151,7 +3968,12 @@ def _execute(root: Path, campaign: Campaign, experiment: dict[str, Any]) -> Path
                     _seal(root)
                     raise CampaignIncomplete(root)
             _checkpoint(root, experiment)
-        _compare_group(root, members, workload_by_id[members[0]["workload_id"]])
+        _compare_group(
+            root,
+            experiment,
+            members,
+            workload_by_id[members[0]["workload_id"]],
+        )
         _checkpoint(root, experiment)
     passed = all(
         sample["state"] == "accepted" and sample["eligible"] is True
@@ -4191,12 +4013,12 @@ def _sanitize_failed_attempt(attempt: Path) -> None:
             path.unlink()
 
 
-def _success_diagnostics(result: dict[str, Any]) -> dict[str, Any]:
+def _success_diagnostics(result: dict[str, Any], attempt: Path) -> dict[str, Any]:
     capture = dict(_primary_capture_view(result))
     capture["capture_path"] = "capture.pcapng"
     capture.pop("trace_path", None)
     capture.pop("trace_sha256", None)
-    return {
+    diagnostics = {
         "capture": capture,
         "offloads": result.get("offloads", []),
         "network_condition": result.get("network_condition"),
@@ -4206,11 +4028,52 @@ def _success_diagnostics(result: dict[str, Any]) -> dict[str, Any]:
         "operationally_valid": result.get("operationally_valid", True),
         "defense": result.get("defense_diagnostics") or {},
     }
+    runtime = _scheduler_runtime_receipt_for_promotion(result, attempt)
+    if runtime is not None:
+        diagnostics[SCHEDULER_RUNTIME_RECEIPT_KEY] = runtime
+    return diagnostics
 
 
-def _controlled_study_cell(
-    campaign: Campaign, sample: Mapping[str, Any]
+def _scheduler_runtime_receipt_for_promotion(
+    result: Mapping[str, Any], attempt: Path
 ) -> dict[str, Any] | None:
+    """Validate and retain scheduler evidence before promotion deletes its file."""
+
+    run_path = attempt / "neqo/run.json"
+    if run_path.is_symlink() or not run_path.is_file():
+        raise ValueError("successful attempt lacks a regular runner receipt")
+    run_data = load_json(run_path)
+    if result.get("process_scheduler_required") is not True:
+        return None
+
+    scheduler_path = attempt / SCHEDULER_RUNTIME_EVIDENCE_PATH
+    evidence = result.get("scheduler_runtime_evidence")
+    digest = result.get("scheduler_runtime_evidence_sha256")
+    if (
+        result.get("scheduler_runtime_evidence_path") != SCHEDULER_RUNTIME_EVIDENCE_PATH
+        or scheduler_path.is_symlink()
+        or not scheduler_path.is_file()
+        or not isinstance(evidence, Mapping)
+        or load_json(scheduler_path) != evidence
+        or not isinstance(digest, str)
+        or sha256_file(scheduler_path) != digest
+        or result.get("process_scheduler_required") is not True
+        or result.get("process_scheduler_valid") is not True
+        or result.get("scheduler_runtime_evidence_valid") is not True
+        or not capture_engine._capture_scheduler_runtime_evidence_valid(evidence)
+        or not capture_engine._process_scheduler_valid(run_data.get("process_scheduler"))
+    ):
+        raise ValueError("successful attempt scheduler runtime evidence is invalid")
+    return scheduler_runtime_receipt(
+        evidence=evidence,
+        evidence_sha256=digest,
+        process_scheduler_required=True,
+        process_scheduler_valid=True,
+        evidence_valid=True,
+    )
+
+
+def _controlled_study_cell(campaign: Campaign, sample: Mapping[str, Any]) -> dict[str, Any] | None:
     """Bind one exact prospective local-study cell into accepted diagnostics."""
 
     receipt = campaign.study_controlled
@@ -4492,17 +4355,23 @@ def _artifact_hashes(root: Path, sample: dict[str, Any]) -> dict[str, str]:
     return accepted_sample_hashes(root, sample)
 
 
-def _validate_accepted(root: Path, sample: dict[str, Any]) -> None:
+def _validate_accepted(
+    root: Path,
+    experiment: Mapping[str, Any],
+    sample: dict[str, Any],
+) -> None:
     if sample.get("state") != "accepted" or not sample.get("artifacts"):
         raise ValueError(f"accepted sample receipt is invalid: {sample.get('sample_id')}")
     expected = sample["artifacts"]
     actual = _artifact_hashes(root, sample)
     if actual != expected:
         raise ValueError(f"accepted sample artifact set changed: {sample['sample_id']}")
+    validate_accepted_scheduler_runtime_receipt(root, experiment, sample)
 
 
 def _compare_group(
     root: Path,
+    experiment: Mapping[str, Any],
     samples: list[dict[str, Any]],
     workload: Workload,
 ) -> None:
@@ -4516,6 +4385,7 @@ def _compare_group(
     prepared_signature = _prepared_response_signature(workload.data)
     reference = prepared_signature if prepared_signature is not None else baseline_signature
     for sample in accepted:
+        validate_accepted_scheduler_runtime_receipt(root, experiment, sample)
         sample_path = resolved_sample_directory(root, sample, require_directory=True)
         signature = response_signature(sample_path)
         response_match = signature is not None and (reference is None or signature == reference)
@@ -4579,16 +4449,10 @@ def _redirect_attestation(workload: Workload, sample_path: Path) -> dict[str, An
     ):
         raise ValueError("prepared/final redirect evidence is unavailable")
     expected = {
-        item.get("resource_id"): item
-        for item in expected_responses
-        if isinstance(item, Mapping)
+        item.get("resource_id"): item for item in expected_responses if isinstance(item, Mapping)
     }
-    observed = {
-        item.get("resource_id"): item for item in responses if isinstance(item, Mapping)
-    }
-    prepared_resources = {
-        item.get("id"): item for item in resources if isinstance(item, Mapping)
-    }
+    observed = {item.get("resource_id"): item for item in responses if isinstance(item, Mapping)}
+    prepared_resources = {item.get("id"): item for item in resources if isinstance(item, Mapping)}
     if (
         len(expected) != len(expected_responses)
         or len(observed) != len(responses)
@@ -4783,7 +4647,7 @@ def _recover_completed_attempt(
                 )
                 fidelity_failure = _prepared_response_identity_failure(workload, attempt)
             if fidelity_failure is None:
-                diagnostics = _success_diagnostics(result)
+                diagnostics = _success_diagnostics(result, attempt)
                 controlled_cell = _controlled_study_cell(campaign, sample)
                 if controlled_cell is not None:
                     diagnostics["buflo_study_controlled_cell"] = controlled_cell
@@ -4825,9 +4689,7 @@ def resume_campaign(root: Path) -> Path:
     if isinstance(configuration, Mapping):
         coordinator_configuration = dict(configuration)
         coordinator_configuration["name"] = name
-        _require_class_study_coordinator_capture_authority(
-            coordinator_configuration
-        )
+        _require_class_study_coordinator_capture_authority(coordinator_configuration)
     lock_held = (
         isinstance(name, str)
         and name.startswith("buflo-study-v1-")
@@ -4913,9 +4775,7 @@ def _resume_campaign_locked(root: Path) -> Path:
         if terminal_defect["status"] == "running":
             finalize_experiment(root, terminal_defect, status="incomplete")
             seal_result(root)
-        elif terminal_defect["status"] == "incomplete" and not (
-            root / "evidence.sha256"
-        ).is_file():
+        elif terminal_defect["status"] == "incomplete" and not (root / "evidence.sha256").is_file():
             seal_result(root)
         raise CampaignIncomplete(root)
 
@@ -4961,7 +4821,7 @@ def _resume_campaign_locked(root: Path) -> Path:
     campaign = validate_frozen_experiment_contract(root, experiment)
     for sample in experiment["samples"]:
         if sample["state"] == "accepted":
-            _validate_accepted(root, sample)
+            _validate_accepted(root, experiment, sample)
     return _execute(root, campaign, experiment)
 
 
@@ -5105,9 +4965,7 @@ def _frozen_configuration(root: Path, campaign: Campaign) -> dict[str, Any]:
             "resolution": "resolve-once-reject-any-non-public-connect-exact-address",
         }
     study_environment = root / "inputs/study-environment.json"
-    if campaign.name.startswith("buflo-study-v1-") or _is_class_study_campaign(
-        campaign
-    ):
+    if campaign.name.startswith("buflo-study-v1-") or _is_class_study_campaign(campaign):
         from .buflo_study import validate_study_environment_receipt
 
         if study_environment.is_symlink() or not study_environment.is_file():
@@ -5119,13 +4977,11 @@ def _frozen_configuration(root: Path, campaign: Campaign) -> dict[str, Any]:
         if _is_class_study_campaign(campaign):
             from .class_attestation import validate_class_foundation_attestation
 
-            expected_build: Mapping[str, Any] | None = (
-                validate_class_foundation_attestation(
-                    root / CLASS_STUDY_FOUNDATION_INPUT,
-                    deep_code_gate=True,
-                    runtime_role="collection",
-                ).get("build_execution_identity")
-            )
+            expected_build: Mapping[str, Any] | None = validate_class_foundation_attestation(
+                root / CLASS_STUDY_FOUNDATION_INPUT,
+                deep_code_gate=True,
+                runtime_role="collection",
+            ).get("build_execution_identity")
             if campaign.evidence_role in {"canary", "formal"}:
                 from .class_attestation import validate_class_readiness_attestation
 
@@ -5134,16 +4990,11 @@ def _frozen_configuration(root: Path, campaign: Campaign) -> dict[str, Any]:
                     deep_code_gate=True,
                 ).get("build_execution_identity")
                 if readiness_build != expected_build:
-                    raise ValueError(
-                        "class-study readiness and foundation use different builds"
-                    )
+                    raise ValueError("class-study readiness and foundation use different builds")
             if expected_build is not None:
                 environment_build = validated_environment.get("build_execution")
                 observed_build = (
-                    {
-                        key: environment_build.get(key)
-                        for key in expected_build
-                    }
+                    {key: environment_build.get(key) for key in expected_build}
                     if isinstance(environment_build, Mapping)
                     else None
                 )
@@ -5153,9 +5004,7 @@ def _frozen_configuration(root: Path, campaign: Campaign) -> dict[str, Any]:
                     )
         configuration["study_environment_sha256"] = sha256_file(study_environment)
         admission = root / "inputs/capture-admission.json"
-        if campaign.name.startswith("buflo-study-v1-") and _public_buflo_campaign(
-            campaign.name
-        ):
+        if campaign.name.startswith("buflo-study-v1-") and _public_buflo_campaign(campaign.name):
             from .buflo_study import validate_capture_admission
 
             if admission.is_symlink() or not admission.is_file():

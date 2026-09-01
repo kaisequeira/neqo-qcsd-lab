@@ -7,7 +7,7 @@ import signal
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 _CONTAINER_LAB_ROOT = Path("/lab")
 _NATIVE_LAB_ROOT = Path(__file__).resolve().parents[2]
@@ -196,6 +196,7 @@ def run(
     check: bool = True,
     timeout: float | None = None,
     terminate_process_group: bool = False,
+    process_started: Callable[[int], None] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     if timeout is not None:
         return _run_bounded(
@@ -205,7 +206,10 @@ def run(
             check=check,
             timeout=timeout,
             terminate_process_group=terminate_process_group,
+            process_started=process_started,
         )
+    if process_started is not None:
+        raise ValueError("process-start observation requires a bounded command")
     if terminate_process_group:
         raise ValueError("process-group termination requires a bounded command")
     result = subprocess.run(
@@ -246,6 +250,7 @@ def _run_bounded(
     check: bool,
     timeout: float,
     terminate_process_group: bool = False,
+    process_started: Callable[[int], None] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     if timeout <= 0:
         raise ValueError("host timeout must be positive")
@@ -257,6 +262,16 @@ def _run_bounded(
         stderr=subprocess.STDOUT,
         start_new_session=terminate_process_group,
     )
+    if process_started is not None:
+        try:
+            process_started(process.pid)
+        except Exception:
+            if terminate_process_group:
+                os.killpg(process.pid, signal.SIGKILL)
+            else:
+                process.kill()
+            process.communicate()
+            raise
     try:
         stdout, _stderr = process.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
