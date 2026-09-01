@@ -132,6 +132,7 @@ _RUNNER_WAKEUP_METRICS_V5_KEYS = _RUNNER_WAKEUP_METRICS_V4_KEYS | {
     "buflo_exact_incoming_retry_resolutions",
     "buflo_exact_incoming_retry_max_wake_lateness_nanoseconds",
 }
+_RUNNER_WAKEUP_METRICS_V6_KEYS = _RUNNER_WAKEUP_METRICS_V5_KEYS
 _RUNNER_WAKEUP_METRICS_V1_SEMANTICS = (
     "actual_select_return_source; socket_wins_simultaneous_readiness; "
     "controller_subset_is_effective_earliest_deadline; scheduled_cells_are_not_wakeups"
@@ -168,6 +169,29 @@ _RUNNER_WAKEUP_METRICS_V4_SEMANTICS = (
 )
 _RUNNER_WAKEUP_METRICS_V5_SEMANTICS = (
     f"{_RUNNER_WAKEUP_METRICS_V4_SEMANTICS}; "
+    "buflo_exact_incoming_retry_wakeups=transport_callback_or_1/4,1/2,3/4,deadline; "
+    "buflo_exact_incoming_retry_drives="
+    "count_owner_endpoint_output_drive_invocations_including_immediate_and_error; "
+    "buflo_exact_incoming_retry_resolutions="
+    "count_drive_invocations_clearing_at_least_one_captured_identity; "
+    "buflo_exact_incoming_retry_max_wake_lateness_includes_terminal_deadline=true; "
+    "buflo_exact_incoming_inventory="
+    "all_unrealized_slot_owned_adapter_identities_with_same_tick_refresh; "
+    "buflo_exact_incoming_expiry=one_logical_slot_one_deadline_miss"
+)
+_RUNNER_WAKEUP_METRICS_V6_SEMANTICS = (
+    f"{_RUNNER_WAKEUP_METRICS_V1_SEMANTICS}; "
+    "buflo_ordinary_output_admission_lead_us=10000; "
+    "buflo_exact_release_guard_reserves_candidate_window; "
+    "buflo_exact_release_guard_lead_us=10000; "
+    "buflo_exact_release_active_wait_tail_us=10000; "
+    "buflo_exact_release_guard_coincides_with_output_admission=true; "
+    "buflo_exact_release_guards_are_separately_receipted_active_waits; "
+    "buflo_active_defense_socket_drains_are_single_batch; "
+    "buflo_active_defense_http_drains_are_single_event; "
+    "buflo_ordinary_output_stops_at_admission; "
+    "buflo_exact_release_guard_begins_at_guard; "
+    "cs_exact_incoming_retry_phases=1/4,1/2,3/4; "
     "buflo_exact_incoming_retry_wakeups=transport_callback_or_1/4,1/2,3/4,deadline; "
     "buflo_exact_incoming_retry_drives="
     "count_owner_endpoint_output_drive_invocations_including_immediate_and_error; "
@@ -1107,6 +1131,9 @@ def _runner_wakeup_metrics_valid(value: Any) -> bool:
     elif schema_version == 5:
         required = _RUNNER_WAKEUP_METRICS_V5_KEYS
         semantics = _RUNNER_WAKEUP_METRICS_V5_SEMANTICS
+    elif schema_version == 6:
+        required = _RUNNER_WAKEUP_METRICS_V6_KEYS
+        semantics = _RUNNER_WAKEUP_METRICS_V6_SEMANTICS
     else:
         return False
     if set(value) != required or value.get("semantics") != semantics:
@@ -1117,7 +1144,7 @@ def _runner_wakeup_metrics_valid(value: Any) -> bool:
         for key in count_keys
     ):
         return False
-    if schema_version in {2, 3, 4, 5}:
+    if schema_version in {2, 3, 4, 5, 6}:
         guard_measurements = (
             value["buflo_exact_release_guard_wait_nanoseconds"],
             value["buflo_exact_release_active_wait_nanoseconds"],
@@ -1133,7 +1160,7 @@ def _runner_wakeup_metrics_valid(value: Any) -> bool:
             )
         ):
             return False
-    if schema_version in {4, 5} and (
+    if schema_version in {4, 5, 6} and (
         value["cs_exact_incoming_retry_resolutions"]
         > value["cs_exact_incoming_retry_drives"]
         or (
@@ -1143,7 +1170,7 @@ def _runner_wakeup_metrics_valid(value: Any) -> bool:
     ):
         return False
     if (
-        schema_version == 5
+        schema_version in {5, 6}
         and value["buflo_exact_incoming_retry_resolutions"]
         > value["buflo_exact_incoming_retry_drives"]
     ):

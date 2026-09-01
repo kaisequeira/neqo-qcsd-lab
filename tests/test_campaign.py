@@ -1916,7 +1916,7 @@ def test_completed_candidate_binding_requires_current_wakeup_schema(
         terminal_validation_calls.append(
             (kind, require_application_complete, require_current_schema, schema)
         )
-        return require_current_schema and schema == 5
+        return require_current_schema and schema == 6
 
     monkeypatch.setattr(
         orchestrator.capture_engine,
@@ -1974,6 +1974,48 @@ def test_completed_candidate_binding_requires_current_wakeup_schema(
         "cs_exact_incoming_retry_resolutions": 0,
         "cs_exact_incoming_retry_max_phase_lateness_nanoseconds": 0,
     }
+    with pytest.raises(ValueError, match="frozen sample inputs"):
+        _validate_run_binding(
+            run,
+            manifest=manifest,
+            chaff_manifest=chaff_manifest,
+            application_workload_source=application_source,
+            workload_id="site",
+            defense=defense,
+            seed=7,
+            context=context,
+        )
+
+    run["runner_wakeup_metrics"].update(
+        {
+            "schema_version": 6,
+            "semantics": (
+                f"{v1_semantics}; "
+                "buflo_ordinary_output_admission_lead_us=10000; "
+                "buflo_exact_release_guard_reserves_candidate_window; "
+                "buflo_exact_release_guard_lead_us=10000; "
+                "buflo_exact_release_active_wait_tail_us=10000; "
+                "buflo_exact_release_guard_coincides_with_output_admission=true; "
+                "buflo_exact_release_guards_are_separately_receipted_active_waits; "
+                "buflo_active_defense_socket_drains_are_single_batch; "
+                "buflo_active_defense_http_drains_are_single_event; "
+                "buflo_ordinary_output_stops_at_admission; "
+                "buflo_exact_release_guard_begins_at_guard; "
+                "cs_exact_incoming_retry_phases=1/4,1/2,3/4; "
+                "buflo_exact_incoming_retry_wakeups="
+                "transport_callback_or_1/4,1/2,3/4,deadline; "
+                "buflo_exact_incoming_retry_drives="
+                "count_owner_endpoint_output_drive_invocations_including_immediate_and_error; "
+                "buflo_exact_incoming_retry_resolutions="
+                "count_drive_invocations_clearing_at_least_one_captured_identity; "
+                "buflo_exact_incoming_retry_max_wake_lateness_"
+                "includes_terminal_deadline=true; "
+                "buflo_exact_incoming_inventory="
+                "all_unrealized_slot_owned_adapter_identities_with_same_tick_refresh; "
+                "buflo_exact_incoming_expiry=one_logical_slot_one_deadline_miss"
+            ),
+        }
+    )
     _validate_run_binding(
         run,
         manifest=manifest,
@@ -1987,6 +2029,7 @@ def test_completed_candidate_binding_requires_current_wakeup_schema(
     assert terminal_validation_calls == [
         (runtime_kind, True, True, 2),
         (runtime_kind, True, True, 5),
+        (runtime_kind, True, True, 6),
     ]
 
 

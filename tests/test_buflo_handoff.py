@@ -100,9 +100,36 @@ def _runner_wakeup_receipt(schema_version: int) -> dict[str, object]:
         "controller_deadline_timer_wakeups": 0,
         "other_timer_wakeups": 0,
     }
-    if schema_version in {2, 3, 4, 5}:
+    if schema_version in {2, 3, 4, 5, 6}:
         active_wait_tail_us = 250 if schema_version == 2 else 5000
-        if schema_version in {4, 5}:
+        if schema_version == 6:
+            semantics = (
+                f"{semantics}; "
+                "buflo_ordinary_output_admission_lead_us=10000; "
+                "buflo_exact_release_guard_reserves_candidate_window; "
+                "buflo_exact_release_guard_lead_us=10000; "
+                "buflo_exact_release_active_wait_tail_us=10000; "
+                "buflo_exact_release_guard_coincides_with_output_admission=true; "
+                "buflo_exact_release_guards_are_separately_receipted_active_waits; "
+                "buflo_active_defense_socket_drains_are_single_batch; "
+                "buflo_active_defense_http_drains_are_single_event; "
+                "buflo_ordinary_output_stops_at_admission; "
+                "buflo_exact_release_guard_begins_at_guard; "
+                "cs_exact_incoming_retry_phases=1/4,1/2,3/4; "
+                "buflo_exact_incoming_retry_wakeups="
+                "transport_callback_or_1/4,1/2,3/4,deadline; "
+                "buflo_exact_incoming_retry_drives="
+                "count_owner_endpoint_output_drive_invocations_"
+                "including_immediate_and_error; "
+                "buflo_exact_incoming_retry_resolutions="
+                "count_drive_invocations_clearing_at_least_one_captured_identity; "
+                "buflo_exact_incoming_retry_max_wake_lateness_"
+                "includes_terminal_deadline=true; "
+                "buflo_exact_incoming_inventory="
+                "all_unrealized_slot_owned_adapter_identities_with_same_tick_refresh; "
+                "buflo_exact_incoming_expiry=one_logical_slot_one_deadline_miss"
+            )
+        elif schema_version in {4, 5}:
             semantics = (
                 f"{semantics}; "
                 "buflo_ordinary_output_admission_is_one_realization_window_before_guard; "
@@ -151,7 +178,7 @@ def _runner_wakeup_receipt(schema_version: int) -> dict[str, object]:
                 "buflo_exact_release_max_guard_exit_lateness_nanoseconds": 0,
             }
         )
-    if schema_version in {4, 5}:
+    if schema_version in {4, 5, 6}:
         receipt.update(
             {
                 "cs_exact_incoming_retry_drives": 0,
@@ -159,7 +186,7 @@ def _runner_wakeup_receipt(schema_version: int) -> dict[str, object]:
                 "cs_exact_incoming_retry_max_phase_lateness_nanoseconds": 0,
             }
         )
-    if schema_version == 5:
+    if schema_version in {5, 6}:
         receipt.update(
             {
                 "buflo_exact_incoming_retry_drives": 0,
@@ -225,7 +252,7 @@ def _complete_buflo_run(
             "schema_version": 2,
             "defense": {"kind": "buflo"},
         },
-        "runner_wakeup_metrics": _runner_wakeup_receipt(5),
+        "runner_wakeup_metrics": _runner_wakeup_receipt(6),
         "defense_diagnostics": diagnostics,
         "chaff_responses": [
             {"outcome": "buflo_terminal_subcell_tail_cancelled"}
@@ -388,7 +415,7 @@ def _complete_cs_buflo_run() -> dict[str, object]:
             "schema_version": 2,
             "defense": {"kind": "cs_buflo"},
         },
-        "runner_wakeup_metrics": _runner_wakeup_receipt(5),
+        "runner_wakeup_metrics": _runner_wakeup_receipt(6),
         "defense_diagnostics": diagnostics,
         "buflo_summary": None,
         "cs_buflo_summary": summary,
@@ -1110,7 +1137,7 @@ def test_buflo_algorithm_diagnostics_bind_typed_tail_action_and_control_packet(
         events_path=events,
         packets_path=packets,
     )
-    assert run["runner_wakeup_metrics"]["schema_version"] == 5
+    assert run["runner_wakeup_metrics"]["schema_version"] == 6
     assert algorithm["schema_version"] == 4
     assert evaluation_module._load_algorithm_diagnostics(
         algorithm, defense="buflo"
@@ -1624,7 +1651,7 @@ def test_cs_buflo_schema_four_handoff_reconstructs_stop_drain_and_preserves_lega
         events_path=events,
         packets_path=packets,
     )
-    assert run["runner_wakeup_metrics"]["schema_version"] == 5
+    assert run["runner_wakeup_metrics"]["schema_version"] == 6
     assert evaluation_module._load_algorithm_diagnostics(
         current, defense="cs-buflo"
     ) == current

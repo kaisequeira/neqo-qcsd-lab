@@ -51,24 +51,23 @@ defence-control traffic is explicitly receipted and is an expected QCSD-only
 difference from the bilateral TCP study; it is never described as
 paper-equivalent or as a server padding-complete signal.
 
-Current-source BuFLO runs use summary schema 4 and runner-wakeup schema 5.
+Current-source BuFLO runs use summary schema 4 and runner-wakeup schema 6.
 Summary schema 4 binds the typed schedule-stop policy, stop timestamp,
 sub-cell capacity, direction counts at stop, and exact post-stop advertised
 credit drain; historical summary schemas 2 and 3 remain readable but cannot
-admit a fresh candidate capture. Historical runner-wakeup schemas 1–4 remain
-readable but cannot admit a fresh candidate capture. Runner-wakeup schema 5
-retains schema 4's guard, active-wait, and CS exact-incoming retry counters. It
-adds BuFLO exact-incoming retry drives, resolutions, maximum wake lateness, and
-the callback, quarter-phase, and terminal-deadline wake-up semantics. Its
-semantics suffix is exactly
+admit a fresh candidate capture. Historical runner-wakeup schemas 1–5 remain
+readable but cannot admit a fresh candidate capture. Schema 6 retains schema
+5's complete metric inventory, including BuFLO exact-incoming retry drives,
+resolutions, maximum wake lateness, and callback, quarter-phase, and terminal-
+deadline wake-up semantics. Their retained semantics suffix is exactly
 `buflo_exact_incoming_retry_wakeups=transport_callback_or_1/4,1/2,3/4,deadline; buflo_exact_incoming_retry_drives=count_owner_endpoint_output_drive_invocations_including_immediate_and_error; buflo_exact_incoming_retry_resolutions=count_drive_invocations_clearing_at_least_one_captured_identity; buflo_exact_incoming_retry_max_wake_lateness_includes_terminal_deadline=true; buflo_exact_incoming_inventory=all_unrealized_slot_owned_adapter_identities_with_same_tick_refresh; buflo_exact_incoming_expiry=one_logical_slot_one_deadline_miss`.
 Consequently, maximum wake lateness may be nonzero even when there were no
 owner-endpoint drive invocations: the terminal deadline is itself measured.
-The measured client remains actively runnable for the complete 5 ms
-realisation window before every exact
-20 ms release. Fresh ordinary output is stopped one additional 5 ms window
-earlier, leaving an already-admitted targetless socket handoff its complete
-allowance without moving the guard, release, or deadline. After the outgoing
+Schema 6 additionally binds a 10,000-microsecond ordinary-output admission
+lead, guard lead, and active-wait tail, with admission and guard coincident.
+The measured client therefore remains actively runnable for the final 10 ms
+before every exact 20 ms release. The exact release and strict half-open
+`[target, target + 5 ms)` physical realisation interval are unchanged. After the outgoing
 handoff, the runner immediately drives only endpoints with accepted scheduled
 receive credit that has not yet produced a `MAX_STREAM_DATA` frame. Each
 unresolved BuFLO incoming identity remains owned by that exact logical slot
@@ -85,7 +84,7 @@ strict: a release or credit advertisement at or after the deadline is a typed
 hard failure and is never caught up. Historical schema 2 receipts retain their
 exact 250 microsecond
 active-wait semantics and remain readable, but cannot admit a fresh candidate
-capture. Full-window active waiting can consume approximately 25% of one CPU
+capture. Ten-millisecond active waiting can consume approximately 50% of one CPU
 while canonical BuFLO is active, so active-wait nanoseconds and measured client
 CPU are retained as performance evidence rather than treated as unavailable
 infrastructure overhead.
@@ -109,20 +108,27 @@ natural byte invalidates provisional stop evidence in the implementation, with
 the cumulative invalidation count retained in the final receipt.  This drain
 is not the paper's server padding-done signal.
 
-The newest immutable executed checkpoint is cohort v31. It binds clean Lab
-`5decf36b2806849174e77e183ca7138c743b7d9a`, Neqo
-`e0179ce1bb18110eacc8fa78f48fc0b6a78dc12d`, and collection image
-`sha256:7c9339f11385b2d9dc8dac771e668b6ab8cdc243d76ddb3404d904c364f3bba9`.
-Its fresh pull/no-cache build, isolated reference execution, complete code
-gate, and 18/18 regression passed. Its separate nine-mode compatibility proof
-also passed while retaining both origins and all four resources. The clean
-controlled shard then stopped at 39/40 after one BuFLO incoming-credit
-continuation delay measured at 9,150 microseconds. V31 is
-therefore immutable **failed, non-attesting evidence**: it has no controlled
-qualification or class-foundation authority and cannot authorise later source.
+The newest immutable executed checkpoint is cohort v34. It binds clean Lab
+`31156fba761226fdb88b40742d1240fae25afb11`, Neqo/gitlink
+`1c220cdbb49a1837657b6a0c454b8114d3454521`, and collection image
+`sha256:a1307693373eefb605834c3ecb32380b068db3d69f25f0643e2528d9f38ba63e`.
+Its clean pull/no-cache schema-2 build, isolated reference execution, and
+established-seven regression at 14/14 passed. The first `simple` BuFLO attempt
+then failed paired slots 580/581 at its 5.8-second target: passive guard entry
+was 13.148603 ms late and dispatch began 8.149603 ms after release, already
+3.149603 ms beyond the strict deadline. The process nevertheless satisfied its
+`SCHED_RR` priority, CPU-affinity and cgroup contract and recorded zero
+involuntary context switches; packet prearming, congestion, loss, and receive-
+credit capacity were not the cause. CS-BuFLO regression, the code gate,
+controlled qualification, and every class-study stage did not run. V34 is
+therefore immutable **failed, non-attesting evidence** and cannot authorise
+later source.
 
-Post-v31 source keeps the 20 ms cadence, target-minus-5-ms guard, exact target
-release, target-plus-5-ms deadline, and no-catch-up rule. It refreshes the
+The clean current source, with Rust/gitlink
+`19bdf9eb03d950bba889410fe7026c4abe05c046`, keeps the 20 ms cadence, exact target release,
+target-plus-5-ms deadline, and no-catch-up rule. Ordinary-output admission
+remains at target minus 10 ms, while guard entry and active waiting move from
+target minus 5 ms to that existing target-minus-10-ms boundary. It refreshes the
 complete set of unrealised slot-owned adapter identities, keeps each identity
 with its owning endpoint, and uses transport callbacks or strict quarter-,
 half-, and three-quarter-window fallbacks before one terminal deadline wake.
@@ -130,7 +136,12 @@ Each owner drive is bounded to one datagram, a multi-endpoint fan-out still
 produces only one logical terminal outcome, and an exact slot cannot inherit
 already-advertised unowned parser capacity from before its window. These are
 client-side fidelity corrections; they do not relax the deadline or claim
-control of server packet timing or size.
+control of server packet timing or size. They are committed and locally tested:
+the full Lab suite passed 1,737 tests with four skips, and Rust formatting,
+test-target `cargo check`, and warning-fatal Clippy passed. Local Rust test-
+binary linking lacked the pinned NSS symbols supplied by the canonical Docker
+build. The correction remains non-evidentiary until a fresh cohort v35 repeats
+the build and every downstream gate.
 
 The current Lab boundary additionally classifies typed client defence/QCSD
 runner errors as `StrictClientDefenseExecutionFailure`. That type and
@@ -162,7 +173,7 @@ crash prevents `run.json` from finalising its typed error. This closes v32's
 fail-open retry path: a future pre-receipt client panic stops a durable stage
 after its first preserved attempt.
 
-Fresh cohort v33 attempted the required pull/no-cache build from the clean
+Historical cohort v33 attempted the required pull/no-cache build from the clean
 corrected commits. It completed the collection target and reached
 preparation-image export before Docker's ext4 data device reported write I/O
 errors, aborted its journal, failed a superblock write, and remounted
@@ -170,12 +181,11 @@ read-only. `dockerd` and the waiting `docker-buildx` client terminated with
 `SIGBUS`. The Windows C: backing volume was at 100% usage with approximately
 1.9 GB free. A controlled Docker Desktop restart remained in `starting` with
 engine `_ping` timeouts and was stopped. No v33 build receipt or result exists,
-no scientific numerator advanced, and no partial image may be reused. After
-storage and filesystem recovery, unused cohort v34 must repeat the
-pull/no-cache build, reference execution, 18/18 regression, complete code gate,
-all 160 controlled captures, and the class foundation before public-page
-acquisition may begin. V34 progress is zero; no class-study foundation,
-qualification, readiness, or validation attestation exists.
+no scientific numerator advanced, and no partial image may be reused. Storage
+was subsequently reclaimed, Docker state was deliberately reset, and cohort
+v34 produced the newer immutable checkpoint described above. No class-study
+foundation, controlled qualification, readiness receipt, or validation
+attestation exists.
 
 The build launcher now fails closed on the infrastructure condition that
 caused v33. It detects WSL from independent kernel, `/proc`, environment, and
@@ -209,7 +219,7 @@ Host-side Python parsers run in isolated mode, load the exact source-controlled
 validator rather than the caller's import path, and canonicalise the checkout
 root before the first command.
 
-The prospective receipt is build-execution schema 2 with four nested schema-1
+The current receipt is build-execution schema 2 with four nested schema-1
 storage observations, exact IID-bearing command vectors, three distinct role
 IDs, fixed role tags, and independently re-verifiable per-role provenance. It
 is fully revalidated against the clean source, Docker identity, no-cache
@@ -217,18 +227,20 @@ commands, Dockerfile, lockfiles, checkout root, and probe hash before its
 create-only write. Missing, ambiguous, malformed,
 unhealthy, low-capacity, changing, remote, aliased, concurrent, shadowed, or
 semantically invalid evidence prevents a receipt. Historical build-execution
-schema-1 receipts remain readable and relocatable. No schema-2 build receipt
-has yet been produced.
+schema-1 receipts remain readable and relocatable. V34 successfully emitted
+and independently revalidated the first schema-2 receipt; its hashes and image
+identities remain bound to the pre-correction v34 source.
 
-A read-only probe on 1 September 2026 found only about 2.19 GB available on
-the backing C: volume. This standalone observation is operational context,
-not one of the four observations in a successful build receipt. Between
-00:24:55 and 00:25:05 AEST that day, an accidental Docker Desktop version
-query launched Desktop; the VM again reported data-device I/O/full-filesystem
-errors and a temporary read-only overlay. Desktop was stopped, both Docker WSL
-distributions remain stopped, and no build, campaign, result, receipt, or v34
-gate was launched or advanced. V34 remains unlaunched pending deliberate host
-storage and Docker-data-filesystem recovery.
+Earlier on 1 September 2026, a read-only probe found only about 2.19 GB
+available on the backing C: volume and Docker again exposed data-device I/O
+errors. That was operational context, not scientific evidence. The obsolete
+Docker state and redundant local caches were subsequently removed. Docker
+29.0.1 was reinitialised with daemon ID
+`48f27adb-00f1-41ce-80fe-41360d2eb712`; v34's four schema-2 backing-volume
+observations then passed with a minimum 523.92 GiB available. The Ubuntu WSL
+distribution-aware Docker proxy is required so bind mounts resolve against the
+actual checkout. This recovered state enabled v34 but does not transfer its
+source-bound evidence to prospective v35.
 
 The authoritative current heads, progression, and evidence ledger are
 maintained in

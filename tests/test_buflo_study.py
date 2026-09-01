@@ -702,6 +702,83 @@ def _runner_wakeup_receipt_v5() -> dict[str, object]:
     return value
 
 
+def _runner_wakeup_receipt_v6() -> dict[str, object]:
+    value = _runner_wakeup_receipt_v5()
+    value.update(
+        {
+            "schema_version": 6,
+            "semantics": (
+                f'{_runner_wakeup_receipt()["semantics"]}; '
+                "buflo_ordinary_output_admission_lead_us=10000; "
+                "buflo_exact_release_guard_reserves_candidate_window; "
+                "buflo_exact_release_guard_lead_us=10000; "
+                "buflo_exact_release_active_wait_tail_us=10000; "
+                "buflo_exact_release_guard_coincides_with_output_admission=true; "
+                "buflo_exact_release_guards_are_separately_receipted_active_waits; "
+                "buflo_active_defense_socket_drains_are_single_batch; "
+                "buflo_active_defense_http_drains_are_single_event; "
+                "buflo_ordinary_output_stops_at_admission; "
+                "buflo_exact_release_guard_begins_at_guard; "
+                "cs_exact_incoming_retry_phases=1/4,1/2,3/4; "
+                "buflo_exact_incoming_retry_wakeups="
+                "transport_callback_or_1/4,1/2,3/4,deadline; "
+                "buflo_exact_incoming_retry_drives="
+                "count_owner_endpoint_output_drive_invocations_"
+                "including_immediate_and_error; "
+                "buflo_exact_incoming_retry_resolutions="
+                "count_drive_invocations_clearing_at_least_one_captured_identity; "
+                "buflo_exact_incoming_retry_max_wake_lateness_"
+                "includes_terminal_deadline=true; "
+                "buflo_exact_incoming_inventory="
+                "all_unrealized_slot_owned_adapter_identities_with_same_tick_refresh; "
+                "buflo_exact_incoming_expiry=one_logical_slot_one_deadline_miss"
+            ),
+        }
+    )
+    return value
+
+
+def test_runner_wakeup_schema_six_has_exact_semantics_and_v5_metric_keys() -> None:
+    historical_v5 = _runner_wakeup_receipt_v5()
+    current_v6 = _runner_wakeup_receipt_v6()
+
+    assert set(current_v6) == set(historical_v5)
+    assert current_v6["semantics"] == (
+        "actual_select_return_source; socket_wins_simultaneous_readiness; "
+        "controller_subset_is_effective_earliest_deadline; scheduled_cells_are_not_wakeups; "
+        "buflo_ordinary_output_admission_lead_us=10000; "
+        "buflo_exact_release_guard_reserves_candidate_window; "
+        "buflo_exact_release_guard_lead_us=10000; "
+        "buflo_exact_release_active_wait_tail_us=10000; "
+        "buflo_exact_release_guard_coincides_with_output_admission=true; "
+        "buflo_exact_release_guards_are_separately_receipted_active_waits; "
+        "buflo_active_defense_socket_drains_are_single_batch; "
+        "buflo_active_defense_http_drains_are_single_event; "
+        "buflo_ordinary_output_stops_at_admission; "
+        "buflo_exact_release_guard_begins_at_guard; "
+        "cs_exact_incoming_retry_phases=1/4,1/2,3/4; "
+        "buflo_exact_incoming_retry_wakeups=transport_callback_or_1/4,1/2,3/4,deadline; "
+        "buflo_exact_incoming_retry_drives="
+        "count_owner_endpoint_output_drive_invocations_including_immediate_and_error; "
+        "buflo_exact_incoming_retry_resolutions="
+        "count_drive_invocations_clearing_at_least_one_captured_identity; "
+        "buflo_exact_incoming_retry_max_wake_lateness_includes_terminal_deadline=true; "
+        "buflo_exact_incoming_inventory="
+        "all_unrealized_slot_owned_adapter_identities_with_same_tick_refresh; "
+        "buflo_exact_incoming_expiry=one_logical_slot_one_deadline_miss"
+    )
+    assert _runner_wakeup_metrics_valid(historical_v5)
+    assert _fidelity_runner_wakeup_metrics_valid(historical_v5)
+    assert _runner_wakeup_metrics_valid(current_v6)
+    assert _fidelity_runner_wakeup_metrics_valid(current_v6)
+
+    wrong_semantics = {**current_v6, "semantics": historical_v5["semantics"]}
+    assert not _runner_wakeup_metrics_valid(wrong_semantics)
+    assert not _fidelity_runner_wakeup_metrics_valid(wrong_semantics)
+    assert not _runner_wakeup_metrics_valid({**current_v6, "unexpected": 0})
+    assert not _fidelity_runner_wakeup_metrics_valid({**current_v6, "unexpected": 0})
+
+
 def test_registry_appends_two_candidate_scientific_identities() -> None:
     assert DEFENSE_ORDER[-2:] == ("buflo", "cs-buflo")
     assert DEFENSE_RUNTIME_KINDS["buflo"] == "buflo"
@@ -4956,7 +5033,7 @@ def test_completed_buflo_resource_receipt_binds_runner_timer_wakeups(tmp_path: P
     )
     assert historical_v4_measured["timer_wakeups"] == 20
 
-    current = dict(historical_v4)
+    historical_v5 = dict(historical_v4)
     v5_fields = _runner_wakeup_receipt_v5()
     for key in (
         "schema_version",
@@ -4965,12 +5042,23 @@ def test_completed_buflo_resource_receipt_binds_runner_timer_wakeups(tmp_path: P
         "buflo_exact_incoming_retry_resolutions",
         "buflo_exact_incoming_retry_max_wake_lateness_nanoseconds",
     ):
-        current[key] = v5_fields[key]
-    current.update(
+        historical_v5[key] = v5_fields[key]
+    historical_v5.update(
         {
             "buflo_exact_incoming_retry_drives": 3,
             "buflo_exact_incoming_retry_resolutions": 1,
             "buflo_exact_incoming_retry_max_wake_lateness_nanoseconds": 250,
+        }
+    )
+    assert _runner_wakeup_metrics_valid(historical_v5)
+    assert _fidelity_runner_wakeup_metrics_valid(historical_v5)
+
+    current = dict(historical_v5)
+    v6_fields = _runner_wakeup_receipt_v6()
+    current.update(
+        {
+            "schema_version": v6_fields["schema_version"],
+            "semantics": v6_fields["semantics"],
         }
     )
     assert _runner_wakeup_metrics_valid(current)
@@ -5351,8 +5439,8 @@ def test_buflo_fidelity_requires_every_zero_error_and_typed_terminal_once() -> N
         require_application_complete=True,
         require_current_schema=True,
     )
-    current_wakeups = json.loads(json.dumps(historical_v4_wakeups))
-    current_wakeups["runner_wakeup_metrics"].update(
+    historical_v5_wakeups = json.loads(json.dumps(historical_v4_wakeups))
+    historical_v5_wakeups["runner_wakeup_metrics"].update(
         {
             key: value
             for key, value in _runner_wakeup_receipt_v5().items()
@@ -5364,6 +5452,29 @@ def test_buflo_fidelity_requires_every_zero_error_and_typed_terminal_once() -> N
                 "buflo_exact_incoming_retry_resolutions",
                 "buflo_exact_incoming_retry_max_wake_lateness_nanoseconds",
             }
+        }
+    )
+    historical_v5_wakeups["runner_wakeup_metrics"].update(
+        {
+            "buflo_exact_incoming_retry_drives": 3,
+            "buflo_exact_incoming_retry_resolutions": 1,
+            "buflo_exact_incoming_retry_max_wake_lateness_nanoseconds": 250,
+        }
+    )
+    assert new_defense_terminal_receipts_valid(
+        historical_v5_wakeups, "buflo", require_application_complete=True
+    )
+    assert not new_defense_terminal_receipts_valid(
+        historical_v5_wakeups,
+        "buflo",
+        require_application_complete=True,
+        require_current_schema=True,
+    )
+    current_wakeups = json.loads(json.dumps(historical_v5_wakeups))
+    current_wakeups["runner_wakeup_metrics"].update(
+        {
+            "schema_version": _runner_wakeup_receipt_v6()["schema_version"],
+            "semantics": _runner_wakeup_receipt_v6()["semantics"],
         }
     )
     current_wakeups["runner_wakeup_metrics"].update(
@@ -5709,13 +5820,29 @@ def test_cs_buflo_fidelity_reconciles_typed_composition_and_rate_state() -> None
         require_application_complete=True,
         require_current_schema=True,
     )
-    current_wakeups = json.loads(json.dumps(historical_v4_wakeups))
-    current_wakeups["runner_wakeup_metrics"] = {
+    historical_v5_wakeups = json.loads(json.dumps(historical_v4_wakeups))
+    historical_v5_wakeups["runner_wakeup_metrics"] = {
         **_runner_wakeup_receipt_v5(),
         "cs_exact_incoming_retry_drives": 3,
         "cs_exact_incoming_retry_resolutions": 1,
         "cs_exact_incoming_retry_max_phase_lateness_nanoseconds": 250,
     }
+    assert new_defense_terminal_receipts_valid(
+        historical_v5_wakeups, "cs_buflo", require_application_complete=True
+    )
+    assert not new_defense_terminal_receipts_valid(
+        historical_v5_wakeups,
+        "cs_buflo",
+        require_application_complete=True,
+        require_current_schema=True,
+    )
+    current_wakeups = json.loads(json.dumps(historical_v5_wakeups))
+    current_wakeups["runner_wakeup_metrics"].update(
+        {
+            "schema_version": _runner_wakeup_receipt_v6()["schema_version"],
+            "semantics": _runner_wakeup_receipt_v6()["semantics"],
+        }
+    )
     assert new_defense_terminal_receipts_valid(
         current_wakeups,
         "cs_buflo",
@@ -5731,6 +5858,13 @@ def test_cs_buflo_fidelity_reconciles_typed_composition_and_rate_state() -> None
     ] = 1
     assert not new_defense_terminal_receipts_valid(
         invalid_wakeups, "cs_buflo", require_application_complete=True
+    )
+    invalid_buflo_retry_wakeups = json.loads(json.dumps(current_wakeups))
+    invalid_buflo_retry_wakeups["runner_wakeup_metrics"][
+        "buflo_exact_incoming_retry_drives"
+    ] = 1
+    assert not new_defense_terminal_receipts_valid(
+        invalid_buflo_retry_wakeups, "cs_buflo", require_application_complete=True
     )
 
     legacy_v3 = json.loads(json.dumps(run))
