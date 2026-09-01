@@ -84,6 +84,15 @@ while a foreign slot cannot borrow the window. Transport callbacks can trigger
 another owner-only drive; otherwise the runner falls back to one-quarter,
 one-half, three-quarter, and terminal-deadline wake-ups. A fan-out still has
 one logical terminal outcome and therefore at most one deadline-miss row.
+For an exact BuFLO outgoing/incoming pair, current source treats the outgoing
+socket handoff and the captured cross-endpoint credit handoff as one ordered
+dispatch transaction before the ordinary global post-output reduction. The
+outgoing datagram is still reconciled first; only its already-captured,
+identity-bound incoming owner may then receive one direct endpoint drive. The
+direct path fails closed if the outgoing cell is not terminal, an outgoing
+target remains committed, the credit owner changes, or the original deadline
+expires. It does not widen the strict half-open 5 ms window, create catch-up
+traffic, or change the generic and CS-BuFLO output paths.
 CS-BuFLO retains its
 three one-quarter, one-half, and three-quarter owner-only retries. The
 half-open deadline remains
@@ -118,23 +127,22 @@ natural byte invalidates provisional stop evidence in the implementation, with
 the cumulative invalidation count retained in the final receipt.  This drain
 is not the paper's server padding-done signal.
 
-The newest receipt-bearing executed checkpoint is cohort v39. It binds clean Lab
-`3d680ebf70f323289e75d79a6936bc43eef5981b`, Neqo/gitlink
-`c472ea9434c453f0fb36c08a6a858fb9c1dd228a`, and collection image
-`sha256:a8ffe5440782be0bbc1c455dc5bf8dc7d8e1ea1a56018db3ad4027696995c7b7`.
+The newest receipt-bearing executed checkpoint is cohort v41. It binds clean
+Lab `c81d8334be443f5cfcabce95efa18fb6ae3bbf7c`, Neqo/gitlink
+`f69d70575c334480d4249e4409d897b1bf19122a`, and collection image
+`sha256:d4e803efc7508fc9cb067d738a80c23c06258fdd92e3f954d0b5019b01821fe1`.
 Its fresh pull/no-cache build and isolated reference execution passed; their
 outer receipt SHA-256 values are respectively
-`a49dc2c7d3c27903d50486a6debb28f9580ed3c7654631d7ea3c77844b93c708`
-and `12924c83b52fec890e8285ec7d58087b77be731f96232e064a998664f7a01bf4`.
+`e46a23ff9f30879b69370070eb7f03c0f1c6e69871e8b804be2372de9cec6b8e`
+and `f0c9f48d3329eb215861e87360ae85545ab49c0d6a8f01ac77c9191b1bf1b0d3`.
 The mandatory timing stress then stopped terminally at 0/12 accepted visits on
-its sole launch of `visit-000`. At the 14.280-second tick, outgoing slot 1428
-and paired incoming slot 1429 both missed: dispatch was observed 36,984 ns
-beyond the strict half-open deadline, one 1,200-byte incoming-credit cell was
-retired, and no catch-up occurred. The environment receipt found no cgroup
-throttling, guest-visible steal, container CPU overlap, or unexpected
-CPU-10-eligible guest task. V39 therefore has no completed 18-cell regression,
-code gate, controlled result, qualification receipt, or class-study
-foundation, and it cannot authorise current source.
+the sole launch of `visit-000`. Outgoing slot 334 was satisfied 3.207 ms after
+its target, but paired incoming slot 335 reached its socket handoff 544,579 ns
+beyond the unchanged strict half-open deadline. Exactly 1,200 bytes of
+scheduled incoming credit were retired, no catch-up occurred, and no retry was
+authorised. V41 therefore has no 18-cell regression, regression-bound code
+gate, controlled result, qualification receipt, or class-study foundation. It
+is immutable failed evidence and cannot authorise current source.
 
 V36 remains useful older diagnostic evidence: its retry-capable ledgers
 eventually showed 18/18 regression and 9/9 multi-origin acceptance only after
@@ -153,60 +161,29 @@ monitor failure. Physical host and hypervisor isolation remain unavailable
 and are not claimed.
 
 Before the ordinary 18-cell regression can run, a mandatory excluded timing
-stress now captures twelve 100-second canonical-cadence BuFLO visits with
-exactly one launch per visit. It exercises 60,000 guarded outgoing releases
-and 120,024 directional opportunities, preserves every launch in the
-authoritative `experiment.json`, and cannot pass after a missing, rejected, or
-incomplete reserved attempt. The regression receipt is source-, image-,
-network-, parameter-, and cohort-bound to that stress evidence. Current-source
-captures require runner-wakeup schema 8 plus the complete scheduler receipt;
-the exact pinned v36 ledgers remain readable only as historical evidence. A
-v37 no-cache build then failed before any receipt when Docker Desktop retained
-a stale loop-backed root ISO after its data-state reset. A full Desktop
-shutdown and restart remounted the current checksum-valid ISO and subsequent
-container and BuildKit probes passed without further I/O errors. Cohort v38
-reached the Rust code gate but stopped at its first command because pinned Rust
-1.90 formatted one newly added assertion differently from the Rust 1.96 host
-toolchain; no Rust tests, Clippy gate, study receipt, or capture ran. Both
-attempts are non-evidentiary. V39 then produced the passing build/reference
-receipts and terminal timing failure described above. Post-v39 client source
-removes the AArch64 `isb`-emitting processor hint from the otherwise unchanged
-active deadline poll, versions that distinction as runner-wakeup schema 8,
-and ensures a failed `attempt.json` still receives its create-only
-`timing-stress-error.json`. Cohort v40 bound clean Lab
-`eb8440f4fa3e45e358fe45a7a633252e85ef2c9c` and Rust/gitlink
-`483320073f092878798e591b183ce8af79aa8e98`. Its backing-storage preflight
-passed and Docker/BuildKit remained healthy, but the build stopped before a
-receipt in the embedded Rust code gate: pinned Rust 1.90 `cargo fmt --check`
-rejected wrapping in the large test import list and the schema-8 semantics
-assertion. No image-IID artefact, reference execution, timing stress,
-regression, controlled capture, or class-study evidence exists for v40. A
-cached target reproduction is diagnostic only. V40 is consumed and must not
-be rerun. The wrapping-only correction passes the pinned formatter. A clean
-cached full-gate diagnostic then passed formatting plus the `neqo-csdef`,
-`neqo-transport`, and `neqo-http3` gates before one `neqo-bin` partition test
-found a separate stale schema-7 literal: production correctly emitted schema
-8. Rust `fff4f8df…` makes that assertion schema-relative while another test
-continues to pin the public value explicitly to 8. Rust `225b1e9e…` applies the
-exact pinned-formatter layout; the focused pinned-image test and an unfiltered
-pinned Rust 1.90 formatting check pass. A second clean cached full-gate
-diagnostic then passed formatting, all 404 `neqo-csdef` tests, the complete
-`neqo-transport` and `neqo-http3` test gates, and all 162 `neqo-bin` tests.
-Warning-fatal workspace Clippy subsequently found one test-only cognitive
-complexity score of 26 against the configured limit of 25 in
-`run_receipt_keeps_evidence_without_duplicate_workload_fields`. Rust
-`f69d7057…` extracts the unchanged runner-wakeup receipt assertions into a
-private helper without suppressing the lint. Independent review found the
-extraction semantically exact, and pinned Rust 1.90 formatting passes. Host
-Rust 1.96 compiles past the corrected function and no longer reports the
-complexity finding, but does report two newer unit-style lints in unchanged
-timing-test literals. The complete pinned Rust 1.90 Docker gate then passed all
-six commands, including the full workspace Clippy invocation with warnings
-denied. Its self-hashed diagnostic receipt binds clean Lab `7755895…` and
-clean Rust/gitlink `f69d7057…`. These cached checks are diagnostic only and did
-not consume v41. A fresh cohort v41 must repeat build, reference conformance,
-timing stress, regression, code, and controlled gates before expanded-class
-acquisition can begin.
+stress captures twelve 100-second canonical-cadence BuFLO visits with exactly
+one launch per visit. It exercises 60,000 guarded outgoing releases and
+120,024 directional opportunities, preserves every launch in authoritative
+`experiment.json`, and cannot pass after a missing, rejected, or incomplete
+reserved attempt. The regression receipt is source-, image-, network-,
+parameter-, and cohort-bound to that stress evidence. Current-source captures
+require runner-wakeup schema 8 plus the complete scheduler receipt; older
+cohort ledgers remain readable only as historical evidence.
+
+Rust `0c81cb2a99ed672117b39e97b6af86d7c6e0f298` implements the narrow
+client-only exact-pair transaction described above after analysis of v41. The
+focused pinned-image tests cover cross-endpoint outgoing-first ordering,
+remaining-window credit handoff, identity and committed-output rejection,
+half-open deadline expiry, transport error terminalisation, and the one-
+datagram guard. Formatting, test-target compilation, and warning-fatal
+`neqo-bin` Clippy also pass. These are implementation and diagnostic test
+results, not a source-bound campaign gate. Cohort v42 is the next unused
+version and must repeat the fresh build, reference, 12/12 timing stress, 18/18
+regression, code, and 160/160 controlled gates before expanded-class
+acquisition can begin. All acquisition, fitting, qualification, 900-cell
+certification, and 16,000-cell formal numerators remain zero for current
+source. The complete earlier cohort chronology is retained in the authoritative
+workspace [`PROJECT.md`](../PROJECT.md).
 
 The current Lab boundary additionally classifies typed client defence/QCSD
 runner errors as `StrictClientDefenseExecutionFailure`. That type and
@@ -218,9 +195,10 @@ process-local, campaign-identity-bound authority created by the `class-study`
 coordinator after it verifies the prerequisite ledger; generic `run` or
 `resume` cannot bypass that ordering.
 
-Docker 29.0.1 exposed 12 CPUs and approximately 16.5 GB memory during the v40
-attempt, whose backing-storage preflight passed and whose formatter failure
-was not a Docker or storage fault. This is operational context only. Cohort
+At the 1 September 2026 operational checkpoint, Docker 29.0.1 is healthy with
+12 CPUs, approximately 16.5 GB memory, and no running containers. The physical
+volume backing its data VHDX has more than the required 64 GiB free. These are
+admission conditions only and do not advance a scientific numerator. Cohort
 v32 passed its
 fresh pull/no-cache build and isolated reference execution, then stopped in the
 first established-mode regression campaign at 4/14 accepted cells. The two
