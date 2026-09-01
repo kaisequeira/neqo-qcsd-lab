@@ -36,9 +36,7 @@ def test_timing_stress_contract_preserves_frozen_campaign_counts_and_dynamic_dra
         "max_events_per_direction": 6_000,
         "strict_half_open_window_us": 5_000,
         "contract_schema_version": 2,
-        "cadence_semantics": (
-            "inclusive-minimum-prefix-plus-bounded-terminal-whole-cell-drain"
-        ),
+        "cadence_semantics": ("inclusive-minimum-prefix-plus-bounded-terminal-whole-cell-drain"),
         "mandatory_prefix_opportunities_per_direction": 5_001,
         "minimum_guarded_outgoing_releases_per_visit": 5_000,
         "maximum_guarded_outgoing_releases_per_visit": 5_999,
@@ -107,9 +105,7 @@ def test_timing_stress_parameters_require_narrow_explicit_admission() -> None:
         "maximum_guarded_outgoing_releases_per_visit": 5_999,
         "minimum_incoming_bytes_per_visit": 6_001_200,
         "maximum_incoming_bytes_per_visit": 7_200_000,
-        "cadence_semantics": (
-            "inclusive-minimum-prefix-plus-bounded-terminal-whole-cell-drain"
-        ),
+        "cadence_semantics": ("inclusive-minimum-prefix-plus-bounded-terminal-whole-cell-drain"),
         "terminal_drain_suffix": "contiguous-exact-paired-whole-cell-opportunities",
         "logical_order_evidence": "direction-target-slot-identity",
         "physical_row_order": "terminal-resolution-order-not-dispatch-order",
@@ -552,7 +548,7 @@ def _small_run(opportunities: int) -> dict[str, Any]:
     }
     run = {
         "runner_wakeup_metrics": {
-            "schema_version": 9,
+            "schema_version": 10,
             "buflo_exact_release_guard_entries": guards,
             "buflo_exact_release_dispatch_ready_guards": guards,
             "buflo_exact_release_failed_guards": 0,
@@ -564,7 +560,7 @@ def _small_run(opportunities: int) -> dict[str, Any]:
             "buflo_exact_release_max_guard_exit_lateness_nanoseconds": 1_000,
             "buflo_exact_release_dispatch_at_or_after_deadline_guards": 0,
             "buflo_exact_release_active_wait_poll_source": (
-                "linux-aarch64-cntvct-el0-predictive-v1"
+                "linux-aarch64-cntvct-el0-predictive-authoritative-watchdog-v2"
             ),
             "buflo_exact_release_active_wait_counter_frequency_hz": 1_000_000_000,
             "buflo_exact_release_active_wait_counter_guards": guards,
@@ -573,10 +569,18 @@ def _small_run(opportunities: int) -> dict[str, Any]:
             "buflo_exact_release_active_wait_counter_calibrations": guards,
             "buflo_exact_release_active_wait_instant_confirmations": guards,
             "buflo_exact_release_active_wait_early_confirmation_retries": 0,
+            "buflo_exact_release_active_wait_authoritative_watchdog_checks": guards,
+            "buflo_exact_release_active_wait_authoritative_watchdog_dispatches": 0,
+            "buflo_exact_release_active_wait_authoritative_watchdog_cadence_validated_guards": (
+                guards
+            ),
             "buflo_exact_release_active_wait_counter_nanoseconds": 20,
             "buflo_exact_release_max_active_spin_gap_nanoseconds": 4,
             "buflo_exact_release_max_active_wait_counter_gap_nanoseconds": 4,
             "buflo_exact_release_max_counter_calibration_span_nanoseconds": 3,
+            "buflo_exact_release_max_authoritative_sample_gap_nanoseconds": 5,
+            "buflo_exact_release_max_authoritative_counter_lag_nanoseconds": 0,
+            "buflo_exact_release_max_counter_authoritative_lead_nanoseconds": 0,
             "buflo_exact_release_dispatch_lateness_histogram": dict(histogram),
             "buflo_exact_release_active_spin_gap_histogram": dict(histogram),
             "buflo_exact_release_worst_guard": {
@@ -587,10 +591,17 @@ def _small_run(opportunities: int) -> dict[str, Any]:
                 "release_at_defense_nanoseconds": 2,
                 "deadline_at_defense_nanoseconds": 3,
                 "dispatch_at_defense_nanoseconds": 2,
-                "active_wait_poll_source": "linux-aarch64-cntvct-el0-predictive-v1",
+                "active_wait_poll_source": (
+                    "linux-aarch64-cntvct-el0-predictive-authoritative-watchdog-v2"
+                ),
                 "active_wait_counter_frequency_hz": 1_000_000_000,
                 "active_wait_instant_confirmations": 1,
                 "active_wait_early_confirmation_retries": 0,
+                "active_wait_authoritative_watchdog_checks": 0,
+                "active_wait_authoritative_watchdog_dispatches": 0,
+                "max_authoritative_sample_gap_nanoseconds": 5,
+                "max_authoritative_counter_lag_nanoseconds": 0,
+                "max_counter_authoritative_lead_nanoseconds": 0,
             },
             "buflo_exact_release_last_failure": None,
         },
@@ -605,8 +616,7 @@ def _small_run(opportunities: int) -> dict[str, Any]:
                 "then_drain_already_advertised_incoming_credit"
             ),
             "terminal_subcell_policy": (
-                "drain_whole_cells_then_client_local_http3_cancel_unallocatable_"
-                "reviewed_chaff_tail"
+                "drain_whole_cells_then_client_local_http3_cancel_unallocatable_reviewed_chaff_tail"
             ),
             "diagnostics": diagnostics,
         },
@@ -683,9 +693,11 @@ def test_timing_stress_schedule_requires_exact_cells_and_credit_bytes(
         "retired": 0,
         "unresolved": 0,
     }
-    assert evidence["runner_wakeup_schema_version"] == 9
+    assert evidence["runner_wakeup_schema_version"] == 10
     assert evidence["active_wait_counter"]["counter_guards"] == 2
     assert evidence["active_wait_counter"]["instant_confirmations"] == 2
+    assert evidence["active_wait_counter"]["authoritative_watchdog_checks"] == 2
+    assert evidence["active_wait_counter"]["authoritative_watchdog_cadence_validated_guards"] == 2
     assert evidence["terminal_schedule_stop"]["available_bytes"] == 270
     assert evidence["terminal_schedule_stop"]["drained_incoming_cells_after_stop"] == 1
     assert evidence["terminal_subcell_drain"]["exact_capacity_bytes_cancelled"] == 273
@@ -771,10 +783,15 @@ def test_timing_stress_rejects_invalid_prefix_suffix_and_terminal_evidence(
         ("buflo_exact_release_active_wait_counter_nonmonotonic_guards", 1),
         ("buflo_exact_release_active_wait_counter_calibrations", 3),
         ("buflo_exact_release_active_wait_instant_confirmations", 1),
+        ("buflo_exact_release_active_wait_authoritative_watchdog_checks", 0),
+        (
+            "buflo_exact_release_active_wait_authoritative_watchdog_cadence_validated_guards",
+            1,
+        ),
         ("buflo_exact_release_max_guard_exit_lateness_nanoseconds", 5_000),
     ),
 )
-def test_schema_nine_timing_stress_rejects_counter_or_authoritative_lateness_failure(
+def test_schema_ten_timing_stress_rejects_counter_or_authoritative_lateness_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     field: str,
@@ -789,7 +806,7 @@ def test_schema_nine_timing_stress_rejects_counter_or_authoritative_lateness_fai
         buflo_study._timing_stress_schedule_evidence(tmp_path, run)
 
 
-@pytest.mark.parametrize("schema_version", (6, 7, 8))
+@pytest.mark.parametrize("schema_version", (6, 7, 8, 9))
 def test_timing_stress_rejects_noncurrent_wakeup_schema(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, schema_version: int
 ) -> None:
@@ -849,7 +866,7 @@ def _aggregate_timing(opportunities: int) -> dict[str, Any]:
         "max_guard_exit_lateness_nanoseconds": 4_999_999,
         "max_active_spin_gap_nanoseconds": 2_264_322,
         "active_wait_counter": {
-            "source": "linux-aarch64-cntvct-el0-predictive-v1",
+            "source": "linux-aarch64-cntvct-el0-predictive-authoritative-watchdog-v2",
             "frequency_hz": 1_000_000_000,
             "counter_guards": guards,
             "unavailable_guards": 0,
@@ -857,9 +874,15 @@ def _aggregate_timing(opportunities: int) -> dict[str, Any]:
             "calibrations": guards,
             "instant_confirmations": guards,
             "early_confirmation_retries": 0,
+            "authoritative_watchdog_checks": guards * 100,
+            "authoritative_watchdog_dispatches": guards,
+            "authoritative_watchdog_cadence_validated_guards": guards,
             "counter_nanoseconds": guards * 5_000_000,
             "max_counter_gap_nanoseconds": 2_264_322,
             "max_calibration_span_nanoseconds": 1_000,
+            "max_authoritative_sample_gap_nanoseconds": 100_000,
+            "max_authoritative_counter_lag_nanoseconds": 50_000,
+            "max_counter_authoritative_lead_nanoseconds": 25_000,
         },
         "dispatch_lateness_histogram": {
             "upper_bounds_nanoseconds": [5_000_000],
@@ -880,10 +903,14 @@ def test_timing_stress_aggregate_binds_dynamic_mixed_visit_counts() -> None:
     buflo_study._validate_timing_stress_aggregate(aggregate)
 
     assert aggregate["opportunities_per_direction_by_visit"] == opportunities
-    assert aggregate["terminal_drain_opportunities_per_direction_by_visit"] == [
-        0,
-        480,
-    ] * 6
+    assert (
+        aggregate["terminal_drain_opportunities_per_direction_by_visit"]
+        == [
+            0,
+            480,
+        ]
+        * 6
+    )
     assert aggregate["guarded_outgoing_releases"] == 62_880
     assert aggregate["mandatory_prefix_guarded_outgoing_releases"] == 60_000
     assert aggregate["terminal_drain_guarded_outgoing_releases"] == 2_880
@@ -903,15 +930,30 @@ def test_timing_stress_aggregate_binds_dynamic_mixed_visit_counts() -> None:
     assert aggregate["guard_outcomes"]["dispatch_ready"] == 62_880
     assert aggregate["guard_outcomes"]["failed"] == 0
     assert aggregate["active_wait_instant_confirmations"] == 62_880
+    assert aggregate["active_wait_authoritative_watchdog_checks"] == 6_288_000
+    assert aggregate["active_wait_authoritative_watchdog_dispatches"] == 62_880
+    assert aggregate["active_wait_authoritative_watchdog_cadence_validated_guards"] == 62_880
     assert aggregate["active_wait_counter_nanoseconds"] == 314_400_000_000
     assert aggregate["max_active_wait_counter_gap_nanoseconds"] == 2_264_322
+    assert aggregate["max_authoritative_sample_gap_nanoseconds"] == 100_000
+    assert aggregate["max_authoritative_counter_lag_nanoseconds"] == 50_000
+    assert aggregate["max_counter_authoritative_lead_nanoseconds"] == 25_000
     assert aggregate["dispatch_lateness_histogram"]["counts"] == [62_880]
     assert aggregate["active_spin_gap_histogram"]["counts"] == [62_880]
     assert aggregate["observed_sensitivity"]["guard_population"] == 62_880
     assert set(aggregate["zero_failure_counts"].values()) == {0}
 
 
-@pytest.mark.parametrize("tamper", ("above-maximum", "sensitivity", "failure-count"))
+@pytest.mark.parametrize(
+    "tamper",
+    (
+        "above-maximum",
+        "sensitivity",
+        "failure-count",
+        "watchdog-checks",
+        "watchdog-cadence",
+    ),
+)
 def test_timing_stress_dynamic_aggregate_rejects_contract_tamper(tamper: str) -> None:
     aggregate = buflo_study._timing_stress_aggregate(
         [{"timing": _aggregate_timing(value)} for value in [5_001, 5_481] * 6]
@@ -920,8 +962,12 @@ def test_timing_stress_dynamic_aggregate_rejects_contract_tamper(tamper: str) ->
         aggregate["opportunities_per_direction_by_visit"][0] = 6_001
     elif tamper == "sensitivity":
         aggregate["observed_sensitivity"] = buflo_study._timing_stress_sensitivity()
-    else:
+    elif tamper == "failure-count":
         aggregate["zero_failure_counts"]["late_outgoing_releases"] = 1
+    elif tamper == "watchdog-checks":
+        aggregate["active_wait_authoritative_watchdog_checks"] = 0
+    else:
+        aggregate["active_wait_authoritative_watchdog_cadence_validated_guards"] -= 1
 
     with pytest.raises(ValueError, match="aggregate zero-failure gate"):
         buflo_study._validate_timing_stress_aggregate(aggregate)

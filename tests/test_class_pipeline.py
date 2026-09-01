@@ -736,7 +736,7 @@ def test_class_result_rejects_historical_schema_eight_runner_receipt(tmp_path: P
     run["runner_wakeup_metrics"] = _runner_wakeup_receipt(8)
     verified, sample = _candidate_verified_result(tmp_path, run)
 
-    with pytest.raises(ValueError, match="runner-wakeup schema-9"):
+    with pytest.raises(ValueError, match="runner-wakeup schema-10"):
         pipeline._validate_current_candidate_sample_receipt(verified, sample, role="certification")
 
 

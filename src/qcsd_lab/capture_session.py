@@ -36,6 +36,8 @@ from .fidelity import (
     _runner_wakeup_v8_valid,
     _runner_wakeup_v9_relative_chronology_available,
     _runner_wakeup_v9_valid,
+    _runner_wakeup_v10_relative_chronology_available,
+    _runner_wakeup_v10_valid,
     new_defense_terminal_receipts_valid,
     reconcile_direct_runner_artifacts,
     validate_primary_capture_clock_integrity,
@@ -1158,6 +1160,8 @@ def _runner_wakeup_metrics_valid(value: Any) -> bool:
     schema_version = value.get("schema_version")
     if type(schema_version) is not int:
         return False
+    if schema_version == 10:
+        return _runner_wakeup_v10_valid(value)
     if schema_version == 9:
         return _runner_wakeup_v9_valid(value)
     if schema_version == 8:
@@ -1292,6 +1296,12 @@ def _validate_run_binding(
             and wakeup_metrics.get("schema_version") == 9
             and type(run_data.get("defense_start_monotonic_ns")) is int
             and not _runner_wakeup_v9_relative_chronology_available(wakeup_metrics)
+        )
+        or (
+            isinstance(wakeup_metrics, Mapping)
+            and wakeup_metrics.get("schema_version") == 10
+            and type(run_data.get("defense_start_monotonic_ns")) is int
+            and not _runner_wakeup_v10_relative_chronology_available(wakeup_metrics)
         )
         or (
             completed_new_buflo

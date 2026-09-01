@@ -33,6 +33,7 @@ from qcsd_lab.fidelity import (
     RUNNER_WAKEUP_V7_SEMANTICS,
     RUNNER_WAKEUP_V8_SEMANTICS,
     RUNNER_WAKEUP_V9_SEMANTICS,
+    RUNNER_WAKEUP_V10_SEMANTICS,
     SCHEDULE_QCSD_FIELDS,
 )
 from qcsd_lab.orchestrator import Workload, _redirect_attestation
@@ -90,8 +91,43 @@ def test_direction_metrics_use_target_order_not_incoming_terminal_order() -> Non
 
 
 def _runner_wakeup_receipt(schema_version: int, *, guard_entries: int = 0) -> dict[str, object]:
-    if guard_entries < 0 or (schema_version != 9 and guard_entries != 0):
-        raise ValueError("guarded-release fixtures require runner-wakeup schema 9")
+    if guard_entries < 0 or (schema_version not in {9, 10} and guard_entries != 0):
+        raise ValueError("guarded-release fixtures require runner-wakeup schema 9 or 10")
+    if schema_version == 10:
+        receipt = _runner_wakeup_receipt(9, guard_entries=guard_entries)
+        worst = receipt["buflo_exact_release_worst_guard"]
+        active_wait = worst["active_wait_monotonic_nanoseconds"] if isinstance(worst, dict) else 0
+        receipt.update(
+            {
+                "schema_version": 10,
+                "semantics": RUNNER_WAKEUP_V10_SEMANTICS,
+                "buflo_exact_release_active_wait_poll_source": (
+                    "linux-aarch64-cntvct-el0-predictive-authoritative-watchdog-v2"
+                ),
+                "buflo_exact_release_active_wait_authoritative_watchdog_checks": 0,
+                "buflo_exact_release_active_wait_authoritative_watchdog_dispatches": 0,
+                "buflo_exact_release_active_wait_authoritative_watchdog_cadence_validated_guards": (
+                    guard_entries
+                ),
+                "buflo_exact_release_max_authoritative_sample_gap_nanoseconds": active_wait,
+                "buflo_exact_release_max_authoritative_counter_lag_nanoseconds": 0,
+                "buflo_exact_release_max_counter_authoritative_lead_nanoseconds": 0,
+            }
+        )
+        if isinstance(worst, dict):
+            worst.update(
+                {
+                    "active_wait_poll_source": (
+                        "linux-aarch64-cntvct-el0-predictive-authoritative-watchdog-v2"
+                    ),
+                    "active_wait_authoritative_watchdog_checks": 0,
+                    "active_wait_authoritative_watchdog_dispatches": 0,
+                    "max_authoritative_sample_gap_nanoseconds": active_wait,
+                    "max_authoritative_counter_lag_nanoseconds": 0,
+                    "max_counter_authoritative_lead_nanoseconds": 0,
+                }
+            )
+        return receipt
     semantics = (
         "actual_select_return_source; socket_wins_simultaneous_readiness; "
         "controller_subset_is_effective_earliest_deadline; "
@@ -413,7 +449,7 @@ def _complete_buflo_run(
             "defense": {"kind": "buflo"},
         },
         "runner_wakeup_metrics": _runner_wakeup_receipt(
-            9, guard_entries=max(scheduled_outgoing - 1, 0)
+            10, guard_entries=max(scheduled_outgoing - 1, 0)
         ),
         "defense_diagnostics": diagnostics,
         "chaff_responses": [
@@ -577,7 +613,7 @@ def _complete_cs_buflo_run() -> dict[str, object]:
             "schema_version": 2,
             "defense": {"kind": "cs_buflo"},
         },
-        "runner_wakeup_metrics": _runner_wakeup_receipt(9),
+        "runner_wakeup_metrics": _runner_wakeup_receipt(10),
         "defense_diagnostics": diagnostics,
         "buflo_summary": None,
         "cs_buflo_summary": summary,
@@ -1319,7 +1355,7 @@ def test_buflo_algorithm_diagnostics_bind_typed_tail_action_and_control_packet(
         events_path=events,
         packets_path=packets,
     )
-    assert run["runner_wakeup_metrics"]["schema_version"] == 9
+    assert run["runner_wakeup_metrics"]["schema_version"] == 10
     assert algorithm["schema_version"] == 4
     assert evaluation_module._load_algorithm_diagnostics(algorithm, defense="buflo") == algorithm
     assert algorithm["buflo_state"]["schema_version"] == 3
@@ -1828,7 +1864,7 @@ def test_cs_buflo_schema_four_handoff_reconstructs_stop_drain_and_preserves_lega
         events_path=events,
         packets_path=packets,
     )
-    assert run["runner_wakeup_metrics"]["schema_version"] == 9
+    assert run["runner_wakeup_metrics"]["schema_version"] == 10
     assert evaluation_module._load_algorithm_diagnostics(current, defense="cs-buflo") == current
     reconstructed = _algorithm_diagnostics(
         run,

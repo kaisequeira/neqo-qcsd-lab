@@ -136,12 +136,8 @@ TIMING_STRESS_MINIMUM_INCOMING_BYTES_PER_VISIT = (
 TIMING_STRESS_MAXIMUM_INCOMING_BYTES_PER_VISIT = (
     TIMING_STRESS_MAX_EVENTS_PER_DIRECTION * TIMING_STRESS_PACKET_SIZE
 )
-TIMING_STRESS_MINIMUM_TOTAL_GUARDS = (
-    TIMING_STRESS_VISITS * TIMING_STRESS_MINIMUM_GUARDS_PER_VISIT
-)
-TIMING_STRESS_MAXIMUM_TOTAL_GUARDS = (
-    TIMING_STRESS_VISITS * TIMING_STRESS_MAXIMUM_GUARDS_PER_VISIT
-)
+TIMING_STRESS_MINIMUM_TOTAL_GUARDS = TIMING_STRESS_VISITS * TIMING_STRESS_MINIMUM_GUARDS_PER_VISIT
+TIMING_STRESS_MAXIMUM_TOTAL_GUARDS = TIMING_STRESS_VISITS * TIMING_STRESS_MAXIMUM_GUARDS_PER_VISIT
 TIMING_STRESS_MINIMUM_TOTAL_OPPORTUNITIES_PER_DIRECTION = (
     TIMING_STRESS_VISITS * TIMING_STRESS_MANDATORY_OPPORTUNITIES_PER_DIRECTION
 )
@@ -548,12 +544,8 @@ def validate_study_plan(value: Mapping[str, Any]) -> None:
         "mandatory_prefix_opportunities_per_direction": (
             TIMING_STRESS_MANDATORY_OPPORTUNITIES_PER_DIRECTION
         ),
-        "minimum_guarded_outgoing_releases_per_visit": (
-            TIMING_STRESS_MINIMUM_GUARDS_PER_VISIT
-        ),
-        "maximum_guarded_outgoing_releases_per_visit": (
-            TIMING_STRESS_MAXIMUM_GUARDS_PER_VISIT
-        ),
+        "minimum_guarded_outgoing_releases_per_visit": (TIMING_STRESS_MINIMUM_GUARDS_PER_VISIT),
+        "maximum_guarded_outgoing_releases_per_visit": (TIMING_STRESS_MAXIMUM_GUARDS_PER_VISIT),
         "minimum_incoming_bytes_per_visit": TIMING_STRESS_MINIMUM_INCOMING_BYTES_PER_VISIT,
         "maximum_incoming_bytes_per_visit": TIMING_STRESS_MAXIMUM_INCOMING_BYTES_PER_VISIT,
         "minimum_guarded_outgoing_releases": TIMING_STRESS_MINIMUM_TOTAL_GUARDS,
@@ -4782,18 +4774,10 @@ def _timing_stress_parameter_inputs() -> dict[str, Any]:
                 TIMING_STRESS_MANDATORY_OPPORTUNITIES_PER_DIRECTION
             ),
             "maximum_opportunities_per_direction": TIMING_STRESS_MAX_EVENTS_PER_DIRECTION,
-            "minimum_guarded_outgoing_releases_per_visit": (
-                TIMING_STRESS_MINIMUM_GUARDS_PER_VISIT
-            ),
-            "maximum_guarded_outgoing_releases_per_visit": (
-                TIMING_STRESS_MAXIMUM_GUARDS_PER_VISIT
-            ),
-            "minimum_incoming_bytes_per_visit": (
-                TIMING_STRESS_MINIMUM_INCOMING_BYTES_PER_VISIT
-            ),
-            "maximum_incoming_bytes_per_visit": (
-                TIMING_STRESS_MAXIMUM_INCOMING_BYTES_PER_VISIT
-            ),
+            "minimum_guarded_outgoing_releases_per_visit": (TIMING_STRESS_MINIMUM_GUARDS_PER_VISIT),
+            "maximum_guarded_outgoing_releases_per_visit": (TIMING_STRESS_MAXIMUM_GUARDS_PER_VISIT),
+            "minimum_incoming_bytes_per_visit": (TIMING_STRESS_MINIMUM_INCOMING_BYTES_PER_VISIT),
+            "maximum_incoming_bytes_per_visit": (TIMING_STRESS_MAXIMUM_INCOMING_BYTES_PER_VISIT),
             "cadence_semantics": (
                 "inclusive-minimum-prefix-plus-bounded-terminal-whole-cell-drain"
             ),
@@ -4868,13 +4852,9 @@ def _timing_stress_checkpoint_binding(
         "neqo_pinned_commit": source.get("neqo_pinned_commit"),
         "image_digest": source.get("image_digest"),
         "study_plan_sha256": sha256_file(STUDY_PLAN),
-        "opportunity_contract_sha256": _canonical_digest(
-            load_study_plan()["timing_stress"]
-        ),
+        "opportunity_contract_sha256": _canonical_digest(load_study_plan()["timing_stress"]),
         "canonical_parameter_sha256": parameter_inputs["canonical_parameter"]["sha256"],
-        "canonical_parameter_provenance_sha256": parameter_inputs["canonical_provenance"][
-            "sha256"
-        ],
+        "canonical_parameter_provenance_sha256": parameter_inputs["canonical_provenance"]["sha256"],
         "parameter_sha256": parameter_inputs["parameter"]["sha256"],
         "parameter_provenance_sha256": parameter_inputs["provenance"]["sha256"],
         "network_receipt_sha256": _canonical_digest(dict(network_receipt)),
@@ -5284,10 +5264,9 @@ def _timing_stress_schedule_evidence(attempt: Path, run: Mapping[str, Any]) -> d
     worst_guard = wakeups.get("buflo_exact_release_worst_guard")
     if (
         not _runner_wakeup_metrics_valid(wakeups)
-        or wakeups.get("schema_version") != 9
+        or wakeups.get("schema_version") != 10
         or guard_entries != guarded_releases
-        or wakeups.get("buflo_exact_release_dispatch_ready_guards")
-        != guarded_releases
+        or wakeups.get("buflo_exact_release_dispatch_ready_guards") != guarded_releases
         or wakeups.get("buflo_exact_release_failed_guards") != 0
         or any(
             wakeups.get(key) != 0
@@ -5304,16 +5283,22 @@ def _timing_stress_schedule_evidence(attempt: Path, run: Mapping[str, Any]) -> d
         or not 0 <= max_guard_exit_lateness_ns < TIMING_STRESS_WINDOW_US * 1_000
         or wakeups.get("buflo_exact_release_dispatch_at_or_after_deadline_guards") != 0
         or wakeups.get("buflo_exact_release_active_wait_poll_source")
-        != "linux-aarch64-cntvct-el0-predictive-v1"
+        != "linux-aarch64-cntvct-el0-predictive-authoritative-watchdog-v2"
         or type(wakeups.get("buflo_exact_release_active_wait_counter_frequency_hz")) is not int
         or wakeups["buflo_exact_release_active_wait_counter_frequency_hz"] <= 0
-        or wakeups.get("buflo_exact_release_active_wait_counter_guards")
-        != guarded_releases
+        or wakeups.get("buflo_exact_release_active_wait_counter_guards") != guarded_releases
         or wakeups.get("buflo_exact_release_active_wait_counter_unavailable_guards") != 0
         or wakeups.get("buflo_exact_release_active_wait_counter_nonmonotonic_guards") != 0
         or wakeups.get("buflo_exact_release_active_wait_instant_confirmations")
         != guarded_releases
         + wakeups.get("buflo_exact_release_active_wait_early_confirmation_retries", -1)
+        or type(wakeups.get("buflo_exact_release_active_wait_authoritative_watchdog_checks"))
+        is not int
+        or wakeups["buflo_exact_release_active_wait_authoritative_watchdog_checks"] <= 0
+        or wakeups.get(
+            "buflo_exact_release_active_wait_authoritative_watchdog_cadence_validated_guards"
+        )
+        != guarded_releases
         or wakeups.get("buflo_exact_release_active_wait_counter_calibrations", -1)
         != wakeups.get("buflo_exact_release_active_wait_instant_confirmations", 0)
         or type(wakeups.get("buflo_exact_release_active_wait_counter_nanoseconds")) is not int
@@ -5332,7 +5317,8 @@ def _timing_stress_schedule_evidence(attempt: Path, run: Mapping[str, Any]) -> d
         or sum(active_gap_counts) != guarded_releases
         or not isinstance(worst_guard, Mapping)
         or any(type(worst_guard.get(key)) is not int for key in RUNNER_WAKEUP_V7_WORST_TIME_KEYS)
-        or worst_guard.get("active_wait_poll_source") != "linux-aarch64-cntvct-el0-predictive-v1"
+        or worst_guard.get("active_wait_poll_source")
+        != "linux-aarch64-cntvct-el0-predictive-authoritative-watchdog-v2"
         or worst_guard.get("active_wait_counter_frequency_hz")
         != wakeups["buflo_exact_release_active_wait_counter_frequency_hz"]
         or worst_guard.get("active_wait_instant_confirmations")
@@ -5429,10 +5415,7 @@ def _timing_stress_schedule_evidence(attempt: Path, run: Mapping[str, Any]) -> d
         or cancelled_streams != open_streams
         or not 0 <= cancelled_bytes < TIMING_STRESS_PACKET_SIZE
         or diagnostics["buflo_terminal_subcell_parser_lease_bytes_at_latch"] != 0
-        or diagnostics[
-            "buflo_terminal_subcell_pending_application_parser_boundaries_at_latch"
-        ]
-        != 0
+        or diagnostics["buflo_terminal_subcell_pending_application_parser_boundaries_at_latch"] != 0
         or diagnostics["buflo_terminal_subcell_pending_request_cancellations"] != 0
     ):
         raise ValueError("timing-stress BuFLO terminal drain evidence is invalid")
@@ -5460,9 +5443,7 @@ def _timing_stress_schedule_evidence(attempt: Path, run: Mapping[str, Any]) -> d
             "retired": 0,
             "unresolved": 0,
         },
-        "mandatory_prefix_guarded_outgoing_releases": (
-            TIMING_STRESS_MINIMUM_GUARDS_PER_VISIT
-        ),
+        "mandatory_prefix_guarded_outgoing_releases": (TIMING_STRESS_MINIMUM_GUARDS_PER_VISIT),
         "terminal_drain_guarded_outgoing_releases": (
             guarded_releases - TIMING_STRESS_MINIMUM_GUARDS_PER_VISIT
         ),
@@ -5495,7 +5476,7 @@ def _timing_stress_schedule_evidence(attempt: Path, run: Mapping[str, Any]) -> d
             "buflo_exact_release_max_active_spin_gap_nanoseconds"
         ],
         "strict_half_open_window_us": TIMING_STRESS_WINDOW_US,
-        "runner_wakeup_schema_version": 9,
+        "runner_wakeup_schema_version": 10,
         "active_wait_counter": {
             "source": wakeups["buflo_exact_release_active_wait_poll_source"],
             "frequency_hz": wakeups["buflo_exact_release_active_wait_counter_frequency_hz"],
@@ -5513,12 +5494,30 @@ def _timing_stress_schedule_evidence(attempt: Path, run: Mapping[str, Any]) -> d
             "early_confirmation_retries": wakeups[
                 "buflo_exact_release_active_wait_early_confirmation_retries"
             ],
+            "authoritative_watchdog_checks": wakeups[
+                "buflo_exact_release_active_wait_authoritative_watchdog_checks"
+            ],
+            "authoritative_watchdog_dispatches": wakeups[
+                "buflo_exact_release_active_wait_authoritative_watchdog_dispatches"
+            ],
+            "authoritative_watchdog_cadence_validated_guards": wakeups[
+                "buflo_exact_release_active_wait_authoritative_watchdog_cadence_validated_guards"
+            ],
             "counter_nanoseconds": wakeups["buflo_exact_release_active_wait_counter_nanoseconds"],
             "max_counter_gap_nanoseconds": wakeups[
                 "buflo_exact_release_max_active_wait_counter_gap_nanoseconds"
             ],
             "max_calibration_span_nanoseconds": wakeups[
                 "buflo_exact_release_max_counter_calibration_span_nanoseconds"
+            ],
+            "max_authoritative_sample_gap_nanoseconds": wakeups[
+                "buflo_exact_release_max_authoritative_sample_gap_nanoseconds"
+            ],
+            "max_authoritative_counter_lag_nanoseconds": wakeups[
+                "buflo_exact_release_max_authoritative_counter_lag_nanoseconds"
+            ],
+            "max_counter_authoritative_lead_nanoseconds": wakeups[
+                "buflo_exact_release_max_counter_authoritative_lead_nanoseconds"
             ],
         },
         "dispatch_at_or_after_deadline_guards": 0,
@@ -5894,6 +5893,18 @@ def _timing_stress_aggregate(samples: Sequence[Mapping[str, Any]]) -> dict[str, 
             int(timing["active_wait_counter"]["early_confirmation_retries"])
             for timing in typed_timings
         ),
+        "active_wait_authoritative_watchdog_checks": sum(
+            int(timing["active_wait_counter"]["authoritative_watchdog_checks"])
+            for timing in typed_timings
+        ),
+        "active_wait_authoritative_watchdog_dispatches": sum(
+            int(timing["active_wait_counter"]["authoritative_watchdog_dispatches"])
+            for timing in typed_timings
+        ),
+        "active_wait_authoritative_watchdog_cadence_validated_guards": sum(
+            int(timing["active_wait_counter"]["authoritative_watchdog_cadence_validated_guards"])
+            for timing in typed_timings
+        ),
         "active_wait_counter_nanoseconds": sum(
             int(timing["active_wait_counter"]["counter_nanoseconds"]) for timing in typed_timings
         ),
@@ -5903,6 +5914,18 @@ def _timing_stress_aggregate(samples: Sequence[Mapping[str, Any]]) -> dict[str, 
         ),
         "max_counter_calibration_span_nanoseconds": max(
             int(timing["active_wait_counter"]["max_calibration_span_nanoseconds"])
+            for timing in typed_timings
+        ),
+        "max_authoritative_sample_gap_nanoseconds": max(
+            int(timing["active_wait_counter"]["max_authoritative_sample_gap_nanoseconds"])
+            for timing in typed_timings
+        ),
+        "max_authoritative_counter_lag_nanoseconds": max(
+            int(timing["active_wait_counter"]["max_authoritative_counter_lag_nanoseconds"])
+            for timing in typed_timings
+        ),
+        "max_counter_authoritative_lead_nanoseconds": max(
+            int(timing["active_wait_counter"]["max_counter_authoritative_lead_nanoseconds"])
             for timing in typed_timings
         ),
         "dispatch_lateness_histogram": aggregate_histograms(dispatch_histograms),
@@ -5951,9 +5974,7 @@ def _validate_timing_stress_aggregate(aggregate: Mapping[str, Any]) -> None:
     incoming_bytes = incoming * TIMING_STRESS_PACKET_SIZE
     if (
         aggregate.get("contract_schema_version") != TIMING_STRESS_SCHEMA_VERSION
-        or not TIMING_STRESS_MINIMUM_TOTAL_GUARDS
-        <= guards
-        <= TIMING_STRESS_MAXIMUM_TOTAL_GUARDS
+        or not TIMING_STRESS_MINIMUM_TOTAL_GUARDS <= guards <= TIMING_STRESS_MAXIMUM_TOTAL_GUARDS
         or not isinstance(opportunities_by_visit, list)
         or len(opportunities_by_visit) != TIMING_STRESS_VISITS
         or any(
@@ -6004,7 +6025,7 @@ def _validate_timing_stress_aggregate(aggregate: Mapping[str, Any]) -> None:
         or aggregate["maximum_last_target_time_us"]
         != (max(opportunities_by_visit) - 1) * TIMING_STRESS_INTERVAL_US
         or aggregate.get("active_wait_poll_source")
-        != "linux-aarch64-cntvct-el0-predictive-v1"
+        != "linux-aarch64-cntvct-el0-predictive-authoritative-watchdog-v2"
         or type(aggregate.get("active_wait_counter_frequency_hz")) is not int
         or aggregate["active_wait_counter_frequency_hz"] <= 0
         or aggregate.get("active_wait_counter_guards") != guards
@@ -6014,6 +6035,22 @@ def _validate_timing_stress_aggregate(aggregate: Mapping[str, Any]) -> None:
         != guards + aggregate.get("active_wait_early_confirmation_retries", -1)
         or aggregate.get("active_wait_counter_calibrations")
         != aggregate.get("active_wait_instant_confirmations")
+        or type(aggregate.get("active_wait_authoritative_watchdog_checks")) is not int
+        or aggregate["active_wait_authoritative_watchdog_checks"] <= 0
+        or type(aggregate.get("active_wait_authoritative_watchdog_dispatches")) is not int
+        or not 0
+        <= aggregate["active_wait_authoritative_watchdog_dispatches"]
+        <= aggregate["active_wait_authoritative_watchdog_checks"]
+        or aggregate["active_wait_authoritative_watchdog_dispatches"] > guards
+        or aggregate.get("active_wait_authoritative_watchdog_cadence_validated_guards") != guards
+        or any(
+            type(aggregate.get(key)) is not int or aggregate[key] < 0
+            for key in (
+                "max_authoritative_sample_gap_nanoseconds",
+                "max_authoritative_counter_lag_nanoseconds",
+                "max_counter_authoritative_lead_nanoseconds",
+            )
+        )
         or aggregate.get("max_active_spin_gap_nanoseconds")
         != aggregate.get("max_active_wait_counter_gap_nanoseconds")
         or aggregate.get("max_counter_calibration_span_nanoseconds", -1)
@@ -6089,9 +6126,7 @@ def _timing_stress_sensitivity(
         "guard_population": guard_population,
         "iid_sensitivity_target_failures_per_guard": 1 / 20_000,
         "iid_detection_probability_at_target": 1 - (1 - 1 / 20_000) ** guard_population,
-        "zero_failure_one_sided_95_percent_upper_rate": (
-            1 - 0.05 ** (1 / guard_population)
-        ),
+        "zero_failure_one_sided_95_percent_upper_rate": (1 - 0.05 ** (1 / guard_population)),
         "interpretation": (
             "descriptive-iid-sensitivity-only;temporally-correlated-guards-"
             "make-zero-observed-failures-the-actual-gate"
