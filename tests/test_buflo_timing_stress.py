@@ -124,6 +124,39 @@ def test_timing_stress_existing_nonaccepted_first_launch_is_terminal(
     assert launches == 0
 
 
+def test_timing_stress_failed_attempt_receives_durable_rejection_receipt(
+    tmp_path: Path,
+) -> None:
+    attempt = tmp_path / "attempt-01"
+    attempt.mkdir()
+    (attempt / "attempt.json").write_text(
+        json.dumps({"success": False, "runner_error_class": "client-defense-execution-v1"}),
+        encoding="utf-8",
+    )
+
+    error = ValueError("strict BuFLO release failed")
+    buflo_study._timing_stress_persist_rejection(attempt, error, stage="collect")
+
+    receipt = json.loads((attempt / "timing-stress-error.json").read_text(encoding="utf-8"))
+    assert receipt == {
+        "schema_version": buflo_study.TIMING_STRESS_SCHEMA_VERSION,
+        "artifact_type": buflo_study.TIMING_STRESS_ATTEMPT_ERROR_TYPE,
+        "failure": {
+            "stage": "collect",
+            "type": "ValueError",
+            "message": "strict BuFLO release failed",
+        },
+    }
+    assert buflo_study._timing_stress_attempt_rejected(attempt)
+
+    with pytest.raises(ValueError, match="rejected and terminal"):
+        buflo_study._timing_stress_collect_or_resume(
+            attempt,
+            lambda: pytest.fail("terminal launch must never be repeated"),
+            recorded_attempt="attempts/visit-000/attempt-01",
+        )
+
+
 def test_timing_stress_newly_reserved_first_launch_is_launched_once(tmp_path: Path) -> None:
     attempt = tmp_path / "attempt-01"
     launches = 0
@@ -353,7 +386,7 @@ def _small_run() -> dict[str, Any]:
     histogram = {"upper_bounds_nanoseconds": [5_000_000], "counts": [2]}
     return {
         "runner_wakeup_metrics": {
-            "schema_version": 7,
+            "schema_version": 8,
             "buflo_exact_release_guard_entries": 2,
             "buflo_exact_release_max_guard_exit_lateness_nanoseconds": 1_000,
             "buflo_exact_release_dispatch_at_or_after_deadline_guards": 0,
@@ -453,7 +486,7 @@ def test_timing_stress_schedule_requires_exact_cells_and_credit_bytes(
         "retired": 0,
         "unresolved": 0,
     }
-    assert evidence["runner_wakeup_schema_version"] == 7
+    assert evidence["runner_wakeup_schema_version"] == 8
     assert evidence["aux_clock"]["complete_guards"] == 2
 
     missing_worst_times = json.loads(json.dumps(run))
@@ -468,13 +501,14 @@ def test_timing_stress_schedule_requires_exact_cells_and_credit_bytes(
         buflo_study._timing_stress_schedule_evidence(tmp_path, run)
 
 
+@pytest.mark.parametrize("schema_version", (6, 7))
 def test_timing_stress_rejects_noncurrent_wakeup_schema(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, schema_version: int
 ) -> None:
     _patch_small_schedule_contract(monkeypatch)
     _write_small_exact_schedule(tmp_path / "neqo/schedule.csv")
     run = _small_run()
-    run["runner_wakeup_metrics"]["schema_version"] = 6
+    run["runner_wakeup_metrics"]["schema_version"] = schema_version
 
     with pytest.raises(ValueError, match="current Linux guard timing evidence"):
         buflo_study._timing_stress_schedule_evidence(tmp_path, run)

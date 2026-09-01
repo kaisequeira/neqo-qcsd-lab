@@ -122,7 +122,7 @@ def install_scheduler_runtime_receipt(
     run: MutableMapping[str, Any],
     diagnostics: MutableMapping[str, Any],
 ) -> None:
-    run.setdefault("runner_wakeup_metrics", {"schema_version": 7})
+    run.setdefault("runner_wakeup_metrics", {"schema_version": 8})
     run["process_scheduler"] = process_scheduler_receipt()
     evidence = scheduler_runtime_evidence()
     encoded = json.dumps(evidence, indent=2, sort_keys=True).encode("utf-8") + b"\n"

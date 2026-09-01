@@ -16,6 +16,7 @@ from qcsd_lab.verification import verify_result
 
 from .test_campaign import (
     _configuration,
+    _install_attempt_scheduler_evidence,
     _resource,
     _write_pacing_miss,
     _write_successful_attempt,
@@ -23,8 +24,9 @@ from .test_campaign import (
 
 
 class _InterruptAfterOneAccepted:
-    def __init__(self) -> None:
+    def __init__(self, *, install_scheduler_evidence: bool = False) -> None:
         self.calls: list[tuple[str, str, int]] = []
+        self.install_scheduler_evidence = install_scheduler_evidence
 
     def __call__(
         self,
@@ -37,15 +39,19 @@ class _InterruptAfterOneAccepted:
     ) -> dict[str, Any]:
         self.calls.append((workload_id, defense.name, seed))
         if len(self.calls) == 1:
-            return _write_successful_attempt(attempt, workload_id, defense.name)
+            result = _write_successful_attempt(attempt, workload_id, defense.name)
+            if self.install_scheduler_evidence:
+                _install_attempt_scheduler_evidence(attempt, result)
+            return result
         attempt.mkdir(parents=True)
         (attempt / "unpromoted.tmp").write_text("interrupted", encoding="utf-8")
         raise KeyboardInterrupt("controlled interruption")
 
 
 class _ResumeCollector:
-    def __init__(self) -> None:
+    def __init__(self, *, install_scheduler_evidence: bool = False) -> None:
         self.calls: list[tuple[str, str, int]] = []
+        self.install_scheduler_evidence = install_scheduler_evidence
 
     def __call__(
         self,
@@ -58,7 +64,10 @@ class _ResumeCollector:
     ) -> dict[str, Any]:
         self.calls.append((workload_id, defense.name, seed))
         assert not (attempt / "unpromoted.tmp").exists()
-        return _write_successful_attempt(attempt, workload_id, defense.name)
+        result = _write_successful_attempt(attempt, workload_id, defense.name)
+        if self.install_scheduler_evidence:
+            _install_attempt_scheduler_evidence(attempt, result)
+        return result
 
 
 class _FailFrontCollector:
@@ -221,7 +230,7 @@ def test_buflo_resume_counts_and_receipts_a_hard_interruption_as_a_physical_atte
     _allow_synthetic_study_environment(monkeypatch)
     results_root = tmp_path / "results"
     results_root.mkdir()
-    interrupted = _InterruptAfterOneAccepted()
+    interrupted = _InterruptAfterOneAccepted(install_scheduler_evidence=True)
     monkeypatch.setattr(orchestrator.capture_engine, "_collect_attempt", interrupted)
 
     with pytest.raises(KeyboardInterrupt, match="controlled interruption"):
@@ -232,7 +241,7 @@ def test_buflo_resume_counts_and_receipts_a_hard_interruption_as_a_physical_atte
     running = next(sample for sample in before["samples"] if sample["state"] == "running")
     assert running["attempts"] == 1
 
-    resumed = _ResumeCollector()
+    resumed = _ResumeCollector(install_scheduler_evidence=True)
     monkeypatch.setattr(orchestrator.capture_engine, "_collect_attempt", resumed)
     assert resume_campaign(root) == root
 
@@ -257,14 +266,14 @@ def test_buflo_resume_cannot_exceed_total_launch_cap_after_hard_interruption(
     _allow_synthetic_study_environment(monkeypatch)
     results_root = tmp_path / "results"
     results_root.mkdir()
-    interrupted = _InterruptAfterOneAccepted()
+    interrupted = _InterruptAfterOneAccepted(install_scheduler_evidence=True)
     monkeypatch.setattr(orchestrator.capture_engine, "_collect_attempt", interrupted)
 
     with pytest.raises(KeyboardInterrupt, match="controlled interruption"):
         run_campaign(campaign, results_root)
 
     [root] = (results_root / "buflo-study-v1-regression-attempt-accounting-1200").iterdir()
-    resumed = _ResumeCollector()
+    resumed = _ResumeCollector(install_scheduler_evidence=True)
     monkeypatch.setattr(orchestrator.capture_engine, "_collect_attempt", resumed)
     with pytest.raises(orchestrator.CampaignIncomplete):
         resume_campaign(root)

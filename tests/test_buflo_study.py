@@ -63,6 +63,7 @@ from qcsd_lab.fidelity import (
     CS_BUFLO_TERMINATION_STOP_POLICY,
     RUNNER_WAKEUP_V7_HISTOGRAM_UPPER_BOUNDS,
     RUNNER_WAKEUP_V7_SEMANTICS,
+    RUNNER_WAKEUP_V8_SEMANTICS,
     SCHEDULE_PREFIX_FIELDS,
     SCHEDULE_QCSD_FIELDS,
     _cs_buflo_padding_targets_match,
@@ -838,6 +839,51 @@ def _runner_wakeup_receipt_v7(
         }
     )
     return value
+
+
+def _runner_wakeup_receipt_v8(
+    *,
+    guard_entries: int = 0,
+    dispatch_lateness_nanoseconds: int = 7,
+    release_skew_nanoseconds: int = 0,
+) -> dict[str, object]:
+    value = _runner_wakeup_receipt_v7(
+        guard_entries=guard_entries,
+        dispatch_lateness_nanoseconds=dispatch_lateness_nanoseconds,
+        release_skew_nanoseconds=release_skew_nanoseconds,
+    )
+    value.update(
+        {
+            "schema_version": 8,
+            "semantics": RUNNER_WAKEUP_V8_SEMANTICS,
+        }
+    )
+    return value
+
+
+def test_runner_wakeup_schema_eight_binds_barrier_free_poll_semantics() -> None:
+    historical = _runner_wakeup_receipt_v7(guard_entries=1)
+    current = _runner_wakeup_receipt_v8(guard_entries=1)
+
+    assert set(current) == set(historical)
+    assert current["semantics"] == (
+        f"{historical['semantics']}; "
+        "buflo_exact_release_active_wait_poll=poll_instant_without_arch_spin_hint"
+    )
+    assert _runner_wakeup_metrics_valid(historical)
+    assert _fidelity_runner_wakeup_metrics_valid(historical)
+    assert _runner_wakeup_metrics_valid(current)
+    assert _fidelity_runner_wakeup_metrics_valid(current)
+    assert not _runner_wakeup_metrics_valid(
+        {**historical, "semantics": current["semantics"]}
+    )
+    assert not _fidelity_runner_wakeup_metrics_valid(
+        {**historical, "semantics": current["semantics"]}
+    )
+    assert not _runner_wakeup_metrics_valid({**current, "semantics": historical["semantics"]})
+    assert not _fidelity_runner_wakeup_metrics_valid(
+        {**current, "semantics": historical["semantics"]}
+    )
 
 
 def test_runner_wakeup_schema_six_has_exact_semantics_and_v5_metric_keys() -> None:
@@ -5321,7 +5367,7 @@ def test_completed_buflo_resource_receipt_binds_runner_timer_wakeups(tmp_path: P
     assert _runner_wakeup_metrics_valid(historical_v5)
     assert _fidelity_runner_wakeup_metrics_valid(historical_v5)
 
-    current = _runner_wakeup_receipt_v7(guard_entries=19)
+    current = _runner_wakeup_receipt_v8(guard_entries=19)
     for key in (
         "wait_returns",
         "socket_readiness_wakeups",
@@ -5743,7 +5789,7 @@ def test_buflo_fidelity_requires_every_zero_error_and_typed_terminal_once() -> N
     )
     current_wakeups = json.loads(json.dumps(historical_v5_wakeups))
     current_wakeups["runner_wakeup_metrics"] = {
-        **_runner_wakeup_receipt_v7(guard_entries=500),
+        **_runner_wakeup_receipt_v8(guard_entries=500),
         "buflo_exact_incoming_retry_drives": 3,
         "buflo_exact_incoming_retry_resolutions": 1,
         "buflo_exact_incoming_retry_max_wake_lateness_nanoseconds": 250,
@@ -6095,7 +6141,7 @@ def test_cs_buflo_fidelity_reconciles_typed_composition_and_rate_state() -> None
     )
     current_wakeups = json.loads(json.dumps(historical_v5_wakeups))
     current_wakeups["runner_wakeup_metrics"] = {
-        **_runner_wakeup_receipt_v7(),
+        **_runner_wakeup_receipt_v8(),
         "cs_exact_incoming_retry_drives": 3,
         "cs_exact_incoming_retry_resolutions": 1,
         "cs_exact_incoming_retry_max_phase_lateness_nanoseconds": 250,

@@ -4915,9 +4915,9 @@ def _timing_stress_persist_rejection(attempt: Path, error: BaseException, *, sta
     """Persist the sole physical launch failure; the visit is never retried."""
 
     attempt.mkdir(parents=True, exist_ok=True)
-    if _timing_stress_attempt_rejected(attempt):
-        return
     path = attempt / "timing-stress-error.json"
+    if path.exists() or path.is_symlink():
+        return
     value = {
         "schema_version": TIMING_STRESS_SCHEMA_VERSION,
         "artifact_type": TIMING_STRESS_ATTEMPT_ERROR_TYPE,
@@ -5107,7 +5107,7 @@ def _timing_stress_schedule_evidence(attempt: Path, run: Mapping[str, Any]) -> d
     worst_guard = wakeups.get("buflo_exact_release_worst_guard")
     if (
         not _runner_wakeup_metrics_valid(wakeups)
-        or wakeups.get("schema_version") != 7
+        or wakeups.get("schema_version") != 8
         or guard_entries != TIMING_STRESS_GUARDS_PER_VISIT
         or type(max_guard_exit_lateness_ns) is not int
         or not 0 <= max_guard_exit_lateness_ns < TIMING_STRESS_WINDOW_US * 1_000
@@ -5174,7 +5174,7 @@ def _timing_stress_schedule_evidence(attempt: Path, run: Mapping[str, Any]) -> d
         "max_incoming_credit_advertisement_delay_us": max(incoming_advertisement_delays, default=0),
         "max_guard_exit_lateness_nanoseconds": max_guard_exit_lateness_ns,
         "strict_half_open_window_us": TIMING_STRESS_WINDOW_US,
-        "runner_wakeup_schema_version": 7,
+        "runner_wakeup_schema_version": 8,
         "aux_clock": {
             "source": wakeups["buflo_exact_release_aux_clock_source"],
             "complete_guards": wakeups["buflo_exact_release_active_wait_aux_clock_guards"],

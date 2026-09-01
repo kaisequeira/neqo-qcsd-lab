@@ -254,23 +254,25 @@ def test_generic_nonstudy_schema_six_remains_compatible(tmp_path: Path) -> None:
     }
 
 
+@pytest.mark.parametrize("schema_version", (6, 7))
 def test_current_class_sample_rejects_historical_runner_wakeup_schema(
     tmp_path: Path,
+    schema_version: int,
 ) -> None:
     root, experiment = _initialize_class_experiment(tmp_path, role="formal")
     transition_sample(experiment, _sample()["sample_id"], "running", increment_attempt=True)
     sample_root = _write_artifacts(root)
     atomic_json(
         sample_root / "neqo/run.json",
-        {"runner_wakeup_metrics": {"schema_version": 6}},
+        {"runner_wakeup_metrics": {"schema_version": schema_version}},
     )
     accept_sample(root, experiment, _sample()["sample_id"])
 
-    with pytest.raises(ValueError, match="class-study.*schema 7"):
+    with pytest.raises(ValueError, match="class-study.*schema 8"):
         validate_accepted_samples(root, experiment)
 
 
-def test_buflo_study_schema_seven_rejects_missing_scheduler_runtime_receipt(
+def test_buflo_study_schema_eight_rejects_missing_scheduler_runtime_receipt(
     tmp_path: Path,
 ) -> None:
     root, experiment = _initialize(tmp_path)
@@ -279,7 +281,7 @@ def test_buflo_study_schema_seven_rejects_missing_scheduler_runtime_receipt(
     sample_root = _write_artifacts(root)
     atomic_json(
         sample_root / "neqo/run.json",
-        {"runner_wakeup_metrics": {"schema_version": 7}},
+        {"runner_wakeup_metrics": {"schema_version": 8}},
     )
     accept_sample(root, experiment, _sample()["sample_id"])
 
@@ -287,8 +289,10 @@ def test_buflo_study_schema_seven_rejects_missing_scheduler_runtime_receipt(
         validate_accepted_samples(root, experiment)
 
 
-def test_current_buflo_schema_six_cannot_claim_historical_compatibility(
+@pytest.mark.parametrize("schema_version", (6, 7))
+def test_current_buflo_historical_schema_cannot_claim_current_compatibility(
     tmp_path: Path,
+    schema_version: int,
 ) -> None:
     root, experiment = _initialize(tmp_path)
     experiment["name"] = "buflo-study-v1-historical-scheduler-test"
@@ -296,7 +300,7 @@ def test_current_buflo_schema_six_cannot_claim_historical_compatibility(
     sample_root = _write_artifacts(root)
     atomic_json(
         sample_root / "neqo/run.json",
-        {"runner_wakeup_metrics": {"schema_version": 6}},
+        {"runner_wakeup_metrics": {"schema_version": schema_version}},
     )
     accept_sample(root, experiment, _sample()["sample_id"])
 

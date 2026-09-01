@@ -1706,6 +1706,10 @@ RUNNER_WAKEUP_V7_SEMANTICS = (
     "twice_actual_adapter_window_ns; "
     "buflo_exact_release_10000us_lead_fields_are_configured_maxima=true"
 )
+RUNNER_WAKEUP_V8_SEMANTICS = (
+    f"{RUNNER_WAKEUP_V7_SEMANTICS}; "
+    "buflo_exact_release_active_wait_poll=poll_instant_without_arch_spin_hint"
+)
 RUNNER_WAKEUP_V7_HISTOGRAM_UPPER_BOUNDS = [
     50_000,
     100_000,
@@ -2224,9 +2228,9 @@ def new_defense_terminal_receipts_valid(
     ):
         return False
     wakeup_metrics = run["runner_wakeup_metrics"]
-    if require_current_schema and wakeup_metrics["schema_version"] != 7:
+    if require_current_schema and wakeup_metrics["schema_version"] != 8:
         return False
-    if wakeup_metrics["schema_version"] in {2, 3, 4, 5, 6, 7} and defense_kind != "buflo":
+    if wakeup_metrics["schema_version"] in {2, 3, 4, 5, 6, 7, 8} and defense_kind != "buflo":
         if any(
             wakeup_metrics[key]
             for key in (
@@ -2238,7 +2242,7 @@ def new_defense_terminal_receipts_valid(
             )
         ):
             return False
-    if wakeup_metrics["schema_version"] in {5, 6, 7} and defense_kind != "buflo":
+    if wakeup_metrics["schema_version"] in {5, 6, 7, 8} and defense_kind != "buflo":
         if any(
             wakeup_metrics[key]
             for key in (
@@ -2248,7 +2252,7 @@ def new_defense_terminal_receipts_valid(
             )
         ):
             return False
-    if wakeup_metrics["schema_version"] in {4, 5, 6, 7} and defense_kind != "cs_buflo":
+    if wakeup_metrics["schema_version"] in {4, 5, 6, 7, 8} and defense_kind != "cs_buflo":
         if any(
             wakeup_metrics[key]
             for key in (
@@ -2258,7 +2262,7 @@ def new_defense_terminal_receipts_valid(
             )
         ):
             return False
-    if wakeup_metrics["schema_version"] == 7 and defense_kind == "buflo":
+    if wakeup_metrics["schema_version"] in {7, 8} and defense_kind == "buflo":
         scheduled_outgoing = diagnostics.get("buflo_scheduled_outgoing_cells")
         if (
             type(scheduled_outgoing) is not int
@@ -2584,8 +2588,13 @@ def _runner_wakeup_v7_worst_guard_valid(value: Any, *, metrics: Mapping[str, Any
     return True
 
 
-def _runner_wakeup_v7_valid(value: Any) -> bool:
-    """Validate current fine-grained exact-release timing evidence."""
+def _runner_wakeup_fine_timing_valid(
+    value: Any,
+    *,
+    schema_version: int,
+    semantics: str,
+) -> bool:
+    """Validate one version of fine-grained exact-release timing evidence."""
 
     base_integer_keys = {
         "wait_returns",
@@ -2617,8 +2626,8 @@ def _runner_wakeup_v7_valid(value: Any) -> bool:
     if (
         not isinstance(value, Mapping)
         or set(value) != required
-        or value.get("schema_version") != 7
-        or value.get("semantics") != RUNNER_WAKEUP_V7_SEMANTICS
+        or value.get("schema_version") != schema_version
+        or value.get("semantics") != semantics
         or any(type(value.get(key)) is not int or value[key] < 0 for key in integer_keys)
         or value.get("buflo_exact_release_aux_clock_source")
         not in {
@@ -2720,6 +2729,26 @@ def _runner_wakeup_v7_valid(value: Any) -> bool:
     )
 
 
+def _runner_wakeup_v7_valid(value: Any) -> bool:
+    """Validate historical schema-seven exact-release timing evidence."""
+
+    return _runner_wakeup_fine_timing_valid(
+        value,
+        schema_version=7,
+        semantics=RUNNER_WAKEUP_V7_SEMANTICS,
+    )
+
+
+def _runner_wakeup_v8_valid(value: Any) -> bool:
+    """Validate current barrier-free exact-release timing evidence."""
+
+    return _runner_wakeup_fine_timing_valid(
+        value,
+        schema_version=8,
+        semantics=RUNNER_WAKEUP_V8_SEMANTICS,
+    )
+
+
 def _runner_wakeup_metrics_valid(value: Any) -> bool:
     base_required = {
         "schema_version",
@@ -2735,6 +2764,8 @@ def _runner_wakeup_metrics_valid(value: Any) -> bool:
     schema_version = value.get("schema_version")
     if type(schema_version) is not int:
         return False
+    if schema_version == 8:
+        return _runner_wakeup_v8_valid(value)
     if schema_version == 7:
         return _runner_wakeup_v7_valid(value)
     if schema_version == 1:

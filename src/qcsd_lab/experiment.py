@@ -599,25 +599,25 @@ def validate_accepted_scheduler_runtime_receipt(
     runner_schema = wakeups.get("schema_version") if isinstance(wakeups, Mapping) else None
     if (
         _buflo_study_experiment(experiment)
-        and (type(runner_schema) is not int or runner_schema < 7)
+        and runner_schema != 8
         and not _historical_buflo_v36_experiment(experiment)
     ):
         raise ValueError(
-            "current BuFLO-study sample requires runner-wakeup schema 7 or an exact "
+            "current BuFLO-study sample requires runner-wakeup schema 8 or an exact "
             "pinned v36 experiment ledger"
         )
-    required = scheduler_runtime_receipt_required(run, experiment)
     configuration = experiment.get("configuration")
     current_class_role = bool(
         isinstance(configuration, Mapping) and "evidence_role" in configuration
     )
+    if current_class_role and runner_schema != 8:
+        raise ValueError("current class-study sample requires runner-wakeup schema 8")
+    required = scheduler_runtime_receipt_required(run, experiment)
     if not required:
         if retained is not None:
             raise ValueError(
                 "historical runner-wakeup schemas must not claim current scheduler runtime evidence"
             )
-        if current_class_role:
-            raise ValueError("current class-study sample requires runner-wakeup schema 7 or later")
         return
 
     # Imports stay local so the generic experiment state machine does not

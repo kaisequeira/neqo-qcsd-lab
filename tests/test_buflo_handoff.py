@@ -31,6 +31,7 @@ from qcsd_lab.fidelity import (
     CONSUMPTION_SCHEDULE_QCSD_FIELDS,
     RUNNER_WAKEUP_V7_HISTOGRAM_UPPER_BOUNDS,
     RUNNER_WAKEUP_V7_SEMANTICS,
+    RUNNER_WAKEUP_V8_SEMANTICS,
     SCHEDULE_QCSD_FIELDS,
 )
 from qcsd_lab.orchestrator import Workload, _redirect_attestation
@@ -102,9 +103,9 @@ def _runner_wakeup_receipt(schema_version: int) -> dict[str, object]:
         "controller_deadline_timer_wakeups": 0,
         "other_timer_wakeups": 0,
     }
-    if schema_version in {2, 3, 4, 5, 6, 7}:
+    if schema_version in {2, 3, 4, 5, 6, 7, 8}:
         active_wait_tail_us = 250 if schema_version == 2 else 5000
-        if schema_version in {6, 7}:
+        if schema_version in {6, 7, 8}:
             semantics = (
                 f"{semantics}; "
                 "buflo_ordinary_output_admission_lead_us=10000; "
@@ -180,7 +181,7 @@ def _runner_wakeup_receipt(schema_version: int) -> dict[str, object]:
                 "buflo_exact_release_max_guard_exit_lateness_nanoseconds": 0,
             }
         )
-    if schema_version in {4, 5, 6, 7}:
+    if schema_version in {4, 5, 6, 7, 8}:
         receipt.update(
             {
                 "cs_exact_incoming_retry_drives": 0,
@@ -188,7 +189,7 @@ def _runner_wakeup_receipt(schema_version: int) -> dict[str, object]:
                 "cs_exact_incoming_retry_max_phase_lateness_nanoseconds": 0,
             }
         )
-    if schema_version in {5, 6, 7}:
+    if schema_version in {5, 6, 7, 8}:
         receipt.update(
             {
                 "buflo_exact_incoming_retry_drives": 0,
@@ -196,10 +197,14 @@ def _runner_wakeup_receipt(schema_version: int) -> dict[str, object]:
                 "buflo_exact_incoming_retry_max_wake_lateness_nanoseconds": 0,
             }
         )
-    if schema_version == 7:
+    if schema_version in {7, 8}:
         receipt.update(
             {
-                "semantics": RUNNER_WAKEUP_V7_SEMANTICS,
+                "semantics": (
+                    RUNNER_WAKEUP_V8_SEMANTICS
+                    if schema_version == 8
+                    else RUNNER_WAKEUP_V7_SEMANTICS
+                ),
                 "buflo_exact_release_max_guard_entry_lateness_nanoseconds": 0,
                 "buflo_exact_release_passive_sleep_calls": 0,
                 "buflo_exact_release_passive_sleep_requested_nanoseconds": 0,
@@ -290,7 +295,7 @@ def _complete_buflo_run(
             "schema_version": 2,
             "defense": {"kind": "buflo"},
         },
-        "runner_wakeup_metrics": _runner_wakeup_receipt(7),
+        "runner_wakeup_metrics": _runner_wakeup_receipt(8),
         "defense_diagnostics": diagnostics,
         "chaff_responses": [
             {"outcome": "buflo_terminal_subcell_tail_cancelled"}
@@ -453,7 +458,7 @@ def _complete_cs_buflo_run() -> dict[str, object]:
             "schema_version": 2,
             "defense": {"kind": "cs_buflo"},
         },
-        "runner_wakeup_metrics": _runner_wakeup_receipt(7),
+        "runner_wakeup_metrics": _runner_wakeup_receipt(8),
         "defense_diagnostics": diagnostics,
         "buflo_summary": None,
         "cs_buflo_summary": summary,
@@ -1175,7 +1180,7 @@ def test_buflo_algorithm_diagnostics_bind_typed_tail_action_and_control_packet(
         events_path=events,
         packets_path=packets,
     )
-    assert run["runner_wakeup_metrics"]["schema_version"] == 7
+    assert run["runner_wakeup_metrics"]["schema_version"] == 8
     assert algorithm["schema_version"] == 4
     assert evaluation_module._load_algorithm_diagnostics(algorithm, defense="buflo") == algorithm
     assert algorithm["buflo_state"]["schema_version"] == 3
@@ -1684,7 +1689,7 @@ def test_cs_buflo_schema_four_handoff_reconstructs_stop_drain_and_preserves_lega
         events_path=events,
         packets_path=packets,
     )
-    assert run["runner_wakeup_metrics"]["schema_version"] == 7
+    assert run["runner_wakeup_metrics"]["schema_version"] == 8
     assert evaluation_module._load_algorithm_diagnostics(current, defense="cs-buflo") == current
     reconstructed = _algorithm_diagnostics(
         run,

@@ -33,6 +33,7 @@ from .capture import (
 )
 from .fidelity import (
     _runner_wakeup_v7_valid,
+    _runner_wakeup_v8_valid,
     new_defense_terminal_receipts_valid,
     reconcile_direct_runner_artifacts,
     validate_primary_capture_clock_integrity,
@@ -1155,6 +1156,8 @@ def _runner_wakeup_metrics_valid(value: Any) -> bool:
     schema_version = value.get("schema_version")
     if type(schema_version) is not int:
         return False
+    if schema_version == 8:
+        return _runner_wakeup_v8_valid(value)
     if schema_version == 7:
         return _runner_wakeup_v7_valid(value)
     if schema_version == 1:
