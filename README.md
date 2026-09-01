@@ -200,11 +200,13 @@ private helper without suppressing the lint. Independent review found the
 extraction semantically exact, and pinned Rust 1.90 formatting passes. Host
 Rust 1.96 compiles past the corrected function and no longer reports the
 complexity finding, but does report two newer unit-style lints in unchanged
-timing-test literals; the pinned Rust 1.90 full-gate rerun remains
-authoritative and outstanding. These cached checks are diagnostic only and
-did not consume v41. A fresh cohort v41 must repeat build, reference
-conformance, timing stress, regression, code, and controlled gates before
-expanded-class acquisition can begin.
+timing-test literals. The complete pinned Rust 1.90 Docker gate then passed all
+six commands, including the full workspace Clippy invocation with warnings
+denied. Its self-hashed diagnostic receipt binds clean Lab `7755895…` and
+clean Rust/gitlink `f69d7057…`. These cached checks are diagnostic only and did
+not consume v41. A fresh cohort v41 must repeat build, reference conformance,
+timing stress, regression, code, and controlled gates before expanded-class
+acquisition can begin.
 
 The current Lab boundary additionally classifies typed client defence/QCSD
 runner errors as `StrictClientDefenseExecutionFailure`. That type and
