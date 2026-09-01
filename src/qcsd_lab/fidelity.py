@@ -1710,6 +1710,79 @@ RUNNER_WAKEUP_V8_SEMANTICS = (
     f"{RUNNER_WAKEUP_V7_SEMANTICS}; "
     "buflo_exact_release_active_wait_poll=poll_instant_without_arch_spin_hint"
 )
+RUNNER_WAKEUP_V9_SEMANTICS = (
+    f"{RUNNER_WAKEUP_SEMANTICS}; "
+    "buflo_ordinary_output_admission_lead_us=10000; "
+    "buflo_exact_release_guard_reserves_candidate_window; "
+    "buflo_exact_release_guard_lead_us=5000; "
+    "buflo_exact_release_active_wait_tail_us=5000; "
+    "buflo_exact_release_guard_coincides_with_output_admission=false; "
+    "buflo_exact_release_guards_are_separately_receipted_active_waits; "
+    "buflo_exact_release_schema9_passive_wait_unreachable=true; "
+    "buflo_exact_release_guard_wait_equals_active_wait=true; "
+    "buflo_exact_release_max_passive_wake_lateness_equals_"
+    "max_guard_entry_lateness=true; "
+    "buflo_active_defense_socket_drains_are_single_batch; "
+    "buflo_active_defense_http_drains_are_single_event; "
+    "buflo_ordinary_output_stops_at_admission; "
+    "buflo_exact_release_guard_begins_one_actual_adapter_window_before_release=true; "
+    "cs_exact_incoming_retry_phases=1/4,1/2,3/4; "
+    "buflo_exact_incoming_retry_wakeups=transport_callback_or_1/4,1/2,3/4,deadline; "
+    "buflo_exact_incoming_retry_drives="
+    "count_owner_endpoint_output_drive_invocations_including_immediate_and_error; "
+    "buflo_exact_incoming_retry_resolutions="
+    "count_drive_invocations_clearing_at_least_one_captured_identity; "
+    "buflo_exact_incoming_retry_max_wake_lateness_includes_terminal_deadline=true; "
+    "buflo_exact_incoming_inventory="
+    "all_unrealized_slot_owned_adapter_identities_with_same_tick_refresh; "
+    "buflo_exact_incoming_expiry=one_logical_slot_one_deadline_miss; "
+    "buflo_exact_release_timing_histogram_upper_bounds_ns="
+    "50000,100000,250000,500000,1000000,2000000,5000000,overflow; "
+    "buflo_exact_release_active_spin_interruption_threshold_ns=50000; "
+    "buflo_exact_release_active_wait_iterations="
+    "counter_read_attempts_including_ordered_and_unavailable_or_fallback_"
+    "authoritative_polls; "
+    "buflo_exact_release_active_spin_gap_histogram_counts_one_max_gap_per_guard_entry; "
+    "buflo_exact_release_dispatch_lateness_histogram_counts_one_dispatch_ready_guard; "
+    "buflo_exact_release_guard_entries=dispatch_ready_guards+failed_guards; "
+    "buflo_exact_release_failed_guards=sum_typed_failure_guards; "
+    "buflo_exact_release_failed_guards_max=1; "
+    "buflo_exact_release_last_failure_present_iff_failed_guards=1; "
+    "buflo_exact_release_failure_dispatch_at_is_null=true; "
+    "buflo_exact_release_dispatch_at_or_after_deadline_uses_half_open_window=true; "
+    "buflo_exact_release_worst_guard_is_max_dispatch_lateness_first_on_tie; "
+    "buflo_exact_release_worst_guard_times_are_relative_to_defense_start_or_null; "
+    "buflo_rolling_prearm_not_before_relative_us_rounding=ceil; "
+    "buflo_rolling_prearm_deadline_relative_us_rounding=floor; "
+    "buflo_exact_release_packet_timestamp_us_semantics=nominal_defense_release; "
+    "buflo_exact_release_worst_guard_release_and_deadline_semantics="
+    "actual_adapter_instants; "
+    "buflo_exact_release_actual_adapter_window_ns="
+    "nominal_control_interval_ns_or_nominal_minus_1000; "
+    "buflo_exact_release_actual_guard_and_active_wait_lead_ns=actual_adapter_window_ns; "
+    "buflo_exact_release_configured_output_admission_lead_us=10000; "
+    "buflo_exact_release_configured_guard_and_active_wait_lead_us=5000; "
+    "buflo_exact_release_active_wait_poll="
+    "linux_aarch64_cntvct_el0_predictive_else_instant_authoritative_fallback; "
+    "buflo_exact_release_counter_target_rounding=ceil; "
+    "buflo_exact_release_counter_calibration=counter_instant_counter; "
+    "buflo_exact_release_counter_is_predictive_only=true; "
+    "buflo_exact_release_counter_frequency_hz_range_inclusive=1000000..4294967295; "
+    "buflo_exact_release_counter_target_error="
+    "defensive_unreachable_for_valid_live_guard_and_frequency; "
+    "buflo_exact_release_counter_unavailable="
+    "scripted_trait_failure_not_architectural_trap_receipt; "
+    "buflo_exact_release_production_counter_access=target_gated_live_smoke_test; "
+    "buflo_exact_release_counter_frequency_change="
+    "hard_failure_before_transport_dispatch_and_before_success_metrics_mutation; "
+    "buflo_exact_release_cross_guard_frequency_precedence="
+    "typed_wait_failure_preserved_dispatch_ready_retyped; "
+    "buflo_exact_release_dispatch_confirmation=authoritative_instant; "
+    "buflo_exact_release_transport_and_socket_clock=authoritative_instant; "
+    "buflo_exact_release_counter_regression=hard_failure; "
+    "buflo_exact_release_guard_metrics_recorded_before_result_propagation=true; "
+    "buflo_exact_release_transport_dispatch_result_precedes_guard_metrics=true"
+)
 RUNNER_WAKEUP_V7_HISTOGRAM_UPPER_BOUNDS = [
     50_000,
     100_000,
@@ -1793,6 +1866,131 @@ RUNNER_WAKEUP_V7_WORST_KEYS = (
     | RUNNER_WAKEUP_V7_WORST_INTEGER_KEYS
     | {"phase", "dispatch_at_or_after_deadline"}
 )
+RUNNER_WAKEUP_V9_POLL_SOURCES = frozenset(
+    {
+        "linux-aarch64-cntvct-el0-predictive-v1",
+        "instant-authoritative-fallback-v1",
+    }
+)
+RUNNER_WAKEUP_V9_NEW_INTEGER_KEYS = frozenset(
+    {
+        "buflo_exact_release_dispatch_ready_guards",
+        "buflo_exact_release_failed_guards",
+        "buflo_exact_release_invalid_counter_frequency_guards",
+        "buflo_exact_release_counter_unavailable_failure_guards",
+        "buflo_exact_release_counter_nonmonotonic_failure_guards",
+        "buflo_exact_release_counter_frequency_changed_guards",
+        "buflo_exact_release_counter_target_error_guards",
+        "buflo_exact_release_max_guard_entry_lateness_nanoseconds",
+        "buflo_exact_release_passive_sleep_calls",
+        "buflo_exact_release_passive_sleep_requested_nanoseconds",
+        "buflo_exact_release_passive_sleep_elapsed_nanoseconds",
+        "buflo_exact_release_max_passive_sleep_overrun_nanoseconds",
+        "buflo_exact_release_active_wait_iterations",
+        "buflo_exact_release_active_spin_interruptions",
+        "buflo_exact_release_active_spin_interruption_nanoseconds",
+        "buflo_exact_release_max_active_spin_gap_nanoseconds",
+        "buflo_exact_release_active_wait_counter_guards",
+        "buflo_exact_release_active_wait_counter_unavailable_guards",
+        "buflo_exact_release_active_wait_counter_nonmonotonic_guards",
+        "buflo_exact_release_active_wait_counter_calibrations",
+        "buflo_exact_release_active_wait_instant_confirmations",
+        "buflo_exact_release_active_wait_early_confirmation_retries",
+        "buflo_exact_release_active_wait_counter_nanoseconds",
+        "buflo_exact_release_max_active_wait_counter_gap_nanoseconds",
+        "buflo_exact_release_max_counter_calibration_span_nanoseconds",
+        "buflo_exact_release_dispatch_at_or_after_deadline_guards",
+    }
+)
+RUNNER_WAKEUP_V9_OBJECT_KEYS = frozenset(
+    {
+        "buflo_exact_release_active_wait_poll_source",
+        "buflo_exact_release_active_wait_counter_frequency_hz",
+        "buflo_exact_release_dispatch_lateness_histogram",
+        "buflo_exact_release_active_spin_gap_histogram",
+        "buflo_exact_release_worst_guard",
+        "buflo_exact_release_last_failure",
+    }
+)
+RUNNER_WAKEUP_V9_WORST_COUNTER_NULLABLE_KEYS = frozenset(
+    {
+        "active_wait_counter_frequency_hz",
+        "active_wait_counter_nanoseconds",
+        "max_active_wait_counter_gap_nanoseconds",
+        "max_counter_calibration_span_nanoseconds",
+    }
+)
+RUNNER_WAKEUP_V9_WORST_COUNTER_INTEGER_KEYS = frozenset(
+    {
+        "active_wait_counter_calibrations",
+        "active_wait_instant_confirmations",
+        "active_wait_early_confirmation_retries",
+    }
+)
+RUNNER_WAKEUP_V9_WORST_KEYS = (
+    RUNNER_WAKEUP_V7_WORST_TIME_KEYS
+    | RUNNER_WAKEUP_V7_WORST_INTEGER_KEYS
+    | RUNNER_WAKEUP_V9_WORST_COUNTER_NULLABLE_KEYS
+    | RUNNER_WAKEUP_V9_WORST_COUNTER_INTEGER_KEYS
+    | {
+        "phase",
+        "dispatch_at_or_after_deadline",
+        "active_wait_poll_source",
+    }
+)
+RUNNER_WAKEUP_V9_FAILURE_TIME_KEYS = frozenset(
+    {
+        "guard_at_defense_nanoseconds",
+        "entered_at_defense_nanoseconds",
+        "active_wait_at_defense_nanoseconds",
+        "active_wait_started_at_defense_nanoseconds",
+        "release_at_defense_nanoseconds",
+        "deadline_at_defense_nanoseconds",
+        "exited_at_defense_nanoseconds",
+    }
+)
+RUNNER_WAKEUP_V9_FAILURE_COUNTER_NULLABLE_KEYS = frozenset(
+    {
+        "counter_frequency_hz",
+        "counter_nanoseconds",
+        "max_counter_gap_nanoseconds",
+        "max_counter_calibration_span_nanoseconds",
+    }
+)
+RUNNER_WAKEUP_V9_FAILURE_INTEGER_KEYS = frozenset(
+    {
+        "endpoint",
+        "slot",
+        "packet_timestamp_us",
+        "guard_entry_lateness_nanoseconds",
+        "exit_before_release_nanoseconds",
+        "counter_calibrations",
+        "instant_confirmations",
+        "early_confirmation_retries",
+    }
+)
+RUNNER_WAKEUP_V9_FAILURE_KEYS = (
+    RUNNER_WAKEUP_V9_FAILURE_TIME_KEYS
+    | RUNNER_WAKEUP_V9_FAILURE_COUNTER_NULLABLE_KEYS
+    | RUNNER_WAKEUP_V9_FAILURE_INTEGER_KEYS
+    | {
+        "outcome",
+        "phase",
+        "dispatch_at_defense_nanoseconds",
+        "exit_at_or_after_deadline",
+        "active_wait_poll_source",
+        "counter_backed",
+        "counter_unavailable",
+        "counter_nonmonotonic",
+    }
+)
+RUNNER_WAKEUP_V9_FAILURE_COUNTER_BY_OUTCOME = {
+    "invalid-counter-frequency": "buflo_exact_release_invalid_counter_frequency_guards",
+    "counter-unavailable": "buflo_exact_release_counter_unavailable_failure_guards",
+    "counter-nonmonotonic": "buflo_exact_release_counter_nonmonotonic_failure_guards",
+    "counter-frequency-changed": "buflo_exact_release_counter_frequency_changed_guards",
+    "counter-target-error": "buflo_exact_release_counter_target_error_guards",
+}
 _LEGACY_SCHEDULED_INCOMING_CONTRACT = {
     "scheduled_incoming_requested_bytes": _INTEGER,
     "scheduled_incoming_consumed_bytes": _INTEGER,
@@ -2228,9 +2426,9 @@ def new_defense_terminal_receipts_valid(
     ):
         return False
     wakeup_metrics = run["runner_wakeup_metrics"]
-    if require_current_schema and wakeup_metrics["schema_version"] != 8:
+    if require_current_schema and wakeup_metrics["schema_version"] != 9:
         return False
-    if wakeup_metrics["schema_version"] in {2, 3, 4, 5, 6, 7, 8} and defense_kind != "buflo":
+    if wakeup_metrics["schema_version"] in {2, 3, 4, 5, 6, 7, 8, 9} and defense_kind != "buflo":
         if any(
             wakeup_metrics[key]
             for key in (
@@ -2242,7 +2440,7 @@ def new_defense_terminal_receipts_valid(
             )
         ):
             return False
-    if wakeup_metrics["schema_version"] in {5, 6, 7, 8} and defense_kind != "buflo":
+    if wakeup_metrics["schema_version"] in {5, 6, 7, 8, 9} and defense_kind != "buflo":
         if any(
             wakeup_metrics[key]
             for key in (
@@ -2252,7 +2450,7 @@ def new_defense_terminal_receipts_valid(
             )
         ):
             return False
-    if wakeup_metrics["schema_version"] in {4, 5, 6, 7, 8} and defense_kind != "cs_buflo":
+    if wakeup_metrics["schema_version"] in {4, 5, 6, 7, 8, 9} and defense_kind != "cs_buflo":
         if any(
             wakeup_metrics[key]
             for key in (
@@ -2262,7 +2460,7 @@ def new_defense_terminal_receipts_valid(
             )
         ):
             return False
-    if wakeup_metrics["schema_version"] in {7, 8} and defense_kind == "buflo":
+    if wakeup_metrics["schema_version"] in {7, 8, 9} and defense_kind == "buflo":
         scheduled_outgoing = diagnostics.get("buflo_scheduled_outgoing_cells")
         if (
             type(scheduled_outgoing) is not int
@@ -2271,6 +2469,37 @@ def new_defense_terminal_receipts_valid(
             or wakeup_metrics["buflo_exact_release_dispatch_at_or_after_deadline_guards"] != 0
             or wakeup_metrics["buflo_exact_release_max_guard_exit_lateness_nanoseconds"]
             >= 5_000_000
+        ):
+            return False
+    if wakeup_metrics["schema_version"] == 9 and defense_kind == "buflo":
+        guard_entries = wakeup_metrics["buflo_exact_release_guard_entries"]
+        dispatch_ready = wakeup_metrics["buflo_exact_release_dispatch_ready_guards"]
+        confirmations = wakeup_metrics["buflo_exact_release_active_wait_instant_confirmations"]
+        early_retries = wakeup_metrics["buflo_exact_release_active_wait_early_confirmation_retries"]
+        if (
+            dispatch_ready != guard_entries
+            or wakeup_metrics["buflo_exact_release_failed_guards"] != 0
+            or any(
+                wakeup_metrics[key] for key in RUNNER_WAKEUP_V9_FAILURE_COUNTER_BY_OUTCOME.values()
+            )
+            or wakeup_metrics["buflo_exact_release_last_failure"] is not None
+        ):
+            return False
+        worst = wakeup_metrics["buflo_exact_release_worst_guard"]
+        if guard_entries > 0 and (
+            not isinstance(worst, Mapping)
+            or any(type(worst.get(key)) is not int for key in RUNNER_WAKEUP_V7_WORST_TIME_KEYS)
+        ):
+            return False
+        if wakeup_metrics[
+            "buflo_exact_release_active_wait_poll_source"
+        ] == "linux-aarch64-cntvct-el0-predictive-v1" and (
+            wakeup_metrics["buflo_exact_release_active_wait_counter_guards"] != guard_entries
+            or wakeup_metrics["buflo_exact_release_active_wait_counter_unavailable_guards"] != 0
+            or wakeup_metrics["buflo_exact_release_active_wait_counter_nonmonotonic_guards"] != 0
+            or confirmations != guard_entries + early_retries
+            or wakeup_metrics["buflo_exact_release_active_wait_counter_calibrations"]
+            != confirmations
         ):
             return False
     prefix = "buflo_" if defense_kind == "buflo" else "cs_buflo_"
@@ -2729,6 +2958,618 @@ def _runner_wakeup_fine_timing_valid(
     )
 
 
+def _runner_wakeup_v9_last_failure_valid(
+    value: Any,
+    *,
+    metrics: Mapping[str, Any],
+) -> bool:
+    """Validate the authoritative exit receipt for one typed wait failure."""
+
+    failed = metrics["buflo_exact_release_failed_guards"]
+    if failed == 0:
+        return value is None
+    if failed != 1 or not isinstance(value, Mapping) or set(value) != RUNNER_WAKEUP_V9_FAILURE_KEYS:
+        return False
+    if (
+        any(
+            type(value.get(key)) is not int or value[key] < 0
+            for key in RUNNER_WAKEUP_V9_FAILURE_INTEGER_KEYS
+        )
+        or value.get("outcome") not in RUNNER_WAKEUP_V9_FAILURE_COUNTER_BY_OUTCOME
+        or value.get("phase") not in {"prearmed", "committed"}
+        or value.get("dispatch_at_defense_nanoseconds") is not None
+        or type(value.get("exit_at_or_after_deadline")) is not bool
+        or value.get("active_wait_poll_source") not in RUNNER_WAKEUP_V9_POLL_SOURCES
+        or any(
+            type(value.get(key)) is not bool
+            for key in ("counter_backed", "counter_unavailable", "counter_nonmonotonic")
+        )
+    ):
+        return False
+
+    times = [value[key] for key in RUNNER_WAKEUP_V9_FAILURE_TIME_KEYS]
+    if not (
+        all(item is None for item in times)
+        or all(type(item) is int and item >= 0 for item in times)
+    ):
+        return False
+    counter_tuple = (
+        value["counter_frequency_hz"],
+        value["counter_nanoseconds"],
+        value["max_counter_gap_nanoseconds"],
+        value["max_counter_calibration_span_nanoseconds"],
+    )
+    if not (
+        all(item is None for item in counter_tuple)
+        or all(type(item) is int and item >= 0 for item in counter_tuple)
+    ):
+        return False
+    frequency, counter_nanoseconds, max_counter_gap, max_calibration_span = counter_tuple
+    if frequency is not None and not 1_000_000 <= frequency <= 2**32 - 1:
+        return False
+
+    outcome = value["outcome"]
+    outcome_counter = RUNNER_WAKEUP_V9_FAILURE_COUNTER_BY_OUTCOME[outcome]
+    counter_backed = value["counter_backed"]
+    counter_unavailable = value["counter_unavailable"]
+    counter_nonmonotonic = value["counter_nonmonotonic"]
+    calibrations = value["counter_calibrations"]
+    confirmations = value["instant_confirmations"]
+    early_retries = value["early_confirmation_retries"]
+    outcome_flags_valid = {
+        "invalid-counter-frequency": (
+            frequency is None
+            and not counter_backed
+            and counter_unavailable
+            and not counter_nonmonotonic
+        ),
+        "counter-unavailable": (
+            frequency is not None
+            and not counter_backed
+            and counter_unavailable
+            and not counter_nonmonotonic
+        ),
+        "counter-nonmonotonic": (
+            frequency is not None
+            and counter_backed
+            and not counter_unavailable
+            and counter_nonmonotonic
+        ),
+        "counter-frequency-changed": (
+            frequency is not None
+            and counter_backed
+            and not counter_unavailable
+            and not counter_nonmonotonic
+        ),
+        "counter-target-error": (
+            frequency is not None
+            and counter_backed
+            and not counter_unavailable
+            and not counter_nonmonotonic
+        ),
+    }[outcome]
+    if (
+        not outcome_flags_valid
+        or value["active_wait_poll_source"]
+        != metrics["buflo_exact_release_active_wait_poll_source"]
+        or value["active_wait_poll_source"] != "linux-aarch64-cntvct-el0-predictive-v1"
+        or metrics[outcome_counter] != 1
+        or counter_backed == counter_unavailable
+        or counter_backed
+        and metrics["buflo_exact_release_active_wait_counter_guards"] == 0
+        or counter_unavailable
+        and metrics["buflo_exact_release_active_wait_counter_unavailable_guards"] == 0
+        or counter_nonmonotonic
+        is not (metrics["buflo_exact_release_active_wait_counter_nonmonotonic_guards"] > 0)
+        or early_retries > confirmations
+        or confirmations > calibrations
+        or (counter_nanoseconds or 0)
+        > metrics["buflo_exact_release_active_wait_counter_nanoseconds"]
+        or (max_counter_gap or 0)
+        > metrics["buflo_exact_release_max_active_wait_counter_gap_nanoseconds"]
+        or (max_calibration_span or 0)
+        > metrics["buflo_exact_release_max_counter_calibration_span_nanoseconds"]
+        or (max_counter_gap or 0) > (counter_nanoseconds or 0)
+        or (max_calibration_span or 0) > (counter_nanoseconds or 0)
+        or (max_calibration_span or 0) > (max_counter_gap or 0)
+        or (
+            calibrations == 0
+            and any((counter_nanoseconds or 0, max_counter_gap or 0, max_calibration_span or 0))
+        )
+        or outcome == "counter-target-error"
+        and calibrations == 0
+        or calibrations > metrics["buflo_exact_release_active_wait_counter_calibrations"]
+        or confirmations > metrics["buflo_exact_release_active_wait_instant_confirmations"]
+        or early_retries > metrics["buflo_exact_release_active_wait_early_confirmation_retries"]
+    ):
+        return False
+    if outcome == "counter-frequency-changed" and not (
+        calibrations == confirmations == early_retries + 1
+    ):
+        return False
+    if outcome == "counter-frequency-changed" and value["exit_before_release_nanoseconds"] != 0:
+        return False
+    if outcome == "counter-target-error" and not (
+        calibrations == confirmations + 1 == early_retries + 1
+    ):
+        return False
+    if outcome in {"counter-unavailable", "counter-nonmonotonic"} and not (
+        confirmations == early_retries and calibrations in {confirmations, confirmations + 1}
+    ):
+        return False
+    if outcome == "invalid-counter-frequency" and any((calibrations, confirmations, early_retries)):
+        return False
+    if (
+        outcome == "invalid-counter-frequency"
+        and metrics["buflo_exact_release_dispatch_ready_guards"] == 0
+        and metrics["buflo_exact_release_active_wait_iterations"] != 0
+    ):
+        return False
+    established_frequency = metrics["buflo_exact_release_active_wait_counter_frequency_hz"]
+    if outcome == "counter-frequency-changed":
+        if (
+            established_frequency is None
+            or established_frequency == frequency
+            or metrics["buflo_exact_release_dispatch_ready_guards"] == 0
+            or metrics["buflo_exact_release_worst_guard"] is None
+        ):
+            return False
+    elif (
+        frequency is not None
+        and established_frequency != frequency
+        and outcome not in {"counter-unavailable", "counter-nonmonotonic", "counter-target-error"}
+    ):
+        return False
+
+    if all(item is not None for item in times):
+        guard = value["guard_at_defense_nanoseconds"]
+        entered = value["entered_at_defense_nanoseconds"]
+        active_at = value["active_wait_at_defense_nanoseconds"]
+        active_started = value["active_wait_started_at_defense_nanoseconds"]
+        release = value["release_at_defense_nanoseconds"]
+        deadline = value["deadline_at_defense_nanoseconds"]
+        exited = value["exited_at_defense_nanoseconds"]
+        nominal_release = value["packet_timestamp_us"] * 1_000
+        release_skew = release - nominal_release
+        deadline_skew = nominal_release + 5_000_000 - deadline
+        normalization_skew = release_skew + deadline_skew
+        actual_window = deadline - release
+        if (
+            not 0 <= release_skew <= 999
+            or not 0 <= deadline_skew <= 999
+            or normalization_skew not in {0, 1_000}
+            or actual_window != 5_000_000 - normalization_skew
+            or actual_window not in {4_999_000, 5_000_000}
+            or active_at != guard
+            or release - guard != actual_window
+            or not guard <= entered == active_started <= exited
+            or value["guard_entry_lateness_nanoseconds"] != entered - guard
+            or entered - guard > metrics["buflo_exact_release_max_guard_entry_lateness_nanoseconds"]
+            or active_started - active_at
+            > metrics["buflo_exact_release_max_passive_wake_lateness_nanoseconds"]
+            or exited - active_started > metrics["buflo_exact_release_active_wait_nanoseconds"]
+            or exited - entered > metrics["buflo_exact_release_guard_wait_nanoseconds"]
+            or value["exit_before_release_nanoseconds"] != max(release - exited, 0)
+            or value["exit_at_or_after_deadline"] is not (exited >= deadline)
+            or (outcome == "counter-frequency-changed" and exited < release)
+        ):
+            return False
+    return True
+
+
+def _runner_wakeup_v9_worst_guard_valid(
+    value: Any,
+    *,
+    metrics: Mapping[str, Any],
+) -> bool:
+    """Validate schema-nine predictive-clock evidence for the worst guard."""
+
+    dispatch_ready = metrics["buflo_exact_release_dispatch_ready_guards"]
+    if dispatch_ready == 0:
+        return value is None
+    if not isinstance(value, Mapping) or set(value) != RUNNER_WAKEUP_V9_WORST_KEYS:
+        return False
+    if (
+        any(
+            type(value.get(key)) is not int or value[key] < 0
+            for key in (
+                RUNNER_WAKEUP_V7_WORST_INTEGER_KEYS | RUNNER_WAKEUP_V9_WORST_COUNTER_INTEGER_KEYS
+            )
+        )
+        or value.get("phase") not in {"prearmed", "committed"}
+        or type(value.get("dispatch_at_or_after_deadline")) is not bool
+        or value.get("active_wait_poll_source") not in RUNNER_WAKEUP_V9_POLL_SOURCES
+    ):
+        return False
+    times = [value[key] for key in RUNNER_WAKEUP_V7_WORST_TIME_KEYS]
+    if not (
+        all(item is None for item in times)
+        or all(type(item) is int and item >= 0 for item in times)
+    ):
+        return False
+    for key in RUNNER_WAKEUP_V9_WORST_COUNTER_NULLABLE_KEYS:
+        if value[key] is not None and (type(value[key]) is not int or value[key] < 0):
+            return False
+    counter_frequency_value = value["active_wait_counter_frequency_hz"]
+    if counter_frequency_value is not None and not (
+        1_000_000 <= counter_frequency_value <= 2**32 - 1
+    ):
+        return False
+
+    dispatch_lateness = value["dispatch_lateness_nanoseconds"]
+    at_or_after_deadline = value["dispatch_at_or_after_deadline"]
+    dispatch_after_deadline = value["dispatch_after_deadline_nanoseconds"]
+    outside_count = metrics["buflo_exact_release_dispatch_at_or_after_deadline_guards"]
+    active_wait = value["active_wait_monotonic_nanoseconds"]
+    spin_interruptions = value["active_spin_interruptions"]
+    spin_interruption_nanoseconds = value["active_spin_interruption_nanoseconds"]
+    max_spin_gap = value["max_active_spin_gap_nanoseconds"]
+    source = value["active_wait_poll_source"]
+    counter_frequency = value["active_wait_counter_frequency_hz"]
+    counter_calibrations = value["active_wait_counter_calibrations"]
+    instant_confirmations = value["active_wait_instant_confirmations"]
+    early_retries = value["active_wait_early_confirmation_retries"]
+    counter_nanoseconds = value["active_wait_counter_nanoseconds"]
+    max_counter_gap = value["max_active_wait_counter_gap_nanoseconds"]
+    max_calibration_span = value["max_counter_calibration_span_nanoseconds"]
+
+    if (
+        source != metrics["buflo_exact_release_active_wait_poll_source"]
+        or counter_frequency != metrics["buflo_exact_release_active_wait_counter_frequency_hz"]
+        or dispatch_lateness != metrics["buflo_exact_release_max_guard_exit_lateness_nanoseconds"]
+        or (outside_count == 0 and at_or_after_deadline)
+        or (outside_count == dispatch_ready and not at_or_after_deadline)
+        or (not at_or_after_deadline and dispatch_after_deadline != 0)
+        or metrics["buflo_exact_release_dispatch_lateness_histogram"]["counts"][
+            _runner_wakeup_v7_bucket(dispatch_lateness)
+        ]
+        == 0
+        or value["guard_entry_lateness_nanoseconds"]
+        > metrics["buflo_exact_release_max_guard_entry_lateness_nanoseconds"]
+        or value["passive_sleep_calls"] > metrics["buflo_exact_release_passive_sleep_calls"]
+        or value["passive_sleep_requested_nanoseconds"]
+        > metrics["buflo_exact_release_passive_sleep_requested_nanoseconds"]
+        or value["passive_sleep_elapsed_nanoseconds"]
+        > metrics["buflo_exact_release_passive_sleep_elapsed_nanoseconds"]
+        or value["max_passive_sleep_overrun_nanoseconds"]
+        > metrics["buflo_exact_release_max_passive_sleep_overrun_nanoseconds"]
+        or value["active_wait_iterations"] > metrics["buflo_exact_release_active_wait_iterations"]
+        or active_wait > metrics["buflo_exact_release_active_wait_nanoseconds"]
+        or spin_interruptions > metrics["buflo_exact_release_active_spin_interruptions"]
+        or spin_interruption_nanoseconds
+        > metrics["buflo_exact_release_active_spin_interruption_nanoseconds"]
+        or max_spin_gap > metrics["buflo_exact_release_max_active_spin_gap_nanoseconds"]
+        or counter_calibrations > metrics["buflo_exact_release_active_wait_counter_calibrations"]
+        or instant_confirmations > metrics["buflo_exact_release_active_wait_instant_confirmations"]
+        or early_retries > metrics["buflo_exact_release_active_wait_early_confirmation_retries"]
+        or (counter_nanoseconds or 0)
+        > metrics["buflo_exact_release_active_wait_counter_nanoseconds"]
+        or (max_counter_gap or 0)
+        > metrics["buflo_exact_release_max_active_wait_counter_gap_nanoseconds"]
+        or (max_calibration_span or 0)
+        > metrics["buflo_exact_release_max_counter_calibration_span_nanoseconds"]
+        or value["max_passive_sleep_overrun_nanoseconds"]
+        > value["passive_sleep_elapsed_nanoseconds"]
+        or spin_interruptions > value["active_wait_iterations"]
+        or ((spin_interruptions > 0) != (max_spin_gap > 50_000))
+        or ((spin_interruptions == 0) != (spin_interruption_nanoseconds == 0))
+        or (spin_interruptions > 0 and spin_interruption_nanoseconds < max_spin_gap)
+        or spin_interruption_nanoseconds > active_wait
+        or max_spin_gap > active_wait
+        or metrics["buflo_exact_release_active_spin_gap_histogram"]["counts"][
+            _runner_wakeup_v7_bucket(max_spin_gap)
+        ]
+        == 0
+        or early_retries > instant_confirmations
+        or instant_confirmations > counter_calibrations
+    ):
+        return False
+    if source == "linux-aarch64-cntvct-el0-predictive-v1":
+        counter_tuple = (
+            counter_frequency,
+            counter_nanoseconds,
+            max_counter_gap,
+            max_calibration_span,
+        )
+        if (
+            not all(item is not None for item in counter_tuple)
+            or instant_confirmations != early_retries + 1
+            or counter_calibrations != instant_confirmations
+            or value["active_wait_iterations"] < 2 * counter_calibrations
+            or max_spin_gap != max_counter_gap
+            or max_calibration_span > max_counter_gap
+        ):
+            return False
+    elif (
+        counter_frequency is not None
+        or counter_calibrations != 0
+        or instant_confirmations != 0
+        or early_retries != 0
+        or counter_nanoseconds is not None
+        or max_counter_gap is not None
+        or max_calibration_span is not None
+    ):
+        return False
+
+    if all(item is not None for item in times):
+        guard = value["guard_at_defense_nanoseconds"]
+        entered = value["entered_at_defense_nanoseconds"]
+        active_at = value["active_wait_at_defense_nanoseconds"]
+        active_started = value["active_wait_started_at_defense_nanoseconds"]
+        release = value["release_at_defense_nanoseconds"]
+        deadline = value["deadline_at_defense_nanoseconds"]
+        dispatch = value["dispatch_at_defense_nanoseconds"]
+        nominal_release = value["packet_timestamp_us"] * 1_000
+        release_skew = release - nominal_release
+        deadline_skew = nominal_release + 5_000_000 - deadline
+        normalization_skew = release_skew + deadline_skew
+        actual_window = deadline - release
+        if (
+            not 0 <= release_skew <= 999
+            or not 0 <= deadline_skew <= 999
+            or normalization_skew not in {0, 1_000}
+            or actual_window != 5_000_000 - normalization_skew
+            or actual_window not in {4_999_000, 5_000_000}
+            or active_at != guard
+            or release - guard != actual_window
+            or not guard <= entered == active_started <= dispatch
+            or release > dispatch
+            or value["guard_entry_lateness_nanoseconds"] != entered - guard
+            or active_wait != dispatch - active_started
+            or active_started - active_at
+            > metrics["buflo_exact_release_max_passive_wake_lateness_nanoseconds"]
+            or dispatch_lateness != dispatch - release
+            or at_or_after_deadline is not (dispatch >= deadline)
+            or dispatch_after_deadline != max(dispatch - deadline, 0)
+        ):
+            return False
+    else:
+        possible_windows = (4_999_000, 5_000_000)
+        if not any(
+            at_or_after_deadline is (dispatch_lateness >= window)
+            and dispatch_after_deadline == max(dispatch_lateness - window, 0)
+            for window in possible_windows
+        ):
+            return False
+    return True
+
+
+def _runner_wakeup_v9_relative_chronology_available(value: Any) -> bool:
+    """Require relative guard times when the enclosing run has a defence start."""
+
+    if not isinstance(value, Mapping) or value.get("schema_version") != 9:
+        return False
+    for object_key, time_keys in (
+        ("buflo_exact_release_worst_guard", RUNNER_WAKEUP_V7_WORST_TIME_KEYS),
+        ("buflo_exact_release_last_failure", RUNNER_WAKEUP_V9_FAILURE_TIME_KEYS),
+    ):
+        item = value.get(object_key)
+        if item is not None and (
+            not isinstance(item, Mapping)
+            or any(type(item.get(key)) is not int for key in time_keys)
+        ):
+            return False
+    return True
+
+
+def _runner_wakeup_v9_valid(value: Any) -> bool:
+    """Validate the current predictive-clock, authoritative-Instant receipt."""
+
+    base_integer_keys = {
+        "wait_returns",
+        "socket_readiness_wakeups",
+        "timer_wakeups",
+        "controller_deadline_timer_wakeups",
+        "other_timer_wakeups",
+        "buflo_exact_release_guard_entries",
+        "buflo_exact_release_guard_wait_nanoseconds",
+        "buflo_exact_release_active_wait_nanoseconds",
+        "buflo_exact_release_max_passive_wake_lateness_nanoseconds",
+        "buflo_exact_release_max_guard_exit_lateness_nanoseconds",
+        "buflo_exact_incoming_retry_drives",
+        "buflo_exact_incoming_retry_resolutions",
+        "buflo_exact_incoming_retry_max_wake_lateness_nanoseconds",
+        "cs_exact_incoming_retry_drives",
+        "cs_exact_incoming_retry_resolutions",
+        "cs_exact_incoming_retry_max_phase_lateness_nanoseconds",
+    }
+    integer_keys = base_integer_keys | set(RUNNER_WAKEUP_V9_NEW_INTEGER_KEYS)
+    required = integer_keys | set(RUNNER_WAKEUP_V9_OBJECT_KEYS) | {"schema_version", "semantics"}
+    if (
+        not isinstance(value, Mapping)
+        or set(value) != required
+        or value.get("schema_version") != 9
+        or value.get("semantics") != RUNNER_WAKEUP_V9_SEMANTICS
+        or any(type(value.get(key)) is not int or value[key] < 0 for key in integer_keys)
+        or value.get("buflo_exact_release_active_wait_poll_source")
+        not in RUNNER_WAKEUP_V9_POLL_SOURCES
+    ):
+        return False
+    frequency = value["buflo_exact_release_active_wait_counter_frequency_hz"]
+    if frequency is not None and (
+        type(frequency) is not int or not 1_000_000 <= frequency <= 2**32 - 1
+    ):
+        return False
+    entries = value["buflo_exact_release_guard_entries"]
+    dispatch_ready = value["buflo_exact_release_dispatch_ready_guards"]
+    failed = value["buflo_exact_release_failed_guards"]
+    typed_failures = sum(value[key] for key in RUNNER_WAKEUP_V9_FAILURE_COUNTER_BY_OUTCOME.values())
+    source = value["buflo_exact_release_active_wait_poll_source"]
+    counter_guards = value["buflo_exact_release_active_wait_counter_guards"]
+    unavailable_guards = value["buflo_exact_release_active_wait_counter_unavailable_guards"]
+    nonmonotonic_guards = value["buflo_exact_release_active_wait_counter_nonmonotonic_guards"]
+    calibrations = value["buflo_exact_release_active_wait_counter_calibrations"]
+    confirmations = value["buflo_exact_release_active_wait_instant_confirmations"]
+    early_retries = value["buflo_exact_release_active_wait_early_confirmation_retries"]
+    counter_nanoseconds = value["buflo_exact_release_active_wait_counter_nanoseconds"]
+    max_counter_gap = value["buflo_exact_release_max_active_wait_counter_gap_nanoseconds"]
+    max_calibration_span = value["buflo_exact_release_max_counter_calibration_span_nanoseconds"]
+    calibration_surplus = calibrations - confirmations
+    minimum_calibration_surplus = value["buflo_exact_release_counter_target_error_guards"]
+    maximum_calibration_surplus = (
+        minimum_calibration_surplus
+        + value["buflo_exact_release_counter_unavailable_failure_guards"]
+        + value["buflo_exact_release_counter_nonmonotonic_failure_guards"]
+    )
+    if (
+        not _runner_wakeup_v7_histogram_valid(
+            value["buflo_exact_release_dispatch_lateness_histogram"], entries=dispatch_ready
+        )
+        or not _runner_wakeup_v7_histogram_valid(
+            value["buflo_exact_release_active_spin_gap_histogram"], entries=entries
+        )
+        or not _runner_wakeup_v9_worst_guard_valid(
+            value["buflo_exact_release_worst_guard"], metrics=value
+        )
+        or not _runner_wakeup_v9_last_failure_valid(
+            value["buflo_exact_release_last_failure"], metrics=value
+        )
+        or value["buflo_exact_release_active_wait_nanoseconds"]
+        > value["buflo_exact_release_guard_wait_nanoseconds"]
+        or value["buflo_exact_release_active_wait_nanoseconds"]
+        != value["buflo_exact_release_guard_wait_nanoseconds"]
+        or value["buflo_exact_release_max_passive_wake_lateness_nanoseconds"]
+        != value["buflo_exact_release_max_guard_entry_lateness_nanoseconds"]
+        or any(
+            value[key]
+            for key in (
+                "buflo_exact_release_passive_sleep_calls",
+                "buflo_exact_release_passive_sleep_requested_nanoseconds",
+                "buflo_exact_release_passive_sleep_elapsed_nanoseconds",
+                "buflo_exact_release_max_passive_sleep_overrun_nanoseconds",
+            )
+        )
+        or entries != dispatch_ready + failed
+        or failed != typed_failures
+        or failed > 1
+        or counter_guards + unavailable_guards != entries
+        or nonmonotonic_guards > counter_guards
+        or early_retries > confirmations
+        or confirmations > calibrations
+        or not minimum_calibration_surplus <= calibration_surplus <= maximum_calibration_surplus
+        or confirmations
+        != counter_guards
+        - value["buflo_exact_release_counter_nonmonotonic_failure_guards"]
+        - value["buflo_exact_release_counter_target_error_guards"]
+        + early_retries
+        or max_counter_gap > counter_nanoseconds
+        or max_calibration_span > counter_nanoseconds
+        or (calibrations == 0 and any((counter_nanoseconds, max_counter_gap, max_calibration_span)))
+        or value["buflo_exact_release_dispatch_at_or_after_deadline_guards"] > dispatch_ready
+        or value["buflo_exact_release_max_passive_sleep_overrun_nanoseconds"]
+        > value["buflo_exact_release_passive_sleep_elapsed_nanoseconds"]
+        or value["buflo_exact_release_max_active_spin_gap_nanoseconds"]
+        > value["buflo_exact_release_active_wait_nanoseconds"]
+        or value["buflo_exact_release_active_spin_interruptions"]
+        > value["buflo_exact_release_active_wait_iterations"]
+        or (
+            (value["buflo_exact_release_active_spin_interruptions"] == 0)
+            != (value["buflo_exact_release_active_spin_interruption_nanoseconds"] == 0)
+        )
+        or (
+            (value["buflo_exact_release_active_spin_interruptions"] > 0)
+            != (value["buflo_exact_release_max_active_spin_gap_nanoseconds"] > 50_000)
+        )
+        or (
+            value["buflo_exact_release_active_spin_interruptions"] > 0
+            and value["buflo_exact_release_active_spin_interruption_nanoseconds"]
+            < value["buflo_exact_release_max_active_spin_gap_nanoseconds"]
+        )
+        or value["buflo_exact_release_active_spin_interruption_nanoseconds"]
+        > value["buflo_exact_release_active_wait_nanoseconds"]
+        or (
+            entries > 0
+            and value["buflo_exact_release_active_spin_gap_histogram"]["counts"][
+                _runner_wakeup_v7_bucket(
+                    value["buflo_exact_release_max_active_spin_gap_nanoseconds"]
+                )
+            ]
+            == 0
+        )
+    ):
+        return False
+    timing_scalars = {
+        "buflo_exact_release_guard_wait_nanoseconds",
+        "buflo_exact_release_active_wait_nanoseconds",
+        "buflo_exact_release_max_passive_wake_lateness_nanoseconds",
+        "buflo_exact_release_max_guard_exit_lateness_nanoseconds",
+        *RUNNER_WAKEUP_V9_NEW_INTEGER_KEYS,
+    }
+    if entries == 0 and (any(value[key] for key in timing_scalars) or frequency is not None):
+        return False
+    if dispatch_ready == 0 and (
+        value["buflo_exact_release_max_guard_exit_lateness_nanoseconds"] != 0
+        or value["buflo_exact_release_dispatch_at_or_after_deadline_guards"] != 0
+    ):
+        return False
+    if source == "linux-aarch64-cntvct-el0-predictive-v1":
+        last_failure = value["buflo_exact_release_last_failure"]
+        failure_calibrations = (
+            last_failure["counter_calibrations"] if isinstance(last_failure, Mapping) else 0
+        )
+        required_counter_reads = (
+            2 * calibrations
+            + value["buflo_exact_release_counter_unavailable_failure_guards"]
+            + (2 if failure_calibrations == 0 else 1)
+            * value["buflo_exact_release_counter_nonmonotonic_failure_guards"]
+        )
+        if (
+            counter_guards
+            != dispatch_ready
+            + value["buflo_exact_release_counter_nonmonotonic_failure_guards"]
+            + value["buflo_exact_release_counter_frequency_changed_guards"]
+            + value["buflo_exact_release_counter_target_error_guards"]
+            or unavailable_guards
+            != value["buflo_exact_release_invalid_counter_frequency_guards"]
+            + value["buflo_exact_release_counter_unavailable_failure_guards"]
+            or nonmonotonic_guards
+            != value["buflo_exact_release_counter_nonmonotonic_failure_guards"]
+            or value["buflo_exact_release_active_wait_iterations"] < required_counter_reads
+            or value["buflo_exact_release_max_active_spin_gap_nanoseconds"] != max_counter_gap
+            or max_calibration_span > max_counter_gap
+        ):
+            return False
+        if counter_guards > 0 and (type(frequency) is not int or frequency <= 0):
+            return False
+        if frequency is None and any(
+            (
+                counter_guards,
+                calibrations,
+                confirmations,
+                early_retries,
+                counter_nanoseconds,
+                max_counter_gap,
+                max_calibration_span,
+            )
+        ):
+            return False
+    elif (
+        frequency is not None
+        or counter_guards != 0
+        or unavailable_guards != entries
+        or nonmonotonic_guards != 0
+        or calibrations != 0
+        or confirmations != 0
+        or early_retries != 0
+        or counter_nanoseconds != 0
+        or max_counter_gap != 0
+        or max_calibration_span != 0
+    ):
+        return False
+    return (
+        value["wait_returns"] == value["socket_readiness_wakeups"] + value["timer_wakeups"]
+        and value["timer_wakeups"]
+        == value["controller_deadline_timer_wakeups"] + value["other_timer_wakeups"]
+        and value["cs_exact_incoming_retry_resolutions"] <= value["cs_exact_incoming_retry_drives"]
+        and (
+            value["cs_exact_incoming_retry_drives"] != 0
+            or value["cs_exact_incoming_retry_max_phase_lateness_nanoseconds"] == 0
+        )
+        and value["buflo_exact_incoming_retry_resolutions"]
+        <= value["buflo_exact_incoming_retry_drives"]
+    )
+
+
 def _runner_wakeup_v7_valid(value: Any) -> bool:
     """Validate historical schema-seven exact-release timing evidence."""
 
@@ -2740,7 +3581,7 @@ def _runner_wakeup_v7_valid(value: Any) -> bool:
 
 
 def _runner_wakeup_v8_valid(value: Any) -> bool:
-    """Validate current barrier-free exact-release timing evidence."""
+    """Validate historical barrier-free exact-release timing evidence."""
 
     return _runner_wakeup_fine_timing_valid(
         value,
@@ -2764,6 +3605,8 @@ def _runner_wakeup_metrics_valid(value: Any) -> bool:
     schema_version = value.get("schema_version")
     if type(schema_version) is not int:
         return False
+    if schema_version == 9:
+        return _runner_wakeup_v9_valid(value)
     if schema_version == 8:
         return _runner_wakeup_v8_valid(value)
     if schema_version == 7:

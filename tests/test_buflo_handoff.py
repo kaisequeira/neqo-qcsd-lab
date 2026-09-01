@@ -32,6 +32,7 @@ from qcsd_lab.fidelity import (
     RUNNER_WAKEUP_V7_HISTOGRAM_UPPER_BOUNDS,
     RUNNER_WAKEUP_V7_SEMANTICS,
     RUNNER_WAKEUP_V8_SEMANTICS,
+    RUNNER_WAKEUP_V9_SEMANTICS,
     SCHEDULE_QCSD_FIELDS,
 )
 from qcsd_lab.orchestrator import Workload, _redirect_attestation
@@ -88,7 +89,9 @@ def test_direction_metrics_use_target_order_not_incoming_terminal_order() -> Non
     }
 
 
-def _runner_wakeup_receipt(schema_version: int) -> dict[str, object]:
+def _runner_wakeup_receipt(schema_version: int, *, guard_entries: int = 0) -> dict[str, object]:
+    if guard_entries < 0 or (schema_version != 9 and guard_entries != 0):
+        raise ValueError("guarded-release fixtures require runner-wakeup schema 9")
     semantics = (
         "actual_select_return_source; socket_wins_simultaneous_readiness; "
         "controller_subset_is_effective_earliest_deadline; "
@@ -103,9 +106,9 @@ def _runner_wakeup_receipt(schema_version: int) -> dict[str, object]:
         "controller_deadline_timer_wakeups": 0,
         "other_timer_wakeups": 0,
     }
-    if schema_version in {2, 3, 4, 5, 6, 7, 8}:
+    if schema_version in {2, 3, 4, 5, 6, 7, 8, 9}:
         active_wait_tail_us = 250 if schema_version == 2 else 5000
-        if schema_version in {6, 7, 8}:
+        if schema_version in {6, 7, 8, 9}:
             semantics = (
                 f"{semantics}; "
                 "buflo_ordinary_output_admission_lead_us=10000; "
@@ -181,7 +184,7 @@ def _runner_wakeup_receipt(schema_version: int) -> dict[str, object]:
                 "buflo_exact_release_max_guard_exit_lateness_nanoseconds": 0,
             }
         )
-    if schema_version in {4, 5, 6, 7, 8}:
+    if schema_version in {4, 5, 6, 7, 8, 9}:
         receipt.update(
             {
                 "cs_exact_incoming_retry_drives": 0,
@@ -189,7 +192,7 @@ def _runner_wakeup_receipt(schema_version: int) -> dict[str, object]:
                 "cs_exact_incoming_retry_max_phase_lateness_nanoseconds": 0,
             }
         )
-    if schema_version in {5, 6, 7, 8}:
+    if schema_version in {5, 6, 7, 8, 9}:
         receipt.update(
             {
                 "buflo_exact_incoming_retry_drives": 0,
@@ -237,6 +240,120 @@ def _runner_wakeup_receipt(schema_version: int) -> dict[str, object]:
                 "buflo_exact_release_worst_guard": None,
             }
         )
+    if schema_version == 9:
+        receipt.update(
+            {
+                "semantics": RUNNER_WAKEUP_V9_SEMANTICS,
+                "buflo_exact_release_dispatch_ready_guards": 0,
+                "buflo_exact_release_failed_guards": 0,
+                "buflo_exact_release_invalid_counter_frequency_guards": 0,
+                "buflo_exact_release_counter_unavailable_failure_guards": 0,
+                "buflo_exact_release_counter_nonmonotonic_failure_guards": 0,
+                "buflo_exact_release_counter_frequency_changed_guards": 0,
+                "buflo_exact_release_counter_target_error_guards": 0,
+                "buflo_exact_release_max_guard_entry_lateness_nanoseconds": 0,
+                "buflo_exact_release_passive_sleep_calls": 0,
+                "buflo_exact_release_passive_sleep_requested_nanoseconds": 0,
+                "buflo_exact_release_passive_sleep_elapsed_nanoseconds": 0,
+                "buflo_exact_release_max_passive_sleep_overrun_nanoseconds": 0,
+                "buflo_exact_release_active_wait_iterations": 0,
+                "buflo_exact_release_active_spin_interruptions": 0,
+                "buflo_exact_release_active_spin_interruption_nanoseconds": 0,
+                "buflo_exact_release_max_active_spin_gap_nanoseconds": 0,
+                "buflo_exact_release_active_wait_poll_source": (
+                    "linux-aarch64-cntvct-el0-predictive-v1"
+                ),
+                "buflo_exact_release_active_wait_counter_frequency_hz": None,
+                "buflo_exact_release_active_wait_counter_guards": 0,
+                "buflo_exact_release_active_wait_counter_unavailable_guards": 0,
+                "buflo_exact_release_active_wait_counter_nonmonotonic_guards": 0,
+                "buflo_exact_release_active_wait_counter_calibrations": 0,
+                "buflo_exact_release_active_wait_instant_confirmations": 0,
+                "buflo_exact_release_active_wait_early_confirmation_retries": 0,
+                "buflo_exact_release_active_wait_counter_nanoseconds": 0,
+                "buflo_exact_release_max_active_wait_counter_gap_nanoseconds": 0,
+                "buflo_exact_release_max_counter_calibration_span_nanoseconds": 0,
+                "buflo_exact_release_dispatch_at_or_after_deadline_guards": 0,
+                "buflo_exact_release_dispatch_lateness_histogram": {
+                    "upper_bounds_nanoseconds": RUNNER_WAKEUP_V7_HISTOGRAM_UPPER_BOUNDS,
+                    "counts": [0] * 8,
+                },
+                "buflo_exact_release_active_spin_gap_histogram": {
+                    "upper_bounds_nanoseconds": RUNNER_WAKEUP_V7_HISTOGRAM_UPPER_BOUNDS,
+                    "counts": [0] * 8,
+                },
+                "buflo_exact_release_worst_guard": None,
+                "buflo_exact_release_last_failure": None,
+            }
+        )
+        if guard_entries:
+            active_wait_per_guard = 5_001_000
+            receipt.update(
+                {
+                    "buflo_exact_release_guard_entries": guard_entries,
+                    "buflo_exact_release_dispatch_ready_guards": guard_entries,
+                    "buflo_exact_release_guard_wait_nanoseconds": (
+                        guard_entries * active_wait_per_guard
+                    ),
+                    "buflo_exact_release_active_wait_nanoseconds": (
+                        guard_entries * active_wait_per_guard
+                    ),
+                    "buflo_exact_release_max_guard_exit_lateness_nanoseconds": 1_000,
+                    "buflo_exact_release_active_wait_iterations": 2 * guard_entries,
+                    "buflo_exact_release_max_active_spin_gap_nanoseconds": 1,
+                    "buflo_exact_release_active_wait_counter_frequency_hz": 1_000_000_000,
+                    "buflo_exact_release_active_wait_counter_guards": guard_entries,
+                    "buflo_exact_release_active_wait_counter_calibrations": guard_entries,
+                    "buflo_exact_release_active_wait_instant_confirmations": guard_entries,
+                    "buflo_exact_release_active_wait_counter_nanoseconds": (
+                        guard_entries * active_wait_per_guard
+                    ),
+                    "buflo_exact_release_max_active_wait_counter_gap_nanoseconds": 1,
+                    "buflo_exact_release_max_counter_calibration_span_nanoseconds": 1,
+                    "buflo_exact_release_dispatch_lateness_histogram": {
+                        "upper_bounds_nanoseconds": RUNNER_WAKEUP_V7_HISTOGRAM_UPPER_BOUNDS,
+                        "counts": [guard_entries, 0, 0, 0, 0, 0, 0, 0],
+                    },
+                    "buflo_exact_release_active_spin_gap_histogram": {
+                        "upper_bounds_nanoseconds": RUNNER_WAKEUP_V7_HISTOGRAM_UPPER_BOUNDS,
+                        "counts": [guard_entries, 0, 0, 0, 0, 0, 0, 0],
+                    },
+                    "buflo_exact_release_worst_guard": {
+                        "endpoint": 0,
+                        "slot": 3,
+                        "phase": "committed",
+                        "packet_timestamp_us": 20_000,
+                        "guard_at_defense_nanoseconds": 15_000_000,
+                        "entered_at_defense_nanoseconds": 15_000_000,
+                        "active_wait_at_defense_nanoseconds": 15_000_000,
+                        "active_wait_started_at_defense_nanoseconds": 15_000_000,
+                        "release_at_defense_nanoseconds": 20_000_000,
+                        "deadline_at_defense_nanoseconds": 25_000_000,
+                        "dispatch_at_defense_nanoseconds": 20_001_000,
+                        "guard_entry_lateness_nanoseconds": 0,
+                        "passive_sleep_calls": 0,
+                        "passive_sleep_requested_nanoseconds": 0,
+                        "passive_sleep_elapsed_nanoseconds": 0,
+                        "max_passive_sleep_overrun_nanoseconds": 0,
+                        "active_wait_iterations": 2,
+                        "active_wait_monotonic_nanoseconds": active_wait_per_guard,
+                        "active_wait_poll_source": ("linux-aarch64-cntvct-el0-predictive-v1"),
+                        "active_wait_counter_frequency_hz": 1_000_000_000,
+                        "active_wait_counter_calibrations": 1,
+                        "active_wait_instant_confirmations": 1,
+                        "active_wait_early_confirmation_retries": 0,
+                        "active_wait_counter_nanoseconds": active_wait_per_guard,
+                        "max_active_wait_counter_gap_nanoseconds": 1,
+                        "max_counter_calibration_span_nanoseconds": 1,
+                        "active_spin_interruptions": 0,
+                        "active_spin_interruption_nanoseconds": 0,
+                        "max_active_spin_gap_nanoseconds": 1,
+                        "dispatch_lateness_nanoseconds": 1_000,
+                        "dispatch_at_or_after_deadline": False,
+                        "dispatch_after_deadline_nanoseconds": 0,
+                    },
+                }
+            )
     return receipt
 
 
@@ -295,7 +412,9 @@ def _complete_buflo_run(
             "schema_version": 2,
             "defense": {"kind": "buflo"},
         },
-        "runner_wakeup_metrics": _runner_wakeup_receipt(8),
+        "runner_wakeup_metrics": _runner_wakeup_receipt(
+            9, guard_entries=max(scheduled_outgoing - 1, 0)
+        ),
         "defense_diagnostics": diagnostics,
         "chaff_responses": [
             {"outcome": "buflo_terminal_subcell_tail_cancelled"}
@@ -458,11 +577,31 @@ def _complete_cs_buflo_run() -> dict[str, object]:
             "schema_version": 2,
             "defense": {"kind": "cs_buflo"},
         },
-        "runner_wakeup_metrics": _runner_wakeup_receipt(8),
+        "runner_wakeup_metrics": _runner_wakeup_receipt(9),
         "defense_diagnostics": diagnostics,
         "buflo_summary": None,
         "cs_buflo_summary": summary,
     }
+
+
+def test_current_buflo_terminal_receipt_covers_one_guarded_release() -> None:
+    run = _complete_buflo_run(scheduled_outgoing=2, scheduled_incoming=2)
+    metrics = run["runner_wakeup_metrics"]
+
+    assert fidelity_module.new_defense_terminal_receipts_valid(
+        run,
+        "buflo",
+        require_application_complete=True,
+        require_current_schema=True,
+    )
+    assert metrics["buflo_exact_release_guard_entries"] == 1
+    assert metrics["buflo_exact_release_dispatch_ready_guards"] == 1
+    assert metrics["buflo_exact_release_failed_guards"] == 0
+    assert metrics["buflo_exact_release_last_failure"] is None
+    assert all(
+        type(metrics["buflo_exact_release_worst_guard"][key]) is int
+        for key in fidelity_module.RUNNER_WAKEUP_V7_WORST_TIME_KEYS
+    )
 
 
 def _formal_source_binding_fixture(
@@ -1180,7 +1319,7 @@ def test_buflo_algorithm_diagnostics_bind_typed_tail_action_and_control_packet(
         events_path=events,
         packets_path=packets,
     )
-    assert run["runner_wakeup_metrics"]["schema_version"] == 8
+    assert run["runner_wakeup_metrics"]["schema_version"] == 9
     assert algorithm["schema_version"] == 4
     assert evaluation_module._load_algorithm_diagnostics(algorithm, defense="buflo") == algorithm
     assert algorithm["buflo_state"]["schema_version"] == 3
@@ -1689,7 +1828,7 @@ def test_cs_buflo_schema_four_handoff_reconstructs_stop_drain_and_preserves_lega
         events_path=events,
         packets_path=packets,
     )
-    assert run["runner_wakeup_metrics"]["schema_version"] == 8
+    assert run["runner_wakeup_metrics"]["schema_version"] == 9
     assert evaluation_module._load_algorithm_diagnostics(current, defense="cs-buflo") == current
     reconstructed = _algorithm_diagnostics(
         run,

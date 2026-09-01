@@ -386,20 +386,31 @@ def _small_run() -> dict[str, Any]:
     histogram = {"upper_bounds_nanoseconds": [5_000_000], "counts": [2]}
     return {
         "runner_wakeup_metrics": {
-            "schema_version": 8,
+            "schema_version": 9,
             "buflo_exact_release_guard_entries": 2,
+            "buflo_exact_release_dispatch_ready_guards": 2,
+            "buflo_exact_release_failed_guards": 0,
+            "buflo_exact_release_invalid_counter_frequency_guards": 0,
+            "buflo_exact_release_counter_unavailable_failure_guards": 0,
+            "buflo_exact_release_counter_nonmonotonic_failure_guards": 0,
+            "buflo_exact_release_counter_frequency_changed_guards": 0,
+            "buflo_exact_release_counter_target_error_guards": 0,
             "buflo_exact_release_max_guard_exit_lateness_nanoseconds": 1_000,
             "buflo_exact_release_dispatch_at_or_after_deadline_guards": 0,
-            "buflo_exact_release_aux_clock_source": (
-                "linux-clock-gettime-monotonic-raw-and-thread-cputime-id-v1"
+            "buflo_exact_release_active_wait_poll_source": (
+                "linux-aarch64-cntvct-el0-predictive-v1"
             ),
-            "buflo_exact_release_active_wait_aux_clock_guards": 2,
-            "buflo_exact_release_active_wait_aux_clock_unavailable_guards": 0,
-            "buflo_exact_release_active_wait_aux_clock_nonmonotonic_guards": 0,
-            "buflo_exact_release_active_wait_monotonic_raw_nanoseconds": 20,
-            "buflo_exact_release_active_wait_thread_cpu_nanoseconds": 15,
-            "buflo_exact_release_active_wait_estimated_off_cpu_nanoseconds": 5,
-            "buflo_exact_release_max_active_wait_estimated_off_cpu_nanoseconds": 4,
+            "buflo_exact_release_active_wait_counter_frequency_hz": 1_000_000_000,
+            "buflo_exact_release_active_wait_counter_guards": 2,
+            "buflo_exact_release_active_wait_counter_unavailable_guards": 0,
+            "buflo_exact_release_active_wait_counter_nonmonotonic_guards": 0,
+            "buflo_exact_release_active_wait_counter_calibrations": 2,
+            "buflo_exact_release_active_wait_instant_confirmations": 2,
+            "buflo_exact_release_active_wait_early_confirmation_retries": 0,
+            "buflo_exact_release_active_wait_counter_nanoseconds": 20,
+            "buflo_exact_release_max_active_spin_gap_nanoseconds": 4,
+            "buflo_exact_release_max_active_wait_counter_gap_nanoseconds": 4,
+            "buflo_exact_release_max_counter_calibration_span_nanoseconds": 3,
             "buflo_exact_release_dispatch_lateness_histogram": dict(histogram),
             "buflo_exact_release_active_spin_gap_histogram": dict(histogram),
             "buflo_exact_release_worst_guard": {
@@ -410,7 +421,12 @@ def _small_run() -> dict[str, Any]:
                 "release_at_defense_nanoseconds": 2,
                 "deadline_at_defense_nanoseconds": 3,
                 "dispatch_at_defense_nanoseconds": 2,
+                "active_wait_poll_source": "linux-aarch64-cntvct-el0-predictive-v1",
+                "active_wait_counter_frequency_hz": 1_000_000_000,
+                "active_wait_instant_confirmations": 1,
+                "active_wait_early_confirmation_retries": 0,
             },
+            "buflo_exact_release_last_failure": None,
         },
         "defense_diagnostics": {
             "buflo_scheduled_outgoing_cells": 3,
@@ -486,8 +502,9 @@ def test_timing_stress_schedule_requires_exact_cells_and_credit_bytes(
         "retired": 0,
         "unresolved": 0,
     }
-    assert evidence["runner_wakeup_schema_version"] == 8
-    assert evidence["aux_clock"]["complete_guards"] == 2
+    assert evidence["runner_wakeup_schema_version"] == 9
+    assert evidence["active_wait_counter"]["counter_guards"] == 2
+    assert evidence["active_wait_counter"]["instant_confirmations"] == 2
 
     missing_worst_times = json.loads(json.dumps(run))
     missing_worst_times["runner_wakeup_metrics"]["buflo_exact_release_worst_guard"][
@@ -501,7 +518,32 @@ def test_timing_stress_schedule_requires_exact_cells_and_credit_bytes(
         buflo_study._timing_stress_schedule_evidence(tmp_path, run)
 
 
-@pytest.mark.parametrize("schema_version", (6, 7))
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("buflo_exact_release_active_wait_counter_unavailable_guards", 1),
+        ("buflo_exact_release_active_wait_counter_nonmonotonic_guards", 1),
+        ("buflo_exact_release_active_wait_counter_calibrations", 3),
+        ("buflo_exact_release_active_wait_instant_confirmations", 1),
+        ("buflo_exact_release_max_guard_exit_lateness_nanoseconds", 5_000),
+    ),
+)
+def test_schema_nine_timing_stress_rejects_counter_or_authoritative_lateness_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: int,
+) -> None:
+    _patch_small_schedule_contract(monkeypatch)
+    _write_small_exact_schedule(tmp_path / "neqo/schedule.csv")
+    run = _small_run()
+    run["runner_wakeup_metrics"][field] = value
+
+    with pytest.raises(ValueError, match="current Linux guard timing evidence"):
+        buflo_study._timing_stress_schedule_evidence(tmp_path, run)
+
+
+@pytest.mark.parametrize("schema_version", (6, 7, 8))
 def test_timing_stress_rejects_noncurrent_wakeup_schema(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, schema_version: int
 ) -> None:
@@ -517,6 +559,19 @@ def test_timing_stress_rejects_noncurrent_wakeup_schema(
 def test_timing_stress_aggregate_binds_aux_diagnostics_and_byte_totals() -> None:
     timing = {
         "guarded_outgoing_releases": 5_000,
+        "guard_outcomes": {
+            "entries": 5_000,
+            "dispatch_ready": 5_000,
+            "failed": 0,
+            "typed_failures": {
+                "invalid_counter_frequency": 0,
+                "counter_unavailable": 0,
+                "counter_nonmonotonic": 0,
+                "counter_frequency_changed": 0,
+                "counter_target_error": 0,
+            },
+            "last_failure": None,
+        },
         "scheduled_outgoing_opportunities": 5_001,
         "scheduled_incoming_opportunities": 5_001,
         "directional_events": 10_002,
@@ -531,12 +586,19 @@ def test_timing_stress_aggregate_binds_aux_diagnostics_and_byte_totals() -> None
         "max_outgoing_release_lateness_us": 4_999,
         "max_incoming_credit_advertisement_delay_us": 4_999,
         "max_guard_exit_lateness_nanoseconds": 4_999_999,
-        "aux_clock": {
-            "complete_guards": 5_000,
+        "max_active_spin_gap_nanoseconds": 2_264_322,
+        "active_wait_counter": {
+            "source": "linux-aarch64-cntvct-el0-predictive-v1",
+            "frequency_hz": 1_000_000_000,
+            "counter_guards": 5_000,
             "unavailable_guards": 0,
             "nonmonotonic_guards": 0,
-            "estimated_off_cpu_nanoseconds": 120,
-            "max_estimated_off_cpu_nanoseconds": 7,
+            "calibrations": 5_000,
+            "instant_confirmations": 5_000,
+            "early_confirmation_retries": 0,
+            "counter_nanoseconds": 25_000_000_000,
+            "max_counter_gap_nanoseconds": 2_264_322,
+            "max_calibration_span_nanoseconds": 1_000,
         },
         "dispatch_lateness_histogram": {
             "upper_bounds_nanoseconds": [5_000_000],
@@ -558,8 +620,12 @@ def test_timing_stress_aggregate_binds_aux_diagnostics_and_byte_totals() -> None
         "retired": 0,
         "unresolved": 0,
     }
-    assert aggregate["estimated_off_cpu_nanoseconds"] == 1_440
-    assert aggregate["max_estimated_off_cpu_nanoseconds"] == 7
+    assert aggregate["active_wait_counter_guards"] == 60_000
+    assert aggregate["guard_outcomes"]["dispatch_ready"] == 60_000
+    assert aggregate["guard_outcomes"]["failed"] == 0
+    assert aggregate["active_wait_instant_confirmations"] == 60_000
+    assert aggregate["active_wait_counter_nanoseconds"] == 300_000_000_000
+    assert aggregate["max_active_wait_counter_gap_nanoseconds"] == 2_264_322
     assert aggregate["dispatch_lateness_histogram"]["counts"] == [60_000]
     assert aggregate["active_spin_gap_histogram"]["counts"] == [60_000]
     assert set(aggregate["zero_failure_counts"].values()) == {0}

@@ -4119,7 +4119,8 @@ def _validate_current_candidate_sample_receipt(
         schema = summary.get("schema_version") if isinstance(summary, Mapping) else None
         raise ValueError(
             f"{role} {mode} sample {sample_id} lacks a valid current "
-            f"schema-4 terminal receipt (observed {schema!r})"
+            f"schema-4 terminal receipt and runner-wakeup schema-9 evidence "
+            f"(observed terminal schema {schema!r})"
         )
     # Import lazily so the coordinator's core/result metadata import graph stays
     # independent of the heavier handoff parsers while reusing their exact

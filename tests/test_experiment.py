@@ -254,7 +254,7 @@ def test_generic_nonstudy_schema_six_remains_compatible(tmp_path: Path) -> None:
     }
 
 
-@pytest.mark.parametrize("schema_version", (6, 7))
+@pytest.mark.parametrize("schema_version", (6, 7, 8))
 def test_current_class_sample_rejects_historical_runner_wakeup_schema(
     tmp_path: Path,
     schema_version: int,
@@ -268,11 +268,11 @@ def test_current_class_sample_rejects_historical_runner_wakeup_schema(
     )
     accept_sample(root, experiment, _sample()["sample_id"])
 
-    with pytest.raises(ValueError, match="class-study.*schema 8"):
+    with pytest.raises(ValueError, match="class-study.*schema 9"):
         validate_accepted_samples(root, experiment)
 
 
-def test_buflo_study_schema_eight_rejects_missing_scheduler_runtime_receipt(
+def test_buflo_study_schema_nine_rejects_missing_scheduler_runtime_receipt(
     tmp_path: Path,
 ) -> None:
     root, experiment = _initialize(tmp_path)
@@ -281,7 +281,7 @@ def test_buflo_study_schema_eight_rejects_missing_scheduler_runtime_receipt(
     sample_root = _write_artifacts(root)
     atomic_json(
         sample_root / "neqo/run.json",
-        {"runner_wakeup_metrics": {"schema_version": 8}},
+        {"runner_wakeup_metrics": {"schema_version": 9}},
     )
     accept_sample(root, experiment, _sample()["sample_id"])
 
@@ -289,7 +289,7 @@ def test_buflo_study_schema_eight_rejects_missing_scheduler_runtime_receipt(
         validate_accepted_samples(root, experiment)
 
 
-@pytest.mark.parametrize("schema_version", (6, 7))
+@pytest.mark.parametrize("schema_version", (6, 7, 8))
 def test_current_buflo_historical_schema_cannot_claim_current_compatibility(
     tmp_path: Path,
     schema_version: int,

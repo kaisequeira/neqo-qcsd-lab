@@ -5107,23 +5107,59 @@ def _timing_stress_schedule_evidence(attempt: Path, run: Mapping[str, Any]) -> d
     worst_guard = wakeups.get("buflo_exact_release_worst_guard")
     if (
         not _runner_wakeup_metrics_valid(wakeups)
-        or wakeups.get("schema_version") != 8
+        or wakeups.get("schema_version") != 9
         or guard_entries != TIMING_STRESS_GUARDS_PER_VISIT
+        or wakeups.get("buflo_exact_release_dispatch_ready_guards")
+        != TIMING_STRESS_GUARDS_PER_VISIT
+        or wakeups.get("buflo_exact_release_failed_guards") != 0
+        or any(
+            wakeups.get(key) != 0
+            for key in (
+                "buflo_exact_release_invalid_counter_frequency_guards",
+                "buflo_exact_release_counter_unavailable_failure_guards",
+                "buflo_exact_release_counter_nonmonotonic_failure_guards",
+                "buflo_exact_release_counter_frequency_changed_guards",
+                "buflo_exact_release_counter_target_error_guards",
+            )
+        )
+        or wakeups.get("buflo_exact_release_last_failure") is not None
         or type(max_guard_exit_lateness_ns) is not int
         or not 0 <= max_guard_exit_lateness_ns < TIMING_STRESS_WINDOW_US * 1_000
         or wakeups.get("buflo_exact_release_dispatch_at_or_after_deadline_guards") != 0
-        or wakeups.get("buflo_exact_release_aux_clock_source")
-        != "linux-clock-gettime-monotonic-raw-and-thread-cputime-id-v1"
-        or wakeups.get("buflo_exact_release_active_wait_aux_clock_guards")
+        or wakeups.get("buflo_exact_release_active_wait_poll_source")
+        != "linux-aarch64-cntvct-el0-predictive-v1"
+        or type(wakeups.get("buflo_exact_release_active_wait_counter_frequency_hz")) is not int
+        or wakeups["buflo_exact_release_active_wait_counter_frequency_hz"] <= 0
+        or wakeups.get("buflo_exact_release_active_wait_counter_guards")
         != TIMING_STRESS_GUARDS_PER_VISIT
-        or wakeups.get("buflo_exact_release_active_wait_aux_clock_unavailable_guards") != 0
-        or wakeups.get("buflo_exact_release_active_wait_aux_clock_nonmonotonic_guards") != 0
+        or wakeups.get("buflo_exact_release_active_wait_counter_unavailable_guards") != 0
+        or wakeups.get("buflo_exact_release_active_wait_counter_nonmonotonic_guards") != 0
+        or wakeups.get("buflo_exact_release_active_wait_instant_confirmations")
+        != TIMING_STRESS_GUARDS_PER_VISIT
+        + wakeups.get("buflo_exact_release_active_wait_early_confirmation_retries", -1)
+        or wakeups.get("buflo_exact_release_active_wait_counter_calibrations", -1)
+        != wakeups.get("buflo_exact_release_active_wait_instant_confirmations", 0)
+        or type(wakeups.get("buflo_exact_release_active_wait_counter_nanoseconds")) is not int
+        or wakeups["buflo_exact_release_active_wait_counter_nanoseconds"] <= 0
+        or wakeups.get("buflo_exact_release_max_active_wait_counter_gap_nanoseconds", -1)
+        > wakeups["buflo_exact_release_active_wait_counter_nanoseconds"]
+        or wakeups.get("buflo_exact_release_max_counter_calibration_span_nanoseconds", -1)
+        > wakeups["buflo_exact_release_active_wait_counter_nanoseconds"]
+        or wakeups.get("buflo_exact_release_max_active_spin_gap_nanoseconds")
+        != wakeups.get("buflo_exact_release_max_active_wait_counter_gap_nanoseconds")
+        or wakeups.get("buflo_exact_release_max_counter_calibration_span_nanoseconds", -1)
+        > wakeups.get("buflo_exact_release_max_active_wait_counter_gap_nanoseconds", -1)
         or not isinstance(dispatch_counts, list)
         or sum(dispatch_counts) != TIMING_STRESS_GUARDS_PER_VISIT
         or not isinstance(active_gap_counts, list)
         or sum(active_gap_counts) != TIMING_STRESS_GUARDS_PER_VISIT
         or not isinstance(worst_guard, Mapping)
         or any(type(worst_guard.get(key)) is not int for key in RUNNER_WAKEUP_V7_WORST_TIME_KEYS)
+        or worst_guard.get("active_wait_poll_source") != "linux-aarch64-cntvct-el0-predictive-v1"
+        or worst_guard.get("active_wait_counter_frequency_hz")
+        != wakeups["buflo_exact_release_active_wait_counter_frequency_hz"]
+        or worst_guard.get("active_wait_instant_confirmations")
+        != worst_guard.get("active_wait_early_confirmation_retries", -1) + 1
     ):
         raise ValueError(
             "timing-stress current Linux guard timing evidence is incomplete or invalid"
@@ -5170,31 +5206,58 @@ def _timing_stress_schedule_evidence(attempt: Path, run: Mapping[str, Any]) -> d
             "unresolved": 0,
         },
         "guarded_outgoing_releases": guard_entries,
+        "guard_outcomes": {
+            "entries": guard_entries,
+            "dispatch_ready": wakeups["buflo_exact_release_dispatch_ready_guards"],
+            "failed": wakeups["buflo_exact_release_failed_guards"],
+            "typed_failures": {
+                "invalid_counter_frequency": wakeups[
+                    "buflo_exact_release_invalid_counter_frequency_guards"
+                ],
+                "counter_unavailable": wakeups[
+                    "buflo_exact_release_counter_unavailable_failure_guards"
+                ],
+                "counter_nonmonotonic": wakeups[
+                    "buflo_exact_release_counter_nonmonotonic_failure_guards"
+                ],
+                "counter_frequency_changed": wakeups[
+                    "buflo_exact_release_counter_frequency_changed_guards"
+                ],
+                "counter_target_error": wakeups["buflo_exact_release_counter_target_error_guards"],
+            },
+            "last_failure": None,
+        },
         "max_outgoing_release_lateness_us": max(outgoing_lateness, default=0),
         "max_incoming_credit_advertisement_delay_us": max(incoming_advertisement_delays, default=0),
         "max_guard_exit_lateness_nanoseconds": max_guard_exit_lateness_ns,
+        "max_active_spin_gap_nanoseconds": wakeups[
+            "buflo_exact_release_max_active_spin_gap_nanoseconds"
+        ],
         "strict_half_open_window_us": TIMING_STRESS_WINDOW_US,
-        "runner_wakeup_schema_version": 8,
-        "aux_clock": {
-            "source": wakeups["buflo_exact_release_aux_clock_source"],
-            "complete_guards": wakeups["buflo_exact_release_active_wait_aux_clock_guards"],
+        "runner_wakeup_schema_version": 9,
+        "active_wait_counter": {
+            "source": wakeups["buflo_exact_release_active_wait_poll_source"],
+            "frequency_hz": wakeups["buflo_exact_release_active_wait_counter_frequency_hz"],
+            "counter_guards": wakeups["buflo_exact_release_active_wait_counter_guards"],
             "unavailable_guards": wakeups[
-                "buflo_exact_release_active_wait_aux_clock_unavailable_guards"
+                "buflo_exact_release_active_wait_counter_unavailable_guards"
             ],
             "nonmonotonic_guards": wakeups[
-                "buflo_exact_release_active_wait_aux_clock_nonmonotonic_guards"
+                "buflo_exact_release_active_wait_counter_nonmonotonic_guards"
             ],
-            "monotonic_raw_nanoseconds": wakeups[
-                "buflo_exact_release_active_wait_monotonic_raw_nanoseconds"
+            "calibrations": wakeups["buflo_exact_release_active_wait_counter_calibrations"],
+            "instant_confirmations": wakeups[
+                "buflo_exact_release_active_wait_instant_confirmations"
             ],
-            "thread_cpu_nanoseconds": wakeups[
-                "buflo_exact_release_active_wait_thread_cpu_nanoseconds"
+            "early_confirmation_retries": wakeups[
+                "buflo_exact_release_active_wait_early_confirmation_retries"
             ],
-            "estimated_off_cpu_nanoseconds": wakeups[
-                "buflo_exact_release_active_wait_estimated_off_cpu_nanoseconds"
+            "counter_nanoseconds": wakeups["buflo_exact_release_active_wait_counter_nanoseconds"],
+            "max_counter_gap_nanoseconds": wakeups[
+                "buflo_exact_release_max_active_wait_counter_gap_nanoseconds"
             ],
-            "max_estimated_off_cpu_nanoseconds": wakeups[
-                "buflo_exact_release_max_active_wait_estimated_off_cpu_nanoseconds"
+            "max_calibration_span_nanoseconds": wakeups[
+                "buflo_exact_release_max_counter_calibration_span_nanoseconds"
             ],
         },
         "dispatch_at_or_after_deadline_guards": 0,
@@ -5412,6 +5475,15 @@ def _timing_stress_aggregate(samples: Sequence[Mapping[str, Any]]) -> dict[str, 
     typed_timings = [dict(timing) for timing in timings if isinstance(timing, Mapping)]
     dispatch_histograms = [timing["dispatch_lateness_histogram"] for timing in typed_timings]
     gap_histograms = [timing["active_spin_gap_histogram"] for timing in typed_timings]
+    counter_receipts = [timing["active_wait_counter"] for timing in typed_timings]
+    [first_counter, *remaining_counters] = counter_receipts
+    counter_source = first_counter["source"]
+    counter_frequency_hz = first_counter["frequency_hz"]
+    if any(
+        counter["source"] != counter_source or counter["frequency_hz"] != counter_frequency_hz
+        for counter in remaining_counters
+    ):
+        raise ValueError("timing-stress predictive counter changed between visits")
 
     def aggregate_histograms(values: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         [first, *rest] = values
@@ -5438,6 +5510,28 @@ def _timing_stress_aggregate(samples: Sequence[Mapping[str, Any]]) -> dict[str, 
         "guarded_outgoing_releases": sum(
             int(timing["guarded_outgoing_releases"]) for timing in typed_timings
         ),
+        "guard_outcomes": {
+            "entries": sum(int(timing["guard_outcomes"]["entries"]) for timing in typed_timings),
+            "dispatch_ready": sum(
+                int(timing["guard_outcomes"]["dispatch_ready"]) for timing in typed_timings
+            ),
+            "failed": sum(int(timing["guard_outcomes"]["failed"]) for timing in typed_timings),
+            "typed_failures": {
+                key: sum(
+                    int(timing["guard_outcomes"]["typed_failures"][key]) for timing in typed_timings
+                )
+                for key in (
+                    "invalid_counter_frequency",
+                    "counter_unavailable",
+                    "counter_nonmonotonic",
+                    "counter_frequency_changed",
+                    "counter_target_error",
+                )
+            },
+            "last_failures": sum(
+                timing["guard_outcomes"]["last_failure"] is not None for timing in typed_timings
+            ),
+        },
         "outgoing_opportunities": sum(
             int(timing["scheduled_outgoing_opportunities"]) for timing in typed_timings
         ),
@@ -5459,20 +5553,39 @@ def _timing_stress_aggregate(samples: Sequence[Mapping[str, Any]]) -> dict[str, 
         "max_guard_exit_lateness_nanoseconds": max(
             int(timing["max_guard_exit_lateness_nanoseconds"]) for timing in typed_timings
         ),
-        "aux_clock_complete_guards": sum(
-            int(timing["aux_clock"]["complete_guards"]) for timing in typed_timings
+        "max_active_spin_gap_nanoseconds": max(
+            int(timing["max_active_spin_gap_nanoseconds"]) for timing in typed_timings
         ),
-        "aux_clock_unavailable_guards": sum(
-            int(timing["aux_clock"]["unavailable_guards"]) for timing in typed_timings
+        "active_wait_poll_source": counter_source,
+        "active_wait_counter_frequency_hz": counter_frequency_hz,
+        "active_wait_counter_guards": sum(
+            int(timing["active_wait_counter"]["counter_guards"]) for timing in typed_timings
         ),
-        "aux_clock_nonmonotonic_guards": sum(
-            int(timing["aux_clock"]["nonmonotonic_guards"]) for timing in typed_timings
+        "active_wait_counter_unavailable_guards": sum(
+            int(timing["active_wait_counter"]["unavailable_guards"]) for timing in typed_timings
         ),
-        "estimated_off_cpu_nanoseconds": sum(
-            int(timing["aux_clock"]["estimated_off_cpu_nanoseconds"]) for timing in typed_timings
+        "active_wait_counter_nonmonotonic_guards": sum(
+            int(timing["active_wait_counter"]["nonmonotonic_guards"]) for timing in typed_timings
         ),
-        "max_estimated_off_cpu_nanoseconds": max(
-            int(timing["aux_clock"]["max_estimated_off_cpu_nanoseconds"])
+        "active_wait_counter_calibrations": sum(
+            int(timing["active_wait_counter"]["calibrations"]) for timing in typed_timings
+        ),
+        "active_wait_instant_confirmations": sum(
+            int(timing["active_wait_counter"]["instant_confirmations"]) for timing in typed_timings
+        ),
+        "active_wait_early_confirmation_retries": sum(
+            int(timing["active_wait_counter"]["early_confirmation_retries"])
+            for timing in typed_timings
+        ),
+        "active_wait_counter_nanoseconds": sum(
+            int(timing["active_wait_counter"]["counter_nanoseconds"]) for timing in typed_timings
+        ),
+        "max_active_wait_counter_gap_nanoseconds": max(
+            int(timing["active_wait_counter"]["max_counter_gap_nanoseconds"])
+            for timing in typed_timings
+        ),
+        "max_counter_calibration_span_nanoseconds": max(
+            int(timing["active_wait_counter"]["max_calibration_span_nanoseconds"])
             for timing in typed_timings
         ),
         "dispatch_lateness_histogram": aggregate_histograms(dispatch_histograms),
@@ -5761,6 +5874,20 @@ def execute_buflo_timing_stress(
     aggregate = _timing_stress_aggregate(samples)
     if (
         aggregate["guarded_outgoing_releases"] != TIMING_STRESS_TOTAL_GUARDS
+        or aggregate["guard_outcomes"]
+        != {
+            "entries": TIMING_STRESS_TOTAL_GUARDS,
+            "dispatch_ready": TIMING_STRESS_TOTAL_GUARDS,
+            "failed": 0,
+            "typed_failures": {
+                "invalid_counter_frequency": 0,
+                "counter_unavailable": 0,
+                "counter_nonmonotonic": 0,
+                "counter_frequency_changed": 0,
+                "counter_target_error": 0,
+            },
+            "last_failures": 0,
+        }
         or aggregate["outgoing_opportunities"] != TIMING_STRESS_TOTAL_OUTGOING
         or aggregate["incoming_opportunities"] != TIMING_STRESS_TOTAL_INCOMING
         or aggregate["directional_events"] != TIMING_STRESS_TOTAL_DIRECTIONAL_EVENTS
@@ -5773,9 +5900,20 @@ def execute_buflo_timing_stress(
             "retired": 0,
             "unresolved": 0,
         }
-        or aggregate["aux_clock_complete_guards"] != TIMING_STRESS_TOTAL_GUARDS
-        or aggregate["aux_clock_unavailable_guards"] != 0
-        or aggregate["aux_clock_nonmonotonic_guards"] != 0
+        or aggregate["active_wait_poll_source"] != "linux-aarch64-cntvct-el0-predictive-v1"
+        or type(aggregate["active_wait_counter_frequency_hz"]) is not int
+        or aggregate["active_wait_counter_frequency_hz"] <= 0
+        or aggregate["active_wait_counter_guards"] != TIMING_STRESS_TOTAL_GUARDS
+        or aggregate["active_wait_counter_unavailable_guards"] != 0
+        or aggregate["active_wait_counter_nonmonotonic_guards"] != 0
+        or aggregate["active_wait_instant_confirmations"]
+        != TIMING_STRESS_TOTAL_GUARDS + aggregate["active_wait_early_confirmation_retries"]
+        or aggregate["active_wait_counter_calibrations"]
+        != aggregate["active_wait_instant_confirmations"]
+        or aggregate["max_active_spin_gap_nanoseconds"]
+        != aggregate["max_active_wait_counter_gap_nanoseconds"]
+        or aggregate["max_counter_calibration_span_nanoseconds"]
+        > aggregate["max_active_wait_counter_gap_nanoseconds"]
         or aggregate["max_guard_exit_lateness_nanoseconds"] >= TIMING_STRESS_WINDOW_US * 1_000
     ):
         raise ValueError("timing-stress aggregate zero-failure gate did not pass")
@@ -6006,6 +6144,20 @@ def validate_buflo_timing_stress_receipt(receipt_path: Path) -> dict[str, Any]:
         raise ValueError("timing-stress aggregate evidence changed")
     if (
         aggregate["guarded_outgoing_releases"] != TIMING_STRESS_TOTAL_GUARDS
+        or aggregate["guard_outcomes"]
+        != {
+            "entries": TIMING_STRESS_TOTAL_GUARDS,
+            "dispatch_ready": TIMING_STRESS_TOTAL_GUARDS,
+            "failed": 0,
+            "typed_failures": {
+                "invalid_counter_frequency": 0,
+                "counter_unavailable": 0,
+                "counter_nonmonotonic": 0,
+                "counter_frequency_changed": 0,
+                "counter_target_error": 0,
+            },
+            "last_failures": 0,
+        }
         or aggregate["outgoing_opportunities"] != TIMING_STRESS_TOTAL_OUTGOING
         or aggregate["incoming_opportunities"] != TIMING_STRESS_TOTAL_INCOMING
         or aggregate["directional_events"] != TIMING_STRESS_TOTAL_DIRECTIONAL_EVENTS
@@ -6020,9 +6172,20 @@ def validate_buflo_timing_stress_receipt(receipt_path: Path) -> dict[str, Any]:
         }
         or aggregate["physical_attempts"] != TIMING_STRESS_VISITS
         or aggregate["rejected_attempts"] != 0
-        or aggregate["aux_clock_complete_guards"] != TIMING_STRESS_TOTAL_GUARDS
-        or aggregate["aux_clock_unavailable_guards"] != 0
-        or aggregate["aux_clock_nonmonotonic_guards"] != 0
+        or aggregate["active_wait_poll_source"] != "linux-aarch64-cntvct-el0-predictive-v1"
+        or type(aggregate["active_wait_counter_frequency_hz"]) is not int
+        or aggregate["active_wait_counter_frequency_hz"] <= 0
+        or aggregate["active_wait_counter_guards"] != TIMING_STRESS_TOTAL_GUARDS
+        or aggregate["active_wait_counter_unavailable_guards"] != 0
+        or aggregate["active_wait_counter_nonmonotonic_guards"] != 0
+        or aggregate["active_wait_instant_confirmations"]
+        != TIMING_STRESS_TOTAL_GUARDS + aggregate["active_wait_early_confirmation_retries"]
+        or aggregate["active_wait_counter_calibrations"]
+        != aggregate["active_wait_instant_confirmations"]
+        or aggregate["max_active_spin_gap_nanoseconds"]
+        != aggregate["max_active_wait_counter_gap_nanoseconds"]
+        or aggregate["max_counter_calibration_span_nanoseconds"]
+        > aggregate["max_active_wait_counter_gap_nanoseconds"]
         or aggregate["max_guard_exit_lateness_nanoseconds"] >= TIMING_STRESS_WINDOW_US * 1_000
     ):
         raise ValueError("timing-stress aggregate acceptance gate failed")

@@ -613,7 +613,31 @@ def _candidate_verified_result(
         credit_consumption_delay_us="10000000",
         terminal_defense_elapsed_us="10000000",
     )
-    write_rows("schedule.csv", schedule_fields, [outgoing, incoming])
+    schedule_rows = [outgoing, incoming]
+    scheduled_outgoing = int(run["defense_diagnostics"]["buflo_scheduled_outgoing_cells"])
+    if scheduled_outgoing not in {1, 2}:
+        raise ValueError("candidate fixture supports one or two outgoing cells")
+    if scheduled_outgoing == 2:
+        guarded_outgoing = dict(outgoing)
+        guarded_outgoing.update(
+            target_time_us="20000",
+            action_time_us="20001",
+            slot_id="3",
+            terminal_defense_elapsed_us="20001",
+        )
+        guarded_incoming = dict(incoming)
+        guarded_incoming.update(
+            target_time_us="20000",
+            action_time_us="20000",
+            slot_id="4",
+            credit_advertised_at_us="20000",
+            credit_advertisement_delay_us="0",
+            credit_consumed_at_us="10000000",
+            credit_consumption_delay_us="9980000",
+            terminal_defense_elapsed_us="10000000",
+        )
+        schedule_rows.extend((guarded_outgoing, guarded_incoming))
+    write_rows("schedule.csv", schedule_fields, schedule_rows)
 
     event_fields = (*buflo_handoff._EVENT_PREFIX_FIELDS, *SCHEDULE_QCSD_FIELDS)
     write_rows("events.csv", event_fields, [])
@@ -640,7 +664,12 @@ def _candidate_verified_result(
         other_quic_bytes="0",
         lateness_us="0",
     )
-    write_rows("packets.csv", packet_fields, [packet])
+    packets = [packet]
+    if scheduled_outgoing == 2:
+        guarded_packet = dict(packet)
+        guarded_packet.update(monotonic_us="20001", slot_id="3", lateness_us="1")
+        packets.append(guarded_packet)
+    write_rows("packets.csv", packet_fields, packets)
     artifacts = {
         path.relative_to(root).as_posix(): util.sha256_file(path)
         for path in sorted(sample_root.rglob("*"))
@@ -687,6 +716,28 @@ def test_class_result_reopens_current_candidate_terminal_receipt(tmp_path: Path)
     )
 
     pipeline._validate_current_candidate_sample_receipt(verified, sample, role="certification")
+
+
+def test_class_result_reopens_current_guarded_buflo_receipt(tmp_path: Path) -> None:
+    from tests.test_buflo_handoff import _complete_buflo_run
+
+    verified, sample = _candidate_verified_result(
+        tmp_path,
+        _complete_buflo_run(scheduled_outgoing=2, scheduled_incoming=2),
+    )
+
+    pipeline._validate_current_candidate_sample_receipt(verified, sample, role="certification")
+
+
+def test_class_result_rejects_historical_schema_eight_runner_receipt(tmp_path: Path) -> None:
+    from tests.test_buflo_handoff import _complete_buflo_run, _runner_wakeup_receipt
+
+    run = _complete_buflo_run(scheduled_outgoing=1, scheduled_incoming=1)
+    run["runner_wakeup_metrics"] = _runner_wakeup_receipt(8)
+    verified, sample = _candidate_verified_result(tmp_path, run)
+
+    with pytest.raises(ValueError, match="runner-wakeup schema-9"):
+        pipeline._validate_current_candidate_sample_receipt(verified, sample, role="certification")
 
 
 def test_class_result_rejects_historical_candidate_summary_even_when_sealed_and_eligible(

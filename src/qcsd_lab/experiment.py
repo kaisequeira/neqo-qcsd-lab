@@ -599,19 +599,19 @@ def validate_accepted_scheduler_runtime_receipt(
     runner_schema = wakeups.get("schema_version") if isinstance(wakeups, Mapping) else None
     if (
         _buflo_study_experiment(experiment)
-        and runner_schema != 8
+        and runner_schema != 9
         and not _historical_buflo_v36_experiment(experiment)
     ):
         raise ValueError(
-            "current BuFLO-study sample requires runner-wakeup schema 8 or an exact "
+            "current BuFLO-study sample requires runner-wakeup schema 9 or an exact "
             "pinned v36 experiment ledger"
         )
     configuration = experiment.get("configuration")
     current_class_role = bool(
         isinstance(configuration, Mapping) and "evidence_role" in configuration
     )
-    if current_class_role and runner_schema != 8:
-        raise ValueError("current class-study sample requires runner-wakeup schema 8")
+    if current_class_role and runner_schema != 9:
+        raise ValueError("current class-study sample requires runner-wakeup schema 9")
     required = scheduler_runtime_receipt_required(run, experiment)
     if not required:
         if retained is not None:
