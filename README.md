@@ -166,7 +166,48 @@ natural byte invalidates provisional stop evidence in the implementation, with
 the cumulative invalidation count retained in the final receipt.  This drain
 is not the paper's server padding-done signal.
 
-The newest receipt-bearing executed checkpoint is cohort v42. It binds clean
+The newest executed checkpoint is cohort v45. It binds clean Lab
+`d4288ec7053ed38883f2ba3a1b25a00e8f5622af`, Neqo/gitlink
+`9428ec4fc03e9640369630fedc4ba6443870eb11`, collection image
+`sha256:d42018722e61f3f2ed8a16dc4133bf8541fd36880226ada04086de033c79263c`,
+preparation image
+`sha256:45c10d7b7798edb8840c390780dbfc15f16acc6821bbb0e60a27aee2c1fcf4eb`,
+and reference image
+`sha256:c9b2b1dc50b0ffbbcea51b87602e5cd3d886b9f775563331add4e925259cfe1e`.
+Its independent pull/no-cache build and complete in-image test gates passed;
+the immutable build receipt has SHA-256
+`4e555fd766431cf16e65e7a59aeff56b5a6c4429cc20fc17c47c613db25c7488`.
+Its isolated, network-disabled reference execution also passed all eight BuFLO
+profiles, the author/source isolation checks, and the 3,824-record CPSP archive
+audit at aggregate ratio `2.282792444255336`; that receipt has SHA-256
+`adc46319aec83df825bdcc38fe5fa262e6ba18ecfbc889a59717b6dfd3b635ac`.
+
+V45's sole `visit-000` timing-stress launch then passed the operational runtime
+contract but failed the former Lab eligibility contract. It produced 5,481
+opportunities in each direction at the exact contiguous 20 ms targets from
+zero through 109.6 seconds: the mandatory 5,001-opportunity inclusive
+100-second prefix followed by 480 paired whole-cell/parser-drain opportunities.
+All 10,962 directional events were satisfied; all 5,481 outgoing UDP payloads
+were exactly 1,200 bytes; and partial, suppressed, missed, unresolved,
+mismatched, and catch-up outcomes were all zero. Requested and consumed
+incoming credit both totalled 6,577,200 bytes with no retired or unresolved
+credit. Maximum outgoing lateness was 1,013 microseconds, maximum incoming
+advertisement delay was 1,004 microseconds, and maximum authoritative guard-exit
+lateness was 89,311 nanoseconds, all inside the unchanged strict half-open 5 ms
+window. The schedule stopped with 270 bytes available, below the 1,200-byte
+whole-cell requirement, and cancelled the remaining 273-byte sub-cell response
+tail through the documented client-local drain policy.
+
+The old Lab validator nevertheless required the schedule to stop exactly at
+100 seconds and treated physical CSV row order as dispatch order, although
+terminal rows are written in resolution order. It therefore rejected this
+otherwise valid drain suffix as “not the exact inclusive 100-second cadence”.
+The rejection consumed v45 at 0/12 accepted timing-stress visits under the
+one-launch rule. V45 has no 18-cell regression, regression-bound code-gate
+receipt, controlled qualification, or class-study foundation and remains
+immutable, non-authorising failed evidence.
+
+Earlier cohort v42 binds clean
 Lab `d15e75f90d19591e4b28350d3f99ba5812b7d6c9`, Neqo/gitlink
 `0c81cb2a99ed672117b39e97b6af86d7c6e0f298`, and collection image
 `sha256:237c7947ed4932be54005180d54ec262b28630361e313ccf0332a9b00f232620`.
@@ -236,27 +277,40 @@ monitor failure. Physical host and hypervisor isolation remain unavailable
 and are not claimed.
 
 Before the ordinary 18-cell regression can run, a mandatory excluded timing
-stress captures twelve 100-second canonical-cadence BuFLO visits with exactly
-one launch per visit. It exercises 60,000 guarded outgoing releases and
-120,024 directional opportunities, preserves every launch in authoritative
-`experiment.json`, and cannot pass after a missing, rejected, or incomplete
-reserved attempt. Its aggregate separately binds entered, dispatch-ready, and
-typed-failed guard counts and requires zero failures and no last-failure
-receipt. The regression receipt is source-, image-, network-,
-parameter-, and cohort-bound to that stress evidence. Current-source captures
-require runner-wakeup schema 9 plus the complete scheduler receipt; older
-cohort ledgers remain readable only as historical evidence.
+stress captures twelve BuFLO visits with exactly one physical launch per visit.
+The corrected schema-2 contract requires an exact inclusive prefix of 5,001
+opportunities per direction at targets zero through 100 seconds. After that
+prefix, each visit may contain a contiguous, paired whole-cell/parser-drain
+suffix on the same 20 ms cadence, up to the configured limit of 6,000
+opportunities per direction. A visit therefore contributes 5,000–5,999 guarded
+outgoing releases, and the twelve-visit gate contributes exactly the observed
+dynamic total within 60,000–71,988 guards. Every observed guard and suffix
+event remains subject to the unchanged exact-size, strict half-open 5 ms,
+zero-miss, zero-catch-up, and exact incoming-credit requirements.
 
-Post-v44 engineering source implements the schema-9 predictive-counter wait
-described above without changing the client-only peer contract. Its local
-tests, the 5,000-slot engineering probe, and the corrected-test repetition are
-diagnostic development results, not source-bound campaign gates. Fresh cohort
-v45 must repeat
-the build, isolated reference, 12/12 timing stress, 18/18 regression, code, and
-160/160 controlled gates before expanded-class acquisition can begin. All
-acquisition, fitting, qualification, 900-cell certification, and 16,000-cell
-formal numerators remain zero for post-v44 source. The complete earlier cohort
-chronology is retained in the authoritative workspace [`PROJECT.md`](../PROJECT.md).
+Logical outgoing-before-incoming order is proven by direction, target, and slot
+identity. Physical `schedule.csv` row order records terminal resolution and is
+not misrepresented as dispatch order. The aggregate binds the per-visit
+opportunity and drain lengths, dynamic guard and byte totals, histograms,
+observed sensitivity, terminal schedule-stop receipt, and sub-cell drain
+receipt. Authoritative `experiment.json` is source-, image-, cohort-, network-,
+parameter-, workload-, qualification-, and opportunity-contract-bound and
+cannot pass after a missing, rejected, or incomplete reserved attempt. The
+regression receipt remains bound to the same stress evidence. Current-source
+captures require BuFLO summary schema 4, runner-wakeup schema 9, and the complete
+scheduler receipt; older cohort ledgers remain historical evidence only.
+
+Post-v45 engineering source corrects the Lab timing-stress contract without
+changing the client-only runtime, 20 ms cadence, 1,200-byte target, or strict
+5 ms realisation window. The v45 build, reference, and operational visit remain
+historical evidence bound to v45 and cannot authorise corrected source. Fresh
+cohort v46 is the next planned cohort and currently has no executed evidence:
+it must repeat the build, isolated reference, 12/12 timing stress, 18/18
+regression, code, and 160/160 controlled gates before expanded-class acquisition
+can begin. All acquisition, fitting, qualification, 900-cell certification,
+and 16,000-cell formal numerators remain zero for current source. The complete
+earlier cohort chronology is retained in the authoritative workspace
+[`PROJECT.md`](../PROJECT.md).
 
 The current Lab boundary additionally classifies typed client defence/QCSD
 runner errors as `StrictClientDefenseExecutionFailure`. That type and

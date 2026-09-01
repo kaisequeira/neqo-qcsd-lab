@@ -26,7 +26,8 @@ BUFLO_STUDY_ID = "buflo-csbuflo-qcsd-v1"
 CONTROLLED_REGRESSION_ARTIFACT_TYPE = "qcsd-controlled-regression-parameters"
 CONTROLLED_REGRESSION_INPUT_POLICY = "controlled-regression-test-only-v1"
 TIMING_STRESS_ARTIFACT_TYPE = "qcsd-buflo-timing-stress-parameters"
-TIMING_STRESS_INPUT_POLICY = "controlled-test-only-timing-stress-v1"
+PREVIOUS_TIMING_STRESS_INPUT_POLICY = "controlled-test-only-timing-stress-v1"
+TIMING_STRESS_INPUT_POLICY = "controlled-test-only-timing-stress-v2"
 PARAMETER_ARTIFACT_NAME = "defense-parameters.json"
 PARAMETER_PROVENANCE_ARTIFACT_NAME = "defense-parameters.provenance.json"
 
@@ -830,11 +831,59 @@ def _validate_timing_stress_parameter_artifact(
     expected_udp_payload_ceiling: int | None,
     expected_workloads: Mapping[str, object] | Collection[str] | None,
 ) -> ParameterArtifact:
-    """Admit only the frozen, excluded 100-second BuFLO stress derivative."""
+    """Admit only a checked-in, excluded 100-second BuFLO stress derivative."""
 
-    expected_parameter_path = (
-        LAB_ROOT / "config/buflo-study/v1/buflo-timing-stress-v1.json"
-    ).resolve()
+    timing_root = (LAB_ROOT / "config/buflo-study/v1").resolve()
+    v1_parameter_path = timing_root / "buflo-timing-stress-v1.json"
+    v2_parameter_path = timing_root / "buflo-timing-stress-v2.json"
+    if parameter_path == v1_parameter_path:
+        provenance_schema_version = 1
+        input_policy = PREVIOUS_TIMING_STRESS_INPUT_POLICY
+        expected_capture_contract = {
+            "visits": 12,
+            "max_attempts": 1,
+            "authoritative_checkpoint": "experiment.json",
+            "outgoing_opportunities_per_visit": 5_001,
+            "incoming_opportunities_per_visit": 5_001,
+            "guarded_outgoing_releases_per_visit": 5_000,
+            "full_outgoing_cells_per_visit": 5_001,
+            "incoming_bytes_per_visit": 6_001_200,
+            "strict_half_open_window_us": 5_000,
+            "catch_up": False,
+        }
+    elif parameter_path == v2_parameter_path:
+        provenance_schema_version = 2
+        input_policy = TIMING_STRESS_INPUT_POLICY
+        expected_capture_contract = {
+            "schema_version": 2,
+            "visits": 12,
+            "max_attempts": 1,
+            "authoritative_checkpoint": "experiment.json",
+            "mandatory_prefix_opportunities_per_direction": 5_001,
+            "maximum_opportunities_per_direction": 6_000,
+            "minimum_guarded_outgoing_releases_per_visit": 5_000,
+            "maximum_guarded_outgoing_releases_per_visit": 5_999,
+            "minimum_incoming_bytes_per_visit": 6_001_200,
+            "maximum_incoming_bytes_per_visit": 7_200_000,
+            "cadence_semantics": (
+                "inclusive-minimum-prefix-plus-bounded-terminal-whole-cell-drain"
+            ),
+            "terminal_drain_suffix": "contiguous-exact-paired-whole-cell-opportunities",
+            "logical_order_evidence": "direction-target-slot-identity",
+            "physical_row_order": "terminal-resolution-order-not-dispatch-order",
+            "terminal_schedule_stop_policy": (
+                "stop_new_opportunities_at_first_terminal_whole_cell_capacity_exhaustion_"
+                "then_drain_already_advertised_incoming_credit"
+            ),
+            "strict_half_open_window_us": 5_000,
+            "catch_up": False,
+        }
+    else:
+        raise ValueError(
+            "BuFLO timing-stress parameters are valid only at a checked-in "
+            "excluded-campaign identity"
+        )
+    expected_parameter_path = parameter_path
     expected_receipt_path = expected_parameter_path.with_suffix(
         expected_parameter_path.suffix + ".provenance.json"
     )
@@ -845,7 +894,6 @@ def _validate_timing_stress_parameter_artifact(
     if (
         not require_checked_in_fixture
         or receipt_parameter_name is not None
-        or parameter_path != expected_parameter_path
         or receipt_path != expected_receipt_path
         or expected_workloads is not None
     ):
@@ -873,7 +921,7 @@ def _validate_timing_stress_parameter_artifact(
     }
     _require_exact_keys(receipt, receipt_keys, "BuFLO timing-stress provenance")
     if (
-        receipt.get("schema_version") != PROVENANCE_SCHEMA_VERSION
+        receipt.get("schema_version") != provenance_schema_version
         or receipt.get("artifact_type") != TIMING_STRESS_ARTIFACT_TYPE
         or receipt.get("status") != "controlled-test-only"
         or receipt.get("production_ready") is not False
@@ -915,18 +963,7 @@ def _validate_timing_stress_parameter_artifact(
         "stress_value": 100_000_000,
     }:
         raise ValueError("BuFLO timing-stress derivation is invalid")
-    if receipt.get("capture_contract") != {
-        "visits": 12,
-        "max_attempts": 1,
-        "authoritative_checkpoint": "experiment.json",
-        "outgoing_opportunities_per_visit": 5_001,
-        "incoming_opportunities_per_visit": 5_001,
-        "guarded_outgoing_releases_per_visit": 5_000,
-        "full_outgoing_cells_per_visit": 5_001,
-        "incoming_bytes_per_visit": 6_001_200,
-        "strict_half_open_window_us": 5_000,
-        "catch_up": False,
-    }:
+    if receipt.get("capture_contract") != expected_capture_contract:
         raise ValueError("BuFLO timing-stress capture contract is invalid")
     _validate_buflo(parameter, 1_200, receipt_path)
     return ParameterArtifact(
@@ -934,7 +971,7 @@ def _validate_timing_stress_parameter_artifact(
         sha256=parameter_sha256,
         provenance_path=receipt_path,
         provenance_sha256=sha256_file(receipt_path),
-        input_policy=TIMING_STRESS_INPUT_POLICY,
+        input_policy=input_policy,
     )
 
 

@@ -83,15 +83,17 @@ HISTORICAL_MULTI_ORIGIN_V36_SOURCE = {
     "neqo_patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "neqo_pinned_commit": "fb699636c191e91848ffcce859c43bb4d69f7d94",
 }
-TIMING_STRESS_SCHEMA_VERSION = 1
+TIMING_STRESS_SCHEMA_VERSION = 2
 TIMING_STRESS_ARTIFACT_TYPE = "qcsd-buflo-timing-stress-execution"
 TIMING_STRESS_CHECKPOINT_TYPE = "qcsd-buflo-timing-stress-checkpoint"
 TIMING_STRESS_ATTEMPT_ERROR_TYPE = "qcsd-buflo-timing-stress-attempt-error"
-TIMING_STRESS_BOUND_REGRESSION_RECEIPT_SCHEMA_VERSION = 5
+TIMING_STRESS_ATTEMPT_ERROR_SCHEMA_VERSION = 1
+ABORTED_TIMING_STRESS_BOUND_REGRESSION_RECEIPT_SCHEMA_VERSION = 5
+TIMING_STRESS_BOUND_REGRESSION_RECEIPT_SCHEMA_VERSION = 6
 CONTROLLED_NETWORK_RECEIPT_SCHEMA_VERSION = 2
 STUDY_ROOT = LAB_ROOT / "config/buflo-study/v1"
 STUDY_PLAN = STUDY_ROOT / "study.json"
-TIMING_STRESS_PARAMETERS = STUDY_ROOT / "buflo-timing-stress-v1.json"
+TIMING_STRESS_PARAMETERS = STUDY_ROOT / "buflo-timing-stress-v2.json"
 TIMING_STRESS_PARAMETERS_PROVENANCE = TIMING_STRESS_PARAMETERS.with_suffix(
     TIMING_STRESS_PARAMETERS.suffix + ".provenance.json"
 )
@@ -125,17 +127,27 @@ TIMING_STRESS_MINIMUM_DURATION_US = 100_000_000
 TIMING_STRESS_PACKET_SIZE = 1_200
 TIMING_STRESS_MAX_EVENTS_PER_DIRECTION = 6_000
 TIMING_STRESS_WINDOW_US = 5_000
-TIMING_STRESS_OUTGOING_PER_VISIT = 5_001
-TIMING_STRESS_INCOMING_PER_VISIT = 5_001
-TIMING_STRESS_GUARDS_PER_VISIT = 5_000
-TIMING_STRESS_INCOMING_BYTES_PER_VISIT = (
-    TIMING_STRESS_INCOMING_PER_VISIT * TIMING_STRESS_PACKET_SIZE
+TIMING_STRESS_MANDATORY_OPPORTUNITIES_PER_DIRECTION = 5_001
+TIMING_STRESS_MINIMUM_GUARDS_PER_VISIT = 5_000
+TIMING_STRESS_MAXIMUM_GUARDS_PER_VISIT = TIMING_STRESS_MAX_EVENTS_PER_DIRECTION - 1
+TIMING_STRESS_MINIMUM_INCOMING_BYTES_PER_VISIT = (
+    TIMING_STRESS_MANDATORY_OPPORTUNITIES_PER_DIRECTION * TIMING_STRESS_PACKET_SIZE
 )
-TIMING_STRESS_TOTAL_GUARDS = 60_000
-TIMING_STRESS_TOTAL_OUTGOING = 60_012
-TIMING_STRESS_TOTAL_INCOMING = 60_012
-TIMING_STRESS_TOTAL_DIRECTIONAL_EVENTS = 120_024
-TIMING_STRESS_TOTAL_INCOMING_BYTES = TIMING_STRESS_TOTAL_INCOMING * TIMING_STRESS_PACKET_SIZE
+TIMING_STRESS_MAXIMUM_INCOMING_BYTES_PER_VISIT = (
+    TIMING_STRESS_MAX_EVENTS_PER_DIRECTION * TIMING_STRESS_PACKET_SIZE
+)
+TIMING_STRESS_MINIMUM_TOTAL_GUARDS = (
+    TIMING_STRESS_VISITS * TIMING_STRESS_MINIMUM_GUARDS_PER_VISIT
+)
+TIMING_STRESS_MAXIMUM_TOTAL_GUARDS = (
+    TIMING_STRESS_VISITS * TIMING_STRESS_MAXIMUM_GUARDS_PER_VISIT
+)
+TIMING_STRESS_MINIMUM_TOTAL_OPPORTUNITIES_PER_DIRECTION = (
+    TIMING_STRESS_VISITS * TIMING_STRESS_MANDATORY_OPPORTUNITIES_PER_DIRECTION
+)
+TIMING_STRESS_MAXIMUM_TOTAL_OPPORTUNITIES_PER_DIRECTION = (
+    TIMING_STRESS_VISITS * TIMING_STRESS_MAX_EVENTS_PER_DIRECTION
+)
 # The controlled CS-BuFLO qualification needs fresh client-to-server
 # application STREAM bytes on which to exercise its first 16 KiB estimator
 # boundary.  A deterministic, incompressible-looking literal field keeps this
@@ -531,15 +543,33 @@ def validate_study_plan(value: Mapping[str, Any]) -> None:
         "packet_size": TIMING_STRESS_PACKET_SIZE,
         "max_events_per_direction": TIMING_STRESS_MAX_EVENTS_PER_DIRECTION,
         "strict_half_open_window_us": TIMING_STRESS_WINDOW_US,
-        "outgoing_opportunities_per_visit": TIMING_STRESS_OUTGOING_PER_VISIT,
-        "incoming_opportunities_per_visit": TIMING_STRESS_INCOMING_PER_VISIT,
-        "guarded_outgoing_releases_per_visit": TIMING_STRESS_GUARDS_PER_VISIT,
-        "full_outgoing_cells_per_visit": TIMING_STRESS_OUTGOING_PER_VISIT,
-        "incoming_bytes_per_visit": TIMING_STRESS_INCOMING_BYTES_PER_VISIT,
-        "expected_guarded_outgoing_releases": TIMING_STRESS_TOTAL_GUARDS,
-        "expected_outgoing_opportunities": TIMING_STRESS_TOTAL_OUTGOING,
-        "expected_incoming_opportunities": TIMING_STRESS_TOTAL_INCOMING,
-        "expected_directional_events": TIMING_STRESS_TOTAL_DIRECTIONAL_EVENTS,
+        "contract_schema_version": TIMING_STRESS_SCHEMA_VERSION,
+        "cadence_semantics": "inclusive-minimum-prefix-plus-bounded-terminal-whole-cell-drain",
+        "mandatory_prefix_opportunities_per_direction": (
+            TIMING_STRESS_MANDATORY_OPPORTUNITIES_PER_DIRECTION
+        ),
+        "minimum_guarded_outgoing_releases_per_visit": (
+            TIMING_STRESS_MINIMUM_GUARDS_PER_VISIT
+        ),
+        "maximum_guarded_outgoing_releases_per_visit": (
+            TIMING_STRESS_MAXIMUM_GUARDS_PER_VISIT
+        ),
+        "minimum_incoming_bytes_per_visit": TIMING_STRESS_MINIMUM_INCOMING_BYTES_PER_VISIT,
+        "maximum_incoming_bytes_per_visit": TIMING_STRESS_MAXIMUM_INCOMING_BYTES_PER_VISIT,
+        "minimum_guarded_outgoing_releases": TIMING_STRESS_MINIMUM_TOTAL_GUARDS,
+        "maximum_guarded_outgoing_releases": TIMING_STRESS_MAXIMUM_TOTAL_GUARDS,
+        "minimum_opportunities_per_direction": (
+            TIMING_STRESS_MINIMUM_TOTAL_OPPORTUNITIES_PER_DIRECTION
+        ),
+        "maximum_opportunities_per_direction": (
+            TIMING_STRESS_MAXIMUM_TOTAL_OPPORTUNITIES_PER_DIRECTION
+        ),
+        "logical_order_evidence": "direction-target-slot-identity",
+        "physical_row_order": "terminal-resolution-order-not-dispatch-order",
+        "terminal_schedule_stop_policy": (
+            "stop_new_opportunities_at_first_terminal_whole_cell_capacity_exhaustion_"
+            "then_drain_already_advertised_incoming_credit"
+        ),
         "formal_evidence": False,
     }
     if timing_stress != expected_timing_stress:
@@ -1040,6 +1070,11 @@ def validate_controlled_campaign_receipt(value: Any) -> dict[str, Any]:
     stress_bound_keys = current_keys | {"timing_stress"}
     fields = frozenset(value) if isinstance(value, Mapping) else frozenset()
     schema_version = value.get("schema_version") if isinstance(value, Mapping) else None
+    if schema_version == ABORTED_TIMING_STRESS_BOUND_REGRESSION_RECEIPT_SCHEMA_VERSION:
+        raise ValueError(
+            "controlled campaign receipt schema 5 was reserved by failed cohorts and has "
+            "no completed timing-stress execution receipt"
+        )
     if not isinstance(value, Mapping) or not (
         (schema_version == SCHEMA_VERSION and fields == frozenset(historical_keys))
         or (schema_version == 2 and fields == frozenset(previous_keys))
@@ -4710,7 +4745,7 @@ def _timing_stress_parameter_inputs() -> dict[str, Any]:
     if parameter != expected_parameter:
         raise ValueError("timing-stress parameters must change only canonical minimum_duration_us")
     expected_provenance = {
-        "schema_version": 1,
+        "schema_version": 2,
         "artifact_type": "qcsd-buflo-timing-stress-parameters",
         "status": "controlled-test-only",
         "production_ready": False,
@@ -4739,14 +4774,36 @@ def _timing_stress_parameter_inputs() -> dict[str, Any]:
             "stress_value": TIMING_STRESS_MINIMUM_DURATION_US,
         },
         "capture_contract": {
+            "schema_version": TIMING_STRESS_SCHEMA_VERSION,
             "visits": TIMING_STRESS_VISITS,
             "max_attempts": 1,
             "authoritative_checkpoint": "experiment.json",
-            "outgoing_opportunities_per_visit": TIMING_STRESS_OUTGOING_PER_VISIT,
-            "incoming_opportunities_per_visit": TIMING_STRESS_INCOMING_PER_VISIT,
-            "guarded_outgoing_releases_per_visit": TIMING_STRESS_GUARDS_PER_VISIT,
-            "full_outgoing_cells_per_visit": TIMING_STRESS_OUTGOING_PER_VISIT,
-            "incoming_bytes_per_visit": TIMING_STRESS_INCOMING_BYTES_PER_VISIT,
+            "mandatory_prefix_opportunities_per_direction": (
+                TIMING_STRESS_MANDATORY_OPPORTUNITIES_PER_DIRECTION
+            ),
+            "maximum_opportunities_per_direction": TIMING_STRESS_MAX_EVENTS_PER_DIRECTION,
+            "minimum_guarded_outgoing_releases_per_visit": (
+                TIMING_STRESS_MINIMUM_GUARDS_PER_VISIT
+            ),
+            "maximum_guarded_outgoing_releases_per_visit": (
+                TIMING_STRESS_MAXIMUM_GUARDS_PER_VISIT
+            ),
+            "minimum_incoming_bytes_per_visit": (
+                TIMING_STRESS_MINIMUM_INCOMING_BYTES_PER_VISIT
+            ),
+            "maximum_incoming_bytes_per_visit": (
+                TIMING_STRESS_MAXIMUM_INCOMING_BYTES_PER_VISIT
+            ),
+            "cadence_semantics": (
+                "inclusive-minimum-prefix-plus-bounded-terminal-whole-cell-drain"
+            ),
+            "terminal_drain_suffix": "contiguous-exact-paired-whole-cell-opportunities",
+            "logical_order_evidence": "direction-target-slot-identity",
+            "physical_row_order": "terminal-resolution-order-not-dispatch-order",
+            "terminal_schedule_stop_policy": (
+                "stop_new_opportunities_at_first_terminal_whole_cell_capacity_exhaustion_"
+                "then_drain_already_advertised_incoming_credit"
+            ),
             "strict_half_open_window_us": TIMING_STRESS_WINDOW_US,
             "catch_up": False,
         },
@@ -4789,13 +4846,60 @@ def _timing_stress_defense() -> Any:
     )
 
 
-def _validate_timing_stress_checkpoint(value: object, *, require_complete: bool) -> dict[str, str]:
+def _timing_stress_checkpoint_binding(
+    source: Mapping[str, Any],
+    *,
+    cohort_version: int,
+    network_receipt: Mapping[str, Any],
+    environment_binding: Mapping[str, Any],
+    parameter_inputs: Mapping[str, Any],
+    application_path: Path,
+    runtime_path: Path,
+    response_qualification_path: Path,
+    response_qualification_manifest_sha256: str,
+    chaff_path: Path,
+) -> dict[str, Any]:
+    """Bind a resumable stress launch ledger to one cohort and frozen input set."""
+
+    return {
+        "cohort_version": _cohort_version(cohort_version),
+        "lab_commit": source.get("lab_commit"),
+        "neqo_commit": source.get("neqo_commit"),
+        "neqo_pinned_commit": source.get("neqo_pinned_commit"),
+        "image_digest": source.get("image_digest"),
+        "study_plan_sha256": sha256_file(STUDY_PLAN),
+        "opportunity_contract_sha256": _canonical_digest(
+            load_study_plan()["timing_stress"]
+        ),
+        "canonical_parameter_sha256": parameter_inputs["canonical_parameter"]["sha256"],
+        "canonical_parameter_provenance_sha256": parameter_inputs["canonical_provenance"][
+            "sha256"
+        ],
+        "parameter_sha256": parameter_inputs["parameter"]["sha256"],
+        "parameter_provenance_sha256": parameter_inputs["provenance"]["sha256"],
+        "network_receipt_sha256": _canonical_digest(dict(network_receipt)),
+        "environment_receipt_sha256": environment_binding.get("sha256"),
+        "application_workload_sha256": sha256_file(application_path),
+        "runtime_workload_sha256": sha256_file(runtime_path),
+        "response_qualification_sha256": sha256_file(response_qualification_path),
+        "response_qualification_manifest_sha256": response_qualification_manifest_sha256,
+        "qualified_chaff_manifest_sha256": sha256_file(chaff_path),
+    }
+
+
+def _validate_timing_stress_checkpoint(
+    value: object,
+    *,
+    require_complete: bool,
+    expected_binding: Mapping[str, Any] | None = None,
+) -> dict[str, str]:
     if (
         not isinstance(value, Mapping)
         or set(value)
         != {
             "schema_version",
             "artifact_type",
+            "campaign_binding",
             "launched_visits",
             "accepted_visits",
         }
@@ -4805,6 +4909,58 @@ def _validate_timing_stress_checkpoint(value: object, *, require_complete: bool)
         or not isinstance(value.get("accepted_visits"), Mapping)
     ):
         raise ValueError("timing-stress checkpoint is invalid")
+    binding = value.get("campaign_binding")
+    if (
+        not isinstance(binding, Mapping)
+        or set(binding)
+        != {
+            "cohort_version",
+            "lab_commit",
+            "neqo_commit",
+            "neqo_pinned_commit",
+            "image_digest",
+            "study_plan_sha256",
+            "opportunity_contract_sha256",
+            "canonical_parameter_sha256",
+            "canonical_parameter_provenance_sha256",
+            "parameter_sha256",
+            "parameter_provenance_sha256",
+            "network_receipt_sha256",
+            "environment_receipt_sha256",
+            "application_workload_sha256",
+            "runtime_workload_sha256",
+            "response_qualification_sha256",
+            "response_qualification_manifest_sha256",
+            "qualified_chaff_manifest_sha256",
+        }
+        or type(binding.get("cohort_version")) is not int
+        or binding["cohort_version"] <= 0
+        or any(
+            re.fullmatch(r"[0-9a-f]{40}", str(binding.get(key))) is None
+            for key in ("lab_commit", "neqo_commit", "neqo_pinned_commit")
+        )
+        or re.fullmatch(r"sha256:[0-9a-f]{64}", str(binding.get("image_digest"))) is None
+        or any(
+            re.fullmatch(r"[0-9a-f]{64}", str(binding.get(key))) is None
+            for key in (
+                "study_plan_sha256",
+                "opportunity_contract_sha256",
+                "canonical_parameter_sha256",
+                "canonical_parameter_provenance_sha256",
+                "parameter_sha256",
+                "parameter_provenance_sha256",
+                "network_receipt_sha256",
+                "environment_receipt_sha256",
+                "application_workload_sha256",
+                "runtime_workload_sha256",
+                "response_qualification_sha256",
+                "response_qualification_manifest_sha256",
+                "qualified_chaff_manifest_sha256",
+            )
+        )
+        or (expected_binding is not None and dict(binding) != dict(expected_binding))
+    ):
+        raise ValueError("timing-stress checkpoint campaign binding is invalid")
     expected_visits = {f"visit-{visit:03d}" for visit in range(TIMING_STRESS_VISITS)}
     launched = value["launched_visits"]
     accepted = value["accepted_visits"]
@@ -4919,7 +5075,7 @@ def _timing_stress_persist_rejection(attempt: Path, error: BaseException, *, sta
     if path.exists() or path.is_symlink():
         return
     value = {
-        "schema_version": TIMING_STRESS_SCHEMA_VERSION,
+        "schema_version": TIMING_STRESS_ATTEMPT_ERROR_SCHEMA_VERSION,
         "artifact_type": TIMING_STRESS_ATTEMPT_ERROR_TYPE,
         "failure": {
             "stage": stage,
@@ -4957,6 +5113,7 @@ def _timing_stress_schedule_evidence(attempt: Path, run: Mapping[str, Any]) -> d
         RUNNER_WAKEUP_V7_WORST_TIME_KEYS,
         _runner_wakeup_metrics_valid,
         _schedule_realization_metrics,
+        buflo_terminal_diagnostics_valid,
     )
 
     schedule_path = attempt / "neqo/schedule.csv"
@@ -4988,13 +5145,6 @@ def _timing_stress_schedule_evidence(attempt: Path, run: Mapping[str, Any]) -> d
     }
     if not required_fields <= fields:
         raise ValueError("timing-stress schedule lacks current typed outcome columns")
-    expected_targets = list(
-        range(
-            0,
-            TIMING_STRESS_MINIMUM_DURATION_US + TIMING_STRESS_INTERVAL_US,
-            TIMING_STRESS_INTERVAL_US,
-        )
-    )
     by_direction: dict[str, dict[int, Mapping[str, str]]] = {
         "outgoing": {},
         "incoming": {},
@@ -5061,17 +5211,44 @@ def _timing_stress_schedule_evidence(attempt: Path, run: Mapping[str, Any]) -> d
                 )
             incoming_advertisement_delays.append(advertisement_delay)
         by_direction[direction][target] = row
-    if any(sorted(records) != expected_targets for records in by_direction.values()):
-        raise ValueError("timing-stress schedule is not the exact inclusive 100-second cadence")
-    if observed_slots != list(range(len(rows))):
-        raise ValueError("timing-stress schedule is not outgoing-before-incoming at every tick")
+    outgoing_targets = sorted(by_direction["outgoing"])
+    incoming_targets = sorted(by_direction["incoming"])
+    opportunities = len(outgoing_targets)
+    if (
+        outgoing_targets != incoming_targets
+        or not TIMING_STRESS_MANDATORY_OPPORTUNITIES_PER_DIRECTION
+        <= opportunities
+        <= TIMING_STRESS_MAX_EVENTS_PER_DIRECTION
+    ):
+        raise ValueError(
+            "timing-stress schedule does not contain equal bounded directional inventories"
+        )
+    expected_targets = list(
+        range(0, opportunities * TIMING_STRESS_INTERVAL_US, TIMING_STRESS_INTERVAL_US)
+    )
+    if outgoing_targets != expected_targets:
+        raise ValueError(
+            "timing-stress schedule is not the exact inclusive minimum cadence plus "
+            "a contiguous terminal-drain suffix"
+        )
+    expected_events = opportunities * 2
+    expected_slots = list(range(expected_events))
+    if sorted(observed_slots) != expected_slots or len(set(observed_slots)) != expected_events:
+        raise ValueError("timing-stress logical outgoing-before-incoming slot inventory is invalid")
+    terminal_resolution_row_reorderings = sum(
+        observed != expected for expected, observed in enumerate(observed_slots)
+    )
+    guarded_releases = opportunities - 1
+    incoming_bytes = opportunities * TIMING_STRESS_PACKET_SIZE
+    terminal_drain_opportunities = (
+        opportunities - TIMING_STRESS_MANDATORY_OPPORTUNITIES_PER_DIRECTION
+    )
 
     metrics = _schedule_realization_metrics(attempt)
-    expected_events = TIMING_STRESS_OUTGOING_PER_VISIT + TIMING_STRESS_INCOMING_PER_VISIT
     if (
         metrics.get("scheduled_events") != expected_events
-        or metrics.get("scheduled_outgoing_events") != TIMING_STRESS_OUTGOING_PER_VISIT
-        or metrics.get("scheduled_incoming_events") != TIMING_STRESS_INCOMING_PER_VISIT
+        or metrics.get("scheduled_outgoing_events") != opportunities
+        or metrics.get("scheduled_incoming_events") != opportunities
         or metrics.get("satisfied_events") != expected_events
         or metrics.get("terminal_satisfactions") != {"satisfied": expected_events}
         or metrics.get("missed_events") != 0
@@ -5080,8 +5257,8 @@ def _timing_stress_schedule_evidence(attempt: Path, run: Mapping[str, Any]) -> d
         or metrics.get("duplicate_terminal_slots") != 0
         or metrics.get("invalid_terminal_rows") != 0
         or metrics.get("invalid_typed_outcome_rows") != 0
-        or metrics.get("incoming_credit_advertised_events") != TIMING_STRESS_INCOMING_PER_VISIT
-        or metrics.get("incoming_credit_consumed_events") != TIMING_STRESS_INCOMING_PER_VISIT
+        or metrics.get("incoming_credit_advertised_events") != opportunities
+        or metrics.get("incoming_credit_consumed_events") != opportunities
         or metrics.get("incoming_credit_missing_events") != 0
         or metrics.get("incoming_credit_consumption_missing_events") != 0
         or metrics.get("invalid_credit_advertisement_events") != 0
@@ -5108,9 +5285,9 @@ def _timing_stress_schedule_evidence(attempt: Path, run: Mapping[str, Any]) -> d
     if (
         not _runner_wakeup_metrics_valid(wakeups)
         or wakeups.get("schema_version") != 9
-        or guard_entries != TIMING_STRESS_GUARDS_PER_VISIT
+        or guard_entries != guarded_releases
         or wakeups.get("buflo_exact_release_dispatch_ready_guards")
-        != TIMING_STRESS_GUARDS_PER_VISIT
+        != guarded_releases
         or wakeups.get("buflo_exact_release_failed_guards") != 0
         or any(
             wakeups.get(key) != 0
@@ -5131,11 +5308,11 @@ def _timing_stress_schedule_evidence(attempt: Path, run: Mapping[str, Any]) -> d
         or type(wakeups.get("buflo_exact_release_active_wait_counter_frequency_hz")) is not int
         or wakeups["buflo_exact_release_active_wait_counter_frequency_hz"] <= 0
         or wakeups.get("buflo_exact_release_active_wait_counter_guards")
-        != TIMING_STRESS_GUARDS_PER_VISIT
+        != guarded_releases
         or wakeups.get("buflo_exact_release_active_wait_counter_unavailable_guards") != 0
         or wakeups.get("buflo_exact_release_active_wait_counter_nonmonotonic_guards") != 0
         or wakeups.get("buflo_exact_release_active_wait_instant_confirmations")
-        != TIMING_STRESS_GUARDS_PER_VISIT
+        != guarded_releases
         + wakeups.get("buflo_exact_release_active_wait_early_confirmation_retries", -1)
         or wakeups.get("buflo_exact_release_active_wait_counter_calibrations", -1)
         != wakeups.get("buflo_exact_release_active_wait_instant_confirmations", 0)
@@ -5150,9 +5327,9 @@ def _timing_stress_schedule_evidence(attempt: Path, run: Mapping[str, Any]) -> d
         or wakeups.get("buflo_exact_release_max_counter_calibration_span_nanoseconds", -1)
         > wakeups.get("buflo_exact_release_max_active_wait_counter_gap_nanoseconds", -1)
         or not isinstance(dispatch_counts, list)
-        or sum(dispatch_counts) != TIMING_STRESS_GUARDS_PER_VISIT
+        or sum(dispatch_counts) != guarded_releases
         or not isinstance(active_gap_counts, list)
-        or sum(active_gap_counts) != TIMING_STRESS_GUARDS_PER_VISIT
+        or sum(active_gap_counts) != guarded_releases
         or not isinstance(worst_guard, Mapping)
         or any(type(worst_guard.get(key)) is not int for key in RUNNER_WAKEUP_V7_WORST_TIME_KEYS)
         or worst_guard.get("active_wait_poll_source") != "linux-aarch64-cntvct-el0-predictive-v1"
@@ -5166,6 +5343,7 @@ def _timing_stress_schedule_evidence(attempt: Path, run: Mapping[str, Any]) -> d
         )
 
     diagnostics = run.get("defense_diagnostics")
+    summary = run.get("buflo_summary")
     zero_diagnostics = (
         "buflo_partial_outgoing_cells",
         "buflo_suppressed_outgoing_cells",
@@ -5178,33 +5356,116 @@ def _timing_stress_schedule_evidence(attempt: Path, run: Mapping[str, Any]) -> d
     )
     if (
         not isinstance(diagnostics, Mapping)
+        or not isinstance(summary, Mapping)
+        or summary.get("diagnostics") != diagnostics
+        or not buflo_terminal_diagnostics_valid(diagnostics, require_current=True)
+        or summary.get("schema_version") != 4
+        or summary.get("kind") != "buflo"
+        or summary.get("implementation_scope") != "client_only_quic"
+        or summary.get("paper_equivalent") is not False
+        or summary.get("terminal_schedule_stop_policy")
+        != (
+            "stop_new_opportunities_at_first_terminal_whole_cell_capacity_exhaustion_"
+            "then_drain_already_advertised_incoming_credit"
+        )
+        or summary.get("terminal_subcell_policy")
+        != "drain_whole_cells_then_client_local_http3_cancel_unallocatable_reviewed_chaff_tail"
         or any(diagnostics.get(key) != 0 for key in zero_diagnostics)
         or diagnostics.get("buflo_event_guard_triggered") is not False
-        or diagnostics.get("buflo_scheduled_outgoing_cells") != TIMING_STRESS_OUTGOING_PER_VISIT
-        or diagnostics.get("buflo_scheduled_incoming_cells") != TIMING_STRESS_INCOMING_PER_VISIT
-        or diagnostics.get("buflo_full_outgoing_cells") != TIMING_STRESS_OUTGOING_PER_VISIT
-        or diagnostics.get("scheduled_incoming_requested_bytes")
-        != TIMING_STRESS_INCOMING_BYTES_PER_VISIT
-        or diagnostics.get("scheduled_incoming_advertised_bytes")
-        != TIMING_STRESS_INCOMING_BYTES_PER_VISIT
-        or diagnostics.get("scheduled_incoming_consumed_bytes")
-        != TIMING_STRESS_INCOMING_BYTES_PER_VISIT
+        or diagnostics.get("buflo_application_complete") is not True
+        or diagnostics.get("buflo_minimum_duration_reached") is not True
+        or diagnostics.get("buflo_egress_backlog_pending") is not False
+        or diagnostics.get("buflo_scheduled_outgoing_cells") != opportunities
+        or diagnostics.get("buflo_scheduled_incoming_cells") != opportunities
+        or diagnostics.get("buflo_full_outgoing_cells") != opportunities
+        or diagnostics.get("scheduled_incoming_requested_bytes") != incoming_bytes
+        or diagnostics.get("scheduled_incoming_advertised_bytes") != incoming_bytes
+        or diagnostics.get("scheduled_incoming_consumed_bytes") != incoming_bytes
         or diagnostics.get("scheduled_incoming_retired_bytes") != 0
         or diagnostics.get("scheduled_incoming_unresolved_bytes") != 0
     ):
         raise ValueError("timing-stress BuFLO terminal diagnostics are invalid")
+    integer_terminal_fields = (
+        "buflo_schedule_stop_latched_at_us",
+        "buflo_schedule_stop_available_bytes",
+        "buflo_schedule_stop_required_bytes",
+        "buflo_schedule_stop_scheduled_incoming_cells",
+        "buflo_schedule_stop_scheduled_outgoing_cells",
+        "buflo_schedule_stop_terminal_incoming_cells",
+        "buflo_schedule_stop_terminal_outgoing_cells",
+        "buflo_terminal_subcell_latched_at_us",
+        "buflo_terminal_subcell_open_streams_at_latch",
+        "buflo_terminal_subcell_parser_lease_bytes_at_latch",
+        "buflo_terminal_subcell_pending_parser_boundaries_at_latch",
+        "buflo_terminal_subcell_pending_application_parser_boundaries_at_latch",
+        "buflo_terminal_subcell_pending_request_cancellations",
+        "buflo_terminal_subcell_stream_cancellations",
+        "buflo_terminal_subcell_exact_capacity_bytes_cancelled",
+    )
+    if any(type(diagnostics.get(key)) is not int for key in integer_terminal_fields):
+        raise ValueError("timing-stress BuFLO terminal drain evidence is malformed")
+    last_target = expected_targets[-1]
+    stop_at = diagnostics["buflo_schedule_stop_latched_at_us"]
+    stop_available = diagnostics["buflo_schedule_stop_available_bytes"]
+    stop_required = diagnostics["buflo_schedule_stop_required_bytes"]
+    stop_terminal_incoming = diagnostics["buflo_schedule_stop_terminal_incoming_cells"]
+    stop_terminal_outgoing = diagnostics["buflo_schedule_stop_terminal_outgoing_cells"]
+    terminal_at = diagnostics["buflo_terminal_subcell_latched_at_us"]
+    open_streams = diagnostics["buflo_terminal_subcell_open_streams_at_latch"]
+    cancelled_streams = diagnostics["buflo_terminal_subcell_stream_cancellations"]
+    cancelled_bytes = diagnostics["buflo_terminal_subcell_exact_capacity_bytes_cancelled"]
+    if (
+        diagnostics.get("buflo_schedule_stop_latched") is not True
+        or stop_required != TIMING_STRESS_PACKET_SIZE
+        or not 0 <= stop_available < stop_required
+        or diagnostics["buflo_schedule_stop_scheduled_outgoing_cells"] != opportunities
+        or diagnostics["buflo_schedule_stop_scheduled_incoming_cells"] != opportunities
+        or not 0 <= stop_terminal_incoming <= opportunities
+        or not 0 <= stop_terminal_outgoing <= opportunities
+        or not last_target <= stop_at < last_target + TIMING_STRESS_WINDOW_US
+        or diagnostics.get("buflo_terminal_subcell_latched") is not True
+        or terminal_at < stop_at
+        or open_streams < 0
+        or cancelled_streams != open_streams
+        or not 0 <= cancelled_bytes < TIMING_STRESS_PACKET_SIZE
+        or diagnostics["buflo_terminal_subcell_parser_lease_bytes_at_latch"] != 0
+        or diagnostics[
+            "buflo_terminal_subcell_pending_application_parser_boundaries_at_latch"
+        ]
+        != 0
+        or diagnostics["buflo_terminal_subcell_pending_request_cancellations"] != 0
+    ):
+        raise ValueError("timing-stress BuFLO terminal drain evidence is invalid")
     return {
-        "scheduled_outgoing_opportunities": TIMING_STRESS_OUTGOING_PER_VISIT,
-        "scheduled_incoming_opportunities": TIMING_STRESS_INCOMING_PER_VISIT,
+        "contract_schema_version": TIMING_STRESS_SCHEMA_VERSION,
+        "cadence": {
+            "interval_us": TIMING_STRESS_INTERVAL_US,
+            "minimum_duration_us": TIMING_STRESS_MINIMUM_DURATION_US,
+            "mandatory_prefix_opportunities_per_direction": (
+                TIMING_STRESS_MANDATORY_OPPORTUNITIES_PER_DIRECTION
+            ),
+            "terminal_drain_opportunities_per_direction": terminal_drain_opportunities,
+            "last_target_time_us": last_target,
+            "logical_slot_inventory": expected_events,
+            "terminal_resolution_row_reorderings": terminal_resolution_row_reorderings,
+        },
+        "scheduled_outgoing_opportunities": opportunities,
+        "scheduled_incoming_opportunities": opportunities,
         "directional_events": expected_events,
-        "full_outgoing_cells": TIMING_STRESS_OUTGOING_PER_VISIT,
+        "full_outgoing_cells": opportunities,
         "incoming_credit_bytes": {
-            "requested": TIMING_STRESS_INCOMING_BYTES_PER_VISIT,
-            "advertised": TIMING_STRESS_INCOMING_BYTES_PER_VISIT,
-            "consumed": TIMING_STRESS_INCOMING_BYTES_PER_VISIT,
+            "requested": incoming_bytes,
+            "advertised": incoming_bytes,
+            "consumed": incoming_bytes,
             "retired": 0,
             "unresolved": 0,
         },
+        "mandatory_prefix_guarded_outgoing_releases": (
+            TIMING_STRESS_MINIMUM_GUARDS_PER_VISIT
+        ),
+        "terminal_drain_guarded_outgoing_releases": (
+            guarded_releases - TIMING_STRESS_MINIMUM_GUARDS_PER_VISIT
+        ),
         "guarded_outgoing_releases": guard_entries,
         "guard_outcomes": {
             "entries": guard_entries,
@@ -5265,6 +5526,30 @@ def _timing_stress_schedule_evidence(attempt: Path, run: Mapping[str, Any]) -> d
         "active_spin_gap_histogram": deepcopy(dict(active_gap_histogram)),
         "worst_guard": deepcopy(dict(worst_guard)),
         "zero_failure_diagnostics": {key: diagnostics[key] for key in zero_diagnostics},
+        "terminal_schedule_stop": {
+            "policy": summary["terminal_schedule_stop_policy"],
+            "latched_at_us": stop_at,
+            "available_bytes": stop_available,
+            "required_bytes": stop_required,
+            "scheduled_incoming_cells": opportunities,
+            "scheduled_outgoing_cells": opportunities,
+            "terminal_incoming_cells_at_stop": stop_terminal_incoming,
+            "terminal_outgoing_cells_at_stop": stop_terminal_outgoing,
+            "drained_incoming_cells_after_stop": opportunities - stop_terminal_incoming,
+        },
+        "terminal_subcell_drain": {
+            "policy": summary["terminal_subcell_policy"],
+            "latched_at_us": terminal_at,
+            "open_streams_at_latch": open_streams,
+            "parser_lease_bytes_at_latch": 0,
+            "pending_parser_boundaries_at_latch": diagnostics[
+                "buflo_terminal_subcell_pending_parser_boundaries_at_latch"
+            ],
+            "pending_application_parser_boundaries_at_latch": 0,
+            "pending_request_cancellations": 0,
+            "stream_cancellations": cancelled_streams,
+            "exact_capacity_bytes_cancelled": cancelled_bytes,
+        },
         "passed": True,
     }
 
@@ -5369,7 +5654,7 @@ def _timing_stress_attempt_evidence(
         limits=limits,
         udp_payload_ceiling=1_200,
     )
-    seed = _stable_seed("buflo-timing-stress-v1", f"visit-{visit:03d}")
+    seed = _stable_seed("buflo-timing-stress-v2", f"visit-{visit:03d}")
     _validate_run_binding(
         run,
         manifest=runtime_path,
@@ -5473,6 +5758,14 @@ def _timing_stress_aggregate(samples: Sequence[Mapping[str, Any]]) -> dict[str, 
     ):
         raise ValueError("timing-stress timing evidence is incomplete")
     typed_timings = [dict(timing) for timing in timings if isinstance(timing, Mapping)]
+    if any(
+        timing.get("contract_schema_version") != TIMING_STRESS_SCHEMA_VERSION
+        for timing in typed_timings
+    ):
+        raise ValueError("timing-stress sample contract schema is not current")
+    observed_total_guards = sum(
+        int(timing["guarded_outgoing_releases"]) for timing in typed_timings
+    )
     dispatch_histograms = [timing["dispatch_lateness_histogram"] for timing in typed_timings]
     gap_histograms = [timing["active_spin_gap_histogram"] for timing in typed_timings]
     counter_receipts = [timing["active_wait_counter"] for timing in typed_timings]
@@ -5499,17 +5792,27 @@ def _timing_stress_aggregate(samples: Sequence[Mapping[str, Any]]) -> dict[str, 
             if not isinstance(candidate, list) or len(candidate) != len(aggregate):
                 raise ValueError("timing-stress histogram bucket inventory changed")
             aggregate = [left + right for left, right in zip(aggregate, candidate, strict=True)]
-        if sum(aggregate) != TIMING_STRESS_TOTAL_GUARDS:
+        if sum(aggregate) != observed_total_guards:
             raise ValueError("timing-stress aggregate histogram does not cover every guard")
         return {"upper_bounds_nanoseconds": list(bounds), "counts": aggregate}
 
     return {
+        "contract_schema_version": TIMING_STRESS_SCHEMA_VERSION,
         "visits": TIMING_STRESS_VISITS,
         "physical_attempts": TIMING_STRESS_VISITS,
         "rejected_attempts": 0,
-        "guarded_outgoing_releases": sum(
-            int(timing["guarded_outgoing_releases"]) for timing in typed_timings
+        "opportunities_per_direction_by_visit": [
+            int(timing["scheduled_outgoing_opportunities"]) for timing in typed_timings
+        ],
+        "terminal_drain_opportunities_per_direction_by_visit": [
+            int(timing["cadence"]["terminal_drain_opportunities_per_direction"])
+            for timing in typed_timings
+        ],
+        "mandatory_prefix_guarded_outgoing_releases": TIMING_STRESS_MINIMUM_TOTAL_GUARDS,
+        "terminal_drain_guarded_outgoing_releases": (
+            observed_total_guards - TIMING_STRESS_MINIMUM_TOTAL_GUARDS
         ),
+        "guarded_outgoing_releases": observed_total_guards,
         "guard_outcomes": {
             "entries": sum(int(timing["guard_outcomes"]["entries"]) for timing in typed_timings),
             "dispatch_ready": sum(
@@ -5540,6 +5843,20 @@ def _timing_stress_aggregate(samples: Sequence[Mapping[str, Any]]) -> dict[str, 
         ),
         "directional_events": sum(int(timing["directional_events"]) for timing in typed_timings),
         "full_outgoing_cells": sum(int(timing["full_outgoing_cells"]) for timing in typed_timings),
+        "terminal_drain_opportunities_per_direction": sum(
+            int(timing["cadence"]["terminal_drain_opportunities_per_direction"])
+            for timing in typed_timings
+        ),
+        "minimum_last_target_time_us": min(
+            int(timing["cadence"]["last_target_time_us"]) for timing in typed_timings
+        ),
+        "maximum_last_target_time_us": max(
+            int(timing["cadence"]["last_target_time_us"]) for timing in typed_timings
+        ),
+        "terminal_resolution_row_reorderings": sum(
+            int(timing["cadence"]["terminal_resolution_row_reorderings"])
+            for timing in typed_timings
+        ),
         "incoming_credit_bytes": {
             key: sum(int(timing["incoming_credit_bytes"][key]) for timing in typed_timings)
             for key in ("requested", "advertised", "consumed", "retired", "unresolved")
@@ -5603,8 +5920,112 @@ def _timing_stress_aggregate(samples: Sequence[Mapping[str, Any]]) -> dict[str, 
             "retired_incoming_bytes": 0,
             "unresolved_incoming_bytes": 0,
         },
+        "observed_sensitivity": _timing_stress_sensitivity(observed_total_guards),
         "passed": True,
     }
+
+
+def _validate_timing_stress_aggregate(aggregate: Mapping[str, Any]) -> None:
+    """Require the fixed prefix and every observed terminal-drain guard to pass."""
+
+    guards = aggregate.get("guarded_outgoing_releases")
+    outgoing = aggregate.get("outgoing_opportunities")
+    incoming = aggregate.get("incoming_opportunities")
+    opportunities_by_visit = aggregate.get("opportunities_per_direction_by_visit")
+    drain_by_visit = aggregate.get("terminal_drain_opportunities_per_direction_by_visit")
+    if type(guards) is not int or type(outgoing) is not int or type(incoming) is not int:
+        raise ValueError("timing-stress aggregate counts are malformed")
+    expected_guard_outcomes = {
+        "entries": guards,
+        "dispatch_ready": guards,
+        "failed": 0,
+        "typed_failures": {
+            "invalid_counter_frequency": 0,
+            "counter_unavailable": 0,
+            "counter_nonmonotonic": 0,
+            "counter_frequency_changed": 0,
+            "counter_target_error": 0,
+        },
+        "last_failures": 0,
+    }
+    incoming_bytes = incoming * TIMING_STRESS_PACKET_SIZE
+    if (
+        aggregate.get("contract_schema_version") != TIMING_STRESS_SCHEMA_VERSION
+        or not TIMING_STRESS_MINIMUM_TOTAL_GUARDS
+        <= guards
+        <= TIMING_STRESS_MAXIMUM_TOTAL_GUARDS
+        or not isinstance(opportunities_by_visit, list)
+        or len(opportunities_by_visit) != TIMING_STRESS_VISITS
+        or any(
+            type(value) is not int
+            or not TIMING_STRESS_MANDATORY_OPPORTUNITIES_PER_DIRECTION
+            <= value
+            <= TIMING_STRESS_MAX_EVENTS_PER_DIRECTION
+            for value in opportunities_by_visit
+        )
+        or sum(opportunities_by_visit) != outgoing
+        or not isinstance(drain_by_visit, list)
+        or drain_by_visit
+        != [
+            value - TIMING_STRESS_MANDATORY_OPPORTUNITIES_PER_DIRECTION
+            for value in opportunities_by_visit
+        ]
+        or aggregate.get("mandatory_prefix_guarded_outgoing_releases")
+        != TIMING_STRESS_MINIMUM_TOTAL_GUARDS
+        or aggregate.get("terminal_drain_guarded_outgoing_releases")
+        != guards - TIMING_STRESS_MINIMUM_TOTAL_GUARDS
+        or aggregate.get("guard_outcomes") != expected_guard_outcomes
+        or not TIMING_STRESS_MINIMUM_TOTAL_OPPORTUNITIES_PER_DIRECTION
+        <= outgoing
+        <= TIMING_STRESS_MAXIMUM_TOTAL_OPPORTUNITIES_PER_DIRECTION
+        or outgoing != incoming
+        or aggregate.get("directional_events") != outgoing + incoming
+        or aggregate.get("full_outgoing_cells") != outgoing
+        or aggregate.get("terminal_drain_opportunities_per_direction")
+        != outgoing - TIMING_STRESS_MINIMUM_TOTAL_OPPORTUNITIES_PER_DIRECTION
+        or aggregate.get("terminal_drain_opportunities_per_direction") != sum(drain_by_visit)
+        or guards != outgoing - TIMING_STRESS_VISITS
+        or aggregate.get("incoming_credit_bytes")
+        != {
+            "requested": incoming_bytes,
+            "advertised": incoming_bytes,
+            "consumed": incoming_bytes,
+            "retired": 0,
+            "unresolved": 0,
+        }
+        or aggregate.get("physical_attempts") != TIMING_STRESS_VISITS
+        or aggregate.get("rejected_attempts") != 0
+        or type(aggregate.get("terminal_resolution_row_reorderings")) is not int
+        or aggregate["terminal_resolution_row_reorderings"] < 0
+        or type(aggregate.get("minimum_last_target_time_us")) is not int
+        or aggregate["minimum_last_target_time_us"]
+        != (min(opportunities_by_visit) - 1) * TIMING_STRESS_INTERVAL_US
+        or type(aggregate.get("maximum_last_target_time_us")) is not int
+        or aggregate["maximum_last_target_time_us"]
+        != (max(opportunities_by_visit) - 1) * TIMING_STRESS_INTERVAL_US
+        or aggregate.get("active_wait_poll_source")
+        != "linux-aarch64-cntvct-el0-predictive-v1"
+        or type(aggregate.get("active_wait_counter_frequency_hz")) is not int
+        or aggregate["active_wait_counter_frequency_hz"] <= 0
+        or aggregate.get("active_wait_counter_guards") != guards
+        or aggregate.get("active_wait_counter_unavailable_guards") != 0
+        or aggregate.get("active_wait_counter_nonmonotonic_guards") != 0
+        or aggregate.get("active_wait_instant_confirmations")
+        != guards + aggregate.get("active_wait_early_confirmation_retries", -1)
+        or aggregate.get("active_wait_counter_calibrations")
+        != aggregate.get("active_wait_instant_confirmations")
+        or aggregate.get("max_active_spin_gap_nanoseconds")
+        != aggregate.get("max_active_wait_counter_gap_nanoseconds")
+        or aggregate.get("max_counter_calibration_span_nanoseconds", -1)
+        > aggregate.get("max_active_wait_counter_gap_nanoseconds", -1)
+        or aggregate.get("max_guard_exit_lateness_nanoseconds", TIMING_STRESS_WINDOW_US * 1_000)
+        >= TIMING_STRESS_WINDOW_US * 1_000
+        or aggregate.get("observed_sensitivity") != _timing_stress_sensitivity(guards)
+        or not isinstance(aggregate.get("zero_failure_counts"), Mapping)
+        or any(value != 0 for value in aggregate["zero_failure_counts"].values())
+        or aggregate.get("passed") is not True
+    ):
+        raise ValueError("timing-stress aggregate zero-failure gate did not pass")
 
 
 def _timing_stress_local_binding(root: Path, path: Path) -> dict[str, str]:
@@ -5659,13 +6080,17 @@ def _validate_timing_stress_root_inventory(root: Path) -> None:
     exact_directory(inputs / "chaff", files={"qualified-manifest.json"})
 
 
-def _timing_stress_sensitivity() -> dict[str, Any]:
+def _timing_stress_sensitivity(
+    guard_population: int = TIMING_STRESS_MINIMUM_TOTAL_GUARDS,
+) -> dict[str, Any]:
+    if type(guard_population) is not int or guard_population < TIMING_STRESS_MINIMUM_TOTAL_GUARDS:
+        raise ValueError("timing-stress sensitivity population is below the mandatory prefix")
     return {
-        "guard_population": TIMING_STRESS_TOTAL_GUARDS,
+        "guard_population": guard_population,
         "iid_sensitivity_target_failures_per_guard": 1 / 20_000,
-        "iid_detection_probability_at_target": 1 - (1 - 1 / 20_000) ** TIMING_STRESS_TOTAL_GUARDS,
+        "iid_detection_probability_at_target": 1 - (1 - 1 / 20_000) ** guard_population,
         "zero_failure_one_sided_95_percent_upper_rate": (
-            1 - 0.05 ** (1 / TIMING_STRESS_TOTAL_GUARDS)
+            1 - 0.05 ** (1 / guard_population)
         ),
         "interpretation": (
             "descriptive-iid-sensitivity-only;temporally-correlated-guards-"
@@ -5748,6 +6173,18 @@ def execute_buflo_timing_stress(
         canonical_bytes(qualified.manifest),
         "timing-stress qualified chaff manifest",
     )
+    checkpoint_binding = _timing_stress_checkpoint_binding(
+        source,
+        cohort_version=version,
+        network_receipt=network_receipt,
+        environment_binding=environment_binding,
+        parameter_inputs=parameter_inputs,
+        application_path=application_path,
+        runtime_path=runtime_path,
+        response_qualification_path=sidecar_path,
+        response_qualification_manifest_sha256=qualified.manifest_sha256,
+        chaff_path=chaff_path,
+    )
 
     state_path = root / "experiment.json"
     if state_path.exists() or state_path.is_symlink():
@@ -5758,10 +6195,15 @@ def execute_buflo_timing_stress(
         state = {
             "schema_version": TIMING_STRESS_SCHEMA_VERSION,
             "artifact_type": TIMING_STRESS_CHECKPOINT_TYPE,
+            "campaign_binding": checkpoint_binding,
             "launched_visits": {},
             "accepted_visits": {},
         }
-    _validate_timing_stress_checkpoint(state, require_complete=False)
+    _validate_timing_stress_checkpoint(
+        state,
+        require_complete=False,
+        expected_binding=checkpoint_binding,
+    )
     limits = capture_session.Limits(
         timeout_seconds=120,
         max_response_bytes=1_048_576,
@@ -5803,7 +6245,7 @@ def execute_buflo_timing_stress(
                 relative_attempt=relative,
             )
             recorded_launch = relative
-        seed = _stable_seed("buflo-timing-stress-v1", visit_name)
+        seed = _stable_seed("buflo-timing-stress-v2", visit_name)
         try:
             _timing_stress_collect_or_resume(
                 attempt,
@@ -5861,7 +6303,11 @@ def execute_buflo_timing_stress(
         atomic_json(state_path, state)
         samples.append(evidence)
 
-    accepted_visits = _validate_timing_stress_checkpoint(state, require_complete=True)
+    accepted_visits = _validate_timing_stress_checkpoint(
+        state,
+        require_complete=True,
+        expected_binding=checkpoint_binding,
+    )
     ledgers = _timing_stress_attempt_ledgers(
         root,
         application_path=application_path,
@@ -5872,51 +6318,7 @@ def execute_buflo_timing_stress(
         samples=samples,
     )
     aggregate = _timing_stress_aggregate(samples)
-    if (
-        aggregate["guarded_outgoing_releases"] != TIMING_STRESS_TOTAL_GUARDS
-        or aggregate["guard_outcomes"]
-        != {
-            "entries": TIMING_STRESS_TOTAL_GUARDS,
-            "dispatch_ready": TIMING_STRESS_TOTAL_GUARDS,
-            "failed": 0,
-            "typed_failures": {
-                "invalid_counter_frequency": 0,
-                "counter_unavailable": 0,
-                "counter_nonmonotonic": 0,
-                "counter_frequency_changed": 0,
-                "counter_target_error": 0,
-            },
-            "last_failures": 0,
-        }
-        or aggregate["outgoing_opportunities"] != TIMING_STRESS_TOTAL_OUTGOING
-        or aggregate["incoming_opportunities"] != TIMING_STRESS_TOTAL_INCOMING
-        or aggregate["directional_events"] != TIMING_STRESS_TOTAL_DIRECTIONAL_EVENTS
-        or aggregate["full_outgoing_cells"] != TIMING_STRESS_TOTAL_OUTGOING
-        or aggregate["incoming_credit_bytes"]
-        != {
-            "requested": TIMING_STRESS_TOTAL_INCOMING_BYTES,
-            "advertised": TIMING_STRESS_TOTAL_INCOMING_BYTES,
-            "consumed": TIMING_STRESS_TOTAL_INCOMING_BYTES,
-            "retired": 0,
-            "unresolved": 0,
-        }
-        or aggregate["active_wait_poll_source"] != "linux-aarch64-cntvct-el0-predictive-v1"
-        or type(aggregate["active_wait_counter_frequency_hz"]) is not int
-        or aggregate["active_wait_counter_frequency_hz"] <= 0
-        or aggregate["active_wait_counter_guards"] != TIMING_STRESS_TOTAL_GUARDS
-        or aggregate["active_wait_counter_unavailable_guards"] != 0
-        or aggregate["active_wait_counter_nonmonotonic_guards"] != 0
-        or aggregate["active_wait_instant_confirmations"]
-        != TIMING_STRESS_TOTAL_GUARDS + aggregate["active_wait_early_confirmation_retries"]
-        or aggregate["active_wait_counter_calibrations"]
-        != aggregate["active_wait_instant_confirmations"]
-        or aggregate["max_active_spin_gap_nanoseconds"]
-        != aggregate["max_active_wait_counter_gap_nanoseconds"]
-        or aggregate["max_counter_calibration_span_nanoseconds"]
-        > aggregate["max_active_wait_counter_gap_nanoseconds"]
-        or aggregate["max_guard_exit_lateness_nanoseconds"] >= TIMING_STRESS_WINDOW_US * 1_000
-    ):
-        raise ValueError("timing-stress aggregate zero-failure gate did not pass")
+    _validate_timing_stress_aggregate(aggregate)
     value = {
         "schema_version": TIMING_STRESS_SCHEMA_VERSION,
         "artifact_type": TIMING_STRESS_ARTIFACT_TYPE,
@@ -5945,6 +6347,7 @@ def execute_buflo_timing_stress(
             "launch_reserved_atomically_before_collection": True,
             "completed_first_launch_revalidated_without_relaunch": True,
             "rejected_or_incomplete_first_launch_terminal": True,
+            "checkpoint_binds_cohort_source_and_inputs": True,
         },
         "opportunity_contract": deepcopy(load_study_plan()["timing_stress"]),
         "sensitivity": _timing_stress_sensitivity(),
@@ -5963,7 +6366,7 @@ def execute_buflo_timing_stress(
 
 
 def validate_buflo_timing_stress_receipt(receipt_path: Path) -> dict[str, Any]:
-    """Deep-reconstruct the excluded 60,000-guard captured timing gate."""
+    """Deep-reconstruct the excluded 60,000-guard prefix and audited drain suffix."""
 
     from .chaff_qualification import load_response_qualified_chaff
     from .manifest import canonical_bytes, runtime_manifest, validate_research_preparation
@@ -6026,6 +6429,7 @@ def validate_buflo_timing_stress_receipt(receipt_path: Path) -> dict[str, Any]:
         "launch_reserved_atomically_before_collection": True,
         "completed_first_launch_revalidated_without_relaunch": True,
         "rejected_or_incomplete_first_launch_terminal": True,
+        "checkpoint_binds_cohort_source_and_inputs": True,
     }:
         raise ValueError("timing-stress experiment.json resume authority changed")
 
@@ -6101,7 +6505,20 @@ def validate_buflo_timing_stress_receipt(receipt_path: Path) -> dict[str, Any]:
     if checkpoint_path != root / "experiment.json":
         raise ValueError("timing-stress experiment.json is not the authoritative checkpoint")
     accepted_visits = _validate_timing_stress_checkpoint(
-        load_json(checkpoint_path), require_complete=True
+        load_json(checkpoint_path),
+        require_complete=True,
+        expected_binding=_timing_stress_checkpoint_binding(
+            value["source"],
+            cohort_version=version,
+            network_receipt=network,
+            environment_binding=value["environment"],
+            parameter_inputs=expected_parameters,
+            application_path=application_path,
+            runtime_path=runtime_path,
+            response_qualification_path=sidecar_path,
+            response_qualification_manifest_sha256=qualified.manifest_sha256,
+            chaff_path=chaff_path,
+        ),
     )
     defense = _timing_stress_defense()
     samples = value["samples"]
@@ -6142,53 +6559,7 @@ def validate_buflo_timing_stress_receipt(receipt_path: Path) -> dict[str, Any]:
     aggregate = _timing_stress_aggregate(verified_samples)
     if value["aggregate"] != aggregate:
         raise ValueError("timing-stress aggregate evidence changed")
-    if (
-        aggregate["guarded_outgoing_releases"] != TIMING_STRESS_TOTAL_GUARDS
-        or aggregate["guard_outcomes"]
-        != {
-            "entries": TIMING_STRESS_TOTAL_GUARDS,
-            "dispatch_ready": TIMING_STRESS_TOTAL_GUARDS,
-            "failed": 0,
-            "typed_failures": {
-                "invalid_counter_frequency": 0,
-                "counter_unavailable": 0,
-                "counter_nonmonotonic": 0,
-                "counter_frequency_changed": 0,
-                "counter_target_error": 0,
-            },
-            "last_failures": 0,
-        }
-        or aggregate["outgoing_opportunities"] != TIMING_STRESS_TOTAL_OUTGOING
-        or aggregate["incoming_opportunities"] != TIMING_STRESS_TOTAL_INCOMING
-        or aggregate["directional_events"] != TIMING_STRESS_TOTAL_DIRECTIONAL_EVENTS
-        or aggregate["full_outgoing_cells"] != TIMING_STRESS_TOTAL_OUTGOING
-        or aggregate["incoming_credit_bytes"]
-        != {
-            "requested": TIMING_STRESS_TOTAL_INCOMING_BYTES,
-            "advertised": TIMING_STRESS_TOTAL_INCOMING_BYTES,
-            "consumed": TIMING_STRESS_TOTAL_INCOMING_BYTES,
-            "retired": 0,
-            "unresolved": 0,
-        }
-        or aggregate["physical_attempts"] != TIMING_STRESS_VISITS
-        or aggregate["rejected_attempts"] != 0
-        or aggregate["active_wait_poll_source"] != "linux-aarch64-cntvct-el0-predictive-v1"
-        or type(aggregate["active_wait_counter_frequency_hz"]) is not int
-        or aggregate["active_wait_counter_frequency_hz"] <= 0
-        or aggregate["active_wait_counter_guards"] != TIMING_STRESS_TOTAL_GUARDS
-        or aggregate["active_wait_counter_unavailable_guards"] != 0
-        or aggregate["active_wait_counter_nonmonotonic_guards"] != 0
-        or aggregate["active_wait_instant_confirmations"]
-        != TIMING_STRESS_TOTAL_GUARDS + aggregate["active_wait_early_confirmation_retries"]
-        or aggregate["active_wait_counter_calibrations"]
-        != aggregate["active_wait_instant_confirmations"]
-        or aggregate["max_active_spin_gap_nanoseconds"]
-        != aggregate["max_active_wait_counter_gap_nanoseconds"]
-        or aggregate["max_counter_calibration_span_nanoseconds"]
-        > aggregate["max_active_wait_counter_gap_nanoseconds"]
-        or aggregate["max_guard_exit_lateness_nanoseconds"] >= TIMING_STRESS_WINDOW_US * 1_000
-    ):
-        raise ValueError("timing-stress aggregate acceptance gate failed")
+    _validate_timing_stress_aggregate(aggregate)
     return {
         "schema_version": TIMING_STRESS_SCHEMA_VERSION,
         "path": str(receipt_path),
@@ -6200,18 +6571,16 @@ def validate_buflo_timing_stress_receipt(receipt_path: Path) -> dict[str, Any]:
         "visits": TIMING_STRESS_VISITS,
         "physical_attempts": TIMING_STRESS_VISITS,
         "rejected_attempts": 0,
-        "guarded_outgoing_releases": TIMING_STRESS_TOTAL_GUARDS,
-        "outgoing_opportunities": TIMING_STRESS_TOTAL_OUTGOING,
-        "incoming_opportunities": TIMING_STRESS_TOTAL_INCOMING,
-        "directional_events": TIMING_STRESS_TOTAL_DIRECTIONAL_EVENTS,
-        "full_outgoing_cells": TIMING_STRESS_TOTAL_OUTGOING,
-        "incoming_credit_bytes": {
-            "requested": TIMING_STRESS_TOTAL_INCOMING_BYTES,
-            "advertised": TIMING_STRESS_TOTAL_INCOMING_BYTES,
-            "consumed": TIMING_STRESS_TOTAL_INCOMING_BYTES,
-            "retired": 0,
-            "unresolved": 0,
-        },
+        "guarded_outgoing_releases": aggregate["guarded_outgoing_releases"],
+        "outgoing_opportunities": aggregate["outgoing_opportunities"],
+        "incoming_opportunities": aggregate["incoming_opportunities"],
+        "directional_events": aggregate["directional_events"],
+        "full_outgoing_cells": aggregate["full_outgoing_cells"],
+        "incoming_credit_bytes": deepcopy(aggregate["incoming_credit_bytes"]),
+        "terminal_drain_opportunities_per_direction": aggregate[
+            "terminal_drain_opportunities_per_direction"
+        ],
+        "observed_sensitivity": deepcopy(aggregate["observed_sensitivity"]),
         "excluded_from_regression_matrix": True,
         "passed": True,
     }

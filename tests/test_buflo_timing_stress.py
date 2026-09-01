@@ -9,12 +9,13 @@ import pytest
 
 from qcsd_lab import buflo_study
 from qcsd_lab.parameters import (
+    PREVIOUS_TIMING_STRESS_INPUT_POLICY,
     TIMING_STRESS_INPUT_POLICY,
     validate_parameter_artifact,
 )
 
 
-def test_timing_stress_contract_preserves_frozen_campaign_counts() -> None:
+def test_timing_stress_contract_preserves_frozen_campaign_counts_and_dynamic_drain() -> None:
     plan = buflo_study.load_study_plan()
     stress = plan["timing_stress"]
 
@@ -34,21 +35,37 @@ def test_timing_stress_contract_preserves_frozen_campaign_counts() -> None:
         "packet_size": 1_200,
         "max_events_per_direction": 6_000,
         "strict_half_open_window_us": 5_000,
-        "outgoing_opportunities_per_visit": 5_001,
-        "incoming_opportunities_per_visit": 5_001,
-        "guarded_outgoing_releases_per_visit": 5_000,
-        "full_outgoing_cells_per_visit": 5_001,
-        "incoming_bytes_per_visit": 6_001_200,
-        "expected_guarded_outgoing_releases": 60_000,
-        "expected_outgoing_opportunities": 60_012,
-        "expected_incoming_opportunities": 60_012,
-        "expected_directional_events": 120_024,
+        "contract_schema_version": 2,
+        "cadence_semantics": (
+            "inclusive-minimum-prefix-plus-bounded-terminal-whole-cell-drain"
+        ),
+        "mandatory_prefix_opportunities_per_direction": 5_001,
+        "minimum_guarded_outgoing_releases_per_visit": 5_000,
+        "maximum_guarded_outgoing_releases_per_visit": 5_999,
+        "minimum_incoming_bytes_per_visit": 6_001_200,
+        "maximum_incoming_bytes_per_visit": 7_200_000,
+        "minimum_guarded_outgoing_releases": 60_000,
+        "maximum_guarded_outgoing_releases": 71_988,
+        "minimum_opportunities_per_direction": 60_012,
+        "maximum_opportunities_per_direction": 72_000,
+        "logical_order_evidence": "direction-target-slot-identity",
+        "physical_row_order": "terminal-resolution-order-not-dispatch-order",
+        "terminal_schedule_stop_policy": (
+            "stop_new_opportunities_at_first_terminal_whole_cell_capacity_exhaustion_"
+            "then_drain_already_advertised_incoming_credit"
+        ),
         "formal_evidence": False,
     }
     sensitivity = buflo_study._timing_stress_sensitivity()
     assert sensitivity["guard_population"] == 60_000
     assert sensitivity["iid_detection_probability_at_target"] > 0.95
     assert sensitivity["zero_failure_one_sided_95_percent_upper_rate"] < 1 / 20_000
+    maximum_sensitivity = buflo_study._timing_stress_sensitivity(71_988)
+    assert maximum_sensitivity["guard_population"] == 71_988
+    assert (
+        maximum_sensitivity["iid_detection_probability_at_target"]
+        > sensitivity["iid_detection_probability_at_target"]
+    )
 
 
 def test_timing_stress_parameters_require_narrow_explicit_admission() -> None:
@@ -76,6 +93,73 @@ def test_timing_stress_parameters_require_narrow_explicit_admission() -> None:
     assert buflo_study._timing_stress_parameter_inputs()["input_policy"] == (
         TIMING_STRESS_INPUT_POLICY
     )
+
+    provenance_value = json.loads(provenance.read_text(encoding="utf-8"))
+    assert provenance_value["schema_version"] == 2
+    assert provenance_value["capture_contract"] == {
+        "schema_version": 2,
+        "visits": 12,
+        "max_attempts": 1,
+        "authoritative_checkpoint": "experiment.json",
+        "mandatory_prefix_opportunities_per_direction": 5_001,
+        "maximum_opportunities_per_direction": 6_000,
+        "minimum_guarded_outgoing_releases_per_visit": 5_000,
+        "maximum_guarded_outgoing_releases_per_visit": 5_999,
+        "minimum_incoming_bytes_per_visit": 6_001_200,
+        "maximum_incoming_bytes_per_visit": 7_200_000,
+        "cadence_semantics": (
+            "inclusive-minimum-prefix-plus-bounded-terminal-whole-cell-drain"
+        ),
+        "terminal_drain_suffix": "contiguous-exact-paired-whole-cell-opportunities",
+        "logical_order_evidence": "direction-target-slot-identity",
+        "physical_row_order": "terminal-resolution-order-not-dispatch-order",
+        "terminal_schedule_stop_policy": (
+            "stop_new_opportunities_at_first_terminal_whole_cell_capacity_exhaustion_"
+            "then_drain_already_advertised_incoming_credit"
+        ),
+        "strict_half_open_window_us": 5_000,
+        "catch_up": False,
+    }
+
+
+def test_previous_timing_stress_parameters_remain_valid_as_historical_input() -> None:
+    parameter = buflo_study.STUDY_ROOT / "buflo-timing-stress-v1.json"
+    provenance = parameter.with_suffix(parameter.suffix + ".provenance.json")
+
+    artifact = validate_parameter_artifact(
+        parameter,
+        provenance_path=provenance,
+        expected_kind="buflo",
+        allow_timing_stress=True,
+        expected_qcsd_profile="research-1200",
+        expected_udp_payload_ceiling=1_200,
+    )
+
+    assert artifact.input_policy == PREVIOUS_TIMING_STRESS_INPUT_POLICY
+    assert json.loads(provenance.read_text(encoding="utf-8"))["schema_version"] == 1
+
+
+def _checkpoint_binding(*, cohort_version: int = 46) -> dict[str, Any]:
+    return {
+        "cohort_version": cohort_version,
+        "lab_commit": "1" * 40,
+        "neqo_commit": "2" * 40,
+        "neqo_pinned_commit": "2" * 40,
+        "image_digest": "sha256:" + "3" * 64,
+        "study_plan_sha256": "4" * 64,
+        "opportunity_contract_sha256": "5" * 64,
+        "canonical_parameter_sha256": "6" * 64,
+        "canonical_parameter_provenance_sha256": "7" * 64,
+        "parameter_sha256": "8" * 64,
+        "parameter_provenance_sha256": "9" * 64,
+        "network_receipt_sha256": "a" * 64,
+        "environment_receipt_sha256": "b" * 64,
+        "application_workload_sha256": "c" * 64,
+        "runtime_workload_sha256": "d" * 64,
+        "response_qualification_sha256": "e" * 64,
+        "response_qualification_manifest_sha256": "f" * 64,
+        "qualified_chaff_manifest_sha256": "0" * 64,
+    }
 
 
 def test_timing_stress_completed_first_launch_resumes_without_relaunch(
@@ -139,7 +223,7 @@ def test_timing_stress_failed_attempt_receives_durable_rejection_receipt(
 
     receipt = json.loads((attempt / "timing-stress-error.json").read_text(encoding="utf-8"))
     assert receipt == {
-        "schema_version": buflo_study.TIMING_STRESS_SCHEMA_VERSION,
+        "schema_version": buflo_study.TIMING_STRESS_ATTEMPT_ERROR_SCHEMA_VERSION,
         "artifact_type": buflo_study.TIMING_STRESS_ATTEMPT_ERROR_TYPE,
         "failure": {
             "stage": "collect",
@@ -203,6 +287,7 @@ def test_timing_stress_launch_reservation_is_durable_before_collection(
     state = {
         "schema_version": buflo_study.TIMING_STRESS_SCHEMA_VERSION,
         "artifact_type": buflo_study.TIMING_STRESS_CHECKPOINT_TYPE,
+        "campaign_binding": _checkpoint_binding(),
         "launched_visits": {},
         "accepted_visits": {},
     }
@@ -263,6 +348,7 @@ def test_timing_stress_checkpoint_rejects_acceptance_without_launch() -> None:
     state = {
         "schema_version": buflo_study.TIMING_STRESS_SCHEMA_VERSION,
         "artifact_type": buflo_study.TIMING_STRESS_CHECKPOINT_TYPE,
+        "campaign_binding": _checkpoint_binding(),
         "launched_visits": {},
         "accepted_visits": {
             "visit-000": "attempts/visit-000/attempt-01",
@@ -271,6 +357,30 @@ def test_timing_stress_checkpoint_rejects_acceptance_without_launch() -> None:
 
     with pytest.raises(ValueError, match="without a launch"):
         buflo_study._validate_timing_stress_checkpoint(state, require_complete=False)
+
+
+def test_timing_stress_checkpoint_rejects_campaign_binding_tamper() -> None:
+    binding = _checkpoint_binding()
+    state = {
+        "schema_version": buflo_study.TIMING_STRESS_SCHEMA_VERSION,
+        "artifact_type": buflo_study.TIMING_STRESS_CHECKPOINT_TYPE,
+        "campaign_binding": dict(binding),
+        "launched_visits": {},
+        "accepted_visits": {},
+    }
+    buflo_study._validate_timing_stress_checkpoint(
+        state,
+        require_complete=False,
+        expected_binding=binding,
+    )
+
+    state["campaign_binding"]["parameter_sha256"] = "1" * 64
+    with pytest.raises(ValueError, match="campaign binding"):
+        buflo_study._validate_timing_stress_checkpoint(
+            state,
+            require_complete=False,
+            expected_binding=binding,
+        )
 
 
 def test_timing_stress_root_and_input_inventories_reject_stray_files(
@@ -308,29 +418,39 @@ def test_timing_stress_root_and_input_inventories_reject_stray_files(
         buflo_study._validate_timing_stress_root_inventory(root)
 
 
-def _write_small_exact_schedule(path: Path) -> None:
-    fields = [
-        "target_time_us",
-        "direction",
-        "size",
-        "action_time_us",
-        "satisfaction",
-        "observed_size",
-        "miss_reason",
-        "slot_id",
-        "qcsd_outcome_schema_version",
-        "send_policy",
-        "desired_udp_bytes",
-        "observed_udp_bytes",
-        "congestion_reason",
-        "credit_advertised_at_us",
-        "credit_advertisement_delay_us",
-        "credit_consumed_at_us",
-        "credit_consumption_delay_us",
-        "terminal_defense_elapsed_us",
-    ]
+SCHEDULE_FIELDS = (
+    "target_time_us",
+    "direction",
+    "size",
+    "action_time_us",
+    "satisfaction",
+    "observed_size",
+    "miss_reason",
+    "slot_id",
+    "qcsd_outcome_schema_version",
+    "send_policy",
+    "desired_udp_bytes",
+    "observed_udp_bytes",
+    "congestion_reason",
+    "credit_advertised_at_us",
+    "credit_advertisement_delay_us",
+    "credit_consumed_at_us",
+    "credit_consumption_delay_us",
+    "terminal_defense_elapsed_us",
+)
+
+
+def _small_schedule_rows(
+    opportunities: int,
+    *,
+    targets: tuple[int, ...] | None = None,
+) -> list[dict[str, Any]]:
+    if targets is None:
+        targets = tuple(range(0, opportunities * 20, 20))
+    assert len(targets) == opportunities
     rows: list[dict[str, Any]] = []
-    for tick, target in enumerate((0, 20, 40)):
+    for target in targets:
+        tick = target // 20
         rows.extend(
             (
                 {
@@ -375,20 +495,66 @@ def _write_small_exact_schedule(path: Path) -> None:
                 },
             )
         )
+    return rows
+
+
+def _write_small_schedule(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True)
     with path.open("w", newline="", encoding="utf-8") as destination:
-        writer = csv.DictWriter(destination, fieldnames=fields)
+        writer = csv.DictWriter(destination, fieldnames=SCHEDULE_FIELDS)
         writer.writeheader()
         writer.writerows(rows)
 
 
-def _small_run() -> dict[str, Any]:
-    histogram = {"upper_bounds_nanoseconds": [5_000_000], "counts": [2]}
-    return {
+def _small_run(opportunities: int) -> dict[str, Any]:
+    guards = opportunities - 1
+    last_target = (opportunities - 1) * 20
+    incoming_bytes = opportunities * 1_200
+    histogram = {"upper_bounds_nanoseconds": [5_000_000], "counts": [guards]}
+    diagnostics = {
+        "buflo_scheduled_outgoing_cells": opportunities,
+        "buflo_scheduled_incoming_cells": opportunities,
+        "buflo_full_outgoing_cells": opportunities,
+        "buflo_partial_outgoing_cells": 0,
+        "buflo_suppressed_outgoing_cells": 0,
+        "buflo_missed_outgoing_cells": 0,
+        "buflo_missed_incoming_cells": 0,
+        "buflo_outgoing_unresolved_cells": 0,
+        "buflo_incoming_unresolved_cells": 0,
+        "buflo_catch_up_outgoing_cells": 0,
+        "buflo_catch_up_incoming_cells": 0,
+        "buflo_event_guard_triggered": False,
+        "buflo_application_complete": True,
+        "buflo_minimum_duration_reached": True,
+        "buflo_egress_backlog_pending": False,
+        "scheduled_incoming_requested_bytes": incoming_bytes,
+        "scheduled_incoming_advertised_bytes": incoming_bytes,
+        "scheduled_incoming_consumed_bytes": incoming_bytes,
+        "scheduled_incoming_retired_bytes": 0,
+        "scheduled_incoming_unresolved_bytes": 0,
+        "buflo_schedule_stop_latched": True,
+        "buflo_schedule_stop_latched_at_us": last_target + 1,
+        "buflo_schedule_stop_available_bytes": 270,
+        "buflo_schedule_stop_required_bytes": 1_200,
+        "buflo_schedule_stop_scheduled_incoming_cells": opportunities,
+        "buflo_schedule_stop_scheduled_outgoing_cells": opportunities,
+        "buflo_schedule_stop_terminal_incoming_cells": opportunities - 1,
+        "buflo_schedule_stop_terminal_outgoing_cells": opportunities,
+        "buflo_terminal_subcell_latched": True,
+        "buflo_terminal_subcell_latched_at_us": last_target + 2,
+        "buflo_terminal_subcell_open_streams_at_latch": 1,
+        "buflo_terminal_subcell_parser_lease_bytes_at_latch": 0,
+        "buflo_terminal_subcell_pending_parser_boundaries_at_latch": 0,
+        "buflo_terminal_subcell_pending_application_parser_boundaries_at_latch": 0,
+        "buflo_terminal_subcell_pending_request_cancellations": 0,
+        "buflo_terminal_subcell_stream_cancellations": 1,
+        "buflo_terminal_subcell_exact_capacity_bytes_cancelled": 273,
+    }
+    run = {
         "runner_wakeup_metrics": {
             "schema_version": 9,
-            "buflo_exact_release_guard_entries": 2,
-            "buflo_exact_release_dispatch_ready_guards": 2,
+            "buflo_exact_release_guard_entries": guards,
+            "buflo_exact_release_dispatch_ready_guards": guards,
             "buflo_exact_release_failed_guards": 0,
             "buflo_exact_release_invalid_counter_frequency_guards": 0,
             "buflo_exact_release_counter_unavailable_failure_guards": 0,
@@ -401,11 +567,11 @@ def _small_run() -> dict[str, Any]:
                 "linux-aarch64-cntvct-el0-predictive-v1"
             ),
             "buflo_exact_release_active_wait_counter_frequency_hz": 1_000_000_000,
-            "buflo_exact_release_active_wait_counter_guards": 2,
+            "buflo_exact_release_active_wait_counter_guards": guards,
             "buflo_exact_release_active_wait_counter_unavailable_guards": 0,
             "buflo_exact_release_active_wait_counter_nonmonotonic_guards": 0,
-            "buflo_exact_release_active_wait_counter_calibrations": 2,
-            "buflo_exact_release_active_wait_instant_confirmations": 2,
+            "buflo_exact_release_active_wait_counter_calibrations": guards,
+            "buflo_exact_release_active_wait_instant_confirmations": guards,
             "buflo_exact_release_active_wait_early_confirmation_retries": 0,
             "buflo_exact_release_active_wait_counter_nanoseconds": 20,
             "buflo_exact_release_max_active_spin_gap_nanoseconds": 4,
@@ -428,56 +594,61 @@ def _small_run() -> dict[str, Any]:
             },
             "buflo_exact_release_last_failure": None,
         },
-        "defense_diagnostics": {
-            "buflo_scheduled_outgoing_cells": 3,
-            "buflo_scheduled_incoming_cells": 3,
-            "buflo_full_outgoing_cells": 3,
-            "buflo_partial_outgoing_cells": 0,
-            "buflo_suppressed_outgoing_cells": 0,
-            "buflo_missed_outgoing_cells": 0,
-            "buflo_missed_incoming_cells": 0,
-            "buflo_outgoing_unresolved_cells": 0,
-            "buflo_incoming_unresolved_cells": 0,
-            "buflo_catch_up_outgoing_cells": 0,
-            "buflo_catch_up_incoming_cells": 0,
-            "buflo_event_guard_triggered": False,
-            "scheduled_incoming_requested_bytes": 3_600,
-            "scheduled_incoming_advertised_bytes": 3_600,
-            "scheduled_incoming_consumed_bytes": 3_600,
-            "scheduled_incoming_retired_bytes": 0,
-            "scheduled_incoming_unresolved_bytes": 0,
+        "defense_diagnostics": diagnostics,
+        "buflo_summary": {
+            "schema_version": 4,
+            "kind": "buflo",
+            "implementation_scope": "client_only_quic",
+            "paper_equivalent": False,
+            "terminal_schedule_stop_policy": (
+                "stop_new_opportunities_at_first_terminal_whole_cell_capacity_exhaustion_"
+                "then_drain_already_advertised_incoming_credit"
+            ),
+            "terminal_subcell_policy": (
+                "drain_whole_cells_then_client_local_http3_cancel_unallocatable_"
+                "reviewed_chaff_tail"
+            ),
+            "diagnostics": diagnostics,
         },
     }
+    return run
 
 
-def _patch_small_schedule_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+def _patch_small_schedule_contract(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    opportunities: int,
+) -> None:
     from qcsd_lab import fidelity
 
     monkeypatch.setattr(buflo_study, "TIMING_STRESS_INTERVAL_US", 20)
     monkeypatch.setattr(buflo_study, "TIMING_STRESS_MINIMUM_DURATION_US", 40)
     monkeypatch.setattr(buflo_study, "TIMING_STRESS_WINDOW_US", 5)
-    monkeypatch.setattr(buflo_study, "TIMING_STRESS_OUTGOING_PER_VISIT", 3)
-    monkeypatch.setattr(buflo_study, "TIMING_STRESS_INCOMING_PER_VISIT", 3)
-    monkeypatch.setattr(buflo_study, "TIMING_STRESS_GUARDS_PER_VISIT", 2)
-    monkeypatch.setattr(buflo_study, "TIMING_STRESS_INCOMING_BYTES_PER_VISIT", 3_600)
+    monkeypatch.setattr(buflo_study, "TIMING_STRESS_MANDATORY_OPPORTUNITIES_PER_DIRECTION", 3)
+    monkeypatch.setattr(buflo_study, "TIMING_STRESS_MAX_EVENTS_PER_DIRECTION", 5)
+    monkeypatch.setattr(buflo_study, "TIMING_STRESS_MINIMUM_GUARDS_PER_VISIT", 2)
+    monkeypatch.setattr(buflo_study, "TIMING_STRESS_MAXIMUM_GUARDS_PER_VISIT", 4)
     monkeypatch.setattr(fidelity, "_runner_wakeup_metrics_valid", lambda value: True)
+    # The production terminal validator retains the live ten-second floor.  This
+    # scaled cadence fixture exercises the surrounding schema-4 evidence contract.
+    monkeypatch.setattr(fidelity, "buflo_terminal_diagnostics_valid", lambda *args, **kwargs: True)
     monkeypatch.setattr(
         fidelity,
         "_schedule_realization_metrics",
         lambda path: {
-            "scheduled_events": 6,
-            "scheduled_outgoing_events": 3,
-            "scheduled_incoming_events": 3,
-            "satisfied_events": 6,
-            "terminal_satisfactions": {"satisfied": 6},
+            "scheduled_events": opportunities * 2,
+            "scheduled_outgoing_events": opportunities,
+            "scheduled_incoming_events": opportunities,
+            "satisfied_events": opportunities * 2,
+            "terminal_satisfactions": {"satisfied": opportunities * 2},
             "missed_events": 0,
             "outgoing_size_mismatch_events": 0,
             "catch_up_events": 0,
             "duplicate_terminal_slots": 0,
             "invalid_terminal_rows": 0,
             "invalid_typed_outcome_rows": 0,
-            "incoming_credit_advertised_events": 3,
-            "incoming_credit_consumed_events": 3,
+            "incoming_credit_advertised_events": opportunities,
+            "incoming_credit_consumed_events": opportunities,
             "incoming_credit_missing_events": 0,
             "incoming_credit_consumption_missing_events": 0,
             "invalid_credit_advertisement_events": 0,
@@ -489,11 +660,21 @@ def _patch_small_schedule_contract(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_timing_stress_schedule_requires_exact_cells_and_credit_bytes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _patch_small_schedule_contract(monkeypatch)
-    _write_small_exact_schedule(tmp_path / "neqo/schedule.csv")
-    run = _small_run()
+    _patch_small_schedule_contract(monkeypatch, opportunities=3)
+    _write_small_schedule(tmp_path / "neqo/schedule.csv", _small_schedule_rows(3))
+    run = _small_run(3)
 
     evidence = buflo_study._timing_stress_schedule_evidence(tmp_path, run)
+    assert evidence["contract_schema_version"] == 2
+    assert evidence["cadence"] == {
+        "interval_us": 20,
+        "minimum_duration_us": 40,
+        "mandatory_prefix_opportunities_per_direction": 3,
+        "terminal_drain_opportunities_per_direction": 0,
+        "last_target_time_us": 40,
+        "logical_slot_inventory": 6,
+        "terminal_resolution_row_reorderings": 0,
+    }
     assert evidence["full_outgoing_cells"] == 3
     assert evidence["incoming_credit_bytes"] == {
         "requested": 3_600,
@@ -505,6 +686,9 @@ def test_timing_stress_schedule_requires_exact_cells_and_credit_bytes(
     assert evidence["runner_wakeup_schema_version"] == 9
     assert evidence["active_wait_counter"]["counter_guards"] == 2
     assert evidence["active_wait_counter"]["instant_confirmations"] == 2
+    assert evidence["terminal_schedule_stop"]["available_bytes"] == 270
+    assert evidence["terminal_schedule_stop"]["drained_incoming_cells_after_stop"] == 1
+    assert evidence["terminal_subcell_drain"]["exact_capacity_bytes_cancelled"] == 273
 
     missing_worst_times = json.loads(json.dumps(run))
     missing_worst_times["runner_wakeup_metrics"]["buflo_exact_release_worst_guard"][
@@ -515,6 +699,68 @@ def test_timing_stress_schedule_requires_exact_cells_and_credit_bytes(
 
     run["defense_diagnostics"]["scheduled_incoming_consumed_bytes"] = 2_400
     with pytest.raises(ValueError, match="terminal diagnostics"):
+        buflo_study._timing_stress_schedule_evidence(tmp_path, run)
+
+
+@pytest.mark.parametrize("reorder_terminal_rows", (False, True))
+def test_timing_stress_accepts_exact_terminal_drain_suffix_and_resolution_reordering(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    reorder_terminal_rows: bool,
+) -> None:
+    _patch_small_schedule_contract(monkeypatch, opportunities=4)
+    rows = _small_schedule_rows(4)
+    if reorder_terminal_rows:
+        rows[-2:] = reversed(rows[-2:])
+    _write_small_schedule(tmp_path / "neqo/schedule.csv", rows)
+
+    evidence = buflo_study._timing_stress_schedule_evidence(tmp_path, _small_run(4))
+
+    assert evidence["scheduled_outgoing_opportunities"] == 4
+    assert evidence["scheduled_incoming_opportunities"] == 4
+    assert evidence["mandatory_prefix_guarded_outgoing_releases"] == 2
+    assert evidence["terminal_drain_guarded_outgoing_releases"] == 1
+    assert evidence["cadence"]["terminal_drain_opportunities_per_direction"] == 1
+    assert evidence["cadence"]["last_target_time_us"] == 60
+    assert evidence["cadence"]["terminal_resolution_row_reorderings"] == (
+        2 if reorder_terminal_rows else 0
+    )
+
+
+@pytest.mark.parametrize(
+    ("case", "message"),
+    (
+        ("below-prefix", "equal bounded directional inventories"),
+        ("above-maximum", "equal bounded directional inventories"),
+        ("gap", "inclusive minimum cadence"),
+        ("unequal-directions", "equal bounded directional inventories"),
+        ("invalid-slot", "exact no-catch-up ordering"),
+        ("late-suffix", "half-open window"),
+        ("terminal-stop-tamper", "terminal drain"),
+    ),
+)
+def test_timing_stress_rejects_invalid_prefix_suffix_and_terminal_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    case: str,
+    message: str,
+) -> None:
+    opportunities = {"below-prefix": 2, "above-maximum": 6}.get(case, 4)
+    _patch_small_schedule_contract(monkeypatch, opportunities=opportunities)
+    targets = (0, 20, 60, 80) if case == "gap" else None
+    rows = _small_schedule_rows(opportunities, targets=targets)
+    if case == "unequal-directions":
+        rows.pop()
+    elif case == "invalid-slot":
+        rows[-2]["slot_id"] = 0
+    elif case == "late-suffix":
+        rows[-2]["terminal_defense_elapsed_us"] = rows[-2]["target_time_us"] + 5
+    run = _small_run(opportunities)
+    if case == "terminal-stop-tamper":
+        run["defense_diagnostics"]["buflo_schedule_stop_available_bytes"] = 1_200
+    _write_small_schedule(tmp_path / "neqo/schedule.csv", rows)
+
+    with pytest.raises(ValueError, match=message):
         buflo_study._timing_stress_schedule_evidence(tmp_path, run)
 
 
@@ -534,9 +780,9 @@ def test_schema_nine_timing_stress_rejects_counter_or_authoritative_lateness_fai
     field: str,
     value: int,
 ) -> None:
-    _patch_small_schedule_contract(monkeypatch)
-    _write_small_exact_schedule(tmp_path / "neqo/schedule.csv")
-    run = _small_run()
+    _patch_small_schedule_contract(monkeypatch, opportunities=3)
+    _write_small_schedule(tmp_path / "neqo/schedule.csv", _small_schedule_rows(3))
+    run = _small_run(3)
     run["runner_wakeup_metrics"][field] = value
 
     with pytest.raises(ValueError, match="current Linux guard timing evidence"):
@@ -547,21 +793,36 @@ def test_schema_nine_timing_stress_rejects_counter_or_authoritative_lateness_fai
 def test_timing_stress_rejects_noncurrent_wakeup_schema(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, schema_version: int
 ) -> None:
-    _patch_small_schedule_contract(monkeypatch)
-    _write_small_exact_schedule(tmp_path / "neqo/schedule.csv")
-    run = _small_run()
+    _patch_small_schedule_contract(monkeypatch, opportunities=3)
+    _write_small_schedule(tmp_path / "neqo/schedule.csv", _small_schedule_rows(3))
+    run = _small_run(3)
     run["runner_wakeup_metrics"]["schema_version"] = schema_version
 
     with pytest.raises(ValueError, match="current Linux guard timing evidence"):
         buflo_study._timing_stress_schedule_evidence(tmp_path, run)
 
 
-def test_timing_stress_aggregate_binds_aux_diagnostics_and_byte_totals() -> None:
-    timing = {
-        "guarded_outgoing_releases": 5_000,
+def _aggregate_timing(opportunities: int) -> dict[str, Any]:
+    guards = opportunities - 1
+    incoming_bytes = opportunities * 1_200
+    terminal_drain = opportunities - 5_001
+    return {
+        "contract_schema_version": 2,
+        "cadence": {
+            "interval_us": 20_000,
+            "minimum_duration_us": 100_000_000,
+            "mandatory_prefix_opportunities_per_direction": 5_001,
+            "terminal_drain_opportunities_per_direction": terminal_drain,
+            "last_target_time_us": guards * 20_000,
+            "logical_slot_inventory": opportunities * 2,
+            "terminal_resolution_row_reorderings": 2 if terminal_drain else 0,
+        },
+        "mandatory_prefix_guarded_outgoing_releases": 5_000,
+        "terminal_drain_guarded_outgoing_releases": terminal_drain,
+        "guarded_outgoing_releases": guards,
         "guard_outcomes": {
-            "entries": 5_000,
-            "dispatch_ready": 5_000,
+            "entries": guards,
+            "dispatch_ready": guards,
             "failed": 0,
             "typed_failures": {
                 "invalid_counter_frequency": 0,
@@ -572,14 +833,14 @@ def test_timing_stress_aggregate_binds_aux_diagnostics_and_byte_totals() -> None
             },
             "last_failure": None,
         },
-        "scheduled_outgoing_opportunities": 5_001,
-        "scheduled_incoming_opportunities": 5_001,
-        "directional_events": 10_002,
-        "full_outgoing_cells": 5_001,
+        "scheduled_outgoing_opportunities": opportunities,
+        "scheduled_incoming_opportunities": opportunities,
+        "directional_events": opportunities * 2,
+        "full_outgoing_cells": opportunities,
         "incoming_credit_bytes": {
-            "requested": 6_001_200,
-            "advertised": 6_001_200,
-            "consumed": 6_001_200,
+            "requested": incoming_bytes,
+            "advertised": incoming_bytes,
+            "consumed": incoming_bytes,
             "retired": 0,
             "unresolved": 0,
         },
@@ -590,48 +851,83 @@ def test_timing_stress_aggregate_binds_aux_diagnostics_and_byte_totals() -> None
         "active_wait_counter": {
             "source": "linux-aarch64-cntvct-el0-predictive-v1",
             "frequency_hz": 1_000_000_000,
-            "counter_guards": 5_000,
+            "counter_guards": guards,
             "unavailable_guards": 0,
             "nonmonotonic_guards": 0,
-            "calibrations": 5_000,
-            "instant_confirmations": 5_000,
+            "calibrations": guards,
+            "instant_confirmations": guards,
             "early_confirmation_retries": 0,
-            "counter_nanoseconds": 25_000_000_000,
+            "counter_nanoseconds": guards * 5_000_000,
             "max_counter_gap_nanoseconds": 2_264_322,
             "max_calibration_span_nanoseconds": 1_000,
         },
         "dispatch_lateness_histogram": {
             "upper_bounds_nanoseconds": [5_000_000],
-            "counts": [5_000],
+            "counts": [guards],
         },
         "active_spin_gap_histogram": {
             "upper_bounds_nanoseconds": [5_000_000],
-            "counts": [5_000],
+            "counts": [guards],
         },
     }
-    aggregate = buflo_study._timing_stress_aggregate([{"timing": timing} for _ in range(12)])
 
-    assert aggregate["guarded_outgoing_releases"] == 60_000
-    assert aggregate["full_outgoing_cells"] == 60_012
+
+def test_timing_stress_aggregate_binds_dynamic_mixed_visit_counts() -> None:
+    opportunities = [5_001, 5_481] * 6
+    aggregate = buflo_study._timing_stress_aggregate(
+        [{"timing": _aggregate_timing(value)} for value in opportunities]
+    )
+    buflo_study._validate_timing_stress_aggregate(aggregate)
+
+    assert aggregate["opportunities_per_direction_by_visit"] == opportunities
+    assert aggregate["terminal_drain_opportunities_per_direction_by_visit"] == [
+        0,
+        480,
+    ] * 6
+    assert aggregate["guarded_outgoing_releases"] == 62_880
+    assert aggregate["mandatory_prefix_guarded_outgoing_releases"] == 60_000
+    assert aggregate["terminal_drain_guarded_outgoing_releases"] == 2_880
+    assert aggregate["full_outgoing_cells"] == 62_892
+    assert aggregate["terminal_drain_opportunities_per_direction"] == 2_880
+    assert aggregate["minimum_last_target_time_us"] == 100_000_000
+    assert aggregate["maximum_last_target_time_us"] == 109_600_000
+    assert aggregate["terminal_resolution_row_reorderings"] == 12
     assert aggregate["incoming_credit_bytes"] == {
-        "requested": 72_014_400,
-        "advertised": 72_014_400,
-        "consumed": 72_014_400,
+        "requested": 75_470_400,
+        "advertised": 75_470_400,
+        "consumed": 75_470_400,
         "retired": 0,
         "unresolved": 0,
     }
-    assert aggregate["active_wait_counter_guards"] == 60_000
-    assert aggregate["guard_outcomes"]["dispatch_ready"] == 60_000
+    assert aggregate["active_wait_counter_guards"] == 62_880
+    assert aggregate["guard_outcomes"]["dispatch_ready"] == 62_880
     assert aggregate["guard_outcomes"]["failed"] == 0
-    assert aggregate["active_wait_instant_confirmations"] == 60_000
-    assert aggregate["active_wait_counter_nanoseconds"] == 300_000_000_000
+    assert aggregate["active_wait_instant_confirmations"] == 62_880
+    assert aggregate["active_wait_counter_nanoseconds"] == 314_400_000_000
     assert aggregate["max_active_wait_counter_gap_nanoseconds"] == 2_264_322
-    assert aggregate["dispatch_lateness_histogram"]["counts"] == [60_000]
-    assert aggregate["active_spin_gap_histogram"]["counts"] == [60_000]
+    assert aggregate["dispatch_lateness_histogram"]["counts"] == [62_880]
+    assert aggregate["active_spin_gap_histogram"]["counts"] == [62_880]
+    assert aggregate["observed_sensitivity"]["guard_population"] == 62_880
     assert set(aggregate["zero_failure_counts"].values()) == {0}
 
 
-def test_schema_five_regression_receipt_binds_stress_and_preserves_schema_four(
+@pytest.mark.parametrize("tamper", ("above-maximum", "sensitivity", "failure-count"))
+def test_timing_stress_dynamic_aggregate_rejects_contract_tamper(tamper: str) -> None:
+    aggregate = buflo_study._timing_stress_aggregate(
+        [{"timing": _aggregate_timing(value)} for value in [5_001, 5_481] * 6]
+    )
+    if tamper == "above-maximum":
+        aggregate["opportunities_per_direction_by_visit"][0] = 6_001
+    elif tamper == "sensitivity":
+        aggregate["observed_sensitivity"] = buflo_study._timing_stress_sensitivity()
+    else:
+        aggregate["zero_failure_counts"]["late_outgoing_releases"] = 1
+
+    with pytest.raises(ValueError, match="aggregate zero-failure gate"):
+        buflo_study._validate_timing_stress_aggregate(aggregate)
+
+
+def test_schema_six_regression_receipt_binds_stress_rejects_aborted_five_and_preserves_four(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     called: list[object] = []
@@ -667,11 +963,15 @@ def test_schema_five_regression_receipt_binds_stress_and_preserves_schema_four(
     }
     stress_binding = {"path": "/evidence/buflo-timing-stress/receipt.json", "sha256": "0" * 64}
     current = {
-        "schema_version": 5,
+        "schema_version": 6,
         **common,
         "timing_stress": stress_binding,
     }
     assert buflo_study.validate_controlled_campaign_receipt(current) == current
+
+    previous = {"schema_version": 5, **common, "timing_stress": stress_binding}
+    with pytest.raises(ValueError, match="schema 5 was reserved by failed cohorts"):
+        buflo_study.validate_controlled_campaign_receipt(previous)
     assert called == [stress_binding]
 
     historical = {"schema_version": 4, **common}
@@ -707,7 +1007,7 @@ def test_current_and_standalone_regression_stress_binding_rejects_every_identity
         stress["cohort_version"] = 38
     binding = {"path": str(binding_path), "sha256": "0" * 64}
     controlled = {
-        "schema_version": 5,
+        "schema_version": 6,
         "network": network,
         "cohort_version": 37,
         "timing_stress": binding,
@@ -745,7 +1045,7 @@ def test_current_regression_stress_binding_accepts_exact_sibling(
     }
     binding = {"path": str(receipt_path), "sha256": "0" * 64}
     controlled = {
-        "schema_version": 5,
+        "schema_version": 6,
         "network": network,
         "cohort_version": 37,
         "timing_stress": binding,
