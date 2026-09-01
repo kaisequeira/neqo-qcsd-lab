@@ -51,11 +51,11 @@ defence-control traffic is explicitly receipted and is an expected QCSD-only
 difference from the bilateral TCP study; it is never described as
 paper-equivalent or as a server padding-complete signal.
 
-Current-source BuFLO runs use summary schema 4 and runner-wakeup schema 9.
+Current-source BuFLO runs use summary schema 4 and runner-wakeup schema 10.
 Summary schema 4 binds the typed schedule-stop policy, stop timestamp,
 sub-cell capacity, direction counts at stop, and exact post-stop advertised
 credit drain; historical summary schemas 2 and 3 remain readable but cannot
-admit a fresh candidate capture. Historical runner-wakeup schemas 1–8 remain
+admit a fresh candidate capture. Historical runner-wakeup schemas 1–9 remain
 readable for their pinned source cohorts but cannot admit a fresh candidate
 capture; an apparent current-source downgrade is rejected. Schema 7 retains
 schema 6's complete metric inventory, including BuFLO exact-incoming retry drives,
@@ -68,12 +68,16 @@ Schema 7 additionally distinguishes nominal controller timestamps from the
 adapter's ceil-normalised not-before instant and floor-normalised deadline,
 binds aligned 5 ms and fractional 4.999 ms strict windows, and records the
 worst guard's relative entry, release, exit, and deadline instants. It retains
-the 10,000-microsecond ordinary-output admission lead, guard lead, and active-
-wait tail, with admission and guard coincident. Schema 8 preserves that exact
+the configured 10,000-microsecond maximum lead fields. The actual admission,
+guard, and active-wait boundary is two adapter windows before release—10 ms
+for aligned windows and 9.998 ms for fractional windows—and the three remain
+coincident. Schema 8 preserves that exact
 field inventory and timing contract while appending the immutable semantics
 `buflo_exact_release_active_wait_poll=poll_instant_without_arch_spin_hint`.
-Schema 9 keeps the 10 ms ordinary-output admission boundary but separates it
-from a 5 ms release guard and 5 ms active-wait tail. On Linux AArch64, the
+Schema 9 keeps ordinary-output admission two actual adapter windows before
+release but separates it from a one-window release guard and active-wait tail.
+Those boundaries are 10 ms and 5 ms for aligned windows, or 9.998 ms and
+4.999 ms for fractional windows. On Linux AArch64, the
 active wait uses `CNTVCT_EL0` only as a predictive counter: each counter target
 is ceil-rounded, each calibration brackets one authoritative `Instant`, and
 an authoritative `Instant` confirmation prevents an early dispatch. The
@@ -99,16 +103,106 @@ recoverable architectural-trap receipt, and target-calculation error is a
 defensive-unreachable branch for a valid live guard and accepted frequency.
 Production counter access is therefore checked by the target-gated live smoke
 test rather than inferred from either defensive outcome.
+
+For schema 10, let `W = deadline − release`, where `W` is 5 ms for aligned
+adapter windows and 4.999 ms for fractional windows. Ordinary-output admission
+is `release − 2W` (10 ms or 9.998 ms before release); guard entry and active
+waiting begin at `release − W`; and the strict physical-realisation interval is
+`[release, release + W)`. Schema 10 preserves that geometry and the no-catch-up
+rule. On Linux AArch64 it adds an
+authoritative `Instant` watchdog after every 64 successful relaxed
+`CNTVCT_EL0` reads. The virtual counter remains predictive only: a watchdog
+that observes release can nominate dispatch, but the existing fresh
+authoritative transport check still rejects any instant at or after the
+deadline. Receipts count watchdog checks and watchdog-selected dispatches and
+retain maximum authoritative-sample gap, authoritative-over-counter lag, and
+counter-over-authoritative lead in the aggregate, worst-success guard, and
+typed last-failure projections. The serialized
+`buflo_exact_release_active_wait_authoritative_watchdog_cadence_validated_guards`
+count records each dispatch-ready production guard whose own
+`checks_i = floor(R_i/64)`, where `R_i` is that guard's successful relaxed-read
+count after ordered calibration reads. Fresh accepted timing-stress evidence
+requires that count to equal all guarded releases. A zero-failure aggregate
+enforces `64×checks ≤ R < 64×(checks+guards)`, the per-guard dispatch-residue
+capacity, and the exact calibration/retry partition; it does not incorrectly
+take one floor after concatenating every guard's residual reads. Calibration
+and final-confirmation `Instant` samples are additional authoritative samples;
+the 64-read cadence applies specifically to successful relaxed `CNTVCT_EL0`
+reads.
+
+Every schema-10 integer scalar and histogram count, and every present nested
+timestamp, is confined to the Rust `u64` domain. Structural count partitions,
+watchdog/read products, and chronology use checked arithmetic and reject
+overflow. Where the producer
+defines a saturating aggregate, nested-pair and residual validation applies that
+behaviour explicitly. The schema-10-to-schema-9 projection removes additive
+watchdog fields and maps the production poll-source tag; among retained numeric
+identities, it normalises only cumulative wake totals and histogram totals
+needed to reconstruct the frozen schema-9 relationships. Saturation is not a
+general exception to the other exact partitions.
+The retained worst-success guard must satisfy
+`active_duration = W + dispatch_lateness − guard_entry_lateness` for one of the
+two exact window widths. The typed last-failure record includes exact
+iterations, active duration, interruption count/duration, and maximum gap. With
+`X = guard_entry_lateness + active_duration`, it must satisfy
+`exit_before_release = max(W − X, 0)` and
+`exit_at_or_after_deadline = (X ≥ 2W)` even when relative timestamps are
+nullable; available timestamps additionally require active duration to equal
+exit minus active-wait start.
+
+A sole success/failure pair must reproduce the aggregate's saturating sums,
+maxima, and exact two-row histogram. For a mixed aggregate, validation subtracts
+the retained worst and, when present, failure records, then checks the remaining
+success guards' read/cadence, interruption, counter/active-duration, and
+histogram budgets. The claimed maximum must occupy its histogram bucket with no
+occupied higher bucket. If `A` is the interruption count, `H` is the number of guard
+maxima above 50 µs, and `G` is the histogram-derived duration floor including
+the exact maximum, interruption duration is at least
+`G + (A − H)×50,001 ns`; residual histograms and dispatch-lateness buckets also
+lower-bound the hidden guards' interruption and active durations. Failure
+cadence separately accounts for terminal counter reads, and every early
+confirmation retry requires a successful relaxed read. The authoritative-
+`Instant` fallback carries zero predictive/watchdog/divergence evidence, while
+zero BuFLO incoming retry drives requires zero maximum retry-wake lateness.
+
+Aggregate entry lateness is bounded by the retained failure entry or
+`5,000,000 ns + maximum dispatch lateness`. Aggregate active-wait time is
+bounded by exact retained durations plus that per-success ceiling for each
+unretained success, subtracting an unretained owner of the aggregate entry
+maximum before one final `u64` clamp. If the per-success addition itself
+overflows, the lost headroom makes `u64::MAX` the conservative ceiling.
+Active-derived maxima—spin gap, counter gap, calibration span, authoritative
+sample gap, and authoritative counter lag—must be reachable from their exact
+retained per-metric values or one unretained-success ceiling. A non-zero
+at-or-after-deadline count requires maximum dispatch lateness of at least
+4,999,000 ns, and every successful guard's actual adapter window is exactly
+4,999,000 or 5,000,000 ns. Exact top-level and nested key sets, canonical
+string-valued poll sources/phases/failure outcomes, all-present-or-all-null
+counter and chronology tuples, the exact empty projection, and positive
+counter progress for every early-confirmation retry all fail closed. The
+byte-identical Rust/Python schema-10 semantics string is 7,837 bytes with
+SHA-256
+`fc86adeb78f468c2e01acc55324c561368664991d091e5ab86bb913374f7e0ae`;
+the immutable schema-9 semantics hash remains
+`6ab6713bde70c803a7f243432277edda4f6b850d732c9246f88413e61f487503`.
+
+This source-level remediation addresses the clock-domain
+divergence mechanism exposed by v46 without moving the guard earlier, widening
+the window, queuing catch-up cells, or increasing the adapter-window
+active-wait allocation; v47 must prove the remediation live.
+
 Fresh accepted BuFLO samples require every guard to be dispatch-ready and all
-typed failure counts to be zero. Schema 9 also records counter availability,
+typed failure counts to be zero. Schemas 9 and 10 record counter availability,
 calibration, authoritative confirmation, early-confirmation retry,
-elapsed-counter, maximum-gap, and maximum-calibration-span evidence. The
+elapsed-counter, maximum-gap, and maximum-calibration-span evidence; schema 10
+additionally records the watchdog fields above. The
 removed raw-monotonic and thread-CPU auxiliary clocks are not sampled on the
 exact-release critical path. Every entered guard is recorded before its result
 is propagated; when transport dispatch is attempted, its result precedes
 guard-metric recording, while a pre-dispatch typed failure is recorded without
-fabricating a socket handoff. The exact release and strict half-open
-`[target, target + 5 ms)` physical realisation interval are unchanged. After
+fabricating a socket handoff. The exact release and strict adapter-normalised
+half-open `[release, deadline)` physical realisation interval are unchanged.
+After
 the outgoing handoff, the runner immediately drives only endpoints with
 accepted scheduled receive credit that has not yet produced a `MAX_STREAM_DATA`
 frame. Each
@@ -126,8 +220,8 @@ outgoing datagram is still reconciled first; only its already-captured,
 identity-bound incoming owner may then receive one direct endpoint drive. The
 direct path fails closed if the outgoing cell is not terminal, an outgoing
 target remains committed, the credit owner changes, or the original deadline
-expires. It does not widen the strict half-open 5 ms window, create catch-up
-traffic, or change the generic and CS-BuFLO output paths.
+expires. It does not widen the strict adapter-normalised half-open window,
+create catch-up traffic, or change the generic and CS-BuFLO output paths.
 CS-BuFLO retains its
 three one-quarter, one-half, and three-quarter owner-only retries. The
 half-open deadline remains
@@ -166,7 +260,34 @@ natural byte invalidates provisional stop evidence in the implementation, with
 the cumulative invalidation count retained in the final receipt.  This drain
 is not the paper's server padding-done signal.
 
-The newest executed checkpoint is cohort v45. It binds clean Lab
+The newest executed checkpoint is cohort v46. It binds clean Lab
+`b5387ffa43f12173eddfd11cc7c3cfd008f3e2b1`, Neqo/gitlink
+`9428ec4fc03e9640369630fedc4ba6443870eb11`, collection image
+`sha256:5b83101a7c2f4b1fb42d2e8316cc20087ddc7d4032c4871f5f77be533dd99656`,
+preparation image
+`sha256:7bd663ec7946378bb57badd007250cf9eb37197c2307bf2acf04e371694d4fa1`,
+and reference image
+`sha256:abcf75376ef397814487808ec4305a1c7907de6dab2bb132222f42d6b21aeeb4`.
+Its pull/no-cache build and complete in-image code gates passed; the immutable
+build receipt has SHA-256
+`8670b3149830b5c553824aa56c1aa0f3de2c9ac91768cc69fe0f304d9b0db816`.
+Its isolated reference gate also passed, with receipt SHA-256
+`052a79fd136b3a0562173c29a6304871b24cdf48688bee710df35f79b9f8e8d8`.
+
+The mandatory v46 timing stress accepted visits 000 and 001, then stopped
+terminally on the sole authorised launch of visit 002. At the 101.440-second
+tick, outgoing slot 10144 and paired incoming slot 10145 had a release instant
+of 101,440,000,933 ns and strict deadline of 101,444,999,933 ns. The predictive
+counter reported only 4,577,864 ns of progress while authoritative `Instant`
+reported 10,321,797 ns: a 5,743,933 ns clock-domain divergence. Dispatch was
+therefore observed 5,743,588 ns after target and 744,588 ns beyond the strict
+deadline. Both slots terminalised as `DeadlineExpired`, exactly 1,200 incoming
+credit bytes were retired, and no partial, suppressed, or catch-up event was
+accepted. V46 is immutable at 2/12 accepted and 3/12 launched; it has no
+18-cell regression, regression-bound code receipt, controlled qualification,
+or class-study foundation.
+
+The previous executed checkpoint, cohort v45, binds clean Lab
 `d4288ec7053ed38883f2ba3a1b25a00e8f5622af`, Neqo/gitlink
 `9428ec4fc03e9640369630fedc4ba6443870eb11`, collection image
 `sha256:d42018722e61f3f2ed8a16dc4133bf8541fd36880226ada04086de033c79263c`,
@@ -285,7 +406,8 @@ suffix on the same 20 ms cadence, up to the configured limit of 6,000
 opportunities per direction. A visit therefore contributes 5,000–5,999 guarded
 outgoing releases, and the twelve-visit gate contributes exactly the observed
 dynamic total within 60,000–71,988 guards. Every observed guard and suffix
-event remains subject to the unchanged exact-size, strict half-open 5 ms,
+event remains subject to the unchanged exact-size, strict adapter-normalised
+half-open window,
 zero-miss, zero-catch-up, and exact incoming-credit requirements.
 
 Logical outgoing-before-incoming order is proven by direction, target, and slot
@@ -297,19 +419,31 @@ receipt. Authoritative `experiment.json` is source-, image-, cohort-, network-,
 parameter-, workload-, qualification-, and opportunity-contract-bound and
 cannot pass after a missing, rejected, or incomplete reserved attempt. The
 regression receipt remains bound to the same stress evidence. Current-source
-captures require BuFLO summary schema 4, runner-wakeup schema 9, and the complete
+captures require BuFLO summary schema 4, runner-wakeup schema 10, and the complete
 scheduler receipt; older cohort ledgers remain historical evidence only.
 
-Post-v45 engineering source corrects the Lab timing-stress contract without
-changing the client-only runtime, 20 ms cadence, 1,200-byte target, or strict
-5 ms realisation window. The v45 build, reference, and operational visit remain
-historical evidence bound to v45 and cannot authorise corrected source. Fresh
-cohort v46 is the next planned cohort and currently has no executed evidence:
-it must repeat the build, isolated reference, 12/12 timing stress, 18/18
-regression, code, and 160/160 controlled gates before expanded-class acquisition
-can begin. All acquisition, fitting, qualification, 900-cell certification,
-and 16,000-cell formal numerators remain zero for current source. The complete
-earlier cohort chronology is retained in the authoritative workspace
+Post-v46 engineering source retains the client-only runtime, 20 ms cadence,
+1,200-byte target, ordinary-output admission at `release − 2W`, guard and
+active-wait entry at `release − W`, the strict adapter-normalised
+`[release, release + W)` realisation window, and the no-catch-up rule, where
+`W` is 5 ms aligned or 4.999 ms fractional.
+Runner-wakeup schema 10 adds the
+periodic authoritative watchdog, checked-`u64` chronology/partitions, exact
+retained-failure and mixed-residual/histogram integrity, and fail-closed
+divergence evidence described above; the Lab gates accept the additive schema
+while continuing to validate historical schemas against their frozen
+contracts. Rust commit
+`ba72df21b0f6ef0b7607e11928895be83402b063` and Lab engineering commit
+`c6dfc6ccbce6f4dafc329fd1cb3dff132b802bfb` bind the implementation and its
+matching gitlink; this README-only follow-up changes no runtime or evidence
+interface. V46 remains evidence only for its own schema-9 commits and cannot
+authorise this source. Fresh cohort v47
+must repeat the pull/no-cache build, isolated reference gate, 12/12 timing
+stress, 18/18 regression, regression-bound code gate, and 160/160 controlled
+qualification before expanded-class acquisition can begin. All acquisition,
+fitting, qualification, 900-cell certification, and 16,000-cell formal
+numerators remain zero for current source. The complete earlier cohort
+chronology is retained in the authoritative workspace
 [`PROJECT.md`](../PROJECT.md).
 
 The current Lab boundary additionally classifies typed client defence/QCSD
@@ -322,7 +456,7 @@ process-local, campaign-identity-bound authority created by the `class-study`
 coordinator after it verifies the prerequisite ledger; generic `run` or
 `resume` cannot bypass that ordering.
 
-At the 1 September 2026 operational checkpoint, Docker 29.0.1 is healthy with
+At the 2 September 2026 operational checkpoint, Docker 29.0.1 is healthy with
 12 CPUs, approximately 16.5 GB memory, and no running containers. The physical
 volume backing its data VHDX has more than the required 64 GiB free. These are
 admission conditions only and do not advance a scientific numerator. Cohort
