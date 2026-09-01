@@ -197,6 +197,28 @@ reasoned `clippy::cognitive_complexity` expectations. The exact workspace-wide
 Clippy command now passes on the source that will be assigned to the next
 fresh cohort.
 
+Cohort v44 bound clean Lab
+`4de4d99dfef01e71842fa8f22d93cf7c7503459f` and Neqo/gitlink
+`c7409eb3b486eb3655d5ab812c74cf551f27d205`. Its first independent no-cache
+collection build passed all 177 `neqo-bin` tests and workspace-wide Clippy and
+exported collection image
+`sha256:e421c5a173de71f75a7e6dae157e1c70112f62a40e93054f93fe625235734955`.
+The separately rebuilt preparation target then exposed a load-sensitive test
+defect: `exact_release_dispatch_orders_cross_endpoint_pair_inside_one_window`
+passed in the collection build but failed in the preparation build because the
+test slept with Tokio until release and bypassed the production five-
+millisecond reservation and predictive wait. The preparation gate ended at
+176/177 tests, before Clippy or image export. No v44 build receipt was emitted,
+and reference and capture were never started. V44 is therefore a consumed,
+non-authorising code-gate failure and will not be rerun. The post-v44 correction
+is again test-only: the connected two-origin test now constructs the production
+guard, wakes at its unchanged five-millisecond guard, executes the schema-nine
+predictive wait, requires dispatch inside the same half-open window, and records
+the resulting typed evidence after transport dispatch. The corrected test
+passed 100/100 sequential executions and 120/120 executions under 12-way
+pressure; production code, parameters, and the hard five-millisecond deadline
+are unchanged.
+
 V36 remains useful older diagnostic evidence: its retry-capable ledgers
 eventually showed 18/18 regression and 9/9 multi-origin acceptance only after
 two approximately 10 ms capture-reconciliation rejections and one actual
@@ -225,14 +247,15 @@ parameter-, and cohort-bound to that stress evidence. Current-source captures
 require runner-wakeup schema 9 plus the complete scheduler receipt; older
 cohort ledgers remain readable only as historical evidence.
 
-Post-v43 engineering source implements the schema-9 predictive-counter wait
+Post-v44 engineering source implements the schema-9 predictive-counter wait
 described above without changing the client-only peer contract. Its local
-tests and the 5,000-slot engineering probe are diagnostic development results,
-not source-bound campaign gates. Fresh cohort v44 must repeat
+tests, the 5,000-slot engineering probe, and the corrected-test repetition are
+diagnostic development results, not source-bound campaign gates. Fresh cohort
+v45 must repeat
 the build, isolated reference, 12/12 timing stress, 18/18 regression, code, and
 160/160 controlled gates before expanded-class acquisition can begin. All
 acquisition, fitting, qualification, 900-cell certification, and 16,000-cell
-formal numerators remain zero for post-v43 source. The complete earlier cohort
+formal numerators remain zero for post-v44 source. The complete earlier cohort
 chronology is retained in the authoritative workspace [`PROJECT.md`](../PROJECT.md).
 
 The current Lab boundary additionally classifies typed client defence/QCSD
