@@ -2204,6 +2204,11 @@ and `samples.jsonl` SHA-256 values are respectively
 `85bfd88be6c2105201ec7ff3eb87a743e378bd748a9c2097db2fb227875ec2d7`,
 `46289f368912ee6e90314578814b821eb0dfeadcd794d3422c1af3599623317b`,
 and `5974ab9c582793501c558ec294bea4e3afb01bf57039f990fceba33fb0b1e15f`.
+On 1 September 2026, the offline launcher was corrected to invoke the pinned
+`/opt/qcsd-venv/bin/python3` installed by the collection image rather than its
+package-empty system interpreter. The repaired deep verifier rehashed and
+validated all 12,503 governed files and all 2,500 sample relationships with
+the same `SHA256SUMS` digest; no handoff byte was changed.
 This artifact is a five-class classifier-*pipeline* pilot, not evidence of
 classifier or defence efficacy: only undefended blocks supply the
 train/validation/test observations, while every FRONT and Tamaraw sample is

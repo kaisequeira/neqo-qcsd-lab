@@ -79,7 +79,7 @@ container=(
   --volume "${ROOT}:/lab:ro"
   --volume "${HANDOFF_ROOT}:/lab/handoffs:rw"
   --volume "${TOOL}:/opt/qcsd-tools/classifier_handoff.py:ro"
-  --entrypoint /usr/bin/python3
+  --entrypoint /opt/qcsd-venv/bin/python3
   "${image_id}"
   /opt/qcsd-tools/classifier_handoff.py
 )

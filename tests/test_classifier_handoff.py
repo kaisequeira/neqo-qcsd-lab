@@ -49,6 +49,7 @@ def test_classifier_pilot_launcher_is_external_offline_and_least_privilege() -> 
     root = Path(__file__).parents[1]
     launcher_path = root / "classifier-pilot"
     launcher = launcher_path.read_text(encoding="utf-8")
+    dockerfile = (root / "Dockerfile").read_text(encoding="utf-8")
 
     assert os.access(launcher_path, os.X_OK)
     subprocess.run(["bash", "-n", launcher_path], check=True)
@@ -58,6 +59,9 @@ def test_classifier_pilot_launcher_is_external_offline_and_least_privilege() -> 
     assert '--volume "${ROOT}:/lab:ro"' in launcher
     assert '--volume "${HANDOFF_ROOT}:/lab/handoffs:rw"' in launcher
     assert '--volume "${TOOL}:/opt/qcsd-tools/classifier_handoff.py:ro"' in launcher
+    assert "--entrypoint /opt/qcsd-venv/bin/python3" in launcher
+    assert "--entrypoint /usr/bin/python3" not in launcher
+    assert "UV_PROJECT_ENVIRONMENT=/opt/qcsd-venv" in dockerfile
     assert "tools/classifier_handoff.py" in launcher
     assert not (root / "src/qcsd_lab/classifier_handoff.py").exists()
 
