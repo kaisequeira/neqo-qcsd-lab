@@ -118,7 +118,7 @@ natural byte invalidates provisional stop evidence in the implementation, with
 the cumulative invalidation count retained in the final receipt.  This drain
 is not the paper's server padding-done signal.
 
-The newest immutable executed checkpoint is cohort v39. It binds clean Lab
+The newest receipt-bearing executed checkpoint is cohort v39. It binds clean Lab
 `3d680ebf70f323289e75d79a6936bc43eef5981b`, Neqo/gitlink
 `c472ea9434c453f0fb36c08a6a858fb9c1dd228a`, and collection image
 `sha256:a8ffe5440782be0bbc1c455dc5bf8dc7d8e1ea1a56018db3ad4027696995c7b7`.
@@ -173,9 +173,18 @@ receipts and terminal timing failure described above. Post-v39 client source
 removes the AArch64 `isb`-emitting processor hint from the otherwise unchanged
 active deadline poll, versions that distinction as runner-wakeup schema 8,
 and ensures a failed `attempt.json` still receives its create-only
-`timing-stress-error.json`. A fresh cohort v40 or later must repeat build,
-reference conformance, timing stress, regression, code, and controlled gates
-before expanded-class acquisition can begin.
+`timing-stress-error.json`. Cohort v40 bound clean Lab
+`eb8440f4fa3e45e358fe45a7a633252e85ef2c9c` and Rust/gitlink
+`483320073f092878798e591b183ce8af79aa8e98`. Its backing-storage preflight
+passed and Docker/BuildKit remained healthy, but the build stopped before a
+receipt in the embedded Rust code gate: pinned Rust 1.90 `cargo fmt --check`
+rejected wrapping in the large test import list and the schema-8 semantics
+assertion. No image-IID artefact, reference execution, timing stress,
+regression, controlled capture, or class-study evidence exists for v40. A
+cached target reproduction is diagnostic only. V40 is consumed and must not
+be rerun. The wrapping-only correction passes the pinned formatter; a fresh
+cohort v41 must repeat build, reference conformance, timing stress, regression,
+code, and controlled gates before expanded-class acquisition can begin.
 
 The current Lab boundary additionally classifies typed client defence/QCSD
 runner errors as `StrictClientDefenseExecutionFailure`. That type and
@@ -187,8 +196,10 @@ process-local, campaign-identity-bound authority created by the `class-study`
 coordinator after it verifies the prerequisite ledger; generic `run` or
 `resume` cannot bypass that ordering.
 
-Docker 29.0.1 exposed 12 CPUs and approximately 16.5 GB memory before the most
-recent build attempt. This is operational context only. Cohort v32 passed its
+Docker 29.0.1 exposed 12 CPUs and approximately 16.5 GB memory during the v40
+attempt, whose backing-storage preflight passed and whose formatter failure
+was not a Docker or storage fault. This is operational context only. Cohort
+v32 passed its
 fresh pull/no-cache build and isolated reference execution, then stopped in the
 first established-mode regression campaign at 4/14 accepted cells. The two
 undefended and two Walkie-Talkie cells passed; static, FRONT, Tamaraw, Traffic
