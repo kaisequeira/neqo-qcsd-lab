@@ -149,9 +149,17 @@ incomplete reserved attempt. The regression receipt is source-, image-,
 network-, parameter-, and cohort-bound to that stress evidence. Current-source
 captures require runner-wakeup schema 7 plus the complete scheduler receipt;
 the exact pinned v36 ledgers remain readable only as historical evidence. A
-fresh cohort v37 must repeat build, reference conformance, timing stress,
-regression, code, and controlled gates before expanded-class acquisition can
-begin.
+v37 no-cache build then failed before any receipt when Docker Desktop retained
+a stale loop-backed root ISO after its data-state reset. A full Desktop
+shutdown and restart remounted the current checksum-valid ISO and subsequent
+container and BuildKit probes passed without further I/O errors. Cohort v38
+reached the Rust code gate but stopped at its first command because pinned Rust
+1.90 formatted one newly added assertion differently from the Rust 1.96 host
+toolchain; no Rust tests, Clippy gate, study receipt, or capture ran. Both
+attempts are non-evidentiary. The formatter-compatible correction is bound to
+the current clean source commits, and a fresh cohort v39 or later must repeat build,
+reference conformance, timing stress, regression, code, and controlled gates
+before expanded-class acquisition can begin.
 
 The current Lab boundary additionally classifies typed client defence/QCSD
 runner errors as `StrictClientDefenseExecutionFailure`. That type and
@@ -250,7 +258,7 @@ Docker state and redundant local caches were subsequently removed. Docker
 observations then passed with a minimum 523.92 GiB available. The Ubuntu WSL
 distribution-aware Docker proxy is required so bind mounts resolve against the
 actual checkout. This recovered state enabled v34 but does not transfer its
-source-bound evidence to v36 or the prospective fresh v37 source.
+source-bound evidence to v36 or any prospective fresh source.
 
 The authoritative current heads, progression, and evidence ledger are
 maintained in
