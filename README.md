@@ -183,6 +183,20 @@ therefore has no 18-cell regression, regression-bound code gate, controlled
 result, qualification receipt, or class-study foundation. It is immutable
 failed evidence and cannot authorise current or post-v42 source.
 
+Cohort v43 then bound clean Lab
+`1515205dda6d14be4b749efc8318bb05d08338f3` and Neqo/gitlink
+`1257a68f1191054983d09f2773d92b166653885d`. Its fresh no-cache collection
+build reached the in-image Rust gate, where all 177 `neqo-bin` tests passed,
+but workspace-wide all-target Clippy rejected two exhaustive schema-nine test
+functions for exceeding its cognitive-complexity threshold. The build stopped
+before exporting an image or build receipt; reference and capture were never
+started. V43 is therefore a consumed, non-authorising pre-receipt failure and
+will not be rerun. The post-v43 fix is deliberately test-only: the two
+exhaustive golden tests retain their complete assertions and carry scoped,
+reasoned `clippy::cognitive_complexity` expectations. The exact workspace-wide
+Clippy command now passes on the source that will be assigned to the next
+fresh cohort.
+
 V36 remains useful older diagnostic evidence: its retry-capable ledgers
 eventually showed 18/18 regression and 9/9 multi-origin acceptance only after
 two approximately 10 ms capture-reconciliation rejections and one actual
@@ -211,14 +225,14 @@ parameter-, and cohort-bound to that stress evidence. Current-source captures
 require runner-wakeup schema 9 plus the complete scheduler receipt; older
 cohort ledgers remain readable only as historical evidence.
 
-Post-v42 engineering source implements the schema-9 predictive-counter wait
+Post-v43 engineering source implements the schema-9 predictive-counter wait
 described above without changing the client-only peer contract. Its local
 tests and the 5,000-slot engineering probe are diagnostic development results,
-not source-bound campaign gates. A fresh, previously unused cohort must repeat
+not source-bound campaign gates. Fresh cohort v44 must repeat
 the build, isolated reference, 12/12 timing stress, 18/18 regression, code, and
 160/160 controlled gates before expanded-class acquisition can begin. All
 acquisition, fitting, qualification, 900-cell certification, and 16,000-cell
-formal numerators remain zero for post-v42 source. The complete earlier cohort
+formal numerators remain zero for post-v43 source. The complete earlier cohort
 chronology is retained in the authoritative workspace [`PROJECT.md`](../PROJECT.md).
 
 The current Lab boundary additionally classifies typed client defence/QCSD
