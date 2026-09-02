@@ -107,6 +107,22 @@ def test_bounded_process_reports_the_exact_started_process_group(
     assert observed == [process.pid]
 
 
+def test_bounded_process_receives_the_explicit_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    process = _TimeoutProcess(expirations=0)
+    invocation = _install_process(monkeypatch, process)
+
+    util.run(
+        ["neqo", "run"],
+        check=False,
+        timeout=7,
+        env={"QCSD_SAFE_CHILD_VALUE": "retained"},
+    )
+
+    assert invocation["options"]["env"] == {"QCSD_SAFE_CHILD_VALUE": "retained"}
+
+
 def test_prepare_client_adds_host_grace_and_reports_timeout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -189,10 +205,45 @@ def test_prepare_client_applies_the_measured_rr1_scheduler_contract(
     }
 
 
+def test_buflo_etf_scheduler_retains_only_bounded_socket_setup_capabilities(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "QCSD_CAPTURE_SCHEDULER_CONTRACT",
+        "qcsd-client-rr1-cpu10-etf-helper-cpu11-v1",
+    )
+    monkeypatch.setattr(process_scheduler.os, "sched_getaffinity", lambda _pid: {11})
+    monkeypatch.setattr(
+        process_scheduler.resource,
+        "getrlimit",
+        lambda limit: (1, 1)
+        if limit == process_scheduler.resource.RLIMIT_RTPRIO
+        else pytest.fail("unexpected resource limit"),
+    )
+
+    assert process_scheduler.capture_scheduler_launch_prefix() == [
+        "/usr/bin/taskset",
+        "--cpu-list",
+        "10",
+        "/usr/bin/chrt",
+        "--rr",
+        "1",
+        "/usr/bin/setpriv",
+        "--bounding-set=-all,+net_admin,+setpcap",
+        "--inh-caps=+net_admin,+setpcap",
+        "--ambient-caps=+net_admin,+setpcap",
+        "--no-new-privs",
+        "--",
+    ]
+
+
 def test_collection_client_adds_host_grace_and_preserves_timeout_diagnostics(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     observed: dict[str, Any] = {}
+    monkeypatch.setenv("QCSD_TEST_SAFE_CHILD_VALUE", "retained")
+    for name in capture_session._MEASURED_CLIENT_CAPTURE_ENVIRONMENT:
+        monkeypatch.setenv(name, "sensitive")
     timeout_result = subprocess.CompletedProcess(
         ["neqo", "run"],
         -9,
@@ -214,6 +265,11 @@ def test_collection_client_adds_host_grace_and_preserves_timeout_diagnostics(
     assert result is timeout_result
     assert did_time_out is True
     assert host_timeout == 50.0
+    child_environment = observed["options"].pop("env")
+    assert child_environment["QCSD_TEST_SAFE_CHILD_VALUE"] == "retained"
+    assert not capture_session._MEASURED_CLIENT_CAPTURE_ENVIRONMENT.intersection(
+        child_environment
+    )
     assert observed["options"] == {
         "log": tmp_path / "client.log",
         "check": False,

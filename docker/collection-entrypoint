@@ -18,6 +18,46 @@ case "${scheduler_contract}" in
       --no-new-privs \
       taskset --cpu-list 11 qcsd-lab-internal "$@"
     ;;
+  qcsd-client-rr1-cpu10-etf-helper-cpu11-v1)
+    # CAP_SETPCAP is retained only by the orchestration/setup lineage so the
+    # measured Rust client can irrevocably remove its temporary NET_ADMIN and
+    # SETPCAP bounding bits after configuring SO_TXTIME(CLOCK_TAI).  The
+    # completed-run receipt must prove all capability sets are then empty.
+    if [ -n "${QCSD_KERNEL_TX_PUBLIC_ROUTER_IP:-}" ]; then
+      : "${QCSD_KERNEL_TX_PUBLIC_CLIENT_SUBNET:?QCSD_KERNEL_TX_PUBLIC_CLIENT_SUBNET is required}"
+      # A user-defined Docker bridge normally installs its own gateway.  Flush
+      # every default before adding the measured router so no public datagram
+      # can bypass the independent post-veth observer.
+      ip -4 route flush default
+      ip -4 route add default via "${QCSD_KERNEL_TX_PUBLIC_ROUTER_IP}" dev eth0
+      ip -j -4 route show default | /usr/bin/python3 -c '
+import json
+import sys
+
+routes = json.load(sys.stdin)
+expected = sys.argv[1]
+if (
+    not isinstance(routes, list)
+    or len(routes) != 1
+    or routes[0].get("dst") != "default"
+    or routes[0].get("gateway") != expected
+    or routes[0].get("dev") != "eth0"
+):
+    raise SystemExit("public kernel-TX client default route is not exclusive")
+' "${QCSD_KERNEL_TX_PUBLIC_ROUTER_IP}"
+      ip -4 route show "${QCSD_KERNEL_TX_PUBLIC_CLIENT_SUBNET}" | grep -F \
+        "${QCSD_KERNEL_TX_PUBLIC_CLIENT_SUBNET} dev eth0" >/dev/null
+    fi
+    exec setpriv \
+      --reuid "${uid}" \
+      --regid "${gid}" \
+      --clear-groups \
+      --bounding-set=-all,+net_raw,+net_admin,+setpcap \
+      --inh-caps=+net_raw,+net_admin,+setpcap \
+      --ambient-caps=+net_raw,+net_admin,+setpcap \
+      --no-new-privs \
+      taskset --cpu-list 11 qcsd-lab-internal "$@"
+    ;;
   *)
     echo "unsupported capture scheduler contract: ${scheduler_contract}" >&2
     exit 1

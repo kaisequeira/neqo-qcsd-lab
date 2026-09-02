@@ -12,6 +12,7 @@ from .class_run_binding import (
     ClassSampleRunBinding,
     validate_class_sample_run_binding,
 )
+from .fidelity import terminal_evidence_render_receipt_valid
 from .util import load_json, sha256_bytes
 
 
@@ -90,6 +91,7 @@ def load_fitting_trace(
         or run.get("completion_status") != "complete"
         or run.get("error") is not None
         or run.get("error_class") is not None
+        or not terminal_evidence_render_receipt_valid(run, require_empty=True)
     ):
         raise ValueError(f"fitting sample did not complete: {sample_id}")
     if run_binding is not None:

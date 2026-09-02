@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, MutableMapping, Sequence
 
+from .kernel_tx import observer_topology_receipt_valid
 from .util import atomic_json, load_json, sha256_file
 
 
@@ -28,6 +29,18 @@ SCHEDULER_RUNTIME_RECEIPT_KEY = "scheduler_runtime_receipt"
 SCHEDULER_RUNTIME_RECEIPT_SCHEMA_VERSION = 1
 SCHEDULER_RUNTIME_RECEIPT_SOURCE = "accepted-attempt-scheduler-runtime-evidence-v1"
 SCHEDULER_RUNTIME_EVIDENCE_PATH = "diagnostics/scheduler-runtime-evidence.json"
+OBSERVER_TOPOLOGY_RECEIPT_KEY = "observer_topology_receipt"
+KERNEL_TX_EVIDENCE_RECEIPT_KEY = "kernel_tx_evidence_receipt"
+KERNEL_TX_EVIDENCE_RECEIPT_SCHEMA_VERSION = 1
+KERNEL_TX_EVIDENCE_RECEIPT_SOURCE = "accepted-kernel-tx-sidecar-v1"
+KERNEL_TX_EVIDENCE_DIRECTORY = "kernel-tx-evidence"
+KERNEL_TX_EVIDENCE_FILES = frozenset(
+    {
+        "router-capture.pcapng",
+        "router-receipt.json",
+        "kernel-tx-evidence.json",
+    }
+)
 _HISTORICAL_BUFLO_V36_SOURCE = {
     "image_digest": ("sha256:bfb6b8dd6581225c3ba748f9e6b1537bc5f0b7c8be8dfb3a74f8969134a0b5d4"),
     "lab_commit": "b87bf2705e4eb76869d05d4be86a54c3be9da79e",
@@ -58,6 +71,12 @@ _SCHEDULER_RUNTIME_RECEIPT_KEYS = {
     "process_scheduler_valid",
     "scheduler_runtime_evidence_valid",
     "scheduler_runtime_evidence",
+}
+_KERNEL_TX_EVIDENCE_RECEIPT_KEYS = {
+    "schema_version",
+    "source",
+    "directory",
+    "artifacts",
 }
 STRICT_DEFENSE_FIDELITY_FAILURE = "StrictDefenseFidelityFailure"
 STRICT_CLIENT_DEFENSE_EXECUTION_FAILURE = "StrictClientDefenseExecutionFailure"
@@ -482,6 +501,8 @@ def validate_accepted_samples(
                 f"accepted sample hash mismatch for {sample['sample_id']}: " + "; ".join(details)
             )
         validate_accepted_scheduler_runtime_receipt(root, value, sample)
+        validate_accepted_observer_topology_receipt(root, value, sample)
+        validate_accepted_kernel_tx_evidence(root, sample)
         validated[sample["sample_id"]] = actual
         recorded_paths.update(actual)
     samples_root = root / "samples"
@@ -500,6 +521,11 @@ def validate_accepted_samples(
         ]
     if unbound:
         raise ValueError(f"unbound files in authoritative samples directory: {', '.join(unbound)}")
+    _validate_kernel_tx_sidecar_inventory(
+        root,
+        value,
+        allow_running_artifacts=allow_running_artifacts,
+    )
     return validated
 
 
@@ -541,9 +567,14 @@ def scheduler_runtime_receipt_required(
     if type(schema) is not int or schema < 7:
         return False
 
-    from .capture_session import _process_scheduler_valid
+    from .capture_session import _process_scheduler_bound_to_run_valid
 
-    process_scheduler_active = _process_scheduler_valid(run.get("process_scheduler"))
+    scheduler = run.get("process_scheduler")
+    expected_contract = scheduler.get("contract") if isinstance(scheduler, Mapping) else None
+    process_scheduler_active = _process_scheduler_bound_to_run_valid(
+        run,
+        expected_contract=expected_contract,
+    )
     if experiment is None:
         return process_scheduler_active
     return _requires_durable_attempt_evidence(experiment) or process_scheduler_active
@@ -599,19 +630,30 @@ def validate_accepted_scheduler_runtime_receipt(
     runner_schema = wakeups.get("schema_version") if isinstance(wakeups, Mapping) else None
     if (
         _buflo_study_experiment(experiment)
-        and runner_schema != 10
+        and runner_schema not in {10, 11}
         and not _historical_buflo_v36_experiment(experiment)
     ):
         raise ValueError(
-            "current BuFLO-study sample requires runner-wakeup schema 10 or an exact "
+            "current BuFLO-study sample requires runner-wakeup schema 10/11 or an exact "
             "pinned v36 experiment ledger"
         )
     configuration = experiment.get("configuration")
     current_class_role = bool(
         isinstance(configuration, Mapping) and "evidence_role" in configuration
     )
-    if current_class_role and runner_schema != 10:
-        raise ValueError("current class-study sample requires runner-wakeup schema 10")
+    current_buflo_role = _buflo_study_experiment(experiment) and not _historical_buflo_v36_experiment(
+        experiment
+    )
+    from .fidelity import terminal_evidence_render_receipt_valid
+
+    if not terminal_evidence_render_receipt_valid(
+        run,
+        require_present=current_buflo_role or current_class_role,
+        require_empty=True,
+    ):
+        raise ValueError("accepted sample has invalid terminal evidence rendering state")
+    if current_class_role and runner_schema not in {10, 11}:
+        raise ValueError("current class-study sample requires runner-wakeup schema 10/11")
     required = scheduler_runtime_receipt_required(run, experiment)
     if not required:
         if retained is not None:
@@ -622,7 +664,7 @@ def validate_accepted_scheduler_runtime_receipt(
 
     # Imports stay local so the generic experiment state machine does not
     # create an import cycle with the capture implementation.
-    from .capture_session import _process_scheduler_valid
+    from .capture_session import _process_scheduler_bound_to_run_valid
     from .process_scheduler import capture_scheduler_runtime_evidence_valid
 
     if not isinstance(retained, Mapping) or set(retained) != _SCHEDULER_RUNTIME_RECEIPT_KEYS:
@@ -645,9 +687,202 @@ def validate_accepted_scheduler_runtime_receipt(
         or retained.get("process_scheduler_valid") is not True
         or retained.get("scheduler_runtime_evidence_valid") is not True
         or not capture_scheduler_runtime_evidence_valid(evidence)
-        or not _process_scheduler_valid(run.get("process_scheduler"))
+        or not _process_scheduler_bound_to_run_valid(
+            run,
+            expected_contract=evidence.get("contract")
+            if isinstance(evidence, Mapping)
+            else None,
+        )
     ):
         raise ValueError("accepted sample scheduler runtime receipt is invalid")
+
+
+def validate_accepted_observer_topology_receipt(
+    root: Path,
+    experiment: Mapping[str, Any],
+    sample: Mapping[str, Any],
+) -> None:
+    """Revalidate the routed/controlled topology retained at attempt promotion."""
+
+    if sample.get("state") != "accepted":
+        raise ValueError("observer topology validation requires an accepted sample")
+    sample_root = resolved_sample_directory(root, sample, require_directory=True)
+    run_path = sample_root / "neqo/run.json"
+    if run_path.is_symlink() or not run_path.is_file():
+        raise ValueError("accepted sample runner receipt is missing or unsafe")
+    run = load_json(run_path)
+    scheduler = run.get("process_scheduler") if isinstance(run, Mapping) else None
+    matched = bool(
+        isinstance(scheduler, Mapping)
+        and scheduler.get("contract")
+        == "qcsd-client-rr1-cpu10-etf-helper-cpu11-v1"
+    )
+    historical = _historical_buflo_v36_experiment(experiment)
+    required = matched and _requires_durable_attempt_evidence(experiment) and not historical
+    diagnostics = sample.get("diagnostics")
+    retained = (
+        diagnostics.get(OBSERVER_TOPOLOGY_RECEIPT_KEY)
+        if isinstance(diagnostics, Mapping)
+        else None
+    )
+    if not matched:
+        if retained is not None:
+            raise ValueError("non-matched sample claims current observer topology evidence")
+        return
+    if retained is None:
+        if required:
+            raise ValueError("matched accepted sample observer topology receipt is invalid")
+        # Exact historical ledgers and generic pre-contract results remain
+        # readable.  Every new capture passes through the promotion boundary,
+        # which requires this receipt for a matched scheduler contract.
+        return
+    source = experiment.get("source")
+    image_digest = source.get("image_digest") if isinstance(source, Mapping) else None
+    if not isinstance(image_digest, str) or not observer_topology_receipt_valid(
+        retained,
+        expected_image_digest=image_digest,
+    ):
+        raise ValueError("matched accepted sample observer topology receipt is invalid")
+    configuration = experiment.get("configuration")
+    public_policy = (
+        configuration.get("public_origin_policy")
+        if isinstance(configuration, Mapping)
+        else None
+    )
+    network = retained.get("network_receipt") if isinstance(retained, Mapping) else None
+    if public_policy is not None and (
+        not isinstance(network, Mapping)
+        or network.get("artifact_type") != "qcsd-kernel-tx-public-network-v1"
+    ):
+        raise ValueError("public matched sample did not retain routed/NAT topology evidence")
+
+
+def _kernel_tx_sidecar_reference(
+    root: Path, sample: Mapping[str, Any]
+) -> tuple[Mapping[str, Any] | None, Path]:
+    sample_id = sample.get("sample_id")
+    _validate_component(sample_id, "sample ID")
+    target = (root.resolve() / KERNEL_TX_EVIDENCE_DIRECTORY / sample_id).resolve()
+    expected_root = (root.resolve() / KERNEL_TX_EVIDENCE_DIRECTORY).resolve()
+    if not target.is_relative_to(expected_root):
+        raise ValueError("kernel-TX sidecar path escapes its evidence root")
+    diagnostics = sample.get("diagnostics")
+    retained = (
+        diagnostics.get(KERNEL_TX_EVIDENCE_RECEIPT_KEY)
+        if isinstance(diagnostics, Mapping)
+        else None
+    )
+    return retained if isinstance(retained, Mapping) else None, target
+
+
+def _validate_kernel_tx_sidecar_files(
+    root: Path,
+    sample: Mapping[str, Any],
+    retained: Mapping[str, Any],
+    target: Path,
+) -> dict[str, Path]:
+    artifacts = retained.get("artifacts")
+    if (
+        set(retained) != _KERNEL_TX_EVIDENCE_RECEIPT_KEYS
+        or retained.get("schema_version") != KERNEL_TX_EVIDENCE_RECEIPT_SCHEMA_VERSION
+        or retained.get("source") != KERNEL_TX_EVIDENCE_RECEIPT_SOURCE
+        or retained.get("directory") != target.relative_to(root.resolve()).as_posix()
+        or not isinstance(artifacts, Mapping)
+        or set(artifacts) != KERNEL_TX_EVIDENCE_FILES
+        or any(not _is_digest(value) for value in artifacts.values())
+        or target.is_symlink()
+        or not target.is_dir()
+    ):
+        raise ValueError("accepted kernel-TX sidecar receipt is invalid")
+    files = _regular_files(target, relative_to=target)
+    if set(files) != KERNEL_TX_EVIDENCE_FILES or any(
+        sha256_file(files[name]) != artifacts[name] for name in artifacts
+    ):
+        raise ValueError("accepted kernel-TX sidecar artifact inventory differs")
+    return files
+
+
+def validate_accepted_kernel_tx_evidence(
+    root: Path, sample: Mapping[str, Any]
+) -> None:
+    """Reopen the sealed post-veth sidecar for one schema-11 BuFLO sample."""
+
+    if sample.get("state") != "accepted":
+        raise ValueError("kernel-TX evidence validation requires an accepted sample")
+    sample_root = resolved_sample_directory(root, sample, require_directory=True)
+    run_path = sample_root / "neqo/run.json"
+    if run_path.is_symlink() or not run_path.is_file():
+        raise ValueError("accepted kernel-TX sample lacks its runner receipt")
+    run = load_json(run_path)
+    wakeups = run.get("runner_wakeup_metrics") if isinstance(run, Mapping) else None
+    raw = wakeups.get("buflo_kernel_tx") if isinstance(wakeups, Mapping) else None
+    required = isinstance(raw, Mapping)
+    retained, target = _kernel_tx_sidecar_reference(root, sample)
+    if not required:
+        if retained is not None:
+            raise ValueError("non-kernel sample claims a kernel-TX evidence sidecar")
+        return
+    from .fidelity import terminal_evidence_render_receipt_valid
+
+    if not terminal_evidence_render_receipt_valid(
+        run,
+        require_present=True,
+        require_empty=True,
+    ):
+        raise ValueError("accepted kernel-TX sample has invalid terminal rendering evidence")
+    if sample.get("runtime_kind") != "buflo" or retained is None:
+        raise ValueError("schema-11 BuFLO sample lacks its kernel-TX evidence sidecar")
+    files = _validate_kernel_tx_sidecar_files(root, sample, retained, target)
+    router_receipt = load_json(files["router-receipt.json"])
+    evidence = load_json(files["kernel-tx-evidence.json"])
+
+    from .kernel_tx import kernel_tx_evidence_success_valid
+    from .kernel_tx_runtime import extract_router_udp_packets
+
+    router_packets = extract_router_udp_packets(files["router-capture.pcapng"])
+
+    if not kernel_tx_evidence_success_valid(
+        evidence,
+        runner_receipt=raw,
+        expected_run_json_sha256=sha256_file(run_path),
+        expected_router_capture_sha256=sha256_file(files["router-capture.pcapng"]),
+        router_capture_receipt=router_receipt,
+        router_packets=router_packets,
+    ):
+        raise ValueError("accepted kernel-TX evidence failed deep validation")
+
+
+def _validate_kernel_tx_sidecar_inventory(
+    root: Path,
+    experiment: Mapping[str, Any],
+    *,
+    allow_running_artifacts: bool,
+) -> None:
+    evidence_root = root / KERNEL_TX_EVIDENCE_DIRECTORY
+    expected: set[str] = set()
+    permitted_running: set[str] = set()
+    for sample in experiment["samples"]:
+        retained, _target = _kernel_tx_sidecar_reference(root, sample)
+        if retained is None:
+            continue
+        if sample.get("state") == "accepted":
+            expected.add(sample["sample_id"])
+        elif allow_running_artifacts and sample.get("state") == "running":
+            permitted_running.add(sample["sample_id"])
+        else:
+            raise ValueError("non-accepted sample retains a kernel-TX sidecar binding")
+    if not evidence_root.exists():
+        if expected:
+            raise ValueError("accepted kernel-TX evidence root is missing")
+        return
+    if evidence_root.is_symlink() or not evidence_root.is_dir():
+        raise ValueError("kernel-TX evidence root is not a regular directory")
+    actual = _regular_child_directory_names(
+        evidence_root,
+        label="kernel-TX accepted sidecar inventory",
+    )
+    if not expected <= actual or actual - expected - permitted_running:
+        raise ValueError("kernel-TX sidecar inventory differs from accepted samples")
 
 
 def input_artifact_hashes(root: Path) -> dict[str, str]:

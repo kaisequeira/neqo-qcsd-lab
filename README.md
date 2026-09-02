@@ -553,6 +553,35 @@ maintained in
 [`../PROJECT.md`](../PROJECT.md); the exact extended-class protocol and
 matrices are maintained in [`../CLASS-STUDY.md`](../CLASS-STUDY.md).
 
+### Non-evidentiary ETF capability probe
+
+The host-only `etf-probe` command exercises a disposable Docker bridge/veth
+topology before any production kernel-timed egress integration is admitted:
+
+```shell
+./qcsd-lab etf-probe \
+  --destination artifacts/etf-capability-probe-v1.json
+```
+
+The destination must not already exist. The command creates a read-only,
+create-once schema-1 receipt and never modifies a BuFLO result, campaign,
+handoff, or attestation. It installs a two-band root PRIO qdisc with high-band
+CLOCK_TAI ETF and low-band FIFO, records and restores the initial qdisc, and
+uses post-veth receive timestamps to enforce the strict half-open five
+millisecond window. A helper queues the timed datagram while the main process
+is stopped; its one-owner socket-priority transaction must read back priority
+6, reset and read back 0, and then prove that an ordinary datagram on the same
+socket bypasses the pending ETF packet through FIFO. TX_SCHED and TX_SOFTWARE
+feedback, qdisc accounting, four negative controls, CPU affinity, cleanup, and
+the unavailable-or-available `SCM_PRIORITY` ancillary capability are all
+receipted fail closed. No socket-priority fallback is implicit.
+
+This diagnostic is explicitly `evidentiary=false` and
+`authorizes_capture=false`. A passing receipt demonstrates only that the
+selected host, kernel, Docker engine, and image expose the prerequisite
+mechanics at that instant; it cannot satisfy or advance any reference, code,
+qualification, capture, or final-attestation gate.
+
 ### Prospective 100-class final campaign
 
 `classifier-multiorigin100-v1` replaces the earlier unexecuted five-class

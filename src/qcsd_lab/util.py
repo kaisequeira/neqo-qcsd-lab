@@ -7,7 +7,7 @@ import signal
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 _CONTAINER_LAB_ROOT = Path("/lab")
 _NATIVE_LAB_ROOT = Path(__file__).resolve().parents[2]
@@ -192,6 +192,7 @@ def run(
     command: list[str],
     *,
     cwd: Path | None = None,
+    env: Mapping[str, str] | None = None,
     log: Path | None = None,
     check: bool = True,
     timeout: float | None = None,
@@ -202,6 +203,7 @@ def run(
         return _run_bounded(
             command,
             cwd=cwd,
+            env=env,
             log=log,
             check=check,
             timeout=timeout,
@@ -215,6 +217,7 @@ def run(
     result = subprocess.run(
         command,
         cwd=cwd or (LAB_ROOT if LAB_ROOT.is_dir() else None),
+        env=env,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -246,6 +249,7 @@ def _run_bounded(
     command: list[str],
     *,
     cwd: Path | None,
+    env: Mapping[str, str] | None,
     log: Path | None,
     check: bool,
     timeout: float,
@@ -257,6 +261,7 @@ def _run_bounded(
     process = subprocess.Popen(
         command,
         cwd=cwd or (LAB_ROOT if LAB_ROOT.is_dir() else None),
+        env=env,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,

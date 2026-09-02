@@ -122,6 +122,11 @@ def install_scheduler_runtime_receipt(
     run: MutableMapping[str, Any],
     diagnostics: MutableMapping[str, Any],
 ) -> None:
+    # Current Rust run receipts always render this top-level terminal evidence
+    # inventory, including on the ordinary successful path represented by this
+    # fixture.  Keeping it here makes every synthetic scheduler-bound run obey
+    # the same fail-closed contract as production output.
+    run.setdefault("terminal_evidence_render_errors", [])
     run.setdefault("runner_wakeup_metrics", {"schema_version": 10})
     run["process_scheduler"] = process_scheduler_receipt()
     evidence = scheduler_runtime_evidence()

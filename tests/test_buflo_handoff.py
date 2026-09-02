@@ -443,6 +443,7 @@ def _complete_buflo_run(
     return {
         "completion_status": "complete",
         "error": None,
+        "terminal_evidence_render_errors": [],
         "defense_start_monotonic_ns": 0,
         "resolved_configuration": {
             "schema_version": 2,
@@ -608,6 +609,7 @@ def _complete_cs_buflo_run() -> dict[str, object]:
     return {
         "completion_status": "complete",
         "error": None,
+        "terminal_evidence_render_errors": [],
         "defense_start_monotonic_ns": 0,
         "resolved_configuration": {
             "schema_version": 2,

@@ -1124,6 +1124,7 @@ def _write_successful_attempt(
         json.dumps(
             {
                 "completion_status": "complete",
+                "terminal_evidence_render_errors": [],
                 "responses": [
                     {
                         "resource_id": 0,
@@ -1325,6 +1326,14 @@ def test_capture_session_requires_a_complete_successful_runner_result() -> None:
         {
             "completion_status": "complete",
             "responses": [response],
+            "terminal_evidence_render_errors": ["failed to render terminal evidence"],
+        },
+        {0},
+    )
+    assert not _runner_result_complete(
+        {
+            "completion_status": "complete",
+            "responses": [response],
             "defense_diagnostics": {"padding_event_guard_triggered": True},
         },
         {0},
@@ -1453,6 +1462,30 @@ def test_runner_error_receipt_rejects_completed_or_malformed_error_classes() -> 
     )
     assert _runner_error_receipt_coherent(
         {"completion_status": "partial", "error": "historical unclassified failure"}
+    )
+    assert _runner_error_receipt_coherent(
+        {
+            "completion_status": "error",
+            "error": "terminal evidence rendering failures: synthetic",
+            "error_class": "run-artifact-evidence-finalization-v1",
+            "terminal_evidence_render_errors": ["synthetic"],
+        }
+    )
+    assert _runner_error_receipt_coherent(
+        {
+            "completion_status": "error",
+            "error": "terminal run.json persistence failed: synthetic",
+            "error_class": "run-artifact-persistence-v1",
+            "terminal_evidence_render_errors": [],
+        }
+    )
+    assert not _runner_error_receipt_coherent(
+        {
+            "completion_status": "complete",
+            "error": None,
+            "error_class": None,
+            "terminal_evidence_render_errors": ["synthetic"],
+        }
     )
 
 
@@ -1734,6 +1767,7 @@ def test_runner_receipt_is_bound_to_frozen_launch_inputs(
         limits=Limits(max_response_bytes=4096),
     )
     run = {
+        "terminal_evidence_render_errors": [],
         "seed": 7,
         "request_policy": "as-defined",
         "workload_hash_sha256": sha256_file(manifest),
@@ -1890,6 +1924,7 @@ def test_completed_candidate_binding_requires_current_wakeup_schema(
         "buflo_exact_release_max_guard_exit_lateness_nanoseconds": 0,
     }
     run = {
+        "terminal_evidence_render_errors": [],
         "seed": 7,
         "request_policy": "as-defined",
         "workload_hash_sha256": sha256_file(manifest),
@@ -2588,6 +2623,118 @@ def test_promotion_rejects_scheduler_evidence_file_tampering(tmp_path: Path) -> 
 
     with pytest.raises(ValueError, match="scheduler runtime evidence is invalid"):
         orchestrator._success_diagnostics(result, attempt)
+
+
+def test_matched_non_buflo_promotion_retains_observer_topology(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempt = tmp_path / "attempt"
+    result = _write_successful_attempt(attempt, "alpha", "undefended")
+    run_path = attempt / "neqo/run.json"
+    run = load_json(run_path)
+    run["process_scheduler"] = {
+        "contract": "qcsd-client-rr1-cpu10-etf-helper-cpu11-v1"
+    }
+    atomic_json(run_path, run)
+    receipt = {"immutable": "routed-nat-topology"}
+    result.update(
+        observer_topology_required=True,
+        observer_topology_receipt=receipt,
+        observer_topology_valid=True,
+    )
+    monkeypatch.setattr(
+        orchestrator.capture_engine,
+        "observer_topology_receipt_valid",
+        lambda value: value == receipt,
+    )
+
+    assert orchestrator._observer_topology_receipt_for_promotion(result, attempt) == receipt
+    result["observer_topology_receipt"] = None
+    with pytest.raises(ValueError, match="observer topology evidence is invalid"):
+        orchestrator._observer_topology_receipt_for_promotion(result, attempt)
+
+
+def test_kernel_tx_sidecar_promotes_outside_exact_five_file_sample(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import qcsd_lab.kernel_tx as kernel_tx
+    import qcsd_lab.kernel_tx_runtime as kernel_tx_runtime
+
+    sample_id = "a" * 64
+    root = tmp_path / "result"
+    sample = {
+        "sample_id": sample_id,
+        "attempts": 1,
+        "path": "samples/alpha/as-defined/visit-000/buflo",
+    }
+    attempt = root / f"failures/{sample_id}/attempt-001"
+    for directory in (
+        attempt / "captures",
+        attempt / "neqo",
+        attempt / "diagnostics",
+        root / "samples",
+    ):
+        directory.mkdir(parents=True, exist_ok=True)
+    (attempt / "captures/direct-quic.pcapng").write_bytes(b"primary")
+    for name in ("run.json", "packets.csv", "events.csv", "schedule.csv"):
+        (attempt / "neqo" / name).write_bytes(name.encode())
+    sidecar_sources = {
+        "kernel-tx-post-veth-raw.pcapng": b"router",
+        "kernel-tx-post-veth-receipt.json": b"{}\n",
+        "kernel-tx-evidence.json": b"{}\n",
+    }
+    for name, value in sidecar_sources.items():
+        (attempt / "diagnostics" / name).write_bytes(value)
+
+    original_load_json = orchestrator.load_json
+
+    def load_kernel_fixture(path: Path) -> Any:
+        if path == attempt / "neqo/run.json":
+            return {
+                "terminal_evidence_render_errors": [],
+                "runner_wakeup_metrics": {"buflo_kernel_tx": {"fixture": True}},
+            }
+        if path.name in {"kernel-tx-post-veth-receipt.json", "kernel-tx-evidence.json"}:
+            return {}
+        return original_load_json(path)
+
+    monkeypatch.setattr(orchestrator, "load_json", load_kernel_fixture)
+    monkeypatch.setattr(
+        kernel_tx,
+        "kernel_tx_evidence_success_valid",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(kernel_tx_runtime, "extract_router_udp_packets", lambda _path: [])
+
+    receipt = orchestrator._promotion_receipt(root, sample, attempt)
+    orchestrator._promote_attempt(root, sample, attempt)
+
+    sample_root = root / sample["path"]
+    sidecar = root / f"kernel-tx-evidence/{sample_id}"
+    assert set(receipt["kernel_tx_evidence_receipt"]["artifacts"]) == {
+        "router-capture.pcapng",
+        "router-receipt.json",
+        "kernel-tx-evidence.json",
+    }
+    assert {
+        path.relative_to(sample_root).as_posix()
+        for path in sample_root.rglob("*")
+        if path.is_file()
+    } == {
+        "capture.pcapng",
+        "neqo/run.json",
+        "neqo/packets.csv",
+        "neqo/events.csv",
+        "neqo/schedule.csv",
+    }
+    assert {path.name for path in sidecar.iterdir()} == {
+        "router-capture.pcapng",
+        "router-receipt.json",
+        "kernel-tx-evidence.json",
+    }
+    assert not attempt.exists()
 
 
 def test_accepted_scheduler_validation_does_not_reload_experiment_per_sample() -> None:

@@ -8,8 +8,8 @@ import pytest
 
 from qcsd_lab import experiment as experiment_module
 from qcsd_lab.experiment import (
-    accepted_sample_hashes,
     accept_sample,
+    accepted_sample_hashes,
     checkpoint_experiment,
     finalize_experiment,
     initialize_experiment,
@@ -18,11 +18,14 @@ from qcsd_lab.experiment import (
     result_path,
     set_sample_eligibility,
     transition_sample,
+    validate_accepted_observer_topology_receipt,
     validate_accepted_samples,
     validate_resume_fingerprints,
 )
+from qcsd_lab.kernel_tx import build_observer_topology_receipt
 from qcsd_lab.util import atomic_json, atomic_text, load_json, sha256_file
 from tests.scheduler_fixtures import install_scheduler_runtime_receipt
+from tests.test_kernel_tx import _controller_isolation, _public_topology
 
 
 def _configuration(campaign: Path) -> dict:
@@ -264,7 +267,10 @@ def test_current_class_sample_rejects_historical_runner_wakeup_schema(
     sample_root = _write_artifacts(root)
     atomic_json(
         sample_root / "neqo/run.json",
-        {"runner_wakeup_metrics": {"schema_version": schema_version}},
+        {
+            "runner_wakeup_metrics": {"schema_version": schema_version},
+            "terminal_evidence_render_errors": [],
+        },
     )
     accept_sample(root, experiment, _sample()["sample_id"])
 
@@ -281,7 +287,10 @@ def test_buflo_study_schema_ten_rejects_missing_scheduler_runtime_receipt(
     sample_root = _write_artifacts(root)
     atomic_json(
         sample_root / "neqo/run.json",
-        {"runner_wakeup_metrics": {"schema_version": 10}},
+        {
+            "runner_wakeup_metrics": {"schema_version": 10},
+            "terminal_evidence_render_errors": [],
+        },
     )
     accept_sample(root, experiment, _sample()["sample_id"])
 
@@ -359,6 +368,46 @@ def test_current_scheduler_receipt_is_deeply_revalidated_after_promotion(
     receipt["scheduler_runtime_evidence"]["cgroup_cpu_stat"]["nr_throttled_delta"] = 1
     with pytest.raises(ValueError, match="scheduler runtime receipt is invalid"):
         validate_accepted_samples(root, experiment)
+
+
+def test_matched_public_topology_is_retained_and_deeply_revalidated(
+    tmp_path: Path,
+) -> None:
+    root, experiment = _initialize(tmp_path)
+    experiment["name"] = "buflo-study-v1-observer-topology-test"
+    network, binding, digest = _public_topology()
+    experiment["source"] = {"image_digest": network["image_digest"]}
+    experiment["configuration"]["public_origin_policy"] = {"required_value": "1"}
+    transition_sample(experiment, _sample()["sample_id"], "running", increment_attempt=True)
+    sample_root = _write_artifacts(root)
+    atomic_json(
+        sample_root / "neqo/run.json",
+        {
+            "process_scheduler": {
+                "contract": "qcsd-client-rr1-cpu10-etf-helper-cpu11-v1"
+            }
+        },
+    )
+    receipt = build_observer_topology_receipt(
+        network_receipt=network,
+        observer_binding=binding,
+        network_receipt_sha256=digest,
+        controller_isolation=_controller_isolation(),
+    )
+    accepted = accept_sample(
+        root,
+        experiment,
+        _sample()["sample_id"],
+        diagnostics={"observer_topology_receipt": receipt},
+    )
+
+    validate_accepted_observer_topology_receipt(root, experiment, accepted)
+    receipt["network_receipt"]["router"]["source_masquerade"] = False
+    with pytest.raises(ValueError, match="observer topology receipt is invalid"):
+        validate_accepted_observer_topology_receipt(root, experiment, accepted)
+    accepted["diagnostics"].pop("observer_topology_receipt")
+    with pytest.raises(ValueError, match="observer topology receipt is invalid"):
+        validate_accepted_observer_topology_receipt(root, experiment, accepted)
 
 
 def test_nonaccepted_sample_files_cannot_enter_authoritative_samples(tmp_path):

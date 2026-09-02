@@ -38,6 +38,32 @@ def _host_partition() -> dict:
     }
 
 
+def _host_partition_v2() -> dict:
+    return {
+        "schema_version": 2,
+        "source": "docker-inspect-all-running-containers-prelaunch-v2",
+        "captured_at_unix_ns": 1,
+        "protected_cpus": [10, 11],
+        "owner_label": "org.qcsd.owner=qcsd-lab",
+        "docker_ncpu": 12,
+        "expected_sidecar_names": [],
+        "running_study_containers": [],
+        "overlapping_container_ids_by_cpu": {"10": [], "11": []},
+        "running_container_set_matches_expected": True,
+        "valid": True,
+        "verified_scope": (
+            "all running Docker containers at prelaunch; every container must carry the "
+            "qcsd-lab owner label and avoid protected logical CPUs 10 and 11"
+        ),
+        "unavailable_scope": [
+            "non-container host processes",
+            "the measured client container itself, which does not exist at prelaunch",
+            "containers or cpuset changes after the prelaunch observation",
+            "host-kernel and hypervisor scheduling of the selected logical CPUs",
+        ],
+    }
+
+
 def _write_task(
     proc_root: Path,
     *,
@@ -118,6 +144,58 @@ def test_scheduler_runtime_receipt_proves_portable_guest_scope(tmp_path: Path) -
         "host-kernel and hypervisor physical-CPU placement or isolation"
         in evidence["unavailable_scope"]
     )
+
+
+def test_kernel_timed_scheduler_receipts_both_protected_cpus(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(
+        "QCSD_CAPTURE_SCHEDULER_CONTRACT",
+        "qcsd-client-rr1-cpu10-etf-helper-cpu11-v1",
+    )
+    proc_root, cpu_stat = _fixture(tmp_path)
+    monitor = CaptureSchedulerMonitor(
+        proc_root=proc_root,
+        cgroup_cpu_stat_paths=(cpu_stat,),
+        interval_us=1_000_000,
+        host_partition=_host_partition_v2(),
+    )
+    _write_task(
+        proc_root,
+        tgid=77,
+        tid=77,
+        process_group=77,
+        cpus="10",
+        name="neqo-qcsd-client",
+    )
+    monitor.process_started(77)
+
+    evidence = monitor.finish()
+
+    assert evidence["schema_version"] == 2
+    assert evidence["contract"] == "qcsd-client-rr1-cpu10-etf-helper-cpu11-v1"
+    assert evidence["host_partition"]["protected_cpus"] == [10, 11]
+    assert capture_scheduler_runtime_evidence_valid(evidence)
+
+
+def test_kernel_timed_host_partition_rejects_cpu11_overlap() -> None:
+    receipt = _host_partition_v2()
+    receipt["running_study_containers"] = [
+        {
+            "id": "c" * 64,
+            "name": "competing-helper",
+            "study": "other-study",
+            "role": "worker",
+            "configured_cpuset": "11",
+            "effective_cpus": [11],
+            "protected_cpu_overlaps": [11],
+            "expected_sidecar": False,
+        }
+    ]
+    receipt["overlapping_container_ids_by_cpu"]["11"] = ["c" * 64]
+    receipt["valid"] = False
+
+    assert not _host_partition_valid(receipt)
 
 
 def test_scheduler_runtime_receipt_rejects_cgroup_throttling(tmp_path: Path) -> None:

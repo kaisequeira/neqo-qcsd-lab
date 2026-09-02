@@ -91,6 +91,9 @@ TIMING_STRESS_ATTEMPT_ERROR_SCHEMA_VERSION = 1
 ABORTED_TIMING_STRESS_BOUND_REGRESSION_RECEIPT_SCHEMA_VERSION = 5
 TIMING_STRESS_BOUND_REGRESSION_RECEIPT_SCHEMA_VERSION = 6
 CONTROLLED_NETWORK_RECEIPT_SCHEMA_VERSION = 2
+KERNEL_TX_CONTROLLED_NETWORK_RECEIPT_ENV = (
+    "QCSD_KERNEL_TX_CONTROLLED_NETWORK_RECEIPT_B64"
+)
 STUDY_ROOT = LAB_ROOT / "config/buflo-study/v1"
 STUDY_PLAN = STUDY_ROOT / "study.json"
 TIMING_STRESS_PARAMETERS = STUDY_ROOT / "buflo-timing-stress-v2.json"
@@ -1932,6 +1935,41 @@ def _build_shared_router_network_receipt(
     return receipt
 
 
+def _with_kernel_tx_network_receipt(
+    network_receipt: Mapping[str, Any],
+    operation: Callable[..., Any],
+    /,
+    *arguments: Any,
+) -> Any:
+    """Expose one validated controlled-network receipt only while collecting.
+
+    The environment seam is intentionally narrow: the orchestrator and the
+    direct timing-stress collector ultimately converge on ``_collect_attempt``,
+    while the immutable campaign receipt remains the source of the canonical
+    network value.  Restoring the prior process environment prevents a later
+    public capture from inheriting a controlled observer assertion.
+    """
+
+    encoded = base64.b64encode(
+        json.dumps(
+            dict(network_receipt),
+            ensure_ascii=False,
+            allow_nan=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).decode("ascii")
+    previous = os.environ.get(KERNEL_TX_CONTROLLED_NETWORK_RECEIPT_ENV)
+    os.environ[KERNEL_TX_CONTROLLED_NETWORK_RECEIPT_ENV] = encoded
+    try:
+        return operation(*arguments)
+    finally:
+        if previous is None:
+            os.environ.pop(KERNEL_TX_CONTROLLED_NETWORK_RECEIPT_ENV, None)
+        else:
+            os.environ[KERNEL_TX_CONTROLLED_NETWORK_RECEIPT_ENV] = previous
+
+
 def _validate_shared_router_network_receipt(
     value: Any, *, client_qdisc: str, server_qdisc: str, cohort_version: int | None
 ) -> None:
@@ -2293,10 +2331,14 @@ def execute_local_controlled_profile(
         try:
             verified = verify_result(result)
         except (OSError, ValueError):
-            result = resume_campaign(result)
+            result = _with_kernel_tx_network_receipt(
+                network_receipt, resume_campaign, result
+            )
         else:
             if verified.experiment["status"] != "complete":
-                result = resume_campaign(result)
+                result = _with_kernel_tx_network_receipt(
+                    network_receipt, resume_campaign, result
+                )
     else:
         candidates = sorted(
             (destination / "results" / document["name"]).glob("*"),
@@ -2305,10 +2347,17 @@ def execute_local_controlled_profile(
         if len(candidates) > 1:
             raise ValueError("local controlled resume found multiple unbound result roots")
         if candidates:
-            result = resume_campaign(candidates[0])
+            result = _with_kernel_tx_network_receipt(
+                network_receipt, resume_campaign, candidates[0]
+            )
         else:
             try:
-                result = run_campaign(campaign_path, destination / "results")
+                result = _with_kernel_tx_network_receipt(
+                    network_receipt,
+                    run_campaign,
+                    campaign_path,
+                    destination / "results",
+                )
             except CampaignIncomplete as error:
                 result = error.root
                 state["profiles"][netem_profile] = str(result)
@@ -2417,6 +2466,7 @@ def execute_local_regression(
         campaign_paths,
         destination,
         state_name="regression-results.json",
+        network_receipt=network_receipt,
     )
     from .verification import verify_result
 
@@ -4225,16 +4275,19 @@ def _execute_regression_multi_origin_compatibility(
                         udp_payload_ceiling=1_200,
                     )
                     try:
-                        capture_session._collect_attempt(
-                            attempt,
-                            runtime_path,
-                            None if defense.baseline else projected_chaff_path,
-                            "complex",
-                            defense,
-                            seed,
-                            context,
-                            application_workload_source=(
-                                None if defense.baseline else application_path
+                        _with_kernel_tx_network_receipt(
+                            regression_receipt["network"],
+                            lambda: capture_session._collect_attempt(
+                                attempt,
+                                runtime_path,
+                                None if defense.baseline else projected_chaff_path,
+                                "complex",
+                                defense,
+                                seed,
+                                context,
+                                application_workload_source=(
+                                    None if defense.baseline else application_path
+                                ),
                             ),
                         )
                     except (
@@ -6284,15 +6337,18 @@ def execute_buflo_timing_stress(
         try:
             _timing_stress_collect_or_resume(
                 attempt,
-                lambda attempt=attempt, seed=seed: capture_session._collect_attempt(
-                    attempt,
-                    runtime_path,
-                    chaff_path,
-                    "complex",
-                    defense,
-                    seed,
-                    context,
-                    application_workload_source=application_path,
+                lambda attempt=attempt, seed=seed: _with_kernel_tx_network_receipt(
+                    network_receipt,
+                    lambda: capture_session._collect_attempt(
+                        attempt,
+                        runtime_path,
+                        chaff_path,
+                        "complex",
+                        defense,
+                        seed,
+                        context,
+                        application_workload_source=application_path,
+                    ),
                 ),
                 recorded_attempt=recorded_launch,
                 newly_reserved=newly_reserved,
@@ -6821,7 +6877,11 @@ def _local_regression_campaign_documents(
 
 
 def _run_local_campaign_set(
-    campaigns: Sequence[Path], destination: Path, *, state_name: str
+    campaigns: Sequence[Path],
+    destination: Path,
+    *,
+    state_name: str,
+    network_receipt: Mapping[str, Any],
 ) -> tuple[Path, ...]:
     from .orchestrator import CampaignIncomplete, resume_campaign, run_campaign
     from .verification import verify_result
@@ -6859,10 +6919,14 @@ def _run_local_campaign_set(
             try:
                 verified = verify_result(result)
             except (OSError, ValueError):
-                result = resume_campaign(result)
+                result = _with_kernel_tx_network_receipt(
+                    network_receipt, resume_campaign, result
+                )
             else:
                 if verified.experiment["status"] != "complete":
-                    result = resume_campaign(result)
+                    result = _with_kernel_tx_network_receipt(
+                        network_receipt, resume_campaign, result
+                    )
         else:
             candidates = sorted(
                 (destination / "results" / name).glob("*"), key=lambda path: path.name
@@ -6870,10 +6934,17 @@ def _run_local_campaign_set(
             if len(candidates) > 1:
                 raise ValueError(f"local campaign {name} has multiple unbound results")
             if candidates:
-                result = resume_campaign(candidates[0])
+                result = _with_kernel_tx_network_receipt(
+                    network_receipt, resume_campaign, candidates[0]
+                )
             else:
                 try:
-                    result = run_campaign(campaign, destination / "results")
+                    result = _with_kernel_tx_network_receipt(
+                        network_receipt,
+                        run_campaign,
+                        campaign,
+                        destination / "results",
+                    )
                 except CampaignIncomplete as error:
                     result = error.root
                     state["campaigns"][name] = str(result)
@@ -9694,6 +9765,8 @@ def validate_build_execution_receipt(
 
 
 def _capture_scheduler_environment_contract() -> dict[str, Any]:
+    """Return the frozen active-wait scheduler contract used by historical cohorts."""
+
     return {
         "schema_version": 1,
         "contract": "qcsd-client-rr1-cpu10-v1",
@@ -9704,6 +9777,29 @@ def _capture_scheduler_environment_contract() -> dict[str, Any]:
         "sidecar_affinity_cpus": list(range(10)),
         "policy": "SCHED_RR",
         "priority": 1,
+        "rlimit_rtprio": {"soft": 1, "hard": 1},
+        "cap_sys_nice": False,
+        "docker_cpu_rt_runtime_configured": False,
+        "affinity_scope": ("qcsd_container_affinity_partition_not_physical_cpu_isolation"),
+    }
+
+
+def _buflo_etf_capture_scheduler_environment_contract() -> dict[str, Any]:
+    """Return the kernel-timed scheduler contract used by fresh cohorts."""
+
+    return {
+        "schema_version": 2,
+        "contract": "qcsd-client-rr1-cpu10-etf-helper-cpu11-v1",
+        "scope": "all_measured_neqo_clients",
+        "collection_cpuset_cpus": [10, 11],
+        "orchestrator_affinity_cpus": [11],
+        "client_affinity_cpus": [10],
+        "timed_egress_helper_affinity_cpus": [11],
+        "sidecar_affinity_cpus": list(range(10)),
+        "policy": "SCHED_RR",
+        "priority": 1,
+        "timed_egress_helper_policy": "SCHED_RR",
+        "timed_egress_helper_priority": 1,
         "rlimit_rtprio": {"soft": 1, "hard": 1},
         "cap_sys_nice": False,
         "docker_cpu_rt_runtime_configured": False,
@@ -9860,8 +9956,12 @@ def validate_study_environment_receipt(
     ):
         raise ValueError("study host/container realtime samples differ by more than 60 seconds")
     capture_scheduler = value.get("capture_scheduler")
-    expected_capture_scheduler = _capture_scheduler_environment_contract()
-    if value["schema_version"] == 2 and capture_scheduler != expected_capture_scheduler:
+    historical_capture_scheduler = _capture_scheduler_environment_contract()
+    kernel_timed_capture_scheduler = _buflo_etf_capture_scheduler_environment_contract()
+    if value["schema_version"] == 2 and capture_scheduler not in (
+        historical_capture_scheduler,
+        kernel_timed_capture_scheduler,
+    ):
         raise ValueError("study capture scheduler environment receipt is invalid")
     validated = {
         "schema_version": value["schema_version"],
@@ -9879,7 +9979,7 @@ def validate_study_environment_receipt(
         },
     }
     if value["schema_version"] == 2:
-        validated["capture_scheduler"] = dict(expected_capture_scheduler)
+        validated["capture_scheduler"] = dict(capture_scheduler)
     return validated
 
 

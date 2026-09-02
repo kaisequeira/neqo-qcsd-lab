@@ -68,6 +68,7 @@ from .fidelity import (
     SCHEDULE_QCSD_FIELDS,
     _cs_buflo_rate_transition_vector_valid,
     _schedule_realization_metrics_from_path,
+    terminal_evidence_render_receipt_valid,
     buflo_terminal_diagnostics_valid,
     buflo_terminal_state_valid,
     cs_buflo_local_et_handoff_valid,
@@ -838,6 +839,7 @@ def _validate_run_sample_binding(
         or run.get("completion_status") != "complete"
         or run.get("error") is not None
         or run.get("error_class") is not None
+        or not terminal_evidence_render_receipt_valid(run, require_empty=True)
         or run.get("seed") != sample.get("seed")
         or run.get("request_policy") != sample.get("request_policy")
         or run.get("workload_hash_sha256") != input_bindings["runtime_workload_sha256"]

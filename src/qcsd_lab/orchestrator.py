@@ -27,6 +27,12 @@ from . import capture_session as capture_engine
 from .class_acquisition import validate_class_study_preparation
 from .defenses import defense_from_runtime_identity
 from .experiment import (
+    KERNEL_TX_EVIDENCE_DIRECTORY,
+    KERNEL_TX_EVIDENCE_FILES,
+    KERNEL_TX_EVIDENCE_RECEIPT_KEY,
+    KERNEL_TX_EVIDENCE_RECEIPT_SCHEMA_VERSION,
+    KERNEL_TX_EVIDENCE_RECEIPT_SOURCE,
+    OBSERVER_TOPOLOGY_RECEIPT_KEY,
     SCHEDULER_RUNTIME_EVIDENCE_PATH,
     SCHEDULER_RUNTIME_RECEIPT_KEY,
     TERMINAL_DEFENSE_FAILURE_TYPES,
@@ -34,6 +40,8 @@ from .experiment import (
     resolved_attempt_directory,
     resolved_sample_directory,
     scheduler_runtime_receipt,
+    validate_accepted_kernel_tx_evidence,
+    validate_accepted_observer_topology_receipt,
     validate_accepted_scheduler_runtime_receipt,
     validate_planned_sample_identity,
 )
@@ -41,6 +49,7 @@ from .fidelity import (
     BUFLO_INCOMING_CREDIT_ADVERTISEMENT_DELAY_LIMIT_US,
     _schedule_realization_metrics,
     fidelity_eligible,
+    terminal_evidence_render_receipt_valid,
     validate_primary_capture_clock_integrity,
 )
 from .manifest import (
@@ -3932,7 +3941,12 @@ def _execute(root: Path, campaign: Campaign, experiment: dict[str, Any]) -> Path
                         controlled_cell = _controlled_study_cell(campaign, sample)
                         if controlled_cell is not None:
                             diagnostics["buflo_study_controlled_cell"] = controlled_cell
-                        diagnostics["promotion"] = _promotion_receipt(root, sample, attempt)
+                        promotion = _promotion_receipt(root, sample, attempt)
+                        if KERNEL_TX_EVIDENCE_RECEIPT_KEY in promotion:
+                            diagnostics[KERNEL_TX_EVIDENCE_RECEIPT_KEY] = promotion[
+                                KERNEL_TX_EVIDENCE_RECEIPT_KEY
+                            ]
+                        diagnostics["promotion"] = promotion
                         transition_sample(
                             experiment,
                             sample["sample_id"],
@@ -4031,7 +4045,45 @@ def _success_diagnostics(result: dict[str, Any], attempt: Path) -> dict[str, Any
     runtime = _scheduler_runtime_receipt_for_promotion(result, attempt)
     if runtime is not None:
         diagnostics[SCHEDULER_RUNTIME_RECEIPT_KEY] = runtime
+    topology = _observer_topology_receipt_for_promotion(result, attempt)
+    if topology is not None:
+        diagnostics[OBSERVER_TOPOLOGY_RECEIPT_KEY] = topology
     return diagnostics
+
+
+def _observer_topology_receipt_for_promotion(
+    result: Mapping[str, Any], attempt: Path
+) -> dict[str, Any] | None:
+    """Retain the validated observer topology before attempt deletion."""
+
+    run_path = attempt / "neqo/run.json"
+    if run_path.is_symlink() or not run_path.is_file():
+        raise ValueError("successful attempt lacks a regular runner receipt")
+    run = load_json(run_path)
+    scheduler = run.get("process_scheduler") if isinstance(run, Mapping) else None
+    matched = bool(
+        isinstance(scheduler, Mapping)
+        and scheduler.get("contract")
+        == "qcsd-client-rr1-cpu10-etf-helper-cpu11-v1"
+    )
+    retained = result.get("observer_topology_receipt")
+    if not matched:
+        topology_required = result.get("observer_topology_required")
+        if (
+            topology_required is not None
+            and topology_required is not False
+            or retained is not None
+            or result.get("observer_topology_valid") is not None
+        ):
+            raise ValueError("non-matched successful attempt claims observer topology evidence")
+        return None
+    if (
+        result.get("observer_topology_required") is not True
+        or result.get("observer_topology_valid") is not True
+        or not capture_engine.observer_topology_receipt_valid(retained)
+    ):
+        raise ValueError("matched successful attempt observer topology evidence is invalid")
+    return dict(retained)
 
 
 def _scheduler_runtime_receipt_for_promotion(
@@ -4061,7 +4113,10 @@ def _scheduler_runtime_receipt_for_promotion(
         or result.get("process_scheduler_valid") is not True
         or result.get("scheduler_runtime_evidence_valid") is not True
         or not capture_engine._capture_scheduler_runtime_evidence_valid(evidence)
-        or not capture_engine._process_scheduler_valid(run_data.get("process_scheduler"))
+        or not capture_engine._process_scheduler_bound_to_run_valid(
+            run_data,
+            expected_contract=evidence.get("contract"),
+        )
     ):
         raise ValueError("successful attempt scheduler runtime evidence is invalid")
     return scheduler_runtime_receipt(
@@ -4300,6 +4355,74 @@ def _promotion_sources(attempt: Path) -> dict[str, Path]:
     }
 
 
+def _kernel_tx_attempt_sources(attempt: Path) -> dict[str, Path]:
+    diagnostics = attempt / "diagnostics"
+    return {
+        "router-capture.pcapng": diagnostics / "kernel-tx-post-veth-raw.pcapng",
+        "router-receipt.json": diagnostics / "kernel-tx-post-veth-receipt.json",
+        "kernel-tx-evidence.json": diagnostics / "kernel-tx-evidence.json",
+    }
+
+
+def _kernel_tx_sidecar_directory(root: Path, sample: Mapping[str, Any]) -> Path:
+    sample_id = sample.get("sample_id")
+    if not isinstance(sample_id, str) or re.fullmatch(r"[0-9a-f]{64}", sample_id) is None:
+        raise ValueError("kernel-TX sidecar requires the canonical sample identity")
+    root = root.resolve()
+    sidecar_root = (root / KERNEL_TX_EVIDENCE_DIRECTORY).resolve()
+    target = (sidecar_root / sample_id).resolve()
+    if not target.is_relative_to(sidecar_root):
+        raise ValueError("kernel-TX sidecar path escapes its result directory")
+    return target
+
+
+def _kernel_tx_promotion_receipt(
+    root: Path, sample: Mapping[str, Any], attempt: Path
+) -> dict[str, Any] | None:
+    sources = _kernel_tx_attempt_sources(attempt)
+    present = {name for name, path in sources.items() if path.exists() or path.is_symlink()}
+    run_path = attempt / "neqo/run.json"
+    run_data = load_json(run_path) if run_path.is_file() and not run_path.is_symlink() else None
+    wakeups = run_data.get("runner_wakeup_metrics") if isinstance(run_data, Mapping) else None
+    raw = wakeups.get("buflo_kernel_tx") if isinstance(wakeups, Mapping) else None
+    if not present and not isinstance(raw, Mapping):
+        return None
+    if not isinstance(raw, Mapping):
+        raise ValueError("non-kernel successful attempt retains a kernel-TX evidence sidecar")
+    if not terminal_evidence_render_receipt_valid(
+        run_data,
+        require_present=True,
+        require_empty=True,
+    ):
+        raise ValueError("successful kernel-TX attempt has terminal rendering failures")
+    if present != KERNEL_TX_EVIDENCE_FILES or any(
+        path.is_symlink() or not path.is_file() for path in sources.values()
+    ):
+        raise ValueError("successful attempt has a partial kernel-TX evidence sidecar")
+    from .kernel_tx import kernel_tx_evidence_success_valid
+    from .kernel_tx_runtime import extract_router_udp_packets
+
+    router_receipt = load_json(sources["router-receipt.json"])
+    evidence = load_json(sources["kernel-tx-evidence.json"])
+    router_packets = extract_router_udp_packets(sources["router-capture.pcapng"])
+    if not kernel_tx_evidence_success_valid(
+        evidence,
+        runner_receipt=raw,
+        expected_run_json_sha256=sha256_file(run_path),
+        expected_router_capture_sha256=sha256_file(sources["router-capture.pcapng"]),
+        router_capture_receipt=router_receipt,
+        router_packets=router_packets,
+    ):
+        raise ValueError("successful attempt kernel-TX sidecar failed deep validation")
+    target = _kernel_tx_sidecar_directory(root, sample)
+    return {
+        "schema_version": KERNEL_TX_EVIDENCE_RECEIPT_SCHEMA_VERSION,
+        "source": KERNEL_TX_EVIDENCE_RECEIPT_SOURCE,
+        "directory": target.relative_to(root.resolve()).as_posix(),
+        "artifacts": {name: sha256_file(path) for name, path in sorted(sources.items())},
+    }
+
+
 def _promotion_receipt(root: Path, sample: dict[str, Any], attempt: Path) -> dict[str, Any]:
     expected_attempt = resolved_attempt_directory(root, sample)
     if attempt.resolve() != expected_attempt:
@@ -4310,13 +4433,80 @@ def _promotion_receipt(root: Path, sample: dict[str, Any], attempt: Path) -> dic
     missing = [relative for relative, path in sources.items() if not path.is_file()]
     if missing:
         raise ValueError("successful attempt lacks required artifacts: " + ", ".join(missing))
-    return {
+    receipt = {
         "attempt": attempt.relative_to(root).as_posix(),
         "artifacts": {
             (sample_path / relative).relative_to(root).as_posix(): sha256_file(path)
             for relative, path in sources.items()
         },
     }
+    kernel_tx = _kernel_tx_promotion_receipt(root, sample, attempt)
+    if kernel_tx is not None:
+        receipt[KERNEL_TX_EVIDENCE_RECEIPT_KEY] = kernel_tx
+    return receipt
+
+
+def _verify_kernel_tx_sidecar(
+    root: Path, sample: Mapping[str, Any], receipt: Mapping[str, Any]
+) -> None:
+    target = _kernel_tx_sidecar_directory(root, sample)
+    expected = {
+        "schema_version",
+        "source",
+        "directory",
+        "artifacts",
+    }
+    artifacts = receipt.get("artifacts")
+    if (
+        set(receipt) != expected
+        or receipt.get("schema_version") != KERNEL_TX_EVIDENCE_RECEIPT_SCHEMA_VERSION
+        or receipt.get("source") != KERNEL_TX_EVIDENCE_RECEIPT_SOURCE
+        or receipt.get("directory") != target.relative_to(root.resolve()).as_posix()
+        or not isinstance(artifacts, Mapping)
+        or set(artifacts) != KERNEL_TX_EVIDENCE_FILES
+        or any(
+            not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+            for digest in artifacts.values()
+        )
+        or target.is_symlink()
+        or not target.is_dir()
+    ):
+        raise ValueError("kernel-TX sidecar promotion receipt is invalid")
+    observed = set()
+    for path in target.iterdir():
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("kernel-TX sidecar contains a non-regular entry")
+        observed.add(path.name)
+    if observed != KERNEL_TX_EVIDENCE_FILES or any(
+        sha256_file(target / name) != artifacts[name] for name in artifacts
+    ):
+        raise ValueError("kernel-TX sidecar artifact hashes differ")
+
+
+def _install_kernel_tx_sidecar(
+    root: Path, sample: Mapping[str, Any], attempt: Path
+) -> None:
+    receipt = _kernel_tx_promotion_receipt(root, sample, attempt)
+    if receipt is None:
+        return
+    target = _kernel_tx_sidecar_directory(root, sample)
+    if target.exists() or target.is_symlink():
+        _verify_kernel_tx_sidecar(root, sample, receipt)
+        return
+    parent = target.parent
+    if parent.is_symlink():
+        raise ValueError("kernel-TX evidence root cannot be a symlink")
+    parent.mkdir(parents=True, exist_ok=True)
+    staging = attempt / ".kernel-tx-evidence-promotion"
+    if staging.exists() or staging.is_symlink():
+        if staging.is_symlink() or not staging.is_dir():
+            raise ValueError("kernel-TX sidecar staging path is unsafe")
+        shutil.rmtree(staging)
+    staging.mkdir()
+    for name, source in _kernel_tx_attempt_sources(attempt).items():
+        shutil.copy2(source, staging / name)
+    staging.replace(target)
+    _verify_kernel_tx_sidecar(root, sample, receipt)
 
 
 def _promote_attempt(root: Path, sample: dict[str, Any], attempt: Path) -> None:
@@ -4332,6 +4522,7 @@ def _promote_attempt(root: Path, sample: dict[str, Any], attempt: Path) -> None:
     missing = [relative for relative, path in sources.items() if not path.is_file()]
     if missing:
         raise ValueError("accepted attempt lacks required artifacts: " + ", ".join(missing))
+    _install_kernel_tx_sidecar(root, sample, attempt)
     staging = attempt / ".promotion"
     if staging.exists() or staging.is_symlink():
         if staging.is_symlink() or not staging.is_dir():
@@ -4367,6 +4558,8 @@ def _validate_accepted(
     if actual != expected:
         raise ValueError(f"accepted sample artifact set changed: {sample['sample_id']}")
     validate_accepted_scheduler_runtime_receipt(root, experiment, sample)
+    validate_accepted_observer_topology_receipt(root, experiment, sample)
+    validate_accepted_kernel_tx_evidence(root, sample)
 
 
 def _compare_group(
@@ -4386,6 +4579,8 @@ def _compare_group(
     reference = prepared_signature if prepared_signature is not None else baseline_signature
     for sample in accepted:
         validate_accepted_scheduler_runtime_receipt(root, experiment, sample)
+        validate_accepted_observer_topology_receipt(root, experiment, sample)
+        validate_accepted_kernel_tx_evidence(root, sample)
         sample_path = resolved_sample_directory(root, sample, require_directory=True)
         signature = response_signature(sample_path)
         response_match = signature is not None and (reference is None or signature == reference)
@@ -4557,8 +4752,17 @@ def _recover_pending_promotion(root: Path, experiment: dict[str, Any]) -> bool:
     sample = running[0]
     diagnostics = sample.get("diagnostics")
     promotion = diagnostics.get("promotion") if isinstance(diagnostics, dict) else None
-    if not isinstance(promotion, dict) or set(promotion) != {"attempt", "artifacts"}:
+    allowed_promotion_keys = {"attempt", "artifacts"}
+    if isinstance(promotion, Mapping) and KERNEL_TX_EVIDENCE_RECEIPT_KEY in promotion:
+        allowed_promotion_keys.add(KERNEL_TX_EVIDENCE_RECEIPT_KEY)
+    if not isinstance(promotion, dict) or set(promotion) != allowed_promotion_keys:
         return False
+    kernel_tx_sidecar = promotion.get(KERNEL_TX_EVIDENCE_RECEIPT_KEY)
+    if kernel_tx_sidecar is not None and (
+        not isinstance(kernel_tx_sidecar, Mapping)
+        or diagnostics.get(KERNEL_TX_EVIDENCE_RECEIPT_KEY) != kernel_tx_sidecar
+    ):
+        raise ValueError("pending promotion kernel-TX sidecar binding is invalid")
     capture = diagnostics.get("capture")
     try:
         validate_primary_capture_clock_integrity(
@@ -4583,16 +4787,20 @@ def _recover_pending_promotion(root: Path, experiment: dict[str, Any]) -> bool:
     if sample_path.exists() or sample_path.is_symlink():
         if sample_path.is_symlink() or not sample_path.is_dir():
             raise ValueError("pending promotion target is unsafe")
+        if isinstance(kernel_tx_sidecar, Mapping):
+            _verify_kernel_tx_sidecar(root, sample, kernel_tx_sidecar)
     else:
         if not expected_attempt.is_dir() or expected_attempt.is_symlink():
             raise ValueError("validated pending promotion artifacts are missing")
-        current = _promotion_receipt(root, sample, expected_attempt)["artifacts"]
-        if current != expected_artifacts:
+        current = _promotion_receipt(root, sample, expected_attempt)
+        if current != promotion:
             raise ValueError("pending promotion source hash mismatch")
         _promote_attempt(root, sample, expected_attempt)
     actual = _artifact_hashes(root, sample)
     if actual != expected_artifacts:
         raise ValueError("pending promoted sample hash mismatch")
+    if isinstance(kernel_tx_sidecar, Mapping):
+        _verify_kernel_tx_sidecar(root, sample, kernel_tx_sidecar)
     if expected_attempt.exists():
         if expected_attempt.is_symlink() or not expected_attempt.is_dir():
             raise ValueError("pending promotion attempt path is unsafe")
@@ -4651,7 +4859,12 @@ def _recover_completed_attempt(
                 controlled_cell = _controlled_study_cell(campaign, sample)
                 if controlled_cell is not None:
                     diagnostics["buflo_study_controlled_cell"] = controlled_cell
-                diagnostics["promotion"] = _promotion_receipt(root, sample, attempt)
+                promotion = _promotion_receipt(root, sample, attempt)
+                if KERNEL_TX_EVIDENCE_RECEIPT_KEY in promotion:
+                    diagnostics[KERNEL_TX_EVIDENCE_RECEIPT_KEY] = promotion[
+                        KERNEL_TX_EVIDENCE_RECEIPT_KEY
+                    ]
+                diagnostics["promotion"] = promotion
                 transition_sample(
                     experiment,
                     sample["sample_id"],

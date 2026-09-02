@@ -12,10 +12,15 @@ from pathlib import Path
 from typing import Any, Mapping
 
 CAPTURE_SCHEDULER_CONTRACT = "qcsd-client-rr1-cpu10-v1"
+BUFLO_ETF_SCHEDULER_CONTRACT = "qcsd-client-rr1-cpu10-etf-helper-cpu11-v1"
 CAPTURE_ORCHESTRATOR_CPU = 11
 CAPTURE_CLIENT_CPU = 10
 CAPTURE_SCHEDULER_RUNTIME_SCHEMA_VERSION = 1
+BUFLO_ETF_SCHEDULER_RUNTIME_SCHEMA_VERSION = 2
 CAPTURE_SCHEDULER_RUNTIME_SOURCE = "linux-cgroup-procfs-monitor-and-docker-host-prelaunch-v1"
+BUFLO_ETF_SCHEDULER_RUNTIME_SOURCE = (
+    "linux-cgroup-procfs-monitor-and-docker-host-prelaunch-v2"
+)
 CAPTURE_SCHEDULER_HOST_ENV = "QCSD_CAPTURE_SCHEDULER_HOST_PARTITION_B64"
 CAPTURE_SCHEDULER_MONITOR_INTERVAL_US = 10_000
 
@@ -49,6 +54,31 @@ _HOST_CONTAINER_KEYS = {
     "configured_cpuset",
     "effective_cpus",
     "client_cpu_overlap",
+    "expected_sidecar",
+}
+_HOST_PARTITION_V2_KEYS = {
+    "schema_version",
+    "source",
+    "captured_at_unix_ns",
+    "protected_cpus",
+    "owner_label",
+    "docker_ncpu",
+    "expected_sidecar_names",
+    "running_study_containers",
+    "overlapping_container_ids_by_cpu",
+    "running_container_set_matches_expected",
+    "valid",
+    "verified_scope",
+    "unavailable_scope",
+}
+_HOST_CONTAINER_V2_KEYS = {
+    "id",
+    "name",
+    "study",
+    "role",
+    "configured_cpuset",
+    "effective_cpus",
+    "protected_cpu_overlaps",
     "expected_sidecar",
 }
 _CPU_STAT_EVIDENCE_KEYS = {
@@ -98,7 +128,7 @@ def capture_scheduler_contract() -> str | None:
     value = os.environ.get("QCSD_CAPTURE_SCHEDULER_CONTRACT")
     if value in {None, ""}:
         return None
-    if value != CAPTURE_SCHEDULER_CONTRACT:
+    if value not in {CAPTURE_SCHEDULER_CONTRACT, BUFLO_ETF_SCHEDULER_CONTRACT}:
         raise ValueError(f"unsupported capture scheduler contract: {value}")
     return value
 
@@ -117,7 +147,7 @@ def capture_scheduler_launch_prefix() -> list[str]:
     rtprio = resource.getrlimit(resource.RLIMIT_RTPRIO)
     if rtprio != (1, 1):
         raise ValueError("capture scheduler requires RLIMIT_RTPRIO soft/hard 1")
-    return [
+    prefix = [
         "/usr/bin/taskset",
         "--cpu-list",
         str(CAPTURE_CLIENT_CPU),
@@ -125,12 +155,32 @@ def capture_scheduler_launch_prefix() -> list[str]:
         "--rr",
         "1",
         "/usr/bin/setpriv",
-        "--bounding-set=-all",
-        "--inh-caps=-all",
-        "--ambient-caps=-all",
-        "--no-new-privs",
-        "--",
     ]
+    if capture_scheduler_contract() == BUFLO_ETF_SCHEDULER_CONTRACT:
+        # BuFLO's real UDP sockets must select CLOCK_TAI while the Linux ETF
+        # qdisc still performs its normal socket consistency check.  Retain
+        # exactly CAP_NET_ADMIN and CAP_SETPCAP for that bounded setup phase;
+        # the Rust runner configures every socket, drops both capabilities and
+        # the bounding set, verifies the capability-free state, and only then
+        # starts the CPU-11 timed-egress helper.  A complete run whose kernel
+        # receipt does not prove that transition is rejected by the Lab.
+        prefix.extend(
+            [
+                "--bounding-set=-all,+net_admin,+setpcap",
+                "--inh-caps=+net_admin,+setpcap",
+                "--ambient-caps=+net_admin,+setpcap",
+            ]
+        )
+    else:
+        prefix.extend(
+            [
+                "--bounding-set=-all",
+                "--inh-caps=-all",
+                "--ambient-caps=-all",
+            ]
+        )
+    prefix.extend(["--no-new-privs", "--"])
+    return prefix
 
 
 def _uint(value: Any) -> bool:
@@ -157,8 +207,8 @@ def _cpu_list(value: str) -> set[int]:
     return cpus
 
 
-def _host_partition_valid(value: Any) -> bool:
-    """Validate host Docker-inspect evidence supplied by the launcher."""
+def _host_partition_v1_valid(value: Any) -> bool:
+    """Validate the frozen CPU-10-only Docker prelaunch receipt."""
 
     if not isinstance(value, Mapping) or set(value) != _HOST_PARTITION_KEYS:
         return False
@@ -248,7 +298,120 @@ def _host_partition_valid(value: Any) -> bool:
     )
 
 
-def _unavailable_host_partition(reason: str) -> dict[str, Any]:
+def _host_partition_v2_valid(value: Any) -> bool:
+    """Validate the CPU-10/11 partition needed by kernel-timed BuFLO."""
+
+    if not isinstance(value, Mapping) or set(value) != _HOST_PARTITION_V2_KEYS:
+        return False
+    containers = value.get("running_study_containers")
+    expected = value.get("expected_sidecar_names")
+    overlaps = value.get("overlapping_container_ids_by_cpu")
+    protected_cpus = [CAPTURE_CLIENT_CPU, CAPTURE_ORCHESTRATOR_CPU]
+    if (
+        value.get("schema_version") != 2
+        or value.get("source") != "docker-inspect-all-running-containers-prelaunch-v2"
+        or not _uint(value.get("captured_at_unix_ns"))
+        or value["captured_at_unix_ns"] == 0
+        or value.get("protected_cpus") != protected_cpus
+        or value.get("owner_label") != "org.qcsd.owner=qcsd-lab"
+        or not _uint(value.get("docker_ncpu"))
+        or value["docker_ncpu"] <= CAPTURE_ORCHESTRATOR_CPU
+        or not isinstance(expected, list)
+        or any(not isinstance(item, str) or not item for item in expected)
+        or len(expected) != len(set(expected))
+        or not isinstance(containers, list)
+        or not isinstance(overlaps, Mapping)
+        or set(overlaps) != {str(cpu) for cpu in protected_cpus}
+        or any(
+            not isinstance(items, list)
+            or any(not isinstance(item, str) or not item for item in items)
+            or len(items) != len(set(items))
+            for items in overlaps.values()
+        )
+        or value.get("running_container_set_matches_expected") is not True
+        or value.get("valid") is not True
+        or value.get("verified_scope")
+        != (
+            "all running Docker containers at prelaunch; every container must carry the "
+            "qcsd-lab owner label and avoid protected logical CPUs 10 and 11"
+        )
+        or value.get("unavailable_scope")
+        != [
+            "non-container host processes",
+            "the measured client container itself, which does not exist at prelaunch",
+            "containers or cpuset changes after the prelaunch observation",
+            "host-kernel and hypervisor scheduling of the selected logical CPUs",
+        ]
+    ):
+        return False
+    expected_set = set(expected)
+    ids: set[str] = set()
+    names: set[str] = set()
+    observed_expected: set[str] = set()
+    derived_overlaps = {str(cpu): [] for cpu in protected_cpus}
+    for container in containers:
+        if not isinstance(container, Mapping) or set(container) != _HOST_CONTAINER_V2_KEYS:
+            return False
+        container_id = container.get("id")
+        name = container.get("name")
+        configured = container.get("configured_cpuset")
+        effective = container.get("effective_cpus")
+        expected_overlaps = [cpu for cpu in protected_cpus if cpu in (effective or [])]
+        if (
+            not isinstance(container_id, str)
+            or len(container_id) != 64
+            or any(character not in "0123456789abcdef" for character in container_id)
+            or container_id in ids
+            or not isinstance(name, str)
+            or not name
+            or name in names
+            or not isinstance(container.get("study"), str)
+            or not isinstance(container.get("role"), str)
+            or not isinstance(configured, str)
+            or not isinstance(effective, list)
+            or any(type(cpu) is not int or cpu < 0 for cpu in effective)
+            or effective != sorted(set(effective))
+            or container.get("protected_cpu_overlaps") != expected_overlaps
+            or container.get("expected_sidecar") is not (name in expected_set)
+        ):
+            return False
+        if configured:
+            try:
+                if effective != sorted(_cpu_list(configured)):
+                    return False
+            except ValueError:
+                return False
+        elif effective != list(range(value["docker_ncpu"])):
+            return False
+        if name in expected_set:
+            observed_expected.add(name)
+            if effective != list(range(CAPTURE_CLIENT_CPU)):
+                return False
+        for cpu in expected_overlaps:
+            derived_overlaps[str(cpu)].append(container_id)
+        ids.add(container_id)
+        names.add(name)
+    return bool(
+        observed_expected == expected_set
+        and names == expected_set
+        and all(overlaps[key] == sorted(derived_overlaps[key]) for key in overlaps)
+        and all(not items for items in overlaps.values())
+    )
+
+
+def _host_partition_valid(value: Any) -> bool:
+    """Validate either immutable scheduler-host receipt by its explicit version."""
+
+    if not isinstance(value, Mapping):
+        return False
+    if value.get("schema_version") == 1:
+        return _host_partition_v1_valid(value)
+    if value.get("schema_version") == 2:
+        return _host_partition_v2_valid(value)
+    return False
+
+
+def _unavailable_host_partition_v1(reason: str) -> dict[str, Any]:
     return {
         "schema_version": 1,
         "source": "docker-inspect-all-running-containers-prelaunch-v1",
@@ -272,6 +435,42 @@ def _unavailable_host_partition(reason: str) -> dict[str, Any]:
         ],
         "error": reason,
     }
+
+
+def _unavailable_host_partition_v2(reason: str) -> dict[str, Any]:
+    return {
+        "schema_version": 2,
+        "source": "docker-inspect-all-running-containers-prelaunch-v2",
+        "captured_at_unix_ns": 0,
+        "protected_cpus": [CAPTURE_CLIENT_CPU, CAPTURE_ORCHESTRATOR_CPU],
+        "owner_label": "org.qcsd.owner=qcsd-lab",
+        "docker_ncpu": 0,
+        "expected_sidecar_names": [],
+        "running_study_containers": [],
+        "overlapping_container_ids_by_cpu": {
+            str(CAPTURE_CLIENT_CPU): [],
+            str(CAPTURE_ORCHESTRATOR_CPU): [],
+        },
+        "running_container_set_matches_expected": False,
+        "valid": False,
+        "verified_scope": (
+            "all running Docker containers at prelaunch; every container must carry the "
+            "qcsd-lab owner label and avoid protected logical CPUs 10 and 11"
+        ),
+        "unavailable_scope": [
+            "non-container host processes",
+            "the measured client container itself, which does not exist at prelaunch",
+            "containers or cpuset changes after the prelaunch observation",
+            "host-kernel and hypervisor scheduling of the selected logical CPUs",
+        ],
+        "error": reason,
+    }
+
+
+def _unavailable_host_partition(reason: str) -> dict[str, Any]:
+    if capture_scheduler_contract() == BUFLO_ETF_SCHEDULER_CONTRACT:
+        return _unavailable_host_partition_v2(reason)
+    return _unavailable_host_partition_v1(reason)
 
 
 def _load_host_partition() -> dict[str, Any]:
@@ -389,6 +588,7 @@ class CaptureSchedulerMonitor:
         self._proc_root = proc_root
         self._cgroup_paths = cgroup_cpu_stat_paths
         self._interval_us = interval_us
+        self._contract = capture_scheduler_contract() or CAPTURE_SCHEDULER_CONTRACT
         self._host_partition = dict(host_partition or _load_host_partition())
         self._cpu_stat_before = _read_cpu_stat(self._cgroup_paths)
         self._steal_before = _read_cpu_steal(self._proc_root)
@@ -546,8 +746,10 @@ class CaptureSchedulerMonitor:
             "unexpected_task_receipt_overflow": self._overflowed_unexpected,
             "scan_errors": list(self._scan_errors),
         }
+        expected_partition_schema = 2 if self._contract == BUFLO_ETF_SCHEDULER_CONTRACT else 1
         valid = bool(
             _host_partition_valid(self._host_partition)
+            and self._host_partition.get("schema_version") == expected_partition_schema
             and cpu_stat["available"] is True
             and cpu_stat["nr_throttled_delta"] == 0
             and cpu_stat["throttled_duration_delta"] == 0
@@ -559,22 +761,40 @@ class CaptureSchedulerMonitor:
             and not self._overflowed_unexpected
             and not self._scan_errors
         )
+        kernel_timed = self._contract == BUFLO_ETF_SCHEDULER_CONTRACT
+        verified_scope = [
+            "measured process-group eligibility for logical CPU 10 in the collection PID namespace",
+            "collection-cgroup CPU throttling counters over the measured client interval",
+            "guest-visible logical CPU 10 steal ticks over the measured client interval when exposed",
+            (
+                "all running Docker container cpusets at host prelaunch, with every container "
+                "QCSD-owned and logical CPUs 10 and 11 protected"
+                if kernel_timed
+                else (
+                    "all running Docker container cpusets at host prelaunch, with every "
+                    "container QCSD-owned"
+                )
+            ),
+        ]
         return {
-            "schema_version": CAPTURE_SCHEDULER_RUNTIME_SCHEMA_VERSION,
-            "source": CAPTURE_SCHEDULER_RUNTIME_SOURCE,
-            "contract": CAPTURE_SCHEDULER_CONTRACT,
+            "schema_version": (
+                BUFLO_ETF_SCHEDULER_RUNTIME_SCHEMA_VERSION
+                if kernel_timed
+                else CAPTURE_SCHEDULER_RUNTIME_SCHEMA_VERSION
+            ),
+            "source": (
+                BUFLO_ETF_SCHEDULER_RUNTIME_SOURCE
+                if kernel_timed
+                else CAPTURE_SCHEDULER_RUNTIME_SOURCE
+            ),
+            "contract": self._contract,
             "client_cpu": CAPTURE_CLIENT_CPU,
             "orchestrator_cpu": CAPTURE_ORCHESTRATOR_CPU,
             "cgroup_cpu_stat": cpu_stat,
             "proc_stat_steal": steal,
             "guest_task_monitor": monitor,
             "host_partition": self._host_partition,
-            "verified_scope": [
-                "measured process-group eligibility for logical CPU 10 in the collection PID namespace",
-                "collection-cgroup CPU throttling counters over the measured client interval",
-                "guest-visible logical CPU 10 steal ticks over the measured client interval when exposed",
-                "all running Docker container cpusets at host prelaunch, with every container QCSD-owned",
-            ],
+            "verified_scope": verified_scope,
             "unavailable_scope": [
                 "non-container host processes",
                 "the measured client container itself, whose cpuset is bound separately by the launch contract",
@@ -692,17 +912,46 @@ def capture_scheduler_runtime_evidence_valid(value: Any) -> bool:
     }
     if not isinstance(value, Mapping) or set(value) != expected_keys:
         return False
+    contract = value.get("contract")
+    if contract not in {CAPTURE_SCHEDULER_CONTRACT, BUFLO_ETF_SCHEDULER_CONTRACT}:
+        return False
+    kernel_timed = contract == BUFLO_ETF_SCHEDULER_CONTRACT
+    expected_schema = (
+        BUFLO_ETF_SCHEDULER_RUNTIME_SCHEMA_VERSION
+        if kernel_timed
+        else CAPTURE_SCHEDULER_RUNTIME_SCHEMA_VERSION
+    )
+    expected_source = (
+        BUFLO_ETF_SCHEDULER_RUNTIME_SOURCE
+        if kernel_timed
+        else CAPTURE_SCHEDULER_RUNTIME_SOURCE
+    )
+    expected_partition_schema = 2 if kernel_timed else 1
+    expected_verified_scope = [
+        "measured process-group eligibility for logical CPU 10 in the collection PID namespace",
+        "collection-cgroup CPU throttling counters over the measured client interval",
+        "guest-visible logical CPU 10 steal ticks over the measured client interval when exposed",
+        (
+            "all running Docker container cpusets at host prelaunch, with every container "
+            "QCSD-owned and logical CPUs 10 and 11 protected"
+            if kernel_timed
+            else (
+                "all running Docker container cpusets at host prelaunch, with every "
+                "container QCSD-owned"
+            )
+        ),
+    ]
     cpu_stat = value.get("cgroup_cpu_stat")
     steal = value.get("proc_stat_steal")
     monitor = value.get("guest_task_monitor")
     if (
-        value.get("schema_version") != CAPTURE_SCHEDULER_RUNTIME_SCHEMA_VERSION
-        or value.get("source") != CAPTURE_SCHEDULER_RUNTIME_SOURCE
-        or value.get("contract") != CAPTURE_SCHEDULER_CONTRACT
+        value.get("schema_version") != expected_schema
+        or value.get("source") != expected_source
         or value.get("client_cpu") != CAPTURE_CLIENT_CPU
         or value.get("orchestrator_cpu") != CAPTURE_ORCHESTRATOR_CPU
         or value.get("valid") is not True
         or not _host_partition_valid(value.get("host_partition"))
+        or value["host_partition"].get("schema_version") != expected_partition_schema
         or not isinstance(cpu_stat, Mapping)
         or set(cpu_stat) != _CPU_STAT_EVIDENCE_KEYS
         or cpu_stat.get("available") is not True
@@ -733,13 +982,7 @@ def capture_scheduler_runtime_evidence_valid(value: Any) -> bool:
         or monitor.get("unexpected_client_cpu_tasks") != []
         or monitor.get("unexpected_task_receipt_overflow") is not False
         or monitor.get("scan_errors") != []
-        or value.get("verified_scope")
-        != [
-            "measured process-group eligibility for logical CPU 10 in the collection PID namespace",
-            "collection-cgroup CPU throttling counters over the measured client interval",
-            "guest-visible logical CPU 10 steal ticks over the measured client interval when exposed",
-            "all running Docker container cpusets at host prelaunch, with every container QCSD-owned",
-        ]
+        or value.get("verified_scope") != expected_verified_scope
         or value.get("unavailable_scope")
         != [
             "non-container host processes",

@@ -6551,19 +6551,31 @@ def test_launcher_applies_least_privilege_rr1_capture_partition() -> None:
         "buflo_controlled_evidence_base64()", 1
     )[0]
 
-    assert 'study_capture_scheduler_contract="qcsd-client-rr1-cpu10-v1"' in launcher
+    assert (
+        'study_capture_scheduler_contract="qcsd-client-rr1-cpu10-etf-helper-cpu11-v1"'
+        in launcher
+    )
     assert 'runtime+=(--cpuset-cpus "10-11" --ulimit "rtprio=1:1")' in launcher
     assert "--cpuset-cpus 10-11" in launcher
     assert "--ulimit rtprio=1:1" in launcher
     assert "docker ps --format '{{.ID}}'" in launcher
     assert "docker-inspect-all-running-containers-prelaunch-v1" in launcher
+    assert "docker-inspect-all-running-containers-prelaunch-v2" in launcher
+    assert 'QCSD_CAPTURE_ETF_INTERFACE=eth0' in launcher
+    assert "QCSD_KERNEL_TX_POST_VETH_CAPTURE_ENDPOINT" in launcher
+    assert "buflo_kernel_tx_observer_binding_base64()" in launcher
+    assert "QCSD_KERNEL_TX_CONTROLLED_OBSERVER_BINDING_B64" in launcher
+    assert "qcsd-kernel-tx-controlled-observer-binding" in launcher
+    assert "router-eth0-ingress-after-client-veth-before-ifb0-ingress-netem" in launcher
+    assert "controlled kernel-TX router did not reach the idle end state" in launcher
+    assert "kernel-TX post-veth capture root contains stale evidence" in launcher
     assert "container_set_matches_expected = set(expected) == observed_names" in launcher
     assert "refuses a running Docker container without the" in launcher
     assert "QCSD_CAPTURE_SCHEDULER_HOST_PARTITION_B64" in launcher
     assert launcher.count('--label "org.qcsd.owner=qcsd-lab"') >= 5
-    # Acceptance server, ordinary controlled server, and shared router helpers
-    # remain outside the isolated client CPU partition.
-    assert launcher.count("--cpuset-cpus 0-9") == 3
+    # Acceptance server, ordinary controlled server, controlled router, and
+    # routed public observer remain outside the isolated client CPU partition.
+    assert launcher.count("--cpuset-cpus 0-9") == 4
     assert "SYS_NICE" not in launcher
     assert "--cpu-rt-runtime" not in launcher
     assert "unsupported capture scheduler contract" in entrypoint
@@ -6571,6 +6583,187 @@ def test_launcher_applies_least_privilege_rr1_capture_partition() -> None:
     assert "+sys_nice" not in entrypoint
     assert 'docker exec "${container_name}" /usr/bin/python3 -c' in network_probe
     assert "/usr/local/bin/python3" not in network_probe
+
+
+def test_controlled_topology_cleanup_is_fail_closed_and_state_aware(
+    tmp_path: Path,
+) -> None:
+    launcher = (LAB_ROOT / "qcsd-lab").read_text(encoding="utf-8")
+    sidecar_cleanup = "cleanup_sidecars() {" + launcher.split(
+        "cleanup_sidecars() {", 1
+    )[1].split("\n}\n\nstart_capture_acceptance_server", 1)[0] + "\n}\n"
+    controlled_cleanup = "cleanup_buflo_controlled() {" + launcher.split(
+        "    cleanup_buflo_controlled() {", 1
+    )[1].split("\n    }\n    trap 'cleanup_buflo_controlled", 1)[0] + "\n}\n"
+
+    assert 'docker rm -f "${name}" >/dev/null 2>&1 || true' not in sidecar_cleanup
+    assert 'if ! cleanup_sidecars; then' in controlled_cleanup
+    assert 'docker network rm "${controlled_server_network}" >/dev/null 2>&1 || true' not in (
+        controlled_cleanup
+    )
+    assert 'docker network rm "${controlled_client_network}" >/dev/null 2>&1 || true' not in (
+        controlled_cleanup
+    )
+    assert "controlled_server_network_created" in controlled_cleanup
+    assert "controlled_client_network_created" in controlled_cleanup
+    assert "preserving kernel-TX capture root" in controlled_cleanup
+
+    script = sidecar_cleanup + controlled_cleanup + r'''
+set -euo pipefail
+kernel_tx_capture_root="$1"
+original_status="$2"
+call_log="$3"
+fail_cleanup="$4"
+sidecars=(controlled-router ordinary-server-one ordinary-server-two)
+controlled_router_started=0
+controlled_server_network_created=1
+controlled_client_network_created=1
+controlled_server_network=controlled-server-network
+controlled_client_network=controlled-client-network
+docker() {
+  printf '%s\n' "$*" >>"${call_log}"
+  if [[ "${fail_cleanup}" == "1" &&
+        "$1" == "rm" && "$2" == "-f" && "$3" == "controlled-router" ]]; then
+    return 41
+  fi
+  if [[ "${fail_cleanup}" == "1" &&
+        "$1" == "network" && "$2" == "rm" && "$3" == "controlled-server-network" ]]; then
+    return 42
+  fi
+  if [[ "$1" == "container" && "$2" == "inspect" ]]; then
+    return 1
+  fi
+  if [[ "$1" == "network" && "$2" == "inspect" ]]; then
+    return 1
+  fi
+  return 0
+}
+cleanup_buflo_controlled "${original_status}"
+'''
+
+    for original_status, expected_status in ((0, 1), (7, 7)):
+        capture_root = tmp_path / f"capture-{original_status}"
+        capture_root.mkdir()
+        call_log = tmp_path / f"docker-{original_status}.log"
+        result = subprocess.run(
+            [
+                "bash",
+                "-c",
+                script,
+                "bash",
+                str(capture_root),
+                str(original_status),
+                str(call_log),
+                "1",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode == expected_status
+        assert "cannot remove Docker sidecar controlled-router" in result.stderr
+        assert "cannot remove controlled Docker network controlled-server-network" in result.stderr
+        assert (
+            "controlled Docker teardown failed; preserving kernel-TX capture root"
+            in result.stderr
+        )
+        assert capture_root.is_dir()
+        calls = call_log.read_text(encoding="utf-8")
+        assert "rm -f ordinary-server-one" in calls
+        assert "rm -f ordinary-server-two" in calls
+        assert "network rm controlled-server-network" in calls
+        assert "network rm controlled-client-network" in calls
+
+    clean_capture_root = tmp_path / "capture-success"
+    clean_capture_root.mkdir()
+    clean_call_log = tmp_path / "docker-success.log"
+    clean_result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            script,
+            "bash",
+            str(clean_capture_root),
+            "0",
+            str(clean_call_log),
+            "0",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert clean_result.returncode == 0
+    assert clean_result.stderr == ""
+    assert not clean_capture_root.exists()
+
+    controlled_branch = launcher.split(
+        'if [[ "${1:-}" == "buflo-study" && "${2:-}" == "capture" ]]', 1
+    )[1].split("# Every remaining ETF launch is a public campaign.", 1)[0]
+    assert "controlled_client_network_created=1" in controlled_branch
+    assert "controlled_server_network_created=1" in controlled_branch
+    assert (
+        '--volume "${capture_root}:/lab/results/${capture_root##*/}:ro"'
+        in controlled_branch
+    )
+    assert '--volume "${capture_root}:/kernel-tx:rw"' in launcher
+    assert controlled_branch.index('sidecars+=("${first_server}")') > controlled_branch.index(
+        '"${first_server}" qcsd-buflo-server-one 4433'
+    )
+    assert controlled_branch.index('sidecars+=("${second_server}")') > controlled_branch.index(
+        '"${second_server}" qcsd-buflo-server-two 4434'
+    )
+
+
+def test_launcher_routes_every_public_etf_campaign_through_post_veth_observer() -> None:
+    launcher = (LAB_ROOT / "qcsd-lab").read_text(encoding="utf-8")
+    entrypoint = (LAB_ROOT / "docker/collection-entrypoint").read_text(encoding="utf-8")
+    public = launcher.split(
+        "# Every remaining ETF launch is a public campaign.", 1
+    )[1].split('if [[ "${1:-}" == "test"', 1)[0]
+
+    assert 'docker network create --driver bridge --internal' in public
+    assert 'docker network connect --gw-priority 1 bridge' in launcher
+    assert 'QCSD_KERNEL_TX_ROUTER_TOPOLOGY_KIND=routed-public-egress' in launcher
+    assert 'QCSD_KERNEL_TX_ROUTER_REQUIRE_MASQUERADE=1' in launcher
+    assert (
+        'iptables -t nat -A POSTROUTING -s "${client_subnet}" '
+        '-o eth1 -j MASQUERADE' in launcher
+    )
+    assert (
+        'replace_container_option_value --network '
+        '"${kernel_tx_public_client_network}"' in public
+    )
+    assert "capture_scheduler_host_partition_b64" in public
+    assert '"${kernel_tx_public_router_name}"' in public
+    assert 'QCSD_KERNEL_TX_CONTROLLED_NETWORK_RECEIPT_B64' in public
+    assert 'QCSD_KERNEL_TX_CONTROLLED_OBSERVER_BINDING_B64' in public
+    assert 'QCSD_KERNEL_TX_POST_VETH_CAPTURE_ROOT=/kernel-tx' in public
+    assert '--volume "${kernel_tx_public_capture_root}:/kernel-tx:ro"' in public
+    assert '--volume "${capture_root}:/kernel-tx:rw"' in launcher
+    assert 'cleanup_kernel_tx_public_topology "$?"' in public
+    assert 'public kernel-TX router did not reach the idle end state' in launcher
+    assert 'preserving it and failing closed' in launcher
+    assert 'ip -4 route flush default' in entrypoint
+    assert 'public kernel-TX client default route is not exclusive' in entrypoint
+    assert r"{64}\\Z" not in launcher
+    assert r"{64}\Z" in launcher
+
+
+def test_controlled_network_receipt_environment_is_canonical_and_restored(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    name = buflo_study.KERNEL_TX_CONTROLLED_NETWORK_RECEIPT_ENV
+    monkeypatch.setenv(name, "previous")
+    receipt = {"schema_version": 2, "artifact_type": "test-network"}
+
+    def observed() -> str:
+        return os.environ[name]
+
+    encoded = buflo_study._with_kernel_tx_network_receipt(receipt, observed)
+
+    assert json.loads(base64.b64decode(encoded, validate=True)) == receipt
+    assert os.environ[name] == "previous"
 
 
 def test_versioned_build_receipts_coexist_and_reject_path_or_request_mismatch(
@@ -7571,6 +7764,15 @@ def test_study_environment_receipt_binds_minimized_docker_bases_and_locks() -> N
         scheduled, expected_image_digest="sha256:" + "a" * 64
     )
     assert validated["capture_scheduler"]["client_affinity_cpus"] == [10]
+    kernel_timed = json.loads(json.dumps(scheduled))
+    kernel_timed["capture_scheduler"] = (
+        buflo_study._buflo_etf_capture_scheduler_environment_contract()
+    )
+    kernel_validated = validate_study_environment_receipt(
+        kernel_timed, expected_image_digest="sha256:" + "a" * 64
+    )
+    assert kernel_validated["capture_scheduler"]["timed_egress_helper_affinity_cpus"] == [11]
+    assert kernel_validated["capture_scheduler"]["timed_egress_helper_policy"] == "SCHED_RR"
     wrong_topology = json.loads(json.dumps(scheduled))
     wrong_topology["docker"]["ncpu"] = 16
     with pytest.raises(ValueError, match="exact 12-CPU topology"):
@@ -8073,6 +8275,8 @@ def test_buflo_fidelity_requires_every_zero_error_and_typed_terminal_once() -> N
     run = {
         "completion_status": "complete",
         "error": None,
+        "error_class": None,
+        "terminal_evidence_render_errors": [],
         "runner_wakeup_metrics": _runner_wakeup_receipt(),
         "resolved_configuration": {"schema_version": 2, "defense": {"kind": "buflo"}},
         "defense_diagnostics": diagnostics,
@@ -8454,6 +8658,8 @@ def test_cs_buflo_fidelity_reconciles_typed_composition_and_rate_state() -> None
     run = {
         "completion_status": "complete",
         "error": None,
+        "error_class": None,
+        "terminal_evidence_render_errors": [],
         "runner_wakeup_metrics": _runner_wakeup_receipt(),
         "resolved_configuration": {
             "schema_version": 2,

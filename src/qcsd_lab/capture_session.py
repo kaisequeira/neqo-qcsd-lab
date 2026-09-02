@@ -8,6 +8,7 @@ that single attempt.
 
 from __future__ import annotations
 
+import ctypes
 import hashlib
 import json
 import os
@@ -38,9 +39,34 @@ from .fidelity import (
     _runner_wakeup_v9_valid,
     _runner_wakeup_v10_relative_chronology_available,
     _runner_wakeup_v10_valid,
+    _runner_wakeup_v11_valid,
     new_defense_terminal_receipts_valid,
     reconcile_direct_runner_artifacts,
+    terminal_evidence_render_receipt_valid,
     validate_primary_capture_clock_integrity,
+)
+from .kernel_tx import (
+    build_kernel_tx_evidence,
+    build_observer_topology_receipt,
+    controller_isolation_receipt_valid,
+    kernel_tx_evidence_success_valid,
+    kernel_tx_runner_receipt_success_valid,
+    observer_topology_receipt_valid,
+)
+from .kernel_tx_runtime import (
+    KERNEL_TX_CONTROLLED_NETWORK_RECEIPT_ENV,
+    KERNEL_TX_CONTROLLED_OBSERVER_BINDING_ENV,
+    KERNEL_TX_INTERFACE,
+    KERNEL_TX_POST_VETH_ENDPOINT_ENV,
+    KERNEL_TX_POST_VETH_ROOT_ENV,
+    KERNEL_TX_POST_VETH_SECRET_ENV,
+    KernelTxQdiscSession,
+    RouterCaptureClient,
+    bind_qdisc_observation,
+    extract_router_udp_packets,
+    kernel_tx_lab_runtime_required,
+    require_controlled_observer_binding,
+    require_post_veth_capture_configuration,
 )
 from .manifest import https_origin
 from .parameters import (
@@ -49,6 +75,7 @@ from .parameters import (
     validate_run_parameter_binding,
 )
 from .process_scheduler import (
+    BUFLO_ETF_SCHEDULER_CONTRACT as _BUFLO_ETF_SCHEDULER_CONTRACT,
     CAPTURE_CLIENT_CPU as _CAPTURE_CLIENT_CPU,
     CAPTURE_SCHEDULER_CONTRACT as _CAPTURE_SCHEDULER_CONTRACT,
     CaptureSchedulerMonitor as _CaptureSchedulerMonitor,
@@ -82,6 +109,32 @@ SUPPORTED_DEFENSE_KINDS = {
     "tamaraw",
     *PARAMETER_FLAG_BY_KIND,
 }
+_MEASURED_CLIENT_CAPTURE_ENVIRONMENT = frozenset(
+    {
+        KERNEL_TX_POST_VETH_ENDPOINT_ENV,
+        KERNEL_TX_POST_VETH_SECRET_ENV,
+        KERNEL_TX_POST_VETH_ROOT_ENV,
+        KERNEL_TX_CONTROLLED_NETWORK_RECEIPT_ENV,
+        KERNEL_TX_CONTROLLED_OBSERVER_BINDING_ENV,
+        "QCSD_CONTROLLED_CLIENT_SUBNET",
+        "QCSD_CONTROLLED_ROUTER_CLIENT_IP",
+        "QCSD_CONTROLLED_ROUTER_SERVER_IP",
+        "QCSD_CONTROLLED_SERVER_SUBNET",
+        "QCSD_KERNEL_TX_PUBLIC_CLIENT_SUBNET",
+        "QCSD_KERNEL_TX_PUBLIC_ROUTER_IP",
+        "QCSD_KERNEL_TX_ROUTER_CAPTURE_INTERFACE",
+        "QCSD_KERNEL_TX_ROUTER_CAPTURE_PORT",
+        "QCSD_KERNEL_TX_ROUTER_CAPTURE_ROOT",
+        "QCSD_KERNEL_TX_ROUTER_CAPTURE_SECRET",
+        "QCSD_KERNEL_TX_ROUTER_CLIENT_SUBNET",
+        "QCSD_KERNEL_TX_ROUTER_REQUIRE_MASQUERADE",
+        "QCSD_KERNEL_TX_ROUTER_TOPOLOGY_KIND",
+        "QCSD_KERNEL_TX_ROUTER_UPLINK_INTERFACE",
+    }
+)
+_PR_GET_DUMPABLE = 3
+_PR_SET_DUMPABLE = 4
+_CONTROLLER_ISOLATION_SOURCE = "linux-prctl-controller-nondumpable-v1"
 _TERMINAL_CLIENT_DEFENSE_ERROR_CLASSES = frozenset(
     {"client-defense-fidelity-v1", "client-defense-execution-v1"}
 )
@@ -90,6 +143,8 @@ _RUNNER_ERROR_CLASSES = frozenset(
         *_TERMINAL_CLIENT_DEFENSE_ERROR_CLASSES,
         "runner-execution-v1",
         "timeout-v1",
+        "run-artifact-evidence-finalization-v1",
+        "run-artifact-persistence-v1",
     }
 )
 RUNNER_KIND_BY_KIND = {
@@ -477,6 +532,203 @@ def _public_study_network_condition(
     return receipt
 
 
+def _linux_prctl(option: int, argument: int = 0) -> int:
+    """Invoke the Linux ``prctl`` boundary with typed errno handling."""
+
+    if option not in {_PR_GET_DUMPABLE, _PR_SET_DUMPABLE}:
+        raise ValueError("unsupported controller prctl option")
+    library = ctypes.CDLL(None, use_errno=True)
+    prctl = library.prctl
+    prctl.argtypes = [
+        ctypes.c_int,
+        ctypes.c_ulong,
+        ctypes.c_ulong,
+        ctypes.c_ulong,
+        ctypes.c_ulong,
+    ]
+    prctl.restype = ctypes.c_int
+    ctypes.set_errno(0)
+    result = int(prctl(option, argument, 0, 0, 0))
+    if result == -1:
+        error_number = ctypes.get_errno()
+        raise OSError(error_number, os.strerror(error_number))
+    return result
+
+
+def _activate_controller_nondumpable() -> int:
+    """Become non-dumpable before reading observer credentials."""
+
+    try:
+        before = _linux_prctl(_PR_GET_DUMPABLE)
+        set_result = _linux_prctl(_PR_SET_DUMPABLE, 0)
+        after = _linux_prctl(_PR_GET_DUMPABLE)
+    except OSError as error:
+        raise RuntimeError("controller non-dumpable prctl failed") from error
+    if before not in {0, 1}:
+        raise RuntimeError("controller dumpable pre-state is invalid")
+    if set_result != 0:
+        raise RuntimeError("PR_SET_DUMPABLE returned a nonzero result")
+    if after != 0:
+        raise RuntimeError("controller remained dumpable after PR_SET_DUMPABLE")
+    return before
+
+
+def _controller_isolation_receipt(dumpable_before_set: int) -> dict[str, Any]:
+    """Recheck the controller immediately before spawning measured Neqo."""
+
+    try:
+        before_client_spawn = _linux_prctl(_PR_GET_DUMPABLE)
+    except OSError as error:
+        raise RuntimeError("controller dumpable readback before client spawn failed") from error
+    receipt = {
+        "schema_version": 1,
+        "source": _CONTROLLER_ISOLATION_SOURCE,
+        "controller_pid": os.getpid(),
+        "pr_get_dumpable_option": _PR_GET_DUMPABLE,
+        "pr_set_dumpable_option": _PR_SET_DUMPABLE,
+        "dumpable_before_set": dumpable_before_set,
+        "set_dumpable_value": 0,
+        "dumpable_after_set": 0,
+        "dumpable_before_client_spawn": before_client_spawn,
+        "verified_before_observer_credentials": True,
+        "protected_scope": (
+            "controller-process-environment-and-router-capture-credentials"
+        ),
+    }
+    if not controller_isolation_receipt_valid(receipt):
+        raise RuntimeError("controller non-dumpable isolation receipt is invalid")
+    return receipt
+
+
+_ROUTER_CAPTURE_RECEIPT_KEYS = {
+    "schema_version",
+    "artifact_type",
+    "capture_id",
+    "observer_role",
+    "interface",
+    "timestamp_clock_id",
+    "timestamp_type",
+    "capture_start_realtime_ns",
+    "capture_end_realtime_ns",
+    "packets_received",
+    "packets_dropped",
+    "interface_packets_dropped",
+    "dumpcap_received_packets",
+    "dumpcap_returncode",
+    "pcapng_sha256",
+    "capture_active_at_stop",
+    "router_state_start",
+    "router_state_end",
+    "capture_service_end_state",
+}
+
+
+def _copy_create_once(source: Path, destination: Path) -> None:
+    """Copy one regular file across mount boundaries with local atomic publish."""
+
+    if source.is_symlink() or not source.is_file():
+        raise RuntimeError(f"kernel-TX source artifact is not a regular file: {source}")
+    temporary = destination.with_name(f".{destination.name}.copying")
+    if any(path.exists() or path.is_symlink() for path in (destination, temporary)):
+        raise RuntimeError(f"kernel-TX destination already exists: {destination}")
+    try:
+        with source.open("rb") as reader, temporary.open("xb") as writer:
+            shutil.copyfileobj(reader, writer, length=1024 * 1024)
+            writer.flush()
+            os.fsync(writer.fileno())
+        os.chmod(temporary, 0o444)
+        os.replace(temporary, destination)
+    except Exception:
+        if temporary.exists() and not temporary.is_symlink():
+            temporary.unlink()
+        raise
+
+
+def _finalize_router_capture(
+    *,
+    client: RouterCaptureClient,
+    source: Path,
+    receipt: Mapping[str, Any],
+    diagnostics: Path,
+) -> tuple[Path, dict[str, Any]]:
+    """Publish one create-only router capture into its immutable attempt boundary."""
+
+    integer_keys = {
+        "capture_start_realtime_ns",
+        "capture_end_realtime_ns",
+        "packets_received",
+        "packets_dropped",
+        "interface_packets_dropped",
+        "dumpcap_received_packets",
+    }
+    if (
+        set(receipt) != _ROUTER_CAPTURE_RECEIPT_KEYS
+        or receipt.get("schema_version") != 2
+        or receipt.get("artifact_type") != "qcsd-kernel-tx-router-capture"
+        or receipt.get("capture_id") != client.capture_id
+        or receipt.get("observer_role") != "router-ingress-post-client-veth-pre-netem"
+        or receipt.get("interface") != "eth0"
+        or receipt.get("timestamp_clock_id") != "CLOCK_REALTIME"
+        or receipt.get("timestamp_type") != "host"
+        or receipt.get("capture_service_end_state") != "idle-no-dumpcap-child"
+        or receipt.get("capture_active_at_stop") is not True
+        or not isinstance(receipt.get("router_state_start"), Mapping)
+        or not isinstance(receipt.get("router_state_end"), Mapping)
+        or any(type(receipt.get(key)) is not int or receipt[key] < 0 for key in integer_keys)
+        or receipt["capture_start_realtime_ns"] > receipt["capture_end_realtime_ns"]
+        or receipt["packets_received"] > receipt["dumpcap_received_packets"]
+        or receipt.get("dumpcap_returncode") not in {0, 2}
+        or not isinstance(receipt.get("pcapng_sha256"), str)
+        or not re.fullmatch(r"[0-9a-f]{64}", receipt["pcapng_sha256"])
+        or sha256_file(source) != receipt["pcapng_sha256"]
+    ):
+        raise RuntimeError("router post-veth capture receipt failed validation")
+    receipt_source = client.root / f"{client.capture_id}.json"
+    log_source = client.root / f"{client.capture_id}.log"
+    if any(path.is_symlink() or not path.is_file() for path in (receipt_source, log_source)):
+        raise RuntimeError("router post-veth capture side artifacts are unavailable")
+    try:
+        persisted_receipt = json.loads(receipt_source.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise RuntimeError("router post-veth persisted receipt is invalid") from error
+    if persisted_receipt != dict(receipt):
+        raise RuntimeError("router post-veth persisted receipt differs from service response")
+    source_hashes = {
+        "pcapng": sha256_file(source),
+        "receipt": sha256_file(receipt_source),
+        "log": sha256_file(log_source),
+    }
+    capture_destination = diagnostics / "kernel-tx-post-veth-raw.pcapng"
+    receipt_destination = diagnostics / "kernel-tx-post-veth-receipt.json"
+    log_destination = diagnostics / "kernel-tx-post-veth-dumpcap.log"
+    if any(
+        path.exists() or path.is_symlink()
+        for path in (capture_destination, receipt_destination, log_destination)
+    ):
+        raise RuntimeError("attempt already contains kernel-TX router capture artifacts")
+    _copy_create_once(source, capture_destination)
+    _copy_create_once(receipt_source, receipt_destination)
+    _copy_create_once(log_source, log_destination)
+    destination_hashes = {
+        "pcapng": sha256_file(capture_destination),
+        "receipt": sha256_file(receipt_destination),
+        "log": sha256_file(log_destination),
+    }
+    if (
+        destination_hashes != source_hashes
+        or destination_hashes["pcapng"] != receipt["pcapng_sha256"]
+    ):
+        raise RuntimeError("published router capture triplet differs from its sources")
+    client.consume(
+        pcapng_sha256=source_hashes["pcapng"],
+        receipt_sha256=source_hashes["receipt"],
+        log_sha256=source_hashes["log"],
+    )
+    if any(path.exists() or path.is_symlink() for path in (source, receipt_source, log_source)):
+        raise RuntimeError("router capture service did not consume every original artifact")
+    return capture_destination, dict(receipt)
+
+
 def _collect_attempt(
     attempt: Path,
     manifest: Path,
@@ -515,6 +767,44 @@ def _collect_attempt(
     elif chaff_manifest is None or application_workload_source is None:
         raise ValueError("every defended capture requires prepared source and qualified chaff")
 
+    selected_scheduler_contract = _capture_scheduler_contract()
+    observer_topology_required = (
+        selected_scheduler_contract == _BUFLO_ETF_SCHEDULER_CONTRACT
+    )
+    kernel_tx_required = kernel_tx_lab_runtime_required(
+        defense_kind=defense.kind,
+        scheduler_contract=selected_scheduler_contract,
+    )
+    controlled_network_receipt: dict[str, Any] | None = None
+    controlled_observer_binding: dict[str, Any] | None = None
+    controlled_network_receipt_sha256: str | None = None
+    observer_topology_receipt: dict[str, Any] | None = None
+    observer_topology_valid: bool | None = None
+    controller_dumpable_before_set: int | None = None
+    if observer_topology_required:
+        # This must precede every environment decode, socket connection and
+        # filesystem access involving router observer credentials.  The
+        # measured child also receives an explicitly scrubbed environment.
+        controller_dumpable_before_set = _activate_controller_nondumpable()
+        (
+            controlled_network_receipt,
+            controlled_observer_binding,
+            controlled_network_receipt_sha256,
+        ) = require_controlled_observer_binding()
+    if kernel_tx_required:
+        if os.environ.get("QCSD_CAPTURE_ETF_INTERFACE") != KERNEL_TX_INTERFACE:
+            raise ValueError("kernel-timed BuFLO requires QCSD_CAPTURE_ETF_INTERFACE=eth0")
+        # BuFLO additionally requires the authenticated post-veth packet
+        # observer.  Other matched modes retain the same immutable routed/NAT
+        # topology without starting a per-sample router capture.
+        observer_host, _observer_port, _secret, _root = (
+            require_post_veth_capture_configuration()
+        )
+        if os.environ.get("QCSD_CONTROLLED_ROUTER_CLIENT_IP") != observer_host:
+            raise ValueError(
+                "kernel-timed BuFLO post-veth observer is not the routed observer eth0"
+            )
+
     if (
         defense.parameters_path is not None
         and defense.parameters_sha256 is not None
@@ -545,6 +835,13 @@ def _collect_attempt(
     public_network_valid = (
         public_network_condition is None or public_network_condition["valid"] is True
     )
+    kernel_qdisc_session: KernelTxQdiscSession | None = None
+    kernel_qdisc_installed = False
+    kernel_qdisc_observation: dict[str, Any] | None = None
+    router_capture_client: RouterCaptureClient | None = None
+    router_capture_started = False
+    router_capture_source: Path | None = None
+    router_capture_receipt: dict[str, Any] | None = None
     raw = diagnostics / f"{view.id}-raw.pcapng"
     capture_log = diagnostics / f"dumpcap-{view.id}.log"
     handle = capture_log.open("w", encoding="utf-8")
@@ -572,6 +869,41 @@ def _collect_attempt(
     capture_active_through_settle = False
     try:
         _wait_for_capture_start(process, capture_log)
+        if kernel_tx_required:
+            kernel_qdisc_session = KernelTxQdiscSession()
+            kernel_qdisc_session.install()
+            kernel_qdisc_installed = True
+            router_capture_client = RouterCaptureClient(
+                stable_digest("kernel-tx-post-veth-v1", attempt.resolve())
+            )
+            router_capture_client.start(
+                duration_seconds=context.limits.capture_seconds,
+                max_megabytes=context.limits.capture_megabytes,
+            )
+            router_capture_started = True
+        if observer_topology_required:
+            if (
+                controller_dumpable_before_set is None
+                or controlled_network_receipt is None
+                or controlled_observer_binding is None
+                or controlled_network_receipt_sha256 is None
+            ):
+                raise RuntimeError("matched observer isolation inputs are incomplete")
+            isolation_receipt = _controller_isolation_receipt(
+                controller_dumpable_before_set
+            )
+            observer_topology_receipt = build_observer_topology_receipt(
+                network_receipt=controlled_network_receipt,
+                observer_binding=controlled_observer_binding,
+                network_receipt_sha256=controlled_network_receipt_sha256,
+                controller_isolation=isolation_receipt,
+            )
+            observer_topology_valid = observer_topology_receipt_valid(
+                observer_topology_receipt,
+                expected_image_digest=os.environ.get("QCSD_LAB_IMAGE_DIGEST"),
+            )
+            if not observer_topology_valid:
+                raise ValueError("matched collection observer topology failed validation")
         clock_start = _clock_anchor()
         client, runner_timed_out, runner_host_timeout_seconds = _run_neqo_client(
             _client_command(
@@ -603,10 +935,48 @@ def _collect_attempt(
             process.terminate()
             process.wait(timeout=5)
         handle.close()
+        cleanup_errors: list[str] = []
+        if router_capture_started and router_capture_client is not None:
+            try:
+                router_capture_source, router_capture_receipt = router_capture_client.stop()
+            except (OSError, RuntimeError, ValueError) as error:
+                cleanup_errors.append(f"post-veth capture stop failed: {error}")
+        if kernel_qdisc_session is not None:
+            try:
+                if kernel_qdisc_installed:
+                    kernel_qdisc_observation = kernel_qdisc_session.finish_observation()
+                else:
+                    kernel_qdisc_session.restore()
+            except (OSError, RuntimeError, ValueError) as error:
+                cleanup_errors.append(f"client qdisc finalisation failed: {error}")
+                try:
+                    kernel_qdisc_session.restore()
+                except (OSError, RuntimeError, ValueError) as restore_error:
+                    cleanup_errors.append(
+                        f"client qdisc emergency restoration failed: {restore_error}"
+                    )
+        if cleanup_errors:
+            raise RuntimeError("; ".join(cleanup_errors))
 
     # The authoritative interval includes the settle tail and closes only once
     # dumpcap can no longer add a packet to the retained capture.
     capture_clock_anchors = _capture_clock_anchors_after_stop(clock_start, process)
+
+    router_capture_path: Path | None = None
+    if kernel_tx_required:
+        if (
+            router_capture_client is None
+            or router_capture_source is None
+            or router_capture_receipt is None
+            or kernel_qdisc_observation is None
+        ):
+            raise RuntimeError("kernel-TX Lab observations are incomplete")
+        router_capture_path, router_capture_receipt = _finalize_router_capture(
+            client=router_capture_client,
+            source=router_capture_source,
+            receipt=router_capture_receipt,
+            diagnostics=diagnostics,
+        )
 
     run_json = neqo / "run.json"
     runner_output_error: str | None = None
@@ -622,7 +992,12 @@ def _collect_attempt(
     scheduler_required = _capture_scheduler_contract() is not None
     process_scheduler = run_data.get("process_scheduler") if run_data else None
     process_scheduler_valid = (
-        _process_scheduler_valid(process_scheduler) if scheduler_required else None
+        _process_scheduler_bound_to_run_valid(
+            run_data,
+            expected_contract=_capture_scheduler_contract(),
+        )
+        if scheduler_required
+        else None
     )
     scheduler_runtime_evidence_valid = (
         _capture_scheduler_runtime_evidence_valid(scheduler_runtime_evidence)
@@ -818,6 +1193,62 @@ def _collect_attempt(
         "capture_clock_integrity": capture_clock_integrity,
         "valid": valid,
     }
+    kernel_tx_evidence_valid: bool | None = None
+    kernel_tx_evidence_error: str | None = None
+    kernel_tx_evidence_path = diagnostics / "kernel-tx-evidence.json"
+    if kernel_tx_required:
+        try:
+            wakeups = run_data.get("runner_wakeup_metrics")
+            raw_kernel_tx = (
+                wakeups.get("buflo_kernel_tx") if isinstance(wakeups, Mapping) else None
+            )
+            if not isinstance(raw_kernel_tx, Mapping):
+                raise ValueError("runner did not retain the raw kernel-TX receipt")
+            if (
+                kernel_qdisc_observation is None
+                or router_capture_path is None
+                or router_capture_receipt is None
+                or controlled_network_receipt is None
+                or controlled_observer_binding is None
+                or controlled_network_receipt_sha256 is None
+            ):
+                raise ValueError("Lab kernel-TX evidence inputs are incomplete")
+            bound_qdisc = bind_qdisc_observation(
+                kernel_qdisc_observation,
+                raw_kernel_tx["qdisc_contract"],
+            )
+            router_packets = extract_router_udp_packets(router_capture_path)
+            kernel_tx_evidence = build_kernel_tx_evidence(
+                runner_receipt=raw_kernel_tx,
+                runner_run_json_sha256=sha256_file(run_json),
+                qdisc_evidence=bound_qdisc,
+                router_capture_receipt=router_capture_receipt,
+                router_packets=router_packets,
+                controlled_network_receipt=controlled_network_receipt,
+                controlled_network_receipt_sha256=controlled_network_receipt_sha256,
+                controlled_observer_binding=controlled_observer_binding,
+            )
+            atomic_json(kernel_tx_evidence_path, kernel_tx_evidence)
+            kernel_tx_evidence_valid = kernel_tx_evidence_success_valid(
+                kernel_tx_evidence,
+                runner_receipt=raw_kernel_tx,
+                expected_run_json_sha256=sha256_file(run_json),
+                expected_router_capture_sha256=sha256_file(router_capture_path),
+                router_capture_receipt=router_capture_receipt,
+                router_packets=router_packets,
+            )
+            if not kernel_tx_evidence_valid:
+                raise ValueError("kernel-TX independent evidence did not satisfy success gates")
+        except (KeyError, OSError, RuntimeError, TypeError, ValueError) as error:
+            kernel_tx_evidence_valid = False
+            kernel_tx_evidence_error = str(error)
+            failures.append(
+                {
+                    "view": "kernel-tx-post-veth",
+                    "primary": True,
+                    "reason": f"kernel-TX evidence failed: {error}",
+                }
+            )
     success = (
         not runner_timed_out
         and client.returncode == 0
@@ -827,6 +1258,8 @@ def _collect_attempt(
         and (not scheduler_required or scheduler_runtime_evidence_valid is True)
         and endpoint_count_valid
         and valid
+        and (not observer_topology_required or observer_topology_valid is True)
+        and (not kernel_tx_required or kernel_tx_evidence_valid is True)
     )
     terminal_client_defense_failure, runner_process_failure = _terminal_client_execution_failure(
         runner_error_class=runner_error_class,
@@ -891,6 +1324,22 @@ def _collect_attempt(
         "views": [record],
         "offloads": offloads,
         "network_condition": public_network_condition,
+        "observer_topology_required": observer_topology_required,
+        "observer_topology_receipt": observer_topology_receipt,
+        "observer_topology_valid": observer_topology_valid,
+        "kernel_tx_evidence_required": kernel_tx_required,
+        "kernel_tx_evidence_path": (
+            "diagnostics/kernel-tx-evidence.json"
+            if kernel_tx_evidence_path.is_file()
+            else None
+        ),
+        "kernel_tx_evidence_sha256": (
+            sha256_file(kernel_tx_evidence_path)
+            if kernel_tx_evidence_path.is_file()
+            else None
+        ),
+        "kernel_tx_evidence_valid": kernel_tx_evidence_valid,
+        "kernel_tx_evidence_error": kernel_tx_evidence_error,
         "defense_diagnostics": run_data.get("defense_diagnostics"),
         "operationally_valid": not guard_triggered,
         "failure": (
@@ -971,6 +1420,11 @@ def _run_neqo_client(
     started = time.monotonic()
     timed_out = False
     run_options: dict[str, Any] = {
+        "env": {
+            key: value
+            for key, value in os.environ.items()
+            if key not in _MEASURED_CLIENT_CAPTURE_ENVIRONMENT
+        },
         "log": log,
         "check": False,
         "timeout": host_timeout,
@@ -1039,8 +1493,13 @@ def _terminal_client_execution_failure(
     )
 
 
-def _process_scheduler_valid(value: Any) -> bool:
-    """Validate the Linux runtime receipt emitted by the measured Neqo process."""
+def _process_scheduler_receipt_valid(
+    value: Any,
+    *,
+    expected_contract: str | None,
+    allowed_capabilities: frozenset[str],
+) -> bool:
+    """Validate one Linux scheduler snapshot against an explicit contract."""
 
     if not isinstance(value, dict) or set(value) != _PROCESS_SCHEDULER_KEYS:
         return False
@@ -1057,11 +1516,73 @@ def _process_scheduler_valid(value: Any) -> bool:
         and rtprio == {"soft": 1, "hard": 1}
         and value.get("no_new_privileges") is True
         and isinstance(capabilities, str)
-        and capabilities == "0000000000000000"
+        and capabilities in allowed_capabilities
         and value.get("cgroup_effective_cpuset") == "10-11"
         and value.get("affinity_scope") == _PROCESS_SCHEDULER_AFFINITY_SCOPE
-        and value.get("contract") == _CAPTURE_SCHEDULER_CONTRACT
+        and expected_contract in {
+            _CAPTURE_SCHEDULER_CONTRACT,
+            _BUFLO_ETF_SCHEDULER_CONTRACT,
+        }
+        and value.get("contract") == expected_contract
         and value.get("contract_valid") is True
+    )
+
+
+def _process_scheduler_valid(value: Any) -> bool:
+    """Validate the capability-free snapshot selected by the live launcher."""
+
+    return _process_scheduler_receipt_valid(
+        value,
+        expected_contract=_capture_scheduler_contract(),
+        allowed_capabilities=frozenset({"0000000000000000"}),
+    )
+
+
+def _process_scheduler_bound_to_run_valid(
+    run: Mapping[str, Any],
+    *,
+    expected_contract: str | None,
+) -> bool:
+    """Accept BuFLO's bounded setup snapshot only with total kernel evidence.
+
+    Non-BuFLO ETF clients must serialize the fresh post-drop zero-capability
+    snapshot before any network execution.  BuFLO necessarily retains
+    ``CAP_NET_ADMIN`` and ``CAP_SETPCAP`` through endpoint socket setup; its
+    ETF top-level snapshot must therefore contain exactly ``0x1100`` and is
+    accepted only when the
+    nested schema-11 receipt is successful, repeats that exact initial
+    scheduler snapshot, and proves the permanent all-set capability drop.
+    """
+
+    scheduler = run.get("process_scheduler")
+    resolved = run.get("resolved_configuration")
+    defense = resolved.get("defense") if isinstance(resolved, Mapping) else None
+    defense_kind = defense.get("kind") if isinstance(defense, Mapping) else None
+    if _process_scheduler_receipt_valid(
+        scheduler,
+        expected_contract=expected_contract,
+        allowed_capabilities=frozenset({"0000000000000000"}),
+    ):
+        return bool(
+            expected_contract != _BUFLO_ETF_SCHEDULER_CONTRACT
+            or isinstance(defense_kind, str)
+            and defense_kind != "buflo"
+        )
+    if not _process_scheduler_receipt_valid(
+        scheduler,
+        expected_contract=expected_contract,
+        allowed_capabilities=frozenset({"0000000000001100"}),
+    ):
+        return False
+    wakeups = run.get("runner_wakeup_metrics")
+    raw = wakeups.get("buflo_kernel_tx") if isinstance(wakeups, Mapping) else None
+    return bool(
+        expected_contract == _BUFLO_ETF_SCHEDULER_CONTRACT
+        and defense_kind == "buflo"
+        and isinstance(wakeups, Mapping)
+        and wakeups.get("schema_version") == 11
+        and kernel_tx_runner_receipt_success_valid(raw)
+        and raw["runtime_contract"]["scheduler_initial"] == scheduler
     )
 
 
@@ -1160,6 +1681,8 @@ def _runner_wakeup_metrics_valid(value: Any) -> bool:
     schema_version = value.get("schema_version")
     if type(schema_version) is not int:
         return False
+    if schema_version == 11:
+        return _runner_wakeup_v11_valid(value)
     if schema_version == 10:
         return _runner_wakeup_v10_valid(value)
     if schema_version == 9:
@@ -1290,6 +1813,10 @@ def _validate_run_binding(
         or run_data.get("workload_hash_sha256") != sha256_file(manifest)
         or run_data.get("max_response_bytes") != context.limits.max_response_bytes
         or not _runner_error_receipt_coherent(run_data)
+        or not terminal_evidence_render_receipt_valid(
+            run_data,
+            require_present=not historical_candidate,
+        )
         or not _client_resource_usage_valid(resource_usage)
         or (
             isinstance(wakeup_metrics, Mapping)
@@ -1333,7 +1860,13 @@ def _validate_run_binding(
         or resolved.get("max_udp_payload_size") != context.udp_payload_ceiling
         or not isinstance(resolved_defense, dict)
         or resolved_defense.get("kind") != defense.kind
-        or (scheduler_required and not _process_scheduler_valid(process_scheduler))
+        or (
+            scheduler_required
+            and not _process_scheduler_bound_to_run_valid(
+                run_data,
+                expected_contract=_capture_scheduler_contract(),
+            )
+        )
     ):
         raise ValueError("runner receipt does not match the frozen sample inputs")
     expected_chaff_hash = (
@@ -1578,6 +2111,7 @@ def _runner_result_complete(run_data: dict[str, Any], expected_resource_ids: set
     return (
         run_data.get("completion_status") == "complete"
         and _runner_error_receipt_coherent(run_data)
+        and terminal_evidence_render_receipt_valid(run_data, require_empty=True)
         and not padding_event_guard_triggered(run_data)
         and bool(expected_resource_ids)
         and len(observed_ids) == len(responses) == len(expected_resource_ids)
@@ -1598,6 +2132,8 @@ def _runner_error_receipt_coherent(run_data: dict[str, Any]) -> bool:
 
     error = run_data.get("error")
     error_class = run_data.get("error_class")
+    if not terminal_evidence_render_receipt_valid(run_data):
+        return False
     if run_data.get("completion_status") == "complete":
         return error is None and error_class is None
     if error_class is None:

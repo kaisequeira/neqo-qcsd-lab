@@ -2318,7 +2318,10 @@ def test_launcher_rewrites_class_paths_and_never_mounts_workspace_rw():
     assert "QCSD_CLASS_HISTORICAL_PRE_SNAPSHOT" in launcher
     assert "QCSD_STUDY_ENVIRONMENT_B64" in launcher
     assert '"${class_study_execute}" == "1"' in launcher
-    assert 'study_capture_scheduler_contract="qcsd-client-rr1-cpu10-v1"' in launcher
+    assert (
+        'study_capture_scheduler_contract="qcsd-client-rr1-cpu10-etf-helper-cpu11-v1"'
+        in launcher
+    )
     assert "research capture requires the create-only no-cache build receipt" in launcher
     assert '--volume "${ROOT}:/lab:rw"' not in launcher
     assert "rejects a blanket workspace read-write mount" in launcher

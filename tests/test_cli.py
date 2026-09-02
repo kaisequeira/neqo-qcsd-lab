@@ -145,7 +145,7 @@ def test_launcher_routes_only_consolidated_public_commands():
     launcher_path = Path(__file__).parents[1] / "qcsd-lab"
     launcher = launcher_path.read_text(encoding="utf-8")
     assert (
-        "{build|prepare|derive-chaff-prefix-specs|qualify-chaff|qualify-response-chaff|run|resume|verify|analyze|fit|buflo-study|class-study|test}"
+        "{build|prepare|derive-chaff-prefix-specs|qualify-chaff|qualify-response-chaff|run|resume|verify|analyze|fit|buflo-study|class-study|etf-probe|test}"
         in launcher
     )
     assert (

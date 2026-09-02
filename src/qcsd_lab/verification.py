@@ -22,10 +22,12 @@ from .util import atomic_text, sha256_file
 
 
 AUTHORITATIVE_DIRECTORIES = ("inputs", "samples", "failures")
+OPTIONAL_AUTHORITATIVE_DIRECTORIES = ("kernel-tx-evidence",)
 _ALLOWED_ROOT_ENTRIES = {
     EXPERIMENT_FILE,
     EVIDENCE_FILE,
     *RESULT_DIRECTORIES,
+    *OPTIONAL_AUTHORITATIVE_DIRECTORIES,
 }
 _DIGEST = re.compile(r"[0-9a-f]{64}")
 
@@ -68,6 +70,17 @@ def authoritative_files(root: Path) -> dict[str, Path]:
         directory = root / name
         if not directory.is_dir() or directory.is_symlink():
             raise ValueError(f"result has no regular {name}/ directory: {root}")
+        for path in directory.rglob("*"):
+            if path.is_symlink():
+                raise ValueError(f"authoritative evidence cannot contain symlinks: {path}")
+            if path.is_file():
+                result[path.relative_to(root).as_posix()] = path
+    for name in OPTIONAL_AUTHORITATIVE_DIRECTORIES:
+        directory = root / name
+        if not directory.exists():
+            continue
+        if not directory.is_dir() or directory.is_symlink():
+            raise ValueError(f"optional evidence path is not a regular directory: {directory}")
         for path in directory.rglob("*"):
             if path.is_symlink():
                 raise ValueError(f"authoritative evidence cannot contain symlinks: {path}")
@@ -211,11 +224,27 @@ def _discard_running_sample_artifacts(root: Path, experiment: Mapping[str, Any])
         raise ValueError("sequential experiment has multiple running samples")
     for sample in running:
         sample_root = resolved_sample_directory(root, sample)
-        if not sample_root.exists():
-            continue
-        if not sample_root.is_relative_to(samples_root) or not sample_root.is_dir():
-            raise ValueError(f"interrupted sample path is unsafe: {sample['path']}")
-        shutil.rmtree(sample_root)
+        if sample_root.exists() or sample_root.is_symlink():
+            if (
+                sample_root.is_symlink()
+                or not sample_root.is_relative_to(samples_root)
+                or not sample_root.is_dir()
+            ):
+                raise ValueError(f"interrupted sample path is unsafe: {sample['path']}")
+            shutil.rmtree(sample_root)
+        sample_id = sample.get("sample_id")
+        if isinstance(sample_id, str):
+            sidecar = root / "kernel-tx-evidence" / sample_id
+            if sidecar.exists() or sidecar.is_symlink():
+                if sidecar.is_symlink() or not sidecar.is_dir():
+                    raise ValueError("interrupted kernel-TX sidecar path is unsafe")
+                shutil.rmtree(sidecar)
+    evidence_root = root / "kernel-tx-evidence"
+    if evidence_root.is_dir() and not evidence_root.is_symlink():
+        try:
+            evidence_root.rmdir()
+        except OSError:
+            pass
 
 
 def retire_seal_for_resume(

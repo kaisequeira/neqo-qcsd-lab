@@ -12,6 +12,11 @@ from typing import Any, Iterable
 
 from .capture import read_normalized_trace
 from .defenses import DEFENSE_ADAPTATIONS
+from .kernel_tx import (
+    KERNEL_TX_RUNNER_SEMANTICS,
+    kernel_tx_runner_receipt_success_valid,
+    kernel_tx_runner_receipt_valid,
+)
 from .util import load_json, sha256_file
 
 RUNNER_PACKET_FIELDS = (
@@ -93,6 +98,35 @@ BUFLO_SCHEDULE_STOP_V4_BOOLEAN_KEYS = frozenset({"buflo_schedule_stop_latched"})
 BUFLO_SCHEDULE_STOP_V4_KEYS = (
     BUFLO_SCHEDULE_STOP_V4_INTEGER_KEYS | BUFLO_SCHEDULE_STOP_V4_BOOLEAN_KEYS
 )
+
+TERMINAL_EVIDENCE_RENDER_ERROR_CLASS = "run-artifact-evidence-finalization-v1"
+
+
+def terminal_evidence_render_receipt_valid(
+    run: Mapping[str, Any],
+    *,
+    require_present: bool = False,
+    require_empty: bool = False,
+) -> bool:
+    """Validate total run-artifact rendering without rejecting historical receipts."""
+
+    if "terminal_evidence_render_errors" not in run:
+        return not require_present
+    errors = run.get("terminal_evidence_render_errors")
+    if not isinstance(errors, list) or not all(
+        isinstance(error, str) and bool(error) for error in errors
+    ):
+        return False
+    if require_empty and errors:
+        return False
+    if not errors:
+        return True
+    return bool(
+        run.get("completion_status") == "error"
+        and run.get("error_class") == TERMINAL_EVIDENCE_RENDER_ERROR_CLASS
+        and isinstance(run.get("error"), str)
+        and bool(run["error"])
+    )
 CS_BUFLO_LOCAL_ET_V3_INTEGER_KEYS = frozenset(
     {
         "cs_buflo_local_et_latched_at_us",
@@ -688,6 +722,7 @@ def reconcile_direct_runner_artifacts(
         run.get("completion_status") != "complete"
         or run.get("error") is not None
         or run.get("error_class") is not None
+        or not terminal_evidence_render_receipt_valid(run, require_empty=True)
     ):
         raise ValueError("runner did not complete before direct reconciliation")
     overheads = _endpoint_frame_overheads(run)
@@ -2198,6 +2233,15 @@ RUNNER_WAKEUP_V10_POLL_SOURCES = frozenset(
     }
 )
 RUNNER_WAKEUP_V10_U64_MAX = 2**64 - 1
+RUNNER_WAKEUP_V11_SEMANTICS = (
+    f"{RUNNER_WAKEUP_SEMANTICS}; "
+    "runner_schema10_layout_is_retained_for_non_kernel_metrics; "
+    "buflo_legacy_exact_release_guard_metrics_are_zero_with_kernel_tx=true; "
+    "buflo_kernel_tx_raw_semantics="
+    f"{KERNEL_TX_RUNNER_SEMANTICS}; "
+    "post_veth_and_qdisc_end_state_are_separate_lab_evidence=true"
+)
+RUNNER_WAKEUP_V11_REQUIRED_KEYS = RUNNER_WAKEUP_V10_REQUIRED_KEYS | {"buflo_kernel_tx"}
 
 
 def _runner_wakeup_v10_checked_u64_sum(*values: int) -> int | None:
@@ -2879,6 +2923,11 @@ def new_defense_terminal_receipts_valid(
         run.get("completion_status") != "complete"
         or run.get("error") is not None
         or run.get("error_class") is not None
+        or not terminal_evidence_render_receipt_valid(
+            run,
+            require_present=require_current_schema,
+            require_empty=True,
+        )
         or not isinstance(resolved, Mapping)
         or resolved.get("schema_version") != 2
         or not isinstance(resolved_defense, Mapping)
@@ -2889,10 +2938,21 @@ def new_defense_terminal_receipts_valid(
     ):
         return False
     wakeup_metrics = run["runner_wakeup_metrics"]
-    if require_current_schema and wakeup_metrics["schema_version"] != 10:
+    if require_current_schema and (
+        wakeup_metrics["schema_version"] not in {10, 11}
+        or (wakeup_metrics["schema_version"] == 11 and defense_kind != "buflo")
+    ):
         return False
-    if wakeup_metrics["schema_version"] in {2, 3, 4, 5, 6, 7, 8, 9, 10} and defense_kind != "buflo":
-        if any(
+    if (
+        wakeup_metrics["schema_version"] == 11
+        and defense_kind != "buflo"
+        and wakeup_metrics["buflo_kernel_tx"] is not None
+    ):
+        return False
+    if (
+        wakeup_metrics["schema_version"] in {2, 3, 4, 5, 6, 7, 8, 9, 10, 11}
+        and defense_kind != "buflo"
+        and any(
             wakeup_metrics[key]
             for key in (
                 "buflo_exact_release_guard_entries",
@@ -2901,28 +2961,35 @@ def new_defense_terminal_receipts_valid(
                 "buflo_exact_release_max_passive_wake_lateness_nanoseconds",
                 "buflo_exact_release_max_guard_exit_lateness_nanoseconds",
             )
-        ):
-            return False
-    if wakeup_metrics["schema_version"] in {5, 6, 7, 8, 9, 10} and defense_kind != "buflo":
-        if any(
+        )
+    ):
+        return False
+    if (
+        wakeup_metrics["schema_version"] in {5, 6, 7, 8, 9, 10, 11}
+        and defense_kind != "buflo"
+        and any(
             wakeup_metrics[key]
             for key in (
                 "buflo_exact_incoming_retry_drives",
                 "buflo_exact_incoming_retry_resolutions",
                 "buflo_exact_incoming_retry_max_wake_lateness_nanoseconds",
             )
-        ):
-            return False
-    if wakeup_metrics["schema_version"] in {4, 5, 6, 7, 8, 9, 10} and defense_kind != "cs_buflo":
-        if any(
+        )
+    ):
+        return False
+    if (
+        wakeup_metrics["schema_version"] in {4, 5, 6, 7, 8, 9, 10, 11}
+        and defense_kind != "cs_buflo"
+        and any(
             wakeup_metrics[key]
             for key in (
                 "cs_exact_incoming_retry_drives",
                 "cs_exact_incoming_retry_resolutions",
                 "cs_exact_incoming_retry_max_phase_lateness_nanoseconds",
             )
-        ):
-            return False
+        )
+    ):
+        return False
     if wakeup_metrics["schema_version"] in {7, 8, 9, 10} and defense_kind == "buflo":
         scheduled_outgoing = diagnostics.get("buflo_scheduled_outgoing_cells")
         if (
@@ -2963,6 +3030,16 @@ def new_defense_terminal_receipts_valid(
             or confirmations != guard_entries + early_retries
             or wakeup_metrics["buflo_exact_release_active_wait_counter_calibrations"]
             != confirmations
+        ):
+            return False
+    if wakeup_metrics["schema_version"] == 11 and defense_kind == "buflo":
+        scheduled_outgoing = diagnostics.get("buflo_scheduled_outgoing_cells")
+        kernel_tx = wakeup_metrics.get("buflo_kernel_tx")
+        if (
+            type(scheduled_outgoing) is not int
+            or scheduled_outgoing <= 0
+            or not kernel_tx_runner_receipt_success_valid(kernel_tx)
+            or kernel_tx["aggregate"]["job_count"] != scheduled_outgoing
         ):
             return False
     prefix = "buflo_" if defense_kind == "buflo" else "cs_buflo_"
@@ -5375,6 +5452,65 @@ def _runner_wakeup_v10_valid(value: Any) -> bool:
     return True
 
 
+def _runner_wakeup_v11_project_schema_ten(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Project schema 11 onto the frozen schema-10 compatibility envelope."""
+
+    projected = dict(value)
+    projected.pop("buflo_kernel_tx", None)
+    projected["schema_version"] = 10
+    projected["semantics"] = RUNNER_WAKEUP_V10_SEMANTICS
+    return projected
+
+
+def _runner_wakeup_v11_legacy_buflo_metrics_neutral(value: Mapping[str, Any]) -> bool:
+    """Prove the superseded user-space BuFLO path emitted no observations."""
+
+    integer_values = (
+        field_value
+        for key, field_value in value.items()
+        if key.startswith("buflo_exact_") and type(field_value) is int
+    )
+    return bool(
+        not any(integer_values)
+        and value["buflo_exact_release_active_wait_poll_source"]
+        == "instant-authoritative-fallback-v1"
+        and value["buflo_exact_release_active_wait_counter_frequency_hz"] is None
+        and value["buflo_exact_release_worst_guard"] is None
+        and value["buflo_exact_release_last_failure"] is None
+        and not any(value["buflo_exact_release_dispatch_lateness_histogram"]["counts"])
+        and not any(value["buflo_exact_release_active_spin_gap_histogram"]["counts"])
+    )
+
+
+def _runner_wakeup_v11_valid(value: Any) -> bool:
+    """Validate schema 11 without reinterpreting historical schema-10 fields.
+
+    A non-null ``buflo_kernel_tx`` is raw Rust evidence only.  Router-ingress
+    capture and final qdisc counters live in the separately hashed Lab
+    ``kernel_tx_evidence`` receipt; callers must require that receipt before a
+    sample becomes eligible.
+    """
+
+    if (
+        not isinstance(value, Mapping)
+        or set(value) != RUNNER_WAKEUP_V11_REQUIRED_KEYS
+        or value.get("schema_version") != 11
+        or value.get("semantics") != RUNNER_WAKEUP_V11_SEMANTICS
+        or not _runner_wakeup_v10_valid(_runner_wakeup_v11_project_schema_ten(value))
+    ):
+        return False
+    kernel_tx = value.get("buflo_kernel_tx")
+    if kernel_tx is None:
+        return True
+    return bool(
+        kernel_tx_runner_receipt_valid(kernel_tx)
+        # Kernel scheduling supersedes the schema-10 user-space exact-release
+        # guard/retry mechanism.  Keeping those counters non-zero would claim
+        # two mutually exclusive physical realization paths for one sample.
+        and _runner_wakeup_v11_legacy_buflo_metrics_neutral(value)
+    )
+
+
 def _runner_wakeup_v7_valid(value: Any) -> bool:
     """Validate historical schema-seven exact-release timing evidence."""
 
@@ -5410,6 +5546,8 @@ def _runner_wakeup_metrics_valid(value: Any) -> bool:
     schema_version = value.get("schema_version")
     if type(schema_version) is not int:
         return False
+    if schema_version == 11:
+        return _runner_wakeup_v11_valid(value)
     if schema_version == 10:
         return _runner_wakeup_v10_valid(value)
     if schema_version == 9:

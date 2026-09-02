@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .fidelity import terminal_evidence_render_receipt_valid
 from .manifest import canonical_bytes, https_origin, runtime_manifest
 from .util import load_json, sha256_bytes, sha256_file
 
@@ -278,6 +279,7 @@ def validate_class_sample_run_binding(
         or run.get("completion_status") != "complete"
         or run.get("error") is not None
         or run.get("error_class") is not None
+        or not terminal_evidence_render_receipt_valid(run, require_empty=True)
         or run.get("seed") != sample.get("seed")
         or run.get("request_policy") != sample.get("request_policy")
         or run.get("workload_hash_sha256") != inputs["runtime_workload_sha256"]

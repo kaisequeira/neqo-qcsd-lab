@@ -468,7 +468,7 @@ RUN uv lock --check && \
 
 FROM lab-runtime AS collection
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    default-jre-headless ethtool git iproute2 time tshark util-linux wireshark-common && \
+    default-jre-headless ethtool git iproute2 iptables time tshark util-linux wireshark-common && \
     rm -rf /var/lib/apt/lists/*
 RUN uv lock --check && \
     uv sync --frozen --no-dev --no-editable --extra test --extra evaluation && \
