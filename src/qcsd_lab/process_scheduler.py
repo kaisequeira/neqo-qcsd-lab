@@ -167,8 +167,8 @@ def capture_scheduler_launch_prefix() -> list[str]:
         prefix.extend(
             [
                 "--bounding-set=-all,+net_admin,+setpcap",
-                "--inh-caps=+net_admin,+setpcap",
-                "--ambient-caps=+net_admin,+setpcap",
+                "--inh-caps=-all,+net_admin,+setpcap",
+                "--ambient-caps=-all,+net_admin,+setpcap",
             ]
         )
     else:

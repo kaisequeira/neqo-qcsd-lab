@@ -269,19 +269,22 @@ natural byte invalidates provisional stop evidence in the implementation, with
 the cumulative invalidation count retained in the final receipt.  This drain
 is not the paper's server padding-done signal.
 
-The newest immutable prerequisite checkpoint is cohort v51. It binds clean Lab
-`0eaf8039186315a7dc402fc26feac4dd92c1c6ce`, Neqo/gitlink
+The newest immutable prerequisite checkpoint is cohort v52. It binds clean Lab
+`002efabd6de1852a34e56e173ebc8e081d48d173`, Neqo/gitlink
 `e3ea858a31677067da969f50c1ac5aba50592c7c`, collection image
-`sha256:f98de797b0dc812ec201cff44f7a6502ddbd8ffcccf2eea2dcaa2d497cadb3c5`,
+`sha256:6c7c0d8d59ce329ebf79c72e6410146a99fa2e71a1a7c70fe159cbecb90145b8`,
 preparation image
-`sha256:2d0cce042bdc85d3c01917b81b1291405040581d0680ce55947d8c1a7b222165`,
+`sha256:bcc4016f7e2192eb64831e91a0a918947adc63aa1a645ef102544000a37307c7`,
 and reference image
-`sha256:40a8dbfc0807f71ac78f2d62d53b79b8f7b7be2bbd0db5268948036317b7fca7`.
+`sha256:c9d521e4d55c9b20f78b87babad9e5b5912b0c4b5e12e76496398cb782899590`.
 Its no-cache build and isolated reference gate passed. The reference gate
 reproduced all eight BuFLO profiles and the CS-BuFLO archive ratio
-`2.282792444255336` over 3,824 nonzero-baseline records. The router launcher
-then failed before the first timing-stress sample, so v51 contains no
-capture-bearing result and cannot authorise the post-fix source.
+`2.282792444255336` over 3,824 nonzero-baseline records. The first mandatory
+timing-stress launch then failed before creating an attempt or checkpoint:
+the measured client retained NET_RAW in capability mask `0x3100`, whereas the
+bounded ETF socket-setup contract permits only NET_ADMIN and SETPCAP
+(`0x1100`). V52 therefore contains no capture-bearing result and cannot
+authorise the post-fix source.
 
 The newest immutable capture-bearing checkpoint remains cohort v47. It binds
 clean Lab `236da73cb9091f37f0ea78256a72bd9e9ed62d60`, Neqo/gitlink
@@ -484,17 +487,17 @@ canonical Rust-`u64` parser. It accepts only ASCII decimal `0` through
 fractions, leading zeroes other than `0`, overlong text, and overflow before
 timing, size, composition, credit, fitting, plotting, or handoff arithmetic.
 
-Current production schema 11 is committed in Rust
-`7999788ccaafefb6442d34e7a1e5ae6a1d3efb52` and Lab
-`213a26b1f522321d2b0c727819c58a5ae822dfa1`. The clean Rust head and committed
-gitlink are `e3ea858a31677067da969f50c1ac5aba50592c7c`. Lab
-`8939e6ac2f71a1f27a30233bf4ec172fad2e33d1` is the committed pre-launcher
-base, not the identity that may be used for the next build. The current Lab
-checkout contains the acquisition/CDP, launcher/lifecycle, canonical runner-CSV
-`u64`, timing-stress, focused/class-handoff, and documentation hardening. The
-next immutable build must use a clean commit containing that work and this
-README; its exact identity is resolved at launch by `git rev-parse HEAD` and
-bound into the build receipt rather than copied prospectively into this file.
+Current production schema 11 remains at clean Rust head and committed gitlink
+`e3ea858a31677067da969f50c1ac5aba50592c7c`. Clean Lab
+`002efabd6de1852a34e56e173ebc8e081d48d173` is the executed v52 source, not
+the identity that may authorise the capability-narrowing correction. The
+post-v52 Lab source resets the inherited and ambient capability sets before
+adding only NET_ADMIN and SETPCAP for bounded ETF socket setup; it does not
+relax the Rust acceptance predicate or remove NET_RAW from the outer capture
+orchestration process. The next immutable build must use a clean commit
+containing that repair and this README. Its exact identity is resolved at
+launch by `git rev-parse HEAD` and bound into the build receipt rather than
+copied prospectively into this file.
 
 V48 failed during the pre-receipt collection-image build after 230
 `neqo-bin` tests passed and three environment-sensitive fixtures failed. It
@@ -539,7 +542,38 @@ capture, accepted visit, or eligible regression cell. It is therefore a
 consumed infrastructure-failure cohort, not capture evidence: timing stress is
 0/12 and regression is 0/18.
 
-For current source, the fresh build, reference, and regression-bound code-gate
+V52 then bound clean Lab `002efabd6de1852a34e56e173ebc8e081d48d173`
+and the unchanged Rust/gitlink
+`e3ea858a31677067da969f50c1ac5aba50592c7c`. Its pull/no-cache build passed
+with receipt SHA-256
+`0f2ec3466d420ef451ab9844ef8f208d3bbe9a81196259c1446024a59a493d86`;
+its isolated reference gate passed with receipt SHA-256
+`d5b372c9220ac950f1c357adab0c89b2a61fab0aa2c21520b6e459410e7afb33`.
+The first controlled stability run entered Rust as `SCHED_RR` priority 1 on
+CPU 10 with `RLIMIT_RTPRIO=1/1`, no-new-privileges set, and cgroup cpuset
+`10-11`, but failed the strict scheduler contract because effective capability
+mask `0x3100` still included NET_RAW. The inner `setpriv` command had narrowed
+the bounding set while only adding to the inherited and ambient sets supplied
+by the capture orchestrator. The post-v52 repair clears those two sets before
+adding the permitted NET_ADMIN and SETPCAP bits. The strict Rust requirement
+of `0x1100` during setup and zero capabilities after the permanent drop is
+unchanged.
+
+V52 stopped before creating `experiment.json`, an attempt directory, a PCAP,
+or an accepted timing visit. Its timing-stress environment is the sole file in
+the result root and has SHA-256
+`fcd635d06007a9949c58c6c37b83ef74c76c5e5998b03a4857ac6f8a39cef1c5`.
+All three sidecars and both networks were physically removed, but their five
+durable HANDOFF ledgers failed retirement before any retirement authority was
+published. The surviving evidence does not identify a narrower failed guard.
+The official guardian-authenticated `etf-probe` recovery subsequently
+validated and retired exactly those five absent-object roots, then reached its
+expected disabled-probe exit. The active lifecycle namespace and QCSD-labelled
+Docker object set are empty; the preserved kernel-TX root is empty. V52 remains
+a consumed infrastructure-failure cohort at timing stress 0/12 and regression
+0/18.
+
+For post-v52 source, the fresh build, reference, and regression-bound code-gate
 receipts are absent; timing stress is 0/12, regression 0/18, and controlled
 qualification 0/160. Real acquisition observations remain zero. Pilot fitting,
 qualification, and compatibility are 0/480, 0/720, and 0/1,080;
@@ -547,7 +581,7 @@ authoritative fitting and final qualification are 0/2,000 and 0/600;
 certification and canaries are 0/900 and 0/1,000; formal capture is 0/16,000.
 Handoff, evaluation, comparison, and attestation are absent. With this Lab
 hardening in a clean immutable checkout, the next fresh cohort must use an
-unused version of at least 52 and repeat the pull/no-cache build, isolated
+unused version of at least 53 and repeat the pull/no-cache build, isolated
 reference gate, 12/12
 timing stress, 18/18 regression, regression-bound code gate, and 160/160
 controlled qualification before expanded-class acquisition can begin. The

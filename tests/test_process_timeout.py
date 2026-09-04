@@ -230,8 +230,8 @@ def test_buflo_etf_scheduler_retains_only_bounded_socket_setup_capabilities(
         "1",
         "/usr/bin/setpriv",
         "--bounding-set=-all,+net_admin,+setpcap",
-        "--inh-caps=+net_admin,+setpcap",
-        "--ambient-caps=+net_admin,+setpcap",
+        "--inh-caps=-all,+net_admin,+setpcap",
+        "--ambient-caps=-all,+net_admin,+setpcap",
         "--no-new-privs",
         "--",
     ]
