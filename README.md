@@ -489,7 +489,15 @@ embedded six-command Rust gate passed, including 233/233 `neqo-bin` tests and
 strict workspace Clippy, but the build was deliberately cancelled during
 release-binary compilation because the Lab launcher repair was still required.
 It likewise produced no image or immutable receipt, reference, or capture.
-Both attempts are diagnostic only.
+V50 then completed and exported the no-cache collection image, including the
+embedded Rust gate, but emitted no build receipt: its first terminal read-only
+daemon-identity observation stalled immediately after export and reached the
+three-second API-service bound. The build scope had already terminated and the
+daemon subsequently returned the same pinned identity, so this was transient
+identity unavailability rather than identity drift. The exact v50 image was
+removed after a controlled Docker restart and the hash-verified lifecycle
+records were preserved outside the active namespace for audit. V48--v50 are
+diagnostic, non-evidentiary attempts.
 
 For current source, the fresh build, reference, and regression-bound code-gate
 receipts are absent; timing stress is 0/12, regression 0/18, and controlled
@@ -499,7 +507,7 @@ authoritative fitting and final qualification are 0/2,000 and 0/600;
 certification and canaries are 0/900 and 0/1,000; formal capture is 0/16,000.
 Handoff, evaluation, comparison, and attestation are absent. With this Lab
 hardening in a clean immutable checkout, the next fresh cohort must use an
-unused version of at least 50 and repeat the pull/no-cache build, isolated
+unused version of at least 51 and repeat the pull/no-cache build, isolated
 reference gate, 12/12
 timing stress, 18/18 regression, regression-bound code gate, and 160/160
 controlled qualification before expanded-class acquisition can begin. The
@@ -597,6 +605,11 @@ semantics; API calls have whole-tree runtime bounds, while interrupted runs and
 builds must prove the exact cgroup empty before cleanup can complete. Exact
 helper-source, boot, daemon, endpoint, context, process, scope, status-channel,
 container or network, and private nonce bindings are retained for recovery.
+Read-only daemon-identity proof permits one fresh, non-overlapping observation
+only when its first three-second service returns no identity; a returned
+mismatch is terminal, and identity-plus-operation or other mutating Docker
+requests remain one-shot. The native service boundary proves the failed first
+service and its cgroup terminal before the second observation may begin.
 Run/build children remain stopped behind durable birth and supervision
 handshakes; source, latched signal, PID, start time, session, and process group
 are revalidated immediately before release. At the next launch every lifecycle

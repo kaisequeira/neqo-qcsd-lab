@@ -8,6 +8,12 @@
 # operations use their separately declared runtime envelopes.
 
 _QCSD_DOCKER_API_TIMEOUT_SECONDS=3
+# A read-only daemon-identity proof may be retried once when the first bounded
+# observation is unavailable.  This covers a transient control-plane stall
+# immediately after a large BuildKit export without extending the lifetime of
+# any individual API service.  A returned mismatch is terminal and mutating
+# Docker requests remain strictly one-shot.
+_QCSD_DOCKER_DAEMON_IDENTITY_ATTEMPTS=2
 _QCSD_DOCKER_GRACE_SECONDS=40
 # Conservative interrupted delayed-create path at individual bounds: initial
 # 6-second resolution, 12-second publication retry, 3-second signal, one
@@ -666,17 +672,26 @@ _qcsd_target_docker_api_with_timeout() {
 }
 
 _qcsd_verify_pinned_docker_daemon() {
-  local observed_id
+  local observed_id attempt
   if [[ ! "${_QCSD_DOCKER_PINNED_CONTEXT:-}" =~ ^[A-Za-z0-9_.-]+$ ]] ||
      ! _qcsd_valid_pinned_docker_host \
        "${_QCSD_DOCKER_PINNED_HOST:-}" ||
      [[ ! "${_QCSD_DOCKER_PINNED_SERVER_ID:-}" =~ ^[A-Za-z0-9_.:-]+$ ]]; then
     return 1
   fi
-  observed_id="$(_qcsd_docker_api_raw_with_timeout \
-    "${_QCSD_DOCKER_API_TIMEOUT_SECONDS}" info --format '{{.ID}}' 2>/dev/null)" ||
-    return 1
-  [[ "${observed_id}" == "${_QCSD_DOCKER_PINNED_SERVER_ID}" ]]
+  for (( attempt = 1;
+         attempt <= _QCSD_DOCKER_DAEMON_IDENTITY_ATTEMPTS;
+         attempt++ )); do
+    if observed_id="$(_qcsd_docker_api_raw_with_timeout \
+        "${_QCSD_DOCKER_API_TIMEOUT_SECONDS}" \
+        info --format '{{.ID}}' 2>/dev/null)"; then
+      [[ "${observed_id}" == "${_QCSD_DOCKER_PINNED_SERVER_ID}" ]]
+      return
+    fi
+    # The native API-service boundary proves the failed service terminal
+    # before returning, so a retry cannot overlap its predecessor.
+  done
+  return 1
 }
 
 _qcsd_verify_pinned_host_boot() {

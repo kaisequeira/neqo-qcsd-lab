@@ -193,8 +193,19 @@ if args[:1] == ["info"]:
     )
     if os.environ.get("FAKE_ESCAPE_ON_COMMAND") == "info":
         spawn_escaped_child("api")
-    if os.environ.get("FAKE_INFO_DELAY"):
-        time.sleep(float(os.environ["FAKE_INFO_DELAY"]))
+    attempt_counter_path = root / "info-attempt-counter"
+    attempt_counter = (
+        int(attempt_counter_path.read_text(encoding="ascii"))
+        if attempt_counter_path.exists()
+        else 0
+    )
+    write(attempt_counter_path, str(attempt_counter + 1))
+    info_delays = os.environ.get(
+        "FAKE_INFO_DELAY_SEQUENCE", os.environ.get("FAKE_INFO_DELAY", "0")
+    ).split(",")
+    info_delay = float(info_delays[min(attempt_counter, len(info_delays) - 1)])
+    if info_delay:
+        time.sleep(info_delay)
     server_ids = os.environ.get(
         "FAKE_DOCKER_SERVER_ID_SEQUENCE",
         os.environ.get("FAKE_DOCKER_SERVER_ID", "daemon-test-id"),
@@ -4533,6 +4544,202 @@ exit "$status"
         state / "last-api-cgroup", "qcsd-docker-api", "service"
     )
     _assert_user_scope_inactive(unit)
+
+
+def test_daemon_identity_proof_retries_one_unavailable_observation(
+    fake_environment: dict[str, str],
+) -> None:
+    fake_environment.update(
+        FAKE_DOCKER_SERVER_ID="daemon-pinned-id",
+        FAKE_INFO_DELAY_SEQUENCE="1.2,0",
+    )
+    script = r'''
+set -euo pipefail
+source "$HELPER"
+_QCSD_DOCKER_API_TIMEOUT_SECONDS=1
+_QCSD_DOCKER_PINNED_CONTEXT=default
+_QCSD_DOCKER_PINNED_HOST=unix:///var/run/docker.sock
+_QCSD_DOCKER_PINNED_SERVER_ID=daemon-pinned-id
+_qcsd_verify_pinned_docker_daemon
+'''
+    result = subprocess.run(
+        ["bash", "-c", textwrap.dedent(script)],
+        env=fake_environment,
+        text=True,
+        capture_output=True,
+        timeout=8,
+    )
+
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    state = Path(fake_environment["FAKE_DOCKER_STATE"])
+    calls = (state / "calls.log").read_text(encoding="utf-8")
+    assert calls.count("INFO unix:///var/run/docker.sock") == 2
+    assert (state / "info-attempt-counter").read_text(encoding="ascii") == "2"
+
+
+def test_daemon_identity_proof_never_retries_a_returned_mismatch(
+    fake_environment: dict[str, str],
+) -> None:
+    fake_environment["FAKE_DOCKER_SERVER_ID_SEQUENCE"] = (
+        "changed-daemon-id,daemon-pinned-id"
+    )
+    script = r'''
+set -uo pipefail
+source "$HELPER"
+_QCSD_DOCKER_PINNED_CONTEXT=default
+_QCSD_DOCKER_PINNED_HOST=unix:///var/run/docker.sock
+_QCSD_DOCKER_PINNED_SERVER_ID=daemon-pinned-id
+set +e
+_qcsd_verify_pinned_docker_daemon
+status=$?
+set -e
+exit "$status"
+'''
+    result = subprocess.run(
+        ["bash", "-c", textwrap.dedent(script)],
+        env=fake_environment,
+        text=True,
+        capture_output=True,
+        timeout=5,
+    )
+
+    assert result.returncode != 0, (result.stdout, result.stderr)
+    state = Path(fake_environment["FAKE_DOCKER_STATE"])
+    calls = (state / "calls.log").read_text(encoding="utf-8")
+    assert calls.count("INFO unix:///var/run/docker.sock") == 1
+    assert (state / "info-attempt-counter").read_text(encoding="ascii") == "1"
+
+
+def test_daemon_identity_timeout_then_mismatch_blocks_network_mutation(
+    fake_environment: dict[str, str],
+) -> None:
+    fake_environment.update(
+        FAKE_DOCKER_SERVER_ID="changed-daemon-id",
+        FAKE_INFO_DELAY_SEQUENCE="1.2,0",
+    )
+    script = r'''
+set -uo pipefail
+source "$HELPER"
+_QCSD_DOCKER_API_TIMEOUT_SECONDS=1
+QCSD_DOCKER_IDS_TEST=()
+set +e
+qcsd_create_docker_network QCSD_DOCKER_IDS_TEST \
+  docker network create test-network
+status=$?
+set -e
+exit "$status"
+'''
+    result = subprocess.run(
+        ["bash", "-c", textwrap.dedent(script)],
+        env=fake_environment,
+        text=True,
+        capture_output=True,
+        timeout=8,
+    )
+
+    assert result.returncode != 0, (result.stdout, result.stderr)
+    state = Path(fake_environment["FAKE_DOCKER_STATE"])
+    calls = (state / "calls.log").read_text(encoding="utf-8")
+    assert calls.count("INFO unix:///var/run/docker.sock") == 2
+    assert "NETWORK_CREATE_BEGIN" not in calls
+    assert (state / "info-attempt-counter").read_text(encoding="ascii") == "2"
+    assert not (state / "network").exists()
+    assert not (state / "supervisor-roots.log").exists()
+
+
+def test_daemon_identity_two_timeouts_fail_closed_without_network_mutation(
+    fake_environment: dict[str, str],
+) -> None:
+    fake_environment["FAKE_INFO_DELAY_SEQUENCE"] = "1.2,1.2"
+    script = r'''
+set -uo pipefail
+source "$HELPER"
+_QCSD_DOCKER_API_TIMEOUT_SECONDS=1
+QCSD_DOCKER_IDS_TEST=()
+set +e
+qcsd_create_docker_network QCSD_DOCKER_IDS_TEST \
+  docker network create test-network
+status=$?
+set -e
+exit "$status"
+'''
+    result = subprocess.run(
+        ["bash", "-c", textwrap.dedent(script)],
+        env=fake_environment,
+        text=True,
+        capture_output=True,
+        timeout=8,
+    )
+
+    assert result.returncode != 0, (result.stdout, result.stderr)
+    state = Path(fake_environment["FAKE_DOCKER_STATE"])
+    calls = (state / "calls.log").read_text(encoding="utf-8")
+    assert calls.count("INFO unix:///var/run/docker.sock") == 2
+    assert "NETWORK_CREATE_BEGIN" not in calls
+    assert (state / "info-attempt-counter").read_text(encoding="ascii") == "2"
+    assert not (state / "info-counter").exists()
+    assert not (state / "network").exists()
+    assert not (state / "supervisor-roots.log").exists()
+
+
+def test_build_terminal_retirement_identity_timeout_retries_without_rebuild(
+    fake_environment: dict[str, str],
+) -> None:
+    fake_environment.update(
+        FAKE_BUILD_BEHAVIOR="natural0",
+        # The first two observations are the supervisor preflight and the
+        # in-scope request-boundary proof.  Observation three is therefore the
+        # first terminal-retirement proof after BUILD has returned.
+        FAKE_INFO_DELAY_SEQUENCE="0,0,1.2,0",
+    )
+    script = r'''
+set -euo pipefail
+source "$HELPER"
+_QCSD_DOCKER_API_TIMEOUT_SECONDS=1
+eval "$(declare -f _qcsd_lifecycle_retire_completed_root | sed \
+  '1s/_qcsd_lifecycle_retire_completed_root/_qcsd_fixture_retire_completed_root/')"
+_qcsd_lifecycle_retire_completed_root() {
+  # The lightweight fake-Docker fixture replaces native retirement with an
+  # exact local remover.  Restore its terminal daemon proof at this boundary
+  # so this test exercises the production retry through the real build tail.
+  _qcsd_verify_pinned_docker_daemon || return 1
+  _qcsd_fixture_retire_completed_root "$@"
+}
+exec 9>"$LOCK_PATH"
+chmod 600 "$LOCK_PATH"
+flock -n 9
+_QCSD_DOCKER_BUILD_LOCK_FD=9
+qcsd_run_docker_build docker --context default build fake-context
+'''
+    result = subprocess.run(
+        ["bash", "-c", textwrap.dedent(script)],
+        cwd=ROOT,
+        env=fake_environment,
+        text=True,
+        capture_output=True,
+        timeout=15,
+    )
+
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    state = Path(fake_environment["FAKE_DOCKER_STATE"])
+    call_lines = (state / "calls.log").read_text(encoding="utf-8").splitlines()
+    build_lines = [line for line in call_lines if line.startswith("BUILD ")]
+    info_indices = [
+        index
+        for index, line in enumerate(call_lines)
+        if line == "INFO unix:///var/run/docker.sock"
+    ]
+    assert len(build_lines) == 1
+    build_index = call_lines.index(build_lines[0])
+    assert len([index for index in info_indices if index < build_index]) == 2
+    assert len([index for index in info_indices if index > build_index]) == 2
+    assert (state / "info-attempt-counter").read_text(encoding="ascii") == "4"
+    roots = _created_lifecycle_roots(state, "build")
+    assert len(roots) == 1
+    root = roots[0]
+    assert not root.exists()
+    assert not (root.parent / f"retirement.{root.name}").exists()
+    assert not (root.parent / f".retired.{root.name}").exists()
 
 
 def test_pinned_daemon_identity_mismatch_prevents_the_operation(
