@@ -269,7 +269,8 @@ natural byte invalidates provisional stop evidence in the implementation, with
 the cumulative invalidation count retained in the final receipt.  This drain
 is not the paper's server padding-done signal.
 
-The newest immutable prerequisite checkpoint is cohort v53. It binds clean Lab
+The newest receipt-bearing prerequisite checkpoint is cohort v53. It binds
+clean Lab
 `234086d54a15422edce74bfe2000332fd308eb8c`, Neqo/gitlink
 `e3ea858a31677067da969f50c1ac5aba50592c7c`, collection image
 `sha256:354c5b1a8fb6cff2f98d3b85c7958f9bb75b3ece6588defec671c8e853edb40c`,
@@ -298,7 +299,7 @@ It records one launched visit and zero accepted visits. The independent direct
 diagnostic captured 88/88 packets with no reported drop, but no Neqo receipt,
 router-capture triplet, accepted timing visit, or regression sample exists.
 V53 is consequently terminal at timing stress 0/12 and regression 0/18 and
-cannot authorise the post-v53 source.
+cannot authorise any later source.
 
 The newest immutable capture-bearing checkpoint remains cohort v47. It binds
 clean Lab `236da73cb9091f37f0ea78256a72bd9e9ed62d60`, Neqo/gitlink
@@ -501,14 +502,19 @@ canonical Rust-`u64` parser. It accepts only ASCII decimal `0` through
 fractions, leading zeroes other than `0`, overlong text, and overflow before
 timing, size, composition, credit, fitting, plotting, or handoff arithmetic.
 
-Current production schema 11 remains at clean Rust head and committed gitlink
+Production schema 11 in the v53 and v54 executions is clean Rust/gitlink
 `e3ea858a31677067da969f50c1ac5aba50592c7c`. Clean Lab
-`234086d54a15422edce74bfe2000332fd308eb8c` is the executed v53 source. It
-contains the capability-set repair proven by v53 to have passed the build and
-reference boundaries; the later router bind-root defect occurred before a
-measured client launch and is independent of that scheduler contract.
+`6475ccdd1367953c453456fb237c13f3e9c610b0` is the executed v54 source; its
+parent `234086d54a15422edce74bfe2000332fd308eb8c` is the executed v53 source.
+The parent contains the capability-set repair proven by v53 to have passed the
+build and reference boundaries. The clean v54 Lab commit adds the router
+bind-root correction below. Its three focused launcher/access tests passed;
+`tests/test_buflo_study.py` plus `tests/test_kernel_tx_runtime.py` passed 273
+tests in 186.71 seconds; and the complete Lab suite passed 2,656 tests with 14
+skipped and 23 warnings in 1,720.62 seconds (28:40). These are engineering
+tests rather than cohort evidence.
 
-Post-v53 Lab source retains router UID 0 and only NET_ADMIN/NET_RAW. It shares
+Clean Lab `6475ccdd…` retains router UID 0 and only NET_ADMIN/NET_RAW. It shares
 the invoking user's single numeric primary GID with each controlled and public
 post-veth router and requires the private bind root to be an exact host-owned,
 host-primary-GID, setgid mode `2770` directory. Fresh roots are initialised;
@@ -518,10 +524,20 @@ measured client may launch, the router must also prove exact Docker
 UID/GID/mode, setgid inheritance, create/unlink access, and an empty post-probe
 root. The correction adds neither `CAP_DAC_OVERRIDE` nor
 `CAP_DAC_READ_SEARCH`, does not weaken read-only client mounts, and applies to
-both controlled and public ETF paths. The next immutable build must use a clean
-commit containing this repair and this README. Its exact identity is resolved
-at launch by `git rev-parse HEAD` and bound into the build receipt rather than
-copied prospectively into this file.
+both controlled and public ETF paths. V54 exercised this exact clean Lab source
+but failed earlier inside the embedded Rust test gate, before an image or build
+receipt could be exported.
+
+Current clean Rust commit `20daa1df9387e2b50d0105e364a28bffe1bb1cc0`
+changes only the fixture for
+`exact_handoff_excludes_realized_credit_from_a_later_guard`: it applies the
+existing `TestMonotonicNowOverride` so the test's logical 20 ms interval no
+longer includes wall-clock fixture setup. Production behaviour, scheduler
+semantics, and receipt contracts are unchanged. Formatting, one isolated run,
+100/100 repetitions in the pinned container, and the complete 233/233
+`neqo-bin` suite passed. This is test-only engineering evidence, not cohort
+evidence. The Lab gitlink must bind this Rust commit in a clean immutable
+checkout before the next fresh build.
 
 V48 failed during the pre-receipt collection-image build after 230
 `neqo-bin` tests passed and three environment-sensitive fixtures failed. It
@@ -607,18 +623,37 @@ path; the active lifecycle namespace and QCSD-labelled Docker object sets are
 empty. The empty, mode-`0700` v53 kernel-TX root is preserved unchanged for
 audit.
 
-For post-v53 source, the fresh build, reference, and regression-bound code-gate
-receipts are absent; timing stress is 0/12, regression 0/18, and controlled
-qualification 0/160. Real acquisition observations remain zero. Pilot fitting,
-qualification, and compatibility are 0/480, 0/720, and 0/1,080;
+V54 then started a fresh no-cache build from clean Lab
+`6475ccdd1367953c453456fb237c13f3e9c610b0` and Rust/gitlink
+`e3ea858a31677067da969f50c1ac5aba50592c7c`. The collection image's embedded
+Rust gate passed 232 of 233 `neqo-bin` tests, then
+`exact_handoff_excludes_realized_credit_from_a_later_guard` failed because its
+real monotonic clock counted fixture setup inside the intended logical 20 ms
+interval. Buildx reference `wtd8avzrq0if3hfvuhjsfu912` is terminal `Error`.
+No image, build receipt, reference execution, timing visit, regression sample,
+or other capture was exported. The v53 static image identities remain
+unchanged. V54 is a consumed pre-receipt test failure and every v54 gate and
+scientific counter is zero.
+
+Restart/re-audit matched the v54 lifecycle state, then removed exactly its two
+lifecycle roots and three bookkeeping files. The active lifecycle namespace is
+empty. This is operational cleanup rather than candidate evidence. Rust
+`20daa1df9387e2b50d0105e364a28bffe1bb1cc0` applies only the existing
+`TestMonotonicNowOverride` to that fixture; the passing engineering tests are
+recorded above and cannot repair v54 in place.
+
+For current post-v54 source, the fresh build, reference, and regression-bound
+code-gate receipts are absent; timing stress is 0/12, regression 0/18, and
+controlled qualification 0/160. Real acquisition observations remain zero.
+Pilot fitting, qualification, and compatibility are 0/480, 0/720, and 0/1,080;
 authoritative fitting and final qualification are 0/2,000 and 0/600;
 certification and canaries are 0/900 and 0/1,000; formal capture is 0/16,000.
-Handoff, evaluation, comparison, and attestation are absent. With this Lab
-hardening in a clean immutable checkout, the next fresh cohort must use an
-unused version of at least 54 and repeat the pull/no-cache build, isolated
-reference gate, 12/12
-timing stress, 18/18 regression, regression-bound code gate, and 160/160
-controlled qualification before expanded-class acquisition can begin. The
+Handoff, evaluation, comparison, and attestation are absent. With the test-only
+Rust correction bound by a clean Lab gitlink in an immutable checkout, the next
+fresh cohort must be v55 or later and repeat the pull/no-cache build, isolated
+reference gate, 12/12 timing stress, 18/18 regression, regression-bound code
+gate, and 160/160 controlled qualification before expanded-class acquisition
+can begin. The
 complete earlier cohort chronology is retained in the authoritative workspace
 [`PROJECT.md`](../PROJECT.md).
 
