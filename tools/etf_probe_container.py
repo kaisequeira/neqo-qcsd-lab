@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Container half of the non-evidentiary QCSD ETF capability probe.
 
-This file is mounted read-only into two disposable containers by
-``qcsd_lab.etf_probe``.  It deliberately has no dependency on the Lab package
+This file is mounted read-only into two disposable containers by the guarded
+``qcsd-lab etf-probe`` launcher.  It deliberately has no dependency on the Lab package
 so that the probe exercises the selected image's kernel-facing Python and
 iproute2 interfaces directly.
 """
@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import errno
+import ipaddress
 import json
 import os
 import select
@@ -31,6 +32,8 @@ SO_TXTIME = 61
 SCM_TXTIME = SO_TXTIME
 SCM_PRIORITY = SO_PRIORITY
 IP_RECVERR = 11
+IP_TOS = 1
+IP_RECVTOS = 13
 SOF_TIMESTAMPING_TX_SOFTWARE = 1 << 1
 SOF_TIMESTAMPING_SOFTWARE = 1 << 4
 SOF_TIMESTAMPING_OPT_ID = 1 << 7
@@ -86,12 +89,20 @@ def _parse_kernel_timestamp(ancillary: list[tuple[int, int, bytes]]) -> dict[str
     return None
 
 
+def _parse_ipv4_ds_field(ancillary: list[tuple[int, int, bytes]]) -> int | None:
+    for level, kind, data in ancillary:
+        if level == socket.IPPROTO_IP and kind == IP_TOS and data:
+            return data[0]
+    return None
+
+
 def receive(args: argparse.Namespace) -> int:
     output = Path(args.output)
     ready = Path(args.ready)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.setsockopt(socket.SOL_SOCKET, SO_TIMESTAMPNS, 1)
+    sock.setsockopt(socket.IPPROTO_IP, IP_RECVTOS, 1)
     sock.bind(("0.0.0.0", args.port))
     ready.write_text("ready\n", encoding="ascii")
     events: list[dict[str, Any]] = []
@@ -118,6 +129,7 @@ def receive(args: argparse.Namespace) -> int:
                     "source": {"address": address[0], "port": address[1]},
                     "user_tai_ns": user_tai_ns,
                     "kernel_software_timestamp": kernel,
+                    "ipv4_ds_field": _parse_ipv4_ds_field(ancillary),
                     "clock_pair": clock_pair,
                 }
             )
@@ -128,6 +140,7 @@ def receive(args: argparse.Namespace) -> int:
         {
             "schema_version": PROBE_SCHEMA_VERSION,
             "role": "post-veth-receiver",
+            "timeout_seconds": args.timeout_seconds,
             "started_tai_ns": started_tai_ns,
             "finished_tai_ns": time.clock_gettime_ns(CLOCK_TAI),
             "events": events,
@@ -389,6 +402,7 @@ def _control_send(
     sock.close()
     return {
         "name": name,
+        "destination": {"ipv4": destination[0], "port": destination[1]},
         "started_tai_ns": started,
         "finished_tai_ns": time.clock_gettime_ns(CLOCK_TAI),
         "clockid": clockid,
@@ -410,7 +424,12 @@ def _send_fifo(destination: tuple[str, int]) -> dict[str, Any]:
     sent = sock.sendto(PROBE_PAYLOADS["fifo"], destination)
     after = time.clock_gettime_ns(CLOCK_TAI)
     sock.close()
-    return {"sent_bytes": sent, "before_tai_ns": before, "after_tai_ns": after}
+    return {
+        "destination": {"ipv4": destination[0], "port": destination[1]},
+        "sent_bytes": sent,
+        "before_tai_ns": before,
+        "after_tai_ns": after,
+    }
 
 
 def _scm_priority_preflight(destination: tuple[str, int]) -> dict[str, Any]:
@@ -437,6 +456,7 @@ def _scm_priority_preflight(destination: tuple[str, int]) -> dict[str, Any]:
     sock.close()
     return {
         "mechanism": "per-datagram-SCM_PRIORITY",
+        "destination": {"ipv4": destination[0], "port": destination[1]},
         "priority": 6,
         "sent_bytes": sent,
         "send_error": error_value,
@@ -462,6 +482,7 @@ def _positive_helper(
         "scm_txtime_tai_ns": release_tai_ns + 4_000_000,
         "so_txtime_flags": SOF_TXTIME_REPORT_ERRORS,
         "deadline_mode": False,
+        "destination": {"ipv4": destination[0], "port": destination[1]},
     }
     final: dict[str, Any] = {"phase": "final", **ready}
     sock: socket.socket | None = None
@@ -477,7 +498,15 @@ def _positive_helper(
         time.sleep(0.02)
         sock = _txtime_socket(CLOCK_TAI, timestamping=True)
         transaction_before = time.clock_gettime_ns(CLOCK_TAI)
+        original_ip_tos = sock.getsockopt(socket.IPPROTO_IP, IP_TOS)
+        original_priority = sock.getsockopt(socket.SOL_SOCKET, SO_PRIORITY)
+        ip_tos_set_before = time.clock_gettime_ns(CLOCK_TAI)
+        sock.setsockopt(socket.IPPROTO_IP, IP_TOS, 0x02)
+        ip_tos_set_after = time.clock_gettime_ns(CLOCK_TAI)
+        ip_tos_readback = sock.getsockopt(socket.IPPROTO_IP, IP_TOS)
+        priority_set_before = time.clock_gettime_ns(CLOCK_TAI)
         sock.setsockopt(socket.SOL_SOCKET, SO_PRIORITY, 6)
+        priority_set_after = time.clock_gettime_ns(CLOCK_TAI)
         priority_during = sock.getsockopt(socket.SOL_SOCKET, SO_PRIORITY)
         enqueue_before = time.clock_gettime_ns(CLOCK_TAI)
         try:
@@ -496,35 +525,75 @@ def _positive_helper(
             enqueue_after = time.clock_gettime_ns(CLOCK_TAI)
         finally:
             reset_before = time.clock_gettime_ns(CLOCK_TAI)
-            sock.setsockopt(socket.SOL_SOCKET, SO_PRIORITY, 0)
-            priority_after = sock.getsockopt(socket.SOL_SOCKET, SO_PRIORITY)
+            ip_tos_restore_before = time.clock_gettime_ns(CLOCK_TAI)
+            try:
+                sock.setsockopt(socket.IPPROTO_IP, IP_TOS, original_ip_tos)
+                ip_tos_after = sock.getsockopt(socket.IPPROTO_IP, IP_TOS)
+                ip_tos_restore_after = time.clock_gettime_ns(CLOCK_TAI)
+            finally:
+                priority_restore_before = time.clock_gettime_ns(CLOCK_TAI)
+                sock.setsockopt(socket.SOL_SOCKET, SO_PRIORITY, original_priority)
+                priority_after = sock.getsockopt(socket.SOL_SOCKET, SO_PRIORITY)
+                priority_restore_after = time.clock_gettime_ns(CLOCK_TAI)
             reset_after = time.clock_gettime_ns(CLOCK_TAI)
         transaction_after = time.clock_gettime_ns(CLOCK_TAI)
         final["serialized_priority_transaction"] = {
             "mechanism": "socket-global-SO_PRIORITY",
             "single_owner": "helper child while parent is SIGSTOPped",
+            "destination": {"ipv4": destination[0], "port": destination[1]},
             "transaction_before_tai_ns": transaction_before,
+            "ipv4_ds_field": 0x02,
+            "ipv4_ecn": "ECT(0)",
+            "ip_tos_set_before_tai_ns": ip_tos_set_before,
+            "ip_tos_set_after_tai_ns": ip_tos_set_after,
+            "ip_tos_readback_before_priority": ip_tos_readback,
+            "priority_set_before_tai_ns": priority_set_before,
+            "priority_set_after_tai_ns": priority_set_after,
+            "socket_option_order": ["IP_TOS=0x02", "SO_PRIORITY=6"],
+            "per_message_ancillary": ["SCM_TXTIME"],
+            "original_ip_tos": original_ip_tos,
+            "original_priority": original_priority,
             "priority_during_send": priority_during,
             "enqueue_before_tai_ns": enqueue_before,
             "enqueue_after_tai_ns": enqueue_after,
             "sent_bytes": sent,
             "reset_before_tai_ns": reset_before,
+            "ip_tos_restore_before_tai_ns": ip_tos_restore_before,
+            "ip_tos_restore_after_tai_ns": ip_tos_restore_after,
+            "ip_tos_after_reset": ip_tos_after,
+            "priority_restore_before_tai_ns": priority_restore_before,
+            "priority_restore_after_tai_ns": priority_restore_after,
             "reset_after_tai_ns": reset_after,
             "priority_after_reset": priority_after,
+            "socket_restore_order": ["IP_TOS=0x00", "SO_PRIORITY=0"],
             "transaction_after_tai_ns": transaction_after,
         }
         # Use the same socket after the verified reset.  The ordinary datagram
         # must enter the low FIFO band while the timed packet remains queued in
         # the high ETF band.
         normal_before = time.clock_gettime_ns(CLOCK_TAI)
-        normal_sent = sock.sendto(PROBE_PAYLOADS["fifo_concurrent"], destination)
+        normal_ip_tos_before = sock.getsockopt(socket.IPPROTO_IP, IP_TOS)
+        normal_priority_before = sock.getsockopt(socket.SOL_SOCKET, SO_PRIORITY)
+        normal_sent = sock.sendmsg(
+            [PROBE_PAYLOADS["fifo_concurrent"]],
+            [(socket.IPPROTO_IP, IP_TOS, struct.pack("=i", 0x02))],
+            0,
+            destination,
+        )
         normal_after = time.clock_gettime_ns(CLOCK_TAI)
         final["concurrent_priority_zero"] = {
             "socket_priority_configuration": "same-socket-read-back-zero-after-reset",
-            "priority_readback": sock.getsockopt(socket.SOL_SOCKET, SO_PRIORITY),
+            "destination": {"ipv4": destination[0], "port": destination[1]},
+            "socket_ip_tos_before_send": normal_ip_tos_before,
+            "priority_readback": normal_priority_before,
+            "per_message_ancillary": ["IP_TOS=0x02"],
+            "ipv4_ds_field": 0x02,
+            "ipv4_ecn": "ECT(0)",
             "sent_bytes": normal_sent,
             "before_tai_ns": normal_before,
             "after_tai_ns": normal_after,
+            "socket_ip_tos_after_send": sock.getsockopt(socket.IPPROTO_IP, IP_TOS),
+            "priority_after_send": sock.getsockopt(socket.SOL_SOCKET, SO_PRIORITY),
         }
         messages = _drain_error_queue(
             sock,
@@ -586,6 +655,52 @@ def _positive_send(
     }
 
 
+def _resolve_receiver_ipv4(receiver: str, port: int) -> tuple[str, dict[str, Any]]:
+    """Resolve exactly one numeric IPv4 destination before qdisc accounting."""
+
+    started = time.clock_gettime_ns(CLOCK_TAI)
+    try:
+        answers = socket.getaddrinfo(
+            receiver,
+            port,
+            family=socket.AF_INET,
+            type=socket.SOCK_DGRAM,
+            proto=socket.IPPROTO_UDP,
+        )
+    except socket.gaierror as error:
+        raise RuntimeError(f"cannot resolve ETF receiver IPv4 address: {error}") from error
+    candidates: set[str] = set()
+    for family, kind, protocol, _canonical_name, sockaddr in answers:
+        if (
+            family != socket.AF_INET
+            or kind != socket.SOCK_DGRAM
+            or protocol not in {0, socket.IPPROTO_UDP}
+            or not isinstance(sockaddr, tuple)
+            or len(sockaddr) < 2
+        ):
+            raise RuntimeError("ETF receiver resolution returned an unexpected address record")
+        try:
+            address = str(ipaddress.IPv4Address(sockaddr[0]))
+        except ipaddress.AddressValueError as error:
+            raise RuntimeError("ETF receiver resolution returned a non-IPv4 address") from error
+        candidates.add(address)
+    if len(candidates) != 1:
+        raise RuntimeError(
+            f"ETF receiver resolution requires exactly one IPv4 address, got {len(candidates)}"
+        )
+    address = next(iter(candidates))
+    finished = time.clock_gettime_ns(CLOCK_TAI)
+    return address, {
+        "mechanism": "AF_INET/SOCK_DGRAM-getaddrinfo-before-qdisc",
+        "requested_name": receiver,
+        "port": port,
+        "candidate_ipv4": sorted(candidates),
+        "resolved_ipv4": address,
+        "started_tai_ns": started,
+        "finished_tai_ns": finished,
+    }
+
+
 def send(args: argparse.Namespace) -> int:
     output = Path(args.output)
     commands: list[dict[str, Any]] = []
@@ -603,6 +718,12 @@ def send(args: argparse.Namespace) -> int:
             "timed_priority_mechanism": "serialized-socket-global-SO_PRIORITY",
             "so_txtime_flags": SOF_TXTIME_REPORT_ERRORS,
             "deadline_mode": False,
+            "ipv4_ds_field": 0x02,
+            "ipv4_ecn": "ECT(0)",
+            "ipv4_ds_field_mechanism": "socket-global-IP_TOS-before-SO_PRIORITY",
+            "per_message_ip_tos": False,
+            "receiver_name": args.receiver,
+            "receiver_port": args.port,
             "main_cpu": args.main_cpu,
             "helper_cpu": args.helper_cpu,
             "lead_ns": args.lead_ns,
@@ -619,7 +740,10 @@ def send(args: argparse.Namespace) -> int:
         available = os.sched_getaffinity(0)
         if args.main_cpu not in available or args.helper_cpu not in available:
             raise RuntimeError("requested probe CPUs are outside the container cpuset")
-        destination = (args.receiver, args.port)
+        receiver_ipv4, resolution = _resolve_receiver_ipv4(args.receiver, args.port)
+        receipt["receiver_resolution"] = resolution
+        receipt["configuration"]["resolved_receiver_ipv4"] = receiver_ipv4
+        destination = (receiver_ipv4, args.port)
         initial = _qdisc_snapshot()
         receipt["qdisc_initial"] = initial
         receipt["scm_priority_preflight"] = _scm_priority_preflight(destination)

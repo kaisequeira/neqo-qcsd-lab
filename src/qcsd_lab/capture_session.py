@@ -86,6 +86,7 @@ from .process_scheduler import (
 from .util import (
     ProcessTimeoutError,
     atomic_json,
+    durable_create,
     load_json,
     neqo_host_timeout,
     padding_event_guard_triggered,
@@ -94,6 +95,7 @@ from .util import (
 )
 
 NEQO_CLIENT = os.environ.get("NEQO_QCSD_CLIENT", "/usr/local/bin/neqo-qcsd-client")
+_KERNEL_TX_QDISC_OBSERVATION_DIAGNOSTIC = "kernel-tx-qdisc-observation.json"
 STATIC_MODES = {"chaff-only", "chaff-and-shape"}
 PARAMETER_FLAG_BY_KIND = {
     "traffic_morphing": "--morphing-matrix",
@@ -729,6 +731,19 @@ def _finalize_router_capture(
     return capture_destination, dict(receipt)
 
 
+def _persist_kernel_qdisc_observation(
+    diagnostics: Path, observation: Mapping[str, Any]
+) -> Path:
+    """Durably retain raw qdisc counters without publishing kernel evidence."""
+
+    destination = diagnostics / _KERNEL_TX_QDISC_OBSERVATION_DIAGNOSTIC
+    encoded = (json.dumps(dict(observation), indent=2, sort_keys=True) + "\n").encode(
+        "utf-8"
+    )
+    durable_create(destination, encoded)
+    return destination
+
+
 def _collect_attempt(
     attempt: Path,
     manifest: Path,
@@ -952,6 +967,10 @@ def _collect_attempt(
             try:
                 if kernel_qdisc_installed:
                     kernel_qdisc_observation = kernel_qdisc_session.finish_observation()
+                    _persist_kernel_qdisc_observation(
+                        diagnostics,
+                        kernel_qdisc_observation,
+                    )
                 else:
                     kernel_qdisc_session.restore()
             except (OSError, RuntimeError, ValueError) as error:

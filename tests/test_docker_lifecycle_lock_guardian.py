@@ -912,6 +912,77 @@ def test_exit_between_identity_and_cmdline_preserves_exact_child_status(
     assert _can_lock(_lock_path(guardian_bundle))
 
 
+def test_cmdline_loss_waits_for_exact_waitable_child(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_guardian(guardian_bundle[0])
+    expected = module.ChildIdentity(43210, 9876, 43210, 43210, ("success",))
+    waitable = iter((False, False, True))
+    observations = 0
+    anchors: list[object] = []
+
+    monkeypatch.setattr(
+        module,
+        "_process_record",
+        lambda pid: ("R", 1, expected.process_group, expected.session, expected.start_time),
+    )
+    monkeypatch.setattr(module, "_process_uid", lambda pid: os.getuid())
+
+    def unavailable_cmdline(pid: int) -> tuple[str, ...]:
+        raise module.GuardianError("injected terminal cmdline loss")
+
+    def observe_child_exit(child: object) -> bool:
+        nonlocal observations
+        observations += 1
+        return next(waitable)
+
+    monkeypatch.setattr(module, "_read_cmdline", unavailable_cmdline)
+    monkeypatch.setattr(module, "_observe_child_exit", observe_child_exit)
+    monkeypatch.setattr(
+        module, "_verify_exited_child_anchor", lambda child: anchors.append(child)
+    )
+    monkeypatch.setattr(module, "CHILD_EXIT_CONFIRM_ATTEMPTS", 3)
+    monkeypatch.setattr(module, "CHILD_EXIT_CONFIRM_RETRY_SECONDS", 0)
+
+    assert module._verify_inner_process(expected) is False
+    assert observations == 3
+    assert anchors == [expected]
+
+
+def test_live_cmdline_loss_remains_an_integrity_failure(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_guardian(guardian_bundle[0])
+    expected = module.ChildIdentity(43210, 9876, 43210, 43210, ("success",))
+    observations = 0
+
+    monkeypatch.setattr(
+        module,
+        "_process_record",
+        lambda pid: ("R", 1, expected.process_group, expected.session, expected.start_time),
+    )
+    monkeypatch.setattr(module, "_process_uid", lambda pid: os.getuid())
+
+    def unavailable_cmdline(pid: int) -> tuple[str, ...]:
+        raise module.GuardianError("injected live cmdline loss")
+
+    def child_remains_live(child: object) -> bool:
+        nonlocal observations
+        observations += 1
+        return False
+
+    monkeypatch.setattr(module, "_read_cmdline", unavailable_cmdline)
+    monkeypatch.setattr(module, "_observe_child_exit", child_remains_live)
+    monkeypatch.setattr(module, "CHILD_EXIT_CONFIRM_ATTEMPTS", 3)
+    monkeypatch.setattr(module, "CHILD_EXIT_CONFIRM_RETRY_SECONDS", 0)
+
+    with pytest.raises(module.GuardianError, match="injected live cmdline loss"):
+        module._verify_inner_process(expected)
+    assert observations == 3
+
+
 def test_guardian_recovers_only_exact_empty_docker_config_residue(
     guardian_bundle: tuple[Path, Path, Path, Path],
 ) -> None:
@@ -1084,7 +1155,7 @@ def test_real_qcsd_fd_entry_verifier_go_and_docker_admission(
     native.chmod(0o644)
 
     result = subprocess.run(
-        [str(qcsd), "etf-probe", "disabled"],
+        [str(qcsd), "etf-probe", "--destination", str(tmp_path / "etf.json")],
         cwd=project,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
@@ -1095,7 +1166,7 @@ def test_real_qcsd_fd_entry_verifier_go_and_docker_admission(
     )
 
     assert result.returncode in {1, 125}, (result.stdout, result.stderr)
-    assert "etf-probe is disabled" in result.stderr
+    assert "etf-probe is disabled" not in result.stderr
     assert "lifecycle guardian authority is invalid" not in result.stderr
     assert not tuple(lifecycle_parent.glob(".qcsd-buildx-*"))
 

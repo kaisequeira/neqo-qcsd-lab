@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import copy
+import json
+from pathlib import Path
+
+import pytest
 
 from qcsd_lab import capture_session, fidelity
 from qcsd_lab.kernel_tx import (
@@ -1046,6 +1050,51 @@ def test_runner_kernel_tx_accepts_terminal_txtime_error_but_not_as_success() -> 
 
     assert kernel_tx_runner_receipt_valid(raw)
     assert not kernel_tx_runner_receipt_success_valid(raw)
+
+
+def test_failed_runner_retains_create_only_raw_qdisc_observation(
+    tmp_path: Path,
+) -> None:
+    observation = {
+        "schema_version": 1,
+        "source": "tc-json-v1",
+        "installed_before_runner": True,
+        "verified_after_runner": True,
+        "restored_after_capture": True,
+        "before": _snapshot(),
+        "after": _snapshot(packets=1),
+    }
+    diagnostics = tmp_path / "diagnostics"
+    path = capture_session._persist_kernel_qdisc_observation(
+        diagnostics,
+        observation,
+    )
+    original = path.read_bytes()
+    assert path.name == "kernel-tx-qdisc-observation.json"
+    assert path.read_text(encoding="utf-8").endswith("\n")
+    assert json.loads(original) == observation
+
+    failed_runner = _failed_before_arm_runner_receipt()
+    assert kernel_tx_runner_receipt_valid(failed_runner)
+    assert not kernel_tx_runner_receipt_success_valid(failed_runner)
+    with pytest.raises(ValueError, match="successful raw runner receipt"):
+        build_kernel_tx_evidence(
+            runner_receipt=failed_runner,
+            runner_run_json_sha256="a" * 64,
+            qdisc_evidence=observation,
+            router_capture_receipt={},
+            router_packets=[],
+            controlled_network_receipt={},
+            controlled_network_receipt_sha256="b" * 64,
+            controlled_observer_binding={},
+        )
+    assert not (diagnostics / "kernel-tx-evidence.json").exists()
+
+    changed = copy.deepcopy(observation)
+    changed["after"]["drops"] = 1
+    with pytest.raises(FileExistsError):
+        capture_session._persist_kernel_qdisc_observation(diagnostics, changed)
+    assert path.read_bytes() == original
 
 
 def test_runner_kernel_tx_serialises_end_clock_mapping_failure_after_jobs() -> None:

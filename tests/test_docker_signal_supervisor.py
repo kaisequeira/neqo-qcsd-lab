@@ -224,7 +224,6 @@ if args[0] == "build":
     except OSError:
         cgroup = "unavailable"
     write(root / "build-cgroup", cgroup)
-    write(root / "build-ready", str(os.getpid()))
     log("BUILD", os.getpid(), behavior)
     if behavior.startswith("natural"):
         raise SystemExit(int(behavior.removeprefix("natural")))
@@ -294,13 +293,23 @@ while True:
     if behavior == "cooperative":
         def stop_build(_signum, _frame):
             log("BUILD_INT", os.getpid())
-            time.sleep(float(os.environ.get("FAKE_BUILD_SIGNAL_DELAY", "0")))
+            if os.environ.get("FAKE_BUILD_SIGNAL_GATE") == "1":
+                write(root / "build-int-blocked", str(os.getpid()))
+                deadline = time.monotonic() + 5
+                while not (root / "build-int-release").exists():
+                    if time.monotonic() >= deadline:
+                        log("BUILD_INT_GATE_TIMEOUT", os.getpid())
+                        raise SystemExit(125)
+                    time.sleep(0.01)
+            else:
+                time.sleep(float(os.environ.get("FAKE_BUILD_SIGNAL_DELAY", "0")))
             raise SystemExit(130)
         signal.signal(signal.SIGINT, stop_build)
     elif behavior == "ignore-int":
         signal.signal(signal.SIGINT, signal.SIG_IGN)
     else:
         raise SystemExit(2)
+    write(root / "build-ready", str(os.getpid()))
     while True:
         time.sleep(0.02)
 
@@ -1328,6 +1337,15 @@ def _created_lifecycle_roots(state: Path, kind: str) -> list[Path]:
     return roots
 
 
+def _wait_for_build_supervision_bound(state: Path) -> Path:
+    """Wait until the supervisor, not merely the fake CLI, is signal-ready."""
+    roots = _created_lifecycle_roots(state, "build")
+    assert len(roots) == 1
+    root = roots[0]
+    _wait_for_text(root / "SUPERVISION", "lifecycle_state=bound\n")
+    return root
+
+
 def _assert_lifecycle_receipt_identity(root: Path, receipt: str, state: str) -> None:
     source = HELPER.resolve()
     assert root.parent == Path(f"/var/tmp/qcsd-docker-lifecycle-{os.getuid()}")
@@ -1407,6 +1425,7 @@ def test_external_build_cli_sigkill_preserves_status_and_secure_taint(
     state = Path(fake_environment["FAKE_DOCKER_STATE"])
     lock = Path(fake_environment["LOCK_PATH"]).resolve()
     _wait(state / "build-ready")
+    _wait_for_build_supervision_bound(state)
     cli_pid = int((state / "build-cli-pid").read_text(encoding="ascii"))
 
     assert not _lock_available(lock)
@@ -1463,19 +1482,22 @@ def test_build_signal_maps_host_status_and_preserves_cooperative_taint(
 ) -> None:
     fake_environment.update(
         FAKE_BUILD_BEHAVIOR="cooperative",
-        FAKE_BUILD_SIGNAL_DELAY="0.25",
+        FAKE_BUILD_SIGNAL_GATE="1",
     )
     process = _start_build(fake_environment)
     state = Path(fake_environment["FAKE_DOCKER_STATE"])
     lock = Path(fake_environment["LOCK_PATH"])
     _wait(state / "build-ready")
+    _wait_for_build_supervision_bound(state)
     assert not _lock_available(lock)
 
     os.kill(process.pid, requested)
-    time.sleep(0.05)
-    assert not _lock_available(lock)
+    _wait(state / "build-int-blocked")
+    lock_held_during_cancellation = not _lock_available(lock)
+    (state / "build-int-release").write_text("release\n", encoding="ascii")
     stdout, stderr = _communicate(process, timeout=10)
 
+    assert lock_held_during_cancellation
     assert process.returncode == expected, (stdout, stderr)
     assert _lock_available(lock)
     calls = (state / "calls.log").read_text(encoding="utf-8")
@@ -1507,6 +1529,7 @@ def test_build_cli_is_isolated_and_caller_group_signal_is_supervised(
     process = _start_build(fake_environment)
     state = Path(fake_environment["FAKE_DOCKER_STATE"])
     _wait(state / "build-ready")
+    _wait_for_build_supervision_bound(state)
     cli_pid = int((state / "build-cli-pid").read_text(encoding="ascii"))
     scope_unit = _build_scope_unit(state)
     cli_session = os.getsid(cli_pid)
@@ -1707,6 +1730,7 @@ def test_uncooperative_build_is_forced_and_preserves_a_secure_taint_receipt(
     state = Path(fake_environment["FAKE_DOCKER_STATE"])
     lock = Path(fake_environment["LOCK_PATH"])
     _wait(state / "build-ready")
+    _wait_for_build_supervision_bound(state)
     cli_pid = int((state / "build-cli-pid").read_text(encoding="ascii"))
 
     os.kill(process.pid, signal.SIGTERM)

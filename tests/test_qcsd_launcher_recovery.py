@@ -8,7 +8,6 @@ import secrets
 import stat
 import subprocess
 import sys
-import threading
 import time
 from collections.abc import Iterator, Sequence
 from pathlib import Path
@@ -70,12 +69,35 @@ state = load_state()
 containers = state["containers"]
 networks = state["networks"]
 
+def maybe_publish_deferred(kind, token):
+    if os.environ.get("QCSD_TEST_DEFERRED_PUBLISH_KIND") != kind:
+        return
+    if os.environ.get("QCSD_TEST_DEFERRED_PUBLISH_TOKEN") != token:
+        return
+    counter_path = state_path.with_name("deferred-" + kind + "-list-count")
+    count = (
+        int(counter_path.read_text(encoding="ascii"))
+        if counter_path.exists()
+        else 0
+    ) + 1
+    counter_path.write_text(str(count), encoding="ascii")
+    trigger = int(os.environ["QCSD_TEST_DEFERRED_PUBLISH_AFTER_LISTS"])
+    if count != trigger:
+        return
+    object_id = os.environ["QCSD_TEST_DEFERRED_PUBLISH_ID"]
+    if kind == "run":
+        containers[object_id] = dict(token=token, running=True)
+    else:
+        networks[object_id] = token
+    save_state(state)
+
 if command == "container" and tail and tail[0] == "ls":
     filter_value = option_value(tail[1:], "--filter")
     log("container-ls:" + filter_value)
     selected = []
     if filter_value.startswith("label=org.qcsd.supervisor.instance="):
         token = filter_value.rsplit("=", 1)[1]
+        maybe_publish_deferred("run", token)
         selected = [cid for cid, value in containers.items() if value["token"] == token]
     elif filter_value.startswith("id="):
         wanted = filter_value.split("=", 1)[1]
@@ -109,6 +131,7 @@ if command == "network" and tail and tail[0] == "ls":
     selected = []
     if filter_value.startswith("label=org.qcsd.supervisor.instance="):
         token = filter_value.rsplit("=", 1)[1]
+        maybe_publish_deferred("network", token)
         selected = [network_id for network_id, value in networks.items() if value == token]
     elif filter_value.startswith("id="):
         wanted = filter_value.split("=", 1)[1]
@@ -192,10 +215,36 @@ def launcher_boundary(
         "  printf '%s\\n' \"$*\" >> \"${QCSD_TEST_PROBE_MARKER}\"\n"
         "  exit 0\n"
         "fi\n"
+        "if [ \"${1:-}\" = -c ]; then\n"
+        "  case \"${2:-}\" in\n"
+        "    *'from qcsd_lab.etf_probe import prepare_supervised_request'*)\n"
+        "      printf '%s\\n' \"$*\" >> \"${QCSD_TEST_PROBE_MARKER}\"\n"
+        "      exit 1\n"
+        "      ;;\n"
+        "  esac\n"
+        "fi\n"
+        "if [ \"${1:-}\" = -I ] && [ \"${2:-}\" = -c ]; then\n"
+        "  case \"${3:-}\" in\n"
+        "    *'from qcsd_lab.etf_probe import prepare_supervised_request'*)\n"
+        "      printf '%s\\n' \"$*\" >> \"${QCSD_TEST_PROBE_MARKER}\"\n"
+        "      exit 1\n"
+        "      ;;\n"
+        "  esac\n"
+        "fi\n"
         f"exec {str(Path(sys.executable).resolve())!r} \"$@\"\n",
         encoding="utf-8",
     )
     probe_python.chmod(0o755)
+    copied_launcher = launcher.read_text(encoding="utf-8")
+    trusted_python_assignment = 'etf_probe_python="/usr/bin/python3"'
+    assert copied_launcher.count(trusted_python_assignment) == 2
+    launcher.write_text(
+        copied_launcher.replace(
+            trusted_python_assignment,
+            f'etf_probe_python="{probe_python.resolve()}"',
+        ),
+        encoding="utf-8",
+    )
     environment["QCSD_TEST_DOCKER_STATE"] = str(state_path)
     environment["QCSD_TEST_DOCKER_OPERATION_LOG"] = str(operation_log)
     environment["QCSD_TEST_PROBE_MARKER"] = str(probe_marker)
@@ -683,7 +732,7 @@ def _invoke_etf(
     launcher: Path, environment: dict[str, str], tmp_path: Path
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [str(launcher), "etf-probe", "--output", str(tmp_path / "etf.json")],
+        [str(launcher), "etf-probe", "--destination", str(tmp_path / "etf.json")],
         cwd=tmp_path,
         env=environment,
         check=False,
@@ -1260,7 +1309,7 @@ def test_durable_unpublished_lifecycle_roots_are_recovered_before_docker_work(
     result = _invoke_etf(launcher, environment, tmp_path)
 
     assert result.returncode == 1, result.stderr
-    assert "etf-probe is disabled" in result.stderr
+    assert "etf-probe is disabled" not in result.stderr
     assert "Recovered unpublished Docker" in result.stderr
     assert not root.exists()
     assert "container-rm:" not in operations.read_text(encoding="utf-8")
@@ -1289,7 +1338,7 @@ def test_durable_handoff_is_recovered_by_exact_label_and_full_container_id(
     result = _invoke_etf(launcher, environment, tmp_path)
 
     assert result.returncode == 1, result.stderr
-    assert "etf-probe is disabled" in result.stderr
+    assert "etf-probe is disabled" not in result.stderr
     assert not root.exists()
     assert json.loads(state_path.read_text(encoding="utf-8"))["containers"] == {}
     log = operations.read_text(encoding="utf-8")
@@ -1341,15 +1390,20 @@ def test_durable_recovery_removes_attached_run_before_its_network(
     assert log.index(f"container-rm:{container_id}") < log.index(
         f"network-rm:{network_id}"
     )
+    marker = Path(environment["QCSD_TEST_PROBE_MARKER"])
+    assert "prepare_supervised_request" in marker.read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("kind", ["run", "network"])
-@pytest.mark.parametrize("publish_delay", [0.25, 2.0, None])
+@pytest.mark.parametrize(
+    "publication",
+    ["during-settle", "after-settle", "never"],
+)
 def test_authorised_recovery_waits_for_delayed_daemon_object(
     launcher_boundary: tuple[Path, Path, Path, Path, dict[str, str], list[Path]],
     tmp_path: Path,
     kind: str,
-    publish_delay: float | None,
+    publication: str,
 ) -> None:
     launcher, _builds, state_path, operations, environment, roots = launcher_boundary
     root, token = _new_lifecycle_root(roots, environment, kind)
@@ -1397,10 +1451,17 @@ def test_authorised_recovery_waits_for_delayed_daemon_object(
     _write_record(root, "RECOVERY", fields)
     environment["_QCSD_DOCKER_STALE_RUN_SETTLE_SECONDS"] = "0.5"
     environment["_QCSD_DOCKER_STALE_NETWORK_SETTLE_SECONDS"] = "0.5"
+    if publication == "during-settle":
+        environment.update(
+            QCSD_TEST_DEFERRED_PUBLISH_KIND=kind,
+            QCSD_TEST_DEFERRED_PUBLISH_TOKEN=token,
+            QCSD_TEST_DEFERRED_PUBLISH_ID=object_id,
+            QCSD_TEST_DEFERRED_PUBLISH_AFTER_LISTS="1",
+        )
+    result = _invoke_etf(launcher, environment, tmp_path)
 
-    def publish_delayed_object() -> None:
-        assert publish_delay is not None
-        time.sleep(publish_delay)
+    assert result.returncode == 1, result.stderr
+    if publication == "after-settle":
         if kind == "run":
             _write_state(
                 state_path,
@@ -1408,23 +1469,13 @@ def test_authorised_recovery_waits_for_delayed_daemon_object(
             )
         else:
             _write_state(state_path, networks={object_id: token})
-
-    publisher = (
-        threading.Thread(target=publish_delayed_object)
-        if publish_delay is not None
-        else None
-    )
-    if publisher is not None:
-        publisher.start()
-    result = _invoke_etf(launcher, environment, tmp_path)
-    if publisher is not None:
-        publisher.join(timeout=3)
-
-    assert publisher is None or not publisher.is_alive()
-    assert result.returncode == 1, result.stderr
-    if publish_delay is None or publish_delay > 0.5:
+    if publication != "during-settle":
         assert root.exists(), result.stderr
         assert "-rm:" not in operations.read_text(encoding="utf-8")
+        if publication == "after-settle":
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            collection = "containers" if kind == "run" else "networks"
+            assert object_id in state[collection]
         return
     assert not root.exists(), result.stderr
     log = operations.read_text(encoding="utf-8")

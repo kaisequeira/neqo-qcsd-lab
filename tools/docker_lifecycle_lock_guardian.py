@@ -39,6 +39,8 @@ FAILURE_CLEANUP_SECONDS = 120.0
 GROUP_DRAIN_SECONDS = 5.0
 BUILDX_CENSUS_ATTEMPTS = 4
 BUILDX_CENSUS_RETRY_SECONDS = 0.005
+CHILD_EXIT_CONFIRM_ATTEMPTS = 20
+CHILD_EXIT_CONFIRM_RETRY_SECONDS = 0.001
 LOCK_PARENT = Path("/var/tmp")
 FORWARDED_SIGNALS = (
     signal.SIGHUP,
@@ -2051,12 +2053,18 @@ def _verify_inner_process(expected: ChildIdentity) -> bool:
     try:
         observed = _read_cmdline(expected.pid)
     except GuardianError:
-        # The exact child can become a zombie after its identity was sampled but
-        # before procfs supplies cmdline.  Re-prove that terminal anchor rather
-        # than misclassifying an ordinary exit as integrity drift.  A live
-        # malformed/mismatched process still fails closed below.
-        _verify_exited_child_anchor(expected)
-        return False
+        # Linux can clear an exiting task's cmdline after the live identity
+        # sample above but just before waitid exposes the unreaped zombie.  Only
+        # accept that narrow transition when the kernel proves this exact child
+        # waitable; a live process with an unavailable cmdline still fails
+        # closed with the original integrity error.
+        for attempt in range(CHILD_EXIT_CONFIRM_ATTEMPTS):
+            if _observe_child_exit(expected):
+                _verify_exited_child_anchor(expected)
+                return False
+            if attempt + 1 < CHILD_EXIT_CONFIRM_ATTEMPTS:
+                time.sleep(CHILD_EXIT_CONFIRM_RETRY_SECONDS)
+        raise
     exact = ("/bin/bash", "--noprofile", "--norc", *expected.command)
     if observed != exact:
         _fail("inner qcsd command line changed")
@@ -2651,7 +2659,13 @@ def _wait_for_child(
                     if latch.first is not None and child_status == 0:
                         return 128 + latch.first
                     return child_status
-            except GuardianError:
+            except GuardianError as error:
+                if not failed:
+                    print(
+                        "qcsd-lab Docker lifecycle guardian: "
+                        f"runtime integrity check failed: {error}",
+                        file=sys.stderr,
+                    )
                 failed = True
                 if failure_deadline is None:
                     failure_deadline = now + FAILURE_CLEANUP_SECONDS
@@ -2700,7 +2714,12 @@ def _wait_for_child(
                         _verify_runtime_environment(runtime_identity)
                         if not _verify_inner_process(child):
                             _fail("inner qcsd exited before lifecycle admission")
-                    except GuardianError:
+                    except GuardianError as error:
+                        print(
+                            "qcsd-lab Docker lifecycle guardian: "
+                            f"admission integrity check failed: {error}",
+                            file=sys.stderr,
+                        )
                         failed = True
                 admitted, failed = _publish_admission_decision(
                     go_write,

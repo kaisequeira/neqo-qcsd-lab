@@ -53,9 +53,10 @@ paper-equivalent or as a server padding-complete signal.
 
 The current implementation targets BuFLO summary schema 4 and runner-wakeup
 schema 11. This is an interface requirement, not evidence of successful
-execution: immutable cohort v55 emitted a failed raw schema-11 receipt before
-defence arm and admitted no timing-stress sample, while the clean post-v55 code
-commits remain unreceipted.
+execution: immutable cohort v56 emitted a failed raw schema-11 receipt after
+defence arm when its first IPv4 datagram bypassed ETF, and admitted no
+timing-stress sample. The post-v56 traffic-class/priority repair remains
+unreceipted until a fresh v57 lineage passes the source-bound gates below.
 Summary schema 4 binds the typed schedule-stop policy, stop timestamp,
 sub-cell capacity, direction counts at stop, and exact post-stop advertised
 credit drain; historical summary schemas 2 and 3 remain readable but cannot
@@ -290,28 +291,28 @@ natural byte invalidates provisional stop evidence in the implementation, with
 the cumulative invalidation count retained in the final receipt.  This drain
 is not the paper's server padding-done signal.
 
-The newest receipt-bearing prerequisite checkpoint is cohort v55. It binds
-exact clean Lab `f93630f886aa3e196754c25baf408953b5369e8d` and
-Neqo/gitlink `20daa1df9387e2b50d0105e364a28bffe1bb1cc0`. Its fresh
-pull/no-cache build passed, including the embedded six-command Rust gate and
-233/233 `neqo-bin` tests. The whole build receipt has SHA-256
-`8fa96bf20ea3d7875e1dc4865def3c03036afcafb60e7845aa33de2d277a8a76`;
+The newest receipt-bearing prerequisite checkpoint is cohort v56. It binds
+exact clean Lab `4d2ecd53c56f6d807f71175f62d1acfd44958202` and
+Neqo/gitlink `8d4d1a49c098de1850879f4a116e88802a7bd9e4`. Its fresh
+pull/no-cache build passed, including the pinned Docker code gate. The whole
+build receipt has SHA-256
+`626ffe1a69b51707b45e869a0dc5ebbe977d426484fe0c615a4dd9934f36650e`;
 the collection, preparation, and reference images are respectively
-`sha256:bde3805297dd753682f47349e0e72aeab5a6b3341da854aa9bd576d43912e936`,
-`sha256:00ea552a54eab1680850efb032a0b2d204d354c1cda2b9fd1e06c95130be4803`,
+`sha256:ee75909d19a8e7270c3e444f758ba4dae2b9f82eb5aa1645b3ccce433e365b86`,
+`sha256:5ab716464fbc20604715f57fdf969c34d7b89bbc2ab53192994cabb711baba6d`,
 and
-`sha256:538ea9224b01314667d4cb945e062f1479fb1f2aa56d28851231ed9078588d8a`.
+`sha256:60614b9c705b96a19f0dccb86e7cd6de35549e2688758aae0121ff3df62a636f`.
 
-The isolated v55 reference execution also passed. Its whole-file SHA-256 is
-`30988f6ae535efe3d78e05444beaca63394c5aca330acbe4fbafbe01d31057d4`;
+The isolated v56 reference execution also passed. Its whole-file SHA-256 is
+`7c5b1b8a4b65d3c37e2505c059561421aa60e01cab39b9200b0417b315df5f40`;
 it used Docker network mode `none`, checked all 15 pinned inputs and all eight
 BuFLO profiles, and reproduced the CS-BuFLO aggregate archive ratio
 `2.282792444255336` over 3,824 nonzero-baseline records. These build and
-reference receipts remain valid for their exact v55 commits only.
+reference receipts remain valid for their exact v56 commits only.
 
-The immutable prerequisites are the v55
-[build receipt](artifacts/buflo-study/build-execution-v55.json) and
-[reference receipt](artifacts/buflo-study/reference-execution-v55.json).
+The immutable prerequisites for the failed v56 lineage are its
+[build receipt](artifacts/buflo-study/build-execution-v56.json) and
+[reference receipt](artifacts/buflo-study/reference-execution-v56.json).
 
 The first and only v55 timing-stress launch then failed terminally in 14.366 ms,
 before either HTTP/3 handshake or defence arm. The initialised but deliberately
@@ -336,9 +337,41 @@ The terminal evidence chain is the timing-stress
 [outer error](results/buflo-study-regression-v55/buflo-timing-stress/attempts/visit-000/attempt-01/timing-stress-error.json),
 and [raw run receipt](results/buflo-study-regression-v55/buflo-timing-stress/attempts/visit-000/attempt-01/neqo/run.json).
 
-The newest immutable checkpoint containing measured BuFLO client traffic
-remains cohort v47; v55 retained diagnostic captures but observed no traffic
-from the failed measured run. V47 binds
+V56 then exercised the post-v55 arm repair. Its first and only timing-stress
+launch reached defence arm, but BuFLO kernel job 0 was physically transmitted
+in TAI interval
+`[1788525850613250847,1788525850613254848]`, entirely before its permitted
+half-open interval
+`[1788525850617100862,1788525850622100862)`. The serialized fallback had set
+`SO_PRIORITY=6` before attaching per-message IPv4 `IP_TOS`; Linux derived a
+new packet priority from that later traffic-class control, so the datagram
+bypassed ETF through the ordinary FIFO band instead of waiting for its release.
+The immutable checkpoint has SHA-256
+`c57acb5fe7255d9eaea40ac0f10235efa2f1b8576cbd2632f9f3fc65d291b393`;
+the outer error and raw-run receipt have SHA-256 values
+`62a2a42a0fe3325e277ff9ed1337aff9356cd22182109eafbd127a8e186c4e34`
+and
+`bc71dc358f9c57f51302635c5a36cc1106e7739aa4fd9d78b4faf1aa888731f0`.
+V56 is consumed at 0/12 accepted timing visits and 0/18 regression cells; its
+passed build and reference receipts cannot authorise repaired source.
+
+The post-v56 Rust repair, now committed as
+`edf44779db0dacac37b8a71f5ccf5ea102e34c29`, orders native `SCM_PRIORITY`
+after all IP controls. On the WSL fallback it removes per-message IPv4
+`IP_TOS`, applies socket `IP_TOS` before `SO_PRIORITY`, verifies both armed
+values, and restores `IP_TOS` before priority with readback on every path.
+IPv6 retains per-message `IPV6_TCLASS`. The Lab now durably preserves raw
+qdisc observations for failed runs, and its disposable probe independently
+checks ETF/FIFO accounting and post-veth timing without claiming scientific
+evidence. The passed engineering probe has SHA-256
+`a05b0f299bd97968c6714e5fde408a4bd7b92a42deaa4195b99e38c2077f5885`,
+is explicitly `evidentiary=false` and `authorizes_capture=false`, and used the
+older v56 image plus dirty repaired source. It therefore diagnoses the host
+mechanism but cannot advance a v57 gate.
+
+The newest immutable checkpoint containing measured BuFLO client traffic is
+therefore v56, but it contains a terminal fidelity failure rather than an
+accepted visit. The earlier schema-10 v47 comparison binds
 clean Lab `236da73cb9091f37f0ea78256a72bd9e9ed62d60`, Neqo/gitlink
 `ba72df21b0f6ef0b7607e11928895be83402b063`, collection image
 `sha256:2da4c0da8c661a335cc86e9f22b20f52b6b60126ff9e07f493550cf7705d607a`,
@@ -559,22 +592,21 @@ both controlled and public ETF paths. V55 built this exact clean source and
 entered its first timing launch; the failure occurred in the client before the
 router could observe measured traffic.
 
-Clean post-v55 engineering commits Rust
-`8d4d1a49c098de1850879f4a116e88802a7bd9e4` and Lab code/gitlink
-`d9683ccdfd9270da123dc2b008df5df4f60c0385` contain unreceipted client-side
-corrections. Rust now treats an initialised/unarmed kernel runtime as a valid
-handshake state, gates dispatch and tick-zero wake-up reads on an exact
-coherent arm, rejects asymmetric or mismatched epochs, and requires the
-complete retained legacy metric inventory to be neutral before schema-11
-normalisation. Lab now checks `SOF_TXTIME_REPORT_ERRORS=2` and composes the
-schema-11 semantics from the complete schema-10 contract. Rust formatting,
-235/235 `neqo-bin` tests, and warning-fatal targeted Clippy passed; the focused
-Lab selection passed 82 tests. The final complete Lab run passed 2,667 tests
-with 12 skipped and 23 warnings in 1,651.99 seconds. These results are
-engineering checks only: no post-v55 image, reference execution, or capture
-receipt yet binds the changes.
+The current post-v56 engineering source is Rust
+`edf44779db0dacac37b8a71f5ccf5ea102e34c29` and the matching Lab revision in
+this checkout. It retains the post-v55 coherent-arm and schema-11 corrections,
+then fixes the v56 traffic-class/priority interaction without weakening the
+strict half-open realisation window or no-catch-up rule. The Lab additionally
+preserves raw qdisc observations on failed runs, confines its disposable ETF
+probe to the durable Docker lifecycle boundary, pins its interpreter and Git
+provenance boundaries against caller-controlled shadowing, and closes the
+observed guardian and signal-supervisor races. Rust formatting, the relevant
+release suites and strict Clippy passed. The complete Lab suite passed 2,696
+tests with 12 skipped and 23 warnings in 1,707.09 seconds. These are engineering
+checks only: no v57 image, reference execution, timing visit, regression, code
+gate, or controlled receipt binds this source.
 
-The same clean Lab engineering commit hardens durable Docker HANDOFF
+The retained post-v55 Lab engineering lineage also hardens durable Docker HANDOFF
 retirement. It permits at most one additional read-only absence observation,
 and only after the first exact-presence API result is `unknown`; the Docker
 daemon and host boot are revalidated before that observation. `present` and
@@ -704,19 +736,21 @@ without retroactively claiming a cause. The active v55 lifecycle namespace and
 QCSD-labelled Docker object sets are empty. This cleanup is operational, not
 candidate evidence.
 
-For current post-v55 source, fresh build, reference, and regression-bound
+For current post-v56 source, fresh v57 build, reference, and regression-bound
 code-gate receipts are absent; timing stress is 0/12, regression is 0/18, and
 controlled qualification is 0/160. Real acquisition observations remain zero.
 Pilot fitting, qualification, and compatibility are 0/480, 0/720, and 0/1,080;
 authoritative fitting and final qualification are 0/2,000 and 0/600;
 certification and canaries are 0/900 and 0/1,000; formal capture is 0/16,000.
-Handoff, evaluation, comparison, and attestation are absent. The clean
-post-v55 Lab/Rust commit identities and exact gitlink now exist, so the next
-fresh cohort is v56. It must repeat the pull/no-cache build, isolated
-reference gate, 12/12 timing stress, 18/18 regression, regression-bound code
-gate, and 160/160 controlled qualification before expanded-class acquisition
-can begin. V55 cannot be retried. The complete current status and earlier
-cohort chronology are retained in the authoritative workspace
+Handoff, evaluation, comparison, and attestation are absent. V56's build and
+reference passed only for Lab `4d2ecd53c56f6d807f71175f62d1acfd44958202`
+and Rust `8d4d1a49c098de1850879f4a116e88802a7bd9e4`; its terminal first timing
+launch consumed that cohort. The next fresh cohort is v57. It must repeat the
+pull/no-cache build, isolated reference gate, 12/12 timing stress, 18/18
+regression, regression-bound code gate, and 160/160 controlled qualification
+before expanded-class acquisition can begin. Neither v55 nor v56 can be
+retried. The complete current status and earlier cohort chronology are retained
+in the authoritative workspace
 [`PROJECT.md`](../PROJECT.md).
 
 The current Lab boundary additionally classifies typed client defence/QCSD
@@ -867,22 +901,22 @@ maintained in
 [`../PROJECT.md`](../PROJECT.md); the exact extended-class protocol and
 matrices are maintained in [`../CLASS-STUDY.md`](../CLASS-STUDY.md).
 
-### Disabled non-evidentiary ETF capability probe
+### Non-evidentiary ETF capability probe
 
-The underlying `etf-probe` module describes a disposable Docker bridge/veth
-diagnostic for the production kernel-timed egress path, but the public
-`./qcsd-lab etf-probe` entry point is intentionally disabled. After guarded
-Docker admission and stale-state recovery it exits with status 1, before the
-nested Python Docker lifecycle or any destination receipt can be created. The
-module must not be presented as runnable until those nested create, signal,
-cleanup, and recovery operations use the mandatory durable lifecycle helper.
+The public `./qcsd-lab etf-probe` entry point composes its disposable Docker
+bridge/veth diagnostic through the mandatory durable lifecycle helper. The
+guarded shell owns creation, signal handling, exact-object cleanup, handoff
+retirement, and finalisation; direct Python execution cannot mutate Docker.
+This implementation has synthetic test coverage. The passed live engineering
+probe cited above used the older v56 image plus dirty repaired source; there is
+no clean, source-bound v57 capability or campaign-evidence result.
 
-The planned schema-1 receipt is explicitly `evidentiary=false` and
-`authorizes_capture=false`. Even after the launcher boundary is implemented, a
-passing receipt could demonstrate only that one host, kernel, Docker engine,
-and image exposed the prerequisite PRIO/ETF, timestamping, socket-priority,
-and cleanup mechanics at that instant; it could not satisfy or advance any
-reference, code, qualification, capture, or final-attestation gate.
+The schema-1 receipt is explicitly `evidentiary=false` and
+`authorizes_capture=false`. A passing receipt could demonstrate only that one
+host, kernel, Docker engine, and image exposed the prerequisite PRIO/ETF,
+timestamping, socket-priority, and cleanup mechanics at that instant; it could
+not satisfy or advance any reference, code, qualification, capture, or
+final-attestation gate.
 
 ### Prospective 100-class final campaign
 
@@ -986,8 +1020,7 @@ UID:GID with all capabilities dropped and Docker networking disabled, while a
 local in-container server proves cross-site iframe, worker/shared-worker,
 duplicate-URL, redirect, and shutdown behaviour. Mocked deterministic tests
 have passed during engineering, but the probe must still pass in the freshly
-built preparation image for the next post-v55 cohort, v56 or later, before
-acquisition.
+built preparation image for the fresh v57 lineage before acquisition.
 
 The same complete graph is now independently rederived at every downstream
 evidence boundary. For each accepted fitting, pilot-compatibility,
