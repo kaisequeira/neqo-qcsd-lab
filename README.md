@@ -51,12 +51,14 @@ defence-control traffic is explicitly receipted and is an expected QCSD-only
 difference from the bilateral TCP study; it is never described as
 paper-equivalent or as a server padding-complete signal.
 
-The current implementation targets BuFLO summary schema 4 and runner-wakeup
-schema 11. This is an interface requirement, not evidence of successful
-execution: immutable cohort v56 emitted a failed raw schema-11 receipt after
-defence arm when its first IPv4 datagram bypassed ETF, and admitted no
-timing-stress sample. The post-v56 traffic-class/priority repair remains
-unreceipted until a fresh v57 lineage passes the source-bound gates below.
+The current implementation targets BuFLO summary schema 4, runner-wakeup
+schema 11 with nested kernel runner/item/mapping schema 2, and timing-stress
+parameter/provenance, execution, and checkpoint schema 4. These are interface
+requirements, not evidence of successful execution. Immutable cohort v57
+passed build/reference for its historical parent source but admitted no timing
+sample after the schema-3 runner rejected global TAI-minus-MONOTONIC drift.
+The current item-local clock-evidence repair remains unreceipted until a fresh
+v58 lineage passes the source-bound gates below.
 Summary schema 4 binds the typed schedule-stop policy, stop timestamp,
 sub-cell capacity, direction counts at stop, and exact post-stop advertised
 credit drain; historical summary schemas 2 and 3 remain readable but cannot
@@ -291,7 +293,7 @@ natural byte invalidates provisional stop evidence in the implementation, with
 the cumulative invalidation count retained in the final receipt.  This drain
 is not the paper's server padding-done signal.
 
-The newest receipt-bearing prerequisite checkpoint is cohort v56. It binds
+The failed v56 prerequisite lineage binds
 exact clean Lab `4d2ecd53c56f6d807f71175f62d1acfd44958202` and
 Neqo/gitlink `8d4d1a49c098de1850879f4a116e88802a7bd9e4`. Its fresh
 pull/no-cache build passed, including the pinned Docker code gate. The whole
@@ -369,9 +371,40 @@ is explicitly `evidentiary=false` and `authorizes_capture=false`, and used the
 older v56 image plus dirty repaired source. It therefore diagnoses the host
 mechanism but cannot advance a v57 gate.
 
-The newest immutable checkpoint containing measured BuFLO client traffic is
-therefore v56, but it contains a terminal fidelity failure rather than an
-accepted visit. The earlier schema-10 v47 comparison binds
+V57 then bound exact clean Lab
+`b7811dab7124ffdde113fae111ef8bab4810ebba` and Rust/gitlink
+`edf44779db0dacac37b8a71f5ccf5ea102e34c29`. Its fresh no-cache
+[build](artifacts/buflo-study/build-execution-v57.json) and isolated
+[reference execution](artifacts/buflo-study/reference-execution-v57.json)
+passed; their whole-file SHA-256 values are
+`80958d3b593d021c311aeed15c0013bbd6b4aadc1071753ab92e8c4006e03c2b`
+and
+`f7b12bf025ae836cd72cc6840b5204d02ad463fbb66201329cb4a240757dc436`.
+The collection, preparation, and reference images are respectively
+`sha256:c143cb5b2c0eae8953c5b6f0a484860bebf014d33eb59a856ae952698d7eb855`,
+`sha256:b6fe32138243d25ee2e97d63a834b496e82fe77dbd583d09826ff1cd63836423`,
+and
+`sha256:94475bbb9b6491be702390abc432eca422c8991b9cdebc7192222a77a0a49199`.
+
+Its sole first timing-stress launch was rejected with zero accepted visits
+because global TAI-minus-MONOTONIC offset drift reached 1,566,579 ns against
+the historical schema-3 ceiling of 250,000 ns. The immutable
+[checkpoint](results/buflo-study-regression-v57/buflo-timing-stress/experiment.json)
+and [timing error](results/buflo-study-regression-v57/buflo-timing-stress/attempts/visit-000/attempt-01/timing-stress-error.json)
+have SHA-256 values
+`c166dadd64adbfb14446015a295b391966af74ade6f4470df412c85be3311df3`
+and
+`932e343ba9c29fd8944229760ee404fdd67368bfebcaf083ddefd5a84e6b7f5c`.
+V57 is consumed at timing stress 0/12 and regression 0/18; its separate
+regression-bound code gate, controlled qualification, and all class-study
+stages are absent. These receipts are valid only for their historical source
+and cannot authorise the current clock-evidence repair.
+
+The newest immutable timing checkpoint is therefore v57, but it contains a
+terminal clock-evidence rejection rather than an accepted visit. V56 remains
+the newest immutable checkpoint containing measured BuFLO client traffic, and
+it also contains a terminal fidelity failure rather than an accepted visit.
+The earlier schema-10 v47 comparison binds
 clean Lab `236da73cb9091f37f0ea78256a72bd9e9ed62d60`, Neqo/gitlink
 `ba72df21b0f6ef0b7607e11928895be83402b063`, collection image
 `sha256:2da4c0da8c661a335cc86e9f22b20f52b6b60126ff9e07f493550cf7705d607a`,
@@ -534,7 +567,7 @@ and are not claimed.
 
 Before the ordinary 18-cell regression can run, a mandatory excluded timing
 stress captures twelve BuFLO visits with exactly one physical launch per visit.
-The current schema-3 contract requires an exact inclusive prefix of 5,001
+The current schema-4 contract requires an exact inclusive prefix of 5,001
 opportunities per direction at targets zero through 100 seconds. After that
 prefix, each visit may contain a contiguous, paired whole-cell/parser-drain
 suffix on the same 20 ms cadence, up to the configured limit of 6,000
@@ -559,11 +592,13 @@ feedback, qdisc outcomes, and independent observer matches. Authoritative
 qualification-, and opportunity-contract-bound and cannot pass after a
 missing, rejected, or incomplete reserved attempt. The regression receipt
 remains bound to the same stress evidence. Current-source captures require
-timing-stress parameter/provenance schema 3, BuFLO summary schema 4,
-runner-wakeup schema 11, the complete kernel sender receipt, and the separately
-validated Lab observer sidecar; timing schemas 1 and 2 remain historical-only.
+timing-stress parameter/provenance, execution, and checkpoint schema 4, BuFLO
+summary schema 4, runner-wakeup schema 11 with nested kernel runner/item/
+mapping schema 2, the complete kernel sender receipt, and the separately
+validated Lab observer sidecar; timing schemas 1–3 and nested kernel schema 1
+remain historical-only.
 
-Timing-stress schema 3 accepts only the exact current `schedule.csv` header:
+Timing-stress schema 4 accepts only the exact current `schedule.csv` header:
 the historical prefix followed by the complete nullable QCSD suffix in its
 defined order. Missing, extra, duplicated, or reordered fields fail before
 schedule interpretation. All authoritative runner-CSV paths now share one
@@ -592,19 +627,32 @@ both controlled and public ETF paths. V55 built this exact clean source and
 entered its first timing launch; the failure occurred in the client before the
 router could observe measured traffic.
 
-The current post-v56 engineering source is Rust
-`edf44779db0dacac37b8a71f5ccf5ea102e34c29` and the matching Lab revision in
-this checkout. It retains the post-v55 coherent-arm and schema-11 corrections,
-then fixes the v56 traffic-class/priority interaction without weakening the
-strict half-open realisation window or no-catch-up rule. The Lab additionally
-preserves raw qdisc observations on failed runs, confines its disposable ETF
-probe to the durable Docker lifecycle boundary, pins its interpreter and Git
-provenance boundaries against caller-controlled shadowing, and closes the
-observed guardian and signal-supervisor races. Rust formatting, the relevant
-release suites and strict Clippy passed. The complete Lab suite passed 2,696
-tests with 12 skipped and 23 warnings in 1,707.09 seconds. These are engineering
-checks only: no v57 image, reference execution, timing visit, regression, code
-gate, or controlled receipt binds this source.
+The post-v56 engineering source was Rust
+`edf44779db0dacac37b8a71f5ccf5ea102e34c29` and Lab/gitlink
+`b7811dab7124ffdde113fae111ef8bab4810ebba`. It retained the post-v55 arm and
+schema-11 corrections, fixed the traffic-class/priority interaction, preserved
+raw qdisc evidence on failure, and hardened the diagnostic-probe, interpreter,
+Git-provenance, guardian, and signal-supervisor boundaries. V57 bound that
+exact source and passed its fresh no-cache build and isolated reference gates,
+then its sole first timing launch failed the historical schema-3 whole-run
+TAI-minus-MONOTONIC drift ceiling.
+
+Current clean Rust `ce0d7a21756ce795d6f50d750a1c25e0fa006327` and its exact
+implementation-bearing Lab parent
+`e1ab7d71580055307042188c1ab1f4e0a05bbd60` retain all physical timing
+requirements while replacing that obsolete global gate with nested kernel
+receipt schema 2. The current clean Lab documentation commit is a direct child
+of that parent and resolves its gitlink to the same Rust commit. Each direct
+enqueue TAI bracket is corroborated
+by item-local post-TX MONOTONIC evidence; the REALTIME intersection remains
+hard, global MONOTONIC drift is diagnostic, the physical TX interval remains
+inside `[release, release + 5 ms)`, and incoming evidence additionally requires
+`tx_lower >= enqueue_lower`. The Lab timing-stress contract is schema 4.
+Pinned focused Rust passed 23/23 with strict Clippy, host formatting/checking
+passed, and Lab clock/timing/parameter 164/164, lifecycle adversarial 8/8, CLI
+38/38, and supervisor 215 with seven skipped passed. These are engineering
+checks only; a complete Lab suite has not run for this head, and no v58 build,
+reference, timing, regression, code-gate, or controlled receipt exists.
 
 The retained post-v55 Lab engineering lineage also hardens durable Docker HANDOFF
 retirement. It permits at most one additional read-only absence observation,
@@ -736,20 +784,26 @@ without retroactively claiming a cause. The active v55 lifecycle namespace and
 QCSD-labelled Docker object sets are empty. This cleanup is operational, not
 candidate evidence.
 
-For current post-v56 source, fresh v57 build, reference, and regression-bound
-code-gate receipts are absent; timing stress is 0/12, regression is 0/18, and
+On 5 September 2026, exact ledger-only recovery separately retired the five
+stale v57 `HANDOFF` roots (three run roots and two network roots) after proving
+all corresponding Docker objects absent. It issued no Docker-object removal
+and left unrelated Docker inventory unchanged. This is operational recovery,
+not scientific evidence.
+
+For current source, fresh v58 build, reference, and regression-bound code-gate
+receipts are absent; timing stress is 0/12, regression is 0/18, and
 controlled qualification is 0/160. Real acquisition observations remain zero.
 Pilot fitting, qualification, and compatibility are 0/480, 0/720, and 0/1,080;
 authoritative fitting and final qualification are 0/2,000 and 0/600;
 certification and canaries are 0/900 and 0/1,000; formal capture is 0/16,000.
-Handoff, evaluation, comparison, and attestation are absent. V56's build and
-reference passed only for Lab `4d2ecd53c56f6d807f71175f62d1acfd44958202`
-and Rust `8d4d1a49c098de1850879f4a116e88802a7bd9e4`; its terminal first timing
-launch consumed that cohort. The next fresh cohort is v57. It must repeat the
+Handoff, evaluation, comparison, and attestation are absent. V57's build and
+reference passed only for Lab `b7811dab7124ffdde113fae111ef8bab4810ebba`
+and Rust `edf44779db0dacac37b8a71f5ccf5ea102e34c29`; its terminal first timing
+launch consumed that cohort. The next fresh cohort is v58. It must repeat the
 pull/no-cache build, isolated reference gate, 12/12 timing stress, 18/18
 regression, regression-bound code gate, and 160/160 controlled qualification
-before expanded-class acquisition can begin. Neither v55 nor v56 can be
-retried. The complete current status and earlier cohort chronology are retained
+before expanded-class acquisition can begin. V55–v57 cannot be retried. The
+complete current status and earlier cohort chronology are retained
 in the authoritative workspace
 [`PROJECT.md`](../PROJECT.md).
 
@@ -909,7 +963,9 @@ guarded shell owns creation, signal handling, exact-object cleanup, handoff
 retirement, and finalisation; direct Python execution cannot mutate Docker.
 This implementation has synthetic test coverage. The passed live engineering
 probe cited above used the older v56 image plus dirty repaired source; there is
-no clean, source-bound v57 capability or campaign-evidence result.
+no clean, current-source v58 capability or campaign-evidence result. V57's
+source-bound build/reference receipts do not convert that older probe into
+evidence for either v57 or current source.
 
 The schema-1 receipt is explicitly `evidentiary=false` and
 `authorizes_capture=false`. A passing receipt could demonstrate only that one
@@ -1020,7 +1076,7 @@ UID:GID with all capabilities dropped and Docker networking disabled, while a
 local in-container server proves cross-site iframe, worker/shared-worker,
 duplicate-URL, redirect, and shutdown behaviour. Mocked deterministic tests
 have passed during engineering, but the probe must still pass in the freshly
-built preparation image for the fresh v57 lineage before acquisition.
+built preparation image for the fresh v58 lineage before acquisition.
 
 The same complete graph is now independently rederived at every downstream
 evidence boundary. For each accepted fitting, pilot-compatibility,
