@@ -39,6 +39,21 @@ _QCSD_DOCKER_SCOPE_SETTLE_POLLS=20
 _QCSD_DOCKER_SCOPE_SETTLE_DELAY_SECONDS=0.05
 _QCSD_DOCKER_LIFECYCLE_SCHEMA=1
 _QCSD_DOCKER_LIFECYCLE_PARENT=/var/tmp
+# One historical source transition is admissible solely to retire terminal
+# v57 HANDOFF ledgers that were written by the immediately preceding committed
+# helper.  These pins identify the predecessor bytes, the commit that first
+# carried them, the exact checkout that ran v57, and that checkout's helper
+# blob.  They are deliberately not configurable: any future transition needs
+# an independently reviewed, explicit successor rule.
+_QCSD_DOCKER_V57_PREDECESSOR_SHA256=969f69faa531730f13204bbd0556a2d877b1cfd68d5594d80bff4caa05df6d8b
+_QCSD_DOCKER_V57_PREDECESSOR_BLOB=958d3569aea861380abc4b7152ef29987602e2a8
+_QCSD_DOCKER_V57_PREDECESSOR_COMMIT=d9683ccdfd9270da123dc2b008df5df4f60c0385
+_QCSD_DOCKER_V57_CHECKOUT_COMMIT=b7811dab7124ffdde113fae111ef8bab4810ebba
+_QCSD_DOCKER_V57_HELPER_PATH=tools/docker_signal_supervisor.sh
+readonly _QCSD_DOCKER_V57_PREDECESSOR_SHA256 \
+  _QCSD_DOCKER_V57_PREDECESSOR_BLOB \
+  _QCSD_DOCKER_V57_PREDECESSOR_COMMIT \
+  _QCSD_DOCKER_V57_CHECKOUT_COMMIT _QCSD_DOCKER_V57_HELPER_PATH
 
 _qcsd_require_user_cgroup_manager() {
   command -v systemd-run >/dev/null 2>&1 &&
@@ -676,7 +691,7 @@ _qcsd_target_docker_api_with_timeout() {
 }
 
 _qcsd_verify_pinned_docker_daemon() {
-  local observed_id attempt
+  local attempt status
   if [[ ! "${_QCSD_DOCKER_PINNED_CONTEXT:-}" =~ ^[A-Za-z0-9_.-]+$ ]] ||
      ! _qcsd_valid_pinned_docker_host \
        "${_QCSD_DOCKER_PINNED_HOST:-}" ||
@@ -686,12 +701,29 @@ _qcsd_verify_pinned_docker_daemon() {
   for (( attempt = 1;
          attempt <= _QCSD_DOCKER_DAEMON_IDENTITY_ATTEMPTS;
          attempt++ )); do
-    if observed_id="$(_qcsd_docker_api_raw_with_timeout \
-        "${_QCSD_DOCKER_API_TIMEOUT_SECONDS}" \
-        info --format '{{.ID}}' 2>/dev/null)"; then
-      [[ "${observed_id}" == "${_QCSD_DOCKER_PINNED_SERVER_ID}" ]]
-      return
+    # Keep daemon output inside the leased service.  In particular, do not
+    # make command-substitution output from a very short transient service an
+    # identity authority: systemd supervision can have completed correctly
+    # even when that outer output boundary is unavailable.  systemd-run
+    # --wait and the native holder preserve ExecMainStatus, so 42 is an exact
+    # returned mismatch while 125 (or any other infrastructure failure) is
+    # eligible for the one existing read-only retry.
+    if _qcsd_docker_api_service_with_timeout \
+        "${_QCSD_DOCKER_API_TIMEOUT_SECONDS}" /bin/sh -c '
+trap "" HUP INT QUIT TERM
+host=$1
+expected=$2
+observed=$(env -u DOCKER_CONTEXT -u DOCKER_HOST -u DOCKER_TLS_VERIFY \
+  -u DOCKER_CERT_PATH docker --host "${host}" info --format "{{.ID}}") || \
+  exit 125
+[ "${observed}" = "${expected}" ] || exit 42
+' qcsd-docker-daemon-identity "${_QCSD_DOCKER_PINNED_HOST}" \
+      "${_QCSD_DOCKER_PINNED_SERVER_ID}" >/dev/null 2>&1; then
+      return 0
+    else
+      status=$?
     fi
+    (( status == 42 )) && return 1
     # The native API-service boundary proves the failed service terminal
     # before returning, so a retry cannot overlap its predecessor.
   done
@@ -4175,14 +4207,266 @@ _qcsd_lifecycle_required_fields() {
   done
 }
 
+_qcsd_source_successor_git() {
+  # Discard all ambient Git configuration and repository selectors.  The
+  # fixed binary performs only read-only object/lineage queries below.
+  /usr/bin/env -i XDG_CONFIG_HOME=/nonexistent \
+    PATH=/usr/bin:/bin LC_ALL=C LANG=C GIT_CONFIG_NOSYSTEM=1 \
+    GIT_CONFIG_GLOBAL=/dev/null GIT_NO_REPLACE_OBJECTS=1 \
+    /usr/bin/git "$@"
+}
+
+_qcsd_source_successor_blob_sha256() {
+  local checkout_root="$1" blob="$2" digest
+  digest="$(
+    set -o pipefail
+    _qcsd_source_successor_git -C "${checkout_root}" cat-file blob \
+      "${blob}" 2>/dev/null |
+      /usr/bin/sha256sum
+  )" || return 1
+  digest="${digest%% *}"
+  [[ "${digest}" =~ ^[0-9a-f]{64}$ ]] || return 1
+  printf '%s\n' "${digest}"
+}
+
+_qcsd_lifecycle_v57_expected_handoff_sha256() {
+  # Exact path/digest allowlist for the five terminal ledgers retained by the
+  # rejected v57 shard.  A matching predecessor hash from any other campaign,
+  # token, user namespace, or checkout remains invalid.
+  case "$1" in
+    /var/tmp/qcsd-docker-lifecycle-1000/run.0c59907e4fcfda3dfe6460d0ed90bc8d)
+      printf '%s\n' ab8a743af5d96051dc8b5628109fea7498473c2cc7fda577254786cae399f16f ;;
+    /var/tmp/qcsd-docker-lifecycle-1000/run.0f21acd1954d957587178aa473b2ae95)
+      printf '%s\n' cd8db4c60847e8606a0d2587d7df2f0b3dd1b6f9051f0a94b1a32df6cd76ca8d ;;
+    /var/tmp/qcsd-docker-lifecycle-1000/run.43135816b56120ed09bff4df82bbfe53)
+      printf '%s\n' 91b1be07dfdab4453002e8b4792c918ad5375d72dc2ce6da8b5e8aee34817cd8 ;;
+    /var/tmp/qcsd-docker-lifecycle-1000/network.d60e96839931a455660bb134c295c86e)
+      printf '%s\n' f53c74e9963ca9ed97a6f0ce14d2a8c0ea20aa30b8ff95a64ee633e1b56a4d8f ;;
+    /var/tmp/qcsd-docker-lifecycle-1000/network.fb0f174a425a544d329e8e1f6767bbbe)
+      printf '%s\n' dee19badfac184a0a86f59e4e5143230d0d6c98d197027b43d0e807f86115761 ;;
+    *) return 1 ;;
+  esac
+}
+
+_qcsd_lifecycle_v57_handoff_allowlisted() {
+  local values_name="$1" root expected record metadata_before metadata_after observed
+  local device inode owner mode links size kind
+  local -n values_ref="${values_name}"
+  root="${values_ref[lifecycle_root]:-}"
+  expected="$(_qcsd_lifecycle_v57_expected_handoff_sha256 "${root}")" || return 1
+  record="${root}/HANDOFF"
+  [[ ! -L "${record}" && -f "${record}" &&
+      ! -e "${record}.next" && ! -L "${record}.next" ]] || return 1
+  metadata_before="$(stat -Lc '%d:%i:%u:%a:%h:%s:%F' -- \
+    "${record}" 2>/dev/null)" || return 1
+  IFS=: read -r device inode owner mode links size kind <<<"${metadata_before}"
+  [[ "${device}" =~ ^[0-9]+$ && "${inode}" =~ ^[0-9]+$ &&
+      "${owner}" == "${EUID}" && "${mode}" == 600 && "${links}" == 1 &&
+      "${size}" =~ ^[1-9][0-9]*$ && "${kind}" == "regular file" ]] || return 1
+  observed="$(/usr/bin/sha256sum -- "${record}" 2>/dev/null |
+    /usr/bin/awk '{print $1}')" || return 1
+  metadata_after="$(stat -Lc '%d:%i:%u:%a:%h:%s:%F' -- \
+    "${record}" 2>/dev/null)" || return 1
+  [[ "${metadata_after}" == "${metadata_before}" &&
+      "${observed}" == "${expected}" ]]
+}
+
+_qcsd_lifecycle_validate_v57_predecessor_checkout() {
+  local tools_dir checkout_root canonical git_root git_dir
+  local metadata owner mode kind mode_value head head_line predecessor_blob v57_blob
+  local current_blob index_blob blob_kind commit_kind predecessor_digest current_digest
+  local head_entry index_entry expected_head_entry expected_index_entry source_mode
+  tools_dir="${_qcsd_bound_source_path%/*}"
+  checkout_root="${tools_dir%/*}"
+  [[ "${tools_dir##*/}" == tools &&
+      "${_qcsd_bound_source_path}" == \
+        "${checkout_root}/${_QCSD_DOCKER_V57_HELPER_PATH}" &&
+      ! -L "${checkout_root}" && -d "${checkout_root}" ]] || return 1
+  canonical="$(readlink -f -- "${checkout_root}" 2>/dev/null)" || return 1
+  [[ "${canonical}" == "${checkout_root}" ]] || return 1
+  metadata="$(stat -Lc '%u:%a:%F' -- "${checkout_root}" 2>/dev/null)" || return 1
+  IFS=: read -r owner mode kind <<<"${metadata}"
+  [[ "${owner}" == "${EUID}" && "${mode}" =~ ^[0-7]{3,4}$ &&
+      "${kind}" == directory ]] || return 1
+  mode_value=$((8#${mode}))
+  (( (mode_value & 0022) == 0 )) || return 1
+
+  git_root="$(_qcsd_source_successor_git -C "${checkout_root}" \
+    rev-parse --show-toplevel 2>/dev/null)" || return 1
+  [[ "${git_root}" == "${checkout_root}" ]] || return 1
+  git_dir="$(_qcsd_source_successor_git -C "${checkout_root}" \
+    rev-parse --absolute-git-dir 2>/dev/null)" || return 1
+  [[ "${git_dir}" == /* && ! -L "${git_dir}" && -d "${git_dir}" ]] || return 1
+  canonical="$(readlink -f -- "${git_dir}" 2>/dev/null)" || return 1
+  [[ "${canonical}" == "${git_dir}" ]] || return 1
+  metadata="$(stat -Lc '%u:%a:%F' -- "${git_dir}" 2>/dev/null)" || return 1
+  IFS=: read -r owner mode kind <<<"${metadata}"
+  [[ "${owner}" == "${EUID}" && "${mode}" =~ ^[0-7]{3,4}$ &&
+      "${kind}" == directory ]] || return 1
+  mode_value=$((8#${mode}))
+  (( (mode_value & 0022) == 0 )) || return 1
+
+  head="$(_qcsd_source_successor_git -C "${checkout_root}" \
+    rev-parse --verify 'HEAD^{commit}' 2>/dev/null)" || return 1
+  commit_kind="$(_qcsd_source_successor_git -C "${checkout_root}" \
+    cat-file -t "${_QCSD_DOCKER_V57_PREDECESSOR_COMMIT}" 2>/dev/null)" || return 1
+  [[ "${commit_kind}" == commit ]] || return 1
+  _qcsd_source_successor_git -C "${checkout_root}" merge-base --is-ancestor \
+    "${_QCSD_DOCKER_V57_PREDECESSOR_COMMIT}" \
+    "${_QCSD_DOCKER_V57_CHECKOUT_COMMIT}" \
+    >/dev/null 2>&1 || return 1
+  commit_kind="$(_qcsd_source_successor_git -C "${checkout_root}" \
+    cat-file -t "${_QCSD_DOCKER_V57_CHECKOUT_COMMIT}" 2>/dev/null)" || return 1
+  [[ "${commit_kind}" == commit ]] || return 1
+  _qcsd_source_successor_git -C "${checkout_root}" merge-base --is-ancestor \
+    "${_QCSD_DOCKER_V57_CHECKOUT_COMMIT}" "${head}" \
+    >/dev/null 2>&1 || return 1
+  head_line="$(_qcsd_source_successor_git -C "${checkout_root}" \
+    rev-list --parents -n 1 "${head}" 2>/dev/null)" || return 1
+  [[ "${head_line}" == \
+      "${head} ${_QCSD_DOCKER_V57_CHECKOUT_COMMIT}" ]] || return 1
+  predecessor_blob="$(_qcsd_source_successor_git -C "${checkout_root}" \
+    rev-parse --verify \
+      "${_QCSD_DOCKER_V57_PREDECESSOR_COMMIT}:${_QCSD_DOCKER_V57_HELPER_PATH}" \
+      2>/dev/null)" || return 1
+  v57_blob="$(_qcsd_source_successor_git -C "${checkout_root}" \
+    rev-parse --verify \
+      "${_QCSD_DOCKER_V57_CHECKOUT_COMMIT}:${_QCSD_DOCKER_V57_HELPER_PATH}" \
+      2>/dev/null)" || return 1
+  [[ "${predecessor_blob}" == "${_QCSD_DOCKER_V57_PREDECESSOR_BLOB}" &&
+      "${v57_blob}" == "${_QCSD_DOCKER_V57_PREDECESSOR_BLOB}" ]] || return 1
+  blob_kind="$(_qcsd_source_successor_git -C "${checkout_root}" cat-file -t \
+    "${_QCSD_DOCKER_V57_PREDECESSOR_BLOB}" 2>/dev/null)" || return 1
+  [[ "${blob_kind}" == blob ]] || return 1
+  predecessor_digest="$(_qcsd_source_successor_blob_sha256 \
+    "${checkout_root}" "${_QCSD_DOCKER_V57_PREDECESSOR_BLOB}")" || return 1
+  [[ "${predecessor_digest}" == \
+      "${_QCSD_DOCKER_V57_PREDECESSOR_SHA256}" ]] || return 1
+
+  # The successor itself must be committed: HEAD must descend from the v57
+  # checkout, and HEAD's helper bytes must be the exact immutable source this
+  # shell captured.  A dirty, merely path-matching helper is never authority.
+  current_blob="$(_qcsd_source_successor_git -C "${checkout_root}" \
+    rev-parse --verify "HEAD:${_QCSD_DOCKER_V57_HELPER_PATH}" \
+      2>/dev/null)" || return 1
+  index_blob="$(_qcsd_source_successor_git -C "${checkout_root}" \
+    rev-parse --verify ":${_QCSD_DOCKER_V57_HELPER_PATH}" \
+      2>/dev/null)" || return 1
+  [[ "${index_blob}" == "${current_blob}" ]] || return 1
+  head_entry="$(_qcsd_source_successor_git -C "${checkout_root}" ls-tree \
+    HEAD -- "${_QCSD_DOCKER_V57_HELPER_PATH}" 2>/dev/null)" || return 1
+  index_entry="$(_qcsd_source_successor_git -C "${checkout_root}" ls-files \
+    --stage -- "${_QCSD_DOCKER_V57_HELPER_PATH}" 2>/dev/null)" || return 1
+  printf -v expected_head_entry '100644 blob %s\t%s' "${current_blob}" \
+    "${_QCSD_DOCKER_V57_HELPER_PATH}"
+  printf -v expected_index_entry '100644 %s 0\t%s' "${current_blob}" \
+    "${_QCSD_DOCKER_V57_HELPER_PATH}"
+  [[ "${head_entry}" == "${expected_head_entry}" &&
+      "${index_entry}" == "${expected_index_entry}" ]] || return 1
+  source_mode="$(stat -Lc %a -- "${_qcsd_bound_source_path}" 2>/dev/null)" ||
+    return 1
+  [[ "${source_mode}" =~ ^[0-7]{3,4}$ ]] || return 1
+  mode_value=$((8#${source_mode}))
+  (( (mode_value & 0111) == 0 )) || return 1
+  blob_kind="$(_qcsd_source_successor_git -C "${checkout_root}" cat-file -t \
+    "${current_blob}" 2>/dev/null)" || return 1
+  [[ "${blob_kind}" == blob ]] || return 1
+  current_digest="$(_qcsd_source_successor_blob_sha256 \
+    "${checkout_root}" "${current_blob}")" || return 1
+  [[ "${current_digest}" == "${_qcsd_bound_source_sha256}" ]]
+}
+
+_qcsd_lifecycle_source_successor_terminal_reproof() {
+  local root_kind="$1" values_name="$2" presence
+  local -n values_ref="${values_name}"
+  local _qcsd_target_docker_context="${values_ref[docker_context]:-}"
+  [[ "${values_ref[host_boot_id]:-}" == "${_QCSD_DOCKER_PINNED_BOOT_ID:-}" ]] ||
+    return 1
+  _qcsd_verify_pinned_host_boot || return 1
+  _qcsd_verify_pinned_docker_daemon || return 1
+  case "${root_kind}" in
+    run)
+      [[ "${values_ref[container_id]:-}" =~ ^[0-9a-f]{64}$ &&
+          "${values_ref[scope_unit]:-}" =~ \
+            ^qcsd-docker-run-[0-9a-f]{32}[.]scope$ &&
+          "${values_ref[supervisor_label]:-}" == \
+            "${_QCSD_DOCKER_SUPERVISOR_LABEL_KEY}=${values_ref[lifecycle_token]:-}" &&
+          "${values_ref[scope_launcher_pid]:-}" =~ ^[1-9][0-9]*$ &&
+          "${values_ref[scope_launcher_start_time]:-}" =~ ^[1-9][0-9]*$ &&
+          "${values_ref[scope_launcher_session]:-}" =~ ^[1-9][0-9]*$ &&
+          "${values_ref[scope_launcher_process_group]:-}" =~ ^[1-9][0-9]*$ ]] ||
+        return 1
+      presence="$(_qcsd_docker_exact_id_presence_detailed \
+        "${values_ref[container_id]:-}")" || return 1
+      [[ "${presence}" == absent ]] || return 1
+      _qcsd_resolve_docker_target "" "${values_ref[lifecycle_token]:-}"
+      [[ "${_qcsd_resolved_state}" == absent &&
+          -z "${_qcsd_resolved_cid}" ]] || return 1
+      _qcsd_query_user_scope "${values_ref[scope_unit]:-}" || return 1
+      [[ "${_qcsd_scope_state}" == absent ]] || return 1
+      _qcsd_bound_process_is_gone "${values_ref[scope_launcher_pid]:-}" \
+        "${values_ref[scope_launcher_start_time]:-}" \
+        "${values_ref[scope_launcher_session]:-}" \
+        "${values_ref[scope_launcher_process_group]:-}" || return 1
+      ;;
+    network)
+      [[ "${values_ref[network_id]:-}" =~ ^[0-9a-f]{64}$ &&
+          "${values_ref[supervisor_label]:-}" == \
+            "${_QCSD_DOCKER_SUPERVISOR_LABEL_KEY}=${values_ref[lifecycle_token]:-}" ]] ||
+        return 1
+      presence="$(_qcsd_docker_exact_network_presence_detailed \
+        "${values_ref[network_id]:-}")" || return 1
+      [[ "${presence}" == absent ]] || return 1
+      _qcsd_resolve_docker_network "${values_ref[lifecycle_token]:-}" ""
+      [[ "${_qcsd_resolved_network_state}" == absent &&
+          -z "${_qcsd_resolved_network_id}" ]] || return 1
+      ;;
+    *) return 1 ;;
+  esac
+  [[ "${values_ref[supervisor_pid]:-}" =~ ^[1-9][0-9]*$ &&
+      "${values_ref[supervisor_start_time]:-}" =~ ^[1-9][0-9]*$ &&
+      "${values_ref[supervisor_session]:-}" =~ ^[1-9][0-9]*$ &&
+      "${values_ref[supervisor_process_group]:-}" =~ ^[1-9][0-9]*$ ]] ||
+    return 1
+  _qcsd_bound_process_is_gone "${values_ref[supervisor_pid]:-}" \
+    "${values_ref[supervisor_start_time]:-}" \
+    "${values_ref[supervisor_session]:-}" \
+    "${values_ref[supervisor_process_group]:-}"
+}
+
+_qcsd_lifecycle_is_v57_source_successor() {
+  local root_kind="$1" record_name="$2" values_name="$3"
+  local -n values_ref="${values_name}"
+  [[ "${root_kind}" =~ ^(run|network)$ && "${record_name}" == HANDOFF &&
+      "${values_ref[lifecycle_state]:-}" == handed-off &&
+      "${values_ref[supervisor_source_sha256]:-}" == \
+        "${_QCSD_DOCKER_V57_PREDECESSOR_SHA256}" &&
+      "${_qcsd_bound_source_sha256:-}" != \
+        "${_QCSD_DOCKER_V57_PREDECESSOR_SHA256}" ]]
+}
+
 _qcsd_lifecycle_validate_source_identity() {
-  local values_name="$1"
+  local root_kind="$1" record_name="$2" values_name="$3"
   local -n values_ref="${values_name}"
   _qcsd_bind_helper_source_identity || return 1
   [[ "${values_ref[supervisor_source_path]}" == "${_qcsd_bound_source_path}" &&
-      "${values_ref[supervisor_source_sha256]}" == "${_qcsd_bound_source_sha256}" &&
       "${values_ref[supervisor_source_device]}" == "${_qcsd_bound_source_device}" &&
-      "${values_ref[supervisor_source_inode]}" == "${_qcsd_bound_source_inode}" ]]
+      "${values_ref[supervisor_source_inode]}" == "${_qcsd_bound_source_inode}" ]] ||
+    return 1
+  if [[ "${values_ref[supervisor_source_sha256]}" == \
+        "${_qcsd_bound_source_sha256}" ]]; then
+    return 0
+  fi
+  # A source mismatch normally remains terminal.  The sole exception is an
+  # immutable v57 run/network HANDOFF from the exact predecessor checkout,
+  # and even that receipt is admitted only after fresh, read-only proof that
+  # its exact object, private label, launcher, and (for a run) scope are gone.
+  _qcsd_lifecycle_is_v57_source_successor \
+    "${root_kind}" "${record_name}" "${values_name}" || return 1
+  _qcsd_lifecycle_v57_handoff_allowlisted "${values_name}" || return 1
+  _qcsd_lifecycle_validate_v57_predecessor_checkout || return 1
+  _qcsd_lifecycle_source_successor_terminal_reproof \
+    "${root_kind}" "${values_name}"
 }
 
 _qcsd_lifecycle_validate_supervisor_tuple() {
@@ -4334,7 +4618,8 @@ _qcsd_lifecycle_validate_record() {
       "${values_ref[host_boot_id]}" =~ \
         ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] ||
     return 1
-  _qcsd_lifecycle_validate_source_identity "${values_name}" || return 1
+  _qcsd_lifecycle_validate_source_identity \
+    "${root_kind}" "${record_name}" "${values_name}" || return 1
   state="${values_ref[lifecycle_state]}"
   case "${root_kind}:${record_name}:${state}" in
     run:SUPERVISION:declared|run:SUPERVISION:request-authorised|\
@@ -6237,7 +6522,12 @@ qcsd_reconcile_docker_lifecycle() {
       [[ "${kinds[index]}" == "build" || "${kinds[index]}" == "run" ]] || continue
       root="${roots[index]}"
       _qcsd_lifecycle_validate_root "${root}" "${kinds[index]}" || return 1
-      if (( _QCSD_LIFECYCLE_SELECTED_UNPUBLISHED == 0 )); then
+      if (( _QCSD_LIFECYCLE_SELECTED_UNPUBLISHED == 0 )) &&
+         ! _qcsd_lifecycle_is_v57_source_successor "${kinds[index]}" \
+             "${_QCSD_LIFECYCLE_SELECTED_RECORD##*/}" \
+             _QCSD_LIFECYCLE_SELECTED_VALUES; then
+        # Even when another root blocks global admission, a predecessor
+        # HANDOFF remains ledger-only and never enters scope-control code.
         _qcsd_lifecycle_stop_stale_scope \
           _QCSD_LIFECYCLE_SELECTED_VALUES "${current_boot}" 1 || return 1
       fi
@@ -6306,27 +6596,42 @@ qcsd_reconcile_docker_lifecycle() {
       fi
       case "${root_kind}" in
         run)
-          local preauth_stop=0
-          if [[ "${_QCSD_LIFECYCLE_SELECTED_VALUES[lifecycle_state]}" == declared ||
-                ( "${_QCSD_LIFECYCLE_SELECTED_VALUES[lifecycle_state]}" == unresolved &&
-                  "${_QCSD_LIFECYCLE_SELECTED_VALUES[daemon_request_authorised]:-1}" == 0 ) ]]; then
-            preauth_stop=1
+          if _qcsd_lifecycle_is_v57_source_successor "${root_kind}" \
+              "${_QCSD_LIFECYCLE_SELECTED_RECORD##*/}" \
+              _QCSD_LIFECYCLE_SELECTED_VALUES; then
+            # The exceptional successor path is ledger-only. It may retire a
+            # now-ownerless HANDOFF after fresh absence proofs, but it must
+            # never stop a scope or issue Docker kill/rm requests.
+            _qcsd_lifecycle_revalidate_snapshot "${root}" "${root_kind}" \
+              "${selected_record_snapshot}" "${selected_sha_snapshot}" \
+              "${manifest_snapshot}" || return 1
+          else
+            local preauth_stop=0
+            if [[ "${_QCSD_LIFECYCLE_SELECTED_VALUES[lifecycle_state]}" == declared ||
+                  ( "${_QCSD_LIFECYCLE_SELECTED_VALUES[lifecycle_state]}" == unresolved &&
+                    "${_QCSD_LIFECYCLE_SELECTED_VALUES[daemon_request_authorised]:-1}" == 0 ) ]]; then
+              preauth_stop=1
+            fi
+            _qcsd_lifecycle_stop_stale_scope \
+              _QCSD_LIFECYCLE_SELECTED_VALUES "${current_boot}" "${preauth_stop}" || return 1
+            (( _QCSD_PREAUTH_CONTRADICTION_AT_CONTAINMENT == 0 )) || return 1
+            _qcsd_lifecycle_revalidate_snapshot "${root}" "${root_kind}" \
+              "${selected_record_snapshot}" "${selected_sha_snapshot}" \
+              "${manifest_snapshot}" || return 1
+            _qcsd_lifecycle_recover_container \
+              "${root}" _QCSD_LIFECYCLE_SELECTED_VALUES || return 1
           fi
-          _qcsd_lifecycle_stop_stale_scope \
-            _QCSD_LIFECYCLE_SELECTED_VALUES "${current_boot}" "${preauth_stop}" || return 1
-          (( _QCSD_PREAUTH_CONTRADICTION_AT_CONTAINMENT == 0 )) || return 1
-          _qcsd_lifecycle_revalidate_snapshot "${root}" "${root_kind}" \
-            "${selected_record_snapshot}" "${selected_sha_snapshot}" \
-            "${manifest_snapshot}" || return 1
-          _qcsd_lifecycle_recover_container \
-            "${root}" _QCSD_LIFECYCLE_SELECTED_VALUES || return 1
           ;;
         network)
           _qcsd_lifecycle_revalidate_snapshot "${root}" "${root_kind}" \
             "${selected_record_snapshot}" "${selected_sha_snapshot}" \
             "${manifest_snapshot}" || return 1
-          _qcsd_lifecycle_recover_network \
-            _QCSD_LIFECYCLE_SELECTED_VALUES || return 1
+          if ! _qcsd_lifecycle_is_v57_source_successor "${root_kind}" \
+              "${_QCSD_LIFECYCLE_SELECTED_RECORD##*/}" \
+              _QCSD_LIFECYCLE_SELECTED_VALUES; then
+            _qcsd_lifecycle_recover_network \
+              _QCSD_LIFECYCLE_SELECTED_VALUES || return 1
+          fi
           ;;
         build)
           [[ "${_QCSD_LIFECYCLE_SELECTED_VALUES[lifecycle_state]}" == "declared" ]] ||

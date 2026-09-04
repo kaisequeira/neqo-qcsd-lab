@@ -14,6 +14,7 @@ from qcsd_lab.kernel_tx import build_observer_topology_receipt
 from qcsd_lab.parameters import (
     PREVIOUS_TIMING_STRESS_INPUT_POLICY,
     PREVIOUS_TIMING_STRESS_V2_INPUT_POLICY,
+    PREVIOUS_TIMING_STRESS_V3_INPUT_POLICY,
     TIMING_STRESS_INPUT_POLICY,
     validate_parameter_artifact,
 )
@@ -22,6 +23,7 @@ from tests.test_buflo_handoff import _runner_wakeup_receipt
 from tests.test_kernel_tx import (
     _controller_isolation,
     _evidence,
+    _runner_receipt_v2,
     _runner_wakeup_v11,
     _topology,
 )
@@ -47,7 +49,7 @@ def test_timing_stress_contract_preserves_frozen_campaign_counts_and_dynamic_dra
         "packet_size": 1_200,
         "max_events_per_direction": 6_000,
         "strict_half_open_window_us": 5_000,
-        "contract_schema_version": 3,
+        "contract_schema_version": 4,
         "cadence_semantics": ("inclusive-minimum-prefix-plus-bounded-terminal-whole-cell-drain"),
         "mandatory_prefix_opportunities_per_direction": 5_001,
         "minimum_kernel_timed_outgoing_releases_after_tick_zero_per_visit": 5_000,
@@ -69,7 +71,7 @@ def test_timing_stress_contract_preserves_frozen_campaign_counts_and_dynamic_dra
         "legacy_userspace_exact_release_projection": (
             "schema-10-compatibility-fields-retained-and-neutral"
         ),
-        "kernel_tx_runner_receipt_schema_version": 1,
+        "kernel_tx_runner_receipt_schema_version": 2,
         "kernel_tx_evidence_schema_version": 1,
         "observer_topology_receipt_schema_version": 1,
         "physical_outgoing_observer": "router-ingress-post-client-veth-pre-netem",
@@ -115,9 +117,9 @@ def test_timing_stress_parameters_require_narrow_explicit_admission() -> None:
     )
 
     provenance_value = json.loads(provenance.read_text(encoding="utf-8"))
-    assert provenance_value["schema_version"] == 3
+    assert provenance_value["schema_version"] == 4
     assert provenance_value["capture_contract"] == {
-        "schema_version": 3,
+        "schema_version": 4,
         "visits": 12,
         "max_attempts": 1,
         "authoritative_checkpoint": "experiment.json",
@@ -142,7 +144,7 @@ def test_timing_stress_parameters_require_narrow_explicit_admission() -> None:
         "legacy_userspace_exact_release_projection": (
             "schema-10-compatibility-fields-retained-and-neutral"
         ),
-        "kernel_tx_runner_receipt_schema_version": 1,
+        "kernel_tx_runner_receipt_schema_version": 2,
         "kernel_tx_evidence_schema_version": 1,
         "observer_topology_receipt_schema_version": 1,
         "physical_outgoing_observer": "router-ingress-post-client-veth-pre-netem",
@@ -182,8 +184,54 @@ def test_schema_two_timing_stress_parameters_remain_historical_not_current() -> 
 
     assert artifact.input_policy == PREVIOUS_TIMING_STRESS_V2_INPUT_POLICY
     assert artifact.input_policy != TIMING_STRESS_INPUT_POLICY
-    assert buflo_study.TIMING_STRESS_PARAMETERS.name == "buflo-timing-stress-v3.json"
+    assert buflo_study.TIMING_STRESS_PARAMETERS.name == "buflo-timing-stress-v4.json"
     assert json.loads(provenance.read_text(encoding="utf-8"))["schema_version"] == 2
+
+
+def test_schema_three_timing_stress_parameters_remain_historical_not_current() -> None:
+    parameter = buflo_study.STUDY_ROOT / "buflo-timing-stress-v3.json"
+    provenance = parameter.with_suffix(parameter.suffix + ".provenance.json")
+
+    artifact = validate_parameter_artifact(
+        parameter,
+        provenance_path=provenance,
+        expected_kind="buflo",
+        allow_timing_stress=True,
+        expected_qcsd_profile="research-1200",
+        expected_udp_payload_ceiling=1_200,
+    )
+
+    assert artifact.input_policy == PREVIOUS_TIMING_STRESS_V3_INPUT_POLICY
+    assert artifact.input_policy != TIMING_STRESS_INPUT_POLICY
+    assert buflo_study.TIMING_STRESS_PARAMETERS.name == "buflo-timing-stress-v4.json"
+    assert json.loads(provenance.read_text(encoding="utf-8"))["schema_version"] == 3
+
+
+def test_historical_timing_stress_inputs_remain_byte_identical() -> None:
+    expected = {
+        "buflo-timing-stress-v1.json": (
+            "9249fd4324c1d24dd6e4d03221b6f92fe4eb6a331b2c756206e91aa318e21285"
+        ),
+        "buflo-timing-stress-v1.json.provenance.json": (
+            "6b11ac948e7d34bce2da3d3df7a6202e19bdfaae1b9d401f4248fb24397722aa"
+        ),
+        "buflo-timing-stress-v2.json": (
+            "9249fd4324c1d24dd6e4d03221b6f92fe4eb6a331b2c756206e91aa318e21285"
+        ),
+        "buflo-timing-stress-v2.json.provenance.json": (
+            "f6e24f01b32b08e2cbc57f8791cc2877846f1fae6800fe61d4f563ddf16738f4"
+        ),
+        "buflo-timing-stress-v3.json": (
+            "9249fd4324c1d24dd6e4d03221b6f92fe4eb6a331b2c756206e91aa318e21285"
+        ),
+        "buflo-timing-stress-v3.json.provenance.json": (
+            "d6e67c15dadfcad0689353487d8dd6eaa4a14a2c3e0b5e0f709bcbee35241d61"
+        ),
+    }
+
+    assert {
+        name: sha256_file(buflo_study.STUDY_ROOT / name) for name in expected
+    } == expected
 
 
 def _checkpoint_binding(*, cohort_version: int = 46) -> dict[str, Any]:
@@ -721,7 +769,7 @@ def _patch_small_schedule_contract(
                 "schema_version": 10,
                 "neutral": True,
             },
-            "runner_receipt_schema_version": 1,
+            "runner_receipt_schema_version": 2,
             "evidence_schema_version": 1,
             "observer_topology_schema_version": 1,
             "job_count": opportunities,
@@ -760,7 +808,7 @@ def test_timing_stress_schedule_requires_exact_cells_and_credit_bytes(
     evidence = buflo_study._timing_stress_schedule_evidence(
         tmp_path, run, network_receipt={}
     )
-    assert evidence["contract_schema_version"] == 3
+    assert evidence["contract_schema_version"] == 4
     assert evidence["cadence"] == {
         "interval_us": 20,
         "minimum_duration_us": 40,
@@ -934,12 +982,19 @@ def test_timing_stress_rejects_invalid_prefix_suffix_and_terminal_evidence(
 def _write_kernel_tx_attempt(
     attempt: Path,
     monkeypatch: pytest.MonkeyPatch,
+    *,
+    runner_schema_version: int = 2,
 ) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
     neqo = attempt / "neqo"
     diagnostics = attempt / "diagnostics"
     neqo.mkdir(parents=True)
     diagnostics.mkdir()
-    run = {"runner_wakeup_metrics": _runner_wakeup_v11()}
+    wakeups = _runner_wakeup_v11()
+    if runner_schema_version == 2:
+        wakeups["buflo_kernel_tx"] = _runner_receipt_v2()
+    elif runner_schema_version != 1:
+        raise ValueError("test runner schema must be 1 or 2")
+    run = {"runner_wakeup_metrics": wakeups}
     run_path = neqo / "run.json"
     run_path.write_text(json.dumps(run), encoding="utf-8")
     router_capture = diagnostics / "kernel-tx-post-veth-raw.pcapng"
@@ -1014,6 +1069,24 @@ def test_timing_stress_kernel_tx_evidence_accepts_complete_current_boundary(
     assert sum(
         evidence["kernel_timed_release_lateness_histogram_after_tick_zero"]["counts"]
     ) == 0
+
+
+def test_timing_stress_kernel_tx_evidence_rejects_historical_nested_schema(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run, network, _packets = _write_kernel_tx_attempt(
+        tmp_path,
+        monkeypatch,
+        runner_schema_version=1,
+    )
+
+    with pytest.raises(ValueError, match="current schema-11 kernel-TX evidence"):
+        buflo_study._timing_stress_kernel_tx_evidence(
+            tmp_path,
+            run,
+            opportunities=1,
+            network_receipt=network,
+        )
 
 
 @pytest.mark.parametrize(
@@ -1098,7 +1171,7 @@ def _aggregate_timing(opportunities: int) -> dict[str, Any]:
             "schema_version": 10,
             "neutral": True,
         },
-        "runner_receipt_schema_version": 1,
+        "runner_receipt_schema_version": 2,
         "evidence_schema_version": 1,
         "observer_topology_schema_version": 1,
         "job_count": opportunities,
@@ -1125,7 +1198,7 @@ def _aggregate_timing(opportunities: int) -> dict[str, Any]:
         "network_receipt_sha256": "5" * 64,
     }
     return {
-        "contract_schema_version": 3,
+        "contract_schema_version": 4,
         "cadence": {
             "interval_us": 20_000,
             "minimum_duration_us": 100_000_000,
@@ -1242,6 +1315,26 @@ def test_current_timing_stress_aggregate_rejects_schema_two_sample() -> None:
     with pytest.raises(ValueError, match="current kernel-TX contract"):
         buflo_study._timing_stress_aggregate(
             [{"timing": copy.deepcopy(historical)} for _ in range(12)]
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("runner_receipt_schema_version", 1),
+        ("evidence_schema_version", 2),
+        ("observer_topology_schema_version", 2),
+    ),
+)
+def test_current_timing_stress_aggregate_rejects_nested_schema_substitution(
+    field: str, value: int
+) -> None:
+    timing = _aggregate_timing(5_001)
+    timing["kernel_tx"][field] = value
+
+    with pytest.raises(ValueError, match="current kernel-TX contract"):
+        buflo_study._timing_stress_aggregate(
+            [{"timing": copy.deepcopy(timing)} for _ in range(12)]
         )
 
 

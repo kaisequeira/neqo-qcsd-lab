@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from qcsd_lab import capture_session, fidelity
+from qcsd_lab import capture_session, fidelity, kernel_tx
 from qcsd_lab.kernel_tx import (
     KERNEL_TX_EVIDENCE_SEMANTICS,
     KERNEL_TX_RUNNER_SEMANTICS,
@@ -347,7 +347,7 @@ def _runner_receipt() -> dict[str, object]:
     clock_mapping = _clock_mapping()
     return {
         "schema_version": 1,
-        "semantics": KERNEL_TX_RUNNER_SEMANTICS,
+        "semantics": kernel_tx.KERNEL_TX_HISTORICAL_RUNNER_SEMANTICS,
         "terminal_outcome": "complete",
         "primary_error": None,
         "cleanup_errors": [],
@@ -420,6 +420,150 @@ def _runner_receipt() -> dict[str, object]:
         },
         "terminal_errors": [],
     }
+
+
+def _runner_receipt_v2() -> dict[str, object]:
+    """Upgrade the historical fixture to the refined clock-mapping contract."""
+
+    raw = _runner_receipt()
+    raw["schema_version"] = 2
+    raw["semantics"] = KERNEL_TX_RUNNER_SEMANTICS
+    mapping = raw["clock_mapping"]
+    assert isinstance(mapping, dict)
+    mapping["schema_version"] = 2
+    mapping["effective_envelope_semantics"] = (
+        "start_and_end_clock_phases_plus_every_explicit_per_item_post_tx_clock_phase; "
+        "every_clock_phase_subsample_and_instant_alignment_bracket_is_at_most_250us; "
+        "effective_monotonic_offset_is_a_nonfatal_diagnostic_union_and_max_observed_"
+        "offset_drift_is_the_exact_maximum_start_relative_midpoint_drift_across_both_"
+        "clocks_and_all_retained_phases; each_enqueue_MONOTONIC_timestamp_is_"
+        "translated_only_with_its_item_local_post_TX_monotonic_phase_and_must_overlap_"
+        "its_direct_enqueue_TAI_bracket; "
+        "realtime_offset_is_the_nonempty_running_intersection_used_online_and_recomputed_"
+        "exactly_at_finalization; final_realtime_interval_must_be_contained_by_every_"
+        "provisional_interval; direct_enqueue_TAI_before_release_and_causal_order_"
+        "predicates_remain_hard_gates; incoming_TX_lower_must_not_precede_its_enqueue_"
+        "TAI_lower"
+    )
+    for job in raw["jobs"]:
+        for item in job["items"]:
+            item["schema_version"] = 2
+            post_tai_ns = item["tx_software_tai_ns"] + 1
+            item["post_tx_clock_phase"] = {
+                "monotonic": _clock_sample(
+                    post_tai_ns - _MONOTONIC_TO_TAI_NS,
+                    _MONOTONIC_TO_TAI_NS,
+                ),
+                "realtime": _clock_sample(
+                    post_tai_ns - _REALTIME_TO_TAI_NS,
+                    _REALTIME_TO_TAI_NS,
+                ),
+            }
+    return raw
+
+
+def _refresh_failed_runner_receipt(
+    raw: dict[str, object], *, primary_error: str
+) -> None:
+    """Recompute the producer's top-level failure projection for test fixtures."""
+
+    jobs = raw["jobs"]
+    items = [item for job in jobs for item in job["items"]]
+    raw["terminal_outcome"] = "failed"
+    raw["primary_error"] = primary_error
+    raw["terminal_errors"] = [primary_error]
+    for job in jobs:
+        if any(item["terminal_outcome"] != "transmitted" for item in job["items"]):
+            job["terminal_error"] = primary_error
+            job["terminal_outcome"] = "failed"
+    outcomes = [item["terminal_outcome"] for item in items]
+    aggregate = raw["aggregate"]
+    aggregate.update(
+        {
+            "transmitted_item_count": outcomes.count("transmitted"),
+            "failed_item_count": sum(outcome != "transmitted" for outcome in outcomes),
+            "tx_sched_timestamp_count": sum(
+                item["tx_sched_tai_ns"] is not None for item in items
+            ),
+            "tx_software_timestamp_count": sum(
+                item["tx_software_tai_ns"] is not None for item in items
+            ),
+            "txtime_error_count": outcomes.count("txtime-error"),
+            "timestamp_evidence_missing_count": outcomes.count(
+                "timestamp-evidence-missing"
+            ),
+            "window_violation_count": outcomes.count("window-violation"),
+            "max_tx_software_lateness_ns": max(
+                (
+                    max(0, item["tx_software_tai_upper_ns"] - item["target_tai_ns"])
+                    for item in items
+                    if item["tx_software_tai_upper_ns"] is not None
+                ),
+                default=0,
+            ),
+            "terminal_outcome": "failed",
+        }
+    )
+
+
+def _clear_final_clock_translations(item: dict[str, object]) -> None:
+    for prefix in ("tx_sched", "tx_software"):
+        for suffix in ("tai_ns", "tai_lower_ns", "tai_upper_ns"):
+            item[f"{prefix}_{suffix}"] = None
+
+
+def _schema_two_unmapped_error_detail(item: dict[str, object]) -> str:
+    enqueue_complete = (
+        item["enqueue_tai_lower_ns"] is not None
+        and item["enqueue_tai_upper_ns"] is not None
+        and item["enqueue_tai_lower_ns"] <= item["enqueue_tai_upper_ns"]
+    )
+    tx_order = (
+        item["tx_sched_realtime_ns"] is not None
+        and item["tx_software_realtime_ns"] is not None
+        and item["tx_sched_realtime_ns"] <= item["tx_software_realtime_ns"]
+    )
+    structural_order = (
+        item["order_index"] == 0
+        and item["enqueue_tai_upper_ns"] is not None
+        and item["enqueue_tai_upper_ns"] < item["target_tai_ns"]
+    )
+    controller_finalized = (
+        item["finalization_state"] == "controller-and-trace-finalized"
+    )
+
+    def rust_bool(value: bool) -> str:
+        return "true" if value else "false"
+
+    return (
+        f"item {item['item_id']} failed final mapping: "
+        f"enqueue_complete={rust_bool(enqueue_complete)}, "
+        "enqueue_clock_consistent=false, timestamp_complete=false, "
+        f"tx_order={rust_bool(tx_order)}, physical_window=false, "
+        "provisional_interval=false, endpoint_tuple=true, item_sequence=true, "
+        "job_identity=true, "
+        f"controller_trace_finalized={rust_bool(controller_finalized)}, "
+        f"structural_order={rust_bool(structural_order)}"
+    )
+
+
+def _make_schema_two_mapping_failure(
+    raw: dict[str, object], *, mapping_error: str
+) -> None:
+    raw.update(
+        {
+            "cleanup_errors": [mapping_error],
+            "clock_mapping_valid": False,
+            "clock_mapping_error": mapping_error,
+            "clock_mapping": None,
+        }
+    )
+    for item in (item for job in raw["jobs"] for item in job["items"]):
+        _clear_final_clock_translations(item)
+        item["terminal_outcome"] = "timestamp-evidence-missing"
+        item["terminal_error"] = "final_conservative_envelope_validation_failed"
+        item["terminal_error_detail"] = _schema_two_unmapped_error_detail(item)
+    _refresh_failed_runner_receipt(raw, primary_error=mapping_error)
 
 
 def _runner_wakeup_v11() -> dict[str, object]:
@@ -848,6 +992,753 @@ def test_runner_schema_eleven_is_exact_key_and_clock_fail_closed() -> None:
     raw["clock_mapping"]["max_observed_bracket_width_ns"] = 250_001
     assert not kernel_tx_runner_receipt_valid(raw)
 
+
+def test_kernel_tx_schema_two_refines_realtime_and_preserves_schema_one() -> None:
+    historical = _runner_receipt()
+    current = _runner_receipt_v2()
+
+    assert kernel_tx_runner_receipt_valid(historical)
+    assert kernel_tx_runner_receipt_valid(current)
+    assert kernel_tx_runner_receipt_success_valid(current)
+    historical["semantics"] = KERNEL_TX_RUNNER_SEMANTICS
+    assert not kernel_tx_runner_receipt_valid(historical)
+    historical["semantics"] = kernel_tx.KERNEL_TX_HISTORICAL_RUNNER_SEMANTICS
+    current["semantics"] = kernel_tx.KERNEL_TX_HISTORICAL_RUNNER_SEMANTICS
+    assert not kernel_tx_runner_receipt_valid(current)
+    current["semantics"] = KERNEL_TX_RUNNER_SEMANTICS
+    wakeups = _runner_wakeup_v11()
+    wakeups["buflo_kernel_tx"] = copy.deepcopy(current)
+    assert fidelity._runner_wakeup_v11_valid(wakeups)
+    assert capture_session._runner_wakeup_metrics_valid(wakeups)
+
+    first = current["jobs"][0]["items"][0]
+    first["provisional_tx_software_tai_lower_ns"] -= 1
+    assert not kernel_tx_runner_receipt_valid(current)
+
+    current = _runner_receipt_v2()
+    del current["jobs"][0]["items"][0]["post_tx_clock_phase"]
+    assert not kernel_tx_runner_receipt_valid(current)
+
+    current = _runner_receipt_v2()
+    current["jobs"][0]["items"][0]["schema_version"] = 1
+    assert not kernel_tx_runner_receipt_valid(current)
+
+    failed_before_arm = _failed_before_arm_runner_receipt()
+    failed_before_arm["schema_version"] = 2
+    failed_before_arm["semantics"] = KERNEL_TX_RUNNER_SEMANTICS
+    assert kernel_tx_runner_receipt_valid(failed_before_arm)
+
+
+def test_kernel_tx_schema_two_reconstructs_online_before_final_intersection() -> None:
+    current = _runner_receipt_v2()
+    mapping = current["clock_mapping"]
+    assert isinstance(mapping, dict)
+
+    def bounded_sample(
+        clock_ns: int, lower_offset_ns: int, upper_offset_ns: int
+    ) -> dict[str, int]:
+        return {
+            "schema_version": 1,
+            "tai_before_ns": clock_ns + lower_offset_ns,
+            "clock_ns": clock_ns,
+            "tai_after_ns": clock_ns + upper_offset_ns,
+            "bracket_width_ns": upper_offset_ns - lower_offset_ns,
+        }
+
+    mapping["start"]["realtime"] = bounded_sample(
+        mapping["start"]["realtime"]["clock_ns"],
+        _REALTIME_TO_TAI_NS,
+        _REALTIME_TO_TAI_NS + 200,
+    )
+    mapping["end"]["realtime"] = bounded_sample(
+        mapping["end"]["realtime"]["clock_ns"],
+        _REALTIME_TO_TAI_NS + 60,
+        _REALTIME_TO_TAI_NS + 140,
+    )
+    current["clock_start"] = copy.deepcopy(mapping["start"])
+    current["clock_end"] = copy.deepcopy(mapping["end"])
+
+    online_offsets = ((20, 180), (40, 160))
+    for item, (lower_delta, upper_delta) in zip(
+        current["jobs"][0]["items"], online_offsets, strict=True
+    ):
+        phase = item["post_tx_clock_phase"]
+        phase["realtime"] = bounded_sample(
+            phase["realtime"]["clock_ns"],
+            _REALTIME_TO_TAI_NS + lower_delta,
+            _REALTIME_TO_TAI_NS + upper_delta,
+        )
+        raw_tx = item["tx_software_realtime_ns"]
+        item["provisional_tx_software_tai_lower_ns"] = (
+            raw_tx + _REALTIME_TO_TAI_NS + lower_delta
+        )
+        item["provisional_tx_software_tai_upper_ns"] = (
+            raw_tx + _REALTIME_TO_TAI_NS + upper_delta
+        )
+        for prefix in ("tx_sched", "tx_software"):
+            raw_timestamp = item[f"{prefix}_realtime_ns"]
+            final_lower = raw_timestamp + _REALTIME_TO_TAI_NS + 60
+            final_upper = raw_timestamp + _REALTIME_TO_TAI_NS + 140
+            item[f"{prefix}_tai_lower_ns"] = final_lower
+            item[f"{prefix}_tai_upper_ns"] = final_upper
+            item[f"{prefix}_tai_ns"] = (final_lower + final_upper) // 2
+
+    mapping["effective_realtime_offset_lower_ns"] = _REALTIME_TO_TAI_NS + 60
+    mapping["effective_realtime_offset_upper_ns"] = _REALTIME_TO_TAI_NS + 140
+    mapping["max_observed_bracket_width_ns"] = 200
+    mapping["max_observed_offset_drift_ns"] = 0
+    current["aggregate"]["max_tx_software_lateness_ns"] = max(
+        item["tx_software_tai_upper_ns"] - _RELEASE_TAI_NS
+        for item in current["jobs"][0]["items"]
+    )
+
+    assert kernel_tx_runner_receipt_success_valid(current)
+
+    # The final phase was unavailable online.  Substituting the narrower final
+    # interval for the first item's wider provisional interval must fail.
+    first = current["jobs"][0]["items"][0]
+    first_raw_tx = first["tx_software_realtime_ns"]
+    first["provisional_tx_software_tai_lower_ns"] = (
+        first_raw_tx + _REALTIME_TO_TAI_NS + 60
+    )
+    first["provisional_tx_software_tai_upper_ns"] = (
+        first_raw_tx + _REALTIME_TO_TAI_NS + 140
+    )
+    assert not kernel_tx_runner_receipt_valid(current)
+
+
+def test_kernel_tx_schema_two_matches_rust_ceil_midpoint_drift() -> None:
+    current = _runner_receipt_v2()
+    mapping = current["clock_mapping"]
+    first = current["jobs"][0]["items"][0]
+    phase = first["post_tx_clock_phase"]
+    monotonic = phase["monotonic"]
+    monotonic["tai_before_ns"] -= 1
+    monotonic["bracket_width_ns"] = 1
+
+    mapping["effective_monotonic_offset_lower_ns"] = _MONOTONIC_TO_TAI_NS - 1
+    mapping["max_observed_bracket_width_ns"] = 1
+    # Rust computes midpoint drift from doubled integer offsets and rounds the
+    # half-nanosecond uncertainty upwards.
+    mapping["max_observed_offset_drift_ns"] = 1
+
+    assert kernel_tx_runner_receipt_success_valid(current)
+
+    mapping["max_observed_offset_drift_ns"] = 0
+    assert not kernel_tx_runner_receipt_valid(current)
+
+
+def test_kernel_tx_schema_two_uses_item_local_monotonic_corroboration() -> None:
+    current = _runner_receipt_v2()
+    mapping = current["clock_mapping"]
+    first = current["jobs"][0]["items"][0]
+    local_offset_delta_ns = 100
+    monotonic = first["post_tx_clock_phase"]["monotonic"]
+    monotonic["tai_before_ns"] -= local_offset_delta_ns
+    monotonic["tai_after_ns"] -= local_offset_delta_ns
+    mapping["effective_monotonic_offset_lower_ns"] -= local_offset_delta_ns
+    mapping["max_observed_offset_drift_ns"] = local_offset_delta_ns
+
+    # The mapping-wide union still overlaps the exact enqueue bracket, but the
+    # item's own phase does not.  Schema two must reject that substitution.
+    assert not kernel_tx_runner_receipt_valid(current)
+
+
+def test_kernel_tx_schema_two_accepts_typed_physical_window_failure() -> None:
+    current = _runner_receipt_v2()
+    job = current["jobs"][0]
+    item = job["items"][1]
+    deadline = job["deadline_tai_ns"]
+    delta = deadline - item["tx_software_tai_ns"]
+    item["tx_software_realtime_ns"] += delta
+    for key in (
+        "tx_software_tai_ns",
+        "tx_software_tai_lower_ns",
+        "tx_software_tai_upper_ns",
+    ):
+        item[key] = deadline
+    for sample in item["post_tx_clock_phase"].values():
+        sample["clock_ns"] += delta
+        sample["tai_before_ns"] += delta
+        sample["tai_after_ns"] += delta
+    item["provisional_tx_software_tai_lower_ns"] = None
+    item["provisional_tx_software_tai_upper_ns"] = None
+    item["finalization_state"] = "physical-transmit-proven"
+    item["terminal_outcome"] = "window-violation"
+    item["terminal_error"] = "final_conservative_envelope_validation_failed"
+    item["terminal_error_detail"] = (
+        "item 1 failed final mapping: enqueue_complete=true, "
+        "enqueue_clock_consistent=true, timestamp_complete=true, tx_order=true, "
+        "physical_window=false, provisional_interval=false, endpoint_tuple=true, "
+        "item_sequence=true, job_identity=true, controller_trace_finalized=false, "
+        "structural_order=true"
+    )
+    _refresh_failed_runner_receipt(
+        current, primary_error="synthetic physical window failure"
+    )
+
+    assert kernel_tx_runner_receipt_valid(current)
+    assert not kernel_tx_runner_receipt_success_valid(current)
+
+    item["terminal_error_detail"] = None
+    assert not kernel_tx_runner_receipt_valid(current)
+
+
+def test_kernel_tx_schema_two_window_failure_can_be_credit_causality() -> None:
+    current = _runner_receipt_v2()
+    job = current["jobs"][0]
+    outgoing, incoming = job["items"]
+    causal_violation = outgoing["tx_software_tai_upper_ns"] - 1
+    incoming["enqueue_tai_ns"] = causal_violation
+    incoming["enqueue_tai_lower_ns"] = causal_violation
+    incoming["enqueue_tai_upper_ns"] = causal_violation
+    incoming["enqueue_monotonic_ns"] = causal_violation - _MONOTONIC_TO_TAI_NS
+    incoming["finalization_state"] = "physical-transmit-proven"
+    incoming["terminal_outcome"] = "window-violation"
+    incoming["terminal_error"] = "final_conservative_envelope_validation_failed"
+    incoming["terminal_error_detail"] = (
+        "item 1 failed final mapping: enqueue_complete=true, "
+        "enqueue_clock_consistent=true, timestamp_complete=true, tx_order=true, "
+        "physical_window=true, provisional_interval=true, endpoint_tuple=true, "
+        "item_sequence=true, job_identity=true, controller_trace_finalized=false, "
+        "structural_order=false"
+    )
+    _refresh_failed_runner_receipt(
+        current, primary_error="synthetic incoming-credit causality failure"
+    )
+
+    assert kernel_tx_runner_receipt_valid(current)
+    assert not kernel_tx_runner_receipt_success_valid(current)
+
+    incoming["enqueue_tai_lower_ns"] = outgoing["tx_software_tai_upper_ns"]
+    incoming["enqueue_tai_upper_ns"] = outgoing["tx_software_tai_upper_ns"]
+    incoming["enqueue_tai_ns"] = outgoing["tx_software_tai_upper_ns"]
+    incoming["enqueue_monotonic_ns"] = (
+        outgoing["tx_software_tai_upper_ns"] - _MONOTONIC_TO_TAI_NS
+    )
+    assert not kernel_tx_runner_receipt_valid(current)
+
+
+def test_kernel_tx_schema_two_rejects_incoming_tx_before_its_enqueue_lower() -> None:
+    current = _runner_receipt_v2()
+    incoming = current["jobs"][0]["items"][1]
+    enqueue_tai_ns = incoming["tx_software_tai_lower_ns"] + 1
+    incoming["enqueue_tai_ns"] = enqueue_tai_ns
+    incoming["enqueue_tai_lower_ns"] = enqueue_tai_ns
+    incoming["enqueue_tai_upper_ns"] = enqueue_tai_ns
+    incoming["enqueue_monotonic_ns"] = enqueue_tai_ns - _MONOTONIC_TO_TAI_NS
+
+    assert not kernel_tx_runner_receipt_valid(current)
+
+
+def test_kernel_tx_schema_two_accepts_unfinalised_physical_item() -> None:
+    current = _runner_receipt_v2()
+    item = current["jobs"][0]["items"][1]
+    item.update(
+        {
+            "finalization_state": "physical-transmit-proven",
+            "terminal_outcome": "window-violation",
+            "terminal_error": "final_conservative_envelope_validation_failed",
+            "terminal_error_detail": (
+                "item 1 failed final mapping: enqueue_complete=true, "
+                "enqueue_clock_consistent=true, timestamp_complete=true, "
+                "tx_order=true, physical_window=true, "
+                "provisional_interval=true, endpoint_tuple=true, "
+                "item_sequence=true, job_identity=true, "
+                "controller_trace_finalized=false, structural_order=true"
+            ),
+        }
+    )
+    _refresh_failed_runner_receipt(
+        current, primary_error="synthetic post-physical controller interruption"
+    )
+
+    assert kernel_tx_runner_receipt_valid(current)
+    assert not kernel_tx_runner_receipt_success_valid(current)
+
+    item["terminal_error"] = "different_failure"
+    assert not kernel_tx_runner_receipt_valid(current)
+
+
+def test_kernel_tx_schema_two_accepts_incremental_send_attempt_failure() -> None:
+    current = _runner_receipt_v2()
+    item = current["jobs"][0]["items"][1]
+    attempt_before = _RELEASE_TAI_NS + 110_000
+    item.update(
+        {
+            "socket_timestamp_id": None,
+            "enqueue_monotonic_ns": None,
+            "enqueue_tai_ns": None,
+            "enqueue_tai_lower_ns": attempt_before,
+            "enqueue_tai_upper_ns": None,
+            "tx_sched_realtime_ns": None,
+            "tx_sched_tai_ns": None,
+            "tx_sched_tai_lower_ns": None,
+            "tx_sched_tai_upper_ns": None,
+            "tx_software_realtime_ns": None,
+            "provisional_tx_software_tai_lower_ns": None,
+            "provisional_tx_software_tai_upper_ns": None,
+            "tx_software_tai_ns": None,
+            "tx_software_tai_lower_ns": None,
+            "tx_software_tai_upper_ns": None,
+            "post_tx_clock_phase": None,
+            "send_attempt": {
+                "schema_version": 1,
+                "kind": "immediate_post_main",
+                "requested_txtime_tai_ns": None,
+                "latest_enqueue_tai_ns": current["jobs"][0]["deadline_tai_ns"],
+                "enqueue_before_tai_ns": attempt_before,
+                "enqueue_monotonic_ns": None,
+                "enqueue_after_tai_ns": None,
+                "sendmsg_result": item["udp_payload_bytes"],
+                "send_errno": None,
+                "payload_bytes": item["udp_payload_bytes"],
+                "source": item["source_address"],
+                "destination": item["destination_address"],
+                "tos": 0,
+                "priority_method": "serialized_socket_so_priority",
+            },
+            "finalization_state": "helper-terminal-failure",
+            "terminal_outcome": "timestamp-evidence-missing",
+            "terminal_error": "io_error",
+            "terminal_error_detail": "synthetic post-send clock failure",
+        }
+    )
+    mapping = current["clock_mapping"]
+    mapping["per_item_monotonic_evidence_count"] = 1
+    mapping["per_item_realtime_evidence_count"] = 1
+    _refresh_failed_runner_receipt(
+        current, primary_error="synthetic incremental send-attempt failure"
+    )
+
+    assert kernel_tx_runner_receipt_valid(current)
+    assert not kernel_tx_runner_receipt_success_valid(current)
+
+    item["send_attempt"]["enqueue_before_tai_ns"] += 1
+    assert not kernel_tx_runner_receipt_valid(current)
+
+
+def test_kernel_tx_schema_two_accepts_pre_send_failure_without_enqueue() -> None:
+    current = _runner_receipt_v2()
+    job = current["jobs"][0]
+    item = job["items"][0]
+    job["items"] = [item]
+    job["credit_identities"] = []
+    job["helper_job_close"] = None
+    for key in (
+        "enqueue_monotonic_ns",
+        "enqueue_tai_ns",
+        "enqueue_tai_lower_ns",
+        "enqueue_tai_upper_ns",
+        "socket_timestamp_id",
+        "tx_sched_realtime_ns",
+        "tx_sched_tai_ns",
+        "tx_sched_tai_lower_ns",
+        "tx_sched_tai_upper_ns",
+        "tx_software_realtime_ns",
+        "provisional_tx_software_tai_lower_ns",
+        "provisional_tx_software_tai_upper_ns",
+        "tx_software_tai_ns",
+        "tx_software_tai_lower_ns",
+        "tx_software_tai_upper_ns",
+        "post_tx_clock_phase",
+    ):
+        item[key] = None
+    item.update(
+        {
+            "finalization_state": "helper-terminal-failure",
+            "terminal_outcome": "timestamp-evidence-missing",
+            "terminal_error": "enqueue_deadline",
+            "terminal_error_detail": "synthetic cutoff reached before sendmsg",
+        }
+    )
+    current["clock_mapping"]["per_item_monotonic_evidence_count"] = 0
+    current["clock_mapping"]["per_item_realtime_evidence_count"] = 0
+    current["aggregate"].update(
+        {
+            "item_count": 1,
+            "ordered_item_count": 0,
+            "captured_credit_identity_count": 0,
+            "carrier_credit_identity_count": 0,
+        }
+    )
+    _refresh_failed_runner_receipt(current, primary_error="synthetic pre-send failure")
+
+    assert kernel_tx_runner_receipt_valid(current)
+    assert not kernel_tx_runner_receipt_success_valid(current)
+
+    item["enqueue_tai_upper_ns"] = item["target_tai_ns"]
+    assert not kernel_tx_runner_receipt_valid(current)
+
+
+def test_kernel_tx_schema_two_accepts_partial_kernel_timestamp_failure() -> None:
+    current = _runner_receipt_v2()
+    item = current["jobs"][0]["items"][1]
+    item.update(
+        {
+            "tx_software_realtime_ns": None,
+            "tx_software_tai_ns": None,
+            "tx_software_tai_lower_ns": None,
+            "tx_software_tai_upper_ns": None,
+            "post_tx_clock_phase": None,
+            "provisional_tx_software_tai_lower_ns": None,
+            "provisional_tx_software_tai_upper_ns": None,
+            "finalization_state": "helper-terminal-failure",
+            "terminal_outcome": "timestamp-evidence-missing",
+            "terminal_error": "report_timeout",
+            "terminal_error_detail": "synthetic TX_SCHED-only timeout",
+        }
+    )
+    current["clock_mapping"]["per_item_monotonic_evidence_count"] = 1
+    current["clock_mapping"]["per_item_realtime_evidence_count"] = 1
+    _refresh_failed_runner_receipt(
+        current, primary_error="synthetic partial timestamp failure"
+    )
+
+    assert kernel_tx_runner_receipt_valid(current)
+
+    unmapped = copy.deepcopy(current)
+    mapping_error = "BuFLO final clock sample failed: synthetic"
+    unmapped.update(
+        {
+            "cleanup_errors": [mapping_error],
+            "clock_end": None,
+            "clock_mapping_valid": False,
+            "clock_mapping_error": mapping_error,
+            "clock_mapping": None,
+        }
+    )
+    outgoing, failed = unmapped["jobs"][0]["items"]
+    for candidate in (outgoing, failed):
+        _clear_final_clock_translations(candidate)
+    outgoing["terminal_outcome"] = "timestamp-evidence-missing"
+    outgoing["terminal_error"] = "final_conservative_envelope_validation_failed"
+    outgoing["terminal_error_detail"] = _schema_two_unmapped_error_detail(outgoing)
+    _refresh_failed_runner_receipt(unmapped, primary_error=mapping_error)
+    assert kernel_tx_runner_receipt_valid(unmapped)
+
+
+def test_kernel_tx_schema_two_accepts_post_tx_clock_sample_failure() -> None:
+    current = _runner_receipt_v2()
+    item = current["jobs"][0]["items"][1]
+    item["post_tx_clock_phase"] = None
+    item["provisional_tx_software_tai_lower_ns"] = None
+    item["provisional_tx_software_tai_upper_ns"] = None
+    item["finalization_state"] = "physical-transmit-proven"
+    item["terminal_outcome"] = "timestamp-evidence-missing"
+    item["terminal_error"] = "clock_sample_failed"
+    item["terminal_error_detail"] = "synthetic post-transmit clock sample failure"
+    mapping = current["clock_mapping"]
+    mapping["per_item_monotonic_evidence_count"] = 1
+    mapping["per_item_realtime_evidence_count"] = 1
+    _refresh_failed_runner_receipt(
+        current, primary_error="synthetic post-transmit clock sample failure"
+    )
+
+    assert kernel_tx_runner_receipt_valid(current)
+    assert not kernel_tx_runner_receipt_success_valid(current)
+
+    item["terminal_outcome"] = "window-violation"
+    _refresh_failed_runner_receipt(
+        current, primary_error="synthetic post-transmit clock sample failure"
+    )
+    assert not kernel_tx_runner_receipt_valid(current)
+
+
+def test_kernel_tx_schema_two_accepts_controller_finalization_failure() -> None:
+    current = _runner_receipt_v2()
+    item = current["jobs"][0]["items"][1]
+    item["finalization_state"] = "physical-transmit-proven"
+    item["terminal_outcome"] = "controller-trace-finalization-failed"
+    item["terminal_error"] = "controller_or_trace_finalization_failed"
+    item["terminal_error_detail"] = "synthetic controller finalization failure"
+    _refresh_failed_runner_receipt(
+        current, primary_error="synthetic controller finalization failure"
+    )
+
+    assert kernel_tx_runner_receipt_valid(current)
+    assert not kernel_tx_runner_receipt_success_valid(current)
+
+    item["provisional_tx_software_tai_lower_ns"] = None
+    item["provisional_tx_software_tai_upper_ns"] = None
+    assert not kernel_tx_runner_receipt_valid(current)
+
+
+def test_kernel_tx_schema_two_accepts_terminal_txtime_failure() -> None:
+    current = _runner_receipt_v2()
+    job = current["jobs"][0]
+    item = job["items"][0]
+    job["items"] = [item]
+    job["credit_identities"] = []
+    job["helper_job_close"] = None
+    item.update(
+        {
+            "socket_timestamp_id": None,
+            "tx_sched_realtime_ns": None,
+            "tx_sched_tai_ns": None,
+            "tx_sched_tai_lower_ns": None,
+            "tx_sched_tai_upper_ns": None,
+            "tx_software_realtime_ns": None,
+            "provisional_tx_software_tai_lower_ns": None,
+            "provisional_tx_software_tai_upper_ns": None,
+            "tx_software_tai_ns": None,
+            "tx_software_tai_lower_ns": None,
+            "tx_software_tai_upper_ns": None,
+            "post_tx_clock_phase": None,
+            "txtime_error": {
+                "family": "ipv4",
+                "errno": 125,
+                "kind": "missed",
+                "requested_txtime_tai_ns": item["scm_txtime_tai_ns"],
+            },
+            "finalization_state": "helper-terminal-failure",
+            "terminal_outcome": "txtime-error",
+            "terminal_error": "txtime_missed",
+            "terminal_error_detail": "synthetic ETF deadline miss",
+        }
+    )
+    mapping = current["clock_mapping"]
+    mapping["per_item_monotonic_evidence_count"] = 0
+    mapping["per_item_realtime_evidence_count"] = 0
+    current["aggregate"].update(
+        {
+            "item_count": 1,
+            "ordered_item_count": 0,
+            "captured_credit_identity_count": 0,
+            "carrier_credit_identity_count": 0,
+        }
+    )
+    _refresh_failed_runner_receipt(current, primary_error="synthetic txtime failure")
+
+    assert kernel_tx_runner_receipt_valid(current)
+    assert not kernel_tx_runner_receipt_success_valid(current)
+
+    item["txtime_error"]["requested_txtime_tai_ns"] += 1
+    assert not kernel_tx_runner_receipt_valid(current)
+
+
+def test_kernel_tx_schema_two_accepts_immediate_txtime_mismatch_failure() -> None:
+    current = _runner_receipt_v2()
+    item = current["jobs"][0]["items"][1]
+    item.update(
+        {
+            "socket_timestamp_id": item["socket_timestamp_id"],
+            "tx_software_realtime_ns": None,
+            "tx_software_tai_ns": None,
+            "tx_software_tai_lower_ns": None,
+            "tx_software_tai_upper_ns": None,
+            "post_tx_clock_phase": None,
+            "provisional_tx_software_tai_lower_ns": None,
+            "provisional_tx_software_tai_upper_ns": None,
+            "txtime_error": {
+                "family": "ipv4",
+                "errno": 125,
+                "kind": "missed",
+                "requested_txtime_tai_ns": 123,
+            },
+            "finalization_state": "helper-terminal-failure",
+            "terminal_outcome": "txtime-error",
+            "terminal_error": "txtime_drop_mismatch",
+            "terminal_error_detail": "synthetic stray TXTIME diagnostic",
+        }
+    )
+    mapping = current["clock_mapping"]
+    mapping["per_item_monotonic_evidence_count"] = 1
+    mapping["per_item_realtime_evidence_count"] = 1
+    _refresh_failed_runner_receipt(
+        current, primary_error="synthetic immediate TXTIME mismatch"
+    )
+
+    assert kernel_tx_runner_receipt_valid(current)
+    assert not kernel_tx_runner_receipt_success_valid(current)
+
+    item["terminal_error"] = "txtime_missed"
+    assert not kernel_tx_runner_receipt_valid(current)
+
+    item["terminal_error"] = "txtime_drop_mismatch"
+    item["txtime_error"]["requested_txtime_tai_ns"] = 0
+    assert not kernel_tx_runner_receipt_valid(current)
+
+    item["terminal_error"] = "txtime_missed"
+    assert kernel_tx_runner_receipt_valid(current)
+
+
+def test_kernel_tx_schema_two_binds_mapping_failure_to_first_bad_phase() -> None:
+    current = _runner_receipt_v2()
+    mapping_error = (
+        "BuFLO kernel item 0 retained an out-of-order post-TX clock phase"
+    )
+    current.update(
+        {
+            "cleanup_errors": [mapping_error],
+            "clock_mapping_valid": False,
+            "clock_mapping_error": mapping_error,
+            "clock_mapping": None,
+        }
+    )
+    for item in current["jobs"][0]["items"]:
+        for sample in item["post_tx_clock_phase"].values():
+            sample["clock_ns"] += 2_000_000_000
+            sample["tai_before_ns"] += 2_000_000_000
+            sample["tai_after_ns"] += 2_000_000_000
+        _clear_final_clock_translations(item)
+        item["terminal_outcome"] = "timestamp-evidence-missing"
+        item["terminal_error"] = "final_conservative_envelope_validation_failed"
+        item["terminal_error_detail"] = _schema_two_unmapped_error_detail(item)
+    _refresh_failed_runner_receipt(current, primary_error=mapping_error)
+
+    assert kernel_tx_runner_receipt_valid(current)
+    assert not kernel_tx_runner_receipt_success_valid(current)
+
+    wrong_error = "BuFLO kernel item 1 retained an out-of-order post-TX clock phase"
+    current["clock_mapping_error"] = wrong_error
+    current["cleanup_errors"] = [wrong_error]
+    assert not kernel_tx_runner_receipt_valid(current)
+
+
+def test_kernel_tx_schema_two_binds_mapping_failure_to_local_tx_evidence() -> None:
+    current = _runner_receipt_v2()
+    mapping_error = (
+        "BuFLO kernel item 1 clock phase preceded its retained transmission evidence"
+    )
+    current.update(
+        {
+            "cleanup_errors": [mapping_error],
+            "clock_mapping_valid": False,
+            "clock_mapping_error": mapping_error,
+            "clock_mapping": None,
+        }
+    )
+    for item in current["jobs"][0]["items"]:
+        _clear_final_clock_translations(item)
+        item["terminal_outcome"] = "timestamp-evidence-missing"
+        item["terminal_error"] = "final_conservative_envelope_validation_failed"
+        item["terminal_error_detail"] = _schema_two_unmapped_error_detail(item)
+    failed_item = current["jobs"][0]["items"][1]
+    failed_item["tx_software_realtime_ns"] = (
+        failed_item["post_tx_clock_phase"]["realtime"]["clock_ns"] + 1
+    )
+    failed_item["tx_sched_realtime_ns"] = failed_item["tx_software_realtime_ns"]
+    _refresh_failed_runner_receipt(current, primary_error=mapping_error)
+
+    assert kernel_tx_runner_receipt_valid(current)
+    assert not kernel_tx_runner_receipt_success_valid(current)
+
+    wrong_error = (
+        "BuFLO kernel item 0 clock phase preceded its retained transmission evidence"
+    )
+    current["clock_mapping_error"] = wrong_error
+    current["cleanup_errors"] = [wrong_error]
+    assert not kernel_tx_runner_receipt_valid(current)
+
+
+def test_kernel_tx_schema_two_accepts_typed_start_end_chronology_failure() -> None:
+    current = _runner_receipt_v2()
+    mapping_error = (
+        "BuFLO kernel clock phases and Instant anchor were not temporally ordered"
+    )
+    current.update(
+        {
+            "cleanup_errors": [mapping_error],
+            "clock_mapping_valid": False,
+            "clock_mapping_error": mapping_error,
+            "clock_mapping": None,
+        }
+    )
+    for clock in ("monotonic", "realtime"):
+        start_sample = current["clock_start"][clock]
+        end_sample = current["clock_end"][clock]
+        shift = end_sample["clock_ns"] - start_sample["clock_ns"] + 1
+        end_sample["clock_ns"] -= shift
+        end_sample["tai_before_ns"] -= shift
+        end_sample["tai_after_ns"] -= shift
+    for item in current["jobs"][0]["items"]:
+        _clear_final_clock_translations(item)
+        item["terminal_outcome"] = "timestamp-evidence-missing"
+        item["terminal_error"] = "final_conservative_envelope_validation_failed"
+        item["terminal_error_detail"] = _schema_two_unmapped_error_detail(item)
+    _refresh_failed_runner_receipt(current, primary_error=mapping_error)
+
+    assert kernel_tx_runner_receipt_valid(current)
+    assert not kernel_tx_runner_receipt_success_valid(current)
+
+    wrong_error = "BuFLO final clock sample failed: synthetic"
+    current["clock_mapping_error"] = wrong_error
+    current["cleanup_errors"] = [wrong_error]
+    assert not kernel_tx_runner_receipt_valid(current)
+
+
+def test_kernel_tx_schema_two_binds_all_derived_mapping_failures() -> None:
+    start_end_empty = _runner_receipt_v2()
+    empty_error = "BuFLO kernel start/end realtime offset intersection was empty"
+    end_realtime = start_end_empty["clock_end"]["realtime"]
+    end_realtime["tai_before_ns"] += 1
+    end_realtime["tai_after_ns"] += 1
+    _make_schema_two_mapping_failure(start_end_empty, mapping_error=empty_error)
+    assert kernel_tx_runner_receipt_valid(start_end_empty)
+
+    item_empty = _runner_receipt_v2()
+    item_error = (
+        "BuFLO kernel realtime offset intersection became empty at item 1"
+    )
+    item_realtime = item_empty["jobs"][0]["items"][1]["post_tx_clock_phase"][
+        "realtime"
+    ]
+    item_realtime["tai_before_ns"] += 1
+    item_realtime["tai_after_ns"] += 1
+    _make_schema_two_mapping_failure(item_empty, mapping_error=item_error)
+    assert kernel_tx_runner_receipt_valid(item_empty)
+    item_empty["clock_mapping_error"] = (
+        "BuFLO kernel realtime offset intersection became empty at item 0"
+    )
+    item_empty["cleanup_errors"] = [item_empty["clock_mapping_error"]]
+    assert not kernel_tx_runner_receipt_valid(item_empty)
+
+    unsupported = _runner_receipt_v2()
+    _make_schema_two_mapping_failure(
+        unsupported, mapping_error="synthetic unsupported mapping failure"
+    )
+    assert not kernel_tx_runner_receipt_valid(unsupported)
+
+
+def test_kernel_tx_schema_two_retains_large_monotonic_drift_as_exact_diagnostic() -> None:
+    current = _runner_receipt_v2()
+    mapping = current["clock_mapping"]
+    drift_ns = 5_000_000
+    mapping["end"]["monotonic"]["clock_ns"] -= drift_ns
+    current["clock_end"]["monotonic"]["clock_ns"] -= drift_ns
+    mapping["effective_monotonic_offset_upper_ns"] += drift_ns
+    mapping["max_observed_offset_drift_ns"] = drift_ns
+
+    assert kernel_tx_runner_receipt_success_valid(current)
+
+    mapping["max_observed_offset_drift_ns"] -= 1
+    assert not kernel_tx_runner_receipt_valid(current)
+
+
+def test_kernel_tx_schema_two_constants_match_the_rust_producer() -> None:
+    source = (Path(__file__).parents[1] / "neqo-qcsd/neqo-bin/src/qcsd/mod.rs").read_text(
+        encoding="utf-8"
+    )
+    runner_prefix = 'const BUFLO_KERNEL_TX_SEMANTICS: &str = "'
+    runner_line = next(
+        line for line in source.splitlines() if line.startswith(runner_prefix)
+    )
+    assert runner_line.endswith('";')
+    assert KERNEL_TX_RUNNER_SEMANTICS == runner_line[len(runner_prefix) : -2]
+    mapping_prefix = 'const BUFLO_KERNEL_CLOCK_MAPPING_SEMANTICS: &str = "'
+    mapping_line = next(
+        line for line in source.splitlines() if line.startswith(mapping_prefix)
+    )
+    assert mapping_line.endswith('";')
+    assert (
+        kernel_tx._EFFECTIVE_ENVELOPE_SEMANTICS_V2
+        == mapping_line[len(mapping_prefix) : -2]
+    )
+    assert "const BUFLO_KERNEL_TX_RECEIPT_SCHEMA_VERSION: u32 = 2;" in source
+    assert "const BUFLO_KERNEL_ITEM_RECEIPT_SCHEMA_VERSION: u32 = 2;" in source
+    assert "const BUFLO_KERNEL_CLOCK_MAPPING_SCHEMA_VERSION: u32 = 2;" in source
+
     raw = _runner_receipt()
     raw["clock_start"] = None
     assert not kernel_tx_runner_receipt_valid(raw)
@@ -1097,8 +1988,11 @@ def test_failed_runner_retains_create_only_raw_qdisc_observation(
     assert path.read_bytes() == original
 
 
-def test_runner_kernel_tx_serialises_end_clock_mapping_failure_after_jobs() -> None:
-    raw = _runner_receipt()
+@pytest.mark.parametrize("runner_schema_version", [1, 2])
+def test_runner_kernel_tx_serialises_end_clock_mapping_failure_after_jobs(
+    runner_schema_version: int,
+) -> None:
+    raw = _runner_receipt_v2() if runner_schema_version == 2 else _runner_receipt()
     mapping_error = "BuFLO final clock sample failed: synthetic"
     raw.update(
         {
@@ -1127,7 +2021,11 @@ def test_runner_kernel_tx_serialises_end_clock_mapping_failure_after_jobs() -> N
         ):
             item[key] = None
         item["terminal_error"] = "final_conservative_envelope_validation_failed"
-        item["terminal_error_detail"] = "synthetic final mapping failure"
+        item["terminal_error_detail"] = (
+            _schema_two_unmapped_error_detail(item)
+            if runner_schema_version == 2
+            else "synthetic final mapping failure"
+        )
         item["terminal_outcome"] = "timestamp-evidence-missing"
     raw["aggregate"].update(
         {
@@ -1143,6 +2041,17 @@ def test_runner_kernel_tx_serialises_end_clock_mapping_failure_after_jobs() -> N
 
     assert kernel_tx_runner_receipt_valid(raw)
     assert not kernel_tx_runner_receipt_success_valid(raw)
+
+    if runner_schema_version == 2:
+        # A mapping failure does not erase the retained item phases.  Their
+        # producer order remains independently verifiable even without a final
+        # mapping or end phase.
+        first_phase = raw["jobs"][0]["items"][0]["post_tx_clock_phase"]
+        for clock in ("monotonic", "realtime"):
+            first_phase[clock]["clock_ns"] += 1_000_000
+            first_phase[clock]["tai_before_ns"] += 1_000_000
+            first_phase[clock]["tai_after_ns"] += 1_000_000
+        assert not kernel_tx_runner_receipt_valid(raw)
 
     raw["jobs"][0]["items"][0]["tx_software_tai_ns"] = _RELEASE_TAI_NS
     assert not kernel_tx_runner_receipt_valid(raw)

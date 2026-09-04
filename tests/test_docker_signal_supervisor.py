@@ -3061,6 +3061,225 @@ docker network rm "${QCSD_DOCKER_IDS_TEST[0]}" >/dev/null
     assert "network_state=present\n" in handoff
 
 
+def test_source_successor_exception_is_exactly_handoff_and_identity_scoped(
+    fake_environment: dict[str, str],
+) -> None:
+    script = r'''
+set -euo pipefail
+source "$HELPER"
+_qcsd_bind_helper_source_identity
+allowlist_calls=0
+checkout_calls=0
+reproof_calls=0
+_qcsd_lifecycle_v57_handoff_allowlisted() {
+  allowlist_calls=$((allowlist_calls + 1))
+}
+_qcsd_lifecycle_validate_v57_predecessor_checkout() {
+  checkout_calls=$((checkout_calls + 1))
+}
+_qcsd_lifecycle_source_successor_terminal_reproof() {
+  reproof_calls=$((reproof_calls + 1))
+}
+declare -A candidate=(
+  [lifecycle_state]=handed-off
+  [supervisor_source_path]="$_qcsd_bound_source_path"
+  [supervisor_source_sha256]="$_QCSD_DOCKER_V57_PREDECESSOR_SHA256"
+  [supervisor_source_device]="$_qcsd_bound_source_device"
+  [supervisor_source_inode]="$_qcsd_bound_source_inode"
+)
+expect() {
+  local expected=$1 label=$2 kind=$3 record=$4
+  local observed=fail
+  if _qcsd_lifecycle_validate_source_identity "$kind" "$record" candidate; then
+    observed=pass
+  fi
+  printf '%s %s\n' "$label" "$observed"
+  [[ "$observed" == "$expected" ]]
+}
+expect pass run-handoff run HANDOFF
+expect pass network-handoff network HANDOFF
+expect fail active-record run ACTIVE
+expect fail claimed-record run CLAIMED
+expect fail supervision-record run SUPERVISION
+expect fail recovery-record run RECOVERY
+candidate[lifecycle_state]=bound
+expect fail nonterminal-state run HANDOFF
+candidate[lifecycle_state]=handed-off
+candidate[supervisor_source_sha256]="${_QCSD_DOCKER_V57_PREDECESSOR_SHA256%?}0"
+expect fail unknown-predecessor run HANDOFF
+candidate[supervisor_source_sha256]="$_QCSD_DOCKER_V57_PREDECESSOR_SHA256"
+candidate[supervisor_source_inode]=$((candidate[supervisor_source_inode] + 1))
+expect fail different-inode run HANDOFF
+candidate[supervisor_source_inode]="$_qcsd_bound_source_inode"
+candidate[supervisor_source_device]=$((candidate[supervisor_source_device] + 1))
+expect fail different-device run HANDOFF
+candidate[supervisor_source_device]="$_qcsd_bound_source_device"
+candidate[supervisor_source_path]="${_qcsd_bound_source_path}.other"
+expect fail different-path run HANDOFF
+candidate[supervisor_source_path]="$_qcsd_bound_source_path"
+candidate[supervisor_source_sha256]="$_qcsd_bound_source_sha256"
+expect pass exact-current-source build SUPERVISION
+printf 'CALLS %s %s %s\n' "$allowlist_calls" "$checkout_calls" "$reproof_calls"
+'''
+    result = subprocess.run(
+        ["bash", "-c", textwrap.dedent(script)],
+        env=fake_environment,
+        text=True,
+        capture_output=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    assert "active-record fail\n" in result.stdout
+    assert "claimed-record fail\n" in result.stdout
+    assert "different-path fail\n" in result.stdout
+    assert "exact-current-source pass\n" in result.stdout
+    assert "CALLS 2 2 2\n" in result.stdout
+
+
+def test_v57_handoff_allowlist_contains_only_the_five_exact_root_digest_pairs(
+    fake_environment: dict[str, str],
+) -> None:
+    script = r'''
+set -euo pipefail
+source "$HELPER"
+check() {
+  local root=$1 expected=$2 observed
+  observed="$(_qcsd_lifecycle_v57_expected_handoff_sha256 "$root")"
+  [[ "$observed" == "$expected" ]]
+  printf '%s %s\n' "$root" "$observed"
+}
+check /var/tmp/qcsd-docker-lifecycle-1000/run.0c59907e4fcfda3dfe6460d0ed90bc8d \
+  ab8a743af5d96051dc8b5628109fea7498473c2cc7fda577254786cae399f16f
+check /var/tmp/qcsd-docker-lifecycle-1000/run.0f21acd1954d957587178aa473b2ae95 \
+  cd8db4c60847e8606a0d2587d7df2f0b3dd1b6f9051f0a94b1a32df6cd76ca8d
+check /var/tmp/qcsd-docker-lifecycle-1000/run.43135816b56120ed09bff4df82bbfe53 \
+  91b1be07dfdab4453002e8b4792c918ad5375d72dc2ce6da8b5e8aee34817cd8
+check /var/tmp/qcsd-docker-lifecycle-1000/network.d60e96839931a455660bb134c295c86e \
+  f53c74e9963ca9ed97a6f0ce14d2a8c0ea20aa30b8ff95a64ee633e1b56a4d8f
+check /var/tmp/qcsd-docker-lifecycle-1000/network.fb0f174a425a544d329e8e1f6767bbbe \
+  dee19badfac184a0a86f59e4e5143230d0d6c98d197027b43d0e807f86115761
+! _qcsd_lifecycle_v57_expected_handoff_sha256 \
+  /var/tmp/qcsd-docker-lifecycle-1000/run.00000000000000000000000000000000
+! _qcsd_lifecycle_v57_expected_handoff_sha256 \
+  /var/tmp/qcsd-docker-lifecycle-1000/run.0c59907e4fcfda3dfe6460d0ed90bc8d.other
+printf 'exact-only\n'
+'''
+    result = subprocess.run(
+        ["bash", "-c", textwrap.dedent(script)],
+        env=fake_environment,
+        text=True,
+        capture_output=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    assert result.stdout.count("/var/tmp/qcsd-docker-lifecycle-1000/") == 5
+    assert result.stdout.endswith("exact-only\n")
+
+
+def test_source_successor_terminal_reproof_is_fail_closed_and_nounset_safe(
+    fake_environment: dict[str, str],
+) -> None:
+    script = r'''
+set -euo pipefail
+source "$HELPER"
+case_name=pass
+_qcsd_verify_pinned_host_boot() { [[ "$case_name" != boot-unavailable ]]; }
+_qcsd_verify_pinned_docker_daemon() { [[ "$case_name" != daemon-unavailable ]]; }
+_qcsd_docker_exact_id_presence_detailed() {
+  case "$case_name" in
+    object-present) printf 'present\n' ;;
+    object-unknown) printf 'unknown\n' ;;
+    *) printf 'absent\n' ;;
+  esac
+}
+_qcsd_docker_exact_network_presence_detailed() {
+  _qcsd_docker_exact_id_presence_detailed "$@"
+}
+_qcsd_resolve_docker_target() {
+  _qcsd_resolved_cid=''
+  _qcsd_resolved_state=absent
+  [[ "$case_name" != label-present ]] || {
+    _qcsd_resolved_cid="${container_id}"
+    _qcsd_resolved_state=running
+  }
+}
+_qcsd_resolve_docker_network() {
+  _qcsd_resolved_network_id=''
+  _qcsd_resolved_network_state=absent
+  [[ "$case_name" != label-present ]] || {
+    _qcsd_resolved_network_id="${network_id}"
+    _qcsd_resolved_network_state=present
+  }
+}
+_qcsd_query_user_scope() {
+  _qcsd_scope_state=absent
+  [[ "$case_name" != scope-active ]] || _qcsd_scope_state=active
+}
+_qcsd_bound_process_is_gone() {
+  [[ "$case_name" != launcher-live || "$1" != 101 ]] &&
+    [[ "$case_name" != supervisor-live || "$1" != 201 ]]
+}
+container_id=$(printf 'a%.0s' {1..64})
+network_id=$(printf 'b%.0s' {1..64})
+token=$(printf 'c%.0s' {1..32})
+declare -A candidate=(
+  [docker_context]=default
+  [host_boot_id]="$_QCSD_DOCKER_PINNED_BOOT_ID"
+  [lifecycle_token]="$token"
+  [container_id]="$container_id"
+  [network_id]="$network_id"
+  [scope_unit]="qcsd-docker-run-${token}.scope"
+  [supervisor_label]="org.qcsd.supervisor.instance=${token}"
+  [scope_launcher_pid]=101
+  [scope_launcher_start_time]=102
+  [scope_launcher_session]=101
+  [scope_launcher_process_group]=101
+  [supervisor_pid]=201
+  [supervisor_start_time]=202
+  [supervisor_session]=201
+  [supervisor_process_group]=201
+)
+run_case() {
+  local kind=$1 requested=$2 expected=$3 observed=fail
+  case_name=$requested
+  if _qcsd_lifecycle_source_successor_terminal_reproof "$kind" candidate; then
+    observed=pass
+  fi
+  printf '%s-%s %s\n' "$kind" "$requested" "$observed"
+  [[ "$observed" == "$expected" ]]
+}
+run_case run pass pass
+for requested in boot-unavailable daemon-unavailable object-present \
+    object-unknown label-present scope-active launcher-live supervisor-live; do
+  run_case run "$requested" fail
+done
+run_case network pass pass
+for requested in object-present object-unknown label-present supervisor-live; do
+  run_case network "$requested" fail
+done
+declare -A malformed=(
+  [docker_context]=default
+  [host_boot_id]="$_QCSD_DOCKER_PINNED_BOOT_ID"
+)
+case_name=pass
+! _qcsd_lifecycle_source_successor_terminal_reproof run malformed
+printf 'malformed fail\n'
+'''
+    result = subprocess.run(
+        ["bash", "-c", textwrap.dedent(script)],
+        env=fake_environment,
+        text=True,
+        capture_output=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    assert "run-pass pass\n" in result.stdout
+    assert "run-object-present fail\n" in result.stdout
+    assert "run-scope-active fail\n" in result.stdout
+    assert "network-label-present fail\n" in result.stdout
+    assert result.stdout.endswith("malformed fail\n")
+
+
 @pytest.mark.parametrize(
     ("kind", "invocation", "remove", "object_id", "registration"),
     (
@@ -3092,6 +3311,12 @@ def test_normal_cleanup_retires_only_the_exact_durable_handoff(
     script = f'''
 set -euo pipefail
 source "$HELPER"
+# Retirement scans every durable ledger in its lifecycle namespace. Keep this
+# unit-owned object isolated from retained production HANDOFF evidence.
+_qcsd_lifecycle_base="$FAKE_DOCKER_STATE/normal-retirement-base"
+mkdir -m 700 "$_qcsd_lifecycle_base"
+_qcsd_secure_lifecycle_base() {{ :; }}
+_qcsd_lifecycle_root_created_hook() {{ :; }}
 QCSD_DOCKER_IDS_TEST=()
 {invocation}
 root=$_qcsd_lifecycle_root
@@ -3138,6 +3363,12 @@ def test_handoff_retirement_retries_unknown_then_accepts_exact_absence(
     script = f'''
 set -euo pipefail
 source "$HELPER"
+# Retirement scans every durable ledger in its lifecycle namespace. Keep this
+# unit-owned object isolated from retained production HANDOFF evidence.
+_qcsd_lifecycle_base="$FAKE_DOCKER_STATE/retry-retirement-base"
+mkdir -m 700 "$_qcsd_lifecycle_base"
+_qcsd_secure_lifecycle_base() {{ :; }}
+_qcsd_lifecycle_root_created_hook() {{ :; }}
 QCSD_DOCKER_IDS_TEST=()
 {invocation}
 root=$_qcsd_lifecycle_root
@@ -3230,6 +3461,12 @@ def test_handoff_retirement_never_retries_present_or_ambiguous_presence(
     script = f'''
 set -euo pipefail
 source "$HELPER"
+# Retirement scans every durable ledger in its lifecycle namespace. Keep this
+# unit-owned object isolated from retained production HANDOFF evidence.
+_qcsd_lifecycle_base="$FAKE_DOCKER_STATE/terminal-retirement-base"
+mkdir -m 700 "$_qcsd_lifecycle_base"
+_qcsd_secure_lifecycle_base() {{ :; }}
+_qcsd_lifecycle_root_created_hook() {{ :; }}
 QCSD_DOCKER_IDS_TEST=()
 {invocation}
 root=$_qcsd_lifecycle_root
@@ -3284,6 +3521,13 @@ def test_sequential_exit_cleanup_retires_three_runs_and_two_networks(
     script = r'''
 set -euo pipefail
 source "$HELPER"
+# A developer machine may legitimately retain production HANDOFF evidence.
+# This unit sequence owns a private lifecycle base and must not inspect that
+# production namespace.
+_qcsd_lifecycle_base="$FAKE_DOCKER_STATE/sequential-lifecycle-base"
+mkdir -m 700 "$_qcsd_lifecycle_base"
+_qcsd_secure_lifecycle_base() { :; }
+_qcsd_lifecycle_root_created_hook() { :; }
 QCSD_DOCKER_IDS_SIDECARS=()
 QCSD_DOCKER_IDS_CONTROLLED_SERVER_NETWORKS=()
 QCSD_DOCKER_IDS_CONTROLLED_CLIENT_NETWORKS=()
@@ -4851,6 +5095,45 @@ _qcsd_verify_pinned_docker_daemon
     calls = (state / "calls.log").read_text(encoding="utf-8")
     assert calls.count("INFO unix:///var/run/docker.sock") == 2
     assert (state / "info-attempt-counter").read_text(encoding="ascii") == "2"
+
+
+def test_daemon_identity_proof_ignores_api_service_stdout_noise(
+    fake_environment: dict[str, str],
+) -> None:
+    fake_environment["FAKE_DOCKER_SERVER_ID"] = "daemon-pinned-id"
+    script = r'''
+set -euo pipefail
+source "$HELPER"
+eval "$(declare -f _qcsd_docker_api_service_with_timeout | sed \
+  '1s/_qcsd_docker_api_service_with_timeout/_qcsd_fixture_api_service_with_timeout/')"
+_qcsd_docker_api_service_with_timeout() {
+  local status
+  if _qcsd_fixture_api_service_with_timeout "$@"; then
+    status=0
+  else
+    status=$?
+  fi
+  printf 'injected-api-service-stdout\n'
+  return "$status"
+}
+_QCSD_DOCKER_PINNED_CONTEXT=default
+_QCSD_DOCKER_PINNED_HOST=unix:///var/run/docker.sock
+_QCSD_DOCKER_PINNED_SERVER_ID=daemon-pinned-id
+_qcsd_verify_pinned_docker_daemon
+'''
+    result = subprocess.run(
+        ["bash", "-c", textwrap.dedent(script)],
+        env=fake_environment,
+        text=True,
+        capture_output=True,
+        timeout=5,
+    )
+
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    assert result.stdout == ""
+    state = Path(fake_environment["FAKE_DOCKER_STATE"])
+    calls = (state / "calls.log").read_text(encoding="utf-8")
+    assert calls.count("INFO unix:///var/run/docker.sock") == 1
 
 
 def test_daemon_identity_proof_never_retries_a_returned_mismatch(

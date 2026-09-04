@@ -61,7 +61,7 @@ WSL_HOST_BUILD_MIN_AVAILABLE_BYTES=68719476736
 QCSD_LAUNCH_ACTION="${1:-}"
 
 usage() {
-  echo "Usage: qcsd-lab {build|prepare|derive-chaff-prefix-specs|qualify-chaff|qualify-response-chaff|run|resume|verify|analyze|fit|buflo-study|class-study|etf-probe|test} [arguments...]" >&2
+  echo "Usage: qcsd-lab {lifecycle-recover|build|prepare|derive-chaff-prefix-specs|qualify-chaff|qualify-response-chaff|run|resume|verify|analyze|fit|buflo-study|class-study|etf-probe|test} [arguments...]" >&2
 }
 
 _qcsd_trusted_git() {
@@ -205,6 +205,11 @@ fi
 
 if [[ "${1:-}" == "test" && "${2:-}" == "pinned-cdp" && $# != 2 ]]; then
   echo "test pinned-cdp accepts no additional arguments" >&2
+  exit 2
+fi
+
+if [[ "${1:-}" == "lifecycle-recover" && $# != 1 ]]; then
+  echo "lifecycle-recover accepts no arguments" >&2
   exit 2
 fi
 
@@ -2498,6 +2503,13 @@ if [[ "${1:-}" == "build" ]]; then
   reject_unresolved_evidence_build
   _QCSD_DOCKER_BUILD_DAEMON_ID="${build_docker_server_id}"
   _QCSD_DOCKER_BUILD_LOCK_FD="${build_host_lock_fd}"
+elif [[ "${1:-}" == "lifecycle-recover" ]]; then
+  # Deliberately stop after guarded daemon/boot admission and durable-ledger
+  # reconciliation. This action never selects an image, creates a campaign
+  # object, or enters any build/capture path.
+  require_docker
+  echo "qcsd-lab Docker lifecycle reconciliation completed" >&2
+  exit 0
 elif [[ "${1:-}" != "class-study" && "${1:-}" != "etf-probe" ]]; then
   require_docker
   require_submodule

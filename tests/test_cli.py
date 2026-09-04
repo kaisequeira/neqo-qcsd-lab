@@ -145,7 +145,7 @@ def test_launcher_routes_only_consolidated_public_commands():
     launcher_path = Path(__file__).parents[1] / "qcsd-lab"
     launcher = launcher_path.read_text(encoding="utf-8")
     assert (
-        "{build|prepare|derive-chaff-prefix-specs|qualify-chaff|qualify-response-chaff|run|resume|verify|analyze|fit|buflo-study|class-study|etf-probe|test}"
+        "{lifecycle-recover|build|prepare|derive-chaff-prefix-specs|qualify-chaff|qualify-response-chaff|run|resume|verify|analyze|fit|buflo-study|class-study|etf-probe|test}"
         in launcher
     )
     assert (
@@ -175,6 +175,35 @@ def test_launcher_routes_only_consolidated_public_commands():
     assert '--entrypoint /opt/qcsd-lab/.venv/bin/python' in pinned_cdp
     assert 'tests/test_cdp_chromium_integration.py' in pinned_cdp
     assert 'qcsd_run_attached_docker "${container[@]}"' in pinned_cdp
+
+
+def test_lifecycle_recover_is_host_only_guarded_reconciliation() -> None:
+    launcher_path = Path(__file__).parents[1] / "qcsd-lab"
+    launcher = launcher_path.read_text(encoding="utf-8")
+    branch = launcher.split(
+        'elif [[ "${1:-}" == "lifecycle-recover" ]]; then', 1
+    )[1].split(
+        'elif [[ "${1:-}" != "class-study"', 1
+    )[0]
+    assert branch.count("require_docker") == 1
+    assert "require_submodule" not in branch
+    assert "qcsd_run_" not in branch
+    assert "docker " not in branch
+    assert "exit 0" in branch
+    assert branch.index("require_docker") < branch.index("exit 0")
+
+    rejected = subprocess.run(
+        [launcher_path, "lifecycle-recover", "unexpected"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+        timeout=5,
+    )
+    assert rejected.returncode == 2
+    assert rejected.stdout == ""
+    assert rejected.stderr == "lifecycle-recover accepts no arguments\n"
 
 
 def test_launcher_selects_prepare_image_only_for_pinned_cdp_test() -> None:

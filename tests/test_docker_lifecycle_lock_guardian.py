@@ -26,6 +26,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUARDIAN = ROOT / "tools/docker_lifecycle_lock_guardian.py"
 NATIVE = ROOT / "tools/docker_lifecycle_native.py"
 HELPER = ROOT / "tools/docker_signal_supervisor.sh"
+V57_CHECKOUT_COMMIT = "b7811dab7124ffdde113fae111ef8bab4810ebba"
 
 
 FAKE_QCSD = r'''#!/bin/bash
@@ -359,6 +360,172 @@ PY
       printf "captured-output\n"
     ' qcsd-api-service "$state")"
     printf '%s\n' "$api_output" >"$state/api-output"
+    ;;
+  api-fast-identity-sequence)
+    ready
+    load_real_helper_with_guardian_proof
+    _qcsd_lifecycle_base="$state/api-fast-identity-base"
+    mkdir -m 700 "$_qcsd_lifecycle_base"
+    export PATH="$state/bin:$PATH" FAKE_DOCKER_STATE="$state"
+    export DOCKER_CONTEXT=default
+    _QCSD_DOCKER_PINNED_CONTEXT=default
+    _QCSD_DOCKER_PINNED_HOST=unix:///var/run/docker.sock
+    _QCSD_DOCKER_PINNED_SERVER_ID=daemon-test-id
+    _QCSD_DOCKER_PINNED_BOOT_ID=$(</proc/sys/kernel/random/boot_id)
+    for iteration in 1 2 3 4 5; do
+      _qcsd_verify_pinned_docker_daemon
+    done
+    printf 'completed\n' >"$state/api-fast-identity-completed"
+    ;;
+  handoff-sequential-retirement|handoff-predecessor-sequential-retirement|\
+  handoff-predecessor-reconcile)
+    ready
+    load_real_helper_with_guardian_proof
+    export PATH="$state/bin:$PATH" FAKE_DOCKER_STATE="$state"
+    export DOCKER_CONTEXT=default
+    _qcsd_lifecycle_base="$state/handoff-retirement-base"
+    mkdir -m 700 "$_qcsd_lifecycle_base"
+    _qcsd_secure_lifecycle_base() { :; }
+    _QCSD_DOCKER_PINNED_CONTEXT=default
+    _QCSD_DOCKER_PINNED_HOST=unix:///var/run/docker.sock
+    _QCSD_DOCKER_PINNED_SERVER_ID=daemon-test-id
+    _QCSD_DOCKER_PINNED_BOOT_ID=$(</proc/sys/kernel/random/boot_id)
+    QCSD_DOCKER_IDS_SIDECARS=()
+    QCSD_DOCKER_IDS_CONTROLLED_SERVER_NETWORKS=()
+    QCSD_DOCKER_IDS_CONTROLLED_CLIENT_NETWORKS=()
+    roots=()
+    use_predecessor=0
+    use_reconcile=0
+    [[ "$1" == handoff-sequential-retirement ]] || use_predecessor=1
+    [[ "$1" != handoff-predecessor-reconcile ]] || use_reconcile=1
+    if (( use_predecessor != 0 )); then
+      # Production's fixed allowlist is independently unit-tested. These
+      # private random-token ledgers exercise every remaining guardian/native
+      # successor and retirement boundary.
+      _qcsd_lifecycle_v57_handoff_allowlisted() { :; }
+    fi
+    make_predecessor_handoff() {
+      (( use_predecessor != 0 )) || return 0
+      sed -i \
+        -e "s/^supervisor_source_sha256=.*/supervisor_source_sha256=${_QCSD_DOCKER_V57_PREDECESSOR_SHA256}/" \
+        -e 's/^supervisor_pid=.*/supervisor_pid=99999999/' \
+        -e 's/^supervisor_start_time=.*/supervisor_start_time=1/' \
+        -e 's/^supervisor_session=.*/supervisor_session=99999999/' \
+        -e 's/^supervisor_process_group=.*/supervisor_process_group=99999999/' \
+        "$_qcsd_lifecycle_root/HANDOFF"
+      chmod 600 "$_qcsd_lifecycle_root/HANDOFF"
+    }
+    cleanup() {
+      local status=$? cleanup_status=0 object_id
+      trap - EXIT
+      set +e
+      if (( use_reconcile != 0 )); then
+        qcsd_reconcile_docker_lifecycle validate || cleanup_status=1
+        (( cleanup_status != 0 )) || \
+          qcsd_reconcile_docker_lifecycle recover || cleanup_status=1
+      else
+        for object_id in "${QCSD_DOCKER_IDS_SIDECARS[@]}"; do
+          qcsd_retire_docker_handoff run "$object_id" \
+            QCSD_DOCKER_IDS_SIDECARS || cleanup_status=1
+        done
+        for object_id in "${QCSD_DOCKER_IDS_CONTROLLED_SERVER_NETWORKS[@]}"; do
+          qcsd_retire_docker_handoff network "$object_id" \
+            QCSD_DOCKER_IDS_CONTROLLED_SERVER_NETWORKS || cleanup_status=1
+        done
+        for object_id in "${QCSD_DOCKER_IDS_CONTROLLED_CLIENT_NETWORKS[@]}"; do
+          qcsd_retire_docker_handoff network "$object_id" \
+            QCSD_DOCKER_IDS_CONTROLLED_CLIENT_NETWORKS || cleanup_status=1
+        done
+      fi
+      printf '%s\n' "$cleanup_status" >"$state/handoff-cleanup-status"
+      awk '$1 == "RM" || $1 == "NETWORK_RM" { count++ } \
+        END { print count + 0 }' "$state/calls.log" \
+        >"$state/handoff-removals-after"
+      (( cleanup_status == 0 )) || exit 97
+      exit "$status"
+    }
+    trap cleanup EXIT
+    for value in 1 2 3; do
+      printf -v FAKE_DOCKER_CONTAINER_ID '%064x' "$value"
+      export FAKE_DOCKER_CONTAINER_ID
+      qcsd_run_detached_docker QCSD_DOCKER_IDS_SIDECARS \
+        docker run fake-image
+      make_predecessor_handoff
+      roots+=("$_qcsd_lifecycle_root")
+      docker rm --force "${QCSD_DOCKER_IDS_SIDECARS[-1]}" >/dev/null
+    done
+    printf -v FAKE_DOCKER_NETWORK_ID '%064x' 101
+    export FAKE_DOCKER_NETWORK_ID
+    qcsd_create_docker_network QCSD_DOCKER_IDS_CONTROLLED_SERVER_NETWORKS \
+      docker network create server-network
+    make_predecessor_handoff
+    roots+=("$_qcsd_lifecycle_root")
+    docker network rm \
+      "${QCSD_DOCKER_IDS_CONTROLLED_SERVER_NETWORKS[-1]}" >/dev/null
+    printf -v FAKE_DOCKER_NETWORK_ID '%064x' 102
+    export FAKE_DOCKER_NETWORK_ID
+    qcsd_create_docker_network QCSD_DOCKER_IDS_CONTROLLED_CLIENT_NETWORKS \
+      docker network create client-network
+    make_predecessor_handoff
+    roots+=("$_qcsd_lifecycle_root")
+    docker network rm \
+      "${QCSD_DOCKER_IDS_CONTROLLED_CLIENT_NETWORKS[-1]}" >/dev/null
+    awk '$1 == "RM" || $1 == "NETWORK_RM" { count++ } \
+      END { print count + 0 }' "$state/calls.log" \
+      >"$state/handoff-removals-before"
+    printf '%s\n' "${roots[@]}" >"$state/handoff-root-inventory"
+    ;;
+  handoff-predecessor-retirement-race)
+    ready
+    load_real_helper_with_guardian_proof
+    export PATH="$state/bin:$PATH" FAKE_DOCKER_STATE="$state"
+    export DOCKER_CONTEXT=default
+    _qcsd_lifecycle_base="$state/handoff-predecessor-race-base"
+    mkdir -m 700 "$_qcsd_lifecycle_base"
+    _qcsd_secure_lifecycle_base() { :; }
+    _QCSD_DOCKER_PINNED_CONTEXT=default
+    _QCSD_DOCKER_PINNED_HOST=unix:///var/run/docker.sock
+    _QCSD_DOCKER_PINNED_SERVER_ID=daemon-test-id
+    _QCSD_DOCKER_PINNED_BOOT_ID=$(</proc/sys/kernel/random/boot_id)
+    _qcsd_lifecycle_v57_handoff_allowlisted() { :; }
+    QCSD_DOCKER_IDS_TEST=()
+    qcsd_run_detached_docker QCSD_DOCKER_IDS_TEST docker run fake-image
+    root=$_qcsd_lifecycle_root
+    object_id=${QCSD_DOCKER_IDS_TEST[0]}
+    token=${root##*.}
+    sed -i \
+      -e "s/^supervisor_source_sha256=.*/supervisor_source_sha256=${_QCSD_DOCKER_V57_PREDECESSOR_SHA256}/" \
+      -e 's/^supervisor_pid=.*/supervisor_pid=99999999/' \
+      -e 's/^supervisor_start_time=.*/supervisor_start_time=1/' \
+      -e 's/^supervisor_session=.*/supervisor_session=99999999/' \
+      -e 's/^supervisor_process_group=.*/supervisor_process_group=99999999/' \
+      "$root/HANDOFF"
+    chmod 600 "$root/HANDOFF"
+    docker rm --force "$object_id" >/dev/null
+    rm_before=$(awk '$1 == "RM" { count++ } END { print count + 0 }' \
+      "$state/calls.log")
+    _qcsd_handoff_retire_after_absence_hook() {
+      case "$(<"$state/race-observation")" in
+        present)
+          printf '%s' "$object_id" >"$state/container"
+          printf '%s' "$token" >"$state/container-token"
+          printf 'true' >"$state/running"
+          ;;
+        ambiguous) export FAKE_CONTAINER_LS_AMBIGUOUS=1 ;;
+        unknown) export FAKE_DOCKER_DAEMON_UNKNOWN=1 ;;
+        *) return 91 ;;
+      esac
+    }
+    set +e
+    qcsd_retire_docker_handoff run "$object_id" QCSD_DOCKER_IDS_TEST
+    retirement_status=$?
+    set -e
+    rm_after=$(awk '$1 == "RM" { count++ } END { print count + 0 }' \
+      "$state/calls.log")
+    [[ "$retirement_status" -ne 0 && "$rm_before" == "$rm_after" &&
+        -f "$root/HANDOFF" ]]
+    printf '%s %s %s %s\n' "$retirement_status" "$rm_before" "$rm_after" \
+      "$root" >"$state/handoff-predecessor-race-result"
     ;;
   api-successor)
     ready
@@ -804,6 +971,50 @@ def _run_guardian(
         check=False,
         timeout=timeout,
     )
+
+
+def _commit_v57_helper_successor(
+    bundle: tuple[Path, Path, Path, Path],
+) -> str:
+    """Give the copied helper an exact, clean descendant of the v57 commit."""
+    helper = bundle[0].parent / HELPER.name
+    project = helper.parent.parent
+
+    def git(*arguments: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["git", "-C", str(project), *arguments],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=True,
+            timeout=10,
+        )
+
+    git("init", "--quiet")
+    git("fetch", "--quiet", "--no-tags", str(ROOT), V57_CHECKOUT_COMMIT)
+    fetched = git("rev-parse", "--verify", "FETCH_HEAD^{commit}").stdout.strip()
+    assert fetched == V57_CHECKOUT_COMMIT
+    git("update-ref", "refs/heads/qcsd-successor-test", fetched)
+    git("symbolic-ref", "HEAD", "refs/heads/qcsd-successor-test")
+    git("read-tree", "HEAD")
+    git("add", "--", "tools/docker_signal_supervisor.sh")
+    git(
+        "-c",
+        "user.name=QCSD lifecycle test",
+        "-c",
+        "user.email=qcsd-lifecycle-test.invalid",
+        "commit",
+        "--quiet",
+        "-m",
+        "Test committed helper successor",
+    )
+    head = git("rev-parse", "--verify", "HEAD^{commit}").stdout.strip()
+    git("merge-base", "--is-ancestor", V57_CHECKOUT_COMMIT, head)
+    assert git(
+        "status", "--porcelain=v1", "--", "tools/docker_signal_supervisor.sh"
+    ).stdout == ""
+    return head
 
 
 def _lock_path(bundle: tuple[Path, Path, Path, Path]) -> Path:
@@ -2206,6 +2417,201 @@ def test_api_holder_runs_from_a_command_substitution_and_returns_output(
     assert (state / "api-output").read_text(
         encoding="ascii"
     ) == "captured-output\n"
+
+
+def test_real_api_holder_accepts_five_fast_daemon_identity_proofs(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    result = _run_guardian(guardian_bundle, "api-fast-identity-sequence", timeout=20)
+    state = guardian_bundle[3]
+
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    assert (state / "api-fast-identity-completed").read_text(
+        encoding="ascii"
+    ) == "completed\n"
+    calls = (state / "calls.log").read_text(encoding="utf-8")
+    assert calls.count("INFO unix:///var/run/docker.sock") == 5
+    assert _can_lock(_lock_path(guardian_bundle))
+
+
+def test_real_guardian_retires_three_runs_and_two_networks_sequentially(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    result = _run_guardian(guardian_bundle, "handoff-sequential-retirement", timeout=60)
+    state = guardian_bundle[3]
+
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    assert (state / "handoff-cleanup-status").read_text(
+        encoding="ascii"
+    ) == "0\n"
+    roots = tuple(
+        Path(value)
+        for value in (state / "handoff-root-inventory")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    )
+    assert len(roots) == 5
+    assert len(set(roots)) == 5
+    assert not any(root.exists() or root.is_symlink() for root in roots)
+    assert "failed at" not in result.stderr
+    assert _can_lock(_lock_path(guardian_bundle))
+
+
+def test_real_guardian_retires_five_v57_predecessor_handoffs_from_clean_successor(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    successor_head = _commit_v57_helper_successor(guardian_bundle)
+    assert successor_head != V57_CHECKOUT_COMMIT
+
+    result = _run_guardian(
+        guardian_bundle, "handoff-predecessor-sequential-retirement", timeout=90
+    )
+    state = guardian_bundle[3]
+
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    assert (state / "handoff-cleanup-status").read_text(
+        encoding="ascii"
+    ) == "0\n"
+    roots = tuple(
+        Path(value)
+        for value in (state / "handoff-root-inventory")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    )
+    assert len(roots) == 5
+    assert len(set(roots)) == 5
+    assert not any(root.exists() or root.is_symlink() for root in roots)
+    assert "failed at" not in result.stderr
+    assert _can_lock(_lock_path(guardian_bundle))
+
+
+def test_real_guardian_reconciles_five_v57_handoffs_without_docker_removal(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    successor_head = _commit_v57_helper_successor(guardian_bundle)
+    assert successor_head != V57_CHECKOUT_COMMIT
+
+    result = _run_guardian(
+        guardian_bundle, "handoff-predecessor-reconcile", timeout=180
+    )
+    state = guardian_bundle[3]
+
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    assert (state / "handoff-cleanup-status").read_text(
+        encoding="ascii"
+    ) == "0\n"
+    assert (state / "handoff-removals-before").read_text(
+        encoding="ascii"
+    ) == "5\n"
+    assert (state / "handoff-removals-after").read_text(
+        encoding="ascii"
+    ) == "5\n"
+    roots = tuple(
+        Path(value)
+        for value in (state / "handoff-root-inventory")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    )
+    assert len(roots) == 5
+    assert not any(root.exists() or root.is_symlink() for root in roots)
+    assert "Recovered durable Docker run lifecycle state" in result.stderr
+    assert "Recovered durable Docker network lifecycle state" in result.stderr
+    assert _can_lock(_lock_path(guardian_bundle))
+
+
+@pytest.mark.parametrize(
+    "successor_drift",
+    ("uncommitted-content", "executable-mode", "second-generation"),
+)
+def test_real_guardian_refuses_v57_predecessor_handoffs_without_exact_successor(
+    guardian_bundle: tuple[Path, Path, Path, Path], successor_drift: str
+) -> None:
+    _commit_v57_helper_successor(guardian_bundle)
+    helper = guardian_bundle[0].parent / HELPER.name
+    if successor_drift == "uncommitted-content":
+        helper.write_text(
+            helper.read_text(encoding="utf-8") + "\n# uncommitted test drift\n",
+            encoding="utf-8",
+        )
+        helper.chmod(0o600)
+    elif successor_drift == "executable-mode":
+        helper.chmod(0o700)
+    else:
+        project = helper.parent.parent
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(project),
+                "-c",
+                "user.name=QCSD lifecycle test",
+                "-c",
+                "user.email=qcsd-lifecycle-test.invalid",
+                "commit",
+                "--quiet",
+                "--allow-empty",
+                "-m",
+                "Disallowed second successor generation",
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=True,
+            timeout=10,
+        )
+
+    result = _run_guardian(
+        guardian_bundle, "handoff-predecessor-sequential-retirement", timeout=60
+    )
+    state = guardian_bundle[3]
+
+    assert result.returncode == 97, (result.stdout, result.stderr)
+    roots = tuple(
+        Path(value)
+        for value in (state / "handoff-root-inventory")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    )
+    assert len(roots) == 5
+    assert all(root.is_dir() and (root / "HANDOFF").is_file() for root in roots)
+    assert (state / "handoff-removals-before").read_text(
+        encoding="ascii"
+    ) == "5\n"
+    assert (state / "handoff-removals-after").read_text(
+        encoding="ascii"
+    ) == "5\n"
+    assert "failed at root-validation" in result.stderr
+    assert _can_lock(_lock_path(guardian_bundle))
+
+
+@pytest.mark.parametrize("observation", ["present", "ambiguous", "unknown"])
+def test_v57_successor_race_recheck_never_issues_docker_removal(
+    guardian_bundle: tuple[Path, Path, Path, Path], observation: str
+) -> None:
+    _commit_v57_helper_successor(guardian_bundle)
+    state = guardian_bundle[3]
+    (state / "race-observation").write_text(observation, encoding="ascii")
+
+    result = _run_guardian(
+        guardian_bundle, "handoff-predecessor-retirement-race", timeout=60
+    )
+
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    status, before, after, raw_root = (
+        state.joinpath("handoff-predecessor-race-result")
+        .read_text(encoding="utf-8")
+        .split()
+    )
+    root = Path(raw_root)
+    assert int(status) != 0
+    assert before == after == "1"
+    assert root.is_dir() and (root / "HANDOFF").is_file()
+    calls = (state / "calls.log").read_text(encoding="utf-8")
+    assert calls.count(f"RM {'a' * 64}") == 1
+    assert "NETWORK_RM" not in calls
+    assert "failed at durable-root-removal" in result.stderr
+    assert _can_lock(_lock_path(guardian_bundle))
 
 
 @pytest.mark.parametrize(

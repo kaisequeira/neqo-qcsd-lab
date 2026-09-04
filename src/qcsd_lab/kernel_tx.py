@@ -24,7 +24,8 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-KERNEL_TX_RUNNER_SCHEMA_VERSION = 1
+KERNEL_TX_RUNNER_SCHEMA_VERSION = 2
+KERNEL_TX_HISTORICAL_RUNNER_SCHEMA_VERSION = 1
 KERNEL_TX_EVIDENCE_SCHEMA_VERSION = 1
 KERNEL_TX_REALIZATION_WINDOW_NS = 5_000_000
 KERNEL_TX_ADAPTER_WINDOW_NS = frozenset({4_999_000, 5_000_000})
@@ -38,6 +39,24 @@ _SOF_TXTIME_REPORT_ERRORS = 1 << 1
 OBSERVER_TOPOLOGY_RECEIPT_SCHEMA_VERSION = 1
 OBSERVER_TOPOLOGY_RECEIPT_SOURCE = "accepted-attempt-observer-topology-v1"
 
+KERNEL_TX_HISTORICAL_RUNNER_SEMANTICS = (
+    "client_only_buflo_kernel_timed_egress_v2; "
+    "clock=CLOCK_TAI_bracketed_against_CLOCK_MONOTONIC_and_CLOCK_REALTIME; "
+    "exact_outgoing=SO_TXTIME_SCM_TXTIME_ETF; "
+    "tick_zero_is_kernel_timed_after_future_defense_start_arm=true; "
+    "residual_incoming_credit=ordered_after_exact_transmit; "
+    "same_endpoint_credit_may_be_coalesced_in_exact_outgoing=true; "
+    "packet_priority=per_datagram_SCM_PRIORITY_after_IP_controls_or_single_threaded_serialized_SO_PRIORITY; "
+    "serialized_ipv4_traffic_class=socket_IP_TOS_before_SO_PRIORITY_and_restore_IP_TOS_before_SO_PRIORITY; "
+    "serialized_ipv6_traffic_class=per_message_IPV6_TCLASS; "
+    "serialized_socket_state_requires_verified_traffic_class_and_priority_readback_and_restoration; "
+    "sender_exclusivity_is_current_thread_control_flow_not_OS_socket_ownership; "
+    "selection_cutoff=release_minus_5ms; "
+    "tx_sched_and_tx_software_are_linux_error_queue_timestamps; "
+    "strict_realization_window_is_half_open; no_catch_up=true; "
+    "client_only_preselection_adaptation=true; paper_equivalent=false; "
+    "raw_runner_receipt_does_not_claim_post_veth_observation=true"
+)
 KERNEL_TX_RUNNER_SEMANTICS = (
     "client_only_buflo_kernel_timed_egress_v2; "
     "clock=CLOCK_TAI_bracketed_against_CLOCK_MONOTONIC_and_CLOCK_REALTIME; "
@@ -52,6 +71,8 @@ KERNEL_TX_RUNNER_SEMANTICS = (
     "sender_exclusivity_is_current_thread_control_flow_not_OS_socket_ownership; "
     "selection_cutoff=release_minus_5ms; "
     "tx_sched_and_tx_software_are_linux_error_queue_timestamps; "
+    "enqueue_monotonic_corroboration=item_local_post_tx_phase; "
+    "global_monotonic_drift_is_diagnostic=true; "
     "strict_realization_window_is_half_open; no_catch_up=true; "
     "client_only_preselection_adaptation=true; paper_equivalent=false; "
     "raw_runner_receipt_does_not_claim_post_veth_observation=true"
@@ -139,10 +160,24 @@ _INSTANT_ALIGNMENT_SEMANTICS = (
     "translated_Instant_is_a_conservative_latest_bound; "
     "full_bracket_width_is_alignment_uncertainty"
 )
-_EFFECTIVE_ENVELOPE_SEMANTICS = (
+_EFFECTIVE_ENVELOPE_SEMANTICS_V1 = (
     "start_and_end_clock_phases_plus_every_retained_per_item_post_tx_realtime_bracket_"
     "and_enqueue_monotonic_direct_tai_bracket; final_interval_is_conservative_union; "
     "widened_interval_must_still_fit_half_open_realization_window"
+)
+_EFFECTIVE_ENVELOPE_SEMANTICS_V2 = (
+    "start_and_end_clock_phases_plus_every_explicit_per_item_post_tx_clock_phase; "
+    "every_clock_phase_subsample_and_instant_alignment_bracket_is_at_most_250us; "
+    "effective_monotonic_offset_is_a_nonfatal_diagnostic_union_and_max_observed_"
+    "offset_drift_is_the_exact_maximum_start_relative_midpoint_drift_across_both_"
+    "clocks_and_all_retained_phases; each_enqueue_MONOTONIC_timestamp_is_"
+    "translated_only_with_its_item_local_post_TX_monotonic_phase_and_must_overlap_"
+    "its_direct_enqueue_TAI_bracket; "
+    "realtime_offset_is_the_nonempty_running_intersection_used_online_and_recomputed_"
+    "exactly_at_finalization; final_realtime_interval_must_be_contained_by_every_"
+    "provisional_interval; direct_enqueue_TAI_before_release_and_causal_order_"
+    "predicates_remain_hard_gates; incoming_TX_lower_must_not_precede_its_enqueue_"
+    "TAI_lower"
 )
 _PROCESS_SCHEDULER_KEYS = frozenset(
     {
@@ -333,7 +368,7 @@ _SEND_ATTEMPT_KEYS = frozenset(
         "priority_method",
     }
 )
-_ITEM_KEYS = frozenset(
+_ITEM_V1_KEYS = frozenset(
     {
         "schema_version",
         "item_id",
@@ -373,6 +408,7 @@ _ITEM_KEYS = frozenset(
         "terminal_outcome",
     }
 )
+_ITEM_V2_KEYS = _ITEM_V1_KEYS | {"post_tx_clock_phase"}
 _JOB_KEYS = frozenset(
     {
         "schema_version",
@@ -829,16 +865,20 @@ def _clock_phase_valid(value: Any) -> bool:
     return bool(
         phase is not None
         and all(_clock_sample_valid(phase.get(clock)) for clock in ("monotonic", "realtime"))
+        and phase["monotonic"]["tai_after_ns"]
+        <= phase["realtime"]["tai_before_ns"]
     )
 
 
 def _clock_phases_chronological(
     start: Mapping[str, Any], end: Mapping[str, Any]
 ) -> bool:
-    return all(
-        start[clock]["clock_ns"] <= end[clock]["clock_ns"]
-        and start[clock]["tai_before_ns"] <= end[clock]["tai_after_ns"]
-        for clock in ("monotonic", "realtime")
+    return bool(
+        start["realtime"]["tai_after_ns"] <= end["monotonic"]["tai_before_ns"]
+        and all(
+            start[clock]["clock_ns"] <= end[clock]["clock_ns"]
+            for clock in ("monotonic", "realtime")
+        )
     )
 
 
@@ -858,11 +898,38 @@ def _phase_offset_envelope(
     return min(bound[0] for bound in bounds), max(bound[1] for bound in bounds)
 
 
+def _offset_intersection(
+    bounds: Sequence[tuple[int, int]],
+) -> tuple[int, int] | None:
+    lower = max(bound[0] for bound in bounds)
+    upper = min(bound[1] for bound in bounds)
+    return (lower, upper) if lower <= upper else None
+
+
+def _clock_phases_strictly_ordered(
+    earlier: Mapping[str, Any], later: Mapping[str, Any]
+) -> bool:
+    """Mirror the schema-two Rust phase ordering predicate exactly."""
+
+    return bool(
+        earlier["realtime"]["tai_after_ns"]
+        <= later["monotonic"]["tai_before_ns"]
+        and earlier["monotonic"]["clock_ns"]
+        <= later["monotonic"]["clock_ns"]
+        and earlier["realtime"]["clock_ns"] <= later["realtime"]["clock_ns"]
+    )
+
+
 def _clock_mapping_valid(value: Any) -> bool:
     mapping = _exact_mapping(value, _CLOCK_MAPPING_KEYS)
+    schema_version = mapping.get("schema_version") if mapping is not None else None
+    expected_semantics = {
+        1: _EFFECTIVE_ENVELOPE_SEMANTICS_V1,
+        2: _EFFECTIVE_ENVELOPE_SEMANTICS_V2,
+    }.get(schema_version)
     if (
         mapping is None
-        or not _schema(mapping)
+        or expected_semantics is None
         or mapping.get("tai_clock_id") != "CLOCK_TAI"
         or mapping.get("monotonic_clock_id") != "CLOCK_MONOTONIC"
         or mapping.get("realtime_clock_id") != "CLOCK_REALTIME"
@@ -879,8 +946,7 @@ def _clock_mapping_valid(value: Any) -> bool:
         )
         or not _u64(mapping.get("per_item_monotonic_evidence_count"))
         or not _u64(mapping.get("per_item_realtime_evidence_count"))
-        or mapping.get("effective_envelope_semantics")
-        != _EFFECTIVE_ENVELOPE_SEMANTICS
+        or mapping.get("effective_envelope_semantics") != expected_semantics
     ):
         return False
     instant = _exact_mapping(mapping.get("instant_alignment"), _INSTANT_ALIGNMENT_KEYS)
@@ -903,9 +969,12 @@ def _clock_mapping_valid(value: Any) -> bool:
         assert isinstance(phase, Mapping)
         phases[phase_name] = phase
     phase_width = max(
-        phases[phase][clock]["bracket_width_ns"]
-        for phase in ("start", "end")
-        for clock in ("monotonic", "realtime")
+        instant["instant_bracket_width_ns"],
+        *(
+            phases[phase][clock]["bracket_width_ns"]
+            for phase in ("start", "end")
+            for clock in ("monotonic", "realtime")
+        ),
     )
     phase_drift = max(
         _offset_midpoint_drift_ns(
@@ -915,21 +984,43 @@ def _clock_mapping_valid(value: Any) -> bool:
         for clock in ("monotonic", "realtime")
     )
     monotonic_phase = _phase_offset_envelope(mapping, "monotonic")
+    realtime_bounds = [
+        _sample_offset_bounds(phases[phase]["realtime"])
+        for phase in ("start", "end")
+    ]
     realtime_phase = _phase_offset_envelope(mapping, "realtime")
+    realtime_intersection = _offset_intersection(realtime_bounds)
+    if schema_version == 1:
+        realtime_valid = bool(
+            mapping["effective_realtime_offset_lower_ns"] <= realtime_phase[0]
+            and mapping["effective_realtime_offset_upper_ns"] >= realtime_phase[1]
+            and _clock_phases_chronological(phases["start"], phases["end"])
+        )
+    else:
+        realtime_valid = bool(
+            realtime_intersection is not None
+            and mapping["effective_realtime_offset_lower_ns"]
+            >= realtime_intersection[0]
+            and mapping["effective_realtime_offset_upper_ns"]
+            <= realtime_intersection[1]
+            and _clock_phases_strictly_ordered(phases["start"], phases["end"])
+        )
     return bool(
         phase_width <= mapping["max_observed_bracket_width_ns"]
         <= KERNEL_TX_MAX_CLOCK_BRACKET_NS
         and phase_drift <= mapping["max_observed_offset_drift_ns"]
-        <= KERNEL_TX_MAX_CLOCK_OFFSET_DRIFT_NS
+        and (
+            schema_version == 2
+            or mapping["max_observed_offset_drift_ns"]
+            <= KERNEL_TX_MAX_CLOCK_OFFSET_DRIFT_NS
+        )
         and mapping["effective_monotonic_offset_lower_ns"] <= monotonic_phase[0]
         and mapping["effective_monotonic_offset_upper_ns"] >= monotonic_phase[1]
         and mapping["effective_monotonic_offset_lower_ns"]
         <= mapping["effective_monotonic_offset_upper_ns"]
-        and mapping["effective_realtime_offset_lower_ns"] <= realtime_phase[0]
-        and mapping["effective_realtime_offset_upper_ns"] >= realtime_phase[1]
         and mapping["effective_realtime_offset_lower_ns"]
         <= mapping["effective_realtime_offset_upper_ns"]
-        and _clock_phases_chronological(phases["start"], phases["end"])
+        and realtime_valid
         and phases["start"]["monotonic"]["clock_ns"]
         <= instant["monotonic_clock_ns"]
         <= phases["end"]["monotonic"]["clock_ns"]
@@ -939,14 +1030,19 @@ def _clock_mapping_valid(value: Any) -> bool:
 def _clock_mapping_matches_items(
     mapping: Mapping[str, Any], jobs: Sequence[Mapping[str, Any]]
 ) -> bool:
+    if mapping["schema_version"] == 2:
+        return _clock_mapping_v2_matches_items(mapping, jobs)
     envelopes = {
         clock: list(_phase_offset_envelope(mapping, clock))
         for clock in ("monotonic", "realtime")
     }
     widths = [
+        mapping["instant_alignment"]["instant_bracket_width_ns"],
+        *(
         mapping[phase][clock]["bracket_width_ns"]
         for phase in ("start", "end")
         for clock in ("monotonic", "realtime")
+        ),
     ]
     drifts = [
         _offset_midpoint_drift_ns(mapping["start"][clock], mapping["end"][clock])
@@ -995,6 +1091,109 @@ def _clock_mapping_matches_items(
     )
 
 
+def _clock_mapping_v2_matches_items(
+    mapping: Mapping[str, Any], jobs: Sequence[Mapping[str, Any]]
+) -> bool:
+    monotonic_envelope = list(_phase_offset_envelope(mapping, "monotonic"))
+    start_realtime_bounds = _sample_offset_bounds(mapping["start"]["realtime"])
+    end_realtime_bounds = _sample_offset_bounds(mapping["end"]["realtime"])
+    # The Rust sender cannot know the final phase while transmitting.  Rebuild
+    # its online running intersection from the start phase and each retained
+    # post-TX phase in item order; only add the end phase when checking the
+    # final mapping.  This distinction is observable whenever the final phase
+    # narrows an earlier provisional interval.
+    online_realtime_intersection = start_realtime_bounds
+    final_realtime_bounds = [start_realtime_bounds, end_realtime_bounds]
+    widths = [
+        mapping["instant_alignment"]["instant_bracket_width_ns"],
+        *(
+        mapping[phase][clock]["bracket_width_ns"]
+        for phase in ("start", "end")
+        for clock in ("monotonic", "realtime")
+        ),
+    ]
+    drifts = [
+        _offset_midpoint_drift_ns(mapping["start"][clock], mapping["end"][clock])
+        for clock in ("monotonic", "realtime")
+    ]
+    evidence_count = 0
+    previous_phase = mapping["start"]
+    for item in (item for job in jobs for item in job["items"]):
+        phase = item.get("post_tx_clock_phase")
+        if phase is None:
+            continue
+        if (
+            not _clock_phase_valid(phase)
+            or not _clock_phases_strictly_ordered(previous_phase, phase)
+            or not _clock_phases_strictly_ordered(phase, mapping["end"])
+            or (
+                item.get("tx_software_realtime_ns") is not None
+                and item["tx_software_realtime_ns"] > phase["realtime"]["clock_ns"]
+            )
+            or (
+                item.get("enqueue_monotonic_ns") is not None
+                and item["enqueue_monotonic_ns"] > phase["monotonic"]["clock_ns"]
+            )
+            or (
+                item.get("enqueue_tai_upper_ns") is not None
+                and item["enqueue_tai_upper_ns"]
+                > phase["monotonic"]["tai_before_ns"]
+            )
+        ):
+            return False
+        monotonic_bounds = _sample_offset_bounds(phase["monotonic"])
+        phase_realtime_bounds = _sample_offset_bounds(phase["realtime"])
+        refined_online_intersection = _offset_intersection(
+            [online_realtime_intersection, phase_realtime_bounds]
+        )
+        if refined_online_intersection is None:
+            return False
+        online_realtime_intersection = refined_online_intersection
+        final_realtime_bounds.append(phase_realtime_bounds)
+        tx_software_realtime_ns = item.get("tx_software_realtime_ns")
+        provisional_lower = item.get("provisional_tx_software_tai_lower_ns")
+        provisional_upper = item.get("provisional_tx_software_tai_upper_ns")
+        if provisional_lower is not None and tx_software_realtime_ns is not None:
+            expected_provisional = (
+                tx_software_realtime_ns + online_realtime_intersection[0],
+                tx_software_realtime_ns + online_realtime_intersection[1],
+            )
+            if (
+                not all(_u64(bound) for bound in expected_provisional)
+                or (provisional_lower, provisional_upper) != expected_provisional
+            ):
+                return False
+        monotonic_envelope[0] = min(monotonic_envelope[0], monotonic_bounds[0])
+        monotonic_envelope[1] = max(monotonic_envelope[1], monotonic_bounds[1])
+        for clock, bounds in (
+            ("monotonic", monotonic_bounds),
+            ("realtime", phase_realtime_bounds),
+        ):
+            widths.append(bounds[1] - bounds[0])
+            drifts.append(
+                _offset_midpoint_drift_ns(
+                    mapping["start"][clock], phase[clock]
+                )
+            )
+        evidence_count += 1
+        previous_phase = phase
+    final_realtime_intersection = _offset_intersection(final_realtime_bounds)
+    if final_realtime_intersection is None:
+        return False
+    return bool(
+        mapping["effective_monotonic_offset_lower_ns"] == monotonic_envelope[0]
+        and mapping["effective_monotonic_offset_upper_ns"] == monotonic_envelope[1]
+        and mapping["effective_realtime_offset_lower_ns"]
+        == final_realtime_intersection[0]
+        and mapping["effective_realtime_offset_upper_ns"]
+        == final_realtime_intersection[1]
+        and mapping["per_item_monotonic_evidence_count"] == evidence_count
+        and mapping["per_item_realtime_evidence_count"] == evidence_count
+        and mapping["max_observed_bracket_width_ns"] == max(widths)
+        and mapping["max_observed_offset_drift_ns"] == max(drifts)
+    )
+
+
 def _offset_envelope(mapping: Mapping[str, Any], clock: str) -> tuple[int, int]:
     return (
         mapping[f"effective_{clock}_offset_lower_ns"],
@@ -1013,6 +1212,34 @@ def _translated_timestamp_valid(
 
 def _clock_frame_contains(mapping: Mapping[str, Any], *, clock: str, raw_ns: int) -> bool:
     return mapping["start"][clock]["clock_ns"] <= raw_ns <= mapping["end"][clock]["clock_ns"]
+
+
+def _item_local_enqueue_clock_consistent(
+    phase: Any,
+    *,
+    enqueue_monotonic_ns: int,
+    enqueue_tai_lower_ns: int,
+    enqueue_tai_upper_ns: int,
+) -> bool:
+    """Mirror schema two's item-local MONOTONIC corroboration exactly."""
+
+    if (
+        not _clock_phase_valid(phase)
+        or enqueue_monotonic_ns > phase["monotonic"]["clock_ns"]
+        or enqueue_tai_lower_ns > enqueue_tai_upper_ns
+        or enqueue_tai_upper_ns > phase["monotonic"]["tai_before_ns"]
+    ):
+        return False
+    lower_offset, upper_offset = _sample_offset_bounds(phase["monotonic"])
+    mapped_lower = enqueue_monotonic_ns + lower_offset
+    mapped_upper = enqueue_monotonic_ns + upper_offset
+    return bool(
+        _u64(mapped_lower)
+        and _u64(mapped_upper)
+        and mapped_lower <= mapped_upper
+        and mapped_lower <= enqueue_tai_upper_ns
+        and enqueue_tai_lower_ns <= mapped_upper
+    )
 
 
 def _privilege_valid(value: Any) -> bool:
@@ -1364,8 +1591,37 @@ def _txtime_error_valid(value: Any, *, requested_txtime_tai_ns: int | None) -> b
         and error.get("family") in {"ipv4", "ipv6"}
         and _positive_u64(error.get("errno"))
         and error.get("kind") in {"invalid_parameter", "missed"}
-        and error.get("requested_txtime_tai_ns") == requested_txtime_tai_ns
+        and _u64(error.get("requested_txtime_tai_ns"))
+        and (
+            requested_txtime_tai_ns is None
+            or error["requested_txtime_tai_ns"] == requested_txtime_tai_ns
+        )
     )
+
+
+def _txtime_failure_matches_item(item: Mapping[str, Any]) -> bool:
+    """Bind a retained TXTIME diagnostic to the helper's pending request.
+
+    Timed main sends retain their explicit ``SCM_TXTIME`` value.  Immediate
+    post-main sends have no SCM control message, but the helper deliberately
+    uses zero as its internal pending-request sentinel.  A different value is
+    retained only by the producer's typed mismatch path.
+    """
+
+    error = item.get("txtime_error")
+    if not isinstance(error, Mapping):
+        return False
+    expected = item.get("scm_txtime_tai_ns")
+    if item.get("send_path") == "ordered-after-exact":
+        expected = 0
+    observed = error.get("requested_txtime_tai_ns")
+    if observed != expected:
+        return item.get("terminal_error") == "txtime_drop_mismatch"
+    expected_terminal_error = {
+        "invalid_parameter": "txtime_invalid_parameter",
+        "missed": "txtime_missed",
+    }.get(error.get("kind"))
+    return item.get("terminal_error") == expected_terminal_error
 
 
 def _send_attempt_valid(value: Any, *, item: Mapping[str, Any]) -> bool:
@@ -1392,6 +1648,49 @@ def _send_attempt_valid(value: Any, *, item: Mapping[str, Any]) -> bool:
     )
 
 
+def _item_enqueue_evidence_valid(item: Mapping[str, Any]) -> bool:
+    """Validate the producer's incremental enqueue-field projection.
+
+    A completed timed/immediate enqueue projects all four item fields.  A
+    ``SendAttemptReceipt`` is deliberately incremental: the TAI-before sample
+    always exists, while the following monotonic and TAI-after samples may each
+    be absent when the corresponding clock read failed.  Rust retains that
+    partial evidence instead of erasing it.
+    """
+
+    monotonic = item.get("enqueue_monotonic_ns")
+    middle = item.get("enqueue_tai_ns")
+    lower = item.get("enqueue_tai_lower_ns")
+    upper = item.get("enqueue_tai_upper_ns")
+    attempt = item.get("send_attempt")
+    if lower is None:
+        return bool(
+            monotonic is None
+            and middle is None
+            and upper is None
+            and attempt is None
+        )
+    if upper is None:
+        if middle is not None:
+            return False
+    elif lower > upper or middle != _midpoint(lower, upper):
+        return False
+    if attempt is None:
+        return monotonic is not None and upper is not None
+    return bool(
+        lower == attempt.get("enqueue_before_tai_ns")
+        and monotonic == attempt.get("enqueue_monotonic_ns")
+        and upper == attempt.get("enqueue_after_tai_ns")
+        and item.get("socket_timestamp_id") is None
+        and item.get("tx_sched_realtime_ns") is None
+        and item.get("tx_software_realtime_ns") is None
+        and item.get("post_tx_clock_phase") is None
+        and item.get("provisional_tx_software_tai_lower_ns") is None
+        and item.get("provisional_tx_software_tai_upper_ns") is None
+        and item.get("txtime_error") is None
+    )
+
+
 def _timestamp_pair_valid(item: Mapping[str, Any], prefix: str, mapping: Mapping[str, Any]) -> bool:
     raw = item[f"{prefix}_realtime_ns"]
     translated = item[f"{prefix}_tai_ns"]
@@ -1408,6 +1707,41 @@ def _timestamp_pair_valid(item: Mapping[str, Any], prefix: str, mapping: Mapping
     )
 
 
+def _rust_bool(value: bool) -> str:
+    return "true" if value else "false"
+
+
+def _final_mapping_error_detail(
+    item: Mapping[str, Any],
+    *,
+    enqueue_interval_complete: bool,
+    enqueue_clock_consistent: bool,
+    timestamp_evidence_complete: bool,
+    tx_order_valid: bool,
+    physical_window_valid: bool,
+    provisional_interval_valid: bool,
+    controller_and_trace_finalized: bool,
+    structural_and_order_valid: bool,
+) -> str:
+    """Reproduce the Rust finaliser's generated item diagnostic exactly."""
+
+    values = (
+        ("enqueue_complete", enqueue_interval_complete),
+        ("enqueue_clock_consistent", enqueue_clock_consistent),
+        ("timestamp_complete", timestamp_evidence_complete),
+        ("tx_order", tx_order_valid),
+        ("physical_window", physical_window_valid),
+        ("provisional_interval", provisional_interval_valid),
+        ("endpoint_tuple", True),
+        ("item_sequence", True),
+        ("job_identity", True),
+        ("controller_trace_finalized", controller_and_trace_finalized),
+        ("structural_order", structural_and_order_valid),
+    )
+    rendered = ", ".join(f"{name}={_rust_bool(state)}" for name, state in values)
+    return f"item {item['item_id']} failed final mapping: {rendered}"
+
+
 def _runner_item_valid(
     value: Any,
     *,
@@ -1420,10 +1754,17 @@ def _runner_item_valid(
     socket_setup: Sequence[Mapping[str, Any]],
     strict_success: bool,
 ) -> bool:
-    item = _exact_mapping(value, _ITEM_KEYS)
+    item_schema_version = mapping["schema_version"]
+    item_keys = _ITEM_V2_KEYS if item_schema_version == 2 else _ITEM_V1_KEYS
+    item = _exact_mapping(value, item_keys)
     if (
         item is None
-        or not _schema(item)
+        or not _schema(item, item_schema_version)
+        or (
+            item_schema_version == 2
+            and item.get("post_tx_clock_phase") is not None
+            and not _clock_phase_valid(item["post_tx_clock_phase"])
+        )
         or not all(_u64(item.get(key)) for key in ("item_id", "job_id", "order_index", "event_id"))
         or item.get("item_id") != expected_item_id
         or item.get("job_id") != job["job_id"]
@@ -1463,6 +1804,7 @@ def _runner_item_valid(
         or not _nullable_string(item.get("terminal_error"))
         or not _nullable_string(item.get("terminal_error_detail"))
         or (item.get("send_attempt") is not None and not _send_attempt_valid(item["send_attempt"], item=item))
+        or not _item_enqueue_evidence_valid(item)
         or (
             item.get("txtime_error") is not None
             and not _txtime_error_valid(
@@ -1478,6 +1820,18 @@ def _runner_item_valid(
         }
     ):
         return False
+    post_tx_phase = item.get("post_tx_clock_phase")
+    if item_schema_version == 2 and post_tx_phase is not None and any(
+        item.get(key) is None
+        for key in (
+            "enqueue_monotonic_ns",
+            "enqueue_tai_upper_ns",
+            "socket_timestamp_id",
+            "tx_sched_realtime_ns",
+            "tx_software_realtime_ns",
+        )
+    ):
+        return False
     enqueue_fields = (
         item["enqueue_monotonic_ns"],
         item["enqueue_tai_ns"],
@@ -1485,25 +1839,31 @@ def _runner_item_valid(
         item["enqueue_tai_upper_ns"],
     )
     enqueue_complete = all(value is not None for value in enqueue_fields)
-    enqueue_null = all(value is None for value in enqueue_fields)
-    if not (enqueue_complete or enqueue_null):
-        return False
+    enqueue_interval_complete = all(
+        value is not None for value in enqueue_fields[2:]
+    ) and item["enqueue_tai_lower_ns"] <= item["enqueue_tai_upper_ns"]
+    enqueue_clock_consistent = False
     if enqueue_complete:
         enqueue_monotonic, enqueue_mid, enqueue_lower, enqueue_upper = enqueue_fields
         assert all(isinstance(value, int) for value in enqueue_fields)
-        mapped_lower, mapped_upper = _translated_interval(
-            mapping, clock="monotonic", raw_ns=enqueue_monotonic
-        )
-        if (
-            enqueue_lower > enqueue_upper
-            or enqueue_mid != _midpoint(enqueue_lower, enqueue_upper)
-            or mapped_lower > enqueue_upper
-            or enqueue_lower > mapped_upper
-            or not _clock_frame_contains(
+        if item_schema_version == 2:
+            enqueue_clock_consistent = _item_local_enqueue_clock_consistent(
+                post_tx_phase,
+                enqueue_monotonic_ns=enqueue_monotonic,
+                enqueue_tai_lower_ns=enqueue_lower,
+                enqueue_tai_upper_ns=enqueue_upper,
+            )
+        else:
+            mapped_lower, mapped_upper = _translated_interval(
                 mapping, clock="monotonic", raw_ns=enqueue_monotonic
             )
-        ):
-            return False
+            enqueue_clock_consistent = bool(
+                mapped_lower <= enqueue_upper
+                and enqueue_lower <= mapped_upper
+                and _clock_frame_contains(
+                    mapping, clock="monotonic", raw_ns=enqueue_monotonic
+                )
+            )
     for prefix in ("tx_sched", "tx_software"):
         raw = item[f"{prefix}_realtime_ns"]
         middle = item[f"{prefix}_tai_ns"]
@@ -1528,13 +1888,24 @@ def _runner_item_valid(
     )
     if (provisional[0] is None) != (provisional[1] is None):
         return False
-    if provisional[0] is not None and (
-        provisional[0] > provisional[1]
-        or item["tx_software_tai_lower_ns"] is None
-        or item["tx_software_tai_lower_ns"] > provisional[0]
-        or item["tx_software_tai_upper_ns"] < provisional[1]
-    ):
+    if item_schema_version == 2 and provisional[0] is not None and post_tx_phase is None:
         return False
+    if provisional[0] is not None:
+        if (
+            provisional[0] > provisional[1]
+            or item["tx_software_tai_lower_ns"] is None
+        ):
+            return False
+        if item_schema_version == 1 and (
+            item["tx_software_tai_lower_ns"] > provisional[0]
+            or item["tx_software_tai_upper_ns"] < provisional[1]
+        ):
+            return False
+        if item_schema_version == 2 and (
+            provisional[0] > item["tx_software_tai_lower_ns"]
+            or provisional[1] < item["tx_software_tai_upper_ns"]
+        ):
+            return False
     if expected_order_index == 0:
         if (
             item.get("role") != "exact-outgoing"
@@ -1542,7 +1913,6 @@ def _runner_item_valid(
             or item.get("event_id") != 2 * job["tick"]
             or item["udp_payload_bytes"] != KERNEL_TX_MAX_UDP_PAYLOAD_BYTES
             or item.get("scm_txtime_tai_ns") != job["release_tai_ns"] + contract["delta_ns"]
-            or (enqueue_complete and item["enqueue_tai_upper_ns"] >= job["release_tai_ns"])
         ):
             return False
     elif (
@@ -1551,43 +1921,79 @@ def _runner_item_valid(
         or item.get("event_id") != 2 * job["tick"] + 1
         or item.get("scm_txtime_tai_ns") is not None
         or outgoing_tx_tai_upper_ns is None
-        or (
-            enqueue_complete
-            and (
-                item["enqueue_tai_lower_ns"] < outgoing_tx_tai_upper_ns
-                or item["enqueue_tai_upper_ns"] >= job["deadline_tai_ns"]
-            )
-        )
     ):
         return False
     tx_sched = item["tx_sched_realtime_ns"]
     tx_software = item["tx_software_realtime_ns"]
-    if (
+    tx_order_valid = bool(
         tx_sched is not None
         and tx_software is not None
-        and tx_sched > tx_software
-    ):
-        return False
+        and tx_sched <= tx_software
+    )
     outcome = item["terminal_outcome"]
     error = item["txtime_error"]
-    evidence_complete = (
-        enqueue_complete
-        and item["socket_timestamp_id"] is not None
+    timestamp_evidence_complete = (
+        item["socket_timestamp_id"] is not None
         and tx_sched is not None
         and tx_software is not None
-        and provisional[0] is not None
+    )
+    post_tx_phase_complete = bool(
+        item_schema_version == 1 or item.get("post_tx_clock_phase") is not None
+    )
+    timestamp_evidence_complete = bool(
+        timestamp_evidence_complete and post_tx_phase_complete
     )
     within_window = bool(
         item["tx_software_tai_lower_ns"] is not None
         and item["tx_software_tai_lower_ns"] >= job["release_tai_ns"]
         and item["tx_software_tai_upper_ns"] < job["deadline_tai_ns"]
     )
+    provisional_interval_complete = bool(
+        provisional[0] is not None and item["tx_software_tai_lower_ns"] is not None
+    )
+    if expected_order_index == 0:
+        transport_order_valid = bool(
+            enqueue_interval_complete
+            and item["enqueue_tai_upper_ns"] < job["release_tai_ns"]
+        )
+    else:
+        transport_order_valid = bool(
+            enqueue_interval_complete
+            and item["enqueue_tai_lower_ns"] >= outgoing_tx_tai_upper_ns
+            and item["enqueue_tai_upper_ns"] < job["deadline_tai_ns"]
+            and item["tx_software_tai_lower_ns"] is not None
+            and item["tx_software_tai_lower_ns"] >= outgoing_tx_tai_upper_ns
+            and item["tx_software_tai_lower_ns"]
+            >= item["enqueue_tai_lower_ns"]
+        )
+    transmission_validation_complete = bool(
+        enqueue_interval_complete
+        and enqueue_clock_consistent
+        and timestamp_evidence_complete
+        and tx_order_valid
+        and within_window
+        and provisional_interval_complete
+        and transport_order_valid
+    )
+    controller_and_trace_finalized = (
+        item["finalization_state"] == "controller-and-trace-finalized"
+    )
+    generated_error_detail = _final_mapping_error_detail(
+        item,
+        enqueue_interval_complete=enqueue_interval_complete,
+        enqueue_clock_consistent=enqueue_clock_consistent,
+        timestamp_evidence_complete=timestamp_evidence_complete,
+        tx_order_valid=tx_order_valid,
+        physical_window_valid=within_window,
+        provisional_interval_valid=provisional_interval_complete,
+        controller_and_trace_finalized=controller_and_trace_finalized,
+        structural_and_order_valid=transport_order_valid,
+    )
     if strict_success:
         return bool(
             outcome == "transmitted"
             and item["finalization_state"] == "controller-and-trace-finalized"
-            and evidence_complete
-            and within_window
+            and transmission_validation_complete
             and error is None
             and item["send_attempt"] is None
             and item["terminal_error"] is None
@@ -1596,44 +2002,55 @@ def _runner_item_valid(
     if outcome == "transmitted":
         return bool(
             item["finalization_state"] == "controller-and-trace-finalized"
-            and
-            evidence_complete
-            and within_window
+            and transmission_validation_complete
             and error is None
+            and item["send_attempt"] is None
             and item["terminal_error"] is None
+            and item["terminal_error_detail"] is None
         )
     if outcome == "txtime-error":
         return bool(
             item["finalization_state"] == "helper-terminal-failure"
-            and
-            item["send_path"] == "etf"
-            and item["tx_software_realtime_ns"] is None
+            and enqueue_interval_complete
+            and item.get("post_tx_clock_phase") is None
+            and provisional[0] is None
             and error is not None
+            and item["send_attempt"] is None
+            and _txtime_failure_matches_item(item)
             and item["terminal_error"] is not None
+            and item["terminal_error_detail"] is not None
         )
     if outcome == "timestamp-evidence-missing":
         return bool(
             item["finalization_state"]
             in {"helper-terminal-failure", "physical-transmit-proven"}
-            and not evidence_complete
+            and (not timestamp_evidence_complete or not enqueue_interval_complete)
             and error is None
             and item["terminal_error"] is not None
+            and item["terminal_error_detail"] is not None
+            and (
+                item["terminal_error"]
+                != "final_conservative_envelope_validation_failed"
+                or item["terminal_error_detail"] == generated_error_detail
+            )
         )
     if outcome == "controller-trace-finalization-failed":
         return bool(
             item["finalization_state"] == "physical-transmit-proven"
-            and evidence_complete
-            and within_window
+            and transmission_validation_complete
             and error is None
             and item["terminal_error"] is not None
             and item["terminal_error_detail"] is not None
         )
     return bool(
         item["finalization_state"] == "physical-transmit-proven"
-        and evidence_complete
-        and not within_window
-        and error is None
+        and timestamp_evidence_complete
+        and enqueue_interval_complete
         and item["terminal_error"]
+        == "final_conservative_envelope_validation_failed"
+        and error is None
+        and item["send_attempt"] is None
+        and item["terminal_error_detail"] == generated_error_detail
     )
 
 
@@ -1869,11 +2286,18 @@ def _unmapped_runner_item_valid(
     expected_item_id: int,
     expected_order_index: int,
     socket_setup: Sequence[Mapping[str, Any]],
+    runner_schema_version: int,
 ) -> bool:
-    item = _exact_mapping(value, _ITEM_KEYS)
+    item_keys = _ITEM_V2_KEYS if runner_schema_version == 2 else _ITEM_V1_KEYS
+    item = _exact_mapping(value, item_keys)
     if (
         item is None
-        or not _schema(item)
+        or not _schema(item, runner_schema_version)
+        or (
+            runner_schema_version == 2
+            and item.get("post_tx_clock_phase") is not None
+            and not _clock_phase_valid(item["post_tx_clock_phase"])
+        )
         or not all(_u64(item.get(key)) for key in ("item_id", "job_id", "order_index", "event_id"))
         or item.get("item_id") != expected_item_id
         or item.get("job_id") != job["job_id"]
@@ -1929,6 +2353,7 @@ def _unmapped_runner_item_valid(
             item.get("send_attempt") is not None
             and not _send_attempt_valid(item["send_attempt"], item=item)
         )
+        or not _item_enqueue_evidence_valid(item)
         or (
             item.get("txtime_error") is not None
             and not _txtime_error_valid(
@@ -1950,18 +2375,23 @@ def _unmapped_runner_item_valid(
         }
     ):
         return False
-    enqueue_lower = item["enqueue_tai_lower_ns"]
-    enqueue_upper = item["enqueue_tai_upper_ns"]
-    enqueue_middle = item["enqueue_tai_ns"]
-    if (enqueue_lower is None) != (enqueue_upper is None):
-        return False
-    if enqueue_lower is None:
-        if enqueue_middle is not None:
+    post_tx_phase = item.get("post_tx_clock_phase")
+    if post_tx_phase is not None:
+        enqueue_monotonic_ns = item.get("enqueue_monotonic_ns")
+        enqueue_tai_lower_ns = item.get("enqueue_tai_lower_ns")
+        enqueue_tai_upper_ns = item.get("enqueue_tai_upper_ns")
+        socket_timestamp_id = item.get("socket_timestamp_id")
+        tx_sched_realtime_ns = item.get("tx_sched_realtime_ns")
+        tx_software_realtime_ns = item.get("tx_software_realtime_ns")
+        if (
+            enqueue_monotonic_ns is None
+            or enqueue_tai_lower_ns is None
+            or enqueue_tai_upper_ns is None
+            or socket_timestamp_id is None
+            or tx_sched_realtime_ns is None
+            or tx_software_realtime_ns is None
+        ):
             return False
-    elif enqueue_lower > enqueue_upper or enqueue_middle != _midpoint(
-        enqueue_lower, enqueue_upper
-    ):
-        return False
     provisional_lower = item["provisional_tx_software_tai_lower_ns"]
     provisional_upper = item["provisional_tx_software_tai_upper_ns"]
     if (provisional_lower is None) != (provisional_upper is None) or (
@@ -1985,25 +2415,182 @@ def _unmapped_runner_item_valid(
         or item.get("scm_txtime_tai_ns") is not None
     ):
         return False
-    if (
+    enqueue_interval_complete = bool(
+        item["enqueue_tai_lower_ns"] is not None
+        and item["enqueue_tai_upper_ns"] is not None
+        and item["enqueue_tai_lower_ns"] <= item["enqueue_tai_upper_ns"]
+    )
+    tx_order_valid = bool(
         item["tx_sched_realtime_ns"] is not None
         and item["tx_software_realtime_ns"] is not None
-        and item["tx_sched_realtime_ns"] > item["tx_software_realtime_ns"]
+        and item["tx_sched_realtime_ns"] <= item["tx_software_realtime_ns"]
+    )
+    structural_and_order_valid = bool(
+        expected_order_index == 0
+        and item["enqueue_tai_upper_ns"] is not None
+        and item["enqueue_tai_upper_ns"] < job["release_tai_ns"]
+    )
+    if (
+        runner_schema_version == 2
+        and item["terminal_error"]
+        == "final_conservative_envelope_validation_failed"
+        and item["terminal_error_detail"]
+        != _final_mapping_error_detail(
+            item,
+            enqueue_interval_complete=enqueue_interval_complete,
+            enqueue_clock_consistent=False,
+            timestamp_evidence_complete=False,
+            tx_order_valid=tx_order_valid,
+            physical_window_valid=False,
+            provisional_interval_valid=False,
+            controller_and_trace_finalized=(
+                item["finalization_state"] == "controller-and-trace-finalized"
+            ),
+            structural_and_order_valid=structural_and_order_valid,
+        )
     ):
         return False
     outcome = item["terminal_outcome"]
     if outcome == "txtime-error":
         return bool(
             item["finalization_state"] == "helper-terminal-failure"
-            and item["send_path"] == "etf"
+            and item["enqueue_monotonic_ns"] is not None
+            and item["enqueue_tai_lower_ns"] is not None
+            and item["enqueue_tai_upper_ns"] is not None
             and item["txtime_error"] is not None
+            and item["send_attempt"] is None
+            and item.get("post_tx_clock_phase") is None
+            and provisional_lower is None
+            and _txtime_failure_matches_item(item)
         )
     if outcome == "controller-trace-finalization-failed":
         return bool(
             item["finalization_state"] == "physical-transmit-proven"
             and item["txtime_error"] is None
+            and item["send_attempt"] is None
+            and (
+                runner_schema_version == 1
+                or item.get("post_tx_clock_phase") is not None
+            )
+            and provisional_lower is not None
         )
     return item["txtime_error"] is None
+
+
+def _schema_two_mapping_failure_matches_evidence(
+    *,
+    clock_start: Mapping[str, Any],
+    clock_end: Mapping[str, Any] | None,
+    defense_start_monotonic_ns: int | None,
+    jobs: Sequence[Mapping[str, Any]],
+    error: str,
+) -> bool:
+    """Replay the producer's fail-fast mapping builder without translating.
+
+    The Instant anchor exists only inside a successful mapping receipt.  Its
+    one otherwise-unobservable failure is therefore accepted solely under the
+    producer's exact chronology error string.  Every failure derivable from
+    retained clock and item evidence is bound to its exact first failing
+    predicate and, where present, item identity or measured value.
+    """
+
+    phase_items = [
+        item
+        for job in jobs
+        for item in job["items"]
+        if item.get("post_tx_clock_phase") is not None
+    ]
+    previous_online_phase = clock_start
+    for index, item in enumerate(phase_items):
+        phase = item["post_tx_clock_phase"]
+        item_id = item["item_id"]
+        if not _clock_phases_strictly_ordered(previous_online_phase, phase):
+            return bool(
+                index == len(phase_items) - 1
+                and error
+                == f"BuFLO kernel item {item_id} retained an out-of-order post-TX clock phase"
+            )
+        if (
+            item["tx_software_realtime_ns"] > phase["realtime"]["clock_ns"]
+            or item["enqueue_monotonic_ns"] > phase["monotonic"]["clock_ns"]
+            or item["enqueue_tai_upper_ns"] > phase["monotonic"]["tai_before_ns"]
+        ):
+            return bool(
+                index == len(phase_items) - 1
+                and error
+                == f"BuFLO kernel item {item_id} clock phase preceded its retained transmission evidence"
+            )
+        previous_online_phase = phase
+
+    if clock_end is None:
+        prefix = "BuFLO final clock sample failed: "
+        return error.startswith(prefix) and bool(error.removeprefix(prefix).strip())
+    if defense_start_monotonic_ns is None:
+        return not jobs and error == "BuFLO kernel epoch was never armed"
+    if not _clock_phases_strictly_ordered(clock_start, clock_end):
+        return (
+            error
+            == "BuFLO kernel clock phases and Instant anchor were not temporally ordered"
+        )
+    # The anchor bracket itself is not repeated outside a successful mapping.
+    # With otherwise ordered phases this exact error is the only observable
+    # representation of an out-of-range anchor.
+    if error == "BuFLO kernel clock phases and Instant anchor were not temporally ordered":
+        return True
+
+    realtime_intersection = _offset_intersection(
+        [
+            _sample_offset_bounds(clock_start["realtime"]),
+            _sample_offset_bounds(clock_end["realtime"]),
+        ]
+    )
+    if realtime_intersection is None:
+        return error == "BuFLO kernel start/end realtime offset intersection was empty"
+
+    max_width = max(
+        phase[clock]["bracket_width_ns"]
+        for phase in (clock_start, clock_end)
+        for clock in ("monotonic", "realtime")
+    )
+    previous_phase = clock_start
+    for item in (item for job in jobs for item in job["items"]):
+        phase = item.get("post_tx_clock_phase")
+        if phase is None:
+            continue
+        item_id = item["item_id"]
+        if not _clock_phases_strictly_ordered(
+            previous_phase, phase
+        ) or not _clock_phases_strictly_ordered(phase, clock_end):
+            return error == (
+                f"BuFLO kernel item {item_id} retained an out-of-order post-TX clock phase"
+            )
+        if (
+            item["tx_software_realtime_ns"] > phase["realtime"]["clock_ns"]
+            or item["enqueue_monotonic_ns"] > phase["monotonic"]["clock_ns"]
+            or item["enqueue_tai_upper_ns"] > phase["monotonic"]["tai_before_ns"]
+        ):
+            return error == (
+                f"BuFLO kernel item {item_id} clock phase preceded its retained transmission evidence"
+            )
+        phase_realtime_bounds = _sample_offset_bounds(phase["realtime"])
+        realtime_intersection = _offset_intersection(
+            [realtime_intersection, phase_realtime_bounds]
+        )
+        if realtime_intersection is None:
+            return error == (
+                f"BuFLO kernel realtime offset intersection became empty at item {item_id}"
+            )
+        max_width = max(
+            max_width,
+            phase["monotonic"]["bracket_width_ns"],
+            phase["realtime"]["bracket_width_ns"],
+        )
+        previous_phase = phase
+    if max_width > KERNEL_TX_MAX_CLOCK_BRACKET_NS:
+        return error == (
+            f"BuFLO kernel clock bracket {max_width} ns exceeded 250000 ns"
+        )
+    return False
 
 
 def _unmapped_runner_jobs_valid(
@@ -2011,7 +2598,11 @@ def _unmapped_runner_jobs_valid(
     *,
     defense_start_monotonic_ns: int | None,
     defense_start_tai_ns: int | None,
+    clock_start: Mapping[str, Any],
+    clock_end: Mapping[str, Any] | None,
+    clock_mapping_error: str,
     socket_setup: Sequence[Mapping[str, Any]],
+    runner_schema_version: int,
 ) -> bool:
     if jobs and (defense_start_monotonic_ns is None or defense_start_tai_ns is None):
         return False
@@ -2062,6 +2653,7 @@ def _unmapped_runner_jobs_valid(
                 expected_item_id=expected_item_id,
                 expected_order_index=order_index,
                 socket_setup=socket_setup,
+                runner_schema_version=runner_schema_version,
             ):
                 return False
             expected_item_id += 1
@@ -2124,7 +2716,16 @@ def _unmapped_runner_jobs_valid(
                 or not _u64(abort.get("failed_commands"))
             ):
                 return False
-    return True
+    return bool(
+        runner_schema_version == 1
+        or _schema_two_mapping_failure_matches_evidence(
+            clock_start=clock_start,
+            clock_end=clock_end,
+            defense_start_monotonic_ns=defense_start_monotonic_ns,
+            jobs=jobs,
+            error=clock_mapping_error,
+        )
+    )
 
 
 def _runner_aggregate(value: Any, jobs: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
@@ -2195,10 +2796,19 @@ def kernel_tx_runner_receipt_valid(value: Any) -> bool:
     """Validate Rust-observable kernel timing evidence without capture claims."""
 
     receipt = _exact_mapping(value, _RUNNER_RECEIPT_KEYS)
+    receipt_schema_version = (
+        receipt.get("schema_version") if receipt is not None else None
+    )
+    expected_semantics = {
+        KERNEL_TX_HISTORICAL_RUNNER_SCHEMA_VERSION: (
+            KERNEL_TX_HISTORICAL_RUNNER_SEMANTICS
+        ),
+        KERNEL_TX_RUNNER_SCHEMA_VERSION: KERNEL_TX_RUNNER_SEMANTICS,
+    }.get(receipt_schema_version)
     if (
         receipt is None
-        or not _schema(receipt, KERNEL_TX_RUNNER_SCHEMA_VERSION)
-        or receipt.get("semantics") != KERNEL_TX_RUNNER_SEMANTICS
+        or expected_semantics is None
+        or receipt.get("semantics") != expected_semantics
         or not _qdisc_contract_valid(receipt.get("qdisc_contract"))
         or receipt.get("terminal_outcome") not in {"complete", "failed"}
         or not _nullable_string(receipt.get("primary_error"))
@@ -2231,7 +2841,16 @@ def kernel_tx_runner_receipt_valid(value: Any) -> bool:
     assert isinstance(clock_start, Mapping)
     if clock_end is not None:
         assert isinstance(clock_end, Mapping)
-        if not _clock_phases_chronological(clock_start, clock_end):
+        if receipt_schema_version == 1:
+            chronological = _clock_phases_chronological(clock_start, clock_end)
+        else:
+            chronological = _clock_phases_strictly_ordered(clock_start, clock_end)
+        start_end_mapping_failure = bool(
+            receipt.get("clock_mapping") is None
+            and receipt.get("clock_mapping_error")
+            == "BuFLO kernel clock phases and Instant anchor were not temporally ordered"
+        )
+        if not chronological and not start_end_mapping_failure:
             return False
     if mapping is None:
         if receipt["clock_mapping_valid"] or receipt["clock_mapping_error"] is None:
@@ -2240,6 +2859,7 @@ def kernel_tx_runner_receipt_valid(value: Any) -> bool:
         receipt["clock_mapping_valid"] is not True
         or receipt["clock_mapping_error"] is not None
         or clock_end is None
+        or mapping["schema_version"] != receipt_schema_version
         or mapping["start"] != clock_start
         or mapping["end"] != clock_end
     ):
@@ -2267,7 +2887,11 @@ def kernel_tx_runner_receipt_valid(value: Any) -> bool:
                 jobs,
                 defense_start_monotonic_ns=receipt["defense_start_monotonic_ns"],
                 defense_start_tai_ns=receipt["defense_start_tai_ns"],
+                clock_start=clock_start,
+                clock_end=clock_end,
+                clock_mapping_error=receipt["clock_mapping_error"],
                 socket_setup=runtime["socket_setup"],
+                runner_schema_version=receipt_schema_version,
             )
             and _runner_aggregate(receipt.get("aggregate"), jobs) is not None
         )
