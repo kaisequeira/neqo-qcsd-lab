@@ -269,8 +269,22 @@ natural byte invalidates provisional stop evidence in the implementation, with
 the cumulative invalidation count retained in the final receipt.  This drain
 is not the paper's server padding-done signal.
 
-The newest immutable scientific checkpoint is cohort v47. It binds clean Lab
-`236da73cb9091f37f0ea78256a72bd9e9ed62d60`, Neqo/gitlink
+The newest immutable prerequisite checkpoint is cohort v51. It binds clean Lab
+`0eaf8039186315a7dc402fc26feac4dd92c1c6ce`, Neqo/gitlink
+`e3ea858a31677067da969f50c1ac5aba50592c7c`, collection image
+`sha256:f98de797b0dc812ec201cff44f7a6502ddbd8ffcccf2eea2dcaa2d497cadb3c5`,
+preparation image
+`sha256:2d0cce042bdc85d3c01917b81b1291405040581d0680ce55947d8c1a7b222165`,
+and reference image
+`sha256:40a8dbfc0807f71ac78f2d62d53b79b8f7b7be2bbd0db5268948036317b7fca7`.
+Its no-cache build and isolated reference gate passed. The reference gate
+reproduced all eight BuFLO profiles and the CS-BuFLO archive ratio
+`2.282792444255336` over 3,824 nonzero-baseline records. The router launcher
+then failed before the first timing-stress sample, so v51 contains no
+capture-bearing result and cannot authorise the post-fix source.
+
+The newest immutable capture-bearing checkpoint remains cohort v47. It binds
+clean Lab `236da73cb9091f37f0ea78256a72bd9e9ed62d60`, Neqo/gitlink
 `ba72df21b0f6ef0b7607e11928895be83402b063`, collection image
 `sha256:2da4c0da8c661a335cc86e9f22b20f52b6b60126ff9e07f493550cf7705d607a`,
 preparation image
@@ -499,6 +513,32 @@ removed after a controlled Docker restart and the hash-verified lifecycle
 records were preserved outside the active namespace for audit. V48--v50 are
 diagnostic, non-evidentiary attempts.
 
+V51 then completed the fresh no-cache build and isolated reference gate for
+clean Lab `0eaf8039186315a7dc402fc26feac4dd92c1c6ce` and Rust/gitlink
+`e3ea858a31677067da969f50c1ac5aba50592c7c`. The build and reference receipt
+SHA-256 values are
+`e01929b30dbe48a7008b7fe3495b5a5fdc118b2b0d96a299f849771e1bdcf98b`
+and
+`6092c5220690d7ac14562f162fc60d8536ad497ed9d1ef37b7603b71130a785d`.
+Regression stopped before its first timing-stress sample: the controlled
+router was launched with explicit `/usr/bin/python3`, bypassing the image
+virtual environment that contains `qcsd_lab`, and its container exited with
+status 1 about 196 ms after start. Reproduction against the same image showed
+`ModuleNotFoundError` under `/usr/bin/python3` and a successful import under
+`/opt/qcsd-venv/bin/python3`. Both controlled and public router launch paths,
+and the public-resume admission import, now use the latter interpreter. The
+supervisor correctly refused to hand off the stopped container. Both Docker
+networks were removed; their durable
+handoff retirement stopped within a pre-publication validation region whose
+exact failing guard was not retained, and later authenticated stale recovery
+validated and retired exactly those two records. No retirement invariant was
+relaxed.
+
+V51 contains no `experiment.json`, sample launch, attempt receipt, packet
+capture, accepted visit, or eligible regression cell. It is therefore a
+consumed infrastructure-failure cohort, not capture evidence: timing stress is
+0/12 and regression is 0/18.
+
 For current source, the fresh build, reference, and regression-bound code-gate
 receipts are absent; timing stress is 0/12, regression 0/18, and controlled
 qualification 0/160. Real acquisition observations remain zero. Pilot fitting,
@@ -507,7 +547,7 @@ authoritative fitting and final qualification are 0/2,000 and 0/600;
 certification and canaries are 0/900 and 0/1,000; formal capture is 0/16,000.
 Handoff, evaluation, comparison, and attestation are absent. With this Lab
 hardening in a clean immutable checkout, the next fresh cohort must use an
-unused version of at least 51 and repeat the pull/no-cache build, isolated
+unused version of at least 52 and repeat the pull/no-cache build, isolated
 reference gate, 12/12
 timing stress, 18/18 regression, regression-bound code gate, and 160/160
 controlled qualification before expanded-class acquisition can begin. The

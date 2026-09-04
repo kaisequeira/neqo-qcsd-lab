@@ -4545,7 +4545,7 @@ if [[ "${study_resume_public}" == "1" ]]; then
     --security-opt no-new-privileges --cap-drop ALL \
     --env "QCSD_LAB_IMAGE_DIGEST=${image_id}" \
     --volume "${ROOT}:/lab:ro" --workdir /lab \
-    --entrypoint /usr/local/bin/python3 "${image_id}" -c \
+    --entrypoint /opt/qcsd-venv/bin/python3 "${image_id}" -c \
     'import sys; from pathlib import Path; from qcsd_lab.buflo_study import validate_capture_admission; validate_capture_admission(Path(sys.argv[1]))' \
     "${study_capture_admission_container}"
 fi
@@ -5186,7 +5186,7 @@ start_buflo_controlled_router() {
     --env "QCSD_KERNEL_TX_ROUTER_CAPTURE_INTERFACE=eth0" \
     --env "QCSD_KERNEL_TX_ROUTER_CAPTURE_PORT=19090" \
     --volume "${capture_root}:/kernel-tx:rw" \
-    --entrypoint /usr/bin/python3 \
+    --entrypoint /opt/qcsd-venv/bin/python3 \
     "${image_id}" -m qcsd_lab.kernel_capture_router
   local -n result_ref="${result_name}"
   result_ref="${QCSD_DOCKER_IDS_SIDECARS[-1]}"
@@ -5572,7 +5572,7 @@ start_kernel_tx_public_router() {
     --env "QCSD_KERNEL_TX_ROUTER_CLIENT_SUBNET=${client_subnet}" \
     --env "QCSD_KERNEL_TX_ROUTER_REQUIRE_MASQUERADE=1" \
     --volume "${capture_root}:/kernel-tx:rw" \
-    --entrypoint /usr/bin/python3 \
+    --entrypoint /opt/qcsd-venv/bin/python3 \
     "${image_id}" -m qcsd_lab.kernel_capture_router
   kernel_tx_public_router_id="${QCSD_DOCKER_IDS_PUBLIC_ROUTERS[-1]}"
   kernel_tx_public_router_created=1

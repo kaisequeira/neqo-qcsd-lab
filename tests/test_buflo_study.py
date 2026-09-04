@@ -6900,6 +6900,9 @@ def test_controlled_topology_cleanup_is_fail_closed_and_state_aware(
     tmp_path: Path,
 ) -> None:
     launcher = (LAB_ROOT / "qcsd-lab").read_text(encoding="utf-8")
+    controlled_router_launcher = "start_buflo_controlled_router() {" + launcher.split(
+        "start_buflo_controlled_router() {", 1
+    )[1].split("\n}\n\nconfigure_buflo_router()", 1)[0]
     lifetime_signal_helpers = "_QCSD_LIFETIME_SIGNAL_STATUS=0" + launcher.split(
         "_QCSD_LIFETIME_SIGNAL_STATUS=0", 1
     )[1].split("\n\nrequire_submodule()", 1)[0]
@@ -7104,6 +7107,12 @@ cleanup_buflo_controlled {original_status}
     )
     assert '--volume "${capture_root}:/kernel-tx:rw"' in launcher
     assert "qcsd_run_detached_docker QCSD_DOCKER_IDS_SIDECARS" in launcher
+    assert '--entrypoint /opt/qcsd-venv/bin/python3' in controlled_router_launcher
+    assert (
+        '"${image_id}" -m qcsd_lab.kernel_capture_router'
+        in controlled_router_launcher
+    )
+    assert '--entrypoint /usr/bin/python3' not in controlled_router_launcher
     assert 'sidecars+=("${first_server}")' not in controlled_branch
     assert 'sidecars+=("${second_server}")' not in controlled_branch
 
@@ -7111,6 +7120,9 @@ cleanup_buflo_controlled {original_status}
 def test_launcher_routes_every_public_etf_campaign_through_post_veth_observer() -> None:
     launcher = (LAB_ROOT / "qcsd-lab").read_text(encoding="utf-8")
     entrypoint = (LAB_ROOT / "docker/collection-entrypoint").read_text(encoding="utf-8")
+    public_router_launcher = "start_kernel_tx_public_router() {" + launcher.split(
+        "start_kernel_tx_public_router() {", 1
+    )[1].split("\n}\n\nkernel_tx_public_network_receipt_base64()", 1)[0]
     public = launcher.split(
         "# Every remaining ETF launch is a public campaign.", 1
     )[1].split('if [[ "${1:-}" == "test"', 1)[0]
@@ -7135,6 +7147,9 @@ def test_launcher_routes_every_public_etf_campaign_through_post_veth_observer() 
     assert 'QCSD_KERNEL_TX_POST_VETH_CAPTURE_ROOT=/kernel-tx' in public
     assert '--volume "${kernel_tx_public_capture_root}:/kernel-tx:ro"' in public
     assert '--volume "${capture_root}:/kernel-tx:rw"' in launcher
+    assert '--entrypoint /opt/qcsd-venv/bin/python3' in public_router_launcher
+    assert '"${image_id}" -m qcsd_lab.kernel_capture_router' in public_router_launcher
+    assert '--entrypoint /usr/bin/python3' not in public_router_launcher
     assert 'cleanup_kernel_tx_public_topology "$?"' in public
     assert 'public kernel-TX router did not reach the idle end state' in launcher
     assert 'preserving it and failing closed' in launcher
@@ -7304,6 +7319,8 @@ def test_launcher_selects_exact_versioned_build_images_and_frozen_resume_admissi
         in launcher
     )
     assert 'read_capture_admission_binding "${study_capture_admission_host}"' in launcher
+    assert '--entrypoint /opt/qcsd-venv/bin/python3 "${image_id}" -c' in launcher
+    assert "--entrypoint /usr/local/bin/python3" not in launcher
     assert (
         '--volume "${reference_cohort_inputs}:'
         '/lab/artifacts/buflo-study/cohort-inputs:rw"' in launcher
