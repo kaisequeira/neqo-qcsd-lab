@@ -6900,6 +6900,9 @@ def test_controlled_topology_cleanup_is_fail_closed_and_state_aware(
     tmp_path: Path,
 ) -> None:
     launcher = (LAB_ROOT / "qcsd-lab").read_text(encoding="utf-8")
+    capture_root_helper = "prepare_kernel_tx_capture_root() {" + launcher.split(
+        "prepare_kernel_tx_capture_root() {", 1
+    )[1].split("\n}\n\nstart_buflo_controlled_router()", 1)[0] + "\n}\n"
     controlled_router_launcher = "start_buflo_controlled_router() {" + launcher.split(
         "start_buflo_controlled_router() {", 1
     )[1].split("\n}\n\nconfigure_buflo_router()", 1)[0]
@@ -7106,6 +7109,25 @@ cleanup_buflo_controlled {original_status}
         in controlled_branch
     )
     assert '--volume "${capture_root}:/kernel-tx:rw"' in launcher
+    assert '--group-add "${qcsd_invoking_gid}"' in controlled_router_launcher
+    assert '--cap-add DAC_OVERRIDE' not in controlled_router_launcher
+    assert controlled_router_launcher.count("--cap-add ") == 2
+    assert "dac_override" not in controlled_router_launcher.lower()
+    assert "dac_read_search" not in controlled_router_launcher.lower()
+    assert "--privileged" not in controlled_router_launcher
+    assert launcher.count('--group-add "${qcsd_invoking_gid}"') == 2
+    assert 'if ! capture_root_first_entry="$(' in capture_root_helper
+    assert "cannot inspect the kernel-TX capture root" in capture_root_helper
+    assert 'verify_kernel_tx_router_capture_access "${result_ref}"' in (
+        controlled_router_launcher
+    )
+    assert "{{json .HostConfig.GroupAdd}}" in launcher
+    assert 'Path("/proc/1/status")' in launcher
+    assert 'root = Path("/kernel-tx")' in launcher
+    assert 'stat.S_IMODE(root_status.st_mode) != 0o2770' in launcher
+    assert 'probe = root / ".qcsd-router-access-probe"' in launcher
+    assert '"${kernel_tx_capture_root}" initialize' in controlled_branch
+    assert '"${kernel_tx_capture_root}" verify' in controlled_branch
     assert "qcsd_run_detached_docker QCSD_DOCKER_IDS_SIDECARS" in launcher
     assert '--entrypoint /opt/qcsd-venv/bin/python3' in controlled_router_launcher
     assert (
@@ -7116,13 +7138,144 @@ cleanup_buflo_controlled {original_status}
     assert 'sidecars+=("${first_server}")' not in controlled_branch
     assert 'sidecars+=("${second_server}")' not in controlled_branch
 
+    capture_root = tmp_path / "kernel-tx"
+    capture_root.mkdir(mode=0o700)
+    access = subprocess.run(
+        [
+            "bash",
+            "-c",
+            f"set -euo pipefail\n{capture_root_helper}\n"
+            'prepare_kernel_tx_capture_root "$CAPTURE_ROOT" initialize',
+        ],
+        env={
+            **os.environ,
+            "CAPTURE_ROOT": str(capture_root),
+            "qcsd_invoking_uid": str(os.getuid()),
+            "qcsd_invoking_gid": str(os.getgid()),
+        },
+        text=True,
+        capture_output=True,
+        timeout=5,
+    )
+    assert access.returncode == 0, access.stderr
+    capture_root_stat = capture_root.stat()
+    assert capture_root_stat.st_uid == os.getuid()
+    assert capture_root_stat.st_gid == os.getgid()
+    assert stat.S_IMODE(capture_root_stat.st_mode) == 0o2770
+
+    symlink = tmp_path / "kernel-tx-link"
+    symlink.symlink_to(capture_root, target_is_directory=True)
+    rejected = subprocess.run(
+        [
+            "bash",
+            "-c",
+            f"set -euo pipefail\n{capture_root_helper}\n"
+            'prepare_kernel_tx_capture_root "$CAPTURE_ROOT" verify',
+        ],
+        env={
+            **os.environ,
+            "CAPTURE_ROOT": str(symlink),
+            "qcsd_invoking_uid": str(os.getuid()),
+            "qcsd_invoking_gid": str(os.getgid()),
+        },
+        text=True,
+        capture_output=True,
+        timeout=5,
+    )
+    assert rejected.returncode != 0
+    assert "existing non-symbolic-link directory" in rejected.stderr
+
+    capture_root.chmod(0o700)
+    wrong_mode = subprocess.run(
+        [
+            "bash",
+            "-c",
+            f"set -euo pipefail\n{capture_root_helper}\n"
+            'prepare_kernel_tx_capture_root "$CAPTURE_ROOT" verify',
+        ],
+        env={
+            **os.environ,
+            "CAPTURE_ROOT": str(capture_root),
+            "qcsd_invoking_uid": str(os.getuid()),
+            "qcsd_invoking_gid": str(os.getgid()),
+        },
+        text=True,
+        capture_output=True,
+        timeout=5,
+    )
+    assert wrong_mode.returncode != 0
+    assert stat.S_IMODE(capture_root.stat().st_mode) == 0o700
+
+    capture_root.chmod(0o2770)
+    wrong_gid = subprocess.run(
+        [
+            "bash",
+            "-c",
+            f"set -euo pipefail\n{capture_root_helper}\n"
+            'prepare_kernel_tx_capture_root "$CAPTURE_ROOT" verify',
+        ],
+        env={
+            **os.environ,
+            "CAPTURE_ROOT": str(capture_root),
+            "qcsd_invoking_uid": str(os.getuid()),
+            "qcsd_invoking_gid": str(os.getgid() + 1),
+        },
+        text=True,
+        capture_output=True,
+        timeout=5,
+    )
+    assert wrong_gid.returncode != 0
+    assert capture_root.stat().st_gid == os.getgid()
+    assert stat.S_IMODE(capture_root.stat().st_mode) == 0o2770
+
+    invalid_action = subprocess.run(
+        [
+            "bash",
+            "-c",
+            f"set -euo pipefail\n{capture_root_helper}\n"
+            'prepare_kernel_tx_capture_root "$CAPTURE_ROOT" invalid',
+        ],
+        env={
+            **os.environ,
+            "CAPTURE_ROOT": str(capture_root),
+            "qcsd_invoking_uid": str(os.getuid()),
+            "qcsd_invoking_gid": str(os.getgid()),
+        },
+        text=True,
+        capture_output=True,
+        timeout=5,
+    )
+    assert invalid_action.returncode != 0
+    assert "access action is invalid" in invalid_action.stderr
+
+    (capture_root / "stale").write_text("evidence", encoding="utf-8")
+    nonempty = subprocess.run(
+        [
+            "bash",
+            "-c",
+            f"set -euo pipefail\n{capture_root_helper}\n"
+            'prepare_kernel_tx_capture_root "$CAPTURE_ROOT" verify',
+        ],
+        env={
+            **os.environ,
+            "CAPTURE_ROOT": str(capture_root),
+            "qcsd_invoking_uid": str(os.getuid()),
+            "qcsd_invoking_gid": str(os.getgid()),
+        },
+        text=True,
+        capture_output=True,
+        timeout=5,
+    )
+    assert nonempty.returncode != 0
+    assert "contains stale evidence" in nonempty.stderr
+
 
 def test_launcher_routes_every_public_etf_campaign_through_post_veth_observer() -> None:
     launcher = (LAB_ROOT / "qcsd-lab").read_text(encoding="utf-8")
     entrypoint = (LAB_ROOT / "docker/collection-entrypoint").read_text(encoding="utf-8")
     public_router_launcher = "start_kernel_tx_public_router() {" + launcher.split(
         "start_kernel_tx_public_router() {", 1
-    )[1].split("\n}\n\nkernel_tx_public_network_receipt_base64()", 1)[0]
+    )[1].split("\n}\n\nreplace_container_option_value()", 1)[0]
     public = launcher.split(
         "# Every remaining ETF launch is a public campaign.", 1
     )[1].split('if [[ "${1:-}" == "test"', 1)[0]
@@ -7147,6 +7300,23 @@ def test_launcher_routes_every_public_etf_campaign_through_post_veth_observer() 
     assert 'QCSD_KERNEL_TX_POST_VETH_CAPTURE_ROOT=/kernel-tx' in public
     assert '--volume "${kernel_tx_public_capture_root}:/kernel-tx:ro"' in public
     assert '--volume "${capture_root}:/kernel-tx:rw"' in launcher
+    assert '--group-add "${qcsd_invoking_gid}"' in public_router_launcher
+    assert '--cap-add DAC_OVERRIDE' not in public_router_launcher
+    assert public_router_launcher.count("--cap-add ") == 2
+    assert "dac_override" not in public_router_launcher.lower()
+    assert "dac_read_search" not in public_router_launcher.lower()
+    assert "--privileged" not in public_router_launcher
+    assert (
+        'verify_kernel_tx_router_capture_access "${kernel_tx_public_router_id}"'
+        in public_router_launcher
+    )
+    assert (
+        'prepare_kernel_tx_capture_root "${kernel_tx_public_capture_root}" initialize'
+        in public
+    )
+    assert public.index("trap 'cleanup_kernel_tx_public_topology") < public.index(
+        'prepare_kernel_tx_capture_root "${kernel_tx_public_capture_root}" initialize'
+    )
     assert '--entrypoint /opt/qcsd-venv/bin/python3' in public_router_launcher
     assert '"${image_id}" -m qcsd_lab.kernel_capture_router' in public_router_launcher
     assert '--entrypoint /usr/bin/python3' not in public_router_launcher

@@ -269,22 +269,36 @@ natural byte invalidates provisional stop evidence in the implementation, with
 the cumulative invalidation count retained in the final receipt.  This drain
 is not the paper's server padding-done signal.
 
-The newest immutable prerequisite checkpoint is cohort v52. It binds clean Lab
-`002efabd6de1852a34e56e173ebc8e081d48d173`, Neqo/gitlink
+The newest immutable prerequisite checkpoint is cohort v53. It binds clean Lab
+`234086d54a15422edce74bfe2000332fd308eb8c`, Neqo/gitlink
 `e3ea858a31677067da969f50c1ac5aba50592c7c`, collection image
-`sha256:6c7c0d8d59ce329ebf79c72e6410146a99fa2e71a1a7c70fe159cbecb90145b8`,
+`sha256:354c5b1a8fb6cff2f98d3b85c7958f9bb75b3ece6588defec671c8e853edb40c`,
 preparation image
-`sha256:bcc4016f7e2192eb64831e91a0a918947adc63aa1a645ef102544000a37307c7`,
+`sha256:0410829d3b71bc68bda965a64d8fc1d516ef66884b1815955887dd3c7872fe9f`,
 and reference image
-`sha256:c9d521e4d55c9b20f78b87babad9e5b5912b0c4b5e12e76496398cb782899590`.
-Its no-cache build and isolated reference gate passed. The reference gate
-reproduced all eight BuFLO profiles and the CS-BuFLO archive ratio
-`2.282792444255336` over 3,824 nonzero-baseline records. The first mandatory
-timing-stress launch then failed before creating an attempt or checkpoint:
-the measured client retained NET_RAW in capability mask `0x3100`, whereas the
-bounded ETF socket-setup contract permits only NET_ADMIN and SETPCAP
-(`0x1100`). V52 therefore contains no capture-bearing result and cannot
-authorise the post-fix source.
+`sha256:9dc84a6dd63f737c35e869cc1a26474735cea31a41575bdd56b70d41b66956e7`.
+Its pull/no-cache build and isolated reference gate passed with receipt
+SHA-256 values
+`26d9eb4b20a6bd638446d731db149c0f7f3b01e46e0cbcbb550c313753831868`
+and
+`ebadc02ac03c5bb3e4dfc8a250df881d530302113927151a923068bf2057067e`.
+The reference gate reproduced all eight BuFLO profiles and the CS-BuFLO
+archive ratio `2.282792444255336` over 3,824 nonzero-baseline records.
+
+The first and sole v53 timing-stress launch failed before the measured Neqo
+client ran. The controlled router, UID 0 with only NET_ADMIN and NET_RAW, could
+not traverse the UID/GID `1000:1000`, mode `0700` host bind root after the
+deliberate `--cap-drop ALL`; its capture service therefore received `EACCES`
+while probing the first create-only post-veth PCAPNG path. The terminal
+checkpoint and attempt-error SHA-256 values are respectively
+`a4d7f9ae6d87b7c01c85ef820656279230abec0259058fd8b1fe2736c26925e8`
+and
+`12a1031a1707bae9c71791f7ee6e4316270c570a020e5d6abb77a5c52a0a55e7`.
+It records one launched visit and zero accepted visits. The independent direct
+diagnostic captured 88/88 packets with no reported drop, but no Neqo receipt,
+router-capture triplet, accepted timing visit, or regression sample exists.
+V53 is consequently terminal at timing stress 0/12 and regression 0/18 and
+cannot authorise the post-v53 source.
 
 The newest immutable capture-bearing checkpoint remains cohort v47. It binds
 clean Lab `236da73cb9091f37f0ea78256a72bd9e9ed62d60`, Neqo/gitlink
@@ -489,14 +503,24 @@ timing, size, composition, credit, fitting, plotting, or handoff arithmetic.
 
 Current production schema 11 remains at clean Rust head and committed gitlink
 `e3ea858a31677067da969f50c1ac5aba50592c7c`. Clean Lab
-`002efabd6de1852a34e56e173ebc8e081d48d173` is the executed v52 source, not
-the identity that may authorise the capability-narrowing correction. The
-post-v52 Lab source resets the inherited and ambient capability sets before
-adding only NET_ADMIN and SETPCAP for bounded ETF socket setup; it does not
-relax the Rust acceptance predicate or remove NET_RAW from the outer capture
-orchestration process. The next immutable build must use a clean commit
-containing that repair and this README. Its exact identity is resolved at
-launch by `git rev-parse HEAD` and bound into the build receipt rather than
+`234086d54a15422edce74bfe2000332fd308eb8c` is the executed v53 source. It
+contains the capability-set repair proven by v53 to have passed the build and
+reference boundaries; the later router bind-root defect occurred before a
+measured client launch and is independent of that scheduler contract.
+
+Post-v53 Lab source retains router UID 0 and only NET_ADMIN/NET_RAW. It shares
+the invoking user's single numeric primary GID with each controlled and public
+post-veth router and requires the private bind root to be an exact host-owned,
+host-primary-GID, setgid mode `2770` directory. Fresh roots are initialised;
+pre-existing roots are verified and never silently repaired. Before any
+measured client may launch, the router must also prove exact Docker
+`HostConfig.GroupAdd`, PID 1 supplementary-group membership, bind-root
+UID/GID/mode, setgid inheritance, create/unlink access, and an empty post-probe
+root. The correction adds neither `CAP_DAC_OVERRIDE` nor
+`CAP_DAC_READ_SEARCH`, does not weaken read-only client mounts, and applies to
+both controlled and public ETF paths. The next immutable build must use a clean
+commit containing this repair and this README. Its exact identity is resolved
+at launch by `git rev-parse HEAD` and bound into the build receipt rather than
 copied prospectively into this file.
 
 V48 failed during the pre-receipt collection-image build after 230
@@ -573,7 +597,17 @@ Docker object set are empty; the preserved kernel-TX root is empty. V52 remains
 a consumed infrastructure-failure cohort at timing stress 0/12 and regression
 0/18.
 
-For post-v52 source, the fresh build, reference, and regression-bound code-gate
+V53 then passed the clean no-cache build and isolated reference gates described
+above. Its first timing-stress launch created the terminal checkpoint and one
+diagnostic attempt but stopped on the router capture-root `EACCES` before the
+measured client. All three sidecars and both controlled networks were
+physically destroyed. Their five stale HANDOFF ledgers were subsequently
+validated and retired through the official guardian-authenticated recovery
+path; the active lifecycle namespace and QCSD-labelled Docker object sets are
+empty. The empty, mode-`0700` v53 kernel-TX root is preserved unchanged for
+audit.
+
+For post-v53 source, the fresh build, reference, and regression-bound code-gate
 receipts are absent; timing stress is 0/12, regression 0/18, and controlled
 qualification 0/160. Real acquisition observations remain zero. Pilot fitting,
 qualification, and compatibility are 0/480, 0/720, and 0/1,080;
@@ -581,7 +615,7 @@ authoritative fitting and final qualification are 0/2,000 and 0/600;
 certification and canaries are 0/900 and 0/1,000; formal capture is 0/16,000.
 Handoff, evaluation, comparison, and attestation are absent. With this Lab
 hardening in a clean immutable checkout, the next fresh cohort must use an
-unused version of at least 53 and repeat the pull/no-cache build, isolated
+unused version of at least 54 and repeat the pull/no-cache build, isolated
 reference gate, 12/12
 timing stress, 18/18 regression, regression-bound code gate, and 160/160
 controlled qualification before expanded-class acquisition can begin. The
@@ -598,7 +632,7 @@ process-local, campaign-identity-bound authority created by the `class-study`
 coordinator after it verifies the prerequisite ledger; generic `run` or
 `resume` cannot bypass that ordering.
 
-At the 4 September 2026 03:04:53 AEST operational checkpoint, a read-only
+At the 4 September 2026 18:17:04 AEST operational checkpoint, a read-only
 probe found Docker 29.0.1 healthy on Linux AArch64 with daemon ID
 `48f27adb-00f1-41ce-80fe-41360d2eb712`, 12 CPUs, approximately 16.5 GB memory,
 and no running containers. The physical volume backing its data VHDX remains

@@ -18,6 +18,14 @@ if [[ -n "${QCSD_DOCKER_LOCK_GUARDIAN_QCSD_SOURCE_FD:-}" ||
 else
   ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 fi
+qcsd_invoking_uid="$(/usr/bin/id -u)"
+qcsd_invoking_gid="$(/usr/bin/id -g)"
+if [[ ! "${qcsd_invoking_uid}" =~ ^(0|[1-9][0-9]*)$ ||
+      ! "${qcsd_invoking_gid}" =~ ^(0|[1-9][0-9]*)$ ]]; then
+  echo "Cannot resolve the invoking numeric UID/GID" >&2
+  exit 1
+fi
+readonly qcsd_invoking_uid qcsd_invoking_gid
 DOCKER_SUPERVISOR="${ROOT}/tools/docker_signal_supervisor.sh"
 docker_supervisor_canonical="$(readlink -f -- "${DOCKER_SUPERVISOR}" 2>/dev/null)" ||
   docker_supervisor_canonical=""
@@ -5164,6 +5172,145 @@ exec /usr/local/bin/neqo-server "0.0.0.0:${QCSD_CONTROLLED_SERVER_PORT}"'
   unset -n result_ref
 }
 
+prepare_kernel_tx_capture_root() {
+  local capture_root="$1"
+  local access_action="$2"
+  local capture_root_metadata=""
+  local capture_root_first_entry=""
+  if [[ -L "${capture_root}" || ! -d "${capture_root}" ]]; then
+    echo "kernel-TX capture root must be an existing non-symbolic-link directory" >&2
+    return 1
+  fi
+  if [[ "${access_action}" == "initialize" ]]; then
+    capture_root_metadata="$(stat -c '%u' -- "${capture_root}" 2>/dev/null)" ||
+      capture_root_metadata=""
+    if [[ "${capture_root_metadata}" != "${qcsd_invoking_uid}" ]]; then
+      echo "kernel-TX capture root is not owned by the invoking user" >&2
+      return 1
+    fi
+    if ! chgrp -- "${qcsd_invoking_gid}" "${capture_root}"; then
+      echo "cannot assign the kernel-TX capture root group" >&2
+      return 1
+    fi
+    if ! chmod 2770 -- "${capture_root}"; then
+      echo "cannot set the kernel-TX capture root mode" >&2
+      return 1
+    fi
+  elif [[ "${access_action}" != "verify" ]]; then
+    echo "kernel-TX capture root access action is invalid" >&2
+    return 1
+  fi
+  if [[ -L "${capture_root}" || ! -d "${capture_root}" ]]; then
+    echo "kernel-TX capture root changed type during access validation" >&2
+    return 1
+  fi
+  capture_root_metadata="$(
+    stat -c '%u:%g:%a' -- "${capture_root}" 2>/dev/null
+  )" || capture_root_metadata=""
+  if [[ "${capture_root_metadata}" != \
+        "${qcsd_invoking_uid}:${qcsd_invoking_gid}:2770" ]]; then
+    echo "kernel-TX capture root access contract is invalid" >&2
+    return 1
+  fi
+  if ! capture_root_first_entry="$(
+    /usr/bin/find "${capture_root}" -mindepth 1 -print -quit
+  )"; then
+    echo "cannot inspect the kernel-TX capture root" >&2
+    return 1
+  fi
+  if [[ -n "${capture_root_first_entry}" ]]; then
+    echo "kernel-TX post-veth capture root contains stale evidence; audit it before resuming" >&2
+    return 1
+  fi
+}
+
+verify_kernel_tx_router_capture_access() {
+  local router_id="$1"
+  local group_add_json=""
+  group_add_json="$(_qcsd_docker_api container inspect \
+    --format '{{json .HostConfig.GroupAdd}}' "${router_id}")" || return 1
+  if ! /usr/bin/python3 -I -c '
+import json
+import sys
+
+expected = sys.argv[2]
+try:
+    observed = json.loads(sys.argv[1])
+except json.JSONDecodeError as error:
+    raise SystemExit("router GroupAdd metadata is not JSON") from error
+if observed != [expected]:
+    raise SystemExit(f"router GroupAdd differs: {observed!r} != {[expected]!r}")
+' "${group_add_json}" "${qcsd_invoking_gid}"; then
+    echo "kernel-TX router Docker group contract is invalid" >&2
+    return 1
+  fi
+  if ! _qcsd_docker_api exec "${router_id}" /usr/bin/python3 -I -c '
+import os
+import stat
+import sys
+from pathlib import Path
+
+expected_uid = int(sys.argv[1])
+expected_gid = int(sys.argv[2])
+status = {}
+for line in Path("/proc/1/status").read_text(encoding="ascii").splitlines():
+    name, separator, value = line.partition(":")
+    if separator:
+        status[name] = value.strip()
+service_uids = [int(value) for value in status.get("Uid", "").split()]
+service_groups = [int(value) for value in status.get("Groups", "").split()]
+if len(service_uids) != 4 or any(value != 0 for value in service_uids):
+    raise SystemExit(f"router service UID contract differs: {service_uids!r}")
+if expected_gid not in service_groups:
+    raise SystemExit(
+        f"router service lacks capture GID {expected_gid}: {service_groups!r}"
+    )
+root = Path("/kernel-tx")
+root_status = os.lstat(root)
+if (
+    not stat.S_ISDIR(root_status.st_mode)
+    or root_status.st_uid != expected_uid
+    or root_status.st_gid != expected_gid
+    or stat.S_IMODE(root_status.st_mode) != 0o2770
+):
+    raise SystemExit(
+        "router capture root metadata differs: "
+        f"uid={root_status.st_uid} gid={root_status.st_gid} "
+        f"mode={stat.S_IMODE(root_status.st_mode):04o}"
+    )
+probe = root / ".qcsd-router-access-probe"
+fd = None
+try:
+    fd = os.open(
+        probe,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+        0o600,
+    )
+    probe_status = os.fstat(fd)
+    if (
+        not stat.S_ISREG(probe_status.st_mode)
+        or probe_status.st_uid != 0
+        or probe_status.st_gid != expected_gid
+    ):
+        raise SystemExit(
+            "router capture probe metadata differs: "
+            f"uid={probe_status.st_uid} gid={probe_status.st_gid}"
+        )
+finally:
+    if fd is not None:
+        os.close(fd)
+    try:
+        os.unlink(probe)
+    except FileNotFoundError:
+        pass
+if os.listdir(root):
+    raise SystemExit("router capture root is not empty after its access probe")
+' "${qcsd_invoking_uid}" "${qcsd_invoking_gid}"; then
+    echo "kernel-TX router live capture-root access contract failed" >&2
+    return 1
+  fi
+}
+
 start_buflo_controlled_router() {
   local router_name="$1"
   local client_network_id="$2"
@@ -5175,6 +5322,7 @@ start_buflo_controlled_router() {
     docker run --name "${router_name}" \
     --network "${client_network_id}" \
     --cpuset-cpus 0-9 \
+    --group-add "${qcsd_invoking_gid}" \
     --label "org.qcsd.owner=qcsd-lab" \
     --label "org.qcsd.study=buflo-controlled" \
     --label "org.qcsd.role=network-router" \
@@ -5196,6 +5344,7 @@ start_buflo_controlled_router() {
 ethtool -K eth0 gro off gso off tso off tx-udp-segmentation off
 ethtool -K eth1 gro off gso off tso off tx-udp-segmentation off
 '
+  verify_kernel_tx_router_capture_access "${result_ref}"
   unset -n result_ref
 }
 
@@ -5557,6 +5706,7 @@ start_kernel_tx_public_router() {
     docker run --name "${router_name}" \
     --network "${client_network_id}" \
     --cpuset-cpus 0-9 \
+    --group-add "${qcsd_invoking_gid}" \
     --label "org.qcsd.owner=qcsd-lab" \
     --label "org.qcsd.study=kernel-tx-public-observer" \
     --label "org.qcsd.role=network-router" \
@@ -5595,6 +5745,7 @@ if not any(row.get("dst") == "default" and row.get("dev") == "eth1" for row in r
 iptables -t nat -A POSTROUTING -s "${client_subnet}" -o eth1 -j MASQUERADE
 iptables -t nat -C POSTROUTING -s "${client_subnet}" -o eth1 -j MASQUERADE
 ' sh "${client_subnet}"
+  verify_kernel_tx_router_capture_access "${kernel_tx_public_router_id}"
 }
 
 replace_container_option_value() {
@@ -6242,9 +6393,19 @@ if [[ "${1:-}" == "buflo-study" && "${2:-}" == "capture" ]]; then
       echo "kernel-TX post-veth capture root cannot be a symbolic link" >&2
       exit 1
     fi
-    mkdir -p -m 700 "${kernel_tx_capture_root}"
-    if find "${kernel_tx_capture_root}" -mindepth 1 -print -quit | grep -q .; then
-      echo "kernel-TX post-veth capture root contains stale evidence; audit it before resuming" >&2
+    kernel_tx_capture_root_created=0
+    if [[ ! -e "${kernel_tx_capture_root}" ]]; then
+      mkdir -m 700 "${kernel_tx_capture_root}"
+      kernel_tx_capture_root_created=1
+    fi
+    if [[ "${kernel_tx_capture_root_created}" == "1" ]]; then
+      if ! prepare_kernel_tx_capture_root \
+          "${kernel_tx_capture_root}" initialize; then
+        rmdir "${kernel_tx_capture_root}" 2>/dev/null || true
+        exit 1
+      fi
+    elif ! prepare_kernel_tx_capture_root \
+        "${kernel_tx_capture_root}" verify; then
       exit 1
     fi
     kernel_tx_capture_secret="$(python3 -I -c 'import secrets; print(secrets.token_hex(32))')"
@@ -6473,6 +6634,7 @@ if [[ "${study_capture_scheduler_contract}" == \
     mktemp -d "${ROOT}/results/.kernel-tx-public-router.XXXXXXXX"
   )"
   trap 'cleanup_kernel_tx_public_topology "$?"' EXIT
+  prepare_kernel_tx_capture_root "${kernel_tx_public_capture_root}" initialize
   kernel_tx_public_capture_secret="$(
     python3 -I -c 'import secrets; print(secrets.token_hex(32))'
   )"
