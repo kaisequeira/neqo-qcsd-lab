@@ -2317,7 +2317,7 @@ RUNNER_WAKEUP_V10_POLL_SOURCES = frozenset(
 )
 RUNNER_WAKEUP_V10_U64_MAX = RUNNER_CSV_U64_MAX
 RUNNER_WAKEUP_V11_SEMANTICS = (
-    f"{RUNNER_WAKEUP_SEMANTICS}; "
+    f"{RUNNER_WAKEUP_V10_SEMANTICS}; "
     "runner_schema10_layout_is_retained_for_non_kernel_metrics; "
     "buflo_legacy_exact_release_guard_metrics_are_zero_with_kernel_tx=true; "
     "buflo_kernel_tx_raw_semantics="

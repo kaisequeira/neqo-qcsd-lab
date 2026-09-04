@@ -14,6 +14,10 @@ _QCSD_DOCKER_API_TIMEOUT_SECONDS=3
 # any individual API service.  A returned mismatch is terminal and mutating
 # Docker requests remain strictly one-shot.
 _QCSD_DOCKER_DAEMON_IDENTITY_ATTEMPTS=2
+# Handoff retirement is allowed one fresh read-only exact-presence proof after
+# a transient unknown result.  Present and structurally ambiguous observations
+# are terminal; neither is normalised into a retryable state at this boundary.
+_QCSD_DOCKER_HANDOFF_ABSENCE_ATTEMPTS=2
 _QCSD_DOCKER_GRACE_SECONDS=40
 # Conservative interrupted delayed-create path at individual bounds: initial
 # 6-second resolution, 12-second publication retry, 3-second signal, one
@@ -723,9 +727,10 @@ _qcsd_force_remove_target() {
   return 1
 }
 
-# Print present, absent, or unknown. Successful `container ls` output is the
-# only absence proof; daemon errors and malformed/ambiguous output are unknown.
-_qcsd_docker_exact_id_presence() {
+# Print present, absent, unknown, or ambiguous. Successful, canonical
+# `container ls` output is the only absence proof. API failure is unknown;
+# malformed, duplicate, or contradictory successful output is ambiguous.
+_qcsd_docker_exact_id_presence_detailed() {
   local cid="$1"
   local output line
   local -a ids=()
@@ -742,8 +747,21 @@ _qcsd_docker_exact_id_presence() {
   elif (( ${#ids[@]} == 1 )) && [[ "${ids[0]}" == "${cid}" ]]; then
     printf 'present\n'
   else
-    printf 'unknown\n'
+    printf 'ambiguous\n'
   fi
+}
+
+# Preserve the historical tri-state contract for recovery and supervisor
+# callers. Handoff retirement uses the detailed observation above because its
+# bounded retry must never treat ambiguous successful output as API unknown.
+_qcsd_docker_exact_id_presence() {
+  local presence
+  presence="$(_qcsd_docker_exact_id_presence_detailed "$1")" || {
+    printf 'unknown\n'
+    return 0
+  }
+  [[ "${presence}" != ambiguous ]] || presence=unknown
+  printf '%s\n' "${presence}"
 }
 
 # Print running, stopped, absent, or unknown while also proving the private
@@ -1388,7 +1406,7 @@ _qcsd_registration_remove_id() {
   unset -n registration_ref
 }
 
-_qcsd_docker_exact_network_presence() {
+_qcsd_docker_exact_network_presence_detailed() {
   local network_id="$1"
   local output line
   local -a ids=()
@@ -1405,8 +1423,18 @@ _qcsd_docker_exact_network_presence() {
   elif (( ${#ids[@]} == 1 )) && [[ "${ids[0]}" == "${network_id}" ]]; then
     printf 'present\n'
   else
-    printf 'unknown\n'
+    printf 'ambiguous\n'
   fi
+}
+
+_qcsd_docker_exact_network_presence() {
+  local presence
+  presence="$(_qcsd_docker_exact_network_presence_detailed "$1")" || {
+    printf 'unknown\n'
+    return 0
+  }
+  [[ "${presence}" != ambiguous ]] || presence=unknown
+  printf '%s\n' "${presence}"
 }
 
 _qcsd_docker_network_state() {
@@ -1975,15 +2003,15 @@ _qcsd_run_docker_supervised() {
     set +e
   fi
   local saved_hup saved_int saved_quit saved_term
-  local requested_signal="" requested_status=0 signal_count=0
+  local requested_signal="" requested_status=0
   saved_hup="$(trap -p HUP || true)"
   saved_int="$(trap -p INT || true)"
   saved_quit="$(trap -p QUIT || true)"
   saved_term="$(trap -p TERM || true)"
-  trap 'signal_count=$((signal_count + 1)); if (( requested_status == 0 )); then requested_signal=HUP; requested_status=129; fi' HUP
-  trap 'signal_count=$((signal_count + 1)); if (( requested_status == 0 )); then requested_signal=INT; requested_status=130; fi' INT
-  trap 'signal_count=$((signal_count + 1)); if (( requested_status == 0 )); then requested_signal=QUIT; requested_status=131; fi' QUIT
-  trap 'signal_count=$((signal_count + 1)); if (( requested_status == 0 )); then requested_signal=TERM; requested_status=143; fi' TERM
+  trap 'if (( requested_status == 0 )); then requested_signal=HUP; requested_status=129; fi' HUP
+  trap 'if (( requested_status == 0 )); then requested_signal=INT; requested_status=130; fi' INT
+  trap 'if (( requested_status == 0 )); then requested_signal=QUIT; requested_status=131; fi' QUIT
+  trap 'if (( requested_status == 0 )); then requested_signal=TERM; requested_status=143; fi' TERM
   local supervisor_pid supervisor_start_time supervisor_session
   local supervisor_process_group
   if ! _qcsd_bind_current_supervisor_identity; then
@@ -6321,27 +6349,54 @@ qcsd_reconcile_docker_lifecycle() {
   done
 }
 
+_qcsd_handoff_retirement_error() {
+  local stage="${1:-unknown}" detail="${2:-unspecified failure}"
+  printf 'Docker handoff retirement failed at %s: %s\n' \
+    "${stage}" "${detail}" >&2
+  return 1
+}
+
 qcsd_retire_docker_handoff() {
-  local root_kind="$1"
-  local object_id="$2"
-  local registration_name="$3"
+  local root_kind="${1:-}"
+  local object_id="${2:-}"
+  local registration_name="${3:-}"
   local root candidate="" candidate_count=0 presence candidate_sha="" observed_sha
-  local candidate_manifest="" observed_manifest
+  local candidate_manifest="" observed_manifest entry attempt
   local nullglob_was_set=0
   local -a roots=()
-  [[ "${root_kind}" =~ ^(run|network)$ &&
-      "${object_id}" =~ ^[0-9a-f]{64}$ &&
-      "${registration_name}" =~ ^QCSD_DOCKER_IDS_[A-Z0-9_]+$ ]] || return 1
-  _qcsd_verify_pinned_docker_daemon || return 1
-  _qcsd_verify_pinned_host_boot || return 1
-  _qcsd_secure_lifecycle_base || return 1
+  if [[ ! "${root_kind}" =~ ^(run|network)$ ||
+        ! "${object_id}" =~ ^[0-9a-f]{64}$ ||
+        ! "${registration_name}" =~ ^QCSD_DOCKER_IDS_[A-Z0-9_]+$ ]]; then
+    _qcsd_handoff_retirement_error request-validation \
+      "invalid kind, object ID, or registration name"
+    return 1
+  fi
+  if ! _qcsd_verify_pinned_docker_daemon; then
+    _qcsd_handoff_retirement_error daemon-identity \
+      "pinned Docker daemon could not be revalidated"
+    return 1
+  fi
+  if ! _qcsd_verify_pinned_host_boot; then
+    _qcsd_handoff_retirement_error host-boot \
+      "pinned host boot could not be revalidated"
+    return 1
+  fi
+  if ! _qcsd_secure_lifecycle_base; then
+    _qcsd_handoff_retirement_error lifecycle-base \
+      "durable lifecycle base validation failed"
+    return 1
+  fi
   shopt -q nullglob && nullglob_was_set=1
   shopt -s nullglob
   roots=("${_qcsd_lifecycle_base}/${root_kind}."*)
   (( nullglob_was_set != 0 )) || shopt -u nullglob
   for root in "${roots[@]}"; do
     [[ -f "${root}/HANDOFF" && ! -L "${root}/HANDOFF" ]] || continue
-    _qcsd_lifecycle_validate_root "${root}" "${root_kind}" || return 1
+    if ! _qcsd_lifecycle_validate_root "${root}" "${root_kind}"; then
+      _qcsd_handoff_retirement_error root-validation \
+        "invalid ${root_kind} lifecycle root ${root}"
+      return 1
+    fi
     [[ "${_QCSD_LIFECYCLE_SELECTED_VALUES[lifecycle_state]}" == "handed-off" ]] ||
       continue
     if [[ "${_QCSD_LIFECYCLE_SELECTED_VALUES[registration_name]}" == \
@@ -6351,28 +6406,111 @@ qcsd_retire_docker_handoff() {
          [[ "${root_kind}" == "network" &&
              "${_QCSD_LIFECYCLE_SELECTED_VALUES[network_id]}" == "${object_id}" ]]; }; then
       candidate="${root}"
-      candidate_sha="$(sha256sum -- "${root}/HANDOFF" | awk '{print $1}')" || return 1
-      candidate_manifest="$(_qcsd_lifecycle_root_manifest_sha256 "${root}")" || return 1
+      if ! candidate_sha="$(sha256sum -- "${root}/HANDOFF" | awk '{print $1}')"; then
+        _qcsd_handoff_retirement_error candidate-record-digest \
+          "could not hash ${root}/HANDOFF"
+        return 1
+      fi
+      if ! candidate_manifest="$(_qcsd_lifecycle_root_manifest_sha256 "${root}")"; then
+        _qcsd_handoff_retirement_error candidate-manifest \
+          "could not bind lifecycle manifest for ${root}"
+        return 1
+      fi
       candidate_count=$((candidate_count + 1))
     fi
   done
-  (( candidate_count == 1 )) || return 1
-  if [[ "${root_kind}" == "run" ]]; then
-    presence="$(_qcsd_docker_exact_id_presence "${object_id}")"
-  else
-    presence="$(_qcsd_docker_exact_network_presence "${object_id}")"
+  if (( candidate_count != 1 )); then
+    _qcsd_handoff_retirement_error candidate-selection \
+      "expected one exact ${root_kind} HANDOFF for ${registration_name}; found ${candidate_count}"
+    return 1
   fi
-  [[ "${presence}" == "absent" ]] || return 1
-  _qcsd_handoff_retire_after_absence_hook \
-    "${candidate}" "${root_kind}" "${object_id}" "${registration_name}"
-  _qcsd_validate_lifecycle_root_contents "${candidate}" || return 1
-  for root in "${candidate}"/*.next; do
-    [[ ! -e "${root}" && ! -L "${root}" ]] || return 1
+  for (( attempt = 1;
+         attempt <= _QCSD_DOCKER_HANDOFF_ABSENCE_ATTEMPTS;
+         attempt++ )); do
+    if [[ "${root_kind}" == "run" ]]; then
+      presence="$(_qcsd_docker_exact_id_presence_detailed "${object_id}")"
+    else
+      presence="$(_qcsd_docker_exact_network_presence_detailed "${object_id}")"
+    fi
+    case "${presence}" in
+      absent)
+        break
+        ;;
+      present|ambiguous)
+        _qcsd_handoff_retirement_error absence-proof \
+          "exact ${root_kind} presence is ${presence}; retained ${candidate}"
+        return 1
+        ;;
+      unknown)
+        if (( attempt == _QCSD_DOCKER_HANDOFF_ABSENCE_ATTEMPTS )); then
+          _qcsd_handoff_retirement_error absence-proof \
+            "exact ${root_kind} presence remained unknown after ${attempt} attempts; retained ${candidate}"
+          return 1
+        fi
+        printf 'Docker handoff retirement retrying absence-proof after exact %s presence was unknown (attempt %d/%d): %s\n' \
+          "${root_kind}" "${attempt}" \
+          "${_QCSD_DOCKER_HANDOFF_ABSENCE_ATTEMPTS}" "${candidate}" >&2
+        if ! _qcsd_verify_pinned_docker_daemon; then
+          _qcsd_handoff_retirement_error absence-retry-daemon-identity \
+            "pinned Docker daemon could not be revalidated after unknown presence"
+          return 1
+        fi
+        if ! _qcsd_verify_pinned_host_boot; then
+          _qcsd_handoff_retirement_error absence-retry-host-boot \
+            "pinned host boot could not be revalidated after unknown presence"
+          return 1
+        fi
+        ;;
+      *)
+        _qcsd_handoff_retirement_error absence-proof \
+          "invalid exact ${root_kind} presence result; retained ${candidate}"
+        return 1
+        ;;
+    esac
   done
-  observed_sha="$(sha256sum -- "${candidate}/HANDOFF" | awk '{print $1}')" || return 1
-  [[ "${observed_sha}" == "${candidate_sha}" ]] || return 1
-  observed_manifest="$(_qcsd_lifecycle_root_manifest_sha256 "${candidate}")" || return 1
-  [[ "${observed_manifest}" == "${candidate_manifest}" ]] || return 1
-  _qcsd_revalidate_helper_source_identity || return 1
-  _qcsd_lifecycle_remove_root "${candidate}" 0 handoff-retired
+  if [[ "${presence}" != absent ]]; then
+    _qcsd_handoff_retirement_error absence-proof \
+      "exact ${root_kind} absence was not established; retained ${candidate}"
+    return 1
+  fi
+  if ! _qcsd_handoff_retire_after_absence_hook \
+      "${candidate}" "${root_kind}" "${object_id}" "${registration_name}"; then
+    _qcsd_handoff_retirement_error post-absence-hook \
+      "post-proof retirement boundary failed; retained ${candidate}"
+    return 1
+  fi
+  if ! _qcsd_validate_lifecycle_root_contents "${candidate}"; then
+    _qcsd_handoff_retirement_error root-contents-revalidation \
+      "lifecycle root changed after absence proof; retained ${candidate}"
+    return 1
+  fi
+  for entry in "${candidate}"/*.next; do
+    if [[ -e "${entry}" || -L "${entry}" ]]; then
+      _qcsd_handoff_retirement_error staged-record-check \
+        "staged lifecycle entry appeared after absence proof; retained ${candidate}"
+      return 1
+    fi
+  done
+  if ! observed_sha="$(sha256sum -- "${candidate}/HANDOFF" | awk '{print $1}')" ||
+     [[ "${observed_sha}" != "${candidate_sha}" ]]; then
+    _qcsd_handoff_retirement_error record-digest-revalidation \
+      "HANDOFF digest changed after absence proof; retained ${candidate}"
+    return 1
+  fi
+  if ! observed_manifest="$(_qcsd_lifecycle_root_manifest_sha256 "${candidate}")" ||
+     [[ "${observed_manifest}" != "${candidate_manifest}" ]]; then
+    _qcsd_handoff_retirement_error manifest-revalidation \
+      "lifecycle manifest changed after absence proof; retained ${candidate}"
+    return 1
+  fi
+  if ! _qcsd_revalidate_helper_source_identity; then
+    _qcsd_handoff_retirement_error helper-source-revalidation \
+      "executed helper source identity changed; retained ${candidate}"
+    return 1
+  fi
+  if ! _qcsd_lifecycle_remove_root "${candidate}" 0 handoff-retired; then
+    _qcsd_handoff_retirement_error durable-root-removal \
+      "authenticated retirement did not complete; retained durable state for ${candidate}"
+    return 1
+  fi
 }

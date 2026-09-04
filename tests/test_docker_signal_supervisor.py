@@ -305,7 +305,7 @@ while True:
         time.sleep(0.02)
 
 if args[0] == "run":
-    cid = "a" * 64
+    cid = os.environ.get("FAKE_DOCKER_CONTAINER_ID", "a" * 64)
     cidfile = Path(args[args.index("--cidfile") + 1])
     assert args.count("--sig-proxy=false") == 1
     label = args[args.index("--label") + 1]
@@ -380,6 +380,16 @@ if args[:2] == ["container", "ls"]:
         time.sleep(2)
     if os.environ.get("FAKE_DOCKER_DAEMON_UNKNOWN") == "1":
         raise SystemExit(125)
+    if os.environ.get("FAKE_CONTAINER_LS_UNKNOWN_ONCE") == "1":
+        counter_path = root / "container-ls-unknown-once-counter"
+        counter = (
+            int(counter_path.read_text(encoding="ascii"))
+            if counter_path.exists()
+            else 0
+        )
+        write(counter_path, str(counter + 1))
+        if counter == 0:
+            raise SystemExit(125)
     selected = container_records()
     if "--filter" in args:
         filter_value = args[args.index("--filter") + 1]
@@ -391,6 +401,11 @@ if args[:2] == ["container", "ls"]:
             selected = [record for record in selected if record[1] == wanted]
         else:
             selected = []
+    if os.environ.get("FAKE_CONTAINER_LS_AMBIGUOUS") == "1":
+        wanted = os.environ.get("FAKE_DOCKER_CONTAINER_ID", "a" * 64)
+        print(wanted)
+        print(wanted)
+        raise SystemExit(0)
     for record in selected:
         print(record[0])
     raise SystemExit(0)
@@ -446,22 +461,33 @@ if args[0] == "exec":
     raise SystemExit(0)
 
 if args[:2] == ["network", "create"]:
+    network_id = os.environ.get("FAKE_DOCKER_NETWORK_ID", "b" * 64)
     label = args[args.index("--label") + 1]
     token = label.split("=", 1)[1]
     log("NETWORK_CREATE_BEGIN", label)
     if os.environ.get("FAKE_NETWORK_FAIL_NO_ID") == "1":
         raise SystemExit(125)
     time.sleep(float(os.environ.get("FAKE_NETWORK_DELAY", "0")))
-    write(root / "network", "b" * 64)
+    write(root / "network", network_id)
     write(root / "network-token", token)
     if os.environ.get("FAKE_ESCAPE_ON_COMMAND") == "network-create":
         spawn_escaped_child("network")
-    log("NETWORK_CREATE_END", "b" * 64)
-    print("b" * 64)
+    log("NETWORK_CREATE_END", network_id)
+    print(network_id)
     raise SystemExit(0)
 
 if args[:2] == ["network", "ls"]:
     log("NETWORK_LS")
+    if os.environ.get("FAKE_NETWORK_LS_UNKNOWN_ONCE") == "1":
+        counter_path = root / "network-ls-unknown-once-counter"
+        counter = (
+            int(counter_path.read_text(encoding="ascii"))
+            if counter_path.exists()
+            else 0
+        )
+        write(counter_path, str(counter + 1))
+        if counter == 0:
+            raise SystemExit(125)
     selected = network_records()
     if "--filter" in args:
         filter_value = args[args.index("--filter") + 1]
@@ -473,6 +499,11 @@ if args[:2] == ["network", "ls"]:
             selected = [record for record in selected if record[1] == wanted]
         else:
             selected = []
+    if os.environ.get("FAKE_NETWORK_LS_AMBIGUOUS") == "1":
+        wanted = os.environ.get("FAKE_DOCKER_NETWORK_ID", "b" * 64)
+        print(wanted)
+        print(wanted)
+        raise SystemExit(0)
     for record in selected:
         print(record[0])
     raise SystemExit(0)
@@ -658,8 +689,8 @@ _qcsd_cancel_lifecycle_root_creation() {
   unset _QCSD_CREATION_ROOT_INODE
 }
 # Retirement state-machine crash coverage lives in its dedicated test module.
-# These legacy helper tests retain a strict, local removal primitive after the
-# production validators and manifest barriers have authorized retirement.
+# These helper tests retain a strict, local removal primitive after production
+# selection, absence, receipt, manifest, and source gates authorise retirement.
 _qcsd_lifecycle_remove_root() {
   local root="${1:?}" root_identity entry nullglob_setting dotglob_setting
   local -a entries=()
@@ -682,29 +713,6 @@ _qcsd_lifecycle_remove_root() {
   [[ "$(stat -Lc '%d:%i' -- "${root}")" == "${root_identity}" ]] || return 1
   rmdir -- "${root}" || return 1
   sync -f "${_qcsd_lifecycle_base}" || return 1
-}
-qcsd_retire_docker_handoff() {
-  local kind="${1:?}" object_id="${2:?}" registration="${3:?}"
-  local root="${_qcsd_lifecycle_root:?}" presence record_sha manifest
-  _qcsd_lifecycle_validate_root "${root}" "${kind}" || return 1
-  [[ "${_QCSD_LIFECYCLE_SELECTED_RECORD}" == "${root}/HANDOFF" &&
-      "${_QCSD_LIFECYCLE_SELECTED_VALUES[registration_name]}" == "${registration}" ]] || return 1
-  if [[ "${kind}" == run ]]; then
-    [[ "${_QCSD_LIFECYCLE_SELECTED_VALUES[container_id]}" == "${object_id}" ]] || return 1
-    presence="$(_qcsd_docker_exact_id_presence "${object_id}")" || return 1
-  else
-    [[ "${_QCSD_LIFECYCLE_SELECTED_VALUES[network_id]}" == "${object_id}" ]] || return 1
-    presence="$(_qcsd_docker_exact_network_presence "${object_id}")" || return 1
-  fi
-  [[ "${presence}" == absent ]] || return 1
-  record_sha="$(sha256sum -- "${root}/HANDOFF" | awk '{print $1}')" || return 1
-  manifest="$(_qcsd_lifecycle_root_manifest_sha256 "${root}")" || return 1
-  _qcsd_handoff_retire_after_absence_hook "${root}" "${kind}" \
-    "${object_id}" "${registration}"
-  _qcsd_lifecycle_validate_root "${root}" "${kind}" || return 1
-  [[ "$(sha256sum -- "${root}/HANDOFF" | awk '{print $1}')" == "${record_sha}" &&
-      "$(_qcsd_lifecycle_root_manifest_sha256 "${root}")" == "${manifest}" ]] || return 1
-  _qcsd_lifecycle_remove_root "${root}" 0 handoff-retired
 }
 # Unit tests retain the former direct transient-unit boundary so fake Docker
 # remains observable through the fixture environment. Production's leased
@@ -3049,7 +3057,6 @@ docker network rm "${QCSD_DOCKER_IDS_TEST[0]}" >/dev/null
         ),
     ),
 )
-@pytest.mark.skip(reason="durable handoff retirement is covered by retirement integration")
 def test_normal_cleanup_retires_only_the_exact_durable_handoff(
     fake_environment: dict[str, str],
     kind: str,
@@ -3076,6 +3083,249 @@ test ! -e "$root"
         timeout=15,
     )
     assert result.returncode == 0, (result.stdout, result.stderr)
+
+
+@pytest.mark.parametrize(
+    ("kind", "invocation", "remove", "unknown_flag"),
+    (
+        (
+            "run",
+            "qcsd_run_detached_docker QCSD_DOCKER_IDS_TEST docker run fake-image",
+            'docker rm --force "${QCSD_DOCKER_IDS_TEST[0]}" >/dev/null',
+            "FAKE_CONTAINER_LS_UNKNOWN_ONCE",
+        ),
+        (
+            "network",
+            "qcsd_create_docker_network QCSD_DOCKER_IDS_TEST "
+            "docker network create test-network",
+            'docker network rm "${QCSD_DOCKER_IDS_TEST[0]}" >/dev/null',
+            "FAKE_NETWORK_LS_UNKNOWN_ONCE",
+        ),
+    ),
+)
+def test_handoff_retirement_retries_unknown_then_accepts_exact_absence(
+    fake_environment: dict[str, str],
+    kind: str,
+    invocation: str,
+    remove: str,
+    unknown_flag: str,
+) -> None:
+    list_event = "CONTAINER_LS" if kind == "run" else "NETWORK_LS"
+    script = f'''
+set -euo pipefail
+source "$HELPER"
+QCSD_DOCKER_IDS_TEST=()
+{invocation}
+root=$_qcsd_lifecycle_root
+object_id="${{QCSD_DOCKER_IDS_TEST[0]}}"
+{remove}
+export {unknown_flag}=1
+eval "$(declare -f _qcsd_verify_pinned_host_boot | sed \
+  '1s/_qcsd_verify_pinned_host_boot/_qcsd_original_verify_pinned_host_boot/')"
+_qcsd_verify_pinned_host_boot() {{
+  printf 'boot\n' >>"$FAKE_DOCKER_STATE/retirement-boot-checks"
+  _qcsd_original_verify_pinned_host_boot
+}}
+info_before="$(awk '$1 == "INFO" {{ count++ }} END {{ print count + 0 }}' \
+  "$FAKE_DOCKER_STATE/calls.log")"
+list_before="$(awk '$1 == "{list_event}" {{ count++ }} END {{ print count + 0 }}' \
+  "$FAKE_DOCKER_STATE/calls.log")"
+qcsd_retire_docker_handoff {kind} "$object_id" QCSD_DOCKER_IDS_TEST
+info_after="$(awk '$1 == "INFO" {{ count++ }} END {{ print count + 0 }}' \
+  "$FAKE_DOCKER_STATE/calls.log")"
+list_after="$(awk '$1 == "{list_event}" {{ count++ }} END {{ print count + 0 }}' \
+  "$FAKE_DOCKER_STATE/calls.log")"
+printf 'INFO_DELTA %d\n' "$((info_after - info_before))"
+printf 'LIST_DELTA %d\n' "$((list_after - list_before))"
+printf 'BOOT_CALLS %d\n' "$(wc -l < \
+  "$FAKE_DOCKER_STATE/retirement-boot-checks")"
+test ! -e "$root"
+'''
+    result = subprocess.run(
+        ["bash", "-c", textwrap.dedent(script)],
+        env=fake_environment,
+        text=True,
+        capture_output=True,
+        timeout=20,
+    )
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    # One explicit daemon proof and one pinned-API proof occur per presence
+    # attempt, so the retry path performs four daemon identity observations.
+    assert "INFO_DELTA 4\n" in result.stdout
+    assert "LIST_DELTA 2\n" in result.stdout
+    assert "BOOT_CALLS 2\n" in result.stdout
+    assert "retrying absence-proof" in result.stderr
+    assert "failed at" not in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("kind", "invocation", "prepare_observation", "expected", "list_event"),
+    (
+        (
+            "run",
+            "qcsd_run_detached_docker QCSD_DOCKER_IDS_TEST docker run fake-image",
+            ":",
+            "present",
+            "CONTAINER_LS",
+        ),
+        (
+            "run",
+            "qcsd_run_detached_docker QCSD_DOCKER_IDS_TEST docker run fake-image",
+            'docker rm --force "$object_id" >/dev/null; '
+            "export FAKE_CONTAINER_LS_AMBIGUOUS=1",
+            "ambiguous",
+            "CONTAINER_LS",
+        ),
+        (
+            "network",
+            "qcsd_create_docker_network QCSD_DOCKER_IDS_TEST "
+            "docker network create test-network",
+            ":",
+            "present",
+            "NETWORK_LS",
+        ),
+        (
+            "network",
+            "qcsd_create_docker_network QCSD_DOCKER_IDS_TEST "
+            "docker network create test-network",
+            'docker network rm "$object_id" >/dev/null; '
+            "export FAKE_NETWORK_LS_AMBIGUOUS=1",
+            "ambiguous",
+            "NETWORK_LS",
+        ),
+    ),
+)
+def test_handoff_retirement_never_retries_present_or_ambiguous_presence(
+    fake_environment: dict[str, str],
+    kind: str,
+    invocation: str,
+    prepare_observation: str,
+    expected: str,
+    list_event: str,
+) -> None:
+    script = f'''
+set -euo pipefail
+source "$HELPER"
+QCSD_DOCKER_IDS_TEST=()
+{invocation}
+root=$_qcsd_lifecycle_root
+object_id="${{QCSD_DOCKER_IDS_TEST[0]}}"
+{prepare_observation}
+eval "$(declare -f _qcsd_verify_pinned_host_boot | sed \
+  '1s/_qcsd_verify_pinned_host_boot/_qcsd_original_verify_pinned_host_boot/')"
+_qcsd_verify_pinned_host_boot() {{
+  printf 'boot\n' >>"$FAKE_DOCKER_STATE/retirement-boot-checks"
+  _qcsd_original_verify_pinned_host_boot
+}}
+info_before="$(awk '$1 == "INFO" {{ count++ }} END {{ print count + 0 }}' \
+  "$FAKE_DOCKER_STATE/calls.log")"
+list_before="$(awk '$1 == "{list_event}" {{ count++ }} END {{ print count + 0 }}' \
+  "$FAKE_DOCKER_STATE/calls.log")"
+set +e
+qcsd_retire_docker_handoff {kind} "$object_id" QCSD_DOCKER_IDS_TEST
+retirement_status=$?
+set -e
+info_after="$(awk '$1 == "INFO" {{ count++ }} END {{ print count + 0 }}' \
+  "$FAKE_DOCKER_STATE/calls.log")"
+list_after="$(awk '$1 == "{list_event}" {{ count++ }} END {{ print count + 0 }}' \
+  "$FAKE_DOCKER_STATE/calls.log")"
+printf 'INFO_DELTA %d\n' "$((info_after - info_before))"
+printf 'LIST_DELTA %d\n' "$((list_after - list_before))"
+printf 'BOOT_CALLS %d\n' "$(wc -l < \
+  "$FAKE_DOCKER_STATE/retirement-boot-checks")"
+test "$retirement_status" -ne 0
+test -f "$root/HANDOFF"
+'''
+    result = subprocess.run(
+        ["bash", "-c", textwrap.dedent(script)],
+        env=fake_environment,
+        text=True,
+        capture_output=True,
+        timeout=20,
+    )
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    # The initial retirement proof and the one-shot pinned presence request
+    # each revalidate the daemon; no retry adds another pair.
+    assert "INFO_DELTA 2\n" in result.stdout
+    assert "LIST_DELTA 1\n" in result.stdout
+    assert "BOOT_CALLS 1\n" in result.stdout
+    assert "Docker handoff retirement failed at absence-proof:" in result.stderr
+    assert f"presence is {expected}" in result.stderr
+    assert "retrying absence-proof" not in result.stderr
+
+
+def test_sequential_exit_cleanup_retires_three_runs_and_two_networks(
+    fake_environment: dict[str, str],
+) -> None:
+    script = r'''
+set -euo pipefail
+source "$HELPER"
+QCSD_DOCKER_IDS_SIDECARS=()
+QCSD_DOCKER_IDS_CONTROLLED_SERVER_NETWORKS=()
+QCSD_DOCKER_IDS_CONTROLLED_CLIENT_NETWORKS=()
+roots=()
+cleanup() {
+  local status=$? cleanup_status=0 object_id
+  trap - EXIT
+  set +e
+  for object_id in "${QCSD_DOCKER_IDS_SIDECARS[@]}"; do
+    qcsd_retire_docker_handoff run "$object_id" \
+      QCSD_DOCKER_IDS_SIDECARS || cleanup_status=1
+  done
+  for object_id in "${QCSD_DOCKER_IDS_CONTROLLED_SERVER_NETWORKS[@]}"; do
+    qcsd_retire_docker_handoff network "$object_id" \
+      QCSD_DOCKER_IDS_CONTROLLED_SERVER_NETWORKS || cleanup_status=1
+  done
+  for object_id in "${QCSD_DOCKER_IDS_CONTROLLED_CLIENT_NETWORKS[@]}"; do
+    qcsd_retire_docker_handoff network "$object_id" \
+      QCSD_DOCKER_IDS_CONTROLLED_CLIENT_NETWORKS || cleanup_status=1
+  done
+  (( cleanup_status == 0 )) || exit 97
+  exit "$status"
+}
+trap cleanup EXIT
+for value in 1 2 3; do
+  printf -v FAKE_DOCKER_CONTAINER_ID '%064x' "$value"
+  export FAKE_DOCKER_CONTAINER_ID
+  qcsd_run_detached_docker QCSD_DOCKER_IDS_SIDECARS docker run fake-image
+  roots+=("$_qcsd_lifecycle_root")
+  docker rm --force "${QCSD_DOCKER_IDS_SIDECARS[-1]}" >/dev/null
+done
+printf -v FAKE_DOCKER_NETWORK_ID '%064x' 101
+export FAKE_DOCKER_NETWORK_ID
+qcsd_create_docker_network QCSD_DOCKER_IDS_CONTROLLED_SERVER_NETWORKS \
+  docker network create server-network
+roots+=("$_qcsd_lifecycle_root")
+docker network rm \
+  "${QCSD_DOCKER_IDS_CONTROLLED_SERVER_NETWORKS[-1]}" >/dev/null
+printf -v FAKE_DOCKER_NETWORK_ID '%064x' 102
+export FAKE_DOCKER_NETWORK_ID
+qcsd_create_docker_network QCSD_DOCKER_IDS_CONTROLLED_CLIENT_NETWORKS \
+  docker network create client-network
+roots+=("$_qcsd_lifecycle_root")
+docker network rm \
+  "${QCSD_DOCKER_IDS_CONTROLLED_CLIENT_NETWORKS[-1]}" >/dev/null
+printf '%s\n' "${roots[@]}" >"$FAKE_DOCKER_STATE/multi-root-inventory"
+'''
+    result = subprocess.run(
+        ["bash", "-c", textwrap.dedent(script)],
+        env=fake_environment,
+        text=True,
+        capture_output=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    state = Path(fake_environment["FAKE_DOCKER_STATE"])
+    roots = [
+        Path(value)
+        for value in (state / "multi-root-inventory")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert len(roots) == 5
+    assert len(set(roots)) == 5
+    assert not any(root.exists() or root.is_symlink() for root in roots)
+    assert "failed at" not in result.stderr
 
 
 @pytest.mark.parametrize("kind", ["run", "network"])
@@ -4551,7 +4801,9 @@ def test_daemon_identity_proof_retries_one_unavailable_observation(
 ) -> None:
     fake_environment.update(
         FAKE_DOCKER_SERVER_ID="daemon-pinned-id",
-        FAKE_INFO_DELAY_SEQUENCE="1.2,0",
+        # Keep a wide margin above RuntimeMaxSec=1s: a 200 ms margin is not
+        # deterministic under a busy user-systemd manager.
+        FAKE_INFO_DELAY_SEQUENCE="5,0",
     )
     script = r'''
 set -euo pipefail
@@ -4615,7 +4867,7 @@ def test_daemon_identity_timeout_then_mismatch_blocks_network_mutation(
 ) -> None:
     fake_environment.update(
         FAKE_DOCKER_SERVER_ID="changed-daemon-id",
-        FAKE_INFO_DELAY_SEQUENCE="1.2,0",
+        FAKE_INFO_DELAY_SEQUENCE="5,0",
     )
     script = r'''
 set -uo pipefail
@@ -4650,7 +4902,7 @@ exit "$status"
 def test_daemon_identity_two_timeouts_fail_closed_without_network_mutation(
     fake_environment: dict[str, str],
 ) -> None:
-    fake_environment["FAKE_INFO_DELAY_SEQUENCE"] = "1.2,1.2"
+    fake_environment["FAKE_INFO_DELAY_SEQUENCE"] = "5,5"
     script = r'''
 set -uo pipefail
 source "$HELPER"
@@ -4690,7 +4942,7 @@ def test_build_terminal_retirement_identity_timeout_retries_without_rebuild(
         # The first two observations are the supervisor preflight and the
         # in-scope request-boundary proof.  Observation three is therefore the
         # first terminal-retirement proof after BUILD has returned.
-        FAKE_INFO_DELAY_SEQUENCE="0,0,1.2,0",
+        FAKE_INFO_DELAY_SEQUENCE="0,0,5,0",
     )
     script = r'''
 set -euo pipefail

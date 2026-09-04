@@ -34,6 +34,7 @@ KERNEL_TX_PRIO_MAP = [1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1]
 KERNEL_TX_MAX_CLOCK_BRACKET_NS = 250_000
 KERNEL_TX_MAX_CLOCK_OFFSET_DRIFT_NS = 250_000
 KERNEL_TX_MAX_UDP_PAYLOAD_BYTES = 1_200
+_SOF_TXTIME_REPORT_ERRORS = 1 << 1
 OBSERVER_TOPOLOGY_RECEIPT_SCHEMA_VERSION = 1
 OBSERVER_TOPOLOGY_RECEIPT_SOURCE = "accepted-attempt-observer-topology-v1"
 
@@ -1097,7 +1098,8 @@ def _socket_setup_valid(value: Any) -> bool:
         and receipt.get("nonblocking") is True
         and receipt.get("socket_type") == 2
         and receipt.get("txtime_clock_id") == 11
-        and receipt.get("txtime_flags") == 1
+        and type(receipt.get("txtime_flags")) is int
+        and receipt.get("txtime_flags") == _SOF_TXTIME_REPORT_ERRORS
         and receipt.get("timestamping_report_flags") == 2_192
         and receipt.get("timed_priority") == 6
         and receipt.get("priority_before_probe") == 0

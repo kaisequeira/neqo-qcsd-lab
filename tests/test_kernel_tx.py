@@ -208,7 +208,7 @@ def _socket_setup(endpoint: int) -> dict[str, object]:
         "nonblocking": True,
         "socket_type": 2,
         "txtime_clock_id": 11,
-        "txtime_flags": 1,
+        "txtime_flags": 2,
         "timestamping_report_flags": 2192,
         "timed_priority": 6,
         "priority_before_probe": 0,
@@ -429,6 +429,47 @@ def _runner_wakeup_v11() -> dict[str, object]:
         }
     )
     return value
+
+
+def _failed_before_arm_runner_receipt() -> dict[str, object]:
+    raw = _runner_receipt()
+    mapping_error = "BuFLO kernel epoch was never armed"
+    raw.update(
+        {
+            "terminal_outcome": "failed",
+            "primary_error": "kernel timing failed before arm",
+            "cleanup_errors": [mapping_error],
+            "defense_start_monotonic_ns": None,
+            "defense_start_tai_ns": None,
+            "clock_mapping_valid": False,
+            "clock_mapping_error": mapping_error,
+            "clock_mapping": None,
+            "jobs": [],
+        }
+    )
+    raw["aggregate"] = {
+        "schema_version": 1,
+        "job_count": 0,
+        "item_count": 0,
+        "etf_item_count": 0,
+        "ordered_item_count": 0,
+        "captured_credit_identity_count": 0,
+        "prepared_output_failure_count": 0,
+        "main_coalesced_credit_identity_count": 0,
+        "carrier_credit_identity_count": 0,
+        "unresolved_credit_identity_count": 0,
+        "transmitted_item_count": 0,
+        "failed_item_count": 0,
+        "tx_sched_timestamp_count": 0,
+        "tx_software_timestamp_count": 0,
+        "txtime_error_count": 0,
+        "timestamp_evidence_missing_count": 0,
+        "window_violation_count": 0,
+        "unresolved_item_count": 0,
+        "max_tx_software_lateness_ns": 0,
+        "terminal_outcome": "failed",
+    }
+    return raw
 
 
 def _snapshot(*, packets: int = 0, drops: int = 0) -> dict[str, int]:
@@ -755,6 +796,29 @@ def test_runner_schema_eleven_binds_raw_kernel_tx_without_rewriting_schema_ten()
     assert not fidelity._runner_wakeup_v11_valid(wakeups)
 
 
+def test_runner_schema_eleven_preserves_failed_before_arm_without_eligibility() -> None:
+    wakeups = _runner_wakeup_v11()
+    raw = _failed_before_arm_runner_receipt()
+    wakeups["buflo_kernel_tx"] = raw
+
+    assert kernel_tx_runner_receipt_valid(raw)
+    assert not kernel_tx_runner_receipt_success_valid(raw)
+    assert fidelity._runner_wakeup_v11_valid(wakeups)
+    assert fidelity._runner_wakeup_metrics_valid(wakeups)
+    assert capture_session._runner_wakeup_metrics_valid(wakeups)
+
+    scheduler = copy.deepcopy(raw["runtime_contract"]["scheduler_initial"])
+    run = {
+        "process_scheduler": scheduler,
+        "resolved_configuration": {"defense": {"kind": "buflo"}},
+        "runner_wakeup_metrics": wakeups,
+    }
+    assert not capture_session._process_scheduler_bound_to_run_valid(
+        run,
+        expected_contract="qcsd-client-rr1-cpu10-etf-helper-cpu11-v1",
+    )
+
+
 def test_runner_schema_eleven_retains_null_kernel_receipt_for_other_modes() -> None:
     wakeups = _runner_wakeup_receipt(10)
     wakeups.update(
@@ -898,6 +962,11 @@ def test_runner_kernel_tx_requires_exact_scheduler_socket_and_privilege_receipts
     raw["runtime_contract"]["scheduler_initial"]["contract_valid"] = False
     assert not kernel_tx_runner_receipt_valid(raw)
 
+    for invalid_flags in (0, 1, 2.0, 3):
+        raw = _runner_receipt()
+        raw["runtime_contract"]["socket_setup"][0]["txtime_flags"] = invalid_flags
+        assert not kernel_tx_runner_receipt_valid(raw)
+
     raw = _runner_receipt()
     raw["runtime_contract"]["socket_setup"][0]["timestamping_report_flags"] = 16
     assert not kernel_tx_runner_receipt_valid(raw)
@@ -973,43 +1042,7 @@ def test_top_scheduler_allows_bounded_setup_caps_only_with_nested_buflo_proof() 
 
 
 def test_runner_kernel_tx_accepts_terminal_txtime_error_but_not_as_success() -> None:
-    raw = _runner_receipt()
-    mapping_error = "BuFLO kernel epoch was never armed"
-    raw.update(
-        {
-            "terminal_outcome": "failed",
-            "primary_error": "kernel timing failed before arm",
-            "cleanup_errors": [mapping_error],
-            "defense_start_monotonic_ns": None,
-            "defense_start_tai_ns": None,
-            "clock_mapping_valid": False,
-            "clock_mapping_error": mapping_error,
-            "clock_mapping": None,
-            "jobs": [],
-        }
-    )
-    raw["aggregate"] = {
-        "schema_version": 1,
-        "job_count": 0,
-        "item_count": 0,
-        "etf_item_count": 0,
-        "ordered_item_count": 0,
-        "captured_credit_identity_count": 0,
-        "prepared_output_failure_count": 0,
-        "main_coalesced_credit_identity_count": 0,
-        "carrier_credit_identity_count": 0,
-        "unresolved_credit_identity_count": 0,
-        "transmitted_item_count": 0,
-        "failed_item_count": 0,
-        "tx_sched_timestamp_count": 0,
-        "tx_software_timestamp_count": 0,
-        "txtime_error_count": 0,
-        "timestamp_evidence_missing_count": 0,
-        "window_violation_count": 0,
-        "unresolved_item_count": 0,
-        "max_tx_software_lateness_ns": 0,
-        "terminal_outcome": "failed",
-    }
+    raw = _failed_before_arm_runner_receipt()
 
     assert kernel_tx_runner_receipt_valid(raw)
     assert not kernel_tx_runner_receipt_success_valid(raw)
