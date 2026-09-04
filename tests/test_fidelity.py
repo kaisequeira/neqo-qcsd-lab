@@ -7,7 +7,10 @@ import pytest
 
 from qcsd_lab.fidelity import (
     CONSUMPTION_SCHEDULE_QCSD_FIELDS,
+    RUNNER_CSV_U64_MAX,
     SCHEDULE_QCSD_FIELDS,
+    _csv_uint,
+    _runner_csv_u64,
     _schedule_realization_metrics,
     _scheduled_incoming_diagnostics_match,
     _validate_qcsd_trace_extension,
@@ -15,6 +18,57 @@ from qcsd_lab.fidelity import (
     reconcile_direct_runner_artifacts,
     validate_primary_capture_clock_integrity,
 )
+
+
+def test_runner_csv_u64_parser_accepts_exact_rust_maximum() -> None:
+    maximum = str(RUNNER_CSV_U64_MAX)
+
+    assert _runner_csv_u64("0", label="runner value") == 0
+    assert _runner_csv_u64(maximum, label="runner value") == RUNNER_CSV_U64_MAX
+    assert _csv_uint({"value": maximum}, "value") == RUNNER_CSV_U64_MAX
+
+
+@pytest.mark.parametrize(
+    "value",
+    (
+        str(2**64),
+        "9" * 10_000,
+        "-1",
+        "+1",
+        " 1",
+        "1 ",
+        "1.0",
+        "01",
+        "١",
+        "true",
+        "",
+    ),
+)
+def test_runner_csv_u64_parser_rejects_noncanonical_or_out_of_domain(value: str) -> None:
+    with pytest.raises(ValueError):
+        _runner_csv_u64(value, label="runner value")
+
+
+def test_trace_extension_rejects_coherent_u64_overflow_chronology() -> None:
+    row = {field: "" for field in SCHEDULE_QCSD_FIELDS}
+    row.update(
+        {
+            "direction": "incoming",
+            "target_time_us": "0",
+            "action_time_us": "1",
+            "qcsd_outcome_schema_version": "3",
+            "send_policy": "exact",
+            "desired_udp_bytes": "1200",
+            "credit_advertised_at_us": "2",
+            "credit_advertisement_delay_us": "1",
+            "credit_consumed_at_us": str(2**64),
+            "credit_consumption_delay_us": str(2**64 - 1),
+            "terminal_defense_elapsed_us": "2",
+        }
+    )
+
+    with pytest.raises(ValueError, match="consumption"):
+        _validate_qcsd_trace_extension(row, label="incoming schedule row")
 
 
 def test_current_qcsd_trace_suffix_is_source_stable_v3() -> None:
@@ -76,10 +130,14 @@ def test_incoming_exact_terminal_is_receive_credit_not_udp_realization() -> None
 
 
 def test_incoming_diagnostics_version_advertisement_without_breaking_legacy() -> None:
-    legacy = _scheduled_incoming_diagnostics()
+    current = _scheduled_incoming_diagnostics()
+    legacy = {
+        key: value
+        for key, value in current.items()
+        if key != "scheduled_incoming_advertised_bytes"
+    }
     assert _scheduled_incoming_diagnostics_match(legacy)
 
-    current = {**legacy, "scheduled_incoming_advertised_bytes": 100}
     assert _scheduled_incoming_diagnostics_match(current)
     current["scheduled_incoming_advertised_bytes"] = 99
     assert not _scheduled_incoming_diagnostics_match(current)
@@ -223,6 +281,45 @@ def test_direct_runner_reconciliation_rejects_contradictory_error_class(tmp_path
     run.write_text(json.dumps(receipt), encoding="utf-8")
 
     with pytest.raises(ValueError, match="did not complete"):
+        reconcile_direct_runner_artifacts(run, packets, trace)
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "message"),
+    (
+        ("outgoing,1000,0,1200,,unshaped,", "outgoing,01,0,1200,,unshaped,", "packet time"),
+        (
+            "outgoing,1000,0,1200,,unshaped,",
+            f"outgoing,1000,{2**64},1200,,unshaped,",
+            "connection",
+        ),
+        (
+            "outgoing,1000,0,1200,,unshaped,",
+            f"outgoing,1000,0,{'9' * 10_000},,unshaped,",
+            "UDP length",
+        ),
+        (
+            "outgoing,1000,0,1200,,unshaped,",
+            f"outgoing,1000,0,1200,{2**64},satisfied,1",
+            "scheduled target",
+        ),
+        (
+            "outgoing,1000,0,1200,,unshaped,",
+            "outgoing,1000,0,1200,1200,satisfied,١",
+            "slot id",
+        ),
+    ),
+)
+def test_direct_runner_reconciliation_bounds_every_packet_unsigned_field(
+    tmp_path, old, new, message
+):
+    run, packets, trace = _reconciliation_artifacts(tmp_path, tail_direction="incoming")
+    packets.write_text(
+        packets.read_text(encoding="utf-8").replace(old, new),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=message):
         reconcile_direct_runner_artifacts(run, packets, trace)
 
 
@@ -724,20 +821,180 @@ def test_walkie_talkie_rejects_source_envelope_overflow_even_when_mould_is_exact
     assert not _eligible("walkie-talkie", diagnostics)
 
 
+@pytest.mark.parametrize(
+    "defense",
+    ["static", "front", "tamaraw", "traffic-morphing", "wtf-pad", "walkie-talkie"],
+)
+def test_established_defense_zero_activity_never_certifies(defense):
+    diagnostics = _zero_activity_diagnostics(defense)
+
+    assert not _eligible(
+        defense,
+        diagnostics,
+        schedule_metrics=_empty_activation_schedule(),
+    )
+
+
+def test_wtf_pad_zero_padding_can_certify_after_real_traffic_activates_automaton():
+    diagnostics = _zero_activity_diagnostics("wtf-pad")
+    diagnostics["wtf_pad_silent_to_burst"] = 1
+
+    assert _eligible(
+        "wtf-pad",
+        diagnostics,
+        schedule_metrics=_empty_activation_schedule(),
+    )
+
+
 def _eligible(
     defense: str,
     diagnostics: dict,
     *,
     missed_events: object = 0,
     outgoing_size_mismatches: object = 0,
+    schedule_metrics: dict | None = None,
+    resolved_configuration: dict | None = None,
 ) -> bool:
+    if schedule_metrics is None:
+        schedule_metrics = _activation_schedule(defense)
+    if resolved_configuration is None:
+        resolved_configuration = _activation_configuration(defense)
     return fidelity_eligible(
         defense,
         diagnostics,
         sample_eligible=True,
         missed_events=missed_events,
         outgoing_size_mismatches=outgoing_size_mismatches,
+        schedule_metrics=schedule_metrics,
+        resolved_configuration=resolved_configuration,
+        require_defense_activation=True,
     )
+
+
+def _activation_schedule(defense: str) -> dict:
+    directional = {
+        "static": ([25_000], [30_000], [100], [100]),
+        "front": ([25_000], [30_000], [100], [100]),
+        "tamaraw": ([0], [0], [100], [100]),
+        "traffic-morphing": ([], [0], [], [100]),
+        "wtf-pad": ([25_000], [30_000], [100], [100]),
+        "walkie-talkie": ([0, 1], [0, 1], [50, 50], [50, 50]),
+    }[defense]
+    outgoing_targets, incoming_targets, outgoing_sizes, incoming_sizes = directional
+    outgoing = len(outgoing_sizes)
+    incoming = len(incoming_sizes)
+    count = outgoing + incoming
+    return {
+        "scheduled_events": count,
+        "scheduled_outgoing_events": outgoing,
+        "scheduled_incoming_events": incoming,
+        "satisfied_events": count,
+        "missed_events": 0,
+        "missed_event_reasons": {},
+        "outgoing_size_mismatch_events": 0,
+        "outgoing_size_absolute_error_bytes": 0,
+        "terminal_satisfactions": {"satisfied": count} if count else {},
+        "terminal_slots_unique": True,
+        "duplicate_terminal_slots": 0,
+        "invalid_terminal_rows": 0,
+        "typed_congestion_reason_column": True,
+        "typed_credit_advertisement_columns": True,
+        "typed_credit_consumption_columns": True,
+        "typed_controller_terminal_time_column": True,
+        "invalid_congestion_reason_events": 0,
+        "congestion_reasons": {},
+        "terminal_desired_outgoing_bytes": sum(outgoing_sizes),
+        "terminal_observed_outgoing_bytes": sum(outgoing_sizes),
+        "catch_up_events": 0,
+        "invalid_typed_outcome_rows": 0,
+        "typed_composition_bytes": {},
+        "typed_lateness_us_total": 0,
+        "typed_lateness_us_max": 0,
+        "typed_real_bearing_outgoing_bytes": 0,
+        "incoming_credit_advertised_events": incoming,
+        "incoming_credit_consumed_events": incoming,
+        "incoming_credit_missing_events": 0,
+        "incoming_credit_consumption_missing_events": 0,
+        "invalid_credit_advertisement_events": 0,
+        "invalid_credit_consumption_events": 0,
+        "incoming_credit_advertisement_delay_us_total": 0,
+        "incoming_credit_advertisement_delay_us_max": 0,
+        "incoming_credit_advertisement_delay_us_values": [0] * incoming,
+        "incoming_credit_consumption_delay_us_total": 0,
+        "incoming_credit_consumption_delay_us_max": 0,
+        "incoming_credit_consumption_delay_us_values": [0] * incoming,
+        "terminal_defense_elapsed_us_values": [0] * count,
+        "target_times_us_by_direction": {
+            "outgoing": outgoing_targets,
+            "incoming": incoming_targets,
+        },
+        "scheduled_sizes_by_direction": {
+            "outgoing": outgoing_sizes,
+            "incoming": incoming_sizes,
+        },
+    }
+
+
+def _empty_activation_schedule() -> dict:
+    schedule = _activation_schedule("traffic-morphing")
+    schedule.update(
+        scheduled_events=0,
+        scheduled_outgoing_events=0,
+        scheduled_incoming_events=0,
+        satisfied_events=0,
+        terminal_satisfactions={},
+        terminal_desired_outgoing_bytes=0,
+        terminal_observed_outgoing_bytes=0,
+        incoming_credit_advertised_events=0,
+        incoming_credit_consumed_events=0,
+        incoming_credit_advertisement_delay_us_values=[],
+        incoming_credit_consumption_delay_us_values=[],
+        terminal_defense_elapsed_us_values=[],
+        target_times_us_by_direction={"outgoing": [], "incoming": []},
+        scheduled_sizes_by_direction={"outgoing": [], "incoming": []},
+    )
+    return schedule
+
+
+def _activation_configuration(defense: str) -> dict:
+    parameters = {
+        "static": {"kind": "static", "padding_only": True, "schedule": "schedule.csv"},
+        "front": {
+            "kind": "front",
+            "n_client_packets": 2,
+            "n_server_packets": 2,
+            "packet_size": 100,
+        },
+        "tamaraw": {
+            "kind": "tamaraw",
+            "incoming_interval_us": 10,
+            "outgoing_interval_us": 20,
+            "packet_size": 100,
+            "modulo": 1,
+        },
+        "traffic-morphing": {
+            "kind": "traffic_morphing",
+            "matrix": "matrix.json",
+            "workload_id": "test",
+        },
+        "wtf-pad": {
+            "kind": "wtf_pad",
+            "histograms": "histograms.json",
+            "max_padding_events": 10,
+            "packet_size": 100,
+        },
+        "walkie-talkie": {
+            "kind": "walkie_talkie",
+            "molded": "mould.json",
+            "workload_id": "test",
+            "packet_size": 50,
+        },
+    }[defense]
+    return {
+        "schema_version": 2,
+        "max_udp_payload_size": 1_200,
+        "defense": parameters,
+    }
 
 
 def _traffic_morphing_diagnostics() -> dict:
@@ -824,10 +1081,41 @@ def _walkie_talkie_diagnostics() -> dict:
 def _scheduled_incoming_diagnostics() -> dict:
     return {
         "scheduled_incoming_requested_bytes": 100,
+        "scheduled_incoming_advertised_bytes": 100,
         "scheduled_incoming_consumed_bytes": 100,
         "scheduled_incoming_retired_bytes": 0,
         "scheduled_incoming_unresolved_bytes": 0,
     }
+
+
+def _zero_activity_diagnostics(defense: str) -> dict:
+    factories = {
+        "static": _scheduled_incoming_diagnostics,
+        "front": _scheduled_incoming_diagnostics,
+        "tamaraw": _scheduled_incoming_diagnostics,
+        "traffic-morphing": _traffic_morphing_diagnostics,
+        "wtf-pad": _wtf_pad_diagnostics,
+        "walkie-talkie": _walkie_talkie_diagnostics,
+    }
+    diagnostics = factories[defense]()
+    for key, value in tuple(diagnostics.items()):
+        if type(value) is int:
+            diagnostics[key] = 0
+        elif isinstance(value, list):
+            diagnostics[key] = (
+                [
+                    {
+                        "index": 0,
+                        "target_outgoing_cells": 0,
+                        "target_incoming_cells": 0,
+                        "observed_outgoing_cells": 0,
+                        "observed_incoming_cells": 0,
+                    }
+                ]
+                if key == "walkie_talkie_burst_realization"
+                else []
+            )
+    return diagnostics
 
 
 def _reconciliation_artifacts(

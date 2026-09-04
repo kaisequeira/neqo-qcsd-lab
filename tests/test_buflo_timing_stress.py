@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import copy
 import json
 from pathlib import Path
 from typing import Any
@@ -8,10 +9,21 @@ from typing import Any
 import pytest
 
 from qcsd_lab import buflo_study
+from qcsd_lab.fidelity import SCHEDULE_PREFIX_FIELDS, SCHEDULE_QCSD_FIELDS
+from qcsd_lab.kernel_tx import build_observer_topology_receipt
 from qcsd_lab.parameters import (
     PREVIOUS_TIMING_STRESS_INPUT_POLICY,
+    PREVIOUS_TIMING_STRESS_V2_INPUT_POLICY,
     TIMING_STRESS_INPUT_POLICY,
     validate_parameter_artifact,
+)
+from qcsd_lab.util import sha256_file
+from tests.test_buflo_handoff import _runner_wakeup_receipt
+from tests.test_kernel_tx import (
+    _controller_isolation,
+    _evidence,
+    _runner_wakeup_v11,
+    _topology,
 )
 
 
@@ -35,15 +47,15 @@ def test_timing_stress_contract_preserves_frozen_campaign_counts_and_dynamic_dra
         "packet_size": 1_200,
         "max_events_per_direction": 6_000,
         "strict_half_open_window_us": 5_000,
-        "contract_schema_version": 2,
+        "contract_schema_version": 3,
         "cadence_semantics": ("inclusive-minimum-prefix-plus-bounded-terminal-whole-cell-drain"),
         "mandatory_prefix_opportunities_per_direction": 5_001,
-        "minimum_guarded_outgoing_releases_per_visit": 5_000,
-        "maximum_guarded_outgoing_releases_per_visit": 5_999,
+        "minimum_kernel_timed_outgoing_releases_after_tick_zero_per_visit": 5_000,
+        "maximum_kernel_timed_outgoing_releases_after_tick_zero_per_visit": 5_999,
         "minimum_incoming_bytes_per_visit": 6_001_200,
         "maximum_incoming_bytes_per_visit": 7_200_000,
-        "minimum_guarded_outgoing_releases": 60_000,
-        "maximum_guarded_outgoing_releases": 71_988,
+        "minimum_kernel_timed_outgoing_releases_after_tick_zero": 60_000,
+        "maximum_kernel_timed_outgoing_releases_after_tick_zero": 71_988,
         "minimum_opportunities_per_direction": 60_012,
         "maximum_opportunities_per_direction": 72_000,
         "logical_order_evidence": "direction-target-slot-identity",
@@ -52,6 +64,16 @@ def test_timing_stress_contract_preserves_frozen_campaign_counts_and_dynamic_dra
             "stop_new_opportunities_at_first_terminal_whole_cell_capacity_exhaustion_"
             "then_drain_already_advertised_incoming_credit"
         ),
+        "realization_backend": "linux-etf-so-txtime-post-veth-v1",
+        "runner_wakeup_schema_version": 11,
+        "legacy_userspace_exact_release_projection": (
+            "schema-10-compatibility-fields-retained-and-neutral"
+        ),
+        "kernel_tx_runner_receipt_schema_version": 1,
+        "kernel_tx_evidence_schema_version": 1,
+        "observer_topology_receipt_schema_version": 1,
+        "physical_outgoing_observer": "router-ingress-post-client-veth-pre-netem",
+        "tick_zero_physical_observation_required": True,
         "formal_evidence": False,
     }
     sensitivity = buflo_study._timing_stress_sensitivity()
@@ -93,16 +115,16 @@ def test_timing_stress_parameters_require_narrow_explicit_admission() -> None:
     )
 
     provenance_value = json.loads(provenance.read_text(encoding="utf-8"))
-    assert provenance_value["schema_version"] == 2
+    assert provenance_value["schema_version"] == 3
     assert provenance_value["capture_contract"] == {
-        "schema_version": 2,
+        "schema_version": 3,
         "visits": 12,
         "max_attempts": 1,
         "authoritative_checkpoint": "experiment.json",
         "mandatory_prefix_opportunities_per_direction": 5_001,
         "maximum_opportunities_per_direction": 6_000,
-        "minimum_guarded_outgoing_releases_per_visit": 5_000,
-        "maximum_guarded_outgoing_releases_per_visit": 5_999,
+        "minimum_kernel_timed_outgoing_releases_after_tick_zero_per_visit": 5_000,
+        "maximum_kernel_timed_outgoing_releases_after_tick_zero_per_visit": 5_999,
         "minimum_incoming_bytes_per_visit": 6_001_200,
         "maximum_incoming_bytes_per_visit": 7_200_000,
         "cadence_semantics": ("inclusive-minimum-prefix-plus-bounded-terminal-whole-cell-drain"),
@@ -115,6 +137,16 @@ def test_timing_stress_parameters_require_narrow_explicit_admission() -> None:
         ),
         "strict_half_open_window_us": 5_000,
         "catch_up": False,
+        "realization_backend": "linux-etf-so-txtime-post-veth-v1",
+        "runner_wakeup_schema_version": 11,
+        "legacy_userspace_exact_release_projection": (
+            "schema-10-compatibility-fields-retained-and-neutral"
+        ),
+        "kernel_tx_runner_receipt_schema_version": 1,
+        "kernel_tx_evidence_schema_version": 1,
+        "observer_topology_receipt_schema_version": 1,
+        "physical_outgoing_observer": "router-ingress-post-client-veth-pre-netem",
+        "tick_zero_physical_observation_required": True,
     }
 
 
@@ -133,6 +165,25 @@ def test_previous_timing_stress_parameters_remain_valid_as_historical_input() ->
 
     assert artifact.input_policy == PREVIOUS_TIMING_STRESS_INPUT_POLICY
     assert json.loads(provenance.read_text(encoding="utf-8"))["schema_version"] == 1
+
+
+def test_schema_two_timing_stress_parameters_remain_historical_not_current() -> None:
+    parameter = buflo_study.STUDY_ROOT / "buflo-timing-stress-v2.json"
+    provenance = parameter.with_suffix(parameter.suffix + ".provenance.json")
+
+    artifact = validate_parameter_artifact(
+        parameter,
+        provenance_path=provenance,
+        expected_kind="buflo",
+        allow_timing_stress=True,
+        expected_qcsd_profile="research-1200",
+        expected_udp_payload_ceiling=1_200,
+    )
+
+    assert artifact.input_policy == PREVIOUS_TIMING_STRESS_V2_INPUT_POLICY
+    assert artifact.input_policy != TIMING_STRESS_INPUT_POLICY
+    assert buflo_study.TIMING_STRESS_PARAMETERS.name == "buflo-timing-stress-v3.json"
+    assert json.loads(provenance.read_text(encoding="utf-8"))["schema_version"] == 2
 
 
 def _checkpoint_binding(*, cohort_version: int = 46) -> dict[str, Any]:
@@ -414,26 +465,7 @@ def test_timing_stress_root_and_input_inventories_reject_stray_files(
         buflo_study._validate_timing_stress_root_inventory(root)
 
 
-SCHEDULE_FIELDS = (
-    "target_time_us",
-    "direction",
-    "size",
-    "action_time_us",
-    "satisfaction",
-    "observed_size",
-    "miss_reason",
-    "slot_id",
-    "qcsd_outcome_schema_version",
-    "send_policy",
-    "desired_udp_bytes",
-    "observed_udp_bytes",
-    "congestion_reason",
-    "credit_advertised_at_us",
-    "credit_advertisement_delay_us",
-    "credit_consumed_at_us",
-    "credit_consumption_delay_us",
-    "terminal_defense_elapsed_us",
-)
+SCHEDULE_FIELDS = SCHEDULE_PREFIX_FIELDS + SCHEDULE_QCSD_FIELDS
 
 
 def _small_schedule_rows(
@@ -453,6 +485,7 @@ def _small_schedule_rows(
                     "target_time_us": target,
                     "direction": "outgoing",
                     "size": 1_200,
+                    "connection": 0,
                     "action_time_us": target,
                     "satisfaction": "satisfied",
                     "observed_size": 1_200,
@@ -473,6 +506,7 @@ def _small_schedule_rows(
                     "target_time_us": target,
                     "direction": "incoming",
                     "size": 1_200,
+                    "connection": 0,
                     "action_time_us": target,
                     "satisfaction": "satisfied",
                     "observed_size": "",
@@ -638,7 +672,6 @@ def _patch_small_schedule_contract(
     monkeypatch.setattr(buflo_study, "TIMING_STRESS_MAX_EVENTS_PER_DIRECTION", 5)
     monkeypatch.setattr(buflo_study, "TIMING_STRESS_MINIMUM_GUARDS_PER_VISIT", 2)
     monkeypatch.setattr(buflo_study, "TIMING_STRESS_MAXIMUM_GUARDS_PER_VISIT", 4)
-    monkeypatch.setattr(fidelity, "_runner_wakeup_metrics_valid", lambda value: True)
     # The production terminal validator retains the live ten-second floor.  This
     # scaled cadence fixture exercises the surrounding schema-4 evidence contract.
     monkeypatch.setattr(fidelity, "buflo_terminal_diagnostics_valid", lambda *args, **kwargs: True)
@@ -665,6 +698,56 @@ def _patch_small_schedule_contract(
             "invalid_credit_consumption_events": 0,
         },
     )
+    guards = opportunities - 1
+    histogram = {
+        "upper_bounds_nanoseconds": [
+            50_000,
+            100_000,
+            250_000,
+            500_000,
+            1_000_000,
+            2_000_000,
+            5_000_000,
+        ],
+        "counts": [guards, 0, 0, 0, 0, 0, 0, 0],
+    }
+    monkeypatch.setattr(
+        buflo_study,
+        "_timing_stress_kernel_tx_evidence",
+        lambda *args, **kwargs: {
+            "realization_backend": "linux-etf-so-txtime-post-veth-v1",
+            "runner_wakeup_schema_version": 11,
+            "legacy_userspace_exact_release_projection": {
+                "schema_version": 10,
+                "neutral": True,
+            },
+            "runner_receipt_schema_version": 1,
+            "evidence_schema_version": 1,
+            "observer_topology_schema_version": 1,
+            "job_count": opportunities,
+            "item_count": opportunities,
+            "etf_item_count": opportunities,
+            "ordered_item_count": 0,
+            "captured_credit_identity_count": opportunities,
+            "matched_item_count": opportunities,
+            "runner_failed_item_count": 0,
+            "runner_unresolved_item_count": 0,
+            "evidence_unresolved_item_count": 0,
+            "qdisc_drop_count": 0,
+            "qdisc_overlimit_count": 0,
+            "qdisc_requeue_count": 0,
+            "capture_drop_count": 0,
+            "max_tx_software_lateness_ns": 1_000,
+            "max_tx_to_capture_delta_ns": 1_000,
+            "max_post_veth_outgoing_release_lateness_ns": 1_000,
+            "kernel_timed_release_lateness_histogram_after_tick_zero": histogram,
+            "runner_receipt_sha256": "1" * 64,
+            "evidence_sha256": "2" * 64,
+            "router_capture_sha256": "3" * 64,
+            "router_receipt_sha256": "4" * 64,
+            "network_receipt_sha256": "5" * 64,
+        },
+    )
 
 
 def test_timing_stress_schedule_requires_exact_cells_and_credit_bytes(
@@ -674,8 +757,10 @@ def test_timing_stress_schedule_requires_exact_cells_and_credit_bytes(
     _write_small_schedule(tmp_path / "neqo/schedule.csv", _small_schedule_rows(3))
     run = _small_run(3)
 
-    evidence = buflo_study._timing_stress_schedule_evidence(tmp_path, run)
-    assert evidence["contract_schema_version"] == 2
+    evidence = buflo_study._timing_stress_schedule_evidence(
+        tmp_path, run, network_receipt={}
+    )
+    assert evidence["contract_schema_version"] == 3
     assert evidence["cadence"] == {
         "interval_us": 20,
         "minimum_duration_us": 40,
@@ -693,25 +778,85 @@ def test_timing_stress_schedule_requires_exact_cells_and_credit_bytes(
         "retired": 0,
         "unresolved": 0,
     }
-    assert evidence["runner_wakeup_schema_version"] == 10
-    assert evidence["active_wait_counter"]["counter_guards"] == 2
-    assert evidence["active_wait_counter"]["instant_confirmations"] == 2
-    assert evidence["active_wait_counter"]["authoritative_watchdog_checks"] == 2
-    assert evidence["active_wait_counter"]["authoritative_watchdog_cadence_validated_guards"] == 2
+    assert evidence["realization_backend"] == "linux-etf-so-txtime-post-veth-v1"
+    assert evidence["runner_wakeup_schema_version"] == 11
+    assert evidence["legacy_userspace_exact_release_projection"] == {
+        "schema_version": 10,
+        "neutral": True,
+    }
+    assert evidence["kernel_timed_outgoing_releases_after_tick_zero"] == 2
+    assert evidence["release_outcomes"] == {
+        "tick_zero_observed": 1,
+        "kernel_timed_after_tick_zero": 2,
+        "post_veth_matched": 3,
+        "failed": 0,
+    }
     assert evidence["terminal_schedule_stop"]["available_bytes"] == 270
     assert evidence["terminal_schedule_stop"]["drained_incoming_cells_after_stop"] == 1
     assert evidence["terminal_subcell_drain"]["exact_capacity_bytes_cancelled"] == 273
 
-    missing_worst_times = json.loads(json.dumps(run))
-    missing_worst_times["runner_wakeup_metrics"]["buflo_exact_release_worst_guard"][
-        "release_at_defense_nanoseconds"
-    ] = None
-    with pytest.raises(ValueError, match="current Linux guard timing evidence"):
-        buflo_study._timing_stress_schedule_evidence(tmp_path, missing_worst_times)
-
     run["defense_diagnostics"]["scheduled_incoming_consumed_bytes"] = 2_400
     with pytest.raises(ValueError, match="terminal diagnostics"):
-        buflo_study._timing_stress_schedule_evidence(tmp_path, run)
+        buflo_study._timing_stress_schedule_evidence(
+            tmp_path, run, network_receipt={}
+        )
+
+
+def test_timing_stress_rejects_coherently_resealed_incoming_u64_overflow(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_small_schedule_contract(monkeypatch, opportunities=3)
+    rows = _small_schedule_rows(3)
+    incoming = rows[-1]
+    action = int(incoming["action_time_us"])
+    incoming["credit_consumed_at_us"] = 2**64
+    incoming["credit_consumption_delay_us"] = 2**64 - action
+    _write_small_schedule(tmp_path / "neqo/schedule.csv", rows)
+
+    with pytest.raises(ValueError, match="incoming opportunity lacks exact credit evidence"):
+        buflo_study._timing_stress_schedule_evidence(
+            tmp_path,
+            _small_run(3),
+            network_receipt={},
+        )
+
+
+def test_timing_stress_rejects_overflowed_connection_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_small_schedule_contract(monkeypatch, opportunities=3)
+    rows = _small_schedule_rows(3)
+    rows[0]["connection"] = 2**64
+    _write_small_schedule(tmp_path / "neqo/schedule.csv", rows)
+
+    with pytest.raises(ValueError, match="malformed row"):
+        buflo_study._timing_stress_schedule_evidence(
+            tmp_path,
+            _small_run(3),
+            network_receipt={},
+        )
+
+
+def test_timing_stress_rejects_nonexact_runner_schedule_header(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_small_schedule_contract(monkeypatch, opportunities=3)
+    path = tmp_path / "neqo/schedule.csv"
+    path.parent.mkdir(parents=True)
+    with path.open("w", newline="", encoding="utf-8") as destination:
+        writer = csv.DictWriter(destination, fieldnames=(*SCHEDULE_FIELDS, "unbound"))
+        writer.writeheader()
+        writer.writerows(_small_schedule_rows(3))
+
+    with pytest.raises(ValueError, match="current typed outcome columns"):
+        buflo_study._timing_stress_schedule_evidence(
+            tmp_path,
+            _small_run(3),
+            network_receipt={},
+        )
 
 
 @pytest.mark.parametrize("reorder_terminal_rows", (False, True))
@@ -726,12 +871,20 @@ def test_timing_stress_accepts_exact_terminal_drain_suffix_and_resolution_reorde
         rows[-2:] = reversed(rows[-2:])
     _write_small_schedule(tmp_path / "neqo/schedule.csv", rows)
 
-    evidence = buflo_study._timing_stress_schedule_evidence(tmp_path, _small_run(4))
+    evidence = buflo_study._timing_stress_schedule_evidence(
+        tmp_path, _small_run(4), network_receipt={}
+    )
 
     assert evidence["scheduled_outgoing_opportunities"] == 4
     assert evidence["scheduled_incoming_opportunities"] == 4
-    assert evidence["mandatory_prefix_guarded_outgoing_releases"] == 2
-    assert evidence["terminal_drain_guarded_outgoing_releases"] == 1
+    assert (
+        evidence["mandatory_prefix_kernel_timed_outgoing_releases_after_tick_zero"]
+        == 2
+    )
+    assert (
+        evidence["terminal_drain_kernel_timed_outgoing_releases_after_tick_zero"]
+        == 1
+    )
     assert evidence["cadence"]["terminal_drain_opportunities_per_direction"] == 1
     assert evidence["cadence"]["last_target_time_us"] == 60
     assert evidence["cadence"]["terminal_resolution_row_reorderings"] == (
@@ -773,82 +926,223 @@ def test_timing_stress_rejects_invalid_prefix_suffix_and_terminal_evidence(
     _write_small_schedule(tmp_path / "neqo/schedule.csv", rows)
 
     with pytest.raises(ValueError, match=message):
-        buflo_study._timing_stress_schedule_evidence(tmp_path, run)
+        buflo_study._timing_stress_schedule_evidence(
+            tmp_path, run, network_receipt={}
+        )
+
+
+def _write_kernel_tx_attempt(
+    attempt: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
+    neqo = attempt / "neqo"
+    diagnostics = attempt / "diagnostics"
+    neqo.mkdir(parents=True)
+    diagnostics.mkdir()
+    run = {"runner_wakeup_metrics": _runner_wakeup_v11()}
+    run_path = neqo / "run.json"
+    run_path.write_text(json.dumps(run), encoding="utf-8")
+    router_capture = diagnostics / "kernel-tx-post-veth-raw.pcapng"
+    router_capture.write_bytes(b"test post-veth capture")
+
+    raw = run["runner_wakeup_metrics"]["buflo_kernel_tx"]
+    evidence, router_receipt, packets = _evidence(raw)
+    router_receipt["pcapng_sha256"] = sha256_file(router_capture)
+    evidence["runner_run_json_sha256"] = sha256_file(run_path)
+    evidence["post_veth_capture"] = copy.deepcopy(router_receipt)
+    evidence_path = diagnostics / "kernel-tx-evidence.json"
+    router_receipt_path = diagnostics / "kernel-tx-post-veth-receipt.json"
+    evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
+    router_receipt_path.write_text(json.dumps(router_receipt), encoding="utf-8")
+
+    network, binding, network_digest = _topology()
+    topology = build_observer_topology_receipt(
+        network_receipt=network,
+        observer_binding=binding,
+        network_receipt_sha256=network_digest,
+        controller_isolation=_controller_isolation(),
+    )
+    result = {
+        "observer_topology_required": True,
+        "observer_topology_receipt": topology,
+        "observer_topology_valid": True,
+        "kernel_tx_evidence_required": True,
+        "kernel_tx_evidence_path": "diagnostics/kernel-tx-evidence.json",
+        "kernel_tx_evidence_sha256": sha256_file(evidence_path),
+        "kernel_tx_evidence_valid": True,
+        "kernel_tx_evidence_error": None,
+    }
+    (attempt / "attempt.json").write_text(json.dumps(result), encoding="utf-8")
+    monkeypatch.setattr(
+        "qcsd_lab.kernel_tx_runtime.extract_router_udp_packets",
+        lambda path: copy.deepcopy(packets),
+    )
+    return run, network, packets
+
+
+def _rewrite_kernel_tx_result_hash(attempt: Path) -> None:
+    result_path = attempt / "attempt.json"
+    result = json.loads(result_path.read_text(encoding="utf-8"))
+    result["kernel_tx_evidence_sha256"] = sha256_file(
+        attempt / "diagnostics/kernel-tx-evidence.json"
+    )
+    result_path.write_text(json.dumps(result), encoding="utf-8")
+
+
+def test_timing_stress_kernel_tx_evidence_accepts_complete_current_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run, network, _packets = _write_kernel_tx_attempt(tmp_path, monkeypatch)
+
+    evidence = buflo_study._timing_stress_kernel_tx_evidence(
+        tmp_path,
+        run,
+        opportunities=1,
+        network_receipt=network,
+    )
+
+    assert evidence["realization_backend"] == "linux-etf-so-txtime-post-veth-v1"
+    assert evidence["runner_wakeup_schema_version"] == 11
+    assert evidence["legacy_userspace_exact_release_projection"] == {
+        "schema_version": 10,
+        "neutral": True,
+    }
+    assert evidence["job_count"] == 1
+    assert evidence["etf_item_count"] == 1
+    assert evidence["matched_item_count"] == evidence["item_count"] == 2
+    assert evidence["max_post_veth_outgoing_release_lateness_ns"] == 200_000
+    assert sum(
+        evidence["kernel_timed_release_lateness_histogram_after_tick_zero"]["counts"]
+    ) == 0
 
 
 @pytest.mark.parametrize(
-    ("field", "value"),
+    "tamper",
     (
-        ("buflo_exact_release_active_wait_counter_unavailable_guards", 1),
-        ("buflo_exact_release_active_wait_counter_nonmonotonic_guards", 1),
-        ("buflo_exact_release_active_wait_counter_calibrations", 3),
-        ("buflo_exact_release_active_wait_instant_confirmations", 1),
-        ("buflo_exact_release_active_wait_authoritative_watchdog_checks", 0),
-        (
-            "buflo_exact_release_active_wait_authoritative_watchdog_cadence_validated_guards",
-            1,
-        ),
-        ("buflo_exact_release_max_guard_exit_lateness_nanoseconds", 5_000),
+        "schema-ten",
+        "nonneutral-legacy-projection",
+        "missing-sidecar",
+        "sidecar-substitution",
+        "observer-substitution",
+        "qdisc-drop",
+        "job-count",
     ),
 )
-def test_schema_ten_timing_stress_rejects_counter_or_authoritative_lateness_failure(
+def test_timing_stress_kernel_tx_evidence_rejects_adversarial_mutation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    field: str,
-    value: int,
+    tamper: str,
 ) -> None:
-    _patch_small_schedule_contract(monkeypatch, opportunities=3)
-    _write_small_schedule(tmp_path / "neqo/schedule.csv", _small_schedule_rows(3))
-    run = _small_run(3)
-    run["runner_wakeup_metrics"][field] = value
+    run, network, _packets = _write_kernel_tx_attempt(tmp_path, monkeypatch)
+    evidence_path = tmp_path / "diagnostics/kernel-tx-evidence.json"
+    run_path = tmp_path / "neqo/run.json"
+    opportunities = 1
+    if tamper == "schema-ten":
+        run["runner_wakeup_metrics"] = _runner_wakeup_receipt(10)
+        run_path.write_text(json.dumps(run), encoding="utf-8")
+    elif tamper == "nonneutral-legacy-projection":
+        run["runner_wakeup_metrics"]["buflo_exact_release_guard_entries"] = 1
+        run_path.write_text(json.dumps(run), encoding="utf-8")
+    elif tamper == "missing-sidecar":
+        evidence_path.unlink()
+    elif tamper == "sidecar-substitution":
+        evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+        evidence["controlled_observer_binding"]["observer"]["container_id"] = "9" * 64
+        evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
+        _rewrite_kernel_tx_result_hash(tmp_path)
+    elif tamper == "observer-substitution":
+        result_path = tmp_path / "attempt.json"
+        result = json.loads(result_path.read_text(encoding="utf-8"))
+        result["observer_topology_receipt"]["network_receipt"]["router"][
+            "client_ipv4"
+        ] = "10.0.0.9"
+        result_path.write_text(json.dumps(result), encoding="utf-8")
+    elif tamper == "qdisc-drop":
+        evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+        evidence["qdisc"]["after"]["drops"] = 1
+        evidence["aggregate"]["qdisc_drop_count"] = 1
+        evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
+        _rewrite_kernel_tx_result_hash(tmp_path)
+    else:
+        opportunities = 2
 
-    with pytest.raises(ValueError, match="current Linux guard timing evidence"):
-        buflo_study._timing_stress_schedule_evidence(tmp_path, run)
-
-
-@pytest.mark.parametrize("schema_version", (6, 7, 8, 9))
-def test_timing_stress_rejects_noncurrent_wakeup_schema(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, schema_version: int
-) -> None:
-    _patch_small_schedule_contract(monkeypatch, opportunities=3)
-    _write_small_schedule(tmp_path / "neqo/schedule.csv", _small_schedule_rows(3))
-    run = _small_run(3)
-    run["runner_wakeup_metrics"]["schema_version"] = schema_version
-
-    with pytest.raises(ValueError, match="current Linux guard timing evidence"):
-        buflo_study._timing_stress_schedule_evidence(tmp_path, run)
+    with pytest.raises(ValueError, match="kernel-TX|observer"):
+        buflo_study._timing_stress_kernel_tx_evidence(
+            tmp_path,
+            run,
+            opportunities=opportunities,
+            network_receipt=network,
+        )
 
 
 def _aggregate_timing(opportunities: int) -> dict[str, Any]:
-    guards = opportunities - 1
+    releases = opportunities - 1
     incoming_bytes = opportunities * 1_200
     terminal_drain = opportunities - 5_001
+    histogram = {
+        "upper_bounds_nanoseconds": [
+            50_000,
+            100_000,
+            250_000,
+            500_000,
+            1_000_000,
+            2_000_000,
+            5_000_000,
+        ],
+        "counts": [0, 0, 0, 0, 0, 0, releases, 0],
+    }
+    kernel = {
+        "realization_backend": "linux-etf-so-txtime-post-veth-v1",
+        "runner_wakeup_schema_version": 11,
+        "legacy_userspace_exact_release_projection": {
+            "schema_version": 10,
+            "neutral": True,
+        },
+        "runner_receipt_schema_version": 1,
+        "evidence_schema_version": 1,
+        "observer_topology_schema_version": 1,
+        "job_count": opportunities,
+        "item_count": opportunities * 2,
+        "etf_item_count": opportunities,
+        "ordered_item_count": opportunities,
+        "captured_credit_identity_count": opportunities,
+        "matched_item_count": opportunities * 2,
+        "runner_failed_item_count": 0,
+        "runner_unresolved_item_count": 0,
+        "evidence_unresolved_item_count": 0,
+        "qdisc_drop_count": 0,
+        "qdisc_overlimit_count": 0,
+        "qdisc_requeue_count": 0,
+        "capture_drop_count": 0,
+        "max_tx_software_lateness_ns": 4_000_000,
+        "max_tx_to_capture_delta_ns": 500_000,
+        "max_post_veth_outgoing_release_lateness_ns": 4_999_999,
+        "kernel_timed_release_lateness_histogram_after_tick_zero": histogram,
+        "runner_receipt_sha256": "1" * 64,
+        "evidence_sha256": "2" * 64,
+        "router_capture_sha256": "3" * 64,
+        "router_receipt_sha256": "4" * 64,
+        "network_receipt_sha256": "5" * 64,
+    }
     return {
-        "contract_schema_version": 2,
+        "contract_schema_version": 3,
         "cadence": {
             "interval_us": 20_000,
             "minimum_duration_us": 100_000_000,
             "mandatory_prefix_opportunities_per_direction": 5_001,
             "terminal_drain_opportunities_per_direction": terminal_drain,
-            "last_target_time_us": guards * 20_000,
+            "last_target_time_us": releases * 20_000,
             "logical_slot_inventory": opportunities * 2,
             "terminal_resolution_row_reorderings": 2 if terminal_drain else 0,
         },
-        "mandatory_prefix_guarded_outgoing_releases": 5_000,
-        "terminal_drain_guarded_outgoing_releases": terminal_drain,
-        "guarded_outgoing_releases": guards,
-        "guard_outcomes": {
-            "entries": guards,
-            "dispatch_ready": guards,
+        "mandatory_prefix_kernel_timed_outgoing_releases_after_tick_zero": 5_000,
+        "terminal_drain_kernel_timed_outgoing_releases_after_tick_zero": terminal_drain,
+        "kernel_timed_outgoing_releases_after_tick_zero": releases,
+        "release_outcomes": {
+            "tick_zero_observed": 1,
+            "kernel_timed_after_tick_zero": releases,
+            "post_veth_matched": opportunities,
             "failed": 0,
-            "typed_failures": {
-                "invalid_counter_frequency": 0,
-                "counter_unavailable": 0,
-                "counter_nonmonotonic": 0,
-                "counter_frequency_changed": 0,
-                "counter_target_error": 0,
-            },
-            "last_failure": None,
         },
         "scheduled_outgoing_opportunities": opportunities,
         "scheduled_incoming_opportunities": opportunities,
@@ -861,37 +1155,16 @@ def _aggregate_timing(opportunities: int) -> dict[str, Any]:
             "retired": 0,
             "unresolved": 0,
         },
-        "max_outgoing_release_lateness_us": 4_999,
+        "max_schedule_outgoing_terminal_lateness_us": 4_999,
         "max_incoming_credit_advertisement_delay_us": 4_999,
-        "max_guard_exit_lateness_nanoseconds": 4_999_999,
-        "max_active_spin_gap_nanoseconds": 2_264_322,
-        "active_wait_counter": {
-            "source": "linux-aarch64-cntvct-el0-predictive-authoritative-watchdog-v2",
-            "frequency_hz": 1_000_000_000,
-            "counter_guards": guards,
-            "unavailable_guards": 0,
-            "nonmonotonic_guards": 0,
-            "calibrations": guards,
-            "instant_confirmations": guards,
-            "early_confirmation_retries": 0,
-            "authoritative_watchdog_checks": guards * 100,
-            "authoritative_watchdog_dispatches": guards,
-            "authoritative_watchdog_cadence_validated_guards": guards,
-            "counter_nanoseconds": guards * 5_000_000,
-            "max_counter_gap_nanoseconds": 2_264_322,
-            "max_calibration_span_nanoseconds": 1_000,
-            "max_authoritative_sample_gap_nanoseconds": 100_000,
-            "max_authoritative_counter_lag_nanoseconds": 50_000,
-            "max_counter_authoritative_lead_nanoseconds": 25_000,
+        "realization_backend": "linux-etf-so-txtime-post-veth-v1",
+        "runner_wakeup_schema_version": 11,
+        "legacy_userspace_exact_release_projection": {
+            "schema_version": 10,
+            "neutral": True,
         },
-        "dispatch_lateness_histogram": {
-            "upper_bounds_nanoseconds": [5_000_000],
-            "counts": [guards],
-        },
-        "active_spin_gap_histogram": {
-            "upper_bounds_nanoseconds": [5_000_000],
-            "counts": [guards],
-        },
+        "kernel_tx": kernel,
+        "kernel_timed_release_lateness_histogram_after_tick_zero": histogram,
     }
 
 
@@ -911,9 +1184,15 @@ def test_timing_stress_aggregate_binds_dynamic_mixed_visit_counts() -> None:
         ]
         * 6
     )
-    assert aggregate["guarded_outgoing_releases"] == 62_880
-    assert aggregate["mandatory_prefix_guarded_outgoing_releases"] == 60_000
-    assert aggregate["terminal_drain_guarded_outgoing_releases"] == 2_880
+    assert aggregate["kernel_timed_outgoing_releases_after_tick_zero"] == 62_880
+    assert (
+        aggregate["mandatory_prefix_kernel_timed_outgoing_releases_after_tick_zero"]
+        == 60_000
+    )
+    assert (
+        aggregate["terminal_drain_kernel_timed_outgoing_releases_after_tick_zero"]
+        == 2_880
+    )
     assert aggregate["full_outgoing_cells"] == 62_892
     assert aggregate["terminal_drain_opportunities_per_direction"] == 2_880
     assert aggregate["minimum_last_target_time_us"] == 100_000_000
@@ -926,22 +1205,44 @@ def test_timing_stress_aggregate_binds_dynamic_mixed_visit_counts() -> None:
         "retired": 0,
         "unresolved": 0,
     }
-    assert aggregate["active_wait_counter_guards"] == 62_880
-    assert aggregate["guard_outcomes"]["dispatch_ready"] == 62_880
-    assert aggregate["guard_outcomes"]["failed"] == 0
-    assert aggregate["active_wait_instant_confirmations"] == 62_880
-    assert aggregate["active_wait_authoritative_watchdog_checks"] == 6_288_000
-    assert aggregate["active_wait_authoritative_watchdog_dispatches"] == 62_880
-    assert aggregate["active_wait_authoritative_watchdog_cadence_validated_guards"] == 62_880
-    assert aggregate["active_wait_counter_nanoseconds"] == 314_400_000_000
-    assert aggregate["max_active_wait_counter_gap_nanoseconds"] == 2_264_322
-    assert aggregate["max_authoritative_sample_gap_nanoseconds"] == 100_000
-    assert aggregate["max_authoritative_counter_lag_nanoseconds"] == 50_000
-    assert aggregate["max_counter_authoritative_lead_nanoseconds"] == 25_000
-    assert aggregate["dispatch_lateness_histogram"]["counts"] == [62_880]
-    assert aggregate["active_spin_gap_histogram"]["counts"] == [62_880]
-    assert aggregate["observed_sensitivity"]["guard_population"] == 62_880
+    assert aggregate["release_outcomes"] == {
+        "tick_zero_observed": 12,
+        "kernel_timed_after_tick_zero": 62_880,
+        "post_veth_matched": 62_892,
+        "failed": 0,
+    }
+    assert aggregate["legacy_userspace_exact_release_projection"] == {
+        "schema_version": 10,
+        "neutral_visits": 12,
+        "nonneutral_visits": 0,
+    }
+    assert aggregate["kernel_tx"]["job_count"] == 62_892
+    assert aggregate["kernel_tx"]["etf_item_count"] == 62_892
+    assert aggregate["kernel_tx"]["item_count"] == 125_784
+    assert aggregate["kernel_tx"]["matched_item_count"] == 125_784
+    assert aggregate["kernel_tx"]["runner_failed_item_count"] == 0
+    assert aggregate["kernel_tx"]["capture_drop_count"] == 0
+    assert aggregate["kernel_timed_release_lateness_histogram_after_tick_zero"][
+        "counts"
+    ] == [0, 0, 0, 0, 0, 0, 62_880, 0]
+    assert (
+        aggregate["observed_sensitivity"][
+            "kernel_timed_outgoing_release_population_after_tick_zero"
+        ]
+        == 62_880
+    )
+    assert "guard_population" not in aggregate["observed_sensitivity"]
     assert set(aggregate["zero_failure_counts"].values()) == {0}
+
+
+def test_current_timing_stress_aggregate_rejects_schema_two_sample() -> None:
+    historical = _aggregate_timing(5_001)
+    historical["contract_schema_version"] = 2
+
+    with pytest.raises(ValueError, match="current kernel-TX contract"):
+        buflo_study._timing_stress_aggregate(
+            [{"timing": copy.deepcopy(historical)} for _ in range(12)]
+        )
 
 
 @pytest.mark.parametrize(
@@ -950,8 +1251,8 @@ def test_timing_stress_aggregate_binds_dynamic_mixed_visit_counts() -> None:
         "above-maximum",
         "sensitivity",
         "failure-count",
-        "watchdog-checks",
-        "watchdog-cadence",
+        "kernel-job-count",
+        "legacy-projection",
     ),
 )
 def test_timing_stress_dynamic_aggregate_rejects_contract_tamper(tamper: str) -> None:
@@ -961,13 +1262,15 @@ def test_timing_stress_dynamic_aggregate_rejects_contract_tamper(tamper: str) ->
     if tamper == "above-maximum":
         aggregate["opportunities_per_direction_by_visit"][0] = 6_001
     elif tamper == "sensitivity":
-        aggregate["observed_sensitivity"] = buflo_study._timing_stress_sensitivity()
+        aggregate["observed_sensitivity"] = (
+            buflo_study._timing_stress_kernel_sensitivity()
+        )
     elif tamper == "failure-count":
-        aggregate["zero_failure_counts"]["late_outgoing_releases"] = 1
-    elif tamper == "watchdog-checks":
-        aggregate["active_wait_authoritative_watchdog_checks"] = 0
+        aggregate["zero_failure_counts"]["late_post_veth_outgoing_releases"] = 1
+    elif tamper == "kernel-job-count":
+        aggregate["kernel_tx"]["job_count"] -= 1
     else:
-        aggregate["active_wait_authoritative_watchdog_cadence_validated_guards"] -= 1
+        aggregate["legacy_userspace_exact_release_projection"]["nonneutral_visits"] = 1
 
     with pytest.raises(ValueError, match="aggregate zero-failure gate"):
         buflo_study._validate_timing_stress_aggregate(aggregate)

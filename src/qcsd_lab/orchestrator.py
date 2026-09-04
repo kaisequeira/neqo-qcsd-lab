@@ -47,6 +47,7 @@ from .experiment import (
 )
 from .fidelity import (
     BUFLO_INCOMING_CREDIT_ADVERTISEMENT_DELAY_LIMIT_US,
+    _runner_csv_u64,
     _schedule_realization_metrics,
     fidelity_eligible,
     terminal_evidence_render_receipt_valid,
@@ -2308,6 +2309,261 @@ def _class_study_campaign_qualification_manifest_sha256(
     return digest
 
 
+_FITTING_GENERATION_STAGES = {
+    "pilot-compatibility": "pilot",
+    "certification": "authoritative",
+}
+_FITTED_MODE_TO_KIND = {
+    "traffic-morphing": "traffic_morphing",
+    "wtf-pad": "wtf_pad",
+    "walkie-talkie": "walkie_talkie",
+}
+
+
+def _class_study_configuration_runtime_inputs(
+    configuration: Mapping[str, Any],
+) -> dict[str, dict[str, Any]]:
+    """Recover typed runtime identities before a class-study resume mutates state."""
+
+    raw = configuration.get("defense_runtime_inputs")
+    if isinstance(raw, Mapping):
+        return {
+            str(name): dict(identity)
+            for name, identity in raw.items()
+            if isinstance(name, str) and isinstance(identity, Mapping)
+        }
+    records = configuration.get("defenses")
+    if not isinstance(records, list) or not records:
+        raise ValueError("class-study fitting-generation configuration has no defenses")
+    identities: dict[str, dict[str, Any]] = {}
+    for record in records:
+        if not isinstance(record, Mapping):
+            raise TypeError("class-study fitting-generation defense is malformed")
+        name = record.get("name")
+        kind = record.get("kind")
+        if not isinstance(name, str) or not isinstance(kind, str) or name in identities:
+            raise ValueError("class-study fitting-generation defense identity is invalid")
+        if kind in capture_engine.PARAMETER_FLAG_BY_KIND:
+            parameters_sha256 = record.get("parameters_sha256")
+            provenance_sha256 = record.get("provenance_sha256")
+            input_policy = record.get("input_policy")
+            if (
+                _SHA256.fullmatch(str(parameters_sha256)) is None
+                or _SHA256.fullmatch(str(provenance_sha256)) is None
+                or not isinstance(input_policy, str)
+                or not input_policy
+            ):
+                raise ValueError(
+                    f"class-study {name} fitting-generation parameter binding is incomplete"
+                )
+            identity = {
+                "identity_type": "hash-bound-parameter-artifact",
+                "runtime_kind": kind,
+                "parameters_sha256": parameters_sha256,
+                "provenance_sha256": provenance_sha256,
+                "input_policy": input_policy,
+            }
+        elif kind == "static":
+            schedule_sha256 = record.get("schedule_sha256")
+            mode = record.get("mode")
+            if (
+                _SHA256.fullmatch(str(schedule_sha256)) is None
+                or mode not in capture_engine.STATIC_MODES
+            ):
+                raise ValueError("class-study static fitting-generation binding is incomplete")
+            identity = {
+                "identity_type": "hash-bound-static-schedule",
+                "runtime_kind": kind,
+                "schedule_sha256": schedule_sha256,
+                "mode": mode,
+            }
+        elif kind in {"none", "front", "tamaraw"}:
+            identity = {
+                "identity_type": (
+                    "source-bound-no-defense" if kind == "none" else "source-bound-built-in"
+                ),
+                "runtime_kind": kind,
+            }
+        else:
+            raise ValueError(f"class-study {name} fitting-generation runtime kind is invalid")
+        identities[name] = identity
+    return identities
+
+
+def _class_study_fitting_runtime_projection(
+    campaign_or_configuration: Campaign | Mapping[str, Any],
+) -> dict[str, Any]:
+    """Project the runtime bytes that a fitted-generation capability authorises."""
+
+    from .class_study import COMPATIBILITY_MODES
+
+    if isinstance(campaign_or_configuration, Campaign):
+        role = campaign_or_configuration.evidence_role
+        runtime_inputs = _class_study_campaign_runtime_inputs(campaign_or_configuration)
+        qualification_set = campaign_or_configuration.chaff_qualification_set
+        manifest_sha256 = _class_study_campaign_qualification_manifest_sha256(
+            campaign_or_configuration
+        )
+    else:
+        role = campaign_or_configuration.get("evidence_role")
+        runtime_inputs = _class_study_configuration_runtime_inputs(campaign_or_configuration)
+        qualification_set = campaign_or_configuration.get("chaff_qualification_set")
+        manifest_sha256 = campaign_or_configuration.get(
+            "chaff_qualification_set_manifest_sha256"
+        )
+    if role not in _FITTING_GENERATION_STAGES:
+        raise ValueError(
+            "fitting-generation authority is valid only for compatibility/certification"
+        )
+    if tuple(runtime_inputs) != COMPATIBILITY_MODES:
+        raise ValueError("fitting-generation runtime map is not the exact nine-mode order")
+    if (
+        not isinstance(qualification_set, str)
+        or not qualification_set
+        or not isinstance(manifest_sha256, str)
+        or _SHA256.fullmatch(manifest_sha256) is None
+    ):
+        raise ValueError("fitting-generation qualification manifest identity is incomplete")
+    return {
+        "defense_runtime_inputs": runtime_inputs,
+        "qualification_set": qualification_set,
+        "qualification_set_manifest_sha256": manifest_sha256,
+    }
+
+
+def _fitting_generation_json_bytes(value: Mapping[str, Any]) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def verify_class_study_fitting_generation(
+    *,
+    source_result_root: Path,
+    campaign_path: Path | None = None,
+    frozen_result_root: Path | None = None,
+) -> dict[str, Any]:
+    """Refit a compatibility/certification bundle from its exact predecessor.
+
+    The ordinary campaign loader proves that the bundle is internally valid.
+    This stronger promotion boundary supplies ``source_result_root`` so all
+    fitted values and optimiser receipts are independently regenerated from
+    the exact fitting result selected by the coordinator.
+    """
+
+    if (campaign_path is None) == (frozen_result_root is None):
+        raise ValueError("fitting-generation verification requires one campaign or frozen result")
+    frozen = frozen_result_root is not None
+    campaign = (
+        _campaign_from_frozen_inputs(Path(frozen_result_root))
+        if frozen
+        else load_campaign(Path(campaign_path))
+    )
+    role = campaign.evidence_role
+    stage = _FITTING_GENERATION_STAGES.get(str(role))
+    if stage is None:
+        raise ValueError("fitting-generation verification requires compatibility/certification")
+
+    fitted = {
+        defense.name: defense
+        for defense in campaign.defenses
+        if defense.kind in SEALED_RESEARCH_PARAMETER_KINDS
+    }
+    if set(fitted) != set(_FITTED_MODE_TO_KIND):
+        raise ValueError("fitting-generation campaign lacks the exact fitted-defense set")
+    bundle_roots = {
+        defense.parameters_path.parent.resolve()
+        for defense in fitted.values()
+        if defense.parameters_path is not None
+    }
+    provenance_paths = {
+        defense.parameters_provenance_path.resolve()
+        for defense in fitted.values()
+        if defense.parameters_provenance_path is not None
+    }
+    if len(bundle_roots) != 1 or len(provenance_paths) != 1:
+        raise ValueError("fitting-generation defenses do not share one complete bundle")
+    [bundle_root] = bundle_roots
+    [provenance_path] = provenance_paths
+    if provenance_path.parent != bundle_root:
+        raise ValueError("fitting-generation provenance is outside its common bundle")
+
+    workload_roots = {workload.path.parent.resolve() for workload in campaign.workloads}
+    sidecar_roots = {
+        workload.chaff_qualification_path.parent.resolve()
+        for workload in campaign.workloads
+        if workload.chaff_qualification_path is not None
+    }
+    prefix_roots = {
+        workload.chaff_prefix_spec_path.parent.resolve()
+        for workload in campaign.workloads
+        if workload.chaff_prefix_spec_path is not None
+    }
+    if len(workload_roots) != 1 or len(sidecar_roots) != 1 or len(prefix_roots) != 1:
+        raise ValueError("fitting-generation qualification roots are not unique and complete")
+    [workload_root] = workload_roots
+    [sidecar_root] = sidecar_roots
+    [prefix_spec_root] = prefix_roots
+
+    from .class_fitting import (
+        BUNDLE_FILES as CLASS_BUNDLE_FILES,
+        PROVENANCE_FILE as CLASS_PROVENANCE_FILE,
+        QualificationContext,
+        verify_class_fitting_bundle,
+    )
+
+    source = Path(os.path.abspath(source_result_root))
+    if source.is_symlink() or not source.is_dir():
+        raise ValueError("fitting-generation source result is not a regular directory")
+    source = source.resolve()
+    verified = verify_class_fitting_bundle(
+        bundle_root,
+        qualification_context=QualificationContext(
+            workload_root=workload_root,
+            sidecar_root=sidecar_root,
+            prefix_spec_root=prefix_spec_root,
+            require_current_implementation=not frozen,
+            expected_qualification_set=campaign.chaff_qualification_set,
+        ),
+        source_result_root=source,
+    )
+    if verified.stage != stage:
+        raise ValueError("fitting-generation bundle has the wrong fitting stage")
+    runtime = _class_study_fitting_runtime_projection(campaign)
+    provenance_sha256 = sha256_file(bundle_root / CLASS_PROVENANCE_FILE)
+    for mode, kind in _FITTED_MODE_TO_KIND.items():
+        identity = runtime["defense_runtime_inputs"][mode]
+        if (
+            identity.get("parameters_sha256") != verified.artifact_hashes[kind]
+            or identity.get("provenance_sha256") != provenance_sha256
+            or fitted[mode].parameters_path.name != CLASS_BUNDLE_FILES[kind]
+        ):
+            raise ValueError("fitting-generation runtime identity differs from verified bundle")
+    evidence_path = source / "evidence.sha256"
+    if evidence_path.is_symlink() or not evidence_path.is_file():
+        raise ValueError("fitting-generation source result has no regular evidence seal")
+    # Close bundle/manifest replacement races after the independent refit.  The
+    # coordinator capability performs the same comparison again after the
+    # campaign is reloaded by run_campaign/resume_campaign.
+    _revalidate_loaded_class_study_runtime_files(campaign)
+    return {
+        "schema_version": 1,
+        "evidence_role": role,
+        "source_result": {
+            "root": str(source),
+            "evidence_sha256": sha256_file(evidence_path),
+        },
+        "bundle": {
+            "root": str(bundle_root),
+            "stage": stage,
+            "provenance_sha256": provenance_sha256,
+            "parameter_sha256": {
+                mode: verified.artifact_hashes[kind]
+                for mode, kind in _FITTED_MODE_TO_KIND.items()
+            },
+        },
+        "capture_runtime": runtime,
+    }
+
+
 @contextmanager
 def _study_capture_lock(results_root: Path):
     """Hold one non-blocking cross-process lock for all study acquisition."""
@@ -2372,6 +2628,8 @@ class _ClassStudyCoordinatorCaptureAuthority:
 
     campaign_identity: tuple[str, str, str, str, str, str, str | None]
     prerequisite_ledger: tuple[tuple[str, str, int | None, str, str], ...]
+    fitting_generation_sha256: str | None
+    fitting_runtime_sha256: str | None
 
 
 _CLASS_STUDY_COORDINATOR_CAPTURE_AUTHORITY: ContextVar[
@@ -2478,6 +2736,7 @@ def _class_study_coordinator_prerequisite_ledger(
 def _class_study_coordinator_capture_authority(
     campaign_configuration: Mapping[str, Any],
     prerequisite_records: tuple[Mapping[str, Any], ...],
+    fitting_generation: Mapping[str, Any] | None = None,
 ):
     """Authorise one identity-bound launch after coordinator prerequisite checks."""
 
@@ -2496,9 +2755,78 @@ def _class_study_coordinator_capture_authority(
         ledger = ()
     else:
         ledger = _class_study_coordinator_prerequisite_ledger(prerequisite_records)
+    generation_sha256: str | None = None
+    runtime_sha256: str | None = None
+    if identity[1] in _FITTING_GENERATION_STAGES:
+        if not isinstance(fitting_generation, Mapping):
+            raise ValueError(
+                "compatibility/certification capture lacks fitting-generation authority"
+            )
+        source = fitting_generation.get("source_result")
+        bundle = fitting_generation.get("bundle")
+        runtime = fitting_generation.get("capture_runtime")
+        expected_source_role = (
+            "pilot-fitting" if identity[1] == "pilot-compatibility" else "authoritative-fitting"
+        )
+        expected_runtime = _class_study_fitting_runtime_projection(campaign_configuration)
+        if (
+            set(fitting_generation)
+            != {"schema_version", "evidence_role", "source_result", "bundle", "capture_runtime"}
+            or fitting_generation.get("schema_version") != 1
+            or fitting_generation.get("evidence_role") != identity[1]
+            or not isinstance(source, Mapping)
+            or set(source) != {"root", "evidence_sha256"}
+            or not isinstance(source.get("root"), str)
+            or not isinstance(source.get("evidence_sha256"), str)
+            or _SHA256.fullmatch(source["evidence_sha256"]) is None
+            or not isinstance(bundle, Mapping)
+            or set(bundle)
+            != {"root", "stage", "provenance_sha256", "parameter_sha256"}
+            or not isinstance(bundle.get("root"), str)
+            or bundle.get("stage") != _FITTING_GENERATION_STAGES[identity[1]]
+            or not isinstance(bundle.get("provenance_sha256"), str)
+            or _SHA256.fullmatch(bundle["provenance_sha256"]) is None
+            or not isinstance(bundle.get("parameter_sha256"), Mapping)
+            or set(bundle["parameter_sha256"]) != set(_FITTED_MODE_TO_KIND)
+            or any(
+                not isinstance(digest, str) or _SHA256.fullmatch(digest) is None
+                for digest in bundle["parameter_sha256"].values()
+            )
+            or not isinstance(runtime, Mapping)
+            or dict(runtime) != expected_runtime
+        ):
+            raise ValueError("class-study fitting-generation authority is malformed or mismatched")
+        runtime_inputs = runtime["defense_runtime_inputs"]
+        assert isinstance(runtime_inputs, Mapping)
+        parameter_sha256 = bundle["parameter_sha256"]
+        assert isinstance(parameter_sha256, Mapping)
+        if any(
+            runtime_inputs[mode].get("parameters_sha256") != parameter_sha256[mode]
+            or runtime_inputs[mode].get("provenance_sha256")
+            != bundle["provenance_sha256"]
+            for mode in _FITTED_MODE_TO_KIND
+        ):
+            raise ValueError(
+                "class-study fitting-generation bundle differs from its capture runtime"
+            )
+        matching = [
+            item
+            for item in ledger
+            if item[1] == expected_source_role
+            and Path(item[3]).resolve() == Path(source["root"]).resolve()
+            and item[4] == source["evidence_sha256"]
+        ]
+        if len(matching) != 1:
+            raise ValueError("fitting-generation authority uses another prerequisite result")
+        generation_sha256 = sha256_bytes(_fitting_generation_json_bytes(fitting_generation))
+        runtime_sha256 = sha256_bytes(_fitting_generation_json_bytes(runtime))
+    elif fitting_generation is not None:
+        raise ValueError("non-fitted capture has unexpected fitting-generation authority")
     authority = _ClassStudyCoordinatorCaptureAuthority(
         campaign_identity=identity,
         prerequisite_ledger=ledger,
+        fitting_generation_sha256=generation_sha256,
+        fitting_runtime_sha256=runtime_sha256,
     )
     token = _CLASS_STUDY_COORDINATOR_CAPTURE_AUTHORITY.set(authority)
     try:
@@ -2521,6 +2849,27 @@ def _require_class_study_coordinator_capture_authority(
             "ordered class-study capture must be launched through the class-study "
             "coordinator with its validated prerequisite ledger or restart authority"
         )
+    if identity[1] in _FITTING_GENERATION_STAGES:
+        if (
+            authority.fitting_generation_sha256 is None
+            or authority.fitting_runtime_sha256 is None
+        ):
+            raise ValueError("compatibility/certification capability lacks fitting generation")
+        if isinstance(campaign_or_configuration, Campaign):
+            _revalidate_loaded_class_study_runtime_files(campaign_or_configuration)
+        runtime = _class_study_fitting_runtime_projection(campaign_or_configuration)
+        if (
+            sha256_bytes(_fitting_generation_json_bytes(runtime))
+            != authority.fitting_runtime_sha256
+        ):
+            raise ValueError(
+                "compatibility/certification runtime differs from fitted-generation authority"
+            )
+    elif (
+        authority.fitting_generation_sha256 is not None
+        or authority.fitting_runtime_sha256 is not None
+    ):
+        raise ValueError("non-fitted capture capability contains fitting-generation authority")
 
 
 def _has_durable_attempt_budget(campaign: Campaign) -> bool:
@@ -2863,9 +3212,13 @@ def _validate_class_study_preclaim_authority(
         source=source,
         paths=_class_study_authority_paths(campaign),
     )
-    if campaign.class_study_successor_sha256 is not None:
-        # Repeat artifact hashes and exact fitting provenance after campaign
-        # loading so no replacement can cross the load-to-claim boundary.
+    if (
+        campaign.class_study_successor_sha256 is not None
+        or campaign.evidence_role in _FITTING_GENERATION_STAGES
+    ):
+        # Repeat runtime artifact and manifest hashes after campaign loading so
+        # no replacement can cross the load-to-claim boundary. Successors also
+        # recheck their fitting-provenance lineage inside this helper.
         _revalidate_loaded_class_study_runtime_files(campaign)
     try:
         foundation_recorded_at = datetime.fromisoformat(str(authority["foundation"]["recorded_at"]))
@@ -4041,6 +4394,7 @@ def _success_diagnostics(result: dict[str, Any], attempt: Path) -> dict[str, Any
         "runner_binding_valid": result.get("runner_binding_valid", True),
         "operationally_valid": result.get("operationally_valid", True),
         "defense": result.get("defense_diagnostics") or {},
+        "resolved_configuration": result.get("resolved_configuration"),
     }
     runtime = _scheduler_runtime_receipt_for_promotion(result, attempt)
     if runtime is not None:
@@ -4195,13 +4549,25 @@ def _buflo_incoming_credit_delay_failure(
         if row.get("direction") != "incoming":
             continue
         try:
-            delay_us = int(row["credit_advertisement_delay_us"])
-            action_time_us = int(row["action_time_us"])
-            advertised_at_us = int(row["credit_advertised_at_us"])
+            delay_us = _runner_csv_u64(
+                row["credit_advertisement_delay_us"],
+                label="credit_advertisement_delay_us",
+            )
+            action_time_us = _runner_csv_u64(
+                row["action_time_us"],
+                label="action_time_us",
+            )
+            advertised_at_us = _runner_csv_u64(
+                row["credit_advertised_at_us"],
+                label="credit_advertised_at_us",
+            )
             violation = {
-                "slot_id": int(row["slot_id"]),
-                "connection": int(row["connection"]),
-                "target_time_us": int(row["target_time_us"]),
+                "slot_id": _runner_csv_u64(row["slot_id"], label="slot_id"),
+                "connection": _runner_csv_u64(row["connection"], label="connection"),
+                "target_time_us": _runner_csv_u64(
+                    row["target_time_us"],
+                    label="target_time_us",
+                ),
                 "action_time_us": action_time_us,
                 "credit_advertised_at_us": advertised_at_us,
                 "credit_advertisement_delay_us": delay_us,
@@ -4250,6 +4616,13 @@ def _intrinsic_fidelity_failure(
         }
 
     schedule = _schedule_realization_metrics(attempt)
+    try:
+        run = load_json(attempt / "neqo/run.json")
+    except (OSError, ValueError):
+        run = {}
+    result["resolved_configuration"] = (
+        run.get("resolved_configuration") if isinstance(run, Mapping) else None
+    )
     defense_metrics = result.get("defense_diagnostics")
     if not isinstance(defense_metrics, dict):
         defense_metrics = {}
@@ -4261,6 +4634,10 @@ def _intrinsic_fidelity_failure(
         missed_events=schedule.get("missed_events"),
         outgoing_size_mismatches=schedule.get("outgoing_size_mismatch_events"),
         schedule_metrics=schedule,
+        resolved_configuration=(
+            run.get("resolved_configuration") if isinstance(run, Mapping) else None
+        ),
+        require_defense_activation=True,
     )
     if eligible:
         return None
@@ -4605,6 +4982,8 @@ def _compare_group(
             missed_events=schedule.get("missed_events"),
             outgoing_size_mismatches=schedule.get("outgoing_size_mismatch_events"),
             schedule_metrics=schedule,
+            resolved_configuration=diagnostics.get("resolved_configuration"),
+            require_defense_activation=True,
         )
         diagnostics.update(
             response_match=response_match,

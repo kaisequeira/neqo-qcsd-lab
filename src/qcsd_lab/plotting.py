@@ -23,6 +23,7 @@ from matplotlib.lines import Line2D
 
 from .capture import ObserverPacket, extract_trace
 from .defenses import DEFENSE_LABELS, DEFENSE_ORDER, canonical_defense
+from .fidelity import _runner_csv_u64
 from .util import load_json, padding_event_guard_triggered
 
 OUTGOING = "#1f77b4"
@@ -80,7 +81,10 @@ def _schedule_action_times(
         if row.get("direction") != direction:
             continue
         try:
-            action_time_us = int(row["action_time_us"])
+            action_time_us = _runner_csv_u64(
+                row["action_time_us"],
+                label="schedule action_time_us",
+            )
         except (KeyError, TypeError, ValueError):
             continue
         action_unix_ns = int(anchor) + action_time_us * 1_000
@@ -146,7 +150,10 @@ def calculate_metrics(
     exact = []
     for row in satisfied:
         try:
-            if int(row["observed_size"]) == int(row["size"]):
+            if _runner_csv_u64(
+                row["observed_size"],
+                label="schedule observed_size",
+            ) == _runner_csv_u64(row["size"], label="schedule size"):
                 exact.append(row)
         except (KeyError, TypeError, ValueError):
             pass

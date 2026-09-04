@@ -39,6 +39,11 @@ from .buflo_evaluation import (
 from .capture import ObserverPacket, extract_trace
 from .defenses import defense_from_runtime_identity
 from .experiment import (
+    KERNEL_TX_EVIDENCE_DIRECTORY,
+    KERNEL_TX_EVIDENCE_FILES,
+    KERNEL_TX_EVIDENCE_RECEIPT_KEY,
+    KERNEL_TX_EVIDENCE_RECEIPT_SCHEMA_VERSION,
+    KERNEL_TX_EVIDENCE_RECEIPT_SOURCE,
     resolved_sample_directory,
     validate_accepted_scheduler_runtime_receipt,
 )
@@ -67,7 +72,9 @@ from .fidelity import (
     SCHEDULE_PREFIX_FIELDS,
     SCHEDULE_QCSD_FIELDS,
     _cs_buflo_rate_transition_vector_valid,
+    _runner_csv_u64,
     _schedule_realization_metrics_from_path,
+    _validate_qcsd_trace_extension,
     terminal_evidence_render_receipt_valid,
     buflo_terminal_diagnostics_valid,
     buflo_terminal_state_valid,
@@ -88,6 +95,11 @@ from .verification import VerifiedResult, verify_result
 
 ARTIFACT_TYPE = "qcsd-buflo-csbuflo-study-handoff"
 PURPOSE = "buflo-csbuflo-focused-evaluation"
+HANDOFF_SCHEMA_VERSION = 2
+_HISTORICAL_HANDOFF_SCHEMA_VERSION = SCHEMA_VERSION
+_SUPPORTED_HANDOFF_SCHEMA_VERSIONS = frozenset(
+    {_HISTORICAL_HANDOFF_SCHEMA_VERSION, HANDOFF_SCHEMA_VERSION}
+)
 FORMAL_RESULT_NAMES = tuple(
     f"buflo-study-v1-formal-{block + 1:02d}-1200" for block in FORMAL_BLOCKS
 )
@@ -127,7 +139,7 @@ _SOURCE_KEYS = frozenset(
         "neqo_patch_sha256",
     }
 )
-_ROW_KEYS = frozenset(
+_HISTORICAL_ROW_KEYS = frozenset(
     {
         "schema_version",
         "sample_id",
@@ -161,6 +173,13 @@ _ROW_KEYS = frozenset(
         "input_bindings",
     }
 )
+_ROW_KEYS = _HISTORICAL_ROW_KEYS | {"kernel_tx_evidence"}
+_KERNEL_TX_BINDING_SCHEMA_VERSION = 1
+_KERNEL_TX_BINDING_KEYS = frozenset({"schema_version", "source_receipt", "artifacts"})
+_KERNEL_TX_SOURCE_RECEIPT_KEYS = frozenset(
+    {"diagnostics_key", "schema_version", "source", "directory"}
+)
+_KERNEL_TX_ARTIFACT_BINDING_KEYS = frozenset({"source_path", "path", "sha256"})
 _RUNNER_DIAGNOSTIC_ROW_KEYS = frozenset(
     {
         "application_workload_path",
@@ -289,7 +308,14 @@ def export_study_handoff(
 
     candidate = Path(tempfile.mkdtemp(prefix=f".{destination.name}.qcsd-study-", dir=parent))
     try:
-        for directory in ("raw", "stripped", "traces", "diagnostics", "inputs"):
+        for directory in (
+            "raw",
+            "stripped",
+            "traces",
+            "diagnostics",
+            "inputs",
+            KERNEL_TX_EVIDENCE_DIRECTORY,
+        ):
             (candidate / directory).mkdir()
         rows: list[dict[str, Any]] = []
         blocks: list[dict[str, Any]] = []
@@ -346,6 +372,12 @@ def export_study_handoff(
                 run = load_json(candidate / raw_run_relative)
                 input_bindings = _sample_input_bindings(receipt.experiment["configuration"], sample)
                 _validate_run_sample_binding(run, sample, input_bindings)
+                kernel_tx_evidence = _export_kernel_tx_sidecar(
+                    candidate,
+                    receipt,
+                    sample,
+                    run=run,
+                )
                 endpoints = run.get("endpoints") if isinstance(run, Mapping) else None
                 if not isinstance(endpoints, list) or not endpoints:
                     raise ValueError("study handoff raw run has no endpoint list")
@@ -369,7 +401,7 @@ def export_study_handoff(
                     packets_path=candidate / packets_relative,
                 )
                 row = {
-                    "schema_version": SCHEMA_VERSION,
+                    "schema_version": HANDOFF_SCHEMA_VERSION,
                     "sample_id": sample_id,
                     "class_label": CLASS_LABELS.get(workload_id, workload_id),
                     "workload_id": workload_id,
@@ -407,6 +439,7 @@ def export_study_handoff(
                     "runner_packets_sha256": sha256_file(candidate / packets_relative),
                     "application_workload_path": workload_relative,
                     "application_workload_sha256": sha256_file(workload_destination),
+                    "kernel_tx_evidence": kernel_tx_evidence,
                     "algorithm_diagnostics": algorithm_diagnostics,
                     "packet_count": len(trace),
                     "performance": _performance_metadata(run, trace),
@@ -452,10 +485,12 @@ def validate_study_handoff(path: Path, *, formal: bool, deep: bool = True) -> Pa
     }
     legacy_detailed_top_level = historical_top_level | {"diagnostics"}
     detailed_top_level = legacy_detailed_top_level | {"inputs"}
+    current_top_level = detailed_top_level | {KERNEL_TX_EVIDENCE_DIRECTORY}
     if top_level not in {
         frozenset(historical_top_level),
         frozenset(legacy_detailed_top_level),
         frozenset(detailed_top_level),
+        frozenset(current_top_level),
     }:
         raise ValueError("study handoff top-level inventory is invalid")
     checksums = _read_checksums(root / "SHA256SUMS")
@@ -468,6 +503,15 @@ def validate_study_handoff(path: Path, *, formal: bool, deep: bool = True) -> Pa
 
     dataset = load_json(root / "dataset.json")
     rows = _read_json_lines(root / "samples.jsonl")
+    handoff_schema = dataset.get("schema_version") if isinstance(dataset, Mapping) else None
+    if (
+        handoff_schema not in _SUPPORTED_HANDOFF_SCHEMA_VERSIONS
+        or any(row.get("schema_version") != handoff_schema for row in rows)
+        or (handoff_schema == HANDOFF_SCHEMA_VERSION)
+        != (top_level == current_top_level)
+        or (formal and handoff_schema != HANDOFF_SCHEMA_VERSION)
+    ):
+        raise ValueError("study handoff schema/inventory declaration is inconsistent")
     detailed, legacy_detailed = _validate_handoff_rows(root, rows, formal=formal)
     if ("diagnostics" in top_level) is not detailed or (
         ("inputs" in top_level) is not (detailed and not legacy_detailed)
@@ -502,6 +546,8 @@ def validate_study_handoff(path: Path, *, formal: bool, deep: bool = True) -> Pa
             row = row_by_id[sample.sample_id]
             raw_run = load_json(root / row["raw_run_path"])
             _validate_run_sample_binding(raw_run, row, row["input_bindings"])
+            if row.get("schema_version") == HANDOFF_SCHEMA_VERSION:
+                _deep_validate_kernel_tx_binding(root, row, run=raw_run)
             endpoints = raw_run.get("endpoints") if isinstance(raw_run, Mapping) else None
             if not isinstance(endpoints, list) or not endpoints:
                 raise ValueError("study handoff raw run endpoint binding is invalid")
@@ -656,6 +702,29 @@ def _validate_formal_source_bindings(
                     handoff_checksums=handoff_checksums,
                 )
 
+            expected_kernel_tx = _expected_kernel_tx_binding(
+                receipt,
+                source_sample,
+                run=load_json(source_sample_root / "neqo/run.json"),
+            )
+            if row.get("kernel_tx_evidence") != expected_kernel_tx:
+                raise ValueError(
+                    "formal handoff kernel-TX binding differs from its sealed result"
+                )
+            if expected_kernel_tx is not None:
+                for artifact in expected_kernel_tx["artifacts"].values():
+                    _validate_sealed_source_copy(
+                        handoff_root,
+                        artifact,
+                        path_key="path",
+                        digest_key="sha256",
+                        source_path=receipt.root / artifact["source_path"],
+                        source_relative=artifact["source_path"],
+                        receipt=receipt,
+                        accepted_hashes=None,
+                        handoff_checksums=handoff_checksums,
+                    )
+
             workload_id = str(row["workload_id"])
             workload_relative = f"inputs/workloads/{workload_id}.json"
             _validate_sealed_source_copy(
@@ -705,6 +774,215 @@ def _validate_sealed_source_copy(
         or sha256_file(source_path) != seal_digest
     ):
         raise ValueError("formal handoff copy differs from its sealed source artifact")
+
+
+def _runner_kernel_tx_requirement(
+    run: Any,
+    *,
+    runtime_kind: Any,
+) -> tuple[bool, Mapping[str, Any] | None]:
+    wakeups = run.get("runner_wakeup_metrics") if isinstance(run, Mapping) else None
+    schema = wakeups.get("schema_version") if isinstance(wakeups, Mapping) else None
+    raw = wakeups.get("buflo_kernel_tx") if isinstance(wakeups, Mapping) else None
+    required = runtime_kind == "buflo" and schema == 11
+    if required and not isinstance(raw, Mapping):
+        raise ValueError("schema-11 BuFLO handoff sample has no raw kernel-TX receipt")
+    if not required and raw is not None:
+        raise ValueError("non-kernel handoff sample carries a raw kernel-TX receipt")
+    return required, raw if isinstance(raw, Mapping) else None
+
+
+def _expected_kernel_tx_binding(
+    receipt: VerifiedResult,
+    sample: Mapping[str, Any],
+    *,
+    run: Any,
+) -> dict[str, Any] | None:
+    """Bind a sealed source sidecar outside the five-file sample inventory."""
+
+    required, _raw = _runner_kernel_tx_requirement(
+        run,
+        runtime_kind=sample.get("runtime_kind"),
+    )
+    diagnostics = sample.get("diagnostics")
+    retained_value = (
+        diagnostics.get(KERNEL_TX_EVIDENCE_RECEIPT_KEY)
+        if isinstance(diagnostics, Mapping)
+        else None
+    )
+    if not required:
+        if retained_value is not None:
+            raise ValueError("non-kernel handoff sample claims kernel-TX evidence")
+        return None
+    if not isinstance(retained_value, Mapping):
+        raise ValueError("schema-11 BuFLO source sidecar receipt is unavailable")
+
+    sample_id = sample.get("sample_id")
+    if not isinstance(sample_id, str) or _COMPONENT.fullmatch(sample_id) is None:
+        raise ValueError("schema-11 BuFLO source sidecar sample identity is invalid")
+    source_directory = f"{KERNEL_TX_EVIDENCE_DIRECTORY}/{sample_id}"
+    source_artifacts = retained_value.get("artifacts")
+    if (
+        set(retained_value)
+        != {"schema_version", "source", "directory", "artifacts"}
+        or retained_value.get("schema_version")
+        != KERNEL_TX_EVIDENCE_RECEIPT_SCHEMA_VERSION
+        or retained_value.get("source") != KERNEL_TX_EVIDENCE_RECEIPT_SOURCE
+        or retained_value.get("directory") != source_directory
+        or not isinstance(source_artifacts, Mapping)
+        or set(source_artifacts) != KERNEL_TX_EVIDENCE_FILES
+        or any(_DIGEST.fullmatch(str(value)) is None for value in source_artifacts.values())
+    ):
+        raise ValueError("schema-11 BuFLO source sidecar receipt is invalid")
+
+    artifacts: dict[str, dict[str, str]] = {}
+    for name in sorted(KERNEL_TX_EVIDENCE_FILES):
+        source_path = f"{source_directory}/{name}"
+        digest = str(source_artifacts[name])
+        source = receipt.root / source_path
+        if (
+            receipt.checksums.get(source_path) != digest
+            or source.is_symlink()
+            or not source.is_file()
+            or sha256_file(source) != digest
+        ):
+            raise ValueError("schema-11 BuFLO source sidecar differs from its evidence seal")
+        artifacts[name] = {
+            "source_path": source_path,
+            "path": source_path,
+            "sha256": digest,
+        }
+    return {
+        "schema_version": _KERNEL_TX_BINDING_SCHEMA_VERSION,
+        "source_receipt": {
+            "diagnostics_key": KERNEL_TX_EVIDENCE_RECEIPT_KEY,
+            "schema_version": KERNEL_TX_EVIDENCE_RECEIPT_SCHEMA_VERSION,
+            "source": KERNEL_TX_EVIDENCE_RECEIPT_SOURCE,
+            "directory": source_directory,
+        },
+        "artifacts": artifacts,
+    }
+
+
+def _export_kernel_tx_sidecar(
+    candidate: Path,
+    receipt: VerifiedResult,
+    sample: Mapping[str, Any],
+    *,
+    run: Any,
+) -> dict[str, Any] | None:
+    binding = _expected_kernel_tx_binding(receipt, sample, run=run)
+    if binding is None:
+        return None
+    destination_root = candidate / KERNEL_TX_EVIDENCE_DIRECTORY / str(sample["sample_id"])
+    destination_root.mkdir()
+    for artifact in binding["artifacts"].values():
+        source = receipt.root / artifact["source_path"]
+        destination = candidate / artifact["path"]
+        _copy_sealed_file(receipt, source, destination)
+        if sha256_file(destination) != artifact["sha256"]:
+            raise ValueError("copied schema-11 BuFLO kernel-TX evidence changed")
+    return binding
+
+
+def _validate_kernel_tx_binding(
+    root: Path,
+    row: Mapping[str, Any],
+    *,
+    run: Any,
+) -> set[str]:
+    required, _raw = _runner_kernel_tx_requirement(
+        run,
+        runtime_kind=row.get("runtime_kind"),
+    )
+    binding = row.get("kernel_tx_evidence")
+    if not required:
+        if binding is not None:
+            raise ValueError("non-kernel handoff row claims kernel-TX evidence")
+        return set()
+    sample_id = str(row.get("sample_id"))
+    expected_directory = f"{KERNEL_TX_EVIDENCE_DIRECTORY}/{sample_id}"
+    if not isinstance(binding, Mapping):
+        raise ValueError("schema-11 BuFLO handoff row lacks kernel-TX evidence")
+    source_receipt = binding.get("source_receipt")
+    artifacts = binding.get("artifacts")
+    if (
+        set(binding) != _KERNEL_TX_BINDING_KEYS
+        or binding.get("schema_version") != _KERNEL_TX_BINDING_SCHEMA_VERSION
+        or not isinstance(source_receipt, Mapping)
+        or set(source_receipt) != _KERNEL_TX_SOURCE_RECEIPT_KEYS
+        or source_receipt.get("diagnostics_key") != KERNEL_TX_EVIDENCE_RECEIPT_KEY
+        or source_receipt.get("schema_version")
+        != KERNEL_TX_EVIDENCE_RECEIPT_SCHEMA_VERSION
+        or source_receipt.get("source") != KERNEL_TX_EVIDENCE_RECEIPT_SOURCE
+        or source_receipt.get("directory") != expected_directory
+        or not isinstance(artifacts, Mapping)
+        or set(artifacts) != KERNEL_TX_EVIDENCE_FILES
+    ):
+        raise ValueError("schema-11 BuFLO handoff kernel-TX binding is invalid")
+
+    directory_candidate = root / expected_directory
+    directory = directory_candidate.resolve()
+    if (
+        not directory.is_relative_to(root)
+        or directory_candidate.is_symlink()
+        or not directory.is_dir()
+        or {item.name for item in directory.iterdir()} != KERNEL_TX_EVIDENCE_FILES
+        or any(item.is_symlink() or not item.is_file() for item in directory.iterdir())
+    ):
+        raise ValueError("schema-11 BuFLO handoff kernel-TX directory is invalid")
+    expected_files: set[str] = set()
+    for name in sorted(KERNEL_TX_EVIDENCE_FILES):
+        artifact = artifacts.get(name)
+        expected_path = f"{expected_directory}/{name}"
+        if (
+            not isinstance(artifact, Mapping)
+            or set(artifact) != _KERNEL_TX_ARTIFACT_BINDING_KEYS
+            or artifact.get("source_path") != expected_path
+            or artifact.get("path") != expected_path
+            or _DIGEST.fullmatch(str(artifact.get("sha256"))) is None
+            or sha256_file(root / expected_path) != artifact.get("sha256")
+        ):
+            raise ValueError("schema-11 BuFLO handoff kernel-TX artifact binding is invalid")
+        expected_files.add(expected_path)
+    return expected_files
+
+
+def _deep_validate_kernel_tx_binding(
+    root: Path,
+    row: Mapping[str, Any],
+    *,
+    run: Any,
+) -> None:
+    required, raw = _runner_kernel_tx_requirement(
+        run,
+        runtime_kind=row.get("runtime_kind"),
+    )
+    if not required:
+        return
+    binding = row.get("kernel_tx_evidence")
+    if not isinstance(binding, Mapping) or raw is None:
+        raise ValueError("schema-11 BuFLO handoff lacks deep kernel-TX evidence")
+    artifacts = binding.get("artifacts")
+    if not isinstance(artifacts, Mapping):
+        raise ValueError("schema-11 BuFLO handoff kernel-TX artifacts are invalid")
+    router_capture = root / str(artifacts["router-capture.pcapng"]["path"])
+    router_receipt = load_json(root / str(artifacts["router-receipt.json"]["path"]))
+    evidence = load_json(root / str(artifacts["kernel-tx-evidence.json"]["path"]))
+
+    from .kernel_tx import kernel_tx_evidence_success_valid
+    from .kernel_tx_runtime import extract_router_udp_packets
+
+    router_packets = extract_router_udp_packets(router_capture)
+    if not kernel_tx_evidence_success_valid(
+        evidence,
+        runner_receipt=raw,
+        expected_run_json_sha256=sha256_file(root / str(row["raw_run_path"])),
+        expected_router_capture_sha256=sha256_file(router_capture),
+        router_capture_receipt=router_receipt,
+        router_packets=router_packets,
+    ):
+        raise ValueError("schema-11 BuFLO handoff kernel-TX evidence failed deep validation")
 
 
 def _sample_input_bindings(
@@ -929,6 +1207,10 @@ def _validate_handoff_sample_correctness(
         missed_events=schedule.get("missed_events"),
         outgoing_size_mismatches=schedule.get("outgoing_size_mismatch_events"),
         schedule_metrics=schedule,
+        resolved_configuration=(
+            run.get("resolved_configuration") if isinstance(run, Mapping) else None
+        ),
+        require_defense_activation=formal,
     )
     if runtime_kind in {"buflo", "cs_buflo"} and not new_defense_terminal_receipts_valid(
         run,
@@ -1109,7 +1391,9 @@ def _validate_dataset(dataset: Any, rows: Sequence[Mapping[str, Any]], *, formal
     if (
         not isinstance(dataset, dict)
         or set(dataset) != (_FORMAL_DATASET_KEYS if formal else _DATASET_KEYS)
-        or dataset.get("schema_version") != SCHEMA_VERSION
+        or dataset.get("schema_version") not in _SUPPORTED_HANDOFF_SCHEMA_VERSIONS
+        or (formal and dataset.get("schema_version") != HANDOFF_SCHEMA_VERSION)
+        or any(row.get("schema_version") != dataset.get("schema_version") for row in rows)
         or dataset.get("artifact_type") != ARTIFACT_TYPE
         or dataset.get("purpose") != PURPOSE
         or dataset.get("formal") is not formal
@@ -1271,111 +1555,11 @@ def _read_extended_runner_csv(
 
 
 def _validate_runner_extension(row: Mapping[str, str], *, label: str) -> None:
-    values = {field: row[field] for field in SCHEDULE_QCSD_FIELDS}
-    schema = values["qcsd_outcome_schema_version"]
-    if not schema:
-        if any(values.values()):
-            raise ValueError(f"{label} has typed values without a schema version")
-        return
-    if schema not in {"1", "2", "3"}:
-        raise ValueError(f"{label} has an invalid typed outcome identity")
-    advertisement_fields = (
-        "credit_advertised_at_us",
-        "credit_advertisement_delay_us",
-    )
-    consumption_fields = ("credit_consumed_at_us", "credit_consumption_delay_us")
-    terminal_field = "terminal_defense_elapsed_us"
-    advertisement_present = any(values[field] for field in advertisement_fields)
-    consumption_present = any(values[field] for field in consumption_fields)
-    advertisement_complete = all(values[field].isdecimal() for field in advertisement_fields)
-    consumption_complete = all(values[field].isdecimal() for field in consumption_fields)
-    if advertisement_present and not advertisement_complete:
-        raise ValueError(f"{label} has incomplete receive-credit advertisement evidence")
-    if consumption_present and not consumption_complete:
-        raise ValueError(f"{label} has incomplete receive-credit consumption evidence")
-    terminal_present = bool(values[terminal_field])
-    if terminal_present != (schema == "3") or (
-        terminal_present and not values[terminal_field].isdecimal()
-    ):
-        raise ValueError(f"{label} has invalid controller terminal-time evidence")
-    target = row.get("target_time_us", "")
-    if (
-        terminal_present
-        and target
-        and (not target.isdecimal() or int(values[terminal_field]) < int(target))
-    ):
-        raise ValueError(f"{label} terminal time predates its defense target")
-    if consumption_present and (schema not in {"2", "3"} or not advertisement_complete):
-        raise ValueError(f"{label} has unbound receive-credit consumption evidence")
-    if not values["send_policy"]:
-        if any(values[field] for field in LEGACY_SCHEDULE_QCSD_FIELDS[1:]):
-            raise ValueError(f"{label} mixes credit-only metadata with an outcome")
-        if (
-            schema == "3"
-            and not consumption_present
-            and (not advertisement_present or advertisement_complete)
-        ):
-            return
-        if schema != "2" or not advertisement_complete or consumption_present:
-            raise ValueError(f"{label} has a schema-only row without typed evidence")
-        return
-    if values["send_policy"] not in {"exact", "congestion_sensitive", "unscheduled"}:
-        raise ValueError(f"{label} has an invalid typed send policy")
-    desired = values["desired_udp_bytes"]
-    if not desired.isdecimal() or int(desired) <= 0:
-        raise ValueError(f"{label} has an invalid desired UDP size")
-    observed = values["observed_udp_bytes"]
-    suffix = (*_COMPOSITION_FIELDS, "lateness_us", "congestion_reason")
-    if not observed:
-        incoming_terminal = (
-            row.get("direction") == "incoming"
-            and values["send_policy"] == "exact"
-            and advertisement_complete
-        )
-        if any(values[field] for field in suffix) or (
-            consumption_present and not incoming_terminal
-        ):
-            raise ValueError(f"{label} has terminal evidence before an observed size")
-        return
-    if not observed.isdecimal():
-        raise ValueError(f"{label} has an invalid observed UDP size")
-    components = [values[field] for field in _COMPOSITION_FIELDS]
-    if consumption_present:
-        raise ValueError(f"{label} attaches peer-consumption timing to an observed UDP row")
-    if values["send_policy"] == "exact":
-        if any(components):
-            if (
-                schema not in {"2", "3"}
-                or not all(component.isdecimal() for component in components)
-                or sum(int(component) for component in components) != int(observed)
-                or not values["lateness_us"].isdecimal()
-            ):
-                raise ValueError(f"{label} has incomplete exact packet composition")
-        elif values["lateness_us"]:
-            raise ValueError(f"{label} gives an exact outcome unexplained lateness")
-        if values["congestion_reason"]:
-            raise ValueError(f"{label} gives an exact outcome congestion metadata")
-        return
-    if not all(component.isdecimal() for component in components):
-        raise ValueError(f"{label} has incomplete traffic composition")
-    if sum(int(component) for component in components) != int(observed):
-        raise ValueError(f"{label} traffic composition does not equal observed UDP bytes")
-    if not values["lateness_us"].isdecimal():
-        raise ValueError(f"{label} has no numeric scheduling lateness")
-    if values["congestion_reason"] not in {
-        "",
-        "congestion_limited",
-        "pacing_limited",
-    }:
-        raise ValueError(f"{label} has an invalid congestion reason")
-    if values["send_policy"] == "unscheduled" and values["congestion_reason"]:
-        raise ValueError(f"{label} gives an unscheduled datagram a congestion reason")
+    _validate_qcsd_trace_extension(row, label=label)
 
 
 def _csv_unsigned(value: Any, *, label: str, positive: bool = False) -> int:
-    if not isinstance(value, str) or not value.isdecimal():
-        raise ValueError(f"{label} is not an unsigned integer")
-    parsed = int(value)
+    parsed = _runner_csv_u64(value, label=label)
     if positive and parsed <= 0:
         raise ValueError(f"{label} is not positive")
     return parsed
@@ -1897,8 +2081,19 @@ def _buflo_terminal_times(
         slot = _csv_unsigned(row["slot_id"], label="schedule.csv BuFLO slot")
         matches = packets_by_slot[slot]
         size = _csv_unsigned(row["size"], label="schedule.csv BuFLO size", positive=True)
+        packet_numbers_valid = len(matches) == 1
+        if packet_numbers_valid:
+            try:
+                for field in (*_COMPOSITION_FIELDS, "lateness_us"):
+                    _csv_unsigned(
+                        matches[0][field],
+                        label=f"packets.csv BuFLO {field}",
+                    )
+            except ValueError:
+                packet_numbers_valid = False
         if (
             len(matches) != 1
+            or not packet_numbers_valid
             or row["satisfaction"] != "satisfied"
             or row["qcsd_outcome_schema_version"] != "3"
             or matches[0]["connection"] != row["connection"]
@@ -1929,9 +2124,6 @@ def _buflo_terminal_times(
                 positive=True,
             )
             != size
-            or any(
-                not matches[0][field].isdecimal() for field in (*_COMPOSITION_FIELDS, "lateness_us")
-            )
         ):
             raise ValueError("study handoff BuFLO outgoing terminal packet binding is invalid")
         terminal_us = _csv_unsigned(
@@ -2133,10 +2325,7 @@ def _algorithm_diagnostics(
         if satisfaction not in {"satisfied", "missed", "full", "partial", "suppressed"}:
             raise ValueError(f"schedule.csv row {index} has an invalid satisfaction")
         if require_current_trace:
-            if (
-                row["qcsd_outcome_schema_version"] != "3"
-                or not row["terminal_defense_elapsed_us"].isdecimal()
-            ):
+            if row["qcsd_outcome_schema_version"] != "3":
                 raise ValueError(
                     "study handoff current schedule row lacks exact controller terminal time"
                 )
@@ -2879,24 +3068,44 @@ def _validate_handoff_rows(
     expected_files = {"README.md", "dataset.json", "samples.jsonl"}
     seen_samples: set[str] = set()
     seen_paths: set[str] = set()
-    current_detailed_rows = [set(row) == _ROW_KEYS | _RUNNER_DIAGNOSTIC_ROW_KEYS for row in rows]
-    legacy_detailed_rows = [
-        set(row) == _ROW_KEYS | _LEGACY_RUNNER_DIAGNOSTIC_ROW_KEYS for row in rows
+    expected_sidecar_samples: set[str] = set()
+    current_schema_rows = [
+        row.get("schema_version") == HANDOFF_SCHEMA_VERSION
+        and set(row) == _ROW_KEYS | _RUNNER_DIAGNOSTIC_ROW_KEYS
+        for row in rows
     ]
-    historical_rows = [set(row) == _ROW_KEYS for row in rows]
+    historical_current_detailed_rows = [
+        row.get("schema_version") == _HISTORICAL_HANDOFF_SCHEMA_VERSION
+        and set(row) == _HISTORICAL_ROW_KEYS | _RUNNER_DIAGNOSTIC_ROW_KEYS
+        for row in rows
+    ]
+    legacy_detailed_rows = [
+        row.get("schema_version") == _HISTORICAL_HANDOFF_SCHEMA_VERSION
+        and set(row) == _HISTORICAL_ROW_KEYS | _LEGACY_RUNNER_DIAGNOSTIC_ROW_KEYS
+        for row in rows
+    ]
+    historical_rows = [
+        row.get("schema_version") == _HISTORICAL_HANDOFF_SCHEMA_VERSION
+        and set(row) == _HISTORICAL_ROW_KEYS
+        for row in rows
+    ]
     if not rows or not (
-        all(current_detailed_rows) or all(legacy_detailed_rows) or all(historical_rows)
+        all(current_schema_rows)
+        or all(historical_current_detailed_rows)
+        or all(legacy_detailed_rows)
+        or all(historical_rows)
     ):
         raise ValueError("study handoff sample row schema is invalid")
-    current_detailed = all(current_detailed_rows)
+    current_schema = all(current_schema_rows)
+    current_detailed = current_schema or all(historical_current_detailed_rows)
     legacy_detailed = all(legacy_detailed_rows)
     detailed = current_detailed or legacy_detailed
-    if formal and not current_detailed:
+    if formal and not current_schema:
         raise ValueError(
-            "formal study handoff requires sealed runner diagnostics and workload inputs"
+            "formal study handoff requires current sealed runner, workload, and kernel evidence"
         )
     for row in rows:
-        if row.get("schema_version") != SCHEMA_VERSION:
+        if row.get("schema_version") not in _SUPPORTED_HANDOFF_SCHEMA_VERSIONS:
             raise ValueError("study handoff sample row schema is invalid")
         sample_id = row.get("sample_id")
         workload_id = row.get("workload_id")
@@ -2998,6 +3207,14 @@ def _validate_handoff_rows(
             ):
                 raise ValueError("study handoff sample artifact digest mismatch")
             expected_files.add(relative)
+        run: Any = None
+        if detailed:
+            run = load_json(root / str(row["raw_run_path"]))
+        if current_schema:
+            sidecar_files = _validate_kernel_tx_binding(root, row, run=run)
+            if sidecar_files:
+                expected_sidecar_samples.add(str(sample_id))
+                expected_files.update(sidecar_files)
         if current_detailed:
             workload_relative = f"inputs/acquisition-block-{block + 1:03d}/{workload_id}.json"
             workload_digest = row.get("application_workload_sha256")
@@ -3018,7 +3235,6 @@ def _validate_handoff_rows(
                 raise ValueError("study handoff application workload digest is invalid")
             expected_files.add(workload_relative)
         if detailed:
-            run = load_json(root / str(row["raw_run_path"]))
             stored_diagnostics = row.get("algorithm_diagnostics")
             stored_schema = (
                 stored_diagnostics.get("schema_version")
@@ -3063,6 +3279,13 @@ def _validate_handoff_rows(
                     formal=formal,
                 )
 
+    if current_schema:
+        sidecar_root = root / KERNEL_TX_EVIDENCE_DIRECTORY
+        observed_sidecar_samples = {item.name for item in sidecar_root.iterdir()}
+        if observed_sidecar_samples != expected_sidecar_samples or any(
+            item.is_symlink() or not item.is_dir() for item in sidecar_root.iterdir()
+        ):
+            raise ValueError("study handoff kernel-TX sidecar inventory is not exact")
     actual_files = set(_regular_tree_files(root, exclude={"SHA256SUMS"}))
     if actual_files != expected_files:
         raise ValueError("study handoff sample inventory is not exact")
@@ -3305,7 +3528,7 @@ def _dataset_receipt(
     execution_source: Any,
 ) -> dict[str, Any]:
     value = {
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": HANDOFF_SCHEMA_VERSION,
         "artifact_type": ARTIFACT_TYPE,
         "purpose": PURPOSE,
         "formal": formal,
@@ -3742,7 +3965,10 @@ def _read_json_lines(path: Path) -> list[dict[str, Any]]:
             row = json.loads(line)
         except json.JSONDecodeError as error:
             raise ValueError(f"invalid study JSONL line {line_number}") from error
-        if not isinstance(row, dict) or row.get("schema_version") != SCHEMA_VERSION:
+        if (
+            not isinstance(row, dict)
+            or row.get("schema_version") not in _SUPPORTED_HANDOFF_SCHEMA_VERSIONS
+        ):
             raise ValueError(f"invalid study JSONL schema on line {line_number}")
         if line != json.dumps(row, sort_keys=True, separators=(",", ":")):
             raise ValueError(f"non-canonical study JSONL line {line_number}")
@@ -3817,6 +4043,15 @@ The defenses are client-only QUIC adaptations and are not paper-equivalent
 bilateral implementations. `samples.jsonl` is authoritative for temporal block
 splits and paired-visit membership. Validate the closed inventory with
 `sha256sum -c SHA256SUMS` and the semantic protocol with `buflo-study verify`.
+
+Schema 2 copies each schema-11 BuFLO post-veth proof into the separate
+`kernel-tx-evidence/<sample-id>/` tree. Each sample row binds the source receipt
+and the exact router capture, router receipt, and reconciliation receipt by
+canonical path and SHA-256. These three files remain outside the accepted
+sample's five-file inventory, while `SHA256SUMS` closes them as part of the
+handoff. Deep verification replays the copied router capture and rechecks the
+kernel-TX receipt against the copied `run.json`; formal verification also
+reopens the original result seal as its authentication boundary.
 
 For BuFLO, `algorithm_diagnostics.buflo_state` binds the inclusive-minimum
 terminal latch, zero live parser-lease bytes, zero pending application parser

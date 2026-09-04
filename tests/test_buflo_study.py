@@ -6,8 +6,11 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 import shutil
+import stat
 import subprocess
+import tempfile
 from collections import Counter
 from pathlib import Path
 from types import SimpleNamespace
@@ -81,6 +84,54 @@ from qcsd_lab.fidelity import (
     _runner_wakeup_metrics_valid as _fidelity_runner_wakeup_metrics_valid,
 )
 from qcsd_lab.util import LAB_ROOT
+
+
+@pytest.fixture(autouse=True)
+def _remove_test_checkout_build_taints(tmp_path: Path):
+    """Remove only audited supervisor records created for this test checkout."""
+
+    yield
+    expected_directory = str(tmp_path.resolve())
+    for root in Path("/tmp").glob("qcsd-docker-build-supervisor.*"):
+        try:
+            root_stat = root.lstat()
+        except FileNotFoundError:
+            continue
+        if (
+            root.is_symlink()
+            or not root.is_dir()
+            or root_stat.st_uid != os.getuid()
+            or stat.S_IMODE(root_stat.st_mode) != 0o700
+        ):
+            continue
+        records = [
+            candidate
+            for name in ("SUPERVISION", "RECOVERY", "SUPERVISION.next", "RECOVERY.next")
+            if (candidate := root / name).is_file() and not candidate.is_symlink()
+        ]
+        if not records or not any(
+            f"working_directory={expected_directory}\n"
+            in record.read_text(encoding="utf-8")
+            for record in records
+        ):
+            continue
+        for record in records:
+            metadata = record.stat()
+            assert metadata.st_uid == os.getuid()
+            assert stat.S_IMODE(metadata.st_mode) == 0o600
+            match = re.search(
+                r"^cli_pid=([1-9][0-9]*)$",
+                record.read_text(encoding="utf-8"),
+                flags=re.MULTILINE,
+            )
+            assert match is None or not Path(f"/proc/{match.group(1)}").exists()
+        assert {item.name for item in root.iterdir()} <= {
+            "SUPERVISION",
+            "RECOVERY",
+            "SUPERVISION.next",
+            "RECOVERY.next",
+        }
+        shutil.rmtree(root)
 
 
 def test_rust_code_gate_sidecar_hash_binds_exact_unsorted_json_bytes(
@@ -194,7 +245,7 @@ def _build_execution_value(
         target: {
             "tag": (
                 build_storage.BUILD_IMAGE_TAGS[target]
-                if schema_version == 2
+                if schema_version in {2, 3}
                 else f"neqo-qcsd-lab-{target}:test"
             ),
             "id": image_id if target == "collection" else "sha256:" + digest * 64,
@@ -207,7 +258,13 @@ def _build_execution_value(
             "target": target,
             "argv": [
                 "docker",
-                *(["--context", "default"] if schema_version == 2 else []),
+                *(
+                    ["--context", "default"]
+                    if schema_version == 2
+                    else ["--host", "unix:///var/run/docker.sock"]
+                    if schema_version == 3
+                    else []
+                ),
                 "build",
                 "--pull",
                 "--no-cache",
@@ -220,7 +277,7 @@ def _build_execution_value(
                             / f"{target}.iid"
                         ),
                     ]
-                    if schema_version == 2
+                    if schema_version in {2, 3}
                     else []
                 ),
                 "--target",
@@ -262,7 +319,7 @@ def _build_execution_value(
             "scope": "Docker-layer-cache-disabled;declared-BuildKit-dependency-cache-mounts-only",
         },
     }
-    if schema_version == 2:
+    if schema_version in {2, 3}:
         value["docker"] = {
             **value["docker"],
             "context": "default",
@@ -430,7 +487,7 @@ def _install_fake_boundary_docker(binary_root: Path, build_marker: Path) -> None
     docker.write_text(
         f"""#!/bin/sh
 set -eu
-if [ "${{1:-}}" = "--context" ]; then
+if [ "${{1:-}}" = "--context" ] || [ "${{1:-}}" = "--host" ]; then
   shift 2
 fi
 command="$1"
@@ -500,6 +557,7 @@ case "$command" in
       '{{{{.OperatingSystem}}}}') printf '%s\\n' "${{QCSD_TEST_DOCKER_OPERATING_SYSTEM:-Docker Desktop}}" ;;
       '{{{{.OSType}}}}') printf '%s\\n' 'linux' ;;
       '{{{{.Architecture}}}}') printf '%s\\n' 'x86_64' ;;
+      '{{{{.ID}}}}') printf '%s\\n' "$server_id" ;;
       *) exit 1 ;;
     esac
     ;;
@@ -531,6 +589,14 @@ case "$command" in
     esac
     ;;
   run)
+    cidfile=""
+    previous=""
+    for argument in "$@"; do
+      if [ "$previous" = "--cidfile" ]; then cidfile="$argument"; fi
+      previous="$argument"
+    done
+    [ -n "$cidfile" ] || exit 1
+    printf '%s\n' {('a' * 64)!r} > "$cidfile"
     case "$*" in
       */source.json)
         if [ -n "${{QCSD_TEST_SOURCE_CHANGE_IMAGE_ID:-}}" ] &&
@@ -550,6 +616,13 @@ case "$command" in
       *) exit 1 ;;
     esac
     ;;
+  container)
+    case "$1" in
+      ls) exit 0 ;;
+      inspect) exit 1 ;;
+      *) exit 1 ;;
+    esac
+    ;;
   *) exit 1 ;;
 esac
 """,
@@ -562,8 +635,44 @@ def _launcher_boundary_fixture(
     tmp_path: Path,
 ) -> tuple[Path, Path, dict[str, str]]:
     launcher = tmp_path / "qcsd-lab"
-    launcher.write_bytes((LAB_ROOT / "qcsd-lab").read_bytes())
+    launcher_source = (LAB_ROOT / "qcsd-lab").read_text(encoding="utf-8")
+    verifier_start = launcher_source.index("_qcsd_verify_clean_build_checkout() {")
+    verifier_end = launcher_source.index("\n}\n\nif [[", verifier_start) + 2
+    launcher_source = (
+        launcher_source[:verifier_start]
+        + "_qcsd_verify_clean_build_checkout() {\n  return 0\n}"
+        + launcher_source[verifier_end:]
+    )
+    launcher.write_text(launcher_source, encoding="utf-8")
     launcher.chmod(0o755)
+    (tmp_path / "tools").mkdir()
+    supervisor = tmp_path / "tools/docker_signal_supervisor.sh"
+    supervisor.write_bytes(
+        (LAB_ROOT / "tools/docker_signal_supervisor.sh").read_bytes()
+        + b'''\n# Test-only exact lifecycle namespace; production has no environment override.\n_qcsd_secure_lifecycle_base() {\n  local entry canonical metadata\n  _qcsd_lifecycle_base="${QCSD_TEST_LIFECYCLE_BASE:?}"\n  [[ "${_qcsd_lifecycle_base}" == /* && ! -L "${_qcsd_lifecycle_base}" &&\n      -d "${_qcsd_lifecycle_base}" ]] || return 1\n  canonical="$(readlink -f -- "${_qcsd_lifecycle_base}")" || return 1\n  [[ "${canonical}" == "${_qcsd_lifecycle_base}" ]] || return 1\n  metadata="$(stat -Lc '%u:%a:%F' -- "${_qcsd_lifecycle_base}")" || return 1\n  [[ "${metadata}" == "$(id -u):700:directory" ]] || return 1\n  for entry in "${_qcsd_lifecycle_base}"/*; do\n    [[ -e "${entry}" || -L "${entry}" ]] || continue\n    [[ "${entry##*/}" =~ ^(run|network|build|transaction)[.][0-9a-f]{32}$ &&\n        ! -L "${entry}" && -d "${entry}" ]] || return 1\n    _qcsd_validate_lifecycle_root_contents "${entry}" || return 1\n  done\n}\n_qcsd_lifecycle_lock_path() {\n  printf '%s.lock\\n' "${QCSD_TEST_LIFECYCLE_BASE:?}"\n}\n# This copied fixture keeps fake Docker calls local and fast. The production\n# leased transient-service boundary is covered by the guardian/native suite.\n_qcsd_docker_api_service_with_timeout() {\n  local duration="${1:?}"\n  shift\n  /usr/bin/timeout --signal=KILL --kill-after=1 "${duration}s" "$@"\n}\n_qcsd_launcher_birth_bound_hook() {\n  local kind="$1" launcher_pid="$2" root="$3"\n  if [[ "${QCSD_TEST_KILL_GUARDIAN_AFTER_BIRTH_KIND:-}" == "$kind" &&\n        ! -e "${QCSD_TEST_HANDOVER_DISABLE:-/nonexistent}" ]]; then\n    printf '%s %s\\n' "$launcher_pid" "$root" >"$QCSD_TEST_HANDOVER_MARKER"\n    kill -KILL "$_QCSD_LIFECYCLE_GUARD_PID"\n    while :; do sleep 1; done\n  fi\n}\n'''
+    )
+    supervisor.chmod(0o755)
+    native = tmp_path / "tools/docker_lifecycle_native.py"
+    native.write_bytes((LAB_ROOT / "tools/docker_lifecycle_native.py").read_bytes())
+    native.chmod(0o644)
+    guardian = tmp_path / "tools/docker_lifecycle_lock_guardian.py"
+    guardian_source = (
+        LAB_ROOT / "tools/docker_lifecycle_lock_guardian.py"
+    ).read_text(encoding="utf-8")
+    guardian_source = guardian_source.replace(
+        "            source_descriptor=source_descriptor,\n        )",
+        "            source_descriptor=source_descriptor,\n"
+        "            lock_parent=Path(os.environ[\"QCSD_TEST_GUARDIAN_LOCK_PARENT\"]),\n"
+        "        )",
+    )
+    guardian_source = guardian_source.replace(
+        '\nif __name__ == "__main__":',
+        '\n# Test-only fixed roots; this copied guardian is never production code.\n'
+        '_SAFE_PATH = os.environ["QCSD_TEST_BINARY_ROOT"] + ":" + _SAFE_PATH\n\n'
+        'if __name__ == "__main__":',
+    )
+    guardian.write_text(guardian_source, encoding="utf-8")
+    guardian.chmod(0o644)
     (tmp_path / "neqo-qcsd").mkdir()
     (tmp_path / "neqo-qcsd/Cargo.lock").write_text("lock\n", encoding="utf-8")
     (tmp_path / "uv.lock").write_text("lock\n", encoding="utf-8")
@@ -579,11 +688,142 @@ def _launcher_boundary_fixture(
     environment["QCSD_TEST_DOCKER_SERVER_ID"] = (
         f"{identity[:8]}-{identity[8:12]}-{identity[12:16]}-{identity[16:20]}-{identity[20:]}"
     )
+    lifecycle_base = tmp_path / "docker-lifecycle"
+    lifecycle_base.mkdir(mode=0o700)
+    guardian_lock_parent = tmp_path / "guardian-locks"
+    guardian_lock_parent.mkdir(mode=0o700)
+    environment["QCSD_TEST_LIFECYCLE_BASE"] = str(lifecycle_base.resolve())
+    environment["QCSD_TEST_GUARDIAN_LOCK_PARENT"] = str(
+        guardian_lock_parent.resolve()
+    )
+    environment["QCSD_TEST_BINARY_ROOT"] = str(binary_root.resolve())
     return launcher, build_marker, environment
 
 
 def _marked_build_count(path: Path) -> int:
     return len(path.read_text(encoding="utf-8").splitlines()) if path.exists() else 0
+
+
+def _build_cli_taint(*, working_directory: Path, daemon_id: str) -> str:
+    return (
+        "object=docker-build-cli\n"
+        "cli_pid=unavailable\n"
+        "cli_start_time=unavailable\n"
+        "cli_session=unavailable\n"
+        "cli_process_group=unavailable\n"
+        "docker_context=default\n"
+        "docker_host=unix:///var/run/docker.sock\n"
+        f"docker_server_id={daemon_id}\n"
+        f"docker_daemon_id={daemon_id}\n"
+        f"working_directory={working_directory.resolve()}\n"
+        f"build_argv_sha256={'0' * 64}\n"
+        "requested_signal=TERM\n"
+        "forwarded_cli_signal=INT\n"
+        "daemon_cancellation=unavailable-client-disconnect-only\n"
+    )
+
+
+def _build_scope_launcher_taint(
+    *,
+    supervisor_root: Path,
+    record_name: str,
+    working_directory: Path,
+    daemon_id: str,
+    supervision_state: str = "declared",
+    recovery_late_signal: bool = False,
+) -> str:
+    scope_unit = f"qcsd-docker-build-{'0' * 32}.scope"
+    common = [
+        ("object", "docker-build-scope-launcher"),
+        ("process_identity_role", "local-systemd-run-scope-launcher"),
+    ]
+    if record_name == "SUPERVISION":
+        if supervision_state == "declared":
+            launcher_identity = ("unavailable",) * 4
+            scope_control_group = "unavailable"
+            status_file_state = "declared"
+        elif supervision_state == "active":
+            launcher_identity = ("4242", "12345", "4242", "4242")
+            scope_control_group = f"/user.slice/app.slice/{scope_unit}"
+            status_file_state = "awaiting-command-status"
+        else:
+            raise AssertionError(
+                f"unsupported scope-launcher supervision state: {supervision_state}"
+            )
+        fields = common + [
+            ("scope_launcher_pid", launcher_identity[0]),
+            ("scope_launcher_start_time", launcher_identity[1]),
+            ("scope_launcher_session", launcher_identity[2]),
+            ("scope_launcher_process_group", launcher_identity[3]),
+            ("docker_context", "default"),
+            ("docker_host", "unix:///var/run/docker.sock"),
+            ("docker_server_id", daemon_id),
+            ("docker_daemon_id", daemon_id),
+            ("working_directory", str(working_directory.resolve())),
+            ("build_argv_sha256", "0" * 64),
+            ("scope_required", "1"),
+            ("scope_unit", scope_unit),
+            ("scope_control_group", scope_control_group),
+            ("scope_state", supervision_state),
+            ("host_boot_id", "00000000-0000-0000-0000-000000000001"),
+            ("status_file", str(supervisor_root.resolve() / "build.status")),
+            ("status_file_state", status_file_state),
+            ("requested_signal", "none"),
+            ("forwarded_cli_signal", "none"),
+            ("daemon_cancellation", "unavailable-client-disconnect-only"),
+        ]
+    elif record_name == "RECOVERY":
+        if recovery_late_signal:
+            scope_signal = ("0", "not_attempted")
+            cli_signal = ("none", "0", "not_attempted")
+        else:
+            scope_signal = ("1", "accepted")
+            cli_signal = ("INT", "1", "accepted")
+        fields = common + [
+            ("scope_launcher_pid", "4242"),
+            ("scope_launcher_start_time", "12345"),
+            ("scope_launcher_session", "4242"),
+            ("scope_launcher_process_group", "4242"),
+            ("docker_context", "default"),
+            ("docker_host", "unix:///var/run/docker.sock"),
+            ("docker_server_id", daemon_id),
+            ("docker_daemon_id", daemon_id),
+            ("working_directory", str(working_directory.resolve())),
+            ("build_argv_sha256", "0" * 64),
+            ("scope_required", "1"),
+            ("scope_unit", scope_unit),
+            ("scope_control_group", f"/user.slice/app.slice/{scope_unit}"),
+            ("scope_final_state", "inactive"),
+            ("scope_signal_attempted", scope_signal[0]),
+            ("scope_signal_outcome", scope_signal[1]),
+            ("scope_leak_detected", "0"),
+            ("scope_kill_attempted", "0"),
+            ("scope_kill_outcome", "not_attempted"),
+            ("scope_empty_proven", "1"),
+            ("host_boot_id", "00000000-0000-0000-0000-000000000001"),
+            ("status_file", str(supervisor_root.resolve() / "build.status")),
+            ("status_file_state", "valid"),
+            ("status_file_matches", "1"),
+            ("docker_command_status", "130"),
+            ("systemd_run_status", "130"),
+            ("requested_signal", "TERM"),
+            ("forwarded_cli_signal", cli_signal[0]),
+            ("cli_signal_attempted", cli_signal[1]),
+            ("cli_signal_outcome", cli_signal[2]),
+            ("cli_forced", "0"),
+            ("cli_force_attempted", "0"),
+            ("cli_force_outcome", "not_attempted"),
+            ("daemon_cancellation", "unavailable-client-disconnect-only"),
+        ]
+    else:
+        raise AssertionError(f"unsupported scope-launcher record: {record_name}")
+    return "".join(f"{key}={value}\n" for key, value in fields)
+
+
+def _replace_taint_field(taint: str, key: str, value: str) -> str:
+    pattern = rf"^{re.escape(key)}=.*$"
+    assert len(re.findall(pattern, taint, flags=re.MULTILINE)) == 1
+    return re.sub(pattern, f"{key}={value}", taint, flags=re.MULTILINE)
 
 
 def _runner_wakeup_receipt() -> dict[str, object]:
@@ -6526,11 +6766,20 @@ def test_launcher_requires_clean_capture_image_and_no_cache_build() -> None:
     assert '"${1:-}" == "run"' in direct_run_guard
     assert "buflo-study-v1-(smoke|rehearsal|formal-[0-9]{2})" in direct_run_guard
     assert '"${1:-}" == "resume"' not in direct_run_guard
-    assert launcher.count('docker --context "${build_docker_context}" build --pull --no-cache') == 3
+    supervised_build = (
+        'qcsd_run_docker_build docker --context "${build_docker_context}" '
+        "build --pull --no-cache"
+    )
+    assert launcher.count(supervised_build) == 3
+    assert not re.search(
+        r"^\s*docker --context \"\$\{build_docker_context\}\" build ",
+        launcher,
+        flags=re.MULTILINE,
+    )
     assert "WSL_HOST_BUILD_MIN_AVAILABLE_BYTES=68719476736" in launcher
     assert launcher.count('wsl_host_build_storage_probe "') == 4
     assert "windows_docker_storage_probe.ps1" in launcher
-    assert '"schema_version": 2' in launcher
+    assert '"schema_version": 3' in launcher
     assert '"host_storage_preflight": host_storage' in launcher
     assert launcher.count('"${ROOT}/src/qcsd_lab/build_storage.py" receipt') == 2
     assert "validate_build_execution_envelope" in launcher
@@ -6558,7 +6807,7 @@ def test_launcher_applies_least_privilege_rr1_capture_partition() -> None:
     assert 'runtime+=(--cpuset-cpus "10-11" --ulimit "rtprio=1:1")' in launcher
     assert "--cpuset-cpus 10-11" in launcher
     assert "--ulimit rtprio=1:1" in launcher
-    assert "docker ps --format '{{.ID}}'" in launcher
+    assert "_qcsd_docker_api ps --format '{{.ID}}'" in launcher
     assert "docker-inspect-all-running-containers-prelaunch-v1" in launcher
     assert "docker-inspect-all-running-containers-prelaunch-v2" in launcher
     assert 'QCSD_CAPTURE_ETF_INTERFACE=eth0' in launcher
@@ -6569,7 +6818,7 @@ def test_launcher_applies_least_privilege_rr1_capture_partition() -> None:
     assert "router-eth0-ingress-after-client-veth-before-ifb0-ingress-netem" in launcher
     assert "controlled kernel-TX router did not reach the idle end state" in launcher
     assert "kernel-TX post-veth capture root contains stale evidence" in launcher
-    assert "container_set_matches_expected = set(expected) == observed_names" in launcher
+    assert "container_set_matches_expected = expected_pairs == observed_pairs" in launcher
     assert "refuses a running Docker container without the" in launcher
     assert "QCSD_CAPTURE_SCHEDULER_HOST_PARTITION_B64" in launcher
     assert launcher.count('--label "org.qcsd.owner=qcsd-lab"') >= 5
@@ -6581,14 +6830,82 @@ def test_launcher_applies_least_privilege_rr1_capture_partition() -> None:
     assert "unsupported capture scheduler contract" in entrypoint
     assert "taskset --cpu-list 11 qcsd-lab-internal" in entrypoint
     assert "+sys_nice" not in entrypoint
-    assert 'docker exec "${container_name}" /usr/bin/python3 -c' in network_probe
+    assert '_qcsd_docker_api exec "${container_id}" /usr/bin/python3 -c' in network_probe
     assert "/usr/local/bin/python3" not in network_probe
+
+
+def test_capture_scheduler_rejects_swapped_name_to_exact_id_binding() -> None:
+    launcher = (LAB_ROOT / "qcsd-lab").read_text(encoding="utf-8")
+    scheduler_function = "capture_scheduler_host_partition_b64() {" + launcher.split(
+        "capture_scheduler_host_partition_b64() {", 1
+    )[1].split("\n}\n\nscheduler_host_partition_b64=", 1)[0] + "\n}\n"
+    first_id = "a" * 64
+    second_id = "b" * 64
+    inspected = json.dumps(
+        [
+            {
+                "Id": first_id,
+                "Name": "/first",
+                "Config": {"Labels": {"org.qcsd.owner": "qcsd-lab"}},
+                "State": {"Running": True},
+                "HostConfig": {"CpusetCpus": "0-9"},
+            },
+            {
+                "Id": second_id,
+                "Name": "/second",
+                "Config": {"Labels": {"org.qcsd.owner": "qcsd-lab"}},
+                "State": {"Running": True},
+                "HostConfig": {"CpusetCpus": "0-9"},
+            },
+        ]
+    )
+    harness = f"""
+set -u
+{scheduler_function}
+docker() {{
+  if [[ "$1" == info ]]; then printf '12\\n'
+  elif [[ "$1" == ps ]]; then printf '%s\\n%s\\n' '{first_id}' '{second_id}'
+  elif [[ "$1" == container && "$2" == inspect ]]; then printf '%s\\n' "$INSPECTED"
+  else return 2
+  fi
+}}
+_qcsd_docker_api() {{ docker "$@"; }}
+study_capture_scheduler_contract=qcsd-client-rr1-cpu10-etf-helper-cpu11-v1
+capture_scheduler_host_partition_b64 "$@"
+"""
+
+    correct = subprocess.run(
+        ["bash", "-c", harness, "scheduler", "first", first_id, "second", second_id],
+        env={**os.environ, "INSPECTED": inspected},
+        text=True,
+        capture_output=True,
+        timeout=5,
+    )
+    assert correct.returncode == 0, correct.stderr
+    receipt = json.loads(base64.b64decode(correct.stdout.strip(), validate=True))
+    assert receipt["running_container_set_matches_expected"] is True
+
+    swapped = subprocess.run(
+        ["bash", "-c", harness, "scheduler", "first", second_id, "second", first_id],
+        env={**os.environ, "INSPECTED": inspected},
+        text=True,
+        capture_output=True,
+        timeout=5,
+    )
+    assert swapped.returncode != 0
+    assert "container_set_matches_expected=False" in swapped.stderr
 
 
 def test_controlled_topology_cleanup_is_fail_closed_and_state_aware(
     tmp_path: Path,
 ) -> None:
     launcher = (LAB_ROOT / "qcsd-lab").read_text(encoding="utf-8")
+    lifetime_signal_helpers = "_QCSD_LIFETIME_SIGNAL_STATUS=0" + launcher.split(
+        "_QCSD_LIFETIME_SIGNAL_STATUS=0", 1
+    )[1].split("\n\nrequire_submodule()", 1)[0]
+    cleanup_signal_helpers = "_qcsd_latch_cleanup_signal() {" + launcher.split(
+        "_qcsd_latch_cleanup_signal() {", 1
+    )[1].split("\ncleanup_kernel_tx_public_topology() {", 1)[0] + "\n"
     sidecar_cleanup = "cleanup_sidecars() {" + launcher.split(
         "cleanup_sidecars() {", 1
     )[1].split("\n}\n\nstart_capture_acceptance_server", 1)[0] + "\n}\n"
@@ -6596,123 +6913,199 @@ def test_controlled_topology_cleanup_is_fail_closed_and_state_aware(
         "    cleanup_buflo_controlled() {", 1
     )[1].split("\n    }\n    trap 'cleanup_buflo_controlled", 1)[0] + "\n}\n"
 
-    assert 'docker rm -f "${name}" >/dev/null 2>&1 || true' not in sidecar_cleanup
-    assert 'if ! cleanup_sidecars; then' in controlled_cleanup
-    assert 'docker network rm "${controlled_server_network}" >/dev/null 2>&1 || true' not in (
-        controlled_cleanup
-    )
-    assert 'docker network rm "${controlled_client_network}" >/dev/null 2>&1 || true' not in (
-        controlled_cleanup
-    )
-    assert "controlled_server_network_created" in controlled_cleanup
-    assert "controlled_client_network_created" in controlled_cleanup
-    assert "preserving kernel-TX capture root" in controlled_cleanup
+    router_id = "a" * 64
+    first_server_id = "b" * 64
+    second_server_id = "c" * 64
+    client_network_id = "d" * 64
+    server_network_id = "e" * 64
 
-    script = sidecar_cleanup + controlled_cleanup + r'''
-set -euo pipefail
-kernel_tx_capture_root="$1"
-original_status="$2"
-call_log="$3"
-fail_cleanup="$4"
-sidecars=(controlled-router ordinary-server-one ordinary-server-two)
-controlled_router_started=0
-controlled_server_network_created=1
-controlled_client_network_created=1
-controlled_server_network=controlled-server-network
-controlled_client_network=controlled-client-network
-docker() {
-  printf '%s\n' "$*" >>"${call_log}"
-  if [[ "${fail_cleanup}" == "1" &&
-        "$1" == "rm" && "$2" == "-f" && "$3" == "controlled-router" ]]; then
-    return 41
-  fi
-  if [[ "${fail_cleanup}" == "1" &&
-        "$1" == "network" && "$2" == "rm" && "$3" == "controlled-server-network" ]]; then
-    return 42
-  fi
-  if [[ "$1" == "container" && "$2" == "inspect" ]]; then
-    return 1
-  fi
-  if [[ "$1" == "network" && "$2" == "inspect" ]]; then
-    return 1
-  fi
-  return 0
-}
-cleanup_buflo_controlled "${original_status}"
-'''
-
-    for original_status, expected_status in ((0, 1), (7, 7)):
-        capture_root = tmp_path / f"capture-{original_status}"
+    def run_cleanup(
+        case: str,
+        *,
+        original_status: int,
+        fail_id: str = "",
+        cleanup_signal: str = "",
+        terminal_signal: str = "",
+    ):
+        case_root = tmp_path / case
+        object_root = case_root / "objects"
+        capture_root = case_root / "capture"
+        object_root.mkdir(parents=True)
         capture_root.mkdir()
-        call_log = tmp_path / f"docker-{original_status}.log"
-        result = subprocess.run(
-            [
-                "bash",
-                "-c",
-                script,
-                "bash",
-                str(capture_root),
-                str(original_status),
-                str(call_log),
-                "1",
-            ],
-            check=False,
-            capture_output=True,
+        for kind, identity in (
+            ("container", router_id),
+            ("container", first_server_id),
+            ("container", second_server_id),
+            ("network", client_network_id),
+            ("network", server_network_id),
+        ):
+            (object_root / f"{kind}-{identity}").touch()
+        script = f"""
+set -u
+{lifetime_signal_helpers}
+{cleanup_signal_helpers}
+{sidecar_cleanup}
+{controlled_cleanup}
+_qcsd_cleanup_terminal_hook() {{
+  if [[ -n "${{TERMINAL_SIGNAL:-}}" ]]; then
+    kill -"$TERMINAL_SIGNAL" "$$"
+  fi
+}}
+_qcsd_docker_exact_id_presence() {{
+  if [[ -f "$OBJECT_ROOT/container-$1" ]]; then printf 'present\\n'; else printf 'absent\\n'; fi
+}}
+_qcsd_docker_exact_network_presence() {{
+  if [[ -f "$OBJECT_ROOT/network-$1" ]]; then printf 'present\\n'; else printf 'absent\\n'; fi
+}}
+_qcsd_docker_api() {{
+  printf '%s\\n' "$*" >>"$CALL_LOG"
+  if [[ -n "${{CLEANUP_SIGNAL:-}}" && ! -e "$SIGNAL_SENT" ]]; then
+    : >"$SIGNAL_SENT"
+    kill -"$CLEANUP_SIGNAL" "$$"
+  fi
+  local identity="${{@: -1}}"
+  if [[ "$1" == "rm" ]]; then
+    [[ "$identity" != "$FAIL_ID" ]] || return 41
+    /usr/bin/unlink "$OBJECT_ROOT/container-$identity"
+  elif [[ "$1" == "network" && "$2" == "rm" ]]; then
+    [[ "$identity" != "$FAIL_ID" ]] || return 42
+    /usr/bin/unlink "$OBJECT_ROOT/network-$identity"
+  fi
+}}
+qcsd_retire_docker_handoff() {{ :; }}
+QCSD_DOCKER_IDS_SIDECARS=({router_id} {first_server_id} {second_server_id})
+controlled_router_started=0
+controlled_router_id={router_id}
+QCSD_DOCKER_IDS_CONTROLLED_CLIENT_NETWORKS=({client_network_id})
+QCSD_DOCKER_IDS_CONTROLLED_SERVER_NETWORKS=({server_network_id})
+kernel_tx_capture_root="$CAPTURE_ROOT"
+cleanup_buflo_controlled {original_status}
+"""
+        completed = subprocess.run(
+            ["bash", "-c", script],
+            env={
+                **os.environ,
+                "OBJECT_ROOT": str(object_root),
+                "CAPTURE_ROOT": str(capture_root),
+                "CALL_LOG": str(case_root / "calls.log"),
+                "FAIL_ID": fail_id,
+                "CLEANUP_SIGNAL": cleanup_signal,
+                "SIGNAL_SENT": str(case_root / "signal-sent"),
+                "TERMINAL_SIGNAL": terminal_signal,
+            },
             text=True,
+            capture_output=True,
+            timeout=5,
         )
+        return completed, capture_root, (case_root / "calls.log").read_text()
 
-        assert result.returncode == expected_status
-        assert "cannot remove Docker sidecar controlled-router" in result.stderr
-        assert "cannot remove controlled Docker network controlled-server-network" in result.stderr
-        assert (
-            "controlled Docker teardown failed; preserving kernel-TX capture root"
-            in result.stderr
-        )
-        assert capture_root.is_dir()
-        calls = call_log.read_text(encoding="utf-8")
-        assert "rm -f ordinary-server-one" in calls
-        assert "rm -f ordinary-server-two" in calls
-        assert "network rm controlled-server-network" in calls
-        assert "network rm controlled-client-network" in calls
+    clean, clean_capture, clean_calls = run_cleanup("clean", original_status=0)
+    assert clean.returncode == 0, clean.stderr
+    assert not clean_capture.exists()
+    assert clean_calls.splitlines() == [
+        f"rm --force {router_id}",
+        f"rm --force {first_server_id}",
+        f"rm --force {second_server_id}",
+        f"network rm {server_network_id}",
+        f"network rm {client_network_id}",
+    ]
 
-    clean_capture_root = tmp_path / "capture-success"
-    clean_capture_root.mkdir()
-    clean_call_log = tmp_path / "docker-success.log"
-    clean_result = subprocess.run(
-        [
-            "bash",
-            "-c",
-            script,
-            "bash",
-            str(clean_capture_root),
-            "0",
-            str(clean_call_log),
-            "0",
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
+    upgraded, upgraded_capture, _ = run_cleanup(
+        "failure-zero", original_status=0, fail_id=router_id
     )
-    assert clean_result.returncode == 0
-    assert clean_result.stderr == ""
-    assert not clean_capture_root.exists()
+    assert upgraded.returncode == 1
+    assert upgraded_capture.exists()
+    assert "preserving kernel-TX capture root" in upgraded.stderr
+
+    preserved, preserved_capture, _ = run_cleanup(
+        "failure-seven", original_status=7, fail_id=router_id
+    )
+    assert preserved.returncode == 7
+    assert preserved_capture.exists()
+
+    for cleanup_signal, expected_status in (
+        ("HUP", 129),
+        ("INT", 130),
+        ("QUIT", 131),
+        ("TERM", 143),
+    ):
+        interrupted, interrupted_capture, interrupted_calls = run_cleanup(
+            f"signal-{cleanup_signal.lower()}",
+            original_status=0,
+            cleanup_signal=cleanup_signal,
+        )
+        assert interrupted.returncode == expected_status, interrupted.stderr
+        assert not interrupted_capture.exists()
+        assert len(interrupted_calls.splitlines()) == 5
+
+        terminal, terminal_capture, terminal_calls = run_cleanup(
+            f"terminal-{cleanup_signal.lower()}",
+            original_status=0,
+            terminal_signal=cleanup_signal,
+        )
+        assert terminal.returncode == expected_status, terminal.stderr
+        assert not terminal_capture.exists()
+        assert len(terminal_calls.splitlines()) == 5
+
+    failed_and_interrupted, failed_capture, _ = run_cleanup(
+        "failure-seven-signal-term",
+        original_status=7,
+        fail_id=router_id,
+        cleanup_signal="TERM",
+    )
+    assert failed_and_interrupted.returncode == 7
+    assert failed_capture.exists()
+
+    terminal_after_failure, terminal_failure_capture, _ = run_cleanup(
+        "failure-seven-terminal-term",
+        original_status=7,
+        fail_id=router_id,
+        terminal_signal="TERM",
+    )
+    assert terminal_after_failure.returncode == 7
+    assert terminal_failure_capture.exists()
+
+    assert 'docker rm -f "${name}"' not in sidecar_cleanup
+    assert '_qcsd_docker_exact_id_presence "${cid}"' in sidecar_cleanup
+    assert '_qcsd_docker_api rm --force "${cid}"' in sidecar_cleanup
+    assert '[[ ! "${cid}" =~ ^[0-9a-f]{64}$ ]]' in sidecar_cleanup
+    assert 'if ! cleanup_sidecars; then' in controlled_cleanup
+    assert 'docker network rm "${controlled_server_network}"' not in controlled_cleanup
+    assert 'docker network rm "${controlled_client_network}"' not in controlled_cleanup
+    assert "QCSD_DOCKER_IDS_CONTROLLED_SERVER_NETWORKS" in controlled_cleanup
+    assert "QCSD_DOCKER_IDS_CONTROLLED_CLIENT_NETWORKS" in controlled_cleanup
+    assert '_qcsd_docker_exact_network_presence' in controlled_cleanup
+    assert '_qcsd_docker_api network rm' in controlled_cleanup
+    assert "_qcsd_begin_latched_cleanup" in controlled_cleanup
+    assert "_qcsd_finish_latched_cleanup" in controlled_cleanup
+    assert "trap '' HUP INT QUIT TERM" not in controlled_cleanup
+    assert "preserving kernel-TX capture root" in controlled_cleanup
 
     controlled_branch = launcher.split(
         'if [[ "${1:-}" == "buflo-study" && "${2:-}" == "capture" ]]', 1
     )[1].split("# Every remaining ETF launch is a public campaign.", 1)[0]
-    assert "controlled_client_network_created=1" in controlled_branch
-    assert "controlled_server_network_created=1" in controlled_branch
+    assert (
+        "qcsd_create_docker_network QCSD_DOCKER_IDS_CONTROLLED_CLIENT_NETWORKS"
+        in controlled_branch
+    )
+    assert (
+        "qcsd_create_docker_network QCSD_DOCKER_IDS_CONTROLLED_SERVER_NETWORKS"
+        in controlled_branch
+    )
+    assert 'controlled_client_network_id="${QCSD_DOCKER_IDS_CONTROLLED_CLIENT_NETWORKS[-1]}"' in (
+        controlled_branch
+    )
+    assert 'controlled_server_network_id="${QCSD_DOCKER_IDS_CONTROLLED_SERVER_NETWORKS[-1]}"' in (
+        controlled_branch
+    )
     assert (
         '--volume "${capture_root}:/lab/results/${capture_root##*/}:ro"'
         in controlled_branch
     )
     assert '--volume "${capture_root}:/kernel-tx:rw"' in launcher
-    assert controlled_branch.index('sidecars+=("${first_server}")') > controlled_branch.index(
-        '"${first_server}" qcsd-buflo-server-one 4433'
-    )
-    assert controlled_branch.index('sidecars+=("${second_server}")') > controlled_branch.index(
-        '"${second_server}" qcsd-buflo-server-two 4434'
-    )
+    assert "qcsd_run_detached_docker QCSD_DOCKER_IDS_SIDECARS" in launcher
+    assert 'sidecars+=("${first_server}")' not in controlled_branch
+    assert 'sidecars+=("${second_server}")' not in controlled_branch
 
 
 def test_launcher_routes_every_public_etf_campaign_through_post_veth_observer() -> None:
@@ -6723,7 +7116,8 @@ def test_launcher_routes_every_public_etf_campaign_through_post_veth_observer() 
     )[1].split('if [[ "${1:-}" == "test"', 1)[0]
 
     assert 'docker network create --driver bridge --internal' in public
-    assert 'docker network connect --gw-priority 1 bridge' in launcher
+    assert '_qcsd_docker_api network connect --gw-priority 1' in launcher
+    assert 'bridge "${kernel_tx_public_router_id}"' in launcher
     assert 'QCSD_KERNEL_TX_ROUTER_TOPOLOGY_KIND=routed-public-egress' in launcher
     assert 'QCSD_KERNEL_TX_ROUTER_REQUIRE_MASQUERADE=1' in launcher
     assert (
@@ -6732,7 +7126,7 @@ def test_launcher_routes_every_public_etf_campaign_through_post_veth_observer() 
     )
     assert (
         'replace_container_option_value --network '
-        '"${kernel_tx_public_client_network}"' in public
+        '"${kernel_tx_public_network_id}"' in public
     )
     assert "capture_scheduler_host_partition_b64" in public
     assert '"${kernel_tx_public_router_name}"' in public
@@ -6807,6 +7201,55 @@ def test_versioned_build_receipts_coexist_and_reject_path_or_request_mismatch(
     copied.write_bytes(paths[1].read_bytes())
     with pytest.raises(ValueError, match="path does not match its cohort version"):
         buflo_study.validate_build_execution_receipt(copied)
+
+
+def test_schema_three_build_receipt_validates_through_study_reader(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "build-execution-v47.json"
+    monkeypatch.setattr(
+        buflo_study,
+        "build_execution_receipt_path",
+        lambda cohort_version=1: path,
+    )
+    value = _build_execution_value(cohort_version=47, schema_version=3)
+    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    validated = buflo_study.validate_build_execution_receipt(
+        path,
+        expected_collection_image="sha256:" + "a" * 64,
+        expected_cohort_version=47,
+    )
+
+    assert validated["cohort_version"] == 47
+    assert validated["collection_image"] == "sha256:" + "a" * 64
+    assert validated["images"]["collection"]["tag"] == build_storage.BUILD_IMAGE_TAGS[
+        "collection"
+    ]
+
+
+def test_schema_three_study_reader_rejects_context_argv_even_when_rehashed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "build-execution-v47.json"
+    monkeypatch.setattr(
+        buflo_study,
+        "build_execution_receipt_path",
+        lambda cohort_version=1: path,
+    )
+    value = _build_execution_value(cohort_version=47, schema_version=3)
+    for command in value["commands"]:
+        command["argv"][1:3] = ["--context", value["docker"]["context"]]
+    payload = dict(value)
+    payload.pop("payload_sha256")
+    value["payload_sha256"] = buflo_study._canonical_digest(payload)
+    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="--pull --no-cache"):
+        buflo_study.validate_build_execution_receipt(
+            path,
+            expected_cohort_version=47,
+        )
 
 
 def test_all_public_v2_campaign_matrices_render_and_validate(
@@ -6975,9 +7418,9 @@ def test_build_final_daemon_recheck_catches_post_inventory_id_change(
     (
         ("DOCKER_HOST", "tcp://example.invalid:2375", "rejects Docker endpoint"),
         (
-            "QCSD_TEST_DOCKER_ENDPOINT",
-            "tcp://example.invalid:2375",
-            "requires a local Docker Desktop endpoint",
+                "QCSD_TEST_DOCKER_ENDPOINT",
+                "tcp://example.invalid:2375",
+                "requires one local Docker endpoint",
         ),
         (
             "QCSD_TEST_DOCKER_OPERATING_SYSTEM",
@@ -7068,6 +7511,323 @@ def test_build_global_lock_rejects_concurrent_role_tag_mutation(
     assert "user/WSL instance's Docker-daemon lock" in result.stderr
     assert _marked_build_count(build_marker) == 0
     assert not (tmp_path / "artifacts/buflo-study/build-execution-v76.json").exists()
+
+
+@pytest.mark.parametrize("record_name", ("SUPERVISION", "RECOVERY"))
+def test_build_rejects_prior_supervisor_taint_from_another_caller_directory(
+    tmp_path: Path, record_name: str
+) -> None:
+    launcher, build_marker, environment = _launcher_boundary_fixture(tmp_path)
+    caller = tmp_path / "caller"
+    caller.mkdir()
+    supervisor_root = Path(
+        tempfile.mkdtemp(prefix="qcsd-docker-build-supervisor.", dir="/tmp")
+    )
+    record = supervisor_root / record_name
+    record.write_text(
+        _build_cli_taint(
+            working_directory=tmp_path,
+            daemon_id=environment["QCSD_TEST_DOCKER_SERVER_ID"],
+        ),
+        encoding="utf-8",
+    )
+    record.chmod(0o600)
+    try:
+        result = subprocess.run(
+            [str(launcher), "build", "--cohort-version", "82"],
+            cwd=caller,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    finally:
+        record.unlink(missing_ok=True)
+        supervisor_root.rmdir()
+
+    assert result.returncode != 0
+    assert "blocked by unresolved prior Docker build state" in result.stderr
+    assert _marked_build_count(build_marker) == 0
+    assert not (tmp_path / "artifacts/buflo-study/build-execution-v82.json").exists()
+
+
+def test_build_rejects_prior_supervisor_taint_from_same_daemon_in_another_checkout(
+    tmp_path: Path,
+) -> None:
+    launcher, build_marker, environment = _launcher_boundary_fixture(tmp_path)
+    supervisor_root = Path(
+        tempfile.mkdtemp(prefix="qcsd-docker-build-supervisor.", dir="/tmp")
+    )
+    record = supervisor_root / "RECOVERY"
+    record.write_text(
+        _build_cli_taint(
+            working_directory=Path("/another/qcsd/checkout"),
+            daemon_id=environment["QCSD_TEST_DOCKER_SERVER_ID"],
+        ),
+        encoding="utf-8",
+    )
+    record.chmod(0o600)
+    try:
+        result = subprocess.run(
+            [str(launcher), "build", "--cohort-version", "83"],
+            cwd=tmp_path,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    finally:
+        record.unlink(missing_ok=True)
+        supervisor_root.rmdir()
+
+    assert result.returncode != 0
+    assert "blocked by unresolved prior Docker build state" in result.stderr
+    assert _marked_build_count(build_marker) == 0
+    assert not (tmp_path / "artifacts/buflo-study/build-execution-v83.json").exists()
+
+
+@pytest.mark.parametrize(
+    ("record_name", "supervision_state", "recovery_late_signal"),
+    (
+        ("SUPERVISION", "declared", False),
+        ("SUPERVISION", "active", False),
+        ("RECOVERY", "declared", False),
+        ("RECOVERY", "declared", True),
+    ),
+)
+def test_build_rejects_valid_scope_launcher_taint_from_same_daemon(
+    tmp_path: Path,
+    record_name: str,
+    supervision_state: str,
+    recovery_late_signal: bool,
+) -> None:
+    launcher, build_marker, environment = _launcher_boundary_fixture(tmp_path)
+    supervisor_root = Path(
+        tempfile.mkdtemp(prefix="qcsd-docker-build-supervisor.", dir="/tmp")
+    )
+    record = supervisor_root / record_name
+    record.write_text(
+        _build_scope_launcher_taint(
+            supervisor_root=supervisor_root,
+            record_name=record_name,
+            working_directory=Path("/another/qcsd/checkout"),
+            daemon_id=environment["QCSD_TEST_DOCKER_SERVER_ID"],
+            supervision_state=supervision_state,
+            recovery_late_signal=recovery_late_signal,
+        ),
+        encoding="utf-8",
+    )
+    record.chmod(0o600)
+    try:
+        result = subprocess.run(
+            [str(launcher), "build", "--cohort-version", "84"],
+            cwd=tmp_path,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    finally:
+        record.unlink(missing_ok=True)
+        supervisor_root.rmdir()
+
+    assert result.returncode != 0
+    assert "blocked by unresolved prior Docker build state" in result.stderr
+    assert "malformed prior supervisor record" not in result.stderr
+    assert _marked_build_count(build_marker) == 0
+    assert not (tmp_path / "artifacts/buflo-study/build-execution-v84.json").exists()
+
+
+@pytest.mark.parametrize("record_name", ("SUPERVISION", "RECOVERY"))
+@pytest.mark.parametrize(
+    ("mutation", "key", "value"),
+    (
+        ("replace", "process_identity_role", "docker-cli"),
+        ("replace", "scope_launcher_pid", "0"),
+        ("replace", "build_argv_sha256", "0" * 63),
+        ("replace", "docker_server_id", "different-daemon"),
+        ("replace", "scope_unit", "qcsd-docker-build-invalid.scope"),
+        ("replace", "host_boot_id", "unavailable"),
+        ("replace", "status_file", "/tmp/unbound-build.status"),
+        ("replace", "status_file_state", "unknown"),
+        ("missing", "process_identity_role", ""),
+        ("duplicate", "process_identity_role", "local-systemd-run-scope-launcher"),
+        ("extra", "unexpected_field", "value"),
+    ),
+)
+def test_build_rejects_malformed_scope_launcher_taint(
+    tmp_path: Path,
+    record_name: str,
+    mutation: str,
+    key: str,
+    value: str,
+) -> None:
+    launcher, build_marker, environment = _launcher_boundary_fixture(tmp_path)
+    supervisor_root = Path(
+        tempfile.mkdtemp(prefix="qcsd-docker-build-supervisor.", dir="/tmp")
+    )
+    record = supervisor_root / record_name
+    taint = _build_scope_launcher_taint(
+        supervisor_root=supervisor_root,
+        record_name=record_name,
+        working_directory=Path("/another/qcsd/checkout"),
+        daemon_id=environment["QCSD_TEST_DOCKER_SERVER_ID"],
+    )
+    if mutation == "replace":
+        taint = _replace_taint_field(taint, key, value)
+    elif mutation == "missing":
+        taint = re.sub(
+            rf"^{re.escape(key)}=.*\n", "", taint, count=1, flags=re.MULTILINE
+        )
+    elif mutation in {"duplicate", "extra"}:
+        taint += f"{key}={value}\n"
+    else:
+        raise AssertionError(f"unsupported mutation: {mutation}")
+    record.write_text(taint, encoding="utf-8")
+    record.chmod(0o600)
+    try:
+        result = subprocess.run(
+            [str(launcher), "build", "--cohort-version", "85"],
+            cwd=tmp_path,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    finally:
+        record.unlink(missing_ok=True)
+        supervisor_root.rmdir()
+
+    assert result.returncode != 0
+    assert "malformed prior supervisor record" in result.stderr
+    assert _marked_build_count(build_marker) == 0
+    assert not (tmp_path / "artifacts/buflo-study/build-execution-v85.json").exists()
+
+
+def test_build_rejects_late_signal_scope_taint_without_terminal_scope(
+    tmp_path: Path,
+) -> None:
+    launcher, build_marker, environment = _launcher_boundary_fixture(tmp_path)
+    supervisor_root = Path(
+        tempfile.mkdtemp(prefix="qcsd-docker-build-supervisor.", dir="/tmp")
+    )
+    record = supervisor_root / "RECOVERY"
+    taint = _build_scope_launcher_taint(
+        supervisor_root=supervisor_root,
+        record_name="RECOVERY",
+        working_directory=Path("/another/qcsd/checkout"),
+        daemon_id=environment["QCSD_TEST_DOCKER_SERVER_ID"],
+        recovery_late_signal=True,
+    )
+    taint = _replace_taint_field(taint, "scope_empty_proven", "0")
+    taint = _replace_taint_field(taint, "scope_final_state", "unknown")
+    record.write_text(taint, encoding="utf-8")
+    record.chmod(0o600)
+    try:
+        result = subprocess.run(
+            [str(launcher), "build", "--cohort-version", "87"],
+            cwd=tmp_path,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    finally:
+        record.unlink(missing_ok=True)
+        supervisor_root.rmdir()
+
+    assert result.returncode != 0
+    assert "malformed prior supervisor record" in result.stderr
+    assert _marked_build_count(build_marker) == 0
+    assert not (tmp_path / "artifacts/buflo-study/build-execution-v87.json").exists()
+
+
+@pytest.mark.parametrize("symlink_kind", ("supervisor-root", "record"))
+def test_build_rejects_symlinked_prior_supervisor_state(
+    tmp_path: Path, symlink_kind: str
+) -> None:
+    launcher, build_marker, environment = _launcher_boundary_fixture(tmp_path)
+    reserved_root = Path(
+        tempfile.mkdtemp(prefix="qcsd-docker-build-supervisor.", dir="/tmp")
+    )
+    taint = _build_cli_taint(
+        working_directory=Path("/another/qcsd/checkout"),
+        daemon_id=environment["QCSD_TEST_DOCKER_SERVER_ID"],
+    )
+    if symlink_kind == "supervisor-root":
+        target_root = tmp_path / "real-supervisor-root"
+        target_root.mkdir(mode=0o700)
+        target_record = target_root / "SUPERVISION"
+        target_record.write_text(taint, encoding="utf-8")
+        target_record.chmod(0o600)
+        reserved_root.rmdir()
+        reserved_root.symlink_to(target_root, target_is_directory=True)
+        record = target_record
+    else:
+        target_record = tmp_path / "real-supervisor-record"
+        target_record.write_text(taint, encoding="utf-8")
+        target_record.chmod(0o600)
+        record = reserved_root / "SUPERVISION"
+        record.symlink_to(target_record)
+    try:
+        result = subprocess.run(
+            [str(launcher), "build", "--cohort-version", "88"],
+            cwd=tmp_path,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    finally:
+        if symlink_kind == "supervisor-root":
+            reserved_root.unlink(missing_ok=True)
+        else:
+            record.unlink(missing_ok=True)
+            reserved_root.rmdir()
+
+    assert result.returncode != 0
+    assert "unsafe prior supervisor" in result.stderr
+    assert _marked_build_count(build_marker) == 0
+    assert not (tmp_path / "artifacts/buflo-study/build-execution-v88.json").exists()
+
+
+def test_build_retains_historical_transaction_taint_support(tmp_path: Path) -> None:
+    launcher, build_marker, environment = _launcher_boundary_fixture(tmp_path)
+    supervisor_root = Path(
+        tempfile.mkdtemp(prefix="qcsd-docker-build-supervisor.", dir="/tmp")
+    )
+    record = supervisor_root / "SUPERVISION"
+    receipt = tmp_path / "artifacts/buflo-study/build-execution-v86.json"
+    record.write_text(
+        "object=docker-build-transaction\n"
+        "docker_context=default\n"
+        "docker_host=unix:///var/run/docker.sock\n"
+        f"docker_server_id={environment['QCSD_TEST_DOCKER_SERVER_ID']}\n"
+        f"docker_daemon_id={environment['QCSD_TEST_DOCKER_SERVER_ID']}\n"
+        f"working_directory={Path('/another/qcsd/checkout')}\n"
+        "cohort_version=86\n"
+        f"receipt_path={receipt.resolve()}\n"
+        "transaction_state=uncommitted-static-tag-mutation\n",
+        encoding="utf-8",
+    )
+    record.chmod(0o600)
+    try:
+        result = subprocess.run(
+            [str(launcher), "build", "--cohort-version", "86"],
+            cwd=tmp_path,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    finally:
+        record.unlink(missing_ok=True)
+        supervisor_root.rmdir()
+
+    assert result.returncode != 0
+    assert "blocked by unresolved prior Docker build state" in result.stderr
+    assert _marked_build_count(build_marker) == 0
+    assert not receipt.exists()
 
 
 def test_build_self_validation_rejects_invalid_inputs_before_receipt_write(
@@ -7364,22 +8124,168 @@ def test_windows_storage_probe_smoke_reports_the_actual_backing_volume() -> None
         )
 
 
-def test_launcher_build_v2_is_create_only_and_preserves_v1(tmp_path: Path) -> None:
-    launcher = tmp_path / "qcsd-lab"
-    launcher.write_bytes((LAB_ROOT / "qcsd-lab").read_bytes())
-    launcher.chmod(0o755)
-    (tmp_path / "neqo-qcsd").mkdir()
-    (tmp_path / "neqo-qcsd/Cargo.lock").write_text("lock\n", encoding="utf-8")
-    (tmp_path / "uv.lock").write_text("lock\n", encoding="utf-8")
-    (tmp_path / "Dockerfile").write_text("FROM scratch\n", encoding="utf-8")
+@pytest.mark.parametrize(
+    ("signal_name", "signal_status"),
+    [("HUP", 129), ("INT", 130), ("QUIT", 131), ("TERM", 143)],
+)
+def test_build_iid_cleanup_latches_terminal_signals_and_preserves_taint(
+    tmp_path: Path,
+    signal_name: str,
+    signal_status: int,
+) -> None:
+    launcher = (LAB_ROOT / "qcsd-lab").read_text(encoding="utf-8")
+    lifetime_signal_helpers = "_QCSD_LIFETIME_SIGNAL_STATUS=0" + launcher.split(
+        "_QCSD_LIFETIME_SIGNAL_STATUS=0", 1
+    )[1].split("\n\nrequire_submodule()", 1)[0]
+    cleanup_functions = "build_iid_cleanup_entry_status=0" + launcher.split(
+        "build_iid_cleanup_entry_status=0", 1
+    )[1].split("\n  trap 'cleanup_build_iids", 1)[0]
+
+    def run_cleanup(case: str, *, original_status: int, signal_phase: str):
+        case_root = tmp_path / case
+        iid_root = case_root / "iids"
+        iid_root.mkdir(parents=True)
+        iid_paths = [
+            iid_root / name
+            for name in ("collection.iid", "prepare.iid", "reference.iid")
+        ]
+        for iid_path in iid_paths:
+            iid_path.write_text("sha256:" + "a" * 64 + "\n", encoding="utf-8")
+        transaction_root = case_root / "transaction"
+        transaction_root.mkdir()
+        transaction_record = transaction_root / "SUPERVISION"
+        transaction_record.write_text(
+            "object=docker-build-transaction\n"
+            "transaction_state=uncommitted-static-tag-mutation\n",
+            encoding="utf-8",
+        )
+        harness = f"""
+set -u
+{lifetime_signal_helpers}
+{cleanup_functions}
+_qcsd_build_iid_cleanup_terminal_hook() {{
+  if [[ "$SIGNAL_PHASE" == "terminal" ]]; then
+    kill -"$SIGNAL_NAME" "$$"
+  fi
+}}
+rm() {{
+  if [[ "$SIGNAL_PHASE" == "removal" && "$SIGNAL_SENT" == "0" ]]; then
+    SIGNAL_SENT=1
+    kill -"$SIGNAL_NAME" "$$"
+  fi
+  /usr/bin/rm "$@"
+}}
+collection_iid_path="$IID_ROOT/collection.iid"
+prepare_iid_path="$IID_ROOT/prepare.iid"
+reference_iid_path="$IID_ROOT/reference.iid"
+build_iid_dir="$IID_ROOT"
+SIGNAL_SENT=0
+trap '_qcsd_latch_build_iid_cleanup_signal 129' HUP
+trap '_qcsd_latch_build_iid_cleanup_signal 130' INT
+trap '_qcsd_latch_build_iid_cleanup_signal 131' QUIT
+trap '_qcsd_latch_build_iid_cleanup_signal 143' TERM
+if [[ "$SIGNAL_PHASE" == "precleanup" ]]; then
+  trap 'cleanup_build_iids "$?"' EXIT
+  kill -"$SIGNAL_NAME" "$$"
+  exit 99
+fi
+cleanup_build_iids "$ORIGINAL_STATUS"
+"""
+        completed = subprocess.run(
+            ["bash", "-c", harness],
+            env={
+                **os.environ,
+                "IID_ROOT": str(iid_root),
+                "ORIGINAL_STATUS": str(original_status),
+                "SIGNAL_NAME": signal_name,
+                "SIGNAL_PHASE": signal_phase,
+            },
+            text=True,
+            capture_output=True,
+            timeout=5,
+        )
+        assert not iid_root.exists()
+        assert transaction_record.read_text(encoding="utf-8").startswith(
+            "object=docker-build-transaction\n"
+        )
+        return completed
+
+    before_cleanup = run_cleanup(
+        f"{signal_name.lower()}-precleanup", original_status=0, signal_phase="precleanup"
+    )
+    assert before_cleanup.returncode == signal_status, before_cleanup.stderr
+
+    during_removal = run_cleanup(
+        f"{signal_name.lower()}-removal", original_status=0, signal_phase="removal"
+    )
+    assert during_removal.returncode == signal_status, during_removal.stderr
+
+    final_boundary = run_cleanup(
+        f"{signal_name.lower()}-terminal", original_status=0, signal_phase="terminal"
+    )
+    assert final_boundary.returncode == signal_status, final_boundary.stderr
+
+
+def test_build_iid_cleanup_preserves_original_failure_over_latched_signal(
+    tmp_path: Path,
+) -> None:
+    launcher = (LAB_ROOT / "qcsd-lab").read_text(encoding="utf-8")
+    lifetime_signal_helpers = "_QCSD_LIFETIME_SIGNAL_STATUS=0" + launcher.split(
+        "_QCSD_LIFETIME_SIGNAL_STATUS=0", 1
+    )[1].split("\n\nrequire_submodule()", 1)[0]
+    cleanup_functions = "build_iid_cleanup_entry_status=0" + launcher.split(
+        "build_iid_cleanup_entry_status=0", 1
+    )[1].split("\n  trap 'cleanup_build_iids", 1)[0]
+    iid_root = tmp_path / "iids"
+    iid_root.mkdir()
+    for name in ("collection.iid", "prepare.iid", "reference.iid"):
+        (iid_root / name).touch()
+    transaction_record = tmp_path / "SUPERVISION"
+    transaction_record.write_text(
+        "object=docker-build-transaction\n"
+        "transaction_state=uncommitted-static-tag-mutation\n",
+        encoding="utf-8",
+    )
+    harness = f"""
+set -u
+{lifetime_signal_helpers}
+{cleanup_functions}
+_qcsd_build_iid_cleanup_terminal_hook() {{ :; }}
+rm() {{
+  kill -TERM "$$"
+  /usr/bin/rm "$@"
+}}
+collection_iid_path="$IID_ROOT/collection.iid"
+prepare_iid_path="$IID_ROOT/prepare.iid"
+reference_iid_path="$IID_ROOT/reference.iid"
+build_iid_dir="$IID_ROOT"
+trap '_qcsd_latch_build_iid_cleanup_signal 129' HUP
+trap '_qcsd_latch_build_iid_cleanup_signal 130' INT
+trap '_qcsd_latch_build_iid_cleanup_signal 131' QUIT
+trap '_qcsd_latch_build_iid_cleanup_signal 143' TERM
+cleanup_build_iids 37
+"""
+    completed = subprocess.run(
+        ["bash", "-c", harness],
+        env={**os.environ, "IID_ROOT": str(iid_root)},
+        text=True,
+        capture_output=True,
+        timeout=5,
+    )
+
+    assert completed.returncode == 37, completed.stderr
+    assert not iid_root.exists()
+    assert transaction_record.exists()
+
+
+def test_launcher_build_v3_is_create_only_and_preserves_v1(tmp_path: Path) -> None:
+    launcher, _build_marker, environment = _launcher_boundary_fixture(tmp_path)
     binary_root = tmp_path / "bin"
-    binary_root.mkdir()
-    _install_fake_wsl_storage_probe(tmp_path, binary_root)
     docker = binary_root / "docker"
     docker.write_text(
         """#!/bin/sh
 set -eu
-if [ "${1:-}" = "--context" ]; then
+if [ "${1:-}" = "--context" ] || [ "${1:-}" = "--host" ]; then
   shift 2
 fi
 command="$1"
@@ -7419,6 +8325,7 @@ case "$command" in
       '{{.OperatingSystem}}') printf '%s\n' 'Docker Desktop' ;;
       '{{.OSType}}') printf '%s\n' 'linux' ;;
       '{{.Architecture}}') printf '%s\n' 'x86_64' ;;
+      '{{.ID}}') printf '%s\n' '12345678-1234-1234-1234-123456789abc' ;;
       *) exit 1 ;;
     esac
     ;;
@@ -7447,6 +8354,14 @@ case "$command" in
     esac
     ;;
   run)
+    cidfile=""
+    previous=""
+    for argument in "$@"; do
+      if [ "$previous" = "--cidfile" ]; then cidfile="$argument"; fi
+      previous="$argument"
+    done
+    [ -n "$cidfile" ] || exit 1
+    printf '%s\n' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' > "$cidfile"
     case "$*" in
       */source.json)
         printf '%s\n' '{"lab_commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","lab_dirty":false,"lab_patch_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","neqo_commit":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","neqo_pinned_commit":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","neqo_dirty":false,"neqo_patch_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}'
@@ -7457,14 +8372,22 @@ case "$command" in
       *) exit 1 ;;
     esac
     ;;
+  container)
+    case "$1" in
+      ls) exit 0 ;;
+      inspect) exit 1 ;;
+      *) exit 1 ;;
+    esac
+    ;;
   *) exit 1 ;;
 esac
 """,
         encoding="utf-8",
     )
     docker.chmod(0o755)
-    environment = dict(os.environ)
-    environment["PATH"] = f"{binary_root}:{environment['PATH']}"
+    environment["QCSD_TEST_DOCKER_SERVER_ID"] = (
+        "12345678-1234-1234-1234-123456789abc"
+    )
     environment["QCSD_TEST_WSL_AVAILABLE_BYTES"] = str(64 * 1024**3)
     environment["QCSD_TEST_WSL_DATA_PATH"] = r"D:\DockerData\disk\docker_data.vhdx"
     powershell_marker = tmp_path / "powershell-boundaries"
@@ -7494,8 +8417,13 @@ esac
     assert json.loads(v1.read_text(encoding="utf-8"))["cohort_version"] == 1
     v2_value = json.loads(v2.read_text(encoding="utf-8"))
     assert v2_value["cohort_version"] == 2
-    assert v2_value["schema_version"] == 2
+    assert v2_value["schema_version"] == 3
     assert v2_value["docker"]["context"] == "default"
+    assert all(
+        command["argv"][:3]
+        == ["docker", "--host", "unix:///var/run/docker.sock"]
+        for command in v2_value["commands"]
+    )
     preflight = v2_value["host_storage_preflight"]
     assert preflight["required_available_bytes"] == 64 * 1024**3
     assert [item["boundary"] for item in preflight["observations"]] == [
@@ -7664,7 +8592,19 @@ def test_launcher_rejects_duplicate_qualification_cohort_version(tmp_path: Path)
     binary_root = tmp_path / "bin"
     binary_root.mkdir()
     docker = binary_root / "docker"
-    docker.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    docker.write_text(
+        """#!/bin/sh
+set -eu
+if [ "${1:-}" = "--context" ] || [ "${1:-}" = "--host" ]; then shift 2; fi
+case "${1:-} ${2:-}" in
+  "context show") printf 'default\n' ;;
+  "context inspect") printf 'unix:///var/run/docker.sock\n' ;;
+  "info --format") printf 'test-daemon\n' ;;
+esac
+exit 0
+""",
+        encoding="utf-8",
+    )
     docker.chmod(0o755)
     environment = dict(os.environ)
     environment["PATH"] = f"{binary_root}:{environment['PATH']}"
@@ -8411,7 +9351,7 @@ def test_buflo_fidelity_requires_every_zero_error_and_typed_terminal_once() -> N
         "buflo_exact_incoming_retry_resolutions": 1,
         "buflo_exact_incoming_retry_max_wake_lateness_nanoseconds": 250,
     }
-    assert new_defense_terminal_receipts_valid(
+    assert not new_defense_terminal_receipts_valid(
         current_wakeups,
         "buflo",
         require_application_complete=True,
@@ -8512,6 +9452,41 @@ def test_buflo_fidelity_requires_every_zero_error_and_typed_terminal_once() -> N
             outgoing_size_mismatches=0,
             schedule_metrics=schedule,
         )
+
+
+def test_current_buflo_terminal_receipt_requires_schema_eleven_kernel_tx() -> None:
+    from tests.test_buflo_handoff import _complete_buflo_run
+    from tests.test_kernel_tx import _runner_wakeup_v11
+
+    schema_ten = _complete_buflo_run(
+        scheduled_outgoing=1,
+        scheduled_incoming=1,
+        current_runner=False,
+    )
+    assert not new_defense_terminal_receipts_valid(
+        schema_ten,
+        "buflo",
+        require_application_complete=True,
+        require_current_schema=True,
+    )
+
+    current = json.loads(json.dumps(schema_ten))
+    current["runner_wakeup_metrics"] = _runner_wakeup_v11()
+    assert new_defense_terminal_receipts_valid(
+        current,
+        "buflo",
+        require_application_complete=True,
+        require_current_schema=True,
+    )
+
+    missing_kernel_receipt = json.loads(json.dumps(current))
+    missing_kernel_receipt["runner_wakeup_metrics"]["buflo_kernel_tx"] = None
+    assert not new_defense_terminal_receipts_valid(
+        missing_kernel_receipt,
+        "buflo",
+        require_application_complete=True,
+        require_current_schema=True,
+    )
 
 
 def test_cs_buflo_fidelity_reconciles_typed_composition_and_rate_state() -> None:

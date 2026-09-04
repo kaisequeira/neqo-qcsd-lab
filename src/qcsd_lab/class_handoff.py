@@ -2,9 +2,10 @@
 
 This exporter is deliberately disjoint from the historical classifier and
 BuFLO-study handoffs.  It accepts only the ten sealed schema-two ``formal``
-results, preserves the five accepted source artifacts byte-for-byte, and
-derives classifier products solely from observer time, client-relative
-direction, and Ethernet frame length.
+results, preserves the five accepted source artifacts byte-for-byte, retains
+schema-11 BuFLO kernel-TX evidence in a separate subtree, and derives
+classifier products solely from observer time, client-relative direction,
+and Ethernet frame length.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ import shutil
 import tempfile
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -58,13 +59,18 @@ from .class_study import (
 from .discover import origin
 from .experiment import (
     ACCEPTED_ARTIFACTS,
+    KERNEL_TX_EVIDENCE_DIRECTORY,
+    KERNEL_TX_EVIDENCE_FILES,
+    KERNEL_TX_EVIDENCE_RECEIPT_KEY,
+    KERNEL_TX_EVIDENCE_RECEIPT_SCHEMA_VERSION,
+    KERNEL_TX_EVIDENCE_RECEIPT_SOURCE,
     resolved_sample_directory,
     validate_accepted_scheduler_runtime_receipt,
 )
 from .util import LAB_ROOT, load_json, require_disjoint_path, sha256_file, source_metadata
 from .verification import VerifiedResult, verify_result
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 ARTIFACT_TYPE = "qcsd-classifier-multiorigin100-formal-handoff"
 PURPOSE = "closed-world-website-traffic-classification"
 COHORT_INPUT = "inputs/class-study-cohort.json"
@@ -74,6 +80,7 @@ CLASS_STUDY_LAUNCHES_PATH = "inputs/class-study-launches"
 CLASS_STUDY_FOUNDATION_INPUT = "inputs/class-study-foundation.json"
 CLASS_STUDY_READINESS_INPUT = "inputs/class-study-readiness.json"
 CLASS_STUDY_HISTORICAL_PRE_INPUT = "inputs/class-study-historical-pre-snapshot.json"
+CLASS_STUDY_HISTORICAL_POST_INPUT = "inputs/class-study-historical-post-snapshot.json"
 CLASS_MANIFEST_PATH = "inputs/class-manifest.json"
 EXECUTION_SOURCE_PATH = "inputs/execution-source.json"
 CLASSIFIER_FIELDS = (
@@ -131,6 +138,7 @@ _TOP_LEVEL = {
     "dataset.json",
     "samples.jsonl",
     "inputs",
+    KERNEL_TX_EVIDENCE_DIRECTORY,
     "raw",
     "shape",
     "traces",
@@ -159,6 +167,7 @@ _DATASET_KEYS = {
     "class_study_launches",
     "class_study_successor",
     "capture_authority",
+    "historical_post_snapshot",
     "runtime_contract",
     "class_manifest",
     "execution_source",
@@ -182,12 +191,20 @@ _ROW_KEYS = {
     "split",
     "paired_class_visit_id",
     "input_bindings",
+    "kernel_tx_evidence",
     "source",
     "products",
     "observer_packet_count",
     "classifier_feature_fields",
     "correctness",
     "performance",
+}
+_KERNEL_TX_BINDING_SCHEMA_VERSION = 1
+_KERNEL_TX_RECEIPT_KEYS = {
+    "schema_version",
+    "source",
+    "directory",
+    "artifacts",
 }
 _CORRECTNESS_RECEIPT = {
     "schema_version": 1,
@@ -266,6 +283,9 @@ class _SourceContext:
     chaff_qualification_set: str
     chaff_qualification_set_manifest_sha256: str
     execution_source: dict[str, Any]
+    class_study_historical_post_snapshot_source: Path | None = None
+    class_study_historical_post_snapshot_sha256: str | None = None
+    class_study_historical_post_snapshot_payload_sha256: str | None = None
 
 
 SourceVerifier = Callable[[Path], VerifiedResult]
@@ -275,12 +295,14 @@ CorrectnessValidator = Callable[..., None]
 PerformanceExtractor = Callable[[Mapping[str, Any], Sequence[ObserverPacket]], dict[str, Any]]
 CohortLoader = Callable[[Path], tuple[dict[str, Any], Any]]
 AssemblyValidator = Callable[..., dict[str, Any]]
+HistoricalPostValidator = Callable[..., Mapping[str, Any]]
 
 
 def export_class_handoff(
     result_roots: Sequence[Path],
     destination: Path,
     *,
+    historical_post_snapshot: Path,
     source_verifier: SourceVerifier = verify_result,
     trace_extractor: TraceExtractor = extract_trace,
     classic_pcap_writer: ClassicPcapWriter = _write_classic_raw_pcap,
@@ -308,6 +330,7 @@ def export_class_handoff(
     return _export_class_handoff(
         result_roots,
         destination,
+        historical_post_snapshot=historical_post_snapshot,
         dimensions=_dimensions_for_study(study_id),
         source_verifier=source_verifier,
         trace_extractor=trace_extractor,
@@ -359,6 +382,7 @@ def _export_class_handoff(
     result_roots: Sequence[Path],
     destination: Path,
     *,
+    historical_post_snapshot: Path,
     dimensions: _StudyDimensions,
     source_verifier: SourceVerifier,
     trace_extractor: TraceExtractor,
@@ -367,6 +391,7 @@ def _export_class_handoff(
     performance_extractor: PerformanceExtractor,
     cohort_loader: CohortLoader,
     assembly_validator: AssemblyValidator,
+    historical_post_validator: HistoricalPostValidator | None = None,
 ) -> Path:
     roots = tuple(Path(root).resolve() for root in result_roots)
     if len(roots) != dimensions.block_count or len(set(roots)) != len(roots):
@@ -382,11 +407,21 @@ def _export_class_handoff(
         cohort_loader=cohort_loader,
         assembly_validator=assembly_validator,
     )
+    context = _bind_historical_post_snapshot(
+        context,
+        historical_post_snapshot,
+        dimensions=dimensions,
+        validator=historical_post_validator,
+    )
 
     existing_handoffs = _existing_handoffs_except(destination)
     destination = require_disjoint_path(
         destination,
-        (*roots, *existing_handoffs),
+        (
+            *roots,
+            Path(historical_post_snapshot),
+            *existing_handoffs,
+        ),
         label="formal class handoff destination",
     )
     parent = destination.parent.resolve()
@@ -400,6 +435,7 @@ def _export_class_handoff(
         for directory in (
             "inputs/workloads",
             CLASS_STUDY_LAUNCHES_PATH,
+            KERNEL_TX_EVIDENCE_DIRECTORY,
             "raw",
             "shape",
             "traces",
@@ -483,6 +519,7 @@ def _verify_class_handoff(
     performance_extractor: PerformanceExtractor,
     cohort_loader: CohortLoader,
     assembly_validator: AssemblyValidator,
+    historical_post_validator: HistoricalPostValidator | None = None,
 ) -> Path:
     root = Path(path).resolve()
     dataset = _read_json_object(root / "dataset.json", "formal class dataset")
@@ -500,6 +537,12 @@ def _verify_class_handoff(
         dimensions=dimensions,
         cohort_loader=cohort_loader,
         assembly_validator=assembly_validator,
+    )
+    context = _bind_historical_post_snapshot(
+        context,
+        root / CLASS_STUDY_HISTORICAL_POST_INPUT,
+        dimensions=dimensions,
+        validator=historical_post_validator,
     )
     _validate_published_tree(
         root,
@@ -778,6 +821,87 @@ def _validate_source_results(
         chaff_qualification_set=chaff_qualification_set,
         chaff_qualification_set_manifest_sha256=(chaff_qualification_set_manifest_sha256),
         execution_source=first_source,
+    )
+
+
+def _bind_historical_post_snapshot(
+    context: _SourceContext,
+    snapshot: Path,
+    *,
+    dimensions: _StudyDimensions,
+    validator: HistoricalPostValidator | None,
+) -> _SourceContext:
+    """Bind the independently reconstructed post-formal snapshot to all blocks."""
+
+    candidate = Path(snapshot).absolute()
+    if candidate.is_symlink() or not candidate.is_file():
+        raise ValueError("formal class historical-post snapshot is not a regular file")
+    source = candidate.resolve()
+    if validator is None:
+        # Local import avoids the intentional class_attestation -> class_handoff
+        # import used by the final promotion verifier.
+        from .class_attestation import validate_class_historical_snapshot
+
+        validator = validate_class_historical_snapshot
+    post = validator(source, expected_phase="post-formal")
+    if not isinstance(post, Mapping):
+        raise ValueError("formal class historical-post validator returned no mapping")
+    readiness = post.get("readiness")
+    pre = post.get("pre_formal_snapshot")
+    expected_results: list[dict[str, str]] = []
+    for receipt, launch_sha256 in zip(
+        context.receipts, context.class_study_launch_sha256s, strict=True
+    ):
+        binding = {
+            "root": str(receipt.root.resolve()),
+            "evidence_sha256": sha256_file(receipt.root / "evidence.sha256"),
+            "class_study_launch_sha256": launch_sha256,
+            "class_study_foundation_sha256": context.class_study_foundation_sha256,
+            "class_study_readiness_sha256": context.class_study_readiness_sha256,
+            "class_study_historical_pre_snapshot_sha256": (
+                context.class_study_historical_pre_snapshot_sha256
+            ),
+        }
+        if context.class_study_successor_sha256 is not None:
+            binding["class_study_id"] = dimensions.study_id
+            binding["class_study_successor_sha256"] = (
+                context.class_study_successor_sha256
+            )
+        expected_results.append(binding)
+    payload_sha256 = post.get("payload_sha256")
+    digest = sha256_file(source)
+    if (
+        post.get("phase") != "post-formal"
+        or post.get("study_id") != dimensions.study_id
+        or post.get("source") != context.execution_source
+        or not isinstance(readiness, Mapping)
+        or readiness.get("sha256") != context.class_study_readiness_sha256
+        or not isinstance(pre, Mapping)
+        or pre.get("sha256")
+        != context.class_study_historical_pre_snapshot_sha256
+        or post.get("formal_results") != expected_results
+        or post.get("sha256") != digest
+        or not isinstance(payload_sha256, str)
+        or _DIGEST.fullmatch(payload_sha256) is None
+    ):
+        raise ValueError(
+            "formal class historical-post snapshot differs from the exact source blocks"
+        )
+    post_time = _timestamp(post.get("recorded_at"), label="historical-post snapshot")
+    last_completion = max(
+        _timestamp(
+            receipt.experiment.get("completed_at"),
+            label="source block completion",
+        )
+        for receipt in context.receipts
+    )
+    if post_time < last_completion:
+        raise ValueError("formal class historical-post snapshot predates source completion")
+    return replace(
+        context,
+        class_study_historical_post_snapshot_source=source,
+        class_study_historical_post_snapshot_sha256=digest,
+        class_study_historical_post_snapshot_payload_sha256=payload_sha256,
     )
 
 
@@ -1114,6 +1238,16 @@ def _copy_study_inputs(
         CLASS_STUDY_HISTORICAL_PRE_INPUT,
     ):
         _copy_sealed_file(first, first.root / relative, candidate / relative)
+    if (
+        context.class_study_historical_post_snapshot_source is None
+        or context.class_study_historical_post_snapshot_sha256 is None
+    ):
+        raise ValueError("formal class handoff has no historical-post authority")
+    _copy_bound_file(
+        context.class_study_historical_post_snapshot_source,
+        candidate / CLASS_STUDY_HISTORICAL_POST_INPUT,
+        expected_sha256=context.class_study_historical_post_snapshot_sha256,
+    )
     if context.class_study_successor_sha256 is not None:
         successor_source = first.root / "inputs/class-study-successor.json"
         _copy_sealed_file(first, successor_source, candidate / "inputs/class-study-successor.json")
@@ -1137,6 +1271,98 @@ def _copy_study_inputs(
 
 def _launch_copy_path(block_index: int) -> str:
     return f"{CLASS_STUDY_LAUNCHES_PATH}/block-{block_index:02d}.json"
+
+
+def _expected_kernel_tx_binding(
+    receipt: VerifiedResult,
+    sample: Mapping[str, Any],
+    *,
+    block_index: int,
+) -> dict[str, Any] | None:
+    """Bind a source sidecar without adding it to the five-file sample inventory."""
+
+    diagnostics = sample.get("diagnostics")
+    retained_value = (
+        diagnostics.get(KERNEL_TX_EVIDENCE_RECEIPT_KEY)
+        if isinstance(diagnostics, Mapping)
+        else None
+    )
+    if sample.get("runtime_kind") != "buflo":
+        if retained_value is not None:
+            raise ValueError("non-BuFLO formal class sample claims kernel-TX evidence")
+        return None
+
+    sample_id = sample.get("sample_id")
+    if (
+        not isinstance(sample_id, str)
+        or not sample_id
+        or Path(sample_id).parts != (sample_id,)
+        or sample_id in {".", ".."}
+        or not isinstance(retained_value, Mapping)
+    ):
+        raise ValueError("formal class BuFLO kernel-TX source receipt is invalid")
+    retained = retained_value
+    source_directory = f"{KERNEL_TX_EVIDENCE_DIRECTORY}/{sample_id}"
+    source_artifacts = retained.get("artifacts")
+    if (
+        set(retained) != _KERNEL_TX_RECEIPT_KEYS
+        or retained.get("schema_version") != KERNEL_TX_EVIDENCE_RECEIPT_SCHEMA_VERSION
+        or retained.get("source") != KERNEL_TX_EVIDENCE_RECEIPT_SOURCE
+        or retained.get("directory") != source_directory
+        or not isinstance(source_artifacts, Mapping)
+        or set(source_artifacts) != KERNEL_TX_EVIDENCE_FILES
+        or any(not _is_digest(value) for value in source_artifacts.values())
+    ):
+        raise ValueError("formal class BuFLO kernel-TX source receipt is invalid")
+
+    artifacts: dict[str, dict[str, str]] = {}
+    for name in sorted(KERNEL_TX_EVIDENCE_FILES):
+        source_path = f"{source_directory}/{name}"
+        digest = str(source_artifacts[name])
+        source = receipt.root / source_path
+        if (
+            receipt.checksums.get(source_path) != digest
+            or source.is_symlink()
+            or not source.is_file()
+        ):
+            raise ValueError("formal class BuFLO kernel-TX source differs from its evidence seal")
+        artifacts[name] = {
+            "source_path": source_path,
+            "path": (
+                f"{KERNEL_TX_EVIDENCE_DIRECTORY}/block-{block_index:02d}/"
+                f"{sample_id}/{name}"
+            ),
+            "sha256": digest,
+        }
+    return {
+        "schema_version": _KERNEL_TX_BINDING_SCHEMA_VERSION,
+        "source_receipt": {
+            "diagnostics_key": KERNEL_TX_EVIDENCE_RECEIPT_KEY,
+            "schema_version": KERNEL_TX_EVIDENCE_RECEIPT_SCHEMA_VERSION,
+            "source": KERNEL_TX_EVIDENCE_RECEIPT_SOURCE,
+            "directory": source_directory,
+        },
+        "artifacts": artifacts,
+    }
+
+
+def _export_kernel_tx_sidecar(
+    candidate: Path,
+    receipt: VerifiedResult,
+    sample: Mapping[str, Any],
+    *,
+    block_index: int,
+) -> dict[str, Any] | None:
+    binding = _expected_kernel_tx_binding(receipt, sample, block_index=block_index)
+    if binding is None:
+        return None
+    for artifact in binding["artifacts"].values():
+        source = receipt.root / artifact["source_path"]
+        destination = candidate / artifact["path"]
+        _copy_sealed_file(receipt, source, destination)
+        if sha256_file(destination) != artifact["sha256"]:
+            raise ValueError("formal class copied BuFLO kernel-TX evidence changed")
+    return binding
 
 
 def _export_sample(
@@ -1186,6 +1412,12 @@ def _export_sample(
         schedule_path=candidate / products["schedule"]["path"],
         events_path=candidate / products["events"]["path"],
         packets_path=candidate / products["packets"]["path"],
+    )
+    kernel_tx_evidence = _export_kernel_tx_sidecar(
+        candidate,
+        receipt,
+        sample,
+        block_index=block_index,
     )
     endpoints = run.get("endpoints") if isinstance(run, Mapping) else None
     if not isinstance(endpoints, list) or not endpoints:
@@ -1240,6 +1472,7 @@ def _export_sample(
             f"block-{block_index:02d}/{workload_id}/visit-{sample['visit']:02d}"
         ),
         "input_bindings": input_bindings,
+        "kernel_tx_evidence": kernel_tx_evidence,
         "source": {
             "result_name": receipt.experiment["name"],
             "result_root": str(receipt.root),
@@ -1392,6 +1625,13 @@ def _dataset_receipt(
                 "sha256": context.class_study_historical_pre_snapshot_sha256,
             },
         },
+        "historical_post_snapshot": {
+            "path": CLASS_STUDY_HISTORICAL_POST_INPUT,
+            "sha256": context.class_study_historical_post_snapshot_sha256,
+            "payload_sha256": (
+                context.class_study_historical_post_snapshot_payload_sha256
+            ),
+        },
         "runtime_contract": {
             "defense_runtime_inputs": context.defense_runtime_inputs,
             "defense_runtime_inputs_sha256": _canonical_digest(context.defense_runtime_inputs),
@@ -1531,6 +1771,21 @@ def _validate_dataset(
         for binding in expected_authority.values()
     ):
         raise ValueError("formal class handoff capture authority is invalid")
+    expected_post = {
+        "path": CLASS_STUDY_HISTORICAL_POST_INPUT,
+        "sha256": context.class_study_historical_post_snapshot_sha256,
+        "payload_sha256": (
+            context.class_study_historical_post_snapshot_payload_sha256
+        ),
+    }
+    if (
+        dataset.get("historical_post_snapshot") != expected_post
+        or not _is_digest(expected_post["sha256"])
+        or not _is_digest(expected_post["payload_sha256"])
+        or sha256_file(_safe_handoff_file(root, CLASS_STUDY_HISTORICAL_POST_INPUT))
+        != expected_post["sha256"]
+    ):
+        raise ValueError("formal class handoff historical-post authority is invalid")
     if dataset.get("runtime_contract") != {
         "defense_runtime_inputs": context.defense_runtime_inputs,
         "defense_runtime_inputs_sha256": _canonical_digest(context.defense_runtime_inputs),
@@ -1690,6 +1945,7 @@ def _validate_rows(
         CLASS_STUDY_FOUNDATION_INPUT,
         CLASS_STUDY_READINESS_INPUT,
         CLASS_STUDY_HISTORICAL_PRE_INPUT,
+        CLASS_STUDY_HISTORICAL_POST_INPUT,
         CLASS_MANIFEST_PATH,
         EXECUTION_SOURCE_PATH,
         *(_launch_copy_path(block_index) for block_index in range(1, dimensions.block_count + 1)),
@@ -1727,6 +1983,11 @@ def _validate_rows(
                 }
                 for label, relative in _SOURCE_ARTIFACTS.items()
             }
+            expected_kernel_tx = _expected_kernel_tx_binding(
+                receipt,
+                sample,
+                block_index=block,
+            )
             source = row.get("source")
             products = row.get("products")
             if (
@@ -1747,6 +2008,7 @@ def _validate_rows(
                 or row.get("paired_class_visit_id")
                 != f"block-{block:02d}/{workload_id}/visit-{visit:02d}"
                 or row.get("input_bindings") != expected_input_bindings
+                or row.get("kernel_tx_evidence") != expected_kernel_tx
                 or row.get("classifier_feature_fields") != list(CLASSIFIER_FIELDS)
                 or not isinstance(source, Mapping)
                 or set(source)
@@ -1801,6 +2063,15 @@ def _validate_rows(
             for label in _SOURCE_ARTIFACTS:
                 if products[label]["sha256"] != expected_source_artifacts[label]["sha256"]:
                     raise ValueError("formal class copied source artifact changed")
+            if expected_kernel_tx is not None:
+                for artifact in expected_kernel_tx["artifacts"].values():
+                    relative = artifact["path"]
+                    _safe_handoff_file(root, relative)
+                    if handoff_checksums.get(relative) != artifact["sha256"]:
+                        raise ValueError(
+                            "formal class copied BuFLO kernel-TX evidence digest is invalid"
+                        )
+                    expected_files.add(relative)
 
             csv_trace = _read_classifier_trace(root / products["trace_csv"]["path"])
             shape_trace = _read_shape_only_pcap(root / products["shape_pcap"]["path"])
@@ -1944,6 +2215,30 @@ def _copy_sealed_file(receipt: VerifiedResult, source: Path, destination: Path) 
         raise ValueError("formal class copied source differs from its evidence seal")
 
 
+def _copy_bound_file(source: Path, destination: Path, *, expected_sha256: str) -> None:
+    """Copy one externally sealed authority while retaining its exact digest."""
+
+    source_candidate = Path(source).absolute()
+    if (
+        source_candidate.is_symlink()
+        or not source_candidate.is_file()
+        or not _is_digest(expected_sha256)
+        or sha256_file(source_candidate) != expected_sha256
+    ):
+        raise ValueError("formal class bound input changed before handoff export")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with source_candidate.open("rb") as input_file, destination.open("xb") as output:
+        for block in iter(lambda: input_file.read(1024 * 1024), b""):
+            output.write(block)
+        output.flush()
+        os.fsync(output.fileno())
+    if (
+        sha256_file(source_candidate) != expected_sha256
+        or sha256_file(destination) != expected_sha256
+    ):
+        raise ValueError("formal class bound input changed during handoff export")
+
+
 def _write_classifier_trace(trace: Sequence[ObserverPacket], path: Path) -> None:
     with path.open("x", newline="", encoding="utf-8") as output:
         writer = csv.writer(output, lineterminator="\n")
@@ -2076,10 +2371,15 @@ def _regular_tree_files(root: Path, *, exclude: set[str] | None = None) -> dict[
     for path in root.rglob("*"):
         if path.is_symlink():
             raise ValueError(f"formal class handoff cannot contain symlinks: {path}")
-        if path.is_file():
-            relative = path.relative_to(root).as_posix()
-            if relative not in excluded:
-                result[relative] = path
+        if path.is_dir():
+            continue
+        if not path.is_file():
+            raise ValueError(
+                f"formal class handoff contains a special filesystem entry: {path}"
+            )
+        relative = path.relative_to(root).as_posix()
+        if relative not in excluded:
+            result[relative] = path
     return result
 
 
@@ -2214,17 +2514,23 @@ modes, {dimensions.block_count} temporal acquisition blocks, and
 training, block 9 is validation, and block 10 is held-out test evidence.
 
 The five accepted source files are preserved under `raw/`; classic raw PCAP is
-derived alongside them. Classifiers must consume only `traces/*.csv` or
-`shape/*.pcap`. Those products contain only relative timestamp, client-relative
-direction, and observer-frame length. The fixed addresses and ports in shape
-PCAPs are synthetic framing and never copied from source traffic. All non-formal
-campaign roles and the `static` compatibility mode are excluded.
+derived alongside them. Schema-11 BuFLO kernel-TX sidecars are copied into the
+separate `kernel-tx-evidence/` subtree and do not alter that five-file source
+inventory. Classifiers must consume only `traces/*.csv` or `shape/*.pcap`.
+Those products contain only relative timestamp, client-relative direction, and
+observer-frame length. The fixed addresses and ports in shape PCAPs are
+synthetic framing and never copied from source traffic. All non-formal campaign
+roles and the `static` compatibility mode are excluded.
 
-Schema 2 `dataset.json` and `samples.jsonl` bind class labels, paired visits,
+Schema 3 `dataset.json` and `samples.jsonl` bind class labels, paired visits,
 source result seals, cohort/class hashes, modes, blocks, and splits. Every
+handoff also copies and hash-binds the independently reconstructed post-formal
+historical snapshot for those exact ordered blocks. Every
 sample row also binds its prepared application graph, executed runtime graph,
-qualified chaff inputs, mode-appropriate defense parameters, and launch limits;
-the semantic verifier checks those receipts against copied `run.json` evidence.
+qualified chaff inputs, mode-appropriate defense parameters, and launch limits.
+BuFLO rows additionally bind the source sidecar receipt and every copied
+kernel-TX artifact by canonical path and SHA-256; all other rows carry `null`.
+The semantic verifier checks those receipts against copied evidence.
 `SHA256SUMS` is a closed inventory. Run the semantic verifier as well as
 `sha256sum -c` before analysis. This is a paper-informed, 100-class closed-world QUIC
 study; it is not a reproduction of a bilateral defense or any paper dataset.

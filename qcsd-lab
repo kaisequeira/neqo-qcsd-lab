@@ -1,14 +1,193 @@
 #!/usr/bin/env bash
 set -euo pipefail
+QCSD_ORIGINAL_ARGV=("$@")
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+# A guarded inner invocation executes the exact qcsd bytes held open by the
+# guardian.  Derive the repository root from the separately bound canonical
+# path only after proving that Bash is reading that guardian-owned descriptor.
+if [[ -n "${QCSD_DOCKER_LOCK_GUARDIAN_QCSD_SOURCE_FD:-}" ||
+      -n "${QCSD_DOCKER_LOCK_GUARDIAN_QCSD_SOURCE_PATH:-}" ]]; then
+  qcsd_loaded_source_canonical="$(readlink -f -- "${BASH_SOURCE[0]}" 2>/dev/null)" ||
+    qcsd_loaded_source_canonical=""
+  [[ "${QCSD_DOCKER_LOCK_GUARDIAN_PID:-}" =~ ^[1-9][0-9]*$ &&
+      "${QCSD_DOCKER_LOCK_GUARDIAN_QCSD_SOURCE_FD:-}" =~ ^[0-9]+$ &&
+      "${QCSD_DOCKER_LOCK_GUARDIAN_QCSD_SOURCE_PATH:-}" == /* &&
+      "${BASH_SOURCE[0]}" == "/proc/${QCSD_DOCKER_LOCK_GUARDIAN_PID}/fd/${QCSD_DOCKER_LOCK_GUARDIAN_QCSD_SOURCE_FD}" &&
+      "${qcsd_loaded_source_canonical}" == "${QCSD_DOCKER_LOCK_GUARDIAN_QCSD_SOURCE_PATH}" ]] || exit 1
+  ROOT="$(cd "$(dirname "${QCSD_DOCKER_LOCK_GUARDIAN_QCSD_SOURCE_PATH}")" && pwd -P)"
+else
+  ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+fi
+DOCKER_SUPERVISOR="${ROOT}/tools/docker_signal_supervisor.sh"
+docker_supervisor_canonical="$(readlink -f -- "${DOCKER_SUPERVISOR}" 2>/dev/null)" ||
+  docker_supervisor_canonical=""
+docker_supervisor_metadata="$(stat -Lc '%d:%i:%s:%Y:%u:%a:%h:%F' -- \
+  "${DOCKER_SUPERVISOR}" 2>/dev/null)" || docker_supervisor_metadata=""
+if [[ -L "${DOCKER_SUPERVISOR}" || ! -f "${DOCKER_SUPERVISOR}" ||
+      "${docker_supervisor_canonical}" != "${DOCKER_SUPERVISOR}" ||
+      ! "${docker_supervisor_metadata}" =~ \
+        ^[0-9]+:[0-9]+:[0-9]+:[0-9]+:$(id -u):[0-7]{3,4}:1:regular[[:space:]]file$ ]]; then
+  echo "Missing regular Docker signal supervisor: ${DOCKER_SUPERVISOR}" >&2
+  exit 1
+fi
+docker_supervisor_mode="$(stat -Lc '%a' -- "${DOCKER_SUPERVISOR}")"
+if (( (8#${docker_supervisor_mode} & 0022) != 0 )); then
+  echo "Docker signal supervisor is group/world writable" >&2
+  exit 1
+fi
+docker_supervisor_sha256="$(sha256sum -- "${DOCKER_SUPERVISOR}" | awk '{print $1}')"
+[[ "${docker_supervisor_sha256}" =~ ^[0-9a-f]{64}$ ]] || exit 1
+# shellcheck source=tools/docker_signal_supervisor.sh
+source "${DOCKER_SUPERVISOR}"
+if [[ "$(stat -Lc '%d:%i:%s:%Y:%u:%a:%h:%F' -- \
+       "${DOCKER_SUPERVISOR}" 2>/dev/null)" != "${docker_supervisor_metadata}" ||
+      "$(sha256sum -- "${DOCKER_SUPERVISOR}" | awk '{print $1}')" != \
+        "${docker_supervisor_sha256}" ]]; then
+  echo "Docker signal supervisor changed while it was sourced" >&2
+  exit 1
+fi
 COLLECTION_IMAGE="${QCSD_LAB_COLLECTION_IMAGE:-neqo-qcsd-lab-collection:local}"
 PREPARE_IMAGE="${QCSD_LAB_PREPARE_IMAGE:-neqo-qcsd-lab-prepare:local}"
 REFERENCE_IMAGE="${QCSD_LAB_REFERENCE_IMAGE:-neqo-qcsd-lab-reference:local}"
 WSL_HOST_BUILD_MIN_AVAILABLE_BYTES=68719476736
+QCSD_LAUNCH_ACTION="${1:-}"
 
 usage() {
   echo "Usage: qcsd-lab {build|prepare|derive-chaff-prefix-specs|qualify-chaff|qualify-response-chaff|run|resume|verify|analyze|fit|buflo-study|class-study|etf-probe|test} [arguments...]" >&2
+}
+
+_qcsd_trusted_git() {
+  GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_OPTIONAL_LOCKS=0 \
+    GIT_NO_REPLACE_OBJECTS=1 \
+    /usr/bin/git -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+      -c core.excludesFile=/dev/null "$@"
+}
+
+_qcsd_verify_git_checkout_binding() {
+  local checkout="$1" expected_git_dir="$2" observed_tree observed_git_dir metadata_file
+  observed_tree="$(_qcsd_trusted_git -C "${checkout}" rev-parse --show-toplevel)" || return 1
+  observed_git_dir="$(_qcsd_trusted_git -C "${checkout}" rev-parse --absolute-git-dir)" || return 1
+  [[ "$(realpath -- "${observed_tree}")" == "$(realpath -- "${checkout}")" &&
+      "$(realpath -- "${observed_git_dir}")" == "$(realpath -- "${expected_git_dir}")" ]] || return 1
+  # Local exclude/attribute files are outside the recorded checkout and can
+  # otherwise hide build-context inputs or install conversion filters.
+  for metadata_file in "${expected_git_dir}/info/exclude" \
+    "${expected_git_dir}/info/attributes" "${expected_git_dir}/info/grafts"; do
+    [[ ! -L "${metadata_file}" && ( ! -e "${metadata_file}" || -f "${metadata_file}" ) ]] || return 1
+    if [[ "${metadata_file}" == */info/grafts && -s "${metadata_file}" ]]; then
+      return 1
+    fi
+    if [[ "${metadata_file}" != */info/grafts && -f "${metadata_file}" ]] &&
+       awk 'NF && $1 !~ /^#/ { found=1 } END { exit found ? 0 : 1 }' \
+         "${metadata_file}"; then
+      return 1
+    fi
+  done
+}
+
+_qcsd_verify_git_index_bytes() {
+  local checkout="$1" object_format inventory status
+  object_format="$(_qcsd_trusted_git -C "${checkout}" rev-parse --show-object-format)" || return 1
+  [[ "${object_format}" == "sha1" || "${object_format}" == "sha256" ]] || return 1
+  inventory="$(mktemp --tmpdir=/tmp qcsd-git-index.XXXXXXXX)" || return 1
+  if ! _qcsd_trusted_git -C "${checkout}" ls-files --stage -z >"${inventory}"; then
+    rm -f -- "${inventory}"
+    return 1
+  fi
+  if /usr/bin/python3 -I -c '
+import hashlib, os, stat, sys
+
+root = os.fsencode(sys.argv[1])
+algorithm = sys.argv[2]
+root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+records = sys.stdin.buffer.read().split(b"\0")
+for record in records:
+    if not record:
+        continue
+    header, separator, relative = record.partition(b"\t")
+    fields = header.split(b" ")
+    if not separator or len(fields) != 3 or fields[2] != b"0":
+        raise SystemExit(1)
+    mode, expected = fields[0], fields[1].decode("ascii")
+    if relative.startswith(b"/") or b"\0" in relative or b".." in relative.split(b"/"):
+        raise SystemExit(1)
+    if mode == b"160000":
+        continue
+    parts = relative.split(b"/")
+    parent_fd = os.dup(root_fd)
+    try:
+        for component in parts[:-1]:
+            child_fd = os.open(
+                component,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                dir_fd=parent_fd,
+            )
+            os.close(parent_fd)
+            parent_fd = child_fd
+        name = parts[-1]
+        value = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        if mode == b"120000":
+            if not stat.S_ISLNK(value.st_mode):
+                raise SystemExit(1)
+            payload = os.fsencode(os.readlink(name, dir_fd=parent_fd))
+        elif mode in (b"100644", b"100755"):
+            descriptor = os.open(
+                name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=parent_fd
+            )
+            try:
+                opened = os.fstat(descriptor)
+                if (
+                    not stat.S_ISREG(opened.st_mode)
+                    or opened.st_nlink != 1
+                    or (opened.st_dev, opened.st_ino) != (value.st_dev, value.st_ino)
+                ):
+                    raise SystemExit(1)
+                executable = bool(opened.st_mode & 0o111)
+                if executable != (mode == b"100755"):
+                    raise SystemExit(1)
+                payload = b""
+                while True:
+                    block = os.read(descriptor, 1024 * 1024)
+                    if not block:
+                        break
+                    payload += block
+            finally:
+                os.close(descriptor)
+        else:
+            raise SystemExit(1)
+    finally:
+        os.close(parent_fd)
+    digest = hashlib.new(algorithm)
+    digest.update(b"blob " + str(len(payload)).encode("ascii") + b"\0")
+    digest.update(payload)
+    if digest.hexdigest() != expected:
+        raise SystemExit(1)
+os.close(root_fd)
+' "${checkout}" "${object_format}" <"${inventory}"; then
+    status=0
+  else
+    status=$?
+  fi
+  rm -f -- "${inventory}"
+  return "${status}"
+}
+
+_qcsd_verify_clean_build_checkout() {
+  local head_gitlink index_gitlink neqo_head
+  _qcsd_verify_git_checkout_binding "${ROOT}" "${ROOT}/.git" &&
+    _qcsd_verify_git_checkout_binding "${ROOT}/neqo-qcsd" \
+      "${ROOT}/.git/modules/third_party/neqo-qcsd" &&
+    _qcsd_verify_git_index_bytes "${ROOT}" &&
+    _qcsd_verify_git_index_bytes "${ROOT}/neqo-qcsd" || return 1
+  [[ -z "$(_qcsd_trusted_git -C "${ROOT}" status --porcelain --untracked-files=all)" &&
+      -z "$(_qcsd_trusted_git -C "${ROOT}/neqo-qcsd" status --porcelain --untracked-files=all)" ]] || return 1
+  head_gitlink="$(_qcsd_trusted_git -C "${ROOT}" rev-parse HEAD:neqo-qcsd)" || return 1
+  index_gitlink="$(_qcsd_trusted_git -C "${ROOT}" ls-files --stage -- neqo-qcsd |
+    awk '$1 == 160000 {print $2}')" || return 1
+  neqo_head="$(_qcsd_trusted_git -C "${ROOT}/neqo-qcsd" rev-parse HEAD)" || return 1
+  [[ "${head_gitlink}" =~ ^[0-9a-f]{40,64}$ &&
+      "${head_gitlink}" == "${index_gitlink}" &&
+      "${head_gitlink}" == "${neqo_head}" ]]
 }
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
@@ -16,10 +195,15 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   exit 0
 fi
 
-# This host-side command deliberately creates only a disposable Docker veth
-# topology and a non-evidentiary capability receipt.  Keep it out of the
-# production campaign container path and immutable BuFLO study state.
-if [[ "${1:-}" == "etf-probe" ]]; then
+if [[ "${1:-}" == "test" && "${2:-}" == "pinned-cdp" && $# != 2 ]]; then
+  echo "test pinned-cdp accepts no additional arguments" >&2
+  exit 2
+fi
+
+# ETF probe help is read-only.  Executing the probe is deferred until the
+# ordinary Docker endpoint pin and stale-supervisor admission gate have run.
+if [[ "${1:-}" == "etf-probe" && $# == 2 &&
+      ( "${2}" == "-h" || "${2}" == "--help" ) ]]; then
   probe_python="python3"
   if [[ -x "${ROOT}/.venv/bin/python" ]]; then
     probe_python="${ROOT}/.venv/bin/python"
@@ -37,15 +221,11 @@ fi
 # is due.  The Python tool owns argument validation; this branch intentionally
 # runs before all Docker and mutable study-state checks.
 if [[ "${1:-}" == "class-study" && "${2:-}" == "acquisition-watch" ]]; then
-  watch_python="python3"
-  if [[ -x "${ROOT}/.venv/bin/python" ]]; then
-    watch_python="${ROOT}/.venv/bin/python"
-  fi
-  command -v "${watch_python}" >/dev/null 2>&1 || {
-    echo "class-study acquisition-watch requires python3 on the host" >&2
+  if [[ ! -x /usr/bin/python3 ]]; then
+    echo "class-study acquisition-watch requires /usr/bin/python3" >&2
     exit 1
-  }
-  exec "${watch_python}" "${ROOT}/tools/class_acquisition_watch.py" "${@:3}"
+  fi
+  exec /usr/bin/python3 -I "${ROOT}/tools/class_acquisition_watch.py" "${@:3}"
 fi
 
 # Nested help is read-only and must not depend on Docker, a built image, or
@@ -74,6 +254,26 @@ if [[ ( "${1:-}" == "class-study" || "${1:-}" == "buflo-study" ) &&
     'from qcsd_lab.cli import main; main()' "$@"
 fi
 
+# Keep one terminal-signal handler installed for the complete mutable launcher
+# lifetime.  Cleanup routines change only the atomic phase flag; they never
+# replace four traps one at a time and therefore have no transition window in
+# which a signal can be discarded or can interrupt exact-object teardown.
+_QCSD_LIFETIME_SIGNAL_STATUS=0
+_QCSD_LIFETIME_CLEANUP_ACTIVE=0
+_qcsd_latch_lifetime_signal() {
+  local received_status="$1"
+  if (( _QCSD_LIFETIME_SIGNAL_STATUS == 0 )); then
+    _QCSD_LIFETIME_SIGNAL_STATUS="${received_status}"
+  fi
+  if (( _QCSD_LIFETIME_CLEANUP_ACTIVE == 0 )); then
+    exit "${_QCSD_LIFETIME_SIGNAL_STATUS}"
+  fi
+}
+trap '_qcsd_latch_lifetime_signal 129' HUP
+trap '_qcsd_latch_lifetime_signal 130' INT
+trap '_qcsd_latch_lifetime_signal 131' QUIT
+trap '_qcsd_latch_lifetime_signal 143' TERM
+
 require_submodule() {
   if [[ ! -f "${ROOT}/neqo-qcsd/Cargo.lock" ]]; then
     echo "Missing Neqo submodule; run: git submodule update --init --recursive" >&2
@@ -81,15 +281,1322 @@ require_submodule() {
   fi
 }
 
+readonly _QCSD_DOCKER_STALE_NETWORK_SETTLE_SECONDS=5
+readonly _QCSD_DOCKER_STALE_RUN_SETTLE_SECONDS=5
+
+_qcsd_admission_parse_record() {
+  local record="$1"
+  local values_name="$2"
+  local order_name="$3"
+  local -n values_ref="${values_name}"
+  local -n order_ref="${order_name}"
+  local metadata size last_byte line key value grep_status
+  values_ref=()
+  order_ref=()
+  [[ ! -L "${record}" && -f "${record}" ]] || return 1
+  metadata="$(stat -c '%u:%a:%h:%F' -- "${record}" 2>/dev/null)" || return 1
+  [[ "${metadata}" == "$(id -u):600:1:regular file" ]] || return 1
+  size="$(stat -c '%s' -- "${record}" 2>/dev/null)" || return 1
+  [[ "${size}" =~ ^[1-9][0-9]*$ ]] || return 1
+  (( size <= 16384 )) || return 1
+  last_byte="$(
+    od -An -tu1 -j "$((size - 1))" -N1 -- "${record}" 2>/dev/null |
+      tr -d '[:space:]'
+  )" || return 1
+  [[ "${last_byte}" == "10" ]] || return 1
+  if LC_ALL=C grep -q '[^ -~]' -- "${record}"; then
+    return 1
+  else
+    grep_status=$?
+    (( grep_status == 1 )) || return 1
+  fi
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    [[ "${line}" == *=* ]] || return 1
+    key="${line%%=*}"
+    value="${line#*=}"
+    [[ "${key}" =~ ^[a-z][a-z0-9_]*$ && -n "${value}" ]] || return 1
+    [[ ! -v "values_ref[${key}]" ]] || return 1
+    values_ref["${key}"]="${value}"
+    order_ref+=("${key}")
+  done <"${record}"
+  (( ${#order_ref[@]} > 0 ))
+}
+
+_qcsd_admission_exact_fields() {
+  local values_name="$1"
+  local order_name="$2"
+  local expected_name="$3"
+  local -n values_ref="${values_name}"
+  local -n order_ref="${order_name}"
+  local -n expected_ref="${expected_name}"
+  local index
+  (( ${#values_ref[@]} == ${#expected_ref[@]} &&
+     ${#order_ref[@]} == ${#expected_ref[@]} )) || return 1
+  for (( index = 0; index < ${#expected_ref[@]}; index++ )); do
+    [[ "${order_ref[index]}" == "${expected_ref[index]}" &&
+        -v "values_ref[${expected_ref[index]}]" ]] || return 1
+  done
+}
+
+_qcsd_admission_validate_root_entries() {
+  local supervisor_root="$1"
+  local root_kind="$2"
+  local current_uid metadata owner mode links kind mode_value entry name
+  local nullglob_was_set=0
+  local dotglob_was_set=0
+  local -a entries=()
+  current_uid="$(id -u)"
+  [[ ! -L "${supervisor_root}" && -d "${supervisor_root}" ]] || return 1
+  metadata="$(stat -Lc '%u:%a:%F' -- "${supervisor_root}" 2>/dev/null)" || return 1
+  [[ "${metadata}" == "${current_uid}:700:directory" ]] || return 1
+  shopt -q nullglob && nullglob_was_set=1
+  shopt -q dotglob && dotglob_was_set=1
+  shopt -s nullglob dotglob
+  entries=("${supervisor_root}"/*)
+  (( nullglob_was_set )) || shopt -u nullglob
+  (( dotglob_was_set )) || shopt -u dotglob
+  for entry in "${entries[@]}"; do
+    name="${entry##*/}"
+    case "${name}" in
+      SUPERVISION.next|RECOVERY.next|run.status.next)
+        echo "qcsd-lab Docker admission found staged prior supervisor state: ${entry}" >&2
+        return 1
+        ;;
+      SUPERVISION|RECOVERY)
+        [[ ! -L "${entry}" && -f "${entry}" ]] || return 1
+        metadata="$(stat -c '%u:%a:%h:%F' -- "${entry}" 2>/dev/null)" || return 1
+        [[ "${metadata}" == "${current_uid}:600:1:regular file" ]] || return 1
+        ;;
+      container.cid)
+        [[ "${root_kind}" == "run" && ! -L "${entry}" && -f "${entry}" ]] ||
+          return 1
+        metadata="$(stat -c '%u:%a:%h:%F' -- "${entry}" 2>/dev/null)" || return 1
+        IFS=: read -r owner mode links kind <<<"${metadata}"
+        [[ "${owner}" == "${current_uid}" && "${links}" == "1" &&
+            "${kind}" == "regular file" && "${mode}" =~ ^[0-7]{3,4}$ ]] ||
+          return 1
+        mode_value=$((8#${mode}))
+        (( (mode_value & 0022) == 0 )) || return 1
+        ;;
+      run.status|stdout)
+        [[ "${root_kind}" == "run" && ! -L "${entry}" && -f "${entry}" ]] ||
+          return 1
+        metadata="$(stat -c '%u:%a:%h:%F' -- "${entry}" 2>/dev/null)" || return 1
+        [[ "${metadata}" == "${current_uid}:600:1:regular file" ]] || return 1
+        ;;
+      wait.pipe)
+        [[ "${root_kind}" == "run" && ! -L "${entry}" && -p "${entry}" ]] ||
+          return 1
+        metadata="$(stat -c '%u:%a:%F' -- "${entry}" 2>/dev/null)" || return 1
+        [[ "${metadata}" == "${current_uid}:600:fifo" ]] || return 1
+        ;;
+      *)
+        echo "qcsd-lab Docker admission found an unexpected prior supervisor entry: ${entry}" >&2
+        return 1
+        ;;
+    esac
+  done
+}
+
+_qcsd_admission_validate_common_record() {
+  local values_name="$1"
+  local expected_object="$2"
+  local -n values_ref="${values_name}"
+  [[ "${values_ref[object]}" == "${expected_object}" &&
+      "${values_ref[supervisor_pid]}" =~ ^[1-9][0-9]*$ &&
+      "${values_ref[supervisor_start_time]}" =~ ^[1-9][0-9]*$ &&
+      "${values_ref[supervisor_session]}" =~ ^[1-9][0-9]*$ &&
+      "${values_ref[supervisor_process_group]}" =~ ^[1-9][0-9]*$ &&
+      "${values_ref[docker_context]}" == "${_QCSD_DOCKER_PINNED_CONTEXT}" &&
+      "${values_ref[docker_host]}" == "${_QCSD_DOCKER_PINNED_HOST}" &&
+      "${values_ref[docker_server_id]}" == "${_QCSD_DOCKER_PINNED_SERVER_ID}" &&
+      "${values_ref[docker_daemon_id]}" == "${_QCSD_DOCKER_PINNED_SERVER_ID}" &&
+      "${values_ref[docker_server_id]}" =~ ^[A-Za-z0-9_.:-]+$ &&
+      "${values_ref[docker_server_id]}" != "unavailable" &&
+      "${values_ref[host_boot_id]}" == "${qcsd_admission_boot_id}" &&
+      "${values_ref[supervisor_label]}" =~ ^org[.]qcsd[.]supervisor[.]instance=[0-9a-f]{32}$ ]]
+}
+
+_qcsd_admission_validate_network_record() {
+  local values_name="$1"
+  local order_name="$2"
+  local record_name="$3"
+  local -n values_ref="${values_name}"
+  local -a expected_fields=(
+    object supervisor_pid supervisor_start_time supervisor_session
+    supervisor_process_group network_id docker_context docker_host
+    docker_server_id docker_daemon_id host_boot_id supervisor_label
+    requested_signal network_state
+  )
+  _qcsd_admission_exact_fields \
+    "${values_name}" "${order_name}" expected_fields || return 1
+  _qcsd_admission_validate_common_record "${values_name}" network || return 1
+  [[ "${values_ref[network_id]}" =~ ^(unavailable|[0-9a-f]{64})$ &&
+      "${values_ref[requested_signal]}" =~ ^(none|HUP|INT|QUIT|TERM)$ ]] ||
+    return 1
+  if [[ "${record_name}" == "SUPERVISION" ]]; then
+    [[ "${values_ref[network_id]}" == "unavailable" &&
+        "${values_ref[requested_signal]}" == "none" &&
+        "${values_ref[network_state]}" == "launching" ]]
+    return $?
+  fi
+  [[ "${record_name}" == "RECOVERY" &&
+      "${values_ref[network_state]}" =~ ^(present|absent|unknown)$ ]] || return 1
+  if [[ "${values_ref[network_state]}" == "present" ]]; then
+    [[ "${values_ref[network_id]}" =~ ^[0-9a-f]{64}$ ]] || return 1
+  fi
+}
+
+_qcsd_admission_validate_launcher_tuple() {
+  local values_name="$1"
+  local -n values_ref="${values_name}"
+  local pid="${values_ref[scope_launcher_pid]}"
+  if [[ "${pid}" == "unavailable" ]]; then
+    [[ "${values_ref[scope_launcher_start_time]}" == "unavailable" &&
+        "${values_ref[scope_launcher_session]}" == "unavailable" &&
+        "${values_ref[scope_launcher_process_group]}" == "unavailable" &&
+        "${values_ref[cli_pid]}" == "unavailable" &&
+        "${values_ref[cli_start_time]}" == "unavailable" &&
+        "${values_ref[cli_session]}" == "unavailable" &&
+        "${values_ref[cli_process_group]}" == "unavailable" ]]
+    return $?
+  fi
+  [[ "${pid}" =~ ^[1-9][0-9]*$ &&
+      "${values_ref[scope_launcher_start_time]}" =~ ^[1-9][0-9]*$ &&
+      "${values_ref[scope_launcher_session]}" == "${pid}" &&
+      "${values_ref[scope_launcher_process_group]}" == "${pid}" &&
+      "${values_ref[cli_pid]}" == "${pid}" &&
+      "${values_ref[cli_start_time]}" == "${values_ref[scope_launcher_start_time]}" &&
+      "${values_ref[cli_session]}" == "${pid}" &&
+      "${values_ref[cli_process_group]}" == "${pid}" ]]
+}
+
+_qcsd_admission_validate_scope_common() {
+  local values_name="$1"
+  local supervisor_root="$2"
+  local -n values_ref="${values_name}"
+  local control_group canonical_path
+  [[ "${values_ref[object]}" == "docker-run-scope-launcher" &&
+      "${values_ref[process_identity_role]}" == "local-systemd-run-scope-launcher" &&
+      "${values_ref[mode]}" =~ ^(attached|detached)$ &&
+      "${values_ref[container_id]}" =~ ^(unavailable|[0-9a-f]{64})$ &&
+      "${values_ref[scope_required]}" == "1" &&
+      "${values_ref[scope_unit]}" =~ ^qcsd-docker-run-[0-9a-f]{32}[.]scope$ &&
+      "${values_ref[status_file]}" == "${supervisor_root}/run.status" &&
+      "${values_ref[requested_signal]}" =~ ^(none|HUP|INT|QUIT|TERM)$ &&
+      "${values_ref[target_state]}" =~ ^(launching|running|stopped|absent|unknown)$ ]] ||
+    return 1
+  _qcsd_admission_validate_common_record \
+    "${values_name}" docker-run-scope-launcher || return 1
+  _qcsd_admission_validate_launcher_tuple "${values_name}" || return 1
+  control_group="${values_ref[scope_control_group]}"
+  if [[ "${control_group}" != "unavailable" ]]; then
+    [[ "${control_group}" == /* &&
+        "${control_group}" =~ ^/[A-Za-z0-9_.@:/-]+$ &&
+        "${control_group}" == */"${values_ref[scope_unit]}" ]] || return 1
+    canonical_path="$(realpath -m -- "${control_group}" 2>/dev/null)" || return 1
+    [[ "${canonical_path}" == "${control_group}" ]] || return 1
+  fi
+  if [[ "${values_ref[target_state]}" =~ ^(running|stopped)$ &&
+        ! "${values_ref[container_id]}" =~ ^[0-9a-f]{64}$ ]]; then
+    return 1
+  fi
+}
+
+_qcsd_admission_validate_run_record() {
+  local values_name="$1"
+  local order_name="$2"
+  local record_name="$3"
+  local supervisor_root="$4"
+  local -n values_ref="${values_name}"
+  local signal_tuple force_tuple scope_tuple status_value systemd_value
+  local -a supervision_fields=(
+    object process_identity_role supervisor_pid supervisor_start_time
+    supervisor_session supervisor_process_group mode scope_launcher_pid
+    scope_launcher_start_time scope_launcher_session scope_launcher_process_group
+    cli_pid cli_start_time cli_session cli_process_group container_id
+    docker_context docker_host docker_server_id docker_daemon_id supervisor_label
+    scope_required scope_unit scope_control_group scope_state host_boot_id
+    status_file status_file_state requested_signal forwarded_target_signal target_state
+  )
+  local -a interim_fields=(
+    object process_identity_role supervisor_pid supervisor_start_time
+    supervisor_session supervisor_process_group mode scope_launcher_pid
+    scope_launcher_start_time scope_launcher_session scope_launcher_process_group
+    cli_pid cli_start_time cli_session cli_process_group container_id
+    docker_context docker_host docker_server_id docker_daemon_id supervisor_label
+    scope_required scope_unit scope_control_group scope_state host_boot_id
+    status_file status_file_state requested_signal interruption_reason
+    planned_target_signal target_signal_attempted target_signal_api_outcome
+    forwarded_target_signal target_state phase
+  )
+  local -a final_fields=(
+    object process_identity_role supervisor_pid supervisor_start_time
+    supervisor_session supervisor_process_group mode scope_launcher_pid
+    scope_launcher_start_time scope_launcher_session scope_launcher_process_group
+    cli_pid cli_start_time cli_session cli_process_group container_id
+    docker_context docker_host docker_server_id docker_daemon_id supervisor_label
+    scope_required scope_unit scope_control_group scope_final_state
+    scope_leak_detected scope_kill_attempted scope_kill_outcome scope_empty_proven
+    host_boot_id status_file status_file_state status_file_matches
+    docker_command_status systemd_run_status requested_signal interruption_reason
+    planned_target_signal target_signal_attempted target_signal_api_outcome
+    forwarded_target_signal target_state forced_without_bound_target
+    interrupted_without_bound_target docker_cli_forced docker_cli_force_attempted
+    docker_cli_force_outcome target_forced target_force_attempted
+    target_force_api_outcome
+  )
+  if [[ "${record_name}" == "SUPERVISION" ]]; then
+    _qcsd_admission_exact_fields \
+      "${values_name}" "${order_name}" supervision_fields || return 1
+  elif [[ "${record_name}" == "RECOVERY" &&
+          "${values_ref[phase]:-}" == "interrupted-before-daemon-teardown" ]]; then
+    _qcsd_admission_exact_fields \
+      "${values_name}" "${order_name}" interim_fields || return 1
+  elif [[ "${record_name}" == "RECOVERY" ]]; then
+    _qcsd_admission_exact_fields \
+      "${values_name}" "${order_name}" final_fields || return 1
+  else
+    return 1
+  fi
+  _qcsd_admission_validate_scope_common \
+    "${values_name}" "${supervisor_root}" || return 1
+
+  if [[ "${record_name}" == "SUPERVISION" ]]; then
+    if [[ "${values_ref[scope_state]}" == "declared" ]]; then
+      [[ "${values_ref[scope_launcher_pid]}" == "unavailable" &&
+          "${values_ref[container_id]}" == "unavailable" &&
+          "${values_ref[scope_control_group]}" == "unavailable" &&
+          "${values_ref[status_file_state]}" == "declared" &&
+          "${values_ref[requested_signal]}" == "none" &&
+          "${values_ref[forwarded_target_signal]}" == "none" &&
+          "${values_ref[target_state]}" == "launching" ]] || return 1
+    else
+      [[ "${values_ref[scope_state]}" =~ ^(active|inactive|absent)$ &&
+          "${values_ref[scope_launcher_pid]}" =~ ^[1-9][0-9]*$ &&
+          "${values_ref[container_id]}" == "unavailable" &&
+          "${values_ref[status_file_state]}" == "awaiting-command-status" &&
+          "${values_ref[forwarded_target_signal]}" == "none" &&
+          "${values_ref[target_state]}" == "launching" ]] || return 1
+      if [[ "${values_ref[scope_state]}" == "active" ]]; then
+        [[ "${values_ref[scope_control_group]}" != "unavailable" ]] || return 1
+      fi
+    fi
+    return 0
+  fi
+
+  # The launcher publishes every non-declared state only after its mandatory
+  # stopped-child birth-identity handshake.  A recovery record without that
+  # complete tuple cannot authorise a process or scope action.
+  [[ "${values_ref[scope_launcher_pid]}" =~ ^[1-9][0-9]*$ ]] || return 1
+
+  [[ "${values_ref[interruption_reason]}" =~ ^(host_signal|internal_abort|none)$ &&
+      "${values_ref[planned_target_signal]}" =~ ^(none|HUP|INT|QUIT|TERM)$ ]] ||
+    return 1
+  if [[ "${values_ref[interruption_reason]}" == "host_signal" ]]; then
+    [[ "${values_ref[requested_signal]}" != "none" ]] || return 1
+  elif [[ "${values_ref[interruption_reason]}" == "internal_abort" ]]; then
+    # A later host signal can be latched after internal_abort became the first
+    # terminal reason but before the atomic recovery record is published.
+    :
+  else
+    [[ "${values_ref[requested_signal]}" == "none" &&
+        "${values_ref[planned_target_signal]}" == "none" ]] || return 1
+  fi
+
+  if [[ "${values_ref[phase]:-}" == "interrupted-before-daemon-teardown" ]]; then
+    [[ "${values_ref[scope_state]}" =~ ^(unavailable|active|inactive|absent|unknown)$ &&
+        "${values_ref[status_file_state]}" =~ ^(declared|awaiting-command-status|valid|status-mismatch|invalid|missing|launcher-unreaped)$ &&
+        "${values_ref[target_signal_attempted]}" == "0" &&
+        "${values_ref[target_signal_api_outcome]}" == "not_attempted" &&
+        "${values_ref[forwarded_target_signal]}" == "none" ]] || return 1
+    if [[ "${values_ref[scope_state]}" == "active" &&
+          "${values_ref[scope_control_group]}" == "unavailable" ]]; then
+      return 1
+    fi
+    return 0
+  fi
+
+  [[ "${values_ref[scope_final_state]}" =~ ^(inactive|absent|unknown)$ &&
+      "${values_ref[scope_leak_detected]}" =~ ^[01]$ &&
+      "${values_ref[scope_kill_attempted]}" =~ ^[01]$ &&
+      "${values_ref[scope_empty_proven]}" =~ ^[01]$ &&
+      "${values_ref[status_file_matches]}" =~ ^[01]$ &&
+      "${values_ref[target_signal_attempted]}" =~ ^[01]$ &&
+      "${values_ref[forced_without_bound_target]}" =~ ^[01]$ &&
+      "${values_ref[interrupted_without_bound_target]}" =~ ^[01]$ &&
+      "${values_ref[docker_cli_forced]}" =~ ^[01]$ &&
+      "${values_ref[docker_cli_force_attempted]}" =~ ^[01]$ &&
+      "${values_ref[target_forced]}" =~ ^[01]$ &&
+      "${values_ref[target_force_attempted]}" =~ ^[01]$ ]] || return 1
+  scope_tuple="${values_ref[scope_leak_detected]}:${values_ref[scope_kill_attempted]}:${values_ref[scope_kill_outcome]}"
+  [[ "${scope_tuple}" =~ ^(0:0:not_attempted|1:1:accepted|1:1:unknown)$ ]] || return 1
+  if [[ "${values_ref[scope_empty_proven]}" == "1" ]]; then
+    [[ "${values_ref[scope_final_state]}" =~ ^(inactive|absent)$ ]] || return 1
+  else
+    [[ "${values_ref[scope_final_state]}" == "unknown" &&
+        "${values_ref[scope_leak_detected]}" == "1" ]] || return 1
+  fi
+  case "${values_ref[status_file_state]}" in
+    valid)
+      status_value="${values_ref[docker_command_status]}"
+      systemd_value="${values_ref[systemd_run_status]}"
+      [[ "${values_ref[status_file_matches]}" == "1" &&
+          "${status_value}" =~ ^(0|[1-9][0-9]{0,2})$ &&
+          "${systemd_value}" == "${status_value}" ]] || return 1
+      (( 10#${status_value} <= 255 )) || return 1
+      ;;
+    status-mismatch)
+      status_value="${values_ref[docker_command_status]}"
+      systemd_value="${values_ref[systemd_run_status]}"
+      [[ "${values_ref[status_file_matches]}" == "0" &&
+          "${status_value}" =~ ^(0|[1-9][0-9]{0,2})$ &&
+          "${systemd_value}" =~ ^(0|[1-9][0-9]{0,2})$ &&
+          "${systemd_value}" != "${status_value}" ]] || return 1
+      (( 10#${status_value} <= 255 && 10#${systemd_value} <= 255 )) || return 1
+      ;;
+    invalid|missing)
+      systemd_value="${values_ref[systemd_run_status]}"
+      [[ "${values_ref[status_file_matches]}" == "0" &&
+          "${values_ref[docker_command_status]}" == "unavailable" &&
+          "${systemd_value}" =~ ^(0|[1-9][0-9]{0,2})$ ]] || return 1
+      (( 10#${systemd_value} <= 255 )) || return 1
+      ;;
+    launcher-unreaped)
+      [[ "${values_ref[status_file_matches]}" == "0" &&
+          "${values_ref[docker_command_status]}" == "unavailable" &&
+          "${values_ref[systemd_run_status]}" == "unavailable" ]] || return 1
+      ;;
+    *) return 1 ;;
+  esac
+  signal_tuple="${values_ref[target_signal_attempted]}:${values_ref[target_signal_api_outcome]}:${values_ref[forwarded_target_signal]}"
+  case "${signal_tuple}" in
+    0:not_attempted:none|1:unknown:none) ;;
+    1:accepted:HUP|1:accepted:INT|1:accepted:QUIT|1:accepted:TERM)
+      [[ "${values_ref[forwarded_target_signal]}" == \
+          "${values_ref[planned_target_signal]}" ]] || return 1
+      ;;
+    *) return 1 ;;
+  esac
+  force_tuple="${values_ref[docker_cli_force_attempted]}:${values_ref[docker_cli_forced]}:${values_ref[docker_cli_force_outcome]}"
+  [[ "${force_tuple}" =~ ^(0:0:not_attempted|1:1:accepted|1:0:unknown)$ ]] || return 1
+  force_tuple="${values_ref[target_force_attempted]}:${values_ref[target_forced]}:${values_ref[target_force_api_outcome]}"
+  [[ "${force_tuple}" =~ ^(0:0:not_attempted|1:1:accepted|1:1:unknown)$ ]] || return 1
+}
+
+_qcsd_admission_records_match() {
+  local supervision_name="$1"
+  local recovery_name="$2"
+  local root_kind="$3"
+  local -n supervision_ref="${supervision_name}"
+  local -n recovery_ref="${recovery_name}"
+  local field
+  local -a immutable_fields=(
+    object supervisor_pid supervisor_start_time supervisor_session
+    supervisor_process_group docker_context docker_host docker_server_id
+    docker_daemon_id host_boot_id supervisor_label
+  )
+  if [[ "${root_kind}" == "run" ]]; then
+    immutable_fields+=(process_identity_role mode scope_required scope_unit status_file)
+  fi
+  for field in "${immutable_fields[@]}"; do
+    [[ "${supervision_ref[${field}]}" == "${recovery_ref[${field}]}" ]] ||
+      return 1
+  done
+  if [[ "${root_kind}" == "run" ]]; then
+    for field in scope_launcher_pid scope_launcher_start_time \
+                 scope_launcher_session scope_launcher_process_group \
+                 cli_pid cli_start_time cli_session cli_process_group \
+                 container_id scope_control_group; do
+      if [[ "${supervision_ref[${field}]}" != "unavailable" &&
+            "${supervision_ref[${field}]}" != "${recovery_ref[${field}]}" ]]; then
+        return 1
+      fi
+    done
+  fi
+}
+
+_qcsd_admission_require_stale_supervisor() {
+  local values_name="$1"
+  local record="$2"
+  local -n values_ref="${values_name}"
+  if _qcsd_job_is_running \
+      "${values_ref[supervisor_pid]}" "${values_ref[supervisor_start_time]}" \
+      "${values_ref[supervisor_session]}" \
+      "${values_ref[supervisor_process_group]}"; then
+    echo "qcsd-lab Docker admission is blocked by an active prior supervisor: ${record}" >&2
+    return 1
+  fi
+  if ! _qcsd_bound_process_is_gone \
+      "${values_ref[supervisor_pid]}" "${values_ref[supervisor_start_time]}" \
+      "${values_ref[supervisor_session]}" \
+      "${values_ref[supervisor_process_group]}"; then
+    echo "qcsd-lab Docker admission cannot prove the prior supervisor stopped: ${record}" >&2
+    return 1
+  fi
+}
+
+_qcsd_admission_validate_launcher_liveness() {
+  local values_name="$1"
+  local record="$2"
+  local -n values_ref="${values_name}"
+  local launcher_pid="${values_ref[scope_launcher_pid]}" owner
+  [[ "${launcher_pid}" != "unavailable" ]] || return 0
+  if _qcsd_job_is_running \
+      "${launcher_pid}" "${values_ref[scope_launcher_start_time]}" \
+      "${values_ref[scope_launcher_session]}" \
+      "${values_ref[scope_launcher_process_group]}"; then
+    owner="$(stat -c '%u' -- "/proc/${launcher_pid}" 2>/dev/null)" || {
+      _qcsd_bound_process_is_gone \
+        "${launcher_pid}" "${values_ref[scope_launcher_start_time]}" \
+        "${values_ref[scope_launcher_session]}" \
+        "${values_ref[scope_launcher_process_group]}" && return 0
+      echo "qcsd-lab Docker admission cannot bind the stale scope launcher: ${record}" >&2
+      return 1
+    }
+    [[ "${owner}" == "$(id -u)" ]] || {
+      echo "qcsd-lab Docker admission refuses a foreign stale scope launcher: ${record}" >&2
+      return 1
+    }
+    return 0
+  fi
+  _qcsd_bound_process_is_gone \
+    "${launcher_pid}" "${values_ref[scope_launcher_start_time]}" \
+    "${values_ref[scope_launcher_session]}" \
+    "${values_ref[scope_launcher_process_group]}" || {
+    echo "qcsd-lab Docker admission cannot prove the stale scope-launcher identity: ${record}" >&2
+    return 1
+  }
+}
+
+_qcsd_admission_validate_scope_liveness() {
+  local values_name="$1"
+  local record="$2"
+  local -n values_ref="${values_name}"
+  local recorded_group="${values_ref[scope_control_group]}"
+  _qcsd_query_user_scope "${values_ref[scope_unit]}" || {
+    echo "qcsd-lab Docker admission cannot query the bound stale run scope: ${record}" >&2
+    return 1
+  }
+  if [[ "${recorded_group}" != "unavailable" &&
+        "${_qcsd_scope_control_group}" != "unavailable" &&
+        "${recorded_group}" != "${_qcsd_scope_control_group}" ]]; then
+    echo "qcsd-lab Docker admission found a conflicting stale run-scope identity: ${record}" >&2
+    return 1
+  fi
+}
+
+_qcsd_admission_recover_run_scope() {
+  local values_name="$1"
+  local record_name="$2"
+  local record="$3"
+  local -n values_ref="${values_name}"
+  local launcher_pid="${values_ref[scope_launcher_pid]}"
+  if ! _qcsd_wait_user_scope_inactive "${values_ref[scope_unit]}"; then
+    _qcsd_kill_user_scope "${values_ref[scope_unit]}" KILL || true
+    if ! _qcsd_wait_user_scope_inactive "${values_ref[scope_unit]}"; then
+      echo "qcsd-lab Docker admission cannot prove the stale run scope empty: ${record}" >&2
+      return 1
+    fi
+  fi
+  if [[ "${launcher_pid}" == "unavailable" ]]; then
+    if [[ "${record_name}" == "SUPERVISION" &&
+          "${values_ref[scope_state]}" == "declared" ]]; then
+      return 0
+    fi
+    echo "qcsd-lab Docker admission lacks a bound stale scope-launcher identity: ${record}" >&2
+    return 1
+  fi
+  if _qcsd_job_is_running \
+      "${launcher_pid}" "${values_ref[scope_launcher_start_time]}" \
+      "${values_ref[scope_launcher_session]}" \
+      "${values_ref[scope_launcher_process_group]}"; then
+    if [[ "$(stat -c '%u' -- "/proc/${launcher_pid}" 2>/dev/null)" != "$(id -u)" ]]; then
+      echo "qcsd-lab Docker admission refuses a foreign stale scope launcher: ${record}" >&2
+      return 1
+    fi
+    _qcsd_signal_bound_process_group \
+      "${launcher_pid}" "${values_ref[scope_launcher_start_time]}" \
+      "${values_ref[scope_launcher_session]}" \
+      "${values_ref[scope_launcher_process_group]}" KILL || true
+    _qcsd_wait_for_job_stop \
+      "${launcher_pid}" "${values_ref[scope_launcher_start_time]}" \
+      "${values_ref[scope_launcher_session]}" \
+      "${values_ref[scope_launcher_process_group]}" \
+      "${_QCSD_DOCKER_REAP_POLLS}" "${_QCSD_DOCKER_REAP_DELAY_SECONDS}" || true
+  fi
+  if ! _qcsd_bound_process_is_gone \
+      "${launcher_pid}" "${values_ref[scope_launcher_start_time]}" \
+      "${values_ref[scope_launcher_session]}" \
+      "${values_ref[scope_launcher_process_group]}"; then
+    echo "qcsd-lab Docker admission cannot prove the stale scope launcher stopped: ${record}" >&2
+    return 1
+  fi
+}
+
+_qcsd_admission_recover_container() {
+  local values_name="$1"
+  local supervisor_root="$2"
+  local record="$3"
+  local -n values_ref="${values_name}"
+  local token="${values_ref[supervisor_label]#*=}"
+  local recorded_id="${values_ref[container_id]}"
+  local cidfile_id="" resolved_id="" resolved_state="unknown" presence snapshot
+  local _qcsd_target_docker_context="${values_ref[docker_context]}"
+  # Legacy run receipts predate an explicit request-authorised bit. Treat all
+  # of them conservatively so a daemon-side create delayed beyond client death
+  # becomes label-visible before the first recovery decision.
+  sleep "${_QCSD_DOCKER_STALE_RUN_SETTLE_SECONDS}"
+  if [[ -e "${supervisor_root}/container.cid" ||
+        -L "${supervisor_root}/container.cid" ]]; then
+    if ! cidfile_id="$(_qcsd_private_cid "${supervisor_root}/container.cid")"; then
+      echo "qcsd-lab Docker admission found an invalid stale cidfile: ${record}" >&2
+      return 1
+    fi
+    if [[ "${recorded_id}" == "unavailable" ]]; then
+      recorded_id="${cidfile_id}"
+    elif [[ "${recorded_id}" != "${cidfile_id}" ]]; then
+      echo "qcsd-lab Docker admission found conflicting stale container IDs: ${record}" >&2
+      return 1
+    fi
+  fi
+  _qcsd_resolve_docker_target "" "${token}"
+  resolved_state="${_qcsd_resolved_state}"
+  resolved_id="${_qcsd_resolved_cid}"
+  if [[ "${resolved_state}" == "unknown" ]]; then
+    echo "qcsd-lab Docker admission cannot resolve one exact stale container: ${record}" >&2
+    return 1
+  fi
+  if [[ "${recorded_id}" == "unavailable" &&
+        "${resolved_state}" == "absent" ]]; then
+    echo "qcsd-lab Docker admission cannot prove an authorised ID-less create terminal: ${record}" >&2
+    return 1
+  fi
+  if [[ -n "${resolved_id}" ]]; then
+    if [[ "${recorded_id}" != "unavailable" &&
+          "${recorded_id}" != "${resolved_id}" ]]; then
+      echo "qcsd-lab Docker admission found an ambiguous stale container identity: ${record}" >&2
+      return 1
+    fi
+    recorded_id="${resolved_id}"
+    [[ "${resolved_state}" =~ ^(running|stopped)$ ]] || return 1
+    _qcsd_target_docker_api rm --force "${resolved_id}" >/dev/null 2>&1 || true
+  elif [[ "${recorded_id}" != "unavailable" ]]; then
+    presence="$(_qcsd_docker_exact_id_presence "${recorded_id}")"
+    if [[ "${presence}" != "absent" ]]; then
+      echo "qcsd-lab Docker admission found an unowned or ambiguous recorded container: ${record}" >&2
+      return 1
+    fi
+  fi
+  for snapshot in 1 2; do
+    _qcsd_resolve_docker_target "" "${token}"
+    [[ "${_qcsd_resolved_state}" == "absent" ]] || {
+      echo "qcsd-lab Docker admission cannot prove stale container-label absence: ${record}" >&2
+      return 1
+    }
+    if [[ "${recorded_id}" != "unavailable" ]]; then
+      presence="$(_qcsd_docker_exact_id_presence "${recorded_id}")"
+      [[ "${presence}" == "absent" ]] || {
+        echo "qcsd-lab Docker admission cannot prove exact stale-container absence: ${record}" >&2
+        return 1
+      }
+    fi
+    (( snapshot == 2 )) || sleep 0.1
+  done
+}
+
+_qcsd_admission_recover_network() {
+  local values_name="$1"
+  local record="$2"
+  local -n values_ref="${values_name}"
+  local token="${values_ref[supervisor_label]#*=}"
+  local recorded_id="${values_ref[network_id]}"
+  local resolved_id resolved_state presence snapshot
+  local _qcsd_target_docker_context="${values_ref[docker_context]}"
+  # A killed network supervisor may have left its bounded three-second Docker
+  # API service alive.  Its systemd RuntimeMaxSec plus TimeoutStopSec is four
+  # seconds; wait five before accepting label absence as terminal.
+  sleep "${_QCSD_DOCKER_STALE_NETWORK_SETTLE_SECONDS}"
+  _qcsd_resolve_docker_network "${token}" ""
+  resolved_state="${_qcsd_resolved_network_state}"
+  resolved_id="${_qcsd_resolved_network_id}"
+  if [[ "${resolved_state}" == "unknown" ]]; then
+    echo "qcsd-lab Docker admission cannot resolve one exact stale network: ${record}" >&2
+    return 1
+  fi
+  if [[ "${recorded_id}" == "unavailable" &&
+        "${resolved_state}" == "absent" ]]; then
+    echo "qcsd-lab Docker admission cannot prove an authorised ID-less network create terminal: ${record}" >&2
+    return 1
+  fi
+  if [[ -n "${resolved_id}" ]]; then
+    if [[ "${recorded_id}" != "unavailable" &&
+          "${recorded_id}" != "${resolved_id}" ]]; then
+      echo "qcsd-lab Docker admission found an ambiguous stale network identity: ${record}" >&2
+      return 1
+    fi
+    recorded_id="${resolved_id}"
+    [[ "${resolved_state}" == "present" ]] || return 1
+    _qcsd_target_docker_api network rm "${resolved_id}" >/dev/null 2>&1 || true
+  elif [[ "${recorded_id}" != "unavailable" ]]; then
+    presence="$(_qcsd_docker_exact_network_presence "${recorded_id}")"
+    if [[ "${presence}" != "absent" ]]; then
+      echo "qcsd-lab Docker admission found an unowned or ambiguous recorded network: ${record}" >&2
+      return 1
+    fi
+  fi
+  for snapshot in 1 2; do
+    _qcsd_resolve_docker_network "${token}" ""
+    [[ "${_qcsd_resolved_network_state}" == "absent" ]] || {
+      echo "qcsd-lab Docker admission cannot prove stale network-label absence: ${record}" >&2
+      return 1
+    }
+    if [[ "${recorded_id}" != "unavailable" ]]; then
+      presence="$(_qcsd_docker_exact_network_presence "${recorded_id}")"
+      [[ "${presence}" == "absent" ]] || {
+        echo "qcsd-lab Docker admission cannot prove exact stale-network absence: ${record}" >&2
+        return 1
+      }
+    fi
+    (( snapshot == 2 )) || sleep 0.1
+  done
+}
+
+_qcsd_admission_remove_recovered_root() {
+  local supervisor_root="$1"
+  local root_kind="$2"
+  _qcsd_admission_validate_root_entries "${supervisor_root}" "${root_kind}" || {
+    echo "qcsd-lab Docker admission lost the private supervisor-root identity: ${supervisor_root}" >&2
+    return 1
+  }
+  if [[ "${root_kind}" == "run" ]]; then
+    rm -f -- "${supervisor_root}/container.cid" \
+      "${supervisor_root}/run.status" "${supervisor_root}/stdout" \
+      "${supervisor_root}/wait.pipe" || return 1
+    sync -f "${supervisor_root}" || return 1
+  fi
+  if [[ -e "${supervisor_root}/SUPERVISION" ]]; then
+    rm -f -- "${supervisor_root}/SUPERVISION" || return 1
+    sync -f "${supervisor_root}" || return 1
+  fi
+  if [[ -e "${supervisor_root}/RECOVERY" ]]; then
+    rm -f -- "${supervisor_root}/RECOVERY" || return 1
+    sync -f "${supervisor_root}" || return 1
+  fi
+  rmdir -- "${supervisor_root}" || return 1
+  sync -f /tmp
+}
+
+_qcsd_admission_root_manifest_sha256() {
+  local supervisor_root="$1" root_kind="$2" entry name metadata digest root_metadata
+  _qcsd_admission_validate_root_entries "${supervisor_root}" "${root_kind}" ||
+    return 1
+  root_metadata="$(stat -Lc '%d:%i:%u:%a:%F' -- "${supervisor_root}" 2>/dev/null)" ||
+    return 1
+  {
+    printf '.\t%s\tdirectory\n' "${root_metadata}"
+    for entry in "${supervisor_root}"/*; do
+      [[ -e "${entry}" || -L "${entry}" ]] || continue
+      name="${entry##*/}"
+      metadata="$(stat -Lc '%d:%i:%u:%a:%h:%s:%F' -- "${entry}" 2>/dev/null)" ||
+        return 1
+      if [[ -f "${entry}" && ! -L "${entry}" ]]; then
+        digest="$(sha256sum -- "${entry}" | awk '{print $1}')" || return 1
+      else
+        digest=non-regular
+      fi
+      printf '%s\t%s\t%s\n' "${name}" "${metadata}" "${digest}"
+    done
+  } | sha256sum | awk '{print $1}'
+}
+
+_qcsd_admission_claim_unique() {
+  local claims_name="$1"
+  local identity="$2"
+  local supervisor_root="$3"
+  local description="$4"
+  local -n claims_ref="${claims_name}"
+  if [[ -n "${claims_ref[${identity}]+present}" ]]; then
+    echo "qcsd-lab Docker admission found an ambiguous duplicate ${description}: ${supervisor_root}" >&2
+    return 1
+  fi
+  claims_ref["${identity}"]="${supervisor_root}"
+}
+
+_qcsd_admission_recover_root() {
+  local supervisor_root="$1"
+  local root_kind="$2"
+  local action="${3:-recover}"
+  local current_uid root_metadata record_name selected_name selected_record
+  local validated_object_id="unavailable" validated_cid=""
+  local supervision_path="${supervisor_root}/SUPERVISION"
+  local recovery_path="${supervisor_root}/RECOVERY"
+  local -A supervision_values=() recovery_values=()
+  local -a supervision_order=() recovery_order=()
+  current_uid="$(id -u)"
+  [[ ! -L "${supervisor_root}" && -d "${supervisor_root}" ]] || {
+    echo "qcsd-lab Docker admission found an unsafe prior supervisor root: ${supervisor_root}" >&2
+    return 1
+  }
+  root_metadata="$(stat -c '%u:%a:%F' -- "${supervisor_root}" 2>/dev/null)" || return 1
+  [[ "${root_metadata}" == "${current_uid}:700:directory" ]] || {
+    echo "qcsd-lab Docker admission found an unsafe prior supervisor root: ${supervisor_root}" >&2
+    return 1
+  }
+  _qcsd_admission_validate_root_entries "${supervisor_root}" "${root_kind}" || {
+    echo "qcsd-lab Docker admission found unsafe or malformed prior supervisor contents: ${supervisor_root}" >&2
+    return 1
+  }
+  if [[ ! -e "${supervision_path}" && ! -e "${recovery_path}" ]]; then
+    echo "qcsd-lab Docker admission found a prior supervisor root without a final record: ${supervisor_root}" >&2
+    return 1
+  fi
+  if [[ -e "${supervision_path}" ]]; then
+    _qcsd_admission_parse_record \
+      "${supervision_path}" supervision_values supervision_order || {
+      echo "qcsd-lab Docker admission found a malformed record: ${supervision_path}" >&2
+      return 1
+    }
+    if [[ "${root_kind}" == "run" ]]; then
+      _qcsd_admission_validate_run_record supervision_values supervision_order \
+        SUPERVISION "${supervisor_root}" || {
+        echo "qcsd-lab Docker admission found a malformed record: ${supervision_path}" >&2
+        return 1
+      }
+    else
+      _qcsd_admission_validate_network_record \
+        supervision_values supervision_order SUPERVISION || {
+        echo "qcsd-lab Docker admission found a malformed record: ${supervision_path}" >&2
+        return 1
+      }
+    fi
+  fi
+  if [[ -e "${recovery_path}" ]]; then
+    _qcsd_admission_parse_record \
+      "${recovery_path}" recovery_values recovery_order || {
+      echo "qcsd-lab Docker admission found a malformed record: ${recovery_path}" >&2
+      return 1
+    }
+    if [[ "${root_kind}" == "run" ]]; then
+      _qcsd_admission_validate_run_record recovery_values recovery_order \
+        RECOVERY "${supervisor_root}" || {
+        echo "qcsd-lab Docker admission found a malformed record: ${recovery_path}" >&2
+        return 1
+      }
+    else
+      _qcsd_admission_validate_network_record \
+        recovery_values recovery_order RECOVERY || {
+        echo "qcsd-lab Docker admission found a malformed record: ${recovery_path}" >&2
+        return 1
+      }
+    fi
+  fi
+  if [[ -e "${supervision_path}" && -e "${recovery_path}" ]]; then
+    _qcsd_admission_records_match \
+      supervision_values recovery_values "${root_kind}" || {
+      echo "qcsd-lab Docker admission found ambiguous coexisting supervisor records: ${supervisor_root}" >&2
+      return 1
+    }
+  fi
+  if [[ -e "${recovery_path}" ]]; then
+    selected_name=recovery_values
+    selected_record="${recovery_path}"
+    record_name=RECOVERY
+  else
+    selected_name=supervision_values
+    selected_record="${supervision_path}"
+    record_name=SUPERVISION
+  fi
+  local -n selected_values_ref="${selected_name}"
+  if [[ "${root_kind}" == "run" ]]; then
+    validated_object_id="${selected_values_ref[container_id]}"
+    if [[ -e "${supervisor_root}/container.cid" ||
+          -L "${supervisor_root}/container.cid" ]]; then
+      validated_cid="$(_qcsd_private_cid "${supervisor_root}/container.cid")" || {
+        echo "qcsd-lab Docker admission found an invalid stale cidfile: ${selected_record}" >&2
+        return 1
+      }
+      if [[ "${validated_object_id}" != "unavailable" &&
+            "${validated_object_id}" != "${validated_cid}" ]]; then
+        echo "qcsd-lab Docker admission found conflicting stale container IDs: ${selected_record}" >&2
+        return 1
+      fi
+      validated_object_id="${validated_cid}"
+    fi
+  else
+    validated_object_id="${selected_values_ref[network_id]}"
+  fi
+  _qcsd_admission_require_stale_supervisor \
+    "${selected_name}" "${selected_record}" || return 1
+  if [[ "${root_kind}" == "run" ]]; then
+    _qcsd_admission_validate_launcher_liveness \
+      "${selected_name}" "${selected_record}" || return 1
+    _qcsd_admission_validate_scope_liveness \
+      "${selected_name}" "${selected_record}" || return 1
+  fi
+  if [[ "${action}" == "validate" ]]; then
+    _QCSD_ADMISSION_VALIDATED_RECORD="${selected_record}"
+    _QCSD_ADMISSION_VALIDATED_RECORD_SHA256="$(sha256sum -- "${selected_record}" | awk '{print $1}')" ||
+      return 1
+    _QCSD_ADMISSION_VALIDATED_LABEL="${selected_values_ref[supervisor_label]}"
+    _QCSD_ADMISSION_VALIDATED_SCOPE_UNIT="unavailable"
+    _QCSD_ADMISSION_VALIDATED_OBJECT_ID="unavailable"
+    _QCSD_ADMISSION_VALIDATED_LAUNCHER_TUPLE="unavailable"
+    if [[ "${root_kind}" == "run" ]]; then
+      _QCSD_ADMISSION_VALIDATED_SCOPE_UNIT="${selected_values_ref[scope_unit]}"
+      if [[ "${selected_values_ref[scope_launcher_pid]}" != unavailable ]]; then
+        _QCSD_ADMISSION_VALIDATED_LAUNCHER_TUPLE="${selected_values_ref[scope_launcher_pid]}:${selected_values_ref[scope_launcher_start_time]}:${selected_values_ref[scope_launcher_session]}:${selected_values_ref[scope_launcher_process_group]}"
+      fi
+    fi
+    _QCSD_ADMISSION_VALIDATED_OBJECT_ID="${validated_object_id}"
+    _QCSD_ADMISSION_VALIDATED_MANIFEST_SHA256="$(_qcsd_admission_root_manifest_sha256 \
+      "${supervisor_root}" "${root_kind}")" || return 1
+    return 0
+  fi
+  [[ "${action}" == "recover" ]] || return 1
+  local selected_record_snapshot="${selected_record}"
+  local selected_sha_snapshot manifest_snapshot label_snapshot scope_snapshot object_snapshot
+  selected_sha_snapshot="$(sha256sum -- "${selected_record}" | awk '{print $1}')" || return 1
+  manifest_snapshot="$(_qcsd_admission_root_manifest_sha256 \
+    "${supervisor_root}" "${root_kind}")" || return 1
+  label_snapshot="${selected_values_ref[supervisor_label]}"
+  scope_snapshot="unavailable"
+  [[ "${root_kind}" != run ]] || scope_snapshot="${selected_values_ref[scope_unit]}"
+  object_snapshot="${validated_object_id}"
+  if [[ "${root_kind}" == "run" ]]; then
+    _qcsd_admission_recover_run_scope \
+      "${selected_name}" "${record_name}" "${selected_record}" || return 1
+    _qcsd_admission_recover_container \
+      "${selected_name}" "${supervisor_root}" "${selected_record}" || return 1
+  else
+    _qcsd_admission_recover_network \
+      "${selected_name}" "${selected_record}" || return 1
+  fi
+  _qcsd_admission_recover_root "${supervisor_root}" "${root_kind}" validate || return 1
+  [[ "${_QCSD_ADMISSION_VALIDATED_RECORD}" == "${selected_record_snapshot}" &&
+      "${_QCSD_ADMISSION_VALIDATED_RECORD_SHA256}" == "${selected_sha_snapshot}" &&
+      "${_QCSD_ADMISSION_VALIDATED_MANIFEST_SHA256}" == "${manifest_snapshot}" &&
+      "${_QCSD_ADMISSION_VALIDATED_LABEL}" == "${label_snapshot}" &&
+      "${_QCSD_ADMISSION_VALIDATED_SCOPE_UNIT}" == "${scope_snapshot}" &&
+      "${_QCSD_ADMISSION_VALIDATED_OBJECT_ID}" == "${object_snapshot}" ]] || {
+    echo "qcsd-lab Docker admission observed changed stale ownership evidence: ${supervisor_root}" >&2
+    return 1
+  }
+  _qcsd_admission_remove_recovered_root \
+    "${supervisor_root}" "${root_kind}" || {
+    echo "qcsd-lab Docker admission could not remove a verified stale supervisor root: ${supervisor_root}" >&2
+    return 1
+  }
+  echo "qcsd-lab Docker admission recovered verified stale ${root_kind} state: ${supervisor_root}" >&2
+}
+
+reconcile_legacy_stale_docker_supervisors() {
+  local supervisor_root nullglob_was_set=0
+  local -a run_roots=() network_roots=()
+  local -A seen_labels=() seen_scope_units=() seen_launcher_tuples=()
+  local -A seen_container_ids=() seen_network_ids=()
+  command -v grep >/dev/null 2>&1 &&
+    command -v od >/dev/null 2>&1 &&
+    command -v realpath >/dev/null 2>&1 &&
+    command -v stat >/dev/null 2>&1 &&
+    command -v sync >/dev/null 2>&1 || {
+    echo "qcsd-lab Docker admission requires grep, od, realpath, stat, and sync" >&2
+    return 1
+  }
+  _qcsd_secure_tmp_root || {
+    echo "qcsd-lab Docker admission cannot establish a secure shared temporary root" >&2
+    return 1
+  }
+  IFS= read -r qcsd_admission_boot_id </proc/sys/kernel/random/boot_id ||
+    qcsd_admission_boot_id=""
+  [[ "${qcsd_admission_boot_id}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || {
+    echo "qcsd-lab Docker admission cannot bind the current host boot" >&2
+    return 1
+  }
+  shopt -q nullglob && nullglob_was_set=1
+  shopt -s nullglob
+  run_roots=(/tmp/qcsd-docker-supervisor.*)
+  network_roots=(/tmp/qcsd-docker-network-supervisor.*)
+  (( nullglob_was_set )) || shopt -u nullglob
+  # Validate the complete initial admission set before changing an owned scope
+  # or Docker object.  Each root is validated again immediately before its
+  # recovery so a concurrent state change fails closed.
+  for supervisor_root in "${run_roots[@]}"; do
+    [[ "${supervisor_root##*/}" =~ ^qcsd-docker-supervisor[.][A-Za-z0-9]{8}$ ]] || {
+      echo "qcsd-lab Docker admission found an invalid reserved run-root name: ${supervisor_root}" >&2
+      return 1
+    }
+    _qcsd_admission_recover_root "${supervisor_root}" run validate || return 1
+    _qcsd_admission_claim_unique seen_labels \
+      "${_QCSD_ADMISSION_VALIDATED_LABEL}" "${supervisor_root}" \
+      "supervisor-label nonce" || return 1
+    _qcsd_admission_claim_unique seen_scope_units \
+      "${_QCSD_ADMISSION_VALIDATED_SCOPE_UNIT}" "${supervisor_root}" \
+      "run-scope unit" || return 1
+    if [[ "${_QCSD_ADMISSION_VALIDATED_LAUNCHER_TUPLE}" != unavailable ]]; then
+      _qcsd_admission_claim_unique seen_launcher_tuples \
+        "${_QCSD_ADMISSION_VALIDATED_LAUNCHER_TUPLE}" "${supervisor_root}" \
+        "scope-launcher identity tuple" || return 1
+    fi
+    if [[ "${_QCSD_ADMISSION_VALIDATED_OBJECT_ID}" != "unavailable" ]]; then
+      _qcsd_admission_claim_unique seen_container_ids \
+        "${_QCSD_ADMISSION_VALIDATED_OBJECT_ID}" "${supervisor_root}" \
+        "container ID" || return 1
+    fi
+  done
+  for supervisor_root in "${network_roots[@]}"; do
+    [[ "${supervisor_root##*/}" =~ ^qcsd-docker-network-supervisor[.][A-Za-z0-9]{8}$ ]] || {
+      echo "qcsd-lab Docker admission found an invalid reserved network-root name: ${supervisor_root}" >&2
+      return 1
+    }
+    _qcsd_admission_recover_root "${supervisor_root}" network validate || return 1
+    _qcsd_admission_claim_unique seen_labels \
+      "${_QCSD_ADMISSION_VALIDATED_LABEL}" "${supervisor_root}" \
+      "supervisor-label nonce" || return 1
+    if [[ "${_QCSD_ADMISSION_VALIDATED_OBJECT_ID}" != "unavailable" ]]; then
+      _qcsd_admission_claim_unique seen_network_ids \
+        "${_QCSD_ADMISSION_VALIDATED_OBJECT_ID}" "${supervisor_root}" \
+        "network ID" || return 1
+    fi
+  done
+  for supervisor_root in "${run_roots[@]}"; do
+    _qcsd_admission_recover_root "${supervisor_root}" run recover || return 1
+  done
+  for supervisor_root in "${network_roots[@]}"; do
+    _qcsd_admission_recover_root "${supervisor_root}" network recover || return 1
+  done
+}
+
+_qcsd_validate_lifecycle_guardian() {
+  local proof parsed ready_fd go_fd go_nonce observed extra key
+  local loaded_helper_device loaded_helper_tail loaded_helper_inode
+  local expected_guardian expected_guardian_metadata expected_guardian_sha
+  local ambient_guardian_fd_path ambient_guardian_metadata ambient_guardian_sha
+  local expected_guardian_device expected_guardian_tail expected_guardian_inode
+  local self_start self_parent self_session self_pgrp guardian_start guardian_uid
+  local -a fields=()
+  [[ "${QCSD_DOCKER_LOCK_GUARDIAN_PID:-}" =~ ^[1-9][0-9]*$ &&
+      "${QCSD_DOCKER_LOCK_GUARDIAN_SOURCE_FD:-}" =~ ^[0-9]+$ ]] || return 1
+  # Do not let the ambient handshake select its own verifier.  Bind it first
+  # to the checked-in guardian and to this shell's exact direct parent.
+  expected_guardian="${ROOT}/tools/docker_lifecycle_lock_guardian.py"
+  [[ -f "${expected_guardian}" && ! -L "${expected_guardian}" ]] || return 1
+  expected_guardian_metadata="$(stat -Lc '%d:%i:%u:%a:%h:%F' -- \
+    "${expected_guardian}")" || return 1
+  [[ "${expected_guardian_metadata}" == *":$(id -u):644:1:regular file" ]] || return 1
+  expected_guardian_device="${expected_guardian_metadata%%:*}"
+  expected_guardian_tail="${expected_guardian_metadata#*:}"
+  expected_guardian_inode="${expected_guardian_tail%%:*}"
+  expected_guardian_sha="$(sha256sum -- "${expected_guardian}")" || return 1
+  expected_guardian_sha="${expected_guardian_sha%% *}"
+  [[ "${expected_guardian_sha}" =~ ^[0-9a-f]{64}$ ]] || return 1
+  [[ "${QCSD_DOCKER_LOCK_GUARDIAN_PID}" == "${PPID}" ]] || return 1
+  read -r self_start self_parent self_session self_pgrp < <(/usr/bin/python3 -I - \
+      "${QCSD_DOCKER_LOCK_GUARDIAN_INNER_PID:-0}" <<'PY'
+import pathlib, sys
+raw = pathlib.Path(f"/proc/{int(sys.argv[1])}/stat").read_text()
+fields = raw.rsplit(") ", 1)[1].split()
+print(fields[19], fields[1], fields[3], fields[2])
+PY
+  ) || return 1
+  [[ "${self_parent}" == "${QCSD_DOCKER_LOCK_GUARDIAN_PID}" &&
+      "${QCSD_DOCKER_LOCK_GUARDIAN_INNER_PID:-}" =~ ^[1-9][0-9]*$ &&
+      "${QCSD_DOCKER_LOCK_GUARDIAN_INNER_START_TIME:-}" == "${self_start}" &&
+      "${QCSD_DOCKER_LOCK_GUARDIAN_INNER_SESSION:-}" == "${self_session}" &&
+      "${QCSD_DOCKER_LOCK_GUARDIAN_INNER_PROCESS_GROUP:-}" == "${self_pgrp}" ]] || return 1
+  read -r guardian_start guardian_uid < <(/usr/bin/python3 -I - \
+      "${QCSD_DOCKER_LOCK_GUARDIAN_PID}" <<'PY'
+import os, pathlib, sys
+pid = int(sys.argv[1])
+raw = pathlib.Path(f"/proc/{pid}/stat").read_text()
+fields = raw.rsplit(") ", 1)[1].split()
+print(fields[19], os.stat(f"/proc/{pid}").st_uid)
+PY
+  ) || return 1
+  [[ "${guardian_start}" == "${QCSD_DOCKER_LOCK_GUARDIAN_START_TIME:-}" &&
+      "${guardian_uid}" == "$(id -u)" ]] || return 1
+  ambient_guardian_fd_path="/proc/${QCSD_DOCKER_LOCK_GUARDIAN_PID}/fd/${QCSD_DOCKER_LOCK_GUARDIAN_SOURCE_FD}"
+  [[ -f "${ambient_guardian_fd_path}" ]] || return 1
+  ambient_guardian_metadata="$(stat -Lc '%d:%i:%u:%a:%h:%F' -- \
+    "${ambient_guardian_fd_path}")" || return 1
+  [[ "${ambient_guardian_metadata}" == "${expected_guardian_metadata}" ]] || return 1
+  ambient_guardian_sha="$(sha256sum -- "${ambient_guardian_fd_path}")" || return 1
+  ambient_guardian_sha="${ambient_guardian_sha%% *}"
+  [[ "${ambient_guardian_sha}" == "${expected_guardian_sha}" &&
+      "${QCSD_DOCKER_LOCK_GUARDIAN_SOURCE_PATH:-}" == "${expected_guardian}" &&
+      "${QCSD_DOCKER_LOCK_GUARDIAN_SOURCE_DEVICE:-}" == "${expected_guardian_device}" &&
+      "${QCSD_DOCKER_LOCK_GUARDIAN_SOURCE_INODE:-}" == "${expected_guardian_inode}" ]] || return 1
+  ready_fd="${QCSD_DOCKER_LOCK_GUARDIAN_READY_FD:-}"
+  proof="$(/usr/bin/python3 -I \
+    "/proc/${QCSD_DOCKER_LOCK_GUARDIAN_PID}/fd/${QCSD_DOCKER_LOCK_GUARDIAN_SOURCE_FD}" \
+    --verify-inner)" || return 1
+  [[ "${ready_fd}" =~ ^[0-9]+$ ]] || return 1
+  eval "exec ${ready_fd}>&-" || return 1
+  parsed="$(/usr/bin/python3 -I -c '
+import json,sys
+v=json.loads(sys.stdin.read())
+keys=("schema","boot_id","guardian_pid","guardian_source_device",
+"guardian_source_inode","guardian_source_path","guardian_source_sha256",
+"guardian_start_time","go_fd","go_nonce","helper_source_device",
+"helper_source_inode","helper_source_path","helper_source_sha256","lease_nonce",
+"lease_socket","lock_device","lock_inode","lock_parent_device",
+"lock_parent_inode","lock_path","native_source_device","native_source_inode",
+"native_source_path","native_source_sha256","qcsd_pid","qcsd_source_device",
+"qcsd_source_fd","qcsd_source_inode","qcsd_source_path","qcsd_source_sha256",
+"qcsd_start_time","docker_config_device","docker_config_inode","docker_config_path",
+"buildx_config_device","buildx_config_inode","buildx_config_path")
+if set(v)!=set(keys) or v["schema"]!=1: raise SystemExit(1)
+for k in keys: print(v[k])
+' <<<"${proof}")" || return 1
+  mapfile -t fields <<<"${parsed}"
+  (( ${#fields[@]} == 38 )) || return 1
+  _QCSD_LIFECYCLE_BOOT_ID="${fields[1]}"
+  _QCSD_LIFECYCLE_GUARD_PID="${fields[2]}"
+  _QCSD_LIFECYCLE_GUARD_SOURCE_DEVICE="${fields[3]}"
+  _QCSD_LIFECYCLE_GUARD_SOURCE_INODE="${fields[4]}"
+  _QCSD_LIFECYCLE_GUARD_SOURCE_PATH="${fields[5]}"
+  _QCSD_LIFECYCLE_GUARD_SOURCE_SHA256="${fields[6]}"
+  _QCSD_LIFECYCLE_GUARD_START="${fields[7]}"
+  go_fd="${fields[8]}"; go_nonce="${fields[9]}"
+  _QCSD_LIFECYCLE_HELPER_SOURCE_DEVICE="${fields[10]}"
+  _QCSD_LIFECYCLE_HELPER_SOURCE_INODE="${fields[11]}"
+  _QCSD_LIFECYCLE_HELPER_SOURCE_PATH="${fields[12]}"
+  _QCSD_LIFECYCLE_HELPER_SHA256="${fields[13]}"
+  _QCSD_LIFECYCLE_LEASE_NONCE="${fields[14]}"
+  _QCSD_LIFECYCLE_LEASE_SOCKET="${fields[15]}"
+  _QCSD_LIFECYCLE_LOCK_DEVICE="${fields[16]}"
+  _QCSD_LIFECYCLE_LOCK_INODE="${fields[17]}"
+  _QCSD_LIFECYCLE_LOCK_PARENT_DEVICE="${fields[18]}"
+  _QCSD_LIFECYCLE_LOCK_PARENT_INODE="${fields[19]}"
+  _QCSD_LIFECYCLE_LOCK_PATH="${fields[20]}"
+  _QCSD_LIFECYCLE_NATIVE_SOURCE_DEVICE="${fields[21]}"
+  _QCSD_LIFECYCLE_NATIVE_SOURCE_INODE="${fields[22]}"
+  _QCSD_LIFECYCLE_NATIVE_PATH="${fields[23]}"
+  _QCSD_LIFECYCLE_NATIVE_SHA256="${fields[24]}"
+  _QCSD_LIFECYCLE_QCSD_PID="${fields[25]}"
+  _QCSD_LIFECYCLE_QCSD_SOURCE_DEVICE="${fields[26]}"
+  _QCSD_LIFECYCLE_QCSD_SOURCE_FD="${fields[27]}"
+  _QCSD_LIFECYCLE_QCSD_SOURCE_INODE="${fields[28]}"
+  _QCSD_LIFECYCLE_QCSD_SOURCE_PATH="${fields[29]}"
+  _QCSD_LIFECYCLE_QCSD_SOURCE_SHA256="${fields[30]}"
+  _QCSD_LIFECYCLE_QCSD_START="${fields[31]}"
+  _QCSD_LIFECYCLE_DOCKER_CONFIG_DEVICE="${fields[32]}"
+  _QCSD_LIFECYCLE_DOCKER_CONFIG_INODE="${fields[33]}"
+  _QCSD_LIFECYCLE_DOCKER_CONFIG_PATH="${fields[34]}"
+  _QCSD_LIFECYCLE_BUILDX_CONFIG_DEVICE="${fields[35]}"
+  _QCSD_LIFECYCLE_BUILDX_CONFIG_INODE="${fields[36]}"
+  _QCSD_LIFECYCLE_BUILDX_CONFIG_PATH="${fields[37]}"
+  [[ "${_QCSD_LIFECYCLE_GUARD_PID}" == "${PPID}" &&
+      "${_QCSD_LIFECYCLE_GUARD_SOURCE_PATH}" == "${expected_guardian}" &&
+      "${_QCSD_LIFECYCLE_GUARD_SOURCE_DEVICE}:${_QCSD_LIFECYCLE_GUARD_SOURCE_INODE}" == \
+        "${expected_guardian_device}:${expected_guardian_inode}" ]] || return 1
+  [[ "${_QCSD_LIFECYCLE_GUARD_SOURCE_DEVICE}:${_QCSD_LIFECYCLE_GUARD_SOURCE_INODE}" == \
+        "${expected_guardian_device}:${expected_guardian_inode}" &&
+      "${_QCSD_LIFECYCLE_GUARD_SOURCE_SHA256}" == "${expected_guardian_sha}" ]] || return 1
+  # Bind the guardian proof to the exact helper bytes already loaded into this
+  # shell.  A later pathname observation alone must not bless replacement
+  # bytes that differ from the functions executing in this process.
+  loaded_helper_device="${docker_supervisor_metadata%%:*}"
+  loaded_helper_tail="${docker_supervisor_metadata#*:}"
+  loaded_helper_inode="${loaded_helper_tail%%:*}"
+  [[ "${_QCSD_LIFECYCLE_HELPER_SOURCE_PATH}" == "${DOCKER_SUPERVISOR}" &&
+      "${_QCSD_LIFECYCLE_HELPER_SOURCE_DEVICE}" == "${loaded_helper_device}" &&
+      "${_QCSD_LIFECYCLE_HELPER_SOURCE_INODE}" == "${loaded_helper_inode}" ]] || return 1
+  [[ "${_QCSD_LIFECYCLE_HELPER_SHA256}" == "${docker_supervisor_sha256}" ]] || return 1
+  [[ "${_QCSD_LIFECYCLE_QCSD_SOURCE_PATH}" == "${ROOT}/qcsd-lab" &&
+      "${BASH_SOURCE[0]}" == "/proc/${_QCSD_LIFECYCLE_GUARD_PID}/fd/${_QCSD_LIFECYCLE_QCSD_SOURCE_FD}" &&
+      "$(readlink -f -- "${BASH_SOURCE[0]}" 2>/dev/null)" == "${_QCSD_LIFECYCLE_QCSD_SOURCE_PATH}" ]] || return 1
+  while IFS='=' read -r key extra; do
+    [[ "${key}" != QCSD_DOCKER_LOCK_GUARDIAN_* ]] || unset "${key}"
+  done < <(env)
+  [[ "${go_fd}" =~ ^[0-9]+$ && "${go_nonce}" =~ ^[0-9a-f]{64}$ ]] || return 1
+  IFS= read -r observed <&"${go_fd}" || return 1
+  [[ "${observed}" == "${go_nonce}" ]] || return 1
+  if IFS= read -r extra <&"${go_fd}"; then return 1; fi
+  eval "exec ${go_fd}<&-" || return 1
+  [[ "${_QCSD_LIFECYCLE_DOCKER_CONFIG_PATH}" == "/proc/${_QCSD_LIFECYCLE_GUARD_PID}/fd/"* &&
+      -d "${_QCSD_LIFECYCLE_DOCKER_CONFIG_PATH}" &&
+      "$(stat -Lc '%d:%i:%u:%a:%h:%F' -- "${_QCSD_LIFECYCLE_DOCKER_CONFIG_PATH}")" == \
+        "${_QCSD_LIFECYCLE_DOCKER_CONFIG_DEVICE}:${_QCSD_LIFECYCLE_DOCKER_CONFIG_INODE}:$(id -u):700:0:directory" &&
+      -z "$(find -H "${_QCSD_LIFECYCLE_DOCKER_CONFIG_PATH}" -mindepth 1 -maxdepth 1 -print -quit)" ]] || return 1
+  [[ "${_QCSD_LIFECYCLE_BUILDX_CONFIG_PATH}" =~ ^/proc/${_QCSD_LIFECYCLE_GUARD_PID}/fd/[0-9]+/[.]qcsd-buildx-config-$(id -u)[.][0-9a-f]{64}$ &&
+      -d "${_QCSD_LIFECYCLE_BUILDX_CONFIG_PATH}" &&
+      ! -L "${_QCSD_LIFECYCLE_BUILDX_CONFIG_PATH}" &&
+      "$(stat -Lc '%d:%i' -- "${_QCSD_LIFECYCLE_BUILDX_CONFIG_PATH%/*}")" == \
+        "${_QCSD_LIFECYCLE_LOCK_PARENT_DEVICE}:${_QCSD_LIFECYCLE_LOCK_PARENT_INODE}" &&
+      "$(stat -Lc '%d:%i:%u:%a:%h:%F' -- "${_QCSD_LIFECYCLE_BUILDX_CONFIG_PATH}")" == \
+        "${_QCSD_LIFECYCLE_BUILDX_CONFIG_DEVICE}:${_QCSD_LIFECYCLE_BUILDX_CONFIG_INODE}:$(id -u):700:2:directory" &&
+      -z "$(find -H "${_QCSD_LIFECYCLE_BUILDX_CONFIG_PATH}" -mindepth 1 -maxdepth 1 -print -quit)" ]] || return 1
+  export DOCKER_CONFIG="${_QCSD_LIFECYCLE_DOCKER_CONFIG_PATH}"
+  export BUILDX_CONFIG="${_QCSD_LIFECYCLE_BUILDX_CONFIG_PATH}"
+  readonly _QCSD_LIFECYCLE_GUARD_PID _QCSD_LIFECYCLE_GUARD_START
+  readonly _QCSD_LIFECYCLE_LOCK_DEVICE _QCSD_LIFECYCLE_LOCK_INODE
+  readonly _QCSD_LIFECYCLE_QCSD_PID _QCSD_LIFECYCLE_QCSD_START
+  readonly _QCSD_LIFECYCLE_HELPER_SHA256 _QCSD_LIFECYCLE_NATIVE_PATH
+  readonly _QCSD_LIFECYCLE_NATIVE_SHA256 _QCSD_LIFECYCLE_LEASE_SOCKET
+  readonly _QCSD_LIFECYCLE_LEASE_NONCE
+  readonly _QCSD_LIFECYCLE_BOOT_ID _QCSD_LIFECYCLE_GUARD_SOURCE_DEVICE
+  readonly _QCSD_LIFECYCLE_GUARD_SOURCE_INODE _QCSD_LIFECYCLE_GUARD_SOURCE_PATH
+  readonly _QCSD_LIFECYCLE_GUARD_SOURCE_SHA256 _QCSD_LIFECYCLE_HELPER_SOURCE_DEVICE
+  readonly _QCSD_LIFECYCLE_HELPER_SOURCE_INODE _QCSD_LIFECYCLE_HELPER_SOURCE_PATH
+  readonly _QCSD_LIFECYCLE_LOCK_PARENT_DEVICE _QCSD_LIFECYCLE_LOCK_PARENT_INODE
+  readonly _QCSD_LIFECYCLE_LOCK_PATH _QCSD_LIFECYCLE_NATIVE_SOURCE_DEVICE
+  readonly _QCSD_LIFECYCLE_NATIVE_SOURCE_INODE _QCSD_LIFECYCLE_QCSD_SOURCE_DEVICE
+  readonly _QCSD_LIFECYCLE_QCSD_SOURCE_INODE _QCSD_LIFECYCLE_QCSD_SOURCE_PATH
+  readonly _QCSD_LIFECYCLE_QCSD_SOURCE_SHA256 _QCSD_LIFECYCLE_QCSD_SOURCE_FD
+  readonly _QCSD_LIFECYCLE_DOCKER_CONFIG_DEVICE _QCSD_LIFECYCLE_DOCKER_CONFIG_INODE
+  readonly _QCSD_LIFECYCLE_DOCKER_CONFIG_PATH
+  readonly _QCSD_LIFECYCLE_BUILDX_CONFIG_DEVICE _QCSD_LIFECYCLE_BUILDX_CONFIG_INODE
+  readonly _QCSD_LIFECYCLE_BUILDX_CONFIG_PATH
+  _QCSD_LIFECYCLE_LOCK_MODE=exclusive
+}
+
+_qcsd_enter_lifecycle_guardian() {
+  local guardian_path="${ROOT}/tools/docker_lifecycle_lock_guardian.py"
+  local guardian_fd guardian_metadata
+  unset DOCKER_CONTEXT DOCKER_HOST
+  [[ -f "${guardian_path}" && ! -L "${guardian_path}" ]] || return 1
+  guardian_metadata="$(stat -Lc '%u:%a:%h:%F' -- "${guardian_path}")" || return 1
+  [[ "${guardian_metadata}" == "$(id -u):644:1:regular file" ]] || return 1
+  exec {guardian_fd}<"${guardian_path}" || return 1
+  exec /usr/bin/python3 -I "/proc/self/fd/${guardian_fd}" \
+    --entry-source-fd "${guardian_fd}" --entry-source-path "${guardian_path}" -- \
+    "${ROOT}/qcsd-lab" "${QCSD_ORIGINAL_ARGV[@]}"
+}
+
+reconcile_stale_docker_supervisors() {
+  # Validate the durable namespace before legacy recovery can mutate anything;
+  # both sets are then revalidated at their respective mutation boundaries.
+  [[ "${_QCSD_LIFECYCLE_LOCK_MODE:-}" == "exclusive" ]] || return 1
+  local nullglob_was_set=0
+  local -a durable_roots=() legacy_roots=()
+  shopt -q nullglob && nullglob_was_set=1
+  shopt -s nullglob
+  durable_roots=("${_qcsd_lifecycle_base}"/{run,network,build,transaction}.*
+    "${_qcsd_lifecycle_base}"/retirement.{run,network,build,transaction}.*
+    "${_qcsd_lifecycle_base}"/.retired.{run,network,build,transaction}.*)
+  legacy_roots=(/tmp/qcsd-docker-supervisor.* /tmp/qcsd-docker-network-supervisor.*)
+  (( nullglob_was_set )) || shopt -u nullglob
+  if (( ${#durable_roots[@]} != 0 && ${#legacy_roots[@]} != 0 )); then
+    echo "qcsd-lab Docker admission refuses mixed legacy and durable ownership namespaces" >&2
+    return 1
+  fi
+  if (( ${#legacy_roots[@]} != 0 )); then
+    echo "qcsd-lab Docker admission quarantines legacy /tmp ownership state; audit it manually before retrying" >&2
+    return 1
+  fi
+  qcsd_reconcile_docker_lifecycle validate || return 1
+  qcsd_reconcile_docker_lifecycle recover
+}
+
 require_docker() {
+  # These are helper-internal trust anchors, never caller inputs.  Clear any
+  # ambient values before the first discovery call so endpoint selection
+  # cannot accidentally inherit a forged prior binding.
+  unset _QCSD_DOCKER_PINNED_CONTEXT _QCSD_DOCKER_PINNED_HOST
+  unset _QCSD_DOCKER_PINNED_SERVER_ID _QCSD_DOCKER_PINNED_BOOT_ID
+  local guardian_environment_present=0
+  while IFS='=' read -r _qcsd_guard_key _qcsd_guard_value; do
+    if [[ "${_qcsd_guard_key}" == QCSD_DOCKER_LOCK_GUARDIAN_* ]]; then
+      guardian_environment_present=1
+      break
+    fi
+  done < <(env)
+  if (( guardian_environment_present == 0 )); then
+    _qcsd_enter_lifecycle_guardian || exit 1
+  fi
+  _qcsd_validate_lifecycle_guardian || {
+    echo "qcsd-lab lifecycle guardian authority is invalid" >&2
+    exit 1
+  }
+  _qcsd_secure_lifecycle_base || exit 1
   command -v docker >/dev/null 2>&1 || {
     echo "qcsd-lab requires Docker on the host" >&2
     exit 1
   }
-  if ! docker info >/dev/null 2>&1; then
+  local pinned_context pinned_endpoint pinned_server_id observed_server_id
+  local pinned_boot_id observed_boot_id
+  pinned_context="$(_qcsd_docker_api context show 2>/dev/null)"
+  if [[ ! "${pinned_context}" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+    echo "qcsd-lab cannot pin one safe Docker context" >&2
+    exit 1
+  fi
+  pinned_endpoint="$(_qcsd_docker_api context inspect --format \
+    '{{.Endpoints.docker.Host}}' "${pinned_context}" 2>/dev/null)"
+  if [[ "${pinned_endpoint}" != "unix:///var/run/docker.sock" &&
+        "${pinned_endpoint}" != \
+          "npipe:////./pipe/dockerDesktopLinuxEngine" ]]; then
+    echo "qcsd-lab requires one local Docker endpoint" >&2
+    exit 1
+  fi
+  pinned_server_id="$(_qcsd_docker_api --context "${pinned_context}" info \
+    --format '{{.ID}}' 2>/dev/null)"
+  if [[ ! "${pinned_server_id}" =~ ^[A-Za-z0-9_.:-]+$ ||
+        "${pinned_server_id}" == "unavailable" ]]; then
+    echo "qcsd-lab cannot bind the local Docker daemon identity" >&2
+    exit 1
+  fi
+  IFS= read -r pinned_boot_id </proc/sys/kernel/random/boot_id ||
+    pinned_boot_id=""
+  if [[ ! "${pinned_boot_id}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+    echo "qcsd-lab cannot bind the current host boot identity" >&2
+    exit 1
+  fi
+  if [[ -n "${QCSD_DOCKER_PINNED_CONTEXT:-}" ||
+        -n "${QCSD_DOCKER_PINNED_HOST:-}" ||
+        -n "${QCSD_DOCKER_PINNED_SERVER_ID:-}" ]]; then
+    if [[ "${QCSD_DOCKER_PINNED_CONTEXT:-}" != "${pinned_context}" ||
+          "${QCSD_DOCKER_PINNED_HOST:-}" != "${pinned_endpoint}" ||
+          "${QCSD_DOCKER_PINNED_SERVER_ID:-}" != "${pinned_server_id}" ]]; then
+      echo "qcsd-lab Docker endpoint drifted from its supervising watch binding" >&2
+      exit 1
+    fi
+  fi
+  export DOCKER_CONTEXT="${pinned_context}"
+  _QCSD_DOCKER_PINNED_CONTEXT="${pinned_context}"
+  _QCSD_DOCKER_PINNED_HOST="${pinned_endpoint}"
+  _QCSD_DOCKER_PINNED_SERVER_ID="${pinned_server_id}"
+  _QCSD_DOCKER_PINNED_BOOT_ID="${pinned_boot_id}"
+  observed_server_id="$(_qcsd_docker_api info --format '{{.ID}}' 2>/dev/null)"
+  if [[ "${observed_server_id}" != "${pinned_server_id}" ]]; then
     echo "Docker is installed but its daemon is unavailable" >&2
     exit 1
   fi
+  IFS= read -r observed_boot_id </proc/sys/kernel/random/boot_id ||
+    observed_boot_id=""
+  if [[ "${observed_boot_id}" != "${pinned_boot_id}" ]]; then
+    echo "qcsd-lab host boot changed across lifecycle admission" >&2
+    exit 1
+  fi
+  if [[ "${QCSD_LAUNCH_ACTION}" == "class-study" &&
+        ( "${class_study_action:-}" == "acquisition-admission" ||
+          "${class_study_action:-}" == "acquisition-run" ||
+          "${class_study_action:-}" == "acquisition-status" ) ]]; then
+    # The first invocation clears prior watcher scopes.  Repeat the complete
+    # current-scope/authority check only after the potentially blocking Docker
+    # lifecycle lock has been acquired, immediately before stale Docker state
+    # can be mutated.
+    "${class_watch_scope_recovery[@]}" >/dev/null || {
+      echo "class-study ${class_study_action} lost scoped request authority before Docker recovery" >&2
+      exit 1
+    }
+    unset class_watch_scope_recovery
+  fi
+  reconcile_stale_docker_supervisors || exit 1
+  observed_server_id="$(_qcsd_docker_api info --format '{{.ID}}' 2>/dev/null)"
+  if [[ "${observed_server_id}" != "${pinned_server_id}" ]]; then
+    echo "qcsd-lab Docker daemon changed across lifecycle admission" >&2
+    exit 1
+  fi
+  IFS= read -r observed_boot_id </proc/sys/kernel/random/boot_id ||
+    observed_boot_id=""
+  if [[ "${observed_boot_id}" != "${pinned_boot_id}" ]]; then
+    echo "qcsd-lab host boot changed across lifecycle reconciliation" >&2
+    exit 1
+  fi
+  # Campaign execution is intentionally serial. Retain the exact exclusive
+  # lifecycle lock for the full invocation so publication, handoff retirement,
+  # and crash recovery share one globally quiescent ownership namespace.
 }
 
 reject_evidence_build_image_overrides() {
@@ -137,17 +1644,24 @@ acquire_evidence_build_lock() {
     return 1
   fi
   build_lock_path="${lock_root}/${lock_identity}.lock"
-  if [[ -L "${build_lock_path}" ||
-        ( -e "${build_lock_path}" && ! -f "${build_lock_path}" ) ]]; then
-    echo "qcsd-lab evidence build lock must be a regular non-symlink file" >&2
+  if [[ -e "${build_lock_path}" || -L "${build_lock_path}" ]]; then
+    lock_state="$(stat -Lc '%u:%a:%h:%F' -- "${build_lock_path}" 2>/dev/null)" ||
+      lock_state="invalid"
+    if [[ "${lock_state}" != "${current_uid}:600:1:regular empty file" ]]; then
+      echo "qcsd-lab evidence build lock must be an exact private empty file" >&2
+      return 1
+    fi
+  fi
+  if [[ -L "${build_lock_path}" ]]; then
+    echo "qcsd-lab evidence build lock must not be a symbolic link" >&2
     return 1
   fi
   previous_umask="$(umask)"
   umask 077
-  exec {build_host_lock_fd}>>"${build_lock_path}"
+  exec {build_host_lock_fd}<>"${build_lock_path}"
   umask "${previous_umask}"
-  lock_state="$(stat -c '%u:%a' -- "${build_lock_path}")"
-  if [[ "${lock_state}" != "${current_uid}:600" ]]; then
+  lock_state="$(stat -Lc '%u:%a:%h:%F' -- "${build_lock_path}")"
+  if [[ "${lock_state}" != "${current_uid}:600:1:regular empty file" ]]; then
     echo "qcsd-lab evidence build lock has unsafe ownership or mode" >&2
     return 1
   fi
@@ -155,6 +1669,534 @@ acquire_evidence_build_lock() {
     echo "another qcsd-lab evidence build holds this user/WSL instance's Docker-daemon lock" >&2
     return 1
   fi
+}
+
+reject_unresolved_evidence_build() {
+  local current_uid record supervisor_root root_metadata record_metadata line
+  local field_key field_count expected_field record_line_count scope_record_invalid
+  local object_count working_directory_count daemon_id_count context_count host_count
+  local server_id_count cli_pid_count cli_start_count cli_session_count cli_group_count
+  local argv_hash_count cohort_count receipt_count transaction_state_count
+  local object working_directory docker_daemon_id docker_context docker_host
+  local docker_server_id cli_pid cli_start cli_session cli_group build_argv_sha256
+  local transaction_cohort transaction_receipt transaction_state canonical_path
+  local scope_unit scope_control_group scope_state scope_pid scope_start
+  local scope_session scope_group scope_docker_status scope_systemd_status
+  local nullglob_was_set=0
+  local -a records=()
+  local -a scope_supervision_fields=(
+    object process_identity_role scope_launcher_pid scope_launcher_start_time
+    scope_launcher_session scope_launcher_process_group docker_context docker_host
+    docker_server_id docker_daemon_id working_directory build_argv_sha256
+    scope_required scope_unit scope_control_group scope_state host_boot_id
+    status_file status_file_state requested_signal forwarded_cli_signal
+    daemon_cancellation
+  )
+  local -a scope_recovery_fields=(
+    object process_identity_role scope_launcher_pid scope_launcher_start_time
+    scope_launcher_session scope_launcher_process_group docker_context docker_host
+    docker_server_id docker_daemon_id working_directory build_argv_sha256
+    scope_required scope_unit scope_control_group scope_final_state
+    scope_signal_attempted scope_signal_outcome scope_leak_detected
+    scope_kill_attempted scope_kill_outcome scope_empty_proven host_boot_id
+    status_file status_file_state status_file_matches docker_command_status
+    systemd_run_status requested_signal forwarded_cli_signal
+    cli_signal_attempted cli_signal_outcome cli_forced cli_force_attempted
+    cli_force_outcome daemon_cancellation
+  )
+  local -A scope_field_counts=()
+  local -A scope_field_values=()
+  current_uid="$(id -u)"
+  shopt -q nullglob && nullglob_was_set=1
+  shopt -s nullglob
+  records=(
+    /tmp/qcsd-docker-build-supervisor.*/SUPERVISION
+    /tmp/qcsd-docker-build-supervisor.*/RECOVERY
+  )
+  (( nullglob_was_set )) || shopt -u nullglob
+  for record in "${records[@]}"; do
+    supervisor_root="${record%/*}"
+    if [[ -L "${supervisor_root}" ]]; then
+      echo "qcsd-lab evidence build found unsafe prior supervisor state: ${supervisor_root}" >&2
+      return 1
+    fi
+    root_metadata="$(stat -c '%u:%a:%F' -- "${supervisor_root}" 2>/dev/null)" ||
+      continue
+    if [[ "${root_metadata%%:*}" != "${current_uid}" ]]; then
+      continue
+    fi
+    if [[ "${root_metadata}" != "${current_uid}:700:directory" ]]; then
+      echo "qcsd-lab evidence build found unsafe prior supervisor state: ${supervisor_root}" >&2
+      return 1
+    fi
+    if [[ -L "${record}" ]]; then
+      echo "qcsd-lab evidence build found unsafe prior supervisor record: ${record}" >&2
+      return 1
+    fi
+    record_metadata="$(stat -c '%u:%a:%h:%F' -- "${record}" 2>/dev/null)" ||
+      continue
+    if [[ "${record_metadata}" != "${current_uid}:600:1:regular file" ]]; then
+      echo "qcsd-lab evidence build found unsafe prior supervisor record: ${record}" >&2
+      return 1
+    fi
+    object_count=0
+    working_directory_count=0
+    daemon_id_count=0
+    context_count=0
+    host_count=0
+    server_id_count=0
+    cli_pid_count=0
+    cli_start_count=0
+    cli_session_count=0
+    cli_group_count=0
+    argv_hash_count=0
+    cohort_count=0
+    receipt_count=0
+    transaction_state_count=0
+    record_line_count=0
+    scope_field_counts=()
+    scope_field_values=()
+    object=""
+    working_directory=""
+    docker_daemon_id=""
+    docker_context=""
+    docker_host=""
+    docker_server_id=""
+    cli_pid=""
+    cli_start=""
+    cli_session=""
+    cli_group=""
+    build_argv_sha256=""
+    transaction_cohort=""
+    transaction_receipt=""
+    transaction_state=""
+    while IFS= read -r line || [[ -n "${line}" ]]; do
+      record_line_count=$((record_line_count + 1))
+      field_key="${line%%=*}"
+      case "${field_key}" in
+        object|process_identity_role|scope_launcher_pid|scope_launcher_start_time|\
+        scope_launcher_session|scope_launcher_process_group|docker_context|\
+        docker_host|docker_server_id|docker_daemon_id|working_directory|\
+        build_argv_sha256|scope_required|scope_unit|scope_control_group|\
+        scope_state|scope_final_state|scope_signal_attempted|scope_signal_outcome|\
+        scope_leak_detected|scope_kill_attempted|scope_kill_outcome|\
+        scope_empty_proven|host_boot_id|status_file|status_file_state|\
+        status_file_matches|docker_command_status|systemd_run_status|\
+        requested_signal|forwarded_cli_signal|cli_signal_attempted|\
+        cli_signal_outcome|cli_forced|cli_force_attempted|cli_force_outcome|\
+        daemon_cancellation)
+          field_count="${scope_field_counts[${field_key}]-0}"
+          scope_field_counts[${field_key}]=$((field_count + 1))
+          scope_field_values[${field_key}]="${line#*=}"
+          ;;
+      esac
+      case "${line}" in
+        object=*)
+          object_count=$((object_count + 1))
+          object="${line#object=}"
+          ;;
+        working_directory=*)
+          working_directory_count=$((working_directory_count + 1))
+          working_directory="${line#working_directory=}"
+          ;;
+        docker_daemon_id=*)
+          daemon_id_count=$((daemon_id_count + 1))
+          docker_daemon_id="${line#docker_daemon_id=}"
+          ;;
+        docker_context=*) context_count=$((context_count + 1)); docker_context="${line#*=}" ;;
+        docker_host=*) host_count=$((host_count + 1)); docker_host="${line#*=}" ;;
+        docker_server_id=*)
+          server_id_count=$((server_id_count + 1)); docker_server_id="${line#*=}"
+          ;;
+        cli_pid=*) cli_pid_count=$((cli_pid_count + 1)); cli_pid="${line#*=}" ;;
+        cli_start_time=*)
+          cli_start_count=$((cli_start_count + 1)); cli_start="${line#*=}"
+          ;;
+        cli_session=*)
+          cli_session_count=$((cli_session_count + 1)); cli_session="${line#*=}"
+          ;;
+        cli_process_group=*)
+          cli_group_count=$((cli_group_count + 1)); cli_group="${line#*=}"
+          ;;
+        build_argv_sha256=*)
+          argv_hash_count=$((argv_hash_count + 1)); build_argv_sha256="${line#*=}"
+          ;;
+        cohort_version=*)
+          cohort_count=$((cohort_count + 1)); transaction_cohort="${line#*=}"
+          ;;
+        receipt_path=*)
+          receipt_count=$((receipt_count + 1)); transaction_receipt="${line#*=}"
+          ;;
+        transaction_state=*)
+          transaction_state_count=$((transaction_state_count + 1));
+          transaction_state="${line#*=}"
+          ;;
+      esac
+    done <"${record}"
+    if (( object_count != 1 || working_directory_count != 1 ||
+          daemon_id_count != 1 )) ||
+       [[ "${object}" != "docker-build-cli" &&
+          "${object}" != "docker-build-transaction" &&
+          "${object}" != "docker-build-scope-launcher" ]]; then
+      echo "qcsd-lab evidence build found malformed prior supervisor record: ${record}" >&2
+      return 1
+    fi
+    canonical_path="$(realpath -m -- "${working_directory}" 2>/dev/null)" ||
+      canonical_path=""
+    if [[ ! "${docker_daemon_id}" =~ ^[A-Za-z0-9_.:-]+$ ||
+          "${docker_daemon_id}" == "unavailable" ||
+          "${working_directory}" != /* || "${working_directory}" == "/" ||
+          "${canonical_path}" != "${working_directory}" ||
+          ${context_count} -ne 1 ||
+          ! "${docker_context}" =~ ^[A-Za-z0-9_.-]+$ ||
+          ${host_count} -ne 1 ||
+          ( "${docker_host}" != "unix:///var/run/docker.sock" &&
+            "${docker_host}" != "npipe:////./pipe/dockerDesktopLinuxEngine" ) ]]; then
+      echo "qcsd-lab evidence build found malformed prior supervisor record: ${record}" >&2
+      return 1
+    fi
+    if [[ "${object}" == "docker-build-cli" ]]; then
+      if (( server_id_count != 1 || cli_pid_count != 1 || cli_start_count != 1 ||
+            cli_session_count != 1 || cli_group_count != 1 || argv_hash_count != 1 )) ||
+         [[ "${docker_server_id}" != "${docker_daemon_id}" ||
+            ! "${build_argv_sha256}" =~ ^[0-9a-f]{64}$ ||
+            ! "${cli_pid}" =~ ^(unavailable|[1-9][0-9]*)$ ||
+            ! "${cli_start}" =~ ^(unavailable|[1-9][0-9]*)$ ||
+            ! "${cli_session}" =~ ^(unavailable|[1-9][0-9]*)$ ||
+            ! "${cli_group}" =~ ^(unavailable|[1-9][0-9]*)$ ]]; then
+        echo "qcsd-lab evidence build found malformed prior supervisor record: ${record}" >&2
+        return 1
+      fi
+    elif [[ "${object}" == "docker-build-transaction" ]]; then
+      canonical_path="$(realpath -m -- "${transaction_receipt}" 2>/dev/null)" ||
+        canonical_path=""
+      if (( server_id_count != 1 || cohort_count != 1 || receipt_count != 1 ||
+            transaction_state_count != 1 )) ||
+         [[ "${docker_server_id}" != "${docker_daemon_id}" ||
+            ! "${transaction_cohort}" =~ ^[1-9][0-9]*$ ||
+            "${transaction_receipt}" != /* || "${transaction_receipt}" == "/" ||
+            "${canonical_path}" != "${transaction_receipt}" ||
+            "${transaction_state}" != "uncommitted-static-tag-mutation" ]]; then
+        echo "qcsd-lab evidence build found malformed prior supervisor record: ${record}" >&2
+        return 1
+      fi
+    else
+      scope_record_invalid=0
+      if [[ "${record##*/}" == "SUPERVISION" ]]; then
+        if (( record_line_count != ${#scope_supervision_fields[@]} )); then
+          scope_record_invalid=1
+        fi
+        for expected_field in "${scope_supervision_fields[@]}"; do
+          if (( ${scope_field_counts[${expected_field}]-0} != 1 )); then
+            scope_record_invalid=1
+          fi
+        done
+      elif [[ "${record##*/}" == "RECOVERY" ]]; then
+        if (( record_line_count != ${#scope_recovery_fields[@]} )); then
+          scope_record_invalid=1
+        fi
+        for expected_field in "${scope_recovery_fields[@]}"; do
+          if (( ${scope_field_counts[${expected_field}]-0} != 1 )); then
+            scope_record_invalid=1
+          fi
+        done
+      else
+        scope_record_invalid=1
+      fi
+      if (( scope_record_invalid != 0 )); then
+        echo "qcsd-lab evidence build found malformed prior supervisor record: ${record}" >&2
+        return 1
+      fi
+
+      scope_unit="${scope_field_values[scope_unit]}"
+      scope_control_group="${scope_field_values[scope_control_group]}"
+      if [[ "${scope_control_group}" != "unavailable" ]]; then
+        canonical_path="$(realpath -m -- "${scope_control_group}" 2>/dev/null)" ||
+          canonical_path=""
+      else
+        canonical_path="unavailable"
+      fi
+      if (( server_id_count != 1 || argv_hash_count != 1 )) ||
+         [[ "${docker_server_id}" != "${docker_daemon_id}" ||
+            "${scope_field_values[process_identity_role]}" != "local-systemd-run-scope-launcher" ||
+            ! "${build_argv_sha256}" =~ ^[0-9a-f]{64}$ ||
+            "${scope_field_values[scope_required]}" != "1" ||
+            ! "${scope_unit}" =~ ^qcsd-docker-build-[0-9a-f]{32}[.]scope$ ||
+            ! "${scope_field_values[host_boot_id]}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ||
+            "${scope_field_values[status_file]}" != "${supervisor_root}/build.status" ||
+            ! "${scope_field_values[requested_signal]}" =~ ^(none|HUP|INT|QUIT|TERM)$ ||
+            ! "${scope_field_values[forwarded_cli_signal]}" =~ ^(none|INT)$ ||
+            "${scope_field_values[daemon_cancellation]}" != "unavailable-client-disconnect-only" ||
+            ( "${scope_control_group}" != "unavailable" &&
+              ( "${scope_control_group}" != /* ||
+                "${canonical_path}" != "${scope_control_group}" ||
+                "${scope_control_group}" != */"${scope_unit}" ||
+                ! "${scope_control_group}" =~ ^/[A-Za-z0-9_.@:/-]+$ ) ) ]]; then
+        echo "qcsd-lab evidence build found malformed prior supervisor record: ${record}" >&2
+        return 1
+      fi
+
+      scope_pid="${scope_field_values[scope_launcher_pid]}"
+      scope_start="${scope_field_values[scope_launcher_start_time]}"
+      scope_session="${scope_field_values[scope_launcher_session]}"
+      scope_group="${scope_field_values[scope_launcher_process_group]}"
+      if [[ "${record##*/}" == "SUPERVISION" ]]; then
+        scope_state="${scope_field_values[scope_state]}"
+        if [[ "${scope_field_values[forwarded_cli_signal]}" != "none" ]]; then
+          scope_record_invalid=1
+        fi
+        case "${scope_state}" in
+          declared)
+            if [[ "${scope_pid}" != "unavailable" ||
+                  "${scope_start}" != "unavailable" ||
+                  "${scope_session}" != "unavailable" ||
+                  "${scope_group}" != "unavailable" ||
+                  "${scope_control_group}" != "unavailable" ||
+                  "${scope_field_values[status_file_state]}" != "declared" ||
+                  "${scope_field_values[requested_signal]}" != "none" ]]; then
+              scope_record_invalid=1
+            fi
+            ;;
+          active|inactive)
+            if [[ ! "${scope_pid}" =~ ^[1-9][0-9]*$ ||
+                  ! "${scope_start}" =~ ^[1-9][0-9]*$ ||
+                  "${scope_session}" != "${scope_pid}" ||
+                  "${scope_group}" != "${scope_pid}" ||
+                  "${scope_control_group}" == "unavailable" ||
+                  "${scope_field_values[status_file_state]}" != "awaiting-command-status" ]]; then
+              scope_record_invalid=1
+            fi
+            ;;
+          absent)
+            if [[ ! "${scope_pid}" =~ ^[1-9][0-9]*$ ||
+                  ! "${scope_start}" =~ ^[1-9][0-9]*$ ||
+                  "${scope_session}" != "${scope_pid}" ||
+                  "${scope_group}" != "${scope_pid}" ||
+                  "${scope_control_group}" != "unavailable" ||
+                  "${scope_field_values[status_file_state]}" != "awaiting-command-status" ]]; then
+              scope_record_invalid=1
+            fi
+            ;;
+          *) scope_record_invalid=1 ;;
+        esac
+      else
+        scope_state="${scope_field_values[scope_final_state]}"
+        if [[ ! "${scope_pid}" =~ ^[1-9][0-9]*$ ||
+              ! "${scope_start}" =~ ^(unavailable|[1-9][0-9]*)$ ]]; then
+          scope_record_invalid=1
+        elif [[ "${scope_session}" == "unavailable" &&
+                "${scope_group}" == "unavailable" ]]; then
+          :
+        elif [[ "${scope_start}" =~ ^[1-9][0-9]*$ &&
+                "${scope_session}" == "${scope_pid}" &&
+                "${scope_group}" == "${scope_pid}" ]]; then
+          :
+        else
+          scope_record_invalid=1
+        fi
+
+        case "${scope_field_values[scope_signal_attempted]}:${scope_field_values[scope_signal_outcome]}" in
+          0:not_attempted) ;;
+          1:accepted|1:unknown) ;;
+          *) scope_record_invalid=1 ;;
+        esac
+        if [[ "${scope_field_values[requested_signal]}" == "none" ]]; then
+          [[ "${scope_field_values[scope_signal_attempted]}" == "0" ]] ||
+            scope_record_invalid=1
+        elif [[ "${scope_field_values[scope_signal_attempted]}" == "0" ]]; then
+          # A terminal signal may latch after the scope-signal boundary. It is
+          # valid to make no signalling attempt only when the later evidence
+          # proves both the scope and its launcher already terminal.
+          if [[ "${scope_field_values[scope_empty_proven]}" != "1" ||
+                "${scope_field_values[status_file_state]}" == "launcher-unreaped" ]]; then
+            scope_record_invalid=1
+          fi
+        elif [[ "${scope_field_values[scope_signal_attempted]}" != "1" ]]; then
+          scope_record_invalid=1
+        fi
+
+        case "${scope_field_values[scope_leak_detected]}:${scope_field_values[scope_kill_attempted]}:${scope_field_values[scope_kill_outcome]}" in
+          0:0:not_attempted) ;;
+          1:1:accepted|1:1:unknown) ;;
+          *) scope_record_invalid=1 ;;
+        esac
+        case "${scope_field_values[scope_empty_proven]}:${scope_state}" in
+          1:inactive)
+            [[ "${scope_control_group}" != "unavailable" ]] ||
+              scope_record_invalid=1
+            ;;
+          1:absent|0:unknown) ;;
+          *) scope_record_invalid=1 ;;
+        esac
+
+        scope_docker_status="${scope_field_values[docker_command_status]}"
+        scope_systemd_status="${scope_field_values[systemd_run_status]}"
+        case "${scope_field_values[status_file_state]}" in
+          valid)
+            if [[ "${scope_field_values[status_file_matches]}" != "1" ||
+                  ! "${scope_docker_status}" =~ ^(0|[1-9][0-9]{0,2})$ ||
+                  ! "${scope_systemd_status}" =~ ^(0|[1-9][0-9]{0,2})$ ||
+                  "${scope_docker_status}" != "${scope_systemd_status}" ]]; then
+              scope_record_invalid=1
+            elif (( 10#${scope_docker_status} > 255 ||
+                    10#${scope_systemd_status} > 255 )); then
+              scope_record_invalid=1
+            fi
+            ;;
+          status-mismatch)
+            if [[ "${scope_field_values[status_file_matches]}" != "0" ||
+                  ! "${scope_docker_status}" =~ ^(0|[1-9][0-9]{0,2})$ ||
+                  ! "${scope_systemd_status}" =~ ^(0|[1-9][0-9]{0,2})$ ||
+                  "${scope_docker_status}" == "${scope_systemd_status}" ]]; then
+              scope_record_invalid=1
+            elif (( 10#${scope_docker_status} > 255 ||
+                    10#${scope_systemd_status} > 255 )); then
+              scope_record_invalid=1
+            fi
+            ;;
+          invalid|missing)
+            if [[ "${scope_field_values[status_file_matches]}" != "0" ||
+                  "${scope_docker_status}" != "unavailable" ||
+                  ! "${scope_systemd_status}" =~ ^(0|[1-9][0-9]{0,2})$ ]]; then
+              scope_record_invalid=1
+            elif (( 10#${scope_systemd_status} > 255 )); then
+              scope_record_invalid=1
+            fi
+            ;;
+          launcher-unreaped)
+            if [[ "${scope_field_values[status_file_matches]}" != "0" ||
+                  "${scope_docker_status}" != "unavailable" ||
+                  "${scope_systemd_status}" != "unavailable" ]]; then
+              scope_record_invalid=1
+            fi
+            ;;
+          *) scope_record_invalid=1 ;;
+        esac
+
+        case "${scope_field_values[cli_signal_attempted]}:${scope_field_values[cli_signal_outcome]}:${scope_field_values[forwarded_cli_signal]}" in
+          0:not_attempted:none) ;;
+          1:accepted:INT|1:unknown:none) ;;
+          *) scope_record_invalid=1 ;;
+        esac
+        if [[ "${scope_field_values[requested_signal]}" == "none" &&
+              "${scope_field_values[cli_signal_attempted]}" != "0" ]]; then
+          scope_record_invalid=1
+        fi
+        case "${scope_field_values[cli_force_attempted]}:${scope_field_values[cli_forced]}:${scope_field_values[cli_force_outcome]}" in
+          0:0:not_attempted) ;;
+          1:1:accepted|1:0:unknown) ;;
+          *) scope_record_invalid=1 ;;
+        esac
+      fi
+      if (( scope_record_invalid != 0 )); then
+        echo "qcsd-lab evidence build found malformed prior supervisor record: ${record}" >&2
+        return 1
+      fi
+    fi
+    if [[ "${docker_daemon_id}" == "${build_docker_server_id}" ||
+          "${working_directory}" == "${ROOT}" ]]; then
+      echo "qcsd-lab evidence build is blocked by unresolved prior Docker build state: ${record}" >&2
+      echo "restart and audit the Docker daemon, then remove only this verified supervisor directory before retrying" >&2
+      return 1
+    fi
+  done
+}
+
+begin_evidence_build_transaction() {
+  local staged root_metadata token transaction_boot_id
+  if [[ -n "${build_transaction_root:-}" ]]; then
+    echo "qcsd-lab evidence build transaction is already active" >&2
+    return 1
+  fi
+  if [[ "${_QCSD_LIFECYCLE_LOCK_MODE:-}" != "exclusive" ]] ||
+     ! command -v sync >/dev/null 2>&1 ||
+     ! _qcsd_bind_helper_source_identity; then
+    echo "qcsd-lab cannot establish durable build-transaction evidence" >&2
+    return 1
+  fi
+  token="$(_qcsd_supervisor_token)" || return 1
+  _qcsd_create_lifecycle_root transaction "${token}" || return 1
+  build_transaction_root="${_qcsd_lifecycle_root}"
+  IFS= read -r transaction_boot_id </proc/sys/kernel/random/boot_id || {
+    _qcsd_cancel_lifecycle_root_creation || true; return 1;
+  }
+  [[ "${transaction_boot_id}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] ||
+    { _qcsd_cancel_lifecycle_root_creation || true; return 1; }
+  root_metadata="$(stat -Lc '%u:%a:%F' -- "${build_transaction_root}" 2>/dev/null)" ||
+    { _qcsd_cancel_lifecycle_root_creation || true; return 1; }
+  if [[ "${root_metadata}" != "$(id -u):700:directory" ]]; then
+    echo "qcsd-lab build transaction root is not private" >&2
+    _qcsd_cancel_lifecycle_root_creation || true
+    return 1
+  fi
+  staged="${build_transaction_root}/SUPERVISION.next"
+  local supervisor_root="${build_transaction_root}"
+  local lifecycle_state="request-authorised"
+  if ! {
+    printf 'object=docker-build-transaction\n'
+    _qcsd_print_lifecycle_identity
+    printf 'docker_context=%s\n' "${build_docker_context}"
+    _qcsd_print_docker_binding
+    printf 'docker_daemon_id=%s\n' "${build_docker_server_id}"
+    printf 'host_boot_id=%s\n' "${transaction_boot_id}"
+    printf 'working_directory=%s\n' "${ROOT}"
+    printf 'cohort_version=%s\n' "${build_cohort_version}"
+    printf 'receipt_path=%s\n' "${build_receipt}"
+    printf 'transaction_state=uncommitted-static-tag-mutation\n'
+  } >"${staged}"; then
+    _qcsd_cancel_lifecycle_root_creation || true
+    return 1
+  fi
+  if ! _qcsd_publish_supervision_file \
+      "${staged}" "${build_transaction_root}/SUPERVISION"; then
+    echo "qcsd-lab cannot publish durable build-transaction evidence" >&2
+    if (( _QCSD_PUBLISH_REPLACED != 0 )); then
+      _qcsd_commit_lifecycle_root_creation || true
+    else
+      _qcsd_cancel_lifecycle_root_creation || true
+    fi
+    return 1
+  fi
+  _qcsd_commit_lifecycle_root_creation || return 1
+  _QCSD_DOCKER_BUILD_TRANSACTION_ROOT="${build_transaction_root}"
+}
+
+complete_evidence_build_transaction() {
+  local record root_metadata record_metadata
+  record="${build_transaction_root:-}/SUPERVISION"
+  if [[ "${_QCSD_LIFECYCLE_LOCK_MODE:-}" != "exclusive" ]] ||
+     ! _qcsd_verify_pinned_docker_daemon ||
+     ! _qcsd_verify_pinned_host_boot ||
+     ! _qcsd_lifecycle_validate_root \
+        "${build_transaction_root:-}" transaction ||
+     (( _QCSD_LIFECYCLE_SELECTED_UNPUBLISHED != 0 )) ||
+     [[ "${_QCSD_LIFECYCLE_SELECTED_VALUES[lifecycle_state]}" != \
+          "request-authorised" ||
+        "${_QCSD_LIFECYCLE_SELECTED_VALUES[working_directory]}" != "${ROOT}" ||
+        "${_QCSD_LIFECYCLE_SELECTED_VALUES[cohort_version]}" != \
+          "${build_cohort_version}" ||
+        "${_QCSD_LIFECYCLE_SELECTED_VALUES[receipt_path]}" != \
+          "${build_receipt}" ]]; then
+    echo "qcsd-lab cannot validate the active build transaction at commit" >&2
+    return 1
+  fi
+  root_metadata="$(stat -Lc '%u:%a:%F' -- "${build_transaction_root:-}" 2>/dev/null)" ||
+    return 1
+  record_metadata="$(stat -Lc '%u:%a:%h:%F' -- "${record}" 2>/dev/null)" ||
+    return 1
+  if [[ "${root_metadata}" != "$(id -u):700:directory" ||
+        "${record_metadata}" != "$(id -u):600:1:regular file" ||
+        -L "${build_receipt}" || ! -f "${build_receipt}" ]]; then
+    echo "qcsd-lab cannot acknowledge an incomplete build transaction" >&2
+    return 1
+  fi
+  # The receipt writer has already fsynced both the validated receipt and its
+  # parent directory. Removing this taint is therefore the commit point: a
+  # signal before it leaves the transaction blocked; a signal after it cannot
+  # erase the immutable receipt that accounts for every static-tag mutation.
+  _qcsd_lifecycle_remove_root "${build_transaction_root}" 0 transaction-committed || return 1
+  _QCSD_DOCKER_BUILD_TRANSACTION_ROOT=""
+  build_transaction_root=""
 }
 
 read_built_image_id() {
@@ -180,7 +2222,7 @@ verify_built_image_binding() {
   local expected_id="$3"
   local observed_id
   observed_id="$(
-    docker --context "${build_docker_context}" image inspect \
+    _qcsd_docker_api --context "${build_docker_context}" image inspect \
       --format '{{.Id}}' "${tag}"
   )"
   if [[ "${observed_id}" != "${expected_id}" ]]; then
@@ -207,14 +2249,14 @@ validate_local_docker_build_endpoint() {
   local current_server_architecture current_server_id current_identity
   local current_server_json
   local -a current_server_fields
-  current_context="$(docker context show)"
+  current_context="$(_qcsd_docker_api context show)"
   if [[ "${current_context}" != "default" &&
         "${current_context}" != "desktop-linux" ]]; then
     echo "qcsd-lab evidence build requires the default local Docker context" >&2
     return 1
   fi
   current_endpoint="$(
-    docker context inspect --format '{{.Endpoints.docker.Host}}' \
+    _qcsd_docker_api context inspect --format '{{.Endpoints.docker.Host}}' \
       "${current_context}"
   )"
   if [[ "${current_endpoint}" != "unix:///var/run/docker.sock" &&
@@ -223,7 +2265,7 @@ validate_local_docker_build_endpoint() {
     return 1
   fi
   current_server_json="$(
-    docker --context "${current_context}" info --format '{{json .}}'
+    _qcsd_docker_api --context "${current_context}" info --format '{{json .}}'
   )"
   if ! mapfile -t current_server_fields < <(
     printf '%s\n' "${current_server_json}" | python3 -I -c '
@@ -385,6 +2427,7 @@ wsl_host_build_storage_probe() {
 # count do not prove that the Windows volume backing Docker's VHDX can safely
 # export a new image.
 if [[ "${1:-}" == "build" ]]; then
+  build_transaction_root=""
   build_cohort_version=1
   if (( $# == 3 )) && [[ "${2:-}" == "--cohort-version" ]]; then
     build_cohort_version="${3}"
@@ -405,9 +2448,13 @@ if [[ "${1:-}" == "build" ]]; then
     echo "build receipt parent/destination cannot be a symlink" >&2
     exit 1
   fi
+  reject_docker_endpoint_overrides
+  require_docker
   mkdir -p "${build_receipt_parent}"
   build_receipt_parent="$(realpath "${build_receipt_parent}")"
   build_receipt="${build_receipt_parent}/$(basename "${build_receipt}")"
+  build_receipt_parent_identity="$(stat -Lc '%d:%i:%u:%a:%F' -- \
+    "${build_receipt_parent}")" || exit 1
   if [[ -e "${build_receipt}" ]]; then
     echo "build requires an absent create-only receipt: ${build_receipt}" >&2
     exit 1
@@ -415,13 +2462,40 @@ if [[ "${1:-}" == "build" ]]; then
   require_submodule
   wsl_host_build_storage_init
   wsl_host_build_storage_probe "before-collection"
-  reject_docker_endpoint_overrides
-  require_docker
   validate_local_docker_build_endpoint
   acquire_evidence_build_lock
-elif [[ "${1:-}" != "class-study" ]]; then
+  if [[ -L "${build_receipt_parent}" || -L "${build_receipt}" ||
+        "$(stat -Lc '%d:%i:%u:%a:%F' -- "${build_receipt_parent}" 2>/dev/null)" != \
+          "${build_receipt_parent_identity}" || -e "${build_receipt}" ]]; then
+    echo "build lost its create-only receipt destination while waiting for lifecycle/build admission" >&2
+    exit 1
+  fi
+  # The build supervisor binds its durable taint to its physical working
+  # directory. Canonicalise that directory before both the taint scan and every
+  # Docker build so invocation from another caller directory cannot bypass the
+  # next-build interlock.
+  cd "${ROOT}"
+  _qcsd_verify_clean_build_checkout || {
+    echo "build requires an exact clean raw-byte Lab/Neqo checkout" >&2
+    exit 1
+  }
+  reject_unresolved_evidence_build
+  _QCSD_DOCKER_BUILD_DAEMON_ID="${build_docker_server_id}"
+  _QCSD_DOCKER_BUILD_LOCK_FD="${build_host_lock_fd}"
+elif [[ "${1:-}" != "class-study" && "${1:-}" != "etf-probe" ]]; then
   require_docker
   require_submodule
+fi
+
+# This host-side command deliberately creates only a disposable Docker veth
+# topology and a non-evidentiary capability receipt.  It remains outside the
+# campaign container and immutable BuFLO-study state, but shares the ordinary
+# endpoint pin and stale-supervisor admission gate before changing Docker
+# topology.  The Python module continues to own argument validation.
+if [[ "${1:-}" == "etf-probe" ]]; then
+  require_docker
+  echo "etf-probe is disabled: its nested Python Docker lifecycle is not yet supervised by the mandatory durable helper" >&2
+  exit 1
 fi
 
 if [[ "${1:-}" == "build" ]]; then
@@ -432,12 +2506,54 @@ if [[ "${1:-}" == "build" ]]; then
   collection_iid_path="${build_iid_dir}/collection.iid"
   prepare_iid_path="${build_iid_dir}/prepare.iid"
   reference_iid_path="${build_iid_dir}/reference.iid"
-  cleanup_build_iids() {
-    rm -f -- "${collection_iid_path}" "${prepare_iid_path}" "${reference_iid_path}"
-    rmdir -- "${build_iid_dir}" 2>/dev/null || true
+  build_iid_cleanup_entry_status=0
+  build_iid_cleanup_signal_status=0
+  build_iid_cleanup_complete=0
+  build_iid_cleanup_failure_status=0
+  build_iid_cleanup_active=0
+  _qcsd_latch_build_iid_cleanup_signal() {
+    local received_status="$1"
+    _qcsd_latch_lifetime_signal "${received_status}"
   }
-  trap cleanup_build_iids EXIT
-  docker --context "${build_docker_context}" build --pull --no-cache \
+  _qcsd_build_iid_cleanup_terminal_hook() {
+    # Test-only boundary override. Production intentionally does no work here.
+    :
+  }
+  cleanup_build_iids() {
+    # One arithmetic builtin publishes every handler-visible field before Bash
+    # can dispatch a pending terminal trap at the next command boundary.
+    (( build_iid_cleanup_entry_status = $1,
+       build_iid_cleanup_signal_status = _QCSD_LIFETIME_SIGNAL_STATUS,
+       build_iid_cleanup_complete = 0,
+       build_iid_cleanup_failure_status = 0,
+       build_iid_cleanup_active = 1,
+       _QCSD_LIFETIME_CLEANUP_ACTIVE = 1 ))
+    trap - EXIT
+    if ! rm -f -- \
+        "${collection_iid_path}" "${prepare_iid_path}" "${reference_iid_path}"; then
+      build_iid_cleanup_failure_status=1
+    fi
+    if ! rmdir -- "${build_iid_dir}" 2>/dev/null; then
+      build_iid_cleanup_failure_status=1
+    fi
+    # A terminal signal cannot interrupt deletion or disappear in the final
+    # check-to-exit window.  Any uncommitted build-transaction record is outside
+    # this IID directory and is deliberately left in place for the next-build
+    # interlock to audit.
+    build_iid_cleanup_complete=1
+    _qcsd_build_iid_cleanup_terminal_hook
+    if (( build_iid_cleanup_entry_status != 0 )); then
+      exit "${build_iid_cleanup_entry_status}"
+    elif (( _QCSD_LIFETIME_SIGNAL_STATUS != 0 )); then
+      exit "${_QCSD_LIFETIME_SIGNAL_STATUS}"
+    else
+      exit "${build_iid_cleanup_failure_status}"
+    fi
+  }
+  trap 'cleanup_build_iids "$?"' EXIT
+  begin_evidence_build_transaction
+  _qcsd_verify_clean_build_checkout || exit 1
+  qcsd_run_docker_build docker --context "${build_docker_context}" build --pull --no-cache \
     --iidfile "${collection_iid_path}" \
     --target collection \
     --tag "${COLLECTION_IMAGE}" --file "${ROOT}/Dockerfile" "${ROOT}"
@@ -445,7 +2561,8 @@ if [[ "${1:-}" == "build" ]]; then
   verify_built_image_binding collection "${COLLECTION_IMAGE}" "${collection_id}"
   wsl_host_build_storage_probe "before-prepare"
   validate_local_docker_build_endpoint
-  docker --context "${build_docker_context}" build --pull --no-cache \
+  _qcsd_verify_clean_build_checkout || exit 1
+  qcsd_run_docker_build docker --context "${build_docker_context}" build --pull --no-cache \
     --iidfile "${prepare_iid_path}" \
     --target prepare \
     --tag "${PREPARE_IMAGE}" --file "${ROOT}/Dockerfile" "${ROOT}"
@@ -453,7 +2570,8 @@ if [[ "${1:-}" == "build" ]]; then
   verify_built_image_binding prepare "${PREPARE_IMAGE}" "${prepare_id}"
   wsl_host_build_storage_probe "before-reference"
   validate_local_docker_build_endpoint
-  docker --context "${build_docker_context}" build --pull --no-cache \
+  _qcsd_verify_clean_build_checkout || exit 1
+  qcsd_run_docker_build docker --context "${build_docker_context}" build --pull --no-cache \
     --iidfile "${reference_iid_path}" \
     --target reference \
     --tag "${REFERENCE_IMAGE}" --file "${ROOT}/Dockerfile" "${ROOT}"
@@ -470,39 +2588,44 @@ print(json.dumps([json.loads(line) for line in sys.stdin if line.strip()], separ
   verify_built_image_binding collection "${COLLECTION_IMAGE}" "${collection_id}"
   verify_built_image_binding prepare "${PREPARE_IMAGE}" "${prepare_id}"
   verify_built_image_binding reference "${REFERENCE_IMAGE}" "${reference_id}"
-  collection_source="$(
-    docker --context "${build_docker_context}" run --rm --entrypoint /bin/cat \
-      "${collection_id}" /usr/share/qcsd-lab/source.json
-  )"
-  prepare_source="$(
-    docker --context "${build_docker_context}" run --rm --entrypoint /bin/cat \
-      "${prepare_id}" /usr/share/qcsd-lab/source.json
-  )"
-  reference_source="$(
-    docker --context "${build_docker_context}" run --rm --entrypoint /bin/cat \
-      "${reference_id}" /usr/share/qcsd-lab/source.json
-  )"
-  if [[ "${collection_source}" != "${prepare_source}" ||
-        "${collection_source}" != "${reference_source}" ]]; then
+  QCSD_DOCKER_OUTPUT_COLLECTION_SOURCE=""
+  QCSD_DOCKER_OUTPUT_PREPARE_SOURCE=""
+  QCSD_DOCKER_OUTPUT_REFERENCE_SOURCE=""
+  qcsd_capture_attached_docker_output QCSD_DOCKER_OUTPUT_COLLECTION_SOURCE \
+    docker --context "${build_docker_context}" run \
+    --entrypoint /bin/cat "${collection_id}" /usr/share/qcsd-lab/source.json
+  qcsd_capture_attached_docker_output QCSD_DOCKER_OUTPUT_PREPARE_SOURCE \
+    docker --context "${build_docker_context}" run \
+    --entrypoint /bin/cat "${prepare_id}" /usr/share/qcsd-lab/source.json
+  qcsd_capture_attached_docker_output QCSD_DOCKER_OUTPUT_REFERENCE_SOURCE \
+    docker --context "${build_docker_context}" run \
+    --entrypoint /bin/cat "${reference_id}" /usr/share/qcsd-lab/source.json
+  if [[ "${QCSD_DOCKER_OUTPUT_COLLECTION_SOURCE}" != \
+        "${QCSD_DOCKER_OUTPUT_PREPARE_SOURCE}" ||
+        "${QCSD_DOCKER_OUTPUT_COLLECTION_SOURCE}" != \
+        "${QCSD_DOCKER_OUTPUT_REFERENCE_SOURCE}" ]]; then
     echo "qcsd-lab image roles were built from different source snapshots" >&2
     exit 1
   fi
-  collection_build_inputs="$(
-    docker --context "${build_docker_context}" run --rm --entrypoint /bin/cat \
-      "${collection_id}" /usr/share/qcsd-lab/study-build-inputs.json
-  )"
-  prepare_build_inputs="$(
-    docker --context "${build_docker_context}" run --rm --entrypoint /bin/cat \
-      "${prepare_id}" /usr/share/qcsd-lab/study-build-inputs.json
-  )"
-  if [[ "${collection_build_inputs}" != "${prepare_build_inputs}" ]]; then
+  QCSD_DOCKER_OUTPUT_COLLECTION_BUILD_INPUTS=""
+  QCSD_DOCKER_OUTPUT_PREPARE_BUILD_INPUTS=""
+  qcsd_capture_attached_docker_output QCSD_DOCKER_OUTPUT_COLLECTION_BUILD_INPUTS \
+    docker --context "${build_docker_context}" run \
+    --entrypoint /bin/cat \
+    "${collection_id}" /usr/share/qcsd-lab/study-build-inputs.json
+  qcsd_capture_attached_docker_output QCSD_DOCKER_OUTPUT_PREPARE_BUILD_INPUTS \
+    docker --context "${build_docker_context}" run \
+    --entrypoint /bin/cat \
+    "${prepare_id}" /usr/share/qcsd-lab/study-build-inputs.json
+  if [[ "${QCSD_DOCKER_OUTPUT_COLLECTION_BUILD_INPUTS}" != \
+        "${QCSD_DOCKER_OUTPUT_PREPARE_BUILD_INPUTS}" ]]; then
     echo "qcsd-lab image roles used different build inputs" >&2
     exit 1
   fi
-  collection_repo_digests="$(docker --context "${build_docker_context}" image inspect --format '{{json .RepoDigests}}' "${collection_id}")"
-  prepare_repo_digests="$(docker --context "${build_docker_context}" image inspect --format '{{json .RepoDigests}}' "${prepare_id}")"
-  reference_repo_digests="$(docker --context "${build_docker_context}" image inspect --format '{{json .RepoDigests}}' "${reference_id}")"
-  build_docker_version="$(docker --context "${build_docker_context}" version --format '{{json .}}')"
+  collection_repo_digests="$(_qcsd_docker_api --context "${build_docker_context}" image inspect --format '{{json .RepoDigests}}' "${collection_id}")"
+  prepare_repo_digests="$(_qcsd_docker_api --context "${build_docker_context}" image inspect --format '{{json .RepoDigests}}' "${prepare_id}")"
+  reference_repo_digests="$(_qcsd_docker_api --context "${build_docker_context}" image inspect --format '{{json .RepoDigests}}' "${reference_id}")"
+  build_docker_version="$(_qcsd_docker_api --context "${build_docker_context}" version --format '{{json .}}')"
   validate_local_docker_build_endpoint
   build_finished_unix_ns="$(date +%s%N)"
   COLLECTION_ID="${collection_id}" \
@@ -511,11 +2634,11 @@ print(json.dumps([json.loads(line) for line in sys.stdin if line.strip()], separ
   PREPARE_REPO_DIGESTS="${prepare_repo_digests}" \
   REFERENCE_ID="${reference_id}" \
   REFERENCE_REPO_DIGESTS="${reference_repo_digests}" \
-  COLLECTION_SOURCE="${collection_source}" \
-  PREPARE_SOURCE="${prepare_source}" \
-  REFERENCE_SOURCE="${reference_source}" \
-  COLLECTION_BUILD_INPUTS="${collection_build_inputs}" \
-  PREPARE_BUILD_INPUTS="${prepare_build_inputs}" \
+  COLLECTION_SOURCE="${QCSD_DOCKER_OUTPUT_COLLECTION_SOURCE}" \
+  PREPARE_SOURCE="${QCSD_DOCKER_OUTPUT_PREPARE_SOURCE}" \
+  REFERENCE_SOURCE="${QCSD_DOCKER_OUTPUT_REFERENCE_SOURCE}" \
+  COLLECTION_BUILD_INPUTS="${QCSD_DOCKER_OUTPUT_COLLECTION_BUILD_INPUTS}" \
+  PREPARE_BUILD_INPUTS="${QCSD_DOCKER_OUTPUT_PREPARE_BUILD_INPUTS}" \
   BUILD_DOCKER_VERSION="${build_docker_version}" \
   BUILD_DOCKER_CONTEXT="${build_docker_context}" \
   BUILD_DOCKER_ENDPOINT="${build_docker_endpoint}" \
@@ -593,7 +2716,7 @@ for target in ("collection", "prepare", "reference"):
         {
             "target": target,
             "argv": [
-                "docker", "--context", os.environ["BUILD_DOCKER_CONTEXT"],
+                "docker", "--host", os.environ["BUILD_DOCKER_ENDPOINT"],
                 "build", "--pull", "--no-cache", "--iidfile",
                 os.environ[f"{target.upper()}_IID_PATH"], "--target", target,
                 "--tag", images[target]["tag"], "--file",
@@ -642,7 +2765,7 @@ host_storage = {
 }
 
 value = {
-    "schema_version": 2,
+    "schema_version": 3,
     "artifact_type": "qcsd-buflo-study-no-cache-build-execution",
     "cohort_version": int(os.environ["BUILD_COHORT_VERSION"]),
     "started_at": stamp(started_ns),
@@ -705,6 +2828,7 @@ try:
 finally:
     os.close(directory)
 PY
+  complete_evidence_build_transaction
   echo "Created no-cache build receipt: ${build_receipt}"
   exit 0
 fi
@@ -877,7 +3001,10 @@ class_study_action=""
 class_study_stage=""
 class_study_execute=0
 class_study_live=0
+class_acquisition_max_candidates=""
+class_acquisition_timeout_ms=""
 class_container_args=()
+class_image_command=()
 class_result_hosts=()
 class_regression_result_hosts=()
 class_controlled_result_hosts=()
@@ -1109,7 +3236,7 @@ for filename in (
   class_final_qualification_manifest="${class_final_qualification_root}/_qualification-set.json"
   class_study_action="${2:-}"
   case "${class_study_action}" in
-    status|acquisition-init|acquisition-run|acquisition-status|acquisition-complete|stability|cohort|campaigns|fit-numeric|prefix-specs|qualify-prefix|finalize-fitting|capture|resume|export|evaluate|foundation|readiness|historical-snapshot|comparison-review|attest|successor-policy|successor-decision|successor-restart|successor-verify|verify) ;;
+    status|acquisition-init|acquisition-run|acquisition-status|acquisition-admission|acquisition-complete|stability|cohort|campaigns|fit-numeric|prefix-specs|qualify-prefix|finalize-fitting|capture|resume|export|evaluate|foundation|readiness|historical-snapshot|comparison-review|attest|successor-policy|successor-decision|successor-restart|successor-verify|verify) ;;
     *)
       echo "class-study requires one recognised action" >&2
       exit 2
@@ -1159,6 +3286,10 @@ for filename in (
           class_study_stage="${class_value}"
         elif [[ "${class_flag}" == "--qualification-workload" ]]; then
           class_study_live=1
+        elif [[ "${class_flag}" == "--acquisition-max-candidates" ]]; then
+          class_acquisition_max_candidates="${class_value}"
+        elif [[ "${class_flag}" == "--acquisition-timeout-ms" ]]; then
+          class_acquisition_timeout_ms="${class_value}"
         fi
         class_index=$((class_index + 1))
         continue
@@ -1209,6 +3340,71 @@ for filename in (
       class_fresh_layout=1
       ;;
   esac
+
+  if [[ "${class_study_action}" == "acquisition-run" &&
+        ( "${class_acquisition_max_candidates}" != "1" ||
+          "${class_acquisition_timeout_ms}" != "60000" ) ]]; then
+    echo "class-study acquisition-run requires the canonical one-candidate action bounds" >&2
+    exit 2
+  fi
+  if [[ "${class_study_action}" == "acquisition-admission" ||
+        "${class_study_action}" == "acquisition-run" ||
+        "${class_study_action}" == "acquisition-status" ]]; then
+    # Admission, status, and mutation are private capabilities of the canonical
+    # watcher.  Reject direct public use before validating any study paths or
+    # inspecting Docker.  The internal verifier binds this exact argv, source,
+    # cgroup, and live WATCH-lock owner to one create-only scope request.
+    if [[ "${class_study_action}" == "acquisition-admission" && $# != 2 ]]; then
+      echo "class-study acquisition-admission accepts no arguments" >&2
+      exit 2
+    fi
+    if [[ ! -x /usr/bin/python3 ]]; then
+      echo "class-study ${class_study_action} requires /usr/bin/python3" >&2
+      exit 1
+    fi
+    if [[ -z "${QCSD_CLASS_WATCH_STATE_ROOT:-}" ||
+          -z "${QCSD_CLASS_WATCH_SCOPE_ROOT:-}" ||
+          -z "${QCSD_CLASS_WATCH_REQUEST_AUTHORITY:-}" ||
+          -z "${QCSD_CLASS_WATCH_ACTION_SHA256:-}" ||
+          -z "${QCSD_CLASS_WATCH_SOURCE_BINDING_SHA256:-}" ]]; then
+      echo "class-study ${class_study_action} requires scoped request authority" >&2
+      exit 1
+    fi
+    class_watch_current_action_sha256="$(
+      /usr/bin/python3 -I - "${ROOT}/qcsd-lab" "${QCSD_ORIGINAL_ARGV[@]}" <<'PY'
+import hashlib
+import json
+import sys
+
+command = ["/usr/bin/bash", *sys.argv[1:]]
+payload = (json.dumps(command, indent=2, sort_keys=True, allow_nan=False) + "\n").encode()
+print(hashlib.sha256(payload).hexdigest())
+PY
+    )" || {
+      echo "class-study ${class_study_action} cannot bind its current action argv" >&2
+      exit 1
+    }
+    if [[ ! "${class_watch_current_action_sha256}" =~ ^[0-9a-f]{64}$ ||
+          "${class_watch_current_action_sha256}" != \
+            "${QCSD_CLASS_WATCH_ACTION_SHA256}" ]]; then
+      echo "class-study ${class_study_action} scoped request action does not match current argv" >&2
+      exit 1
+    fi
+    class_watch_scope_recovery=(
+      /usr/bin/python3 -I "${ROOT}/tools/class_acquisition_watch.py"
+      --recover-stale-scopes-internal
+      --state-root-internal "${QCSD_CLASS_WATCH_STATE_ROOT}"
+      --current-scope-root-internal "${QCSD_CLASS_WATCH_SCOPE_ROOT}"
+      --current-authority-internal "${QCSD_CLASS_WATCH_REQUEST_AUTHORITY}"
+      --expected-action-sha256-internal "${QCSD_CLASS_WATCH_ACTION_SHA256}"
+      --expected-source-binding-sha256-internal \
+        "${QCSD_CLASS_WATCH_SOURCE_BINDING_SHA256}"
+    )
+    "${class_watch_scope_recovery[@]}" >/dev/null || {
+      echo "class-study ${class_study_action} could not validate scoped watcher authority" >&2
+      exit 1
+    }
+  fi
   class_successor_mode=0
   if [[ -n "${class_path_hosts[--successor-restart]:-}" ]]; then
     class_successor_mode=1
@@ -1518,8 +3714,53 @@ for filename in (
   esac
 fi
 
+if [[ "${1:-}" == "class-study" &&
+      "${class_study_action}" == "acquisition-admission" ]]; then
+  # The first verifier pass cannot mutate Docker or the lifecycle namespace.
+  # The guarded inner repeats it immediately before authenticated stale-state
+  # recovery once the separate Docker lifecycle authority has been acquired.
+  require_docker
+  # The first pass execs the guardian and never returns.  Reaching here means
+  # the guarded inner process consumed exact GO and repeated the scoped watch
+  # check inside require_docker; the inherited authority is no longer needed.
+  unset QCSD_CLASS_WATCH_STATE_ROOT QCSD_CLASS_WATCH_SCOPE_ROOT
+  unset QCSD_CLASS_WATCH_REQUEST_AUTHORITY QCSD_CLASS_WATCH_ACTION_SHA256
+  unset QCSD_CLASS_WATCH_SOURCE_BINDING_SHA256
+  class_admission_observed_server_id="$(_qcsd_docker_api info --format '{{.ID}}')" ||
+    class_admission_observed_server_id=""
+  if [[ "${class_admission_observed_server_id}" != \
+        "${_QCSD_DOCKER_PINNED_SERVER_ID}" ]]; then
+    echo "class-study acquisition-admission Docker daemon changed before publication" >&2
+    exit 1
+  fi
+  IFS= read -r class_admission_boot_id </proc/sys/kernel/random/boot_id ||
+    class_admission_boot_id=""
+  if [[ ! "${class_admission_boot_id}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+    echo "class-study acquisition-admission cannot bind the host boot identity" >&2
+    exit 1
+  fi
+  printf '{\n'
+  printf '  "artifact_type": "qcsd-class-study-docker-admission",\n'
+  printf '  "docker_context": "%s",\n' "${_QCSD_DOCKER_PINNED_CONTEXT}"
+  printf '  "docker_host": "%s",\n' "${_QCSD_DOCKER_PINNED_HOST}"
+  printf '  "docker_server_id": "%s",\n' "${_QCSD_DOCKER_PINNED_SERVER_ID}"
+  printf '  "host_boot_id": "%s",\n' "${class_admission_boot_id}"
+  printf '  "schema_version": 1\n'
+  printf '}\n'
+  exit 0
+fi
+
 if [[ "${1:-}" == "class-study" ]]; then
   require_docker
+  if [[ "${class_study_action}" == "acquisition-run" ||
+        "${class_study_action}" == "acquisition-status" ]]; then
+    # The guarded inner repeated the exact watcher-scope validation immediately
+    # before Docker recovery.  Do not retain its one-action capability beyond
+    # that admission boundary.
+    unset QCSD_CLASS_WATCH_STATE_ROOT QCSD_CLASS_WATCH_SCOPE_ROOT
+    unset QCSD_CLASS_WATCH_REQUEST_AUTHORITY QCSD_CLASS_WATCH_ACTION_SHA256
+    unset QCSD_CLASS_WATCH_SOURCE_BINDING_SHA256
+  fi
   require_submodule
 fi
 
@@ -1665,6 +3906,9 @@ case "${1:-}" in
   run|resume|verify|analyze|fit|buflo-study|class-study|test) image="${COLLECTION_IMAGE}" ;;
   *) usage; exit 2 ;;
 esac
+if [[ "${1:-}" == "test" && "${2:-}" == "pinned-cdp" ]]; then
+  image="${PREPARE_IMAGE}"
+fi
 if [[ "${1:-}" == "buflo-study" && "${2:-}" == "reference" ]]; then
   image="${REFERENCE_IMAGE}"
 fi
@@ -1674,7 +3918,7 @@ if [[ "${1:-}" == "class-study" &&
   image="${PREPARE_IMAGE}"
 fi
 
-if ! docker image inspect "${image}" >/dev/null 2>&1; then
+if ! _qcsd_docker_api image inspect "${image}" >/dev/null 2>&1; then
   echo "Missing image ${image}; run: ./qcsd-lab build" >&2
   exit 1
 fi
@@ -1689,7 +3933,7 @@ fi
 if [[ "${1:-}" == "buflo-study" && "${2:-}" == "qualify" &&
       "${QCSD_BUFLO_QUALIFY_VERIFY_ONLY:-0}" != "1" &&
       "${QCSD_BUFLO_QUALIFY_CONTROLLED_ONLY:-0}" != "1" ]]; then
-  if ! docker image inspect "${PREPARE_IMAGE}" >/dev/null 2>&1; then
+  if ! _qcsd_docker_api image inspect "${PREPARE_IMAGE}" >/dev/null 2>&1; then
     echo "Missing image ${PREPARE_IMAGE}; run: ./qcsd-lab build" >&2
     exit 1
   fi
@@ -1862,7 +4106,7 @@ elif [[ "${1:-}" == "derive-chaff-prefix-specs" ||
 else
   mkdir -p "${ROOT}/results" "${ROOT}/artifacts" "${ROOT}/config/workloads"
 fi
-image_id="$(docker image inspect --format '{{.Id}}' "${image}")"
+image_id="$(_qcsd_docker_api image inspect --format '{{.Id}}' "${image}")"
 buflo_host_lock_fd=""
 class_host_lock_fd=""
 class_acquisition_lock_fd=""
@@ -1954,15 +4198,16 @@ if [[ ( "${1:-}" == "run" &&
     exit 1
   fi
   study_build_execution="$(/bin/cat "${study_build_execution_path}")"
-  study_docker_version="$(docker version --format '{{json .}}')"
-  study_docker_info="$(docker info --format '{{json .}}')"
-  study_build_inputs="$(
-    docker run --rm --entrypoint /bin/cat \
-      "${image_id}" /usr/share/qcsd-lab/study-build-inputs.json
-  )"
-  study_container_clock="$(
-    docker run --rm --network none --entrypoint /usr/bin/python3 \
-      "${image_id}" -c '
+  study_docker_version="$(_qcsd_docker_api version --format '{{json .}}')"
+  study_docker_info="$(_qcsd_docker_api info --format '{{json .}}')"
+  QCSD_DOCKER_OUTPUT_STUDY_BUILD_INPUTS=""
+  qcsd_capture_attached_docker_output QCSD_DOCKER_OUTPUT_STUDY_BUILD_INPUTS \
+    docker run --entrypoint /bin/cat \
+    "${image_id}" /usr/share/qcsd-lab/study-build-inputs.json
+  QCSD_DOCKER_OUTPUT_STUDY_CONTAINER_CLOCK=""
+  qcsd_capture_attached_docker_output QCSD_DOCKER_OUTPUT_STUDY_CONTAINER_CLOCK \
+    docker run --network none --entrypoint /usr/bin/python3 \
+    "${image_id}" -c '
 import json, time
 print(json.dumps({
     "source": "python-clock-gettime-inside-collection-image",
@@ -1975,15 +4220,15 @@ print(json.dumps({
     "monotonic_ns": time.monotonic_ns(),
 }, sort_keys=True, separators=(",", ":")))
 '
-  )"
-  study_repo_digests="$(docker image inspect --format '{{json .RepoDigests}}' "${image_id}")"
+  study_repo_digests="$(_qcsd_docker_api image inspect \
+    --format '{{json .RepoDigests}}' "${image_id}")"
   study_environment_b64="$(
     QCSD_STUDY_DOCKER_VERSION="${study_docker_version}" \
     QCSD_STUDY_DOCKER_INFO="${study_docker_info}" \
-    QCSD_STUDY_BUILD_INPUTS="${study_build_inputs}" \
+    QCSD_STUDY_BUILD_INPUTS="${QCSD_DOCKER_OUTPUT_STUDY_BUILD_INPUTS}" \
     QCSD_STUDY_BUILD_EXECUTION="${study_build_execution}" \
     QCSD_STUDY_BUILD_EXECUTION_SHA256="${study_build_execution_sha256}" \
-    QCSD_STUDY_CONTAINER_CLOCK="${study_container_clock}" \
+    QCSD_STUDY_CONTAINER_CLOCK="${QCSD_DOCKER_OUTPUT_STUDY_CONTAINER_CLOCK}" \
     QCSD_STUDY_REPO_DIGESTS="${study_repo_digests}" \
     QCSD_STUDY_IMAGE_ID="${image_id}" \
     QCSD_STUDY_CAPTURE_SCHEDULER_CONTRACT="${study_capture_scheduler_contract}" \
@@ -2202,23 +4447,32 @@ fi
 
 verify_qualification_checkout() {
   local operation="${1:-qualification/capture}"
+  _qcsd_verify_git_checkout_binding "${ROOT}" "${ROOT}/.git" &&
+    _qcsd_verify_git_checkout_binding "${ROOT}/neqo-qcsd" \
+      "${ROOT}/.git/modules/third_party/neqo-qcsd" &&
+    _qcsd_verify_git_index_bytes "${ROOT}" &&
+    _qcsd_verify_git_index_bytes "${ROOT}/neqo-qcsd" || {
+    echo "${operation} refuses redirected Git worktree or gitdir state" >&2
+    exit 1
+  }
   command -v python3 >/dev/null 2>&1 || {
     echo "${operation} requires python3 on the host for source verification" >&2
     exit 1
   }
-  local metadata
+  local QCSD_DOCKER_OUTPUT_METADATA=""
   local -a image_source=()
-  metadata="$(docker run --rm --entrypoint /bin/cat "${image_id}" /usr/share/qcsd-lab/source.json)"
+  qcsd_capture_attached_docker_output QCSD_DOCKER_OUTPUT_METADATA docker run \
+    --entrypoint /bin/cat "${image_id}" /usr/share/qcsd-lab/source.json
   mapfile -t image_source < <(
-    python3 -I -c 'import json,sys; v=json.load(sys.stdin); print(v["lab_commit"]); print(str(v["lab_dirty"]).lower()); print(v["lab_patch_sha256"]); print(v["neqo_commit"]); print(v["neqo_pinned_commit"]); print(str(v["neqo_dirty"]).lower()); print(v["neqo_patch_sha256"])' <<<"${metadata}"
+    python3 -I -c 'import json,sys; v=json.load(sys.stdin); print(v["lab_commit"]); print(str(v["lab_dirty"]).lower()); print(v["lab_patch_sha256"]); print(v["neqo_commit"]); print(v["neqo_pinned_commit"]); print(str(v["neqo_dirty"]).lower()); print(v["neqo_patch_sha256"])' <<<"${QCSD_DOCKER_OUTPUT_METADATA}"
   )
   local empty_sha="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
   local lab_head neqo_head neqo_pin
-  lab_head="$(git -C "${ROOT}" rev-parse HEAD)"
-  neqo_head="$(git -C "${ROOT}/neqo-qcsd" rev-parse HEAD)"
-  neqo_pin="$(git -C "${ROOT}" ls-files --stage -- neqo-qcsd | awk '$1 == 160000 {print $2}')"
-  if [[ -n "$(git -C "${ROOT}" status --porcelain --untracked-files=all)" ]] ||
-     [[ -n "$(git -C "${ROOT}/neqo-qcsd" status --porcelain --untracked-files=all)" ]] ||
+  lab_head="$(_qcsd_trusted_git -C "${ROOT}" rev-parse HEAD)"
+  neqo_head="$(_qcsd_trusted_git -C "${ROOT}/neqo-qcsd" rev-parse HEAD)"
+  neqo_pin="$(_qcsd_trusted_git -C "${ROOT}" ls-files --stage -- neqo-qcsd | awk '$1 == 160000 {print $2}')"
+  if [[ -n "$(_qcsd_trusted_git -C "${ROOT}" status --porcelain --untracked-files=all)" ]] ||
+     [[ -n "$(_qcsd_trusted_git -C "${ROOT}/neqo-qcsd" status --porcelain --untracked-files=all)" ]] ||
      [[ "${#image_source[@]}" -ne 7 ]] ||
      [[ "${image_source[0]}" != "${lab_head}" ]] ||
      [[ "${image_source[1]}" != "false" ]] ||
@@ -2233,25 +4487,34 @@ verify_qualification_checkout() {
 }
 
 verify_fit_neqo_checkout() {
+  _qcsd_verify_git_checkout_binding "${ROOT}" "${ROOT}/.git" &&
+    _qcsd_verify_git_checkout_binding "${ROOT}/neqo-qcsd" \
+      "${ROOT}/.git/modules/third_party/neqo-qcsd" &&
+    _qcsd_verify_git_index_bytes "${ROOT}/neqo-qcsd" || {
+    echo "fit refuses redirected Git worktree or gitdir state" >&2
+    exit 1
+  }
   command -v python3 >/dev/null 2>&1 || {
     echo "fit requires python3 on the host for Neqo source verification" >&2
     exit 1
   }
-  local empty_sha metadata image_neqo image_pin image_neqo_dirty image_neqo_patch
+  local empty_sha QCSD_DOCKER_OUTPUT_METADATA=""
+  local image_neqo image_pin image_neqo_dirty image_neqo_patch
   local neqo_head head_gitlink index_gitlink
   local -a image_neqo_source=()
   empty_sha="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-  metadata="$(docker run --rm --entrypoint /bin/cat "${image_id}" /usr/share/qcsd-lab/source.json)"
+  qcsd_capture_attached_docker_output QCSD_DOCKER_OUTPUT_METADATA docker run \
+    --entrypoint /bin/cat "${image_id}" /usr/share/qcsd-lab/source.json
   mapfile -t image_neqo_source < <(
-    python3 -I -c 'import json,sys; v=json.load(sys.stdin); print(v["neqo_commit"]); print(v["neqo_pinned_commit"]); print(str(v["neqo_dirty"]).lower()); print(v["neqo_patch_sha256"])' <<<"${metadata}"
+    python3 -I -c 'import json,sys; v=json.load(sys.stdin); print(v["neqo_commit"]); print(v["neqo_pinned_commit"]); print(str(v["neqo_dirty"]).lower()); print(v["neqo_patch_sha256"])' <<<"${QCSD_DOCKER_OUTPUT_METADATA}"
   )
   image_neqo="${image_neqo_source[0]:-}"
   image_pin="${image_neqo_source[1]:-}"
   image_neqo_dirty="${image_neqo_source[2]:-}"
   image_neqo_patch="${image_neqo_source[3]:-}"
-  neqo_head="$(git -C "${ROOT}/neqo-qcsd" rev-parse HEAD)"
-  head_gitlink="$(git -C "${ROOT}" rev-parse HEAD:neqo-qcsd)"
-  index_gitlink="$(git -C "${ROOT}" ls-files --stage -- neqo-qcsd | awk '$1 == 160000 {print $2}')"
+  neqo_head="$(_qcsd_trusted_git -C "${ROOT}/neqo-qcsd" rev-parse HEAD)"
+  head_gitlink="$(_qcsd_trusted_git -C "${ROOT}" rev-parse HEAD:neqo-qcsd)"
+  index_gitlink="$(_qcsd_trusted_git -C "${ROOT}" ls-files --stage -- neqo-qcsd | awk '$1 == 160000 {print $2}')"
   if [[ "${#image_neqo_source[@]}" -ne 4 ]] ||
      [[ ! "${image_neqo}" =~ ^[0-9a-f]{40}$ ]] ||
      [[ "${image_neqo}" != "${image_pin}" ]] ||
@@ -2260,7 +4523,7 @@ verify_fit_neqo_checkout() {
      [[ "${neqo_head}" != "${image_neqo}" ]] ||
      [[ "${head_gitlink}" != "${image_neqo}" ]] ||
      [[ "${index_gitlink}" != "${image_neqo}" ]] ||
-     [[ -n "$(git -C "${ROOT}/neqo-qcsd" status --porcelain --untracked-files=all)" ]]; then
+     [[ -n "$(_qcsd_trusted_git -C "${ROOT}/neqo-qcsd" status --porcelain --untracked-files=all)" ]]; then
     echo "fit requires the exact clean Neqo commit and parent gitlink embedded in the image" >&2
     exit 1
   fi
@@ -2278,7 +4541,7 @@ if [[ "${1:-}" == "run" &&
 fi
 if [[ "${study_resume_public}" == "1" ]]; then
   verify_qualification_checkout "buflo study campaign resume"
-  docker run --rm --network none \
+  qcsd_run_attached_docker docker run --network none \
     --security-opt no-new-privileges --cap-drop ALL \
     --env "QCSD_LAB_IMAGE_DIGEST=${image_id}" \
     --volume "${ROOT}:/lab:ro" --workdir /lab \
@@ -2308,16 +4571,16 @@ fi
 capture_scheduler_host_partition_b64() {
   local docker_ncpu inspect_json
   local -a study_container_ids=()
-  docker_ncpu="$(docker info --format '{{.NCPU}}')"
+  docker_ncpu="$(_qcsd_docker_api info --format '{{.NCPU}}')"
   if [[ ! "${docker_ncpu}" =~ ^[0-9]+$ ]] || (( docker_ncpu <= 11 )); then
     echo "capture scheduler requires at least 12 Docker CPUs" >&2
     return 1
   fi
   mapfile -t study_container_ids < <(
-    docker ps --format '{{.ID}}'
+    _qcsd_docker_api ps --format '{{.ID}}'
   )
   if (( ${#study_container_ids[@]} )); then
-    inspect_json="$(docker container inspect "${study_container_ids[@]}")"
+    inspect_json="$(_qcsd_docker_api container inspect "${study_container_ids[@]}")"
   else
     inspect_json='[]'
   fi
@@ -2339,8 +4602,18 @@ if contract not in {
     raise SystemExit(f"capture scheduler contract is invalid: {contract!r}")
 kernel_timed = contract == "qcsd-client-rr1-cpu10-etf-helper-cpu11-v1"
 protected_cpus = [CLIENT_CPU, HELPER_CPU] if kernel_timed else [CLIENT_CPU]
-expected = sys.argv[3:]
-if len(expected) != len(set(expected)) or any(not item for item in expected):
+expected_arguments = sys.argv[3:]
+if len(expected_arguments) % 2:
+    raise SystemExit("capture scheduler expected-sidecar pairs are incomplete")
+expected_names = expected_arguments[::2]
+expected_ids = expected_arguments[1::2]
+expected_pairs = set(zip(expected_names, expected_ids, strict=True))
+if (
+    len(expected_names) != len(set(expected_names))
+    or len(expected_ids) != len(set(expected_ids))
+    or any(not item for item in expected_names)
+    or any(re.fullmatch(r"[0-9a-f]{64}", item) is None for item in expected_ids)
+):
     raise SystemExit("capture scheduler expected-sidecar list is invalid")
 try:
     inspected = json.load(sys.stdin)
@@ -2385,7 +4658,7 @@ for item in inspected:
         "role": labels.get("org.qcsd.role", ""),
         "configured_cpuset": configured,
         "effective_cpus": effective,
-        "expected_sidecar": name in expected,
+        "expected_sidecar": (name, item.get("Id")) in expected_pairs,
     }
     if kernel_timed:
         container["protected_cpu_overlaps"] = [
@@ -2395,8 +4668,8 @@ for item in inspected:
         container["client_cpu_overlap"] = CLIENT_CPU in effective
     containers.append(container)
 containers.sort(key=lambda item: (item["name"], item["id"]))
-observed_names = {item["name"] for item in containers}
-container_set_matches_expected = set(expected) == observed_names
+observed_pairs = {(item["name"], item["id"]) for item in containers}
+container_set_matches_expected = expected_pairs == observed_pairs
 for item in containers:
     if item["expected_sidecar"] and item["effective_cpus"] != list(range(CLIENT_CPU)):
         raise SystemExit(
@@ -2418,7 +4691,7 @@ value = {
     "captured_at_unix_ns": time.time_ns(),
     "owner_label": "org.qcsd.owner=qcsd-lab",
     "docker_ncpu": docker_ncpu,
-    "expected_sidecar_names": expected,
+    "expected_sidecar_names": expected_names,
     "running_study_containers": containers,
     "running_container_set_matches_expected": container_set_matches_expected,
     "unavailable_scope": [
@@ -2466,14 +4739,15 @@ if [[ -n "${study_capture_scheduler_contract}" ]]; then
   scheduler_host_partition_b64="$(capture_scheduler_host_partition_b64)"
 fi
 
-runtime=(--rm --security-opt no-new-privileges)
+runtime=(--security-opt no-new-privileges)
 runtime+=(
   --label "org.qcsd.owner=qcsd-lab"
   --label "org.qcsd.study=qcsd-workspace"
   --label "org.qcsd.role=command"
 )
 network_mode="bridge"
-if [[ "${1:-}" == "fit" || "${1:-}" == "derive-chaff-prefix-specs" ||
+if [[ ( "${1:-}" == "test" && "${2:-}" == "pinned-cdp" ) ||
+      "${1:-}" == "fit" || "${1:-}" == "derive-chaff-prefix-specs" ||
       ( "${1:-}" == "buflo-study" && "${2:-}" == "reference" ) ||
       ( "${1:-}" == "class-study" &&
         "${class_study_action}" != "acquisition-run" &&
@@ -2484,13 +4758,38 @@ if [[ "${1:-}" == "fit" || "${1:-}" == "derive-chaff-prefix-specs" ||
             "${class_study_execute}" == "1" ) ) ]]; then
   network_mode="none"
 fi
-if [[ "${1:-}" == "prepare" || "${1:-}" == "derive-chaff-prefix-specs" ||
+if [[ "${1:-}" == "test" && "${2:-}" == "pinned-cdp" ]]; then
+  runtime+=(--user "$(id -u):$(id -g)" --cap-drop ALL)
+elif [[ "${1:-}" == "class-study" &&
+      ! ( ( "${class_study_action}" == "capture" ||
+            "${class_study_action}" == "resume" ) &&
+          "${class_study_execute}" == "1" ) ]]; then
+  # Every class-study action other than execute-mode capture/resume runs
+  # without packet or network-administration capabilities.  Bypass
+  # collection-entrypoint, whose sole purpose is privileged capture setup,
+  # while retaining tini as PID 1 for signal forwarding and child reaping.
+  # The explicit host identity also keeps every writable class-study overlay
+  # usable by its creating user.
+  runtime+=(
+    --user "$(id -u):$(id -g)"
+    --cap-drop ALL
+    --entrypoint /usr/bin/tini
+  )
+  if [[ "${class_study_action}" == "acquisition-run" ]]; then
+    # Bound the complete in-container coordinator action, not merely each
+    # browser navigation. INT starts the normal evidence cleanup path; KILL is
+    # reserved for a cleanup path that exceeds the documented 120-second
+    # supervisor envelope.
+    class_image_command=(
+      -- /usr/bin/timeout --signal=INT --kill-after=120s 1800s
+      /usr/local/bin/qcsd-lab-internal
+    )
+  else
+    class_image_command=(-- /usr/local/bin/qcsd-lab-internal)
+  fi
+elif [[ "${1:-}" == "prepare" || "${1:-}" == "derive-chaff-prefix-specs" ||
       ( "${1:-}" == "buflo-study" && "${2:-}" == "reference" ) ||
-      "${1:-}" == "qualify-chaff" || "${1:-}" == "qualify-response-chaff" ||
-      ( "${1:-}" == "class-study" &&
-        ! ( ( "${class_study_action}" == "capture" ||
-              "${class_study_action}" == "resume" ) &&
-            "${class_study_execute}" == "1" ) ) ]]; then
+      "${1:-}" == "qualify-chaff" || "${1:-}" == "qualify-response-chaff" ]]; then
   runtime+=(--user "$(id -u):$(id -g)")
 else
   runtime+=(
@@ -2776,16 +5075,35 @@ if [[ "${1:-}" == "fit" ]]; then
 fi
 container+=(--workdir /lab)
 
-sidecars=()
+QCSD_DOCKER_IDS_SIDECARS=()
 cleanup_sidecars() {
   local cleanup_status=0
-  local name
-  for name in "${sidecars[@]}"; do
-    if ! docker rm -f "${name}" >/dev/null 2>&1; then
-      echo "cannot remove Docker sidecar ${name}" >&2
+  local cid state
+  for cid in "${QCSD_DOCKER_IDS_SIDECARS[@]}"; do
+    if [[ ! "${cid}" =~ ^[0-9a-f]{64}$ ]]; then
+      echo "refusing malformed Docker sidecar identity ${cid}" >&2
       cleanup_status=1
-    elif docker container inspect "${name}" >/dev/null 2>&1; then
-      echo "Docker sidecar ${name} remained after removal" >&2
+      continue
+    fi
+    state="$(_qcsd_docker_exact_id_presence "${cid}")"
+    if [[ "${state}" == "unknown" ]]; then
+      echo "Docker sidecar ${cid} disappeared before teardown (${state})" >&2
+      cleanup_status=1
+      continue
+    fi
+    if [[ "${state}" == "present" ]]; then
+      _qcsd_docker_api rm --force "${cid}" >/dev/null 2>&1 || true
+    else
+      echo "Docker sidecar ${cid} disappeared before teardown (${state})" >&2
+      cleanup_status=1
+    fi
+    state="$(_qcsd_docker_exact_id_presence "${cid}")"
+    if [[ "${state}" != "absent" ]]; then
+      echo "Docker sidecar ${cid} teardown state is ${state}" >&2
+      cleanup_status=1
+    elif ! qcsd_retire_docker_handoff \
+        run "${cid}" QCSD_DOCKER_IDS_SIDECARS; then
+      echo "Docker sidecar ${cid} handoff retirement failed" >&2
       cleanup_status=1
     fi
   done
@@ -2795,7 +5113,9 @@ cleanup_sidecars() {
 start_capture_acceptance_server() {
   local server_name="$1"
   local server_port="$2"
-  docker run --detach --name "${server_name}" \
+  local result_name="$3"
+  qcsd_run_detached_docker QCSD_DOCKER_IDS_SIDECARS \
+    docker run --name "${server_name}" \
     --network bridge \
     --cpuset-cpus 0-9 \
     --label "org.qcsd.owner=qcsd-lab" \
@@ -2808,17 +5128,22 @@ start_capture_acceptance_server() {
     "${image_id}" -eu -c \
     'ethtool -K eth0 gro off gso off tso off tx-udp-segmentation off
 exec /usr/local/bin/neqo-server "0.0.0.0:${QCSD_ACCEPTANCE_SERVER_PORT}"'
+  local -n result_ref="${result_name}"
+  result_ref="${QCSD_DOCKER_IDS_SIDECARS[-1]}"
+  unset -n result_ref
 }
 
 start_buflo_controlled_server() {
   local server_name="$1"
   local server_alias="$2"
   local server_port="$3"
-  local server_network="$4"
+  local server_network_id="$4"
   local client_subnet="$5"
   local router_server_ip="$6"
-  docker run --detach --name "${server_name}" \
-    --network "${server_network}" --network-alias "${server_alias}" \
+  local result_name="$7"
+  qcsd_run_detached_docker QCSD_DOCKER_IDS_SIDECARS \
+    docker run --name "${server_name}" \
+    --network "${server_network_id}" --network-alias "${server_alias}" \
     --cpuset-cpus 0-9 \
     --label "org.qcsd.owner=qcsd-lab" \
     --label "org.qcsd.study=buflo-controlled" \
@@ -2834,16 +5159,21 @@ start_buflo_controlled_server() {
 ip -4 route replace "${QCSD_CONTROLLED_CLIENT_SUBNET}" \
   via "${QCSD_CONTROLLED_ROUTER_SERVER_IP}" dev eth0
 exec /usr/local/bin/neqo-server "0.0.0.0:${QCSD_CONTROLLED_SERVER_PORT}"'
+  local -n result_ref="${result_name}"
+  result_ref="${QCSD_DOCKER_IDS_SIDECARS[-1]}"
+  unset -n result_ref
 }
 
 start_buflo_controlled_router() {
   local router_name="$1"
-  local client_network="$2"
-  local server_network="$3"
+  local client_network_id="$2"
+  local server_network_id="$3"
   local capture_root="$4"
   local capture_secret="$5"
-  docker run --detach --name "${router_name}" \
-    --network "${client_network}" \
+  local result_name="$6"
+  qcsd_run_detached_docker QCSD_DOCKER_IDS_SIDECARS \
+    docker run --name "${router_name}" \
+    --network "${client_network_id}" \
     --cpuset-cpus 0-9 \
     --label "org.qcsd.owner=qcsd-lab" \
     --label "org.qcsd.study=buflo-controlled" \
@@ -2858,20 +5188,21 @@ start_buflo_controlled_router() {
     --volume "${capture_root}:/kernel-tx:rw" \
     --entrypoint /usr/bin/python3 \
     "${image_id}" -m qcsd_lab.kernel_capture_router
-  # Register immediately after creation: a later network-connect or router
-  # validation failure must still leave the EXIT trap responsible for removal.
-  sidecars+=("${router_name}")
-  docker network connect --gw-priority -1 "${server_network}" "${router_name}"
-  docker exec "${router_name}" /bin/sh -eu -c '
+  local -n result_ref="${result_name}"
+  result_ref="${QCSD_DOCKER_IDS_SIDECARS[-1]}"
+  _qcsd_docker_api network connect --gw-priority -1 \
+    "${server_network_id}" "${result_ref}"
+  _qcsd_docker_api exec "${result_ref}" /bin/sh -eu -c '
 ethtool -K eth0 gro off gso off tso off tx-udp-segmentation off
 ethtool -K eth1 gro off gso off tso off tx-udp-segmentation off
 '
+  unset -n result_ref
 }
 
 configure_buflo_router() {
-  local router_name="$1"
+  local router_id="$1"
   local profile="$2"
-  docker exec "${router_name}" /bin/sh -eu -c '
+  _qcsd_docker_api exec "${router_id}" /bin/sh -eu -c '
 profile="$1"
 if ! ip link show dev ifb0 >/dev/null 2>&1; then
   ip link add ifb0 type ifb
@@ -2908,10 +5239,10 @@ fi
 }
 
 buflo_namespace_evidence() {
-  local container_name="$1"
+  local container_id="$1"
   local interfaces="$2"
   local include_router="$3"
-  docker exec "${container_name}" /usr/bin/python3 -c '
+  _qcsd_docker_api exec "${container_id}" /usr/bin/python3 -c '
 import json
 import subprocess
 import sys
@@ -2957,18 +5288,25 @@ print(json.dumps(value, sort_keys=True, separators=(",", ":")))
 
 buflo_controlled_evidence_base64() {
   local client_network="$1"
-  local server_network="$2"
-  local router_name="$3"
-  local first_server="$4"
-  local second_server="$5"
+  local client_network_id="$2"
+  local server_network="$3"
+  local server_network_id="$4"
+  local router_name="$5"
+  local router_id="$6"
+  local first_server="$7"
+  local first_server_id="$8"
+  local second_server="$9"
+  local second_server_id="${10}"
   local router_json first_server_json second_server_json
   local client_ipam server_ipam
-  router_json="$(buflo_namespace_evidence "${router_name}" "eth0,eth1,ifb0" 1)"
-  first_server_json="$(buflo_namespace_evidence "${first_server}" "eth0" 0)"
-  second_server_json="$(buflo_namespace_evidence "${second_server}" "eth0" 0)"
-  client_ipam="$(docker network inspect --format '{{json .IPAM.Config}}' "${client_network}")"
-  server_ipam="$(docker network inspect --format '{{json .IPAM.Config}}' "${server_network}")"
-  /usr/bin/python3 -c '
+  router_json="$(buflo_namespace_evidence "${router_id}" "eth0,eth1,ifb0" 1)"
+  first_server_json="$(buflo_namespace_evidence "${first_server_id}" "eth0" 0)"
+  second_server_json="$(buflo_namespace_evidence "${second_server_id}" "eth0" 0)"
+  client_ipam="$(_qcsd_docker_api network inspect \
+    --format '{{json .IPAM.Config}}' "${client_network_id}")"
+  server_ipam="$(_qcsd_docker_api network inspect \
+    --format '{{json .IPAM.Config}}' "${server_network_id}")"
+  /usr/bin/python3 -I -c '
 import base64
 import json
 import sys
@@ -3003,22 +5341,23 @@ print(base64.b64encode(encoded).decode("ascii"))
 
 buflo_kernel_tx_observer_binding_base64() {
   local client_network="$1"
-  local server_network="$2"
-  local router_name="$3"
-  local router_client_ip="$4"
-  local router_id router_image client_network_id server_network_id
+  local client_network_id="$2"
+  local server_network="$3"
+  local server_network_id="$4"
+  local router_name="$5"
+  local router_id="$6"
+  local router_client_ip="$7"
+  local router_image
   local client_endpoint_id server_endpoint_id
-  router_id="$(docker inspect --format '{{.Id}}' "${router_name}")"
-  router_image="$(docker inspect --format '{{.Image}}' "${router_name}")"
-  client_network_id="$(docker network inspect --format '{{.Id}}' "${client_network}")"
-  server_network_id="$(docker network inspect --format '{{.Id}}' "${server_network}")"
-  client_endpoint_id="$(docker inspect --format \
+  router_image="$(_qcsd_docker_api container inspect \
+    --format '{{.Image}}' "${router_id}")"
+  client_endpoint_id="$(_qcsd_docker_api container inspect --format \
     "{{with index .NetworkSettings.Networks \"${client_network}\"}}{{.EndpointID}}{{end}}" \
-    "${router_name}")"
-  server_endpoint_id="$(docker inspect --format \
+    "${router_id}")"
+  server_endpoint_id="$(_qcsd_docker_api container inspect --format \
     "{{with index .NetworkSettings.Networks \"${server_network}\"}}{{.EndpointID}}{{end}}" \
-    "${router_name}")"
-  /usr/bin/python3 -c '
+    "${router_id}")"
+  /usr/bin/python3 -I -c '
 import base64
 import ipaddress
 import json
@@ -3078,7 +5417,7 @@ kernel_tx_public_network_receipt_base64() {
   local client_subnet="$2"
   local router_name="$3"
   local router_client_ip="$4"
-  /usr/bin/python3 -c '
+  /usr/bin/python3 -I -c '
 import base64
 import ipaddress
 import json
@@ -3138,21 +5477,23 @@ print(base64.b64encode(encoded).decode("ascii"))
 
 kernel_tx_public_observer_binding_base64() {
   local client_network="$1"
-  local router_name="$2"
-  local router_client_ip="$3"
-  local router_id router_image client_network_id uplink_network_id
+  local client_network_id="$2"
+  local router_name="$3"
+  local router_id="$4"
+  local router_client_ip="$5"
+  local router_image uplink_network_id
   local client_endpoint_id uplink_endpoint_id
-  router_id="$(docker inspect --format '{{.Id}}' "${router_name}")"
-  router_image="$(docker inspect --format '{{.Image}}' "${router_name}")"
-  client_network_id="$(docker network inspect --format '{{.Id}}' "${client_network}")"
-  uplink_network_id="$(docker network inspect --format '{{.Id}}' bridge)"
-  client_endpoint_id="$(docker inspect --format \
+  router_image="$(_qcsd_docker_api container inspect \
+    --format '{{.Image}}' "${router_id}")"
+  uplink_network_id="$(_qcsd_docker_api network inspect \
+    --format '{{.Id}}' bridge)"
+  client_endpoint_id="$(_qcsd_docker_api container inspect --format \
     "{{with index .NetworkSettings.Networks \"${client_network}\"}}{{.EndpointID}}{{end}}" \
-    "${router_name}")"
-  uplink_endpoint_id="$(docker inspect --format \
+    "${router_id}")"
+  uplink_endpoint_id="$(_qcsd_docker_api container inspect --format \
     '{{with index .NetworkSettings.Networks "bridge"}}{{.EndpointID}}{{end}}' \
-    "${router_name}")"
-  /usr/bin/python3 -c '
+    "${router_id}")"
+  /usr/bin/python3 -I -c '
 import base64
 import ipaddress
 import json
@@ -3208,12 +5549,13 @@ print(base64.b64encode(encoded).decode("ascii"))
 
 start_kernel_tx_public_router() {
   local router_name="$1"
-  local client_network="$2"
+  local client_network_id="$2"
   local client_subnet="$3"
   local capture_root="$4"
   local capture_secret="$5"
-  docker run --detach --name "${router_name}" \
-    --network "${client_network}" \
+  qcsd_run_detached_docker QCSD_DOCKER_IDS_PUBLIC_ROUTERS \
+    docker run --name "${router_name}" \
+    --network "${client_network_id}" \
     --cpuset-cpus 0-9 \
     --label "org.qcsd.owner=qcsd-lab" \
     --label "org.qcsd.study=kernel-tx-public-observer" \
@@ -3232,9 +5574,11 @@ start_kernel_tx_public_router() {
     --volume "${capture_root}:/kernel-tx:rw" \
     --entrypoint /usr/bin/python3 \
     "${image_id}" -m qcsd_lab.kernel_capture_router
+  kernel_tx_public_router_id="${QCSD_DOCKER_IDS_PUBLIC_ROUTERS[-1]}"
   kernel_tx_public_router_created=1
-  docker network connect --gw-priority 1 bridge "${router_name}"
-  docker exec "${router_name}" /bin/sh -eu -c '
+  _qcsd_docker_api network connect --gw-priority 1 \
+    bridge "${kernel_tx_public_router_id}"
+  _qcsd_docker_api exec "${kernel_tx_public_router_id}" /bin/sh -eu -c '
 client_subnet="$1"
 ethtool -K eth0 gro off gso off tso off tx-udp-segmentation off
 ethtool -K eth1 gro off gso off tso off tx-udp-segmentation off
@@ -3285,22 +5629,64 @@ replace_container_environment() {
   fi
 }
 
+_qcsd_latch_cleanup_signal() {
+  local received_status="$1"
+  _qcsd_latch_lifetime_signal "${received_status}"
+}
+
+_qcsd_begin_latched_cleanup() {
+  # Enter latch-only mode before removing the EXIT handler.  A terminal signal
+  # delivered at either command boundary must continue through this teardown,
+  # never re-enter it or escape through a momentarily unprotected EXIT path.
+  _QCSD_LIFETIME_CLEANUP_ACTIVE=1
+  trap - EXIT
+  cleanup_signal_status="${_QCSD_LIFETIME_SIGNAL_STATUS}"
+}
+
+_qcsd_cleanup_terminal_hook() {
+  # Test-only boundary override. Production intentionally does no work here.
+  :
+}
+
+_qcsd_finish_latched_cleanup() {
+  # The lifetime handler remains in latch-only mode through the final hook and
+  # status selection. This closes the final check-to-exit window without
+  # discarding a signal or allowing it to interrupt teardown.
+  cleanup_complete=1
+  _qcsd_cleanup_terminal_hook
+  if (( cleanup_entry_status != 0 )); then
+    exit "${cleanup_entry_status}"
+  elif (( _QCSD_LIFETIME_SIGNAL_STATUS != 0 )); then
+    exit "${_QCSD_LIFETIME_SIGNAL_STATUS}"
+  else
+    exit "${cleanup_failure_status}"
+  fi
+}
+
 cleanup_kernel_tx_public_topology() {
-  local original_status="$1"
+  local cleanup_entry_status="$1"
+  local cleanup_signal_status=0 cleanup_complete=0 cleanup_failure_status=0
+  _qcsd_begin_latched_cleanup
   local cleanup_status=0
   local router_running=""
-  trap - EXIT INT TERM
-  if [[ "${kernel_tx_public_router_created:-0}" == "1" ]]; then
-    if ! docker container inspect "${kernel_tx_public_router_name}" >/dev/null 2>&1; then
+  local router_state=""
+  local public_network_state=""
+  if (( ${#QCSD_DOCKER_IDS_PUBLIC_ROUTERS[@]} > 0 )); then
+    kernel_tx_public_router_id="${QCSD_DOCKER_IDS_PUBLIC_ROUTERS[-1]}"
+    router_state="$(_qcsd_docker_exact_id_presence \
+      "${kernel_tx_public_router_id}")"
+    if [[ "${router_state}" != "present" ]]; then
       echo "public kernel-TX router disappeared before teardown" >&2
       cleanup_status=1
     else
-      router_running="$(docker inspect --format '{{.State.Running}}' \
-        "${kernel_tx_public_router_name}" 2>/dev/null || true)"
+      router_running="$(_qcsd_docker_api container inspect \
+        --format '{{.State.Running}}' \
+        "${kernel_tx_public_router_id}" 2>/dev/null || true)"
       if [[ "${router_running}" != "true" ]]; then
         echo "public kernel-TX router was not running at teardown" >&2
         cleanup_status=1
-      elif ! docker exec "${kernel_tx_public_router_name}" /usr/bin/python3 -c '
+      elif ! _qcsd_docker_api exec "${kernel_tx_public_router_id}" \
+        /usr/bin/python3 -c '
 from pathlib import Path
 import sys
 
@@ -3313,34 +5699,55 @@ for comm in Path("/proc").glob("[0-9]*/comm"):
         pass
 if active:
     raise SystemExit("active dumpcap children at public router teardown: " + ",".join(active))
-'; then
+      '; then
         echo "public kernel-TX router did not reach the idle end state" >&2
         cleanup_status=1
       fi
-      if ! docker rm -f "${kernel_tx_public_router_name}" >/dev/null; then
-        echo "cannot remove public kernel-TX router ${kernel_tx_public_router_name}" >&2
+      if ! _qcsd_docker_api rm --force \
+          "${kernel_tx_public_router_id}" >/dev/null; then
+        echo "cannot remove public kernel-TX router ${kernel_tx_public_router_id}" >&2
         cleanup_status=1
       fi
     fi
-  fi
-  if [[ "${kernel_tx_public_network_created:-0}" == "1" ]]; then
-    if ! docker network inspect "${kernel_tx_public_client_network}" >/dev/null 2>&1; then
-      echo "public kernel-TX client network disappeared before teardown" >&2
-      cleanup_status=1
-    elif ! docker network rm "${kernel_tx_public_client_network}" >/dev/null; then
-      echo "cannot remove public kernel-TX client network ${kernel_tx_public_client_network}" >&2
+    router_state="$(_qcsd_docker_exact_id_presence \
+      "${kernel_tx_public_router_id}")"
+    if [[ "${router_state}" == "absent" ]] &&
+       ! qcsd_retire_docker_handoff run \
+         "${kernel_tx_public_router_id}" QCSD_DOCKER_IDS_PUBLIC_ROUTERS; then
+      echo "public kernel-TX router handoff retirement failed" >&2
       cleanup_status=1
     fi
   fi
-  if [[ -n "${kernel_tx_public_router_name:-}" ]] &&
-     docker container inspect "${kernel_tx_public_router_name}" >/dev/null 2>&1; then
-    echo "public kernel-TX router remained after teardown" >&2
-    cleanup_status=1
+  if (( ${#QCSD_DOCKER_IDS_PUBLIC_NETWORKS[@]} > 0 )); then
+    kernel_tx_public_network_id="${QCSD_DOCKER_IDS_PUBLIC_NETWORKS[-1]}"
+    public_network_state="$(_qcsd_docker_exact_network_presence \
+      "${kernel_tx_public_network_id}")"
+    if [[ "${public_network_state}" != "present" ]]; then
+      echo "public kernel-TX client network disappeared before teardown (${public_network_state})" >&2
+      cleanup_status=1
+    else
+      _qcsd_docker_api network rm \
+        "${kernel_tx_public_network_id}" >/dev/null 2>&1 || true
+      public_network_state="$(_qcsd_docker_exact_network_presence \
+        "${kernel_tx_public_network_id}")"
+    fi
+    if [[ "${public_network_state}" == "present" ||
+          "${public_network_state}" == "unknown" ]]; then
+      echo "public kernel-TX client network teardown state is ${public_network_state}" >&2
+      cleanup_status=1
+    elif ! qcsd_retire_docker_handoff network \
+        "${kernel_tx_public_network_id}" QCSD_DOCKER_IDS_PUBLIC_NETWORKS; then
+      echo "public kernel-TX network handoff retirement failed" >&2
+      cleanup_status=1
+    fi
   fi
-  if [[ -n "${kernel_tx_public_client_network:-}" ]] &&
-     docker network inspect "${kernel_tx_public_client_network}" >/dev/null 2>&1; then
-    echo "public kernel-TX client network remained after teardown" >&2
-    cleanup_status=1
+  if [[ -n "${kernel_tx_public_router_id:-}" ]]; then
+    router_state="$(_qcsd_docker_exact_id_presence \
+      "${kernel_tx_public_router_id}")"
+    if [[ "${router_state}" != "absent" ]]; then
+      echo "public kernel-TX router teardown state is ${router_state}" >&2
+      cleanup_status=1
+    fi
   fi
   if [[ "${kernel_tx_public_topology_started:-0}" == "1" &&
         ! -d "${kernel_tx_public_capture_root}" ]]; then
@@ -3356,15 +5763,13 @@ if active:
       cleanup_status=1
     fi
   fi
-  if (( original_status == 0 && cleanup_status != 0 )); then
-    original_status=1
-  fi
-  exit "${original_status}"
+  (( cleanup_status == 0 )) || cleanup_failure_status=1
+  _qcsd_finish_latched_cleanup
 }
 
 buflo_controlled_subnets() {
   local cohort_version="$1"
-  /usr/bin/python3 -c '
+  /usr/bin/python3 -I -c '
 import hashlib
 import ipaddress
 import sys
@@ -3393,6 +5798,11 @@ run_buflo_controlled_profile() {
   local second_server_ip="${12}"
   local capture_root="${13}"
   local capture_secret="${14}"
+  local client_network_id="${15}"
+  local server_network_id="${16}"
+  local router_id="${17}"
+  local first_server_id="${18}"
+  local second_server_id="${19}"
   local network_evidence_b64 observer_binding_b64
   local scheduler_host_partition_b64
   local controlled_results_mount="${ROOT}/results:/lab/results:rw"
@@ -3402,17 +5812,23 @@ run_buflo_controlled_profile() {
       --env "QCSD_STUDY_ENVIRONMENT_B64=${study_environment_b64}"
     )
   fi
-  configure_buflo_router "${router_name}" "${profile}"
+  configure_buflo_router "${router_id}" "${profile}"
   network_evidence_b64="$(buflo_controlled_evidence_base64 \
-    "${client_network}" "${server_network}" "${router_name}" \
-    "${first_server}" "${second_server}")"
+    "${client_network}" "${client_network_id}" \
+    "${server_network}" "${server_network_id}" \
+    "${router_name}" "${router_id}" \
+    "${first_server}" "${first_server_id}" \
+    "${second_server}" "${second_server_id}")"
   observer_binding_b64="$(buflo_kernel_tx_observer_binding_base64 \
-    "${client_network}" "${server_network}" "${router_name}" \
-    "${router_client_ip}")"
+    "${client_network}" "${client_network_id}" \
+    "${server_network}" "${server_network_id}" \
+    "${router_name}" "${router_id}" "${router_client_ip}")"
   scheduler_host_partition_b64="$(capture_scheduler_host_partition_b64 \
-    "${router_name}" "${first_server}" "${second_server}")"
-  docker run --rm \
-    --network "${client_network}" \
+    "${router_name}" "${router_id}" \
+    "${first_server}" "${first_server_id}" \
+    "${second_server}" "${second_server_id}")"
+  qcsd_run_attached_docker docker run \
+    --network "${client_network_id}" \
     --add-host "qcsd-buflo-server-one:${first_server_ip}" \
     --add-host "qcsd-buflo-server-two:${second_server_ip}" \
     --cpuset-cpus 10-11 \
@@ -3519,15 +5935,19 @@ if status == 0 and any(after[path].get("type") != kind for path, kind in expecte
 }
 
 if [[ "${1:-}" == "derive-chaff-prefix-specs" ]]; then
-  before_snapshot="$(mktemp)"
-  after_snapshot="$(mktemp)"
+  before_snapshot="$(mktemp --tmpdir=/tmp qcsd-lifecycle-snapshot.XXXXXXXX)"
+  after_snapshot="$(mktemp --tmpdir=/tmp qcsd-lifecycle-snapshot.XXXXXXXX)"
   cleanup_snapshots() {
-    rm -f "${before_snapshot}" "${after_snapshot}"
+    local cleanup_entry_status="$1"
+    local cleanup_signal_status=0 cleanup_complete=0 cleanup_failure_status=0
+    _qcsd_begin_latched_cleanup
+    rm -f "${before_snapshot}" "${after_snapshot}" || cleanup_failure_status=1
+    _qcsd_finish_latched_cleanup
   }
-  trap cleanup_snapshots EXIT INT TERM
+  trap 'cleanup_snapshots "$?"' EXIT
   snapshot_regular_tree "${ROOT}/config" "derive-chaff-prefix-specs config" >"${before_snapshot}"
   set +e
-  "${container[@]}" "${image_id}" "$@"
+  qcsd_run_attached_docker "${container[@]}" "${image_id}" "$@"
   status=$?
   set -e
   snapshot_regular_tree "${ROOT}/config" "derive-chaff-prefix-specs config" >"${after_snapshot}"
@@ -3607,16 +6027,20 @@ else:
 }
 
 if [[ "${1:-}" == "qualify-chaff" ]]; then
-  before_snapshot="$(mktemp)"
-  after_snapshot="$(mktemp)"
+  before_snapshot="$(mktemp --tmpdir=/tmp qcsd-lifecycle-snapshot.XXXXXXXX)"
+  after_snapshot="$(mktemp --tmpdir=/tmp qcsd-lifecycle-snapshot.XXXXXXXX)"
   cleanup_snapshots() {
-    rm -f "${before_snapshot}" "${after_snapshot}"
+    local cleanup_entry_status="$1"
+    local cleanup_signal_status=0 cleanup_complete=0 cleanup_failure_status=0
+    _qcsd_begin_latched_cleanup
+    rm -f "${before_snapshot}" "${after_snapshot}" || cleanup_failure_status=1
+    _qcsd_finish_latched_cleanup
   }
-  trap cleanup_snapshots EXIT INT TERM
+  trap 'cleanup_snapshots "$?"' EXIT
   snapshot_regular_tree \
     "${ROOT}/config/chaff-qualification-store" "qualify-chaff store" >"${before_snapshot}"
   set +e
-  "${container[@]}" "${image_id}" "$@"
+  qcsd_run_attached_docker "${container[@]}" "${image_id}" "$@"
   status=$?
   set -e
   snapshot_regular_tree \
@@ -3685,17 +6109,21 @@ else:
 }
 
 if [[ "${1:-}" == "qualify-response-chaff" ]]; then
-  before_snapshot="$(mktemp)"
-  after_snapshot="$(mktemp)"
+  before_snapshot="$(mktemp --tmpdir=/tmp qcsd-lifecycle-snapshot.XXXXXXXX)"
+  after_snapshot="$(mktemp --tmpdir=/tmp qcsd-lifecycle-snapshot.XXXXXXXX)"
   cleanup_snapshots() {
-    rm -f "${before_snapshot}" "${after_snapshot}"
+    local cleanup_entry_status="$1"
+    local cleanup_signal_status=0 cleanup_complete=0 cleanup_failure_status=0
+    _qcsd_begin_latched_cleanup
+    rm -f "${before_snapshot}" "${after_snapshot}" || cleanup_failure_status=1
+    _qcsd_finish_latched_cleanup
   }
-  trap cleanup_snapshots EXIT INT TERM
+  trap 'cleanup_snapshots "$?"' EXIT
   snapshot_regular_tree \
     "${ROOT}/config/chaff-response-qualification-store" \
     "qualify-response-chaff store" >"${before_snapshot}"
   set +e
-  "${container[@]}" "${image_id}" "$@"
+  qcsd_run_attached_docker "${container[@]}" "${image_id}" "$@"
   status=$?
   set -e
   snapshot_regular_tree \
@@ -3709,15 +6137,19 @@ if [[ "${1:-}" == "qualify-response-chaff" ]]; then
 fi
 
 if [[ "${1:-}" == "fit" ]]; then
-  before_snapshot="$(mktemp)"
-  after_snapshot="$(mktemp)"
+  before_snapshot="$(mktemp --tmpdir=/tmp qcsd-lifecycle-snapshot.XXXXXXXX)"
+  after_snapshot="$(mktemp --tmpdir=/tmp qcsd-lifecycle-snapshot.XXXXXXXX)"
   cleanup_snapshots() {
-    rm -f "${before_snapshot}" "${after_snapshot}"
+    local cleanup_entry_status="$1"
+    local cleanup_signal_status=0 cleanup_complete=0 cleanup_failure_status=0
+    _qcsd_begin_latched_cleanup
+    rm -f "${before_snapshot}" "${after_snapshot}" || cleanup_failure_status=1
+    _qcsd_finish_latched_cleanup
   }
-  trap cleanup_snapshots EXIT INT TERM
+  trap 'cleanup_snapshots "$?"' EXIT
   snapshot_regular_tree "${ROOT}/artifacts" "fit artifact" >"${before_snapshot}"
   set +e
-  "${container[@]}" "${image_id}" "$@"
+  qcsd_run_attached_docker "${container[@]}" "${image_id}" "$@"
   status=$?
   set -e
   snapshot_regular_tree "${ROOT}/artifacts" "fit artifact" >"${after_snapshot}"
@@ -3822,13 +6254,13 @@ if [[ "${1:-}" == "buflo-study" && "${2:-}" == "capture" ]]; then
     fi
     for controlled_network in \
       "${controlled_client_network}" "${controlled_server_network}"; do
-      if docker network inspect "${controlled_network}" >/dev/null 2>&1; then
+      if _qcsd_docker_api network inspect "${controlled_network}" >/dev/null 2>&1; then
         echo "controlled Docker network already exists; remove stale ${controlled_network}" >&2
         exit 1
       fi
     done
     for controlled_container in "${router_name}" "${first_server}" "${second_server}"; do
-      if docker container inspect "${controlled_container}" >/dev/null 2>&1; then
+      if _qcsd_docker_api container inspect "${controlled_container}" >/dev/null 2>&1; then
         echo "controlled container name already exists; remove stale ${controlled_container}" >&2
         exit 1
       fi
@@ -3841,14 +6273,18 @@ if [[ "${1:-}" == "buflo-study" && "${2:-}" == "capture" ]]; then
     controlled_client_subnet="${controlled_subnets[0]}"
     controlled_server_subnet="${controlled_subnets[1]}"
     controlled_router_started=0
-    controlled_client_network_created=0
-    controlled_server_network_created=0
+    QCSD_DOCKER_IDS_CONTROLLED_CLIENT_NETWORKS=()
+    QCSD_DOCKER_IDS_CONTROLLED_SERVER_NETWORKS=()
+    controlled_client_network_id=""
+    controlled_server_network_id=""
     cleanup_buflo_controlled() {
-      local original_status="$1"
+      local cleanup_entry_status="$1"
+      local cleanup_signal_status=0 cleanup_complete=0 cleanup_failure_status=0
+      _qcsd_begin_latched_cleanup
       local cleanup_status=0
-      trap - EXIT INT TERM
+      local controlled_network_state=""
       if [[ "${controlled_router_started:-0}" == "1" ]]; then
-        if ! docker exec "${router_name}" /usr/bin/python3 -c '
+        if ! _qcsd_docker_api exec "${controlled_router_id}" /usr/bin/python3 -c '
 from pathlib import Path
 
 active = []
@@ -3868,21 +6304,57 @@ if active:
       if ! cleanup_sidecars; then
         cleanup_status=1
       fi
-      if [[ "${controlled_server_network_created:-0}" == "1" ]]; then
-        if ! docker network rm "${controlled_server_network}" >/dev/null 2>&1; then
-          echo "cannot remove controlled Docker network ${controlled_server_network}" >&2
+      if (( ${#QCSD_DOCKER_IDS_CONTROLLED_SERVER_NETWORKS[@]} > 0 )); then
+        controlled_server_network_id="${QCSD_DOCKER_IDS_CONTROLLED_SERVER_NETWORKS[-1]}"
+        controlled_network_state="$(_qcsd_docker_exact_network_presence \
+          "${controlled_server_network_id}")"
+        if [[ "${controlled_network_state}" != "present" ]]; then
+          echo "controlled server network disappeared before teardown (${controlled_network_state})" >&2
           cleanup_status=1
-        elif docker network inspect "${controlled_server_network}" >/dev/null 2>&1; then
-          echo "controlled Docker network ${controlled_server_network} remained after removal" >&2
+        else
+          _qcsd_docker_api network rm \
+            "${controlled_server_network_id}" >/dev/null 2>&1 || true
+          controlled_network_state="$(_qcsd_docker_exact_network_presence \
+            "${controlled_server_network_id}")"
+        fi
+        if [[ "${controlled_network_state}" != "absent" &&
+              "${controlled_network_state}" != "present" ]]; then
+          echo "controlled server network teardown state is ${controlled_network_state}" >&2
+          cleanup_status=1
+        elif [[ "${controlled_network_state}" == "present" ]]; then
+          echo "controlled server network remained after teardown" >&2
+          cleanup_status=1
+        elif ! qcsd_retire_docker_handoff network \
+            "${controlled_server_network_id}" \
+            QCSD_DOCKER_IDS_CONTROLLED_SERVER_NETWORKS; then
+          echo "controlled server network handoff retirement failed" >&2
           cleanup_status=1
         fi
       fi
-      if [[ "${controlled_client_network_created:-0}" == "1" ]]; then
-        if ! docker network rm "${controlled_client_network}" >/dev/null 2>&1; then
-          echo "cannot remove controlled Docker network ${controlled_client_network}" >&2
+      if (( ${#QCSD_DOCKER_IDS_CONTROLLED_CLIENT_NETWORKS[@]} > 0 )); then
+        controlled_client_network_id="${QCSD_DOCKER_IDS_CONTROLLED_CLIENT_NETWORKS[-1]}"
+        controlled_network_state="$(_qcsd_docker_exact_network_presence \
+          "${controlled_client_network_id}")"
+        if [[ "${controlled_network_state}" != "present" ]]; then
+          echo "controlled client network disappeared before teardown (${controlled_network_state})" >&2
           cleanup_status=1
-        elif docker network inspect "${controlled_client_network}" >/dev/null 2>&1; then
-          echo "controlled Docker network ${controlled_client_network} remained after removal" >&2
+        else
+          _qcsd_docker_api network rm \
+            "${controlled_client_network_id}" >/dev/null 2>&1 || true
+          controlled_network_state="$(_qcsd_docker_exact_network_presence \
+            "${controlled_client_network_id}")"
+        fi
+        if [[ "${controlled_network_state}" != "absent" &&
+              "${controlled_network_state}" != "present" ]]; then
+          echo "controlled client network teardown state is ${controlled_network_state}" >&2
+          cleanup_status=1
+        elif [[ "${controlled_network_state}" == "present" ]]; then
+          echo "controlled client network remained after teardown" >&2
+          cleanup_status=1
+        elif ! qcsd_retire_docker_handoff network \
+            "${controlled_client_network_id}" \
+            QCSD_DOCKER_IDS_CONTROLLED_CLIENT_NETWORKS; then
+          echo "controlled client network handoff retirement failed" >&2
           cleanup_status=1
         fi
       fi
@@ -3901,54 +6373,56 @@ if active:
         echo "controlled kernel-TX capture root disappeared before teardown" >&2
         cleanup_status=1
       fi
-      if (( original_status == 0 && cleanup_status != 0 )); then
-        original_status=1
-      fi
-      exit "${original_status}"
+      (( cleanup_status == 0 )) || cleanup_failure_status=1
+      _qcsd_finish_latched_cleanup
     }
     trap 'cleanup_buflo_controlled "$?"' EXIT
-    trap 'exit 130' INT
-    trap 'exit 143' TERM
-    docker network create --driver bridge --subnet "${controlled_client_subnet}" \
+    qcsd_create_docker_network QCSD_DOCKER_IDS_CONTROLLED_CLIENT_NETWORKS \
+      docker network create --driver bridge --subnet "${controlled_client_subnet}" \
       "${controlled_client_network}" >/dev/null
-    controlled_client_network_created=1
-    docker network create --driver bridge --subnet "${controlled_server_subnet}" \
+    controlled_client_network_id="${QCSD_DOCKER_IDS_CONTROLLED_CLIENT_NETWORKS[-1]}"
+    qcsd_create_docker_network QCSD_DOCKER_IDS_CONTROLLED_SERVER_NETWORKS \
+      docker network create --driver bridge --subnet "${controlled_server_subnet}" \
       "${controlled_server_network}" >/dev/null
-    controlled_server_network_created=1
+    controlled_server_network_id="${QCSD_DOCKER_IDS_CONTROLLED_SERVER_NETWORKS[-1]}"
     start_buflo_controlled_router \
-      "${router_name}" "${controlled_client_network}" "${controlled_server_network}" \
+      "${router_name}" \
+      "${controlled_client_network_id}" "${controlled_server_network_id}" \
       "${kernel_tx_capture_root}" "${kernel_tx_capture_secret}" \
+      controlled_router_id \
       >/dev/null
     controlled_router_started=1
-    router_client_ip="$(docker inspect --format \
+    router_client_ip="$(_qcsd_docker_api container inspect --format \
       "{{with index .NetworkSettings.Networks \"${controlled_client_network}\"}}{{.IPAddress}}{{end}}" \
-      "${router_name}")"
-    router_server_ip="$(docker inspect --format \
+      "${controlled_router_id}")"
+    router_server_ip="$(_qcsd_docker_api container inspect --format \
       "{{with index .NetworkSettings.Networks \"${controlled_server_network}\"}}{{.IPAddress}}{{end}}" \
-      "${router_name}")"
+      "${controlled_router_id}")"
     if [[ -z "${router_client_ip}" || -z "${router_server_ip}" ]]; then
       echo "controlled router did not receive both required IPv4 addresses" >&2
       exit 1
     fi
-    docker exec "${router_name}" /bin/sh -eu -c '
+    _qcsd_docker_api exec "${controlled_router_id}" /bin/sh -eu -c '
 ip -4 -o address show dev eth0 | grep -F " $1/" >/dev/null
 ip -4 -o address show dev eth1 | grep -F " $2/" >/dev/null
 test "$(cat /proc/sys/net/ipv4/ip_forward)" = 1
 ' sh "${router_client_ip}" "${router_server_ip}"
     start_buflo_controlled_server \
-      "${first_server}" qcsd-buflo-server-one 4433 "${controlled_server_network}" \
-      "${controlled_client_subnet}" "${router_server_ip}" >/dev/null
-    sidecars+=("${first_server}")
+      "${first_server}" qcsd-buflo-server-one 4433 \
+      "${controlled_server_network_id}" \
+      "${controlled_client_subnet}" "${router_server_ip}" \
+      controlled_first_server_id >/dev/null
     start_buflo_controlled_server \
-      "${second_server}" qcsd-buflo-server-two 4434 "${controlled_server_network}" \
-      "${controlled_client_subnet}" "${router_server_ip}" >/dev/null
-    sidecars+=("${second_server}")
-    first_server_ip="$(docker inspect --format \
+      "${second_server}" qcsd-buflo-server-two 4434 \
+      "${controlled_server_network_id}" \
+      "${controlled_client_subnet}" "${router_server_ip}" \
+      controlled_second_server_id >/dev/null
+    first_server_ip="$(_qcsd_docker_api container inspect --format \
       "{{with index .NetworkSettings.Networks \"${controlled_server_network}\"}}{{.IPAddress}}{{end}}" \
-      "${first_server}")"
-    second_server_ip="$(docker inspect --format \
+      "${controlled_first_server_id}")"
+    second_server_ip="$(_qcsd_docker_api container inspect --format \
       "{{with index .NetworkSettings.Networks \"${controlled_server_network}\"}}{{.IPAddress}}{{end}}" \
-      "${second_server}")"
+      "${controlled_second_server_id}")"
     if [[ -z "${first_server_ip}" || -z "${second_server_ip}" ||
           "${first_server_ip}" == "${second_server_ip}" ]]; then
       echo "controlled ordinary servers did not receive distinct IPv4 addresses" >&2
@@ -3971,7 +6445,10 @@ test "$(cat /proc/sys/net/ipv4/ip_forward)" = 1
         "/lab/results/${controlled_destination_name}" \
         "${router_client_ip}" "${controlled_server_subnet}" \
         "${first_server_ip}" "${second_server_ip}" \
-        "${kernel_tx_capture_root}" "${kernel_tx_capture_secret}"
+        "${kernel_tx_capture_root}" "${kernel_tx_capture_secret}" \
+        "${controlled_client_network_id}" "${controlled_server_network_id}" \
+        "${controlled_router_id}" \
+        "${controlled_first_server_id}" "${controlled_second_server_id}"
     done
     exit 0
   fi
@@ -3986,15 +6463,16 @@ if [[ "${study_capture_scheduler_contract}" == \
       "qcsd-client-rr1-cpu10-etf-helper-cpu11-v1" ]]; then
   kernel_tx_public_client_network="qcsd-kernel-tx-public-client-$$"
   kernel_tx_public_router_name="qcsd-kernel-tx-public-router-$$"
-  kernel_tx_public_network_created=0
+  QCSD_DOCKER_IDS_PUBLIC_NETWORKS=()
+  kernel_tx_public_network_id=""
+  QCSD_DOCKER_IDS_PUBLIC_ROUTERS=()
+  kernel_tx_public_router_id=""
   kernel_tx_public_router_created=0
   kernel_tx_public_topology_started=0
   kernel_tx_public_capture_root="$(
     mktemp -d "${ROOT}/results/.kernel-tx-public-router.XXXXXXXX"
   )"
   trap 'cleanup_kernel_tx_public_topology "$?"' EXIT
-  trap 'exit 130' INT
-  trap 'exit 143' TERM
   kernel_tx_public_capture_secret="$(
     python3 -I -c 'import secrets; print(secrets.token_hex(32))'
   )"
@@ -4002,18 +6480,21 @@ if [[ "${study_capture_scheduler_contract}" == \
     echo "cannot create the public kernel-TX router capture secret" >&2
     exit 1
   fi
-  if docker network inspect "${kernel_tx_public_client_network}" >/dev/null 2>&1 ||
-     docker container inspect "${kernel_tx_public_router_name}" >/dev/null 2>&1; then
+  if _qcsd_docker_api network inspect \
+       "${kernel_tx_public_client_network}" >/dev/null 2>&1 ||
+     _qcsd_docker_api container inspect \
+       "${kernel_tx_public_router_name}" >/dev/null 2>&1; then
     echo "public kernel-TX topology name already exists; remove stale PID $$ state" >&2
     exit 1
   fi
-  docker network create --driver bridge --internal \
+  qcsd_create_docker_network QCSD_DOCKER_IDS_PUBLIC_NETWORKS \
+    docker network create --driver bridge --internal \
     --label "org.qcsd.owner=qcsd-lab" \
     --label "org.qcsd.study=kernel-tx-public-observer" \
     "${kernel_tx_public_client_network}" >/dev/null
-  kernel_tx_public_network_created=1
-  kernel_tx_public_client_subnet="$(docker network inspect --format \
-    '{{(index .IPAM.Config 0).Subnet}}' "${kernel_tx_public_client_network}")"
+  kernel_tx_public_network_id="${QCSD_DOCKER_IDS_PUBLIC_NETWORKS[-1]}"
+  kernel_tx_public_client_subnet="$(_qcsd_docker_api network inspect --format \
+    '{{(index .IPAM.Config 0).Subnet}}' "${kernel_tx_public_network_id}")"
   kernel_tx_public_client_subnet="$(python3 -I -c '
 import ipaddress
 import sys
@@ -4024,19 +6505,19 @@ print(network)
 ' "${kernel_tx_public_client_subnet}")"
   start_kernel_tx_public_router \
     "${kernel_tx_public_router_name}" \
-    "${kernel_tx_public_client_network}" \
+    "${kernel_tx_public_network_id}" \
     "${kernel_tx_public_client_subnet}" \
     "${kernel_tx_public_capture_root}" \
     "${kernel_tx_public_capture_secret}" >/dev/null
   kernel_tx_public_topology_started=1
-  kernel_tx_public_router_ip="$(docker inspect --format \
+  kernel_tx_public_router_ip="$(_qcsd_docker_api container inspect --format \
     "{{with index .NetworkSettings.Networks \"${kernel_tx_public_client_network}\"}}{{.IPAddress}}{{end}}" \
-    "${kernel_tx_public_router_name}")"
+    "${kernel_tx_public_router_id}")"
   if [[ -z "${kernel_tx_public_router_ip}" ]]; then
     echo "public kernel-TX router did not receive a client-side IPv4 address" >&2
     exit 1
   fi
-  docker exec "${kernel_tx_public_router_name}" /bin/sh -eu -c '
+  _qcsd_docker_api exec "${kernel_tx_public_router_id}" /bin/sh -eu -c '
 ip -4 -o address show dev eth0 | grep -F " $1/" >/dev/null
 test "$(cat /proc/sys/net/ipv4/ip_forward)" = 1
 iptables -t nat -C POSTROUTING -s "$2" -o eth1 -j MASQUERADE
@@ -4048,11 +6529,13 @@ iptables -t nat -C POSTROUTING -s "$2" -o eth1 -j MASQUERADE
     "${kernel_tx_public_router_ip}")"
   kernel_tx_public_binding_b64="$(kernel_tx_public_observer_binding_base64 \
     "${kernel_tx_public_client_network}" \
+    "${kernel_tx_public_network_id}" \
     "${kernel_tx_public_router_name}" \
+    "${kernel_tx_public_router_id}" \
     "${kernel_tx_public_router_ip}")"
   scheduler_host_partition_b64="$(capture_scheduler_host_partition_b64 \
-    "${kernel_tx_public_router_name}")"
-  replace_container_option_value --network "${kernel_tx_public_client_network}"
+    "${kernel_tx_public_router_name}" "${kernel_tx_public_router_id}")"
+  replace_container_option_value --network "${kernel_tx_public_network_id}"
   replace_container_environment \
     QCSD_CAPTURE_SCHEDULER_HOST_PARTITION_B64 \
     "${scheduler_host_partition_b64}"
@@ -4069,13 +6552,25 @@ iptables -t nat -C POSTROUTING -s "$2" -o eth1 -j MASQUERADE
   )
   set +e
   if [[ "${1:-}" == "class-study" ]]; then
-    "${container[@]}" "${image_id}" "${class_container_args[@]}"
+    qcsd_run_attached_docker "${container[@]}" "${image_id}" \
+      "${class_image_command[@]}" "${class_container_args[@]}"
   else
-    "${container[@]}" "${image_id}" "$@"
+    qcsd_run_attached_docker "${container[@]}" "${image_id}" "$@"
   fi
   kernel_tx_public_status=$?
   set -e
   exit "${kernel_tx_public_status}"
+fi
+
+if [[ "${1:-}" == "test" && "${2:-}" == "pinned-cdp" ]]; then
+  set +e
+  qcsd_run_attached_docker "${container[@]}" \
+    --env "QCSD_RUN_PINNED_CDP_PROBE=1" \
+    --entrypoint /opt/qcsd-lab/.venv/bin/python \
+    "${image_id}" -m pytest -q tests/test_cdp_chromium_integration.py
+  status=$?
+  set -e
+  exit "${status}"
 fi
 
 if [[ "${1:-}" == "test" && "${2:-}" == "live" ]]; then
@@ -4084,32 +6579,33 @@ if [[ "${1:-}" == "test" && "${2:-}" == "live" ]]; then
     exit 2
   fi
   cleanup_live_sidecars() {
-    local original_status="$1"
+    local cleanup_entry_status="$1"
+    local cleanup_signal_status=0 cleanup_complete=0 cleanup_failure_status=0
+    _qcsd_begin_latched_cleanup
     local cleanup_status=0
-    trap - EXIT INT TERM
     if ! cleanup_sidecars; then
       cleanup_status=1
     fi
-    if (( original_status == 0 && cleanup_status != 0 )); then
-      original_status=1
-    fi
-    exit "${original_status}"
+    (( cleanup_status == 0 )) || cleanup_failure_status=1
+    _qcsd_finish_latched_cleanup
   }
   trap 'cleanup_live_sidecars "$?"' EXIT
-  trap 'exit 130' INT
-  trap 'exit 143' TERM
   first_server="qcsd-direct-server-$$"
   second_server="qcsd-direct-server-two-$$"
-  start_capture_acceptance_server "${first_server}" 4433 >/dev/null
-  sidecars+=("${first_server}")
-  start_capture_acceptance_server "${second_server}" 4434 >/dev/null
-  sidecars+=("${second_server}")
-  first_address="$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${first_server}")"
-  second_address="$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${second_server}")"
+  start_capture_acceptance_server \
+    "${first_server}" 4433 direct_first_server_id >/dev/null
+  start_capture_acceptance_server \
+    "${second_server}" 4434 direct_second_server_id >/dev/null
+  first_address="$(_qcsd_docker_api container inspect \
+    --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' \
+    "${direct_first_server_id}")"
+  second_address="$(_qcsd_docker_api container inspect \
+    --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' \
+    "${direct_second_server_id}")"
   test -n "${first_address}" && test -n "${second_address}"
   sleep 1
   set +e
-  "${container[@]}" \
+  qcsd_run_attached_docker "${container[@]}" \
     --env "QCSD_RUN_CAPTURE_ACCEPTANCE=1" \
     --env "QCSD_CAPTURE_SERVER_ADDRESS=${first_address}" \
     --env "QCSD_CAPTURE_SERVER_PORT=4433" \
@@ -4122,7 +6618,12 @@ if [[ "${1:-}" == "test" && "${2:-}" == "live" ]]; then
 fi
 
 if [[ "${1:-}" == "buflo-study" && "${2:-}" == "reference" ]]; then
-  exec "${container[@]}" "${image_id}" "${reference_container_args[@]}"
+  set +e
+  qcsd_run_attached_docker "${container[@]}" \
+    "${image_id}" "${reference_container_args[@]}"
+  status=$?
+  set -e
+  exit "${status}"
 fi
 
 if [[ "${1:-}" == "class-study" ]]; then
@@ -4130,12 +6631,22 @@ if [[ "${1:-}" == "class-study" ]]; then
         "${class_study_action}" == "acquisition-status" ||
         "${class_study_action}" == "acquisition-complete" ]]; then
     set +e
-    "${container[@]}" "${image_id}" "${class_container_args[@]}"
+    qcsd_run_attached_docker "${container[@]}" "${image_id}" \
+      "${class_image_command[@]}" "${class_container_args[@]}"
     class_acquisition_status=$?
     set -e
     exit "${class_acquisition_status}"
   fi
-  exec "${container[@]}" "${image_id}" "${class_container_args[@]}"
+  set +e
+  qcsd_run_attached_docker "${container[@]}" "${image_id}" \
+    "${class_image_command[@]}" "${class_container_args[@]}"
+  class_status=$?
+  set -e
+  exit "${class_status}"
 fi
 
-exec "${container[@]}" "${image_id}" "$@"
+set +e
+qcsd_run_attached_docker "${container[@]}" "${image_id}" "$@"
+status=$?
+set -e
+exit "${status}"

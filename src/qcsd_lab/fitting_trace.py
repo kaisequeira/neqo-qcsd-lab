@@ -12,12 +12,16 @@ from .class_run_binding import (
     ClassSampleRunBinding,
     validate_class_sample_run_binding,
 )
-from .fidelity import terminal_evidence_render_receipt_valid
+from .fidelity import (
+    RUNNER_CSV_U64_MAX,
+    _runner_csv_u64,
+    terminal_evidence_render_receipt_valid,
+)
 from .util import load_json, sha256_bytes
 
 
 EVENT_COLUMNS = ["monotonic_us", "connection", "event", "outcome", "details"]
-MAX_U64 = 2**64 - 1
+MAX_U64 = RUNNER_CSV_U64_MAX
 
 
 @dataclass(frozen=True)
@@ -301,12 +305,12 @@ def _integer(value: object, label: str, path: Path) -> int:
 
 
 def _csv_integer(value: object, label: str, path: Path, line: int) -> int:
-    if not isinstance(value, str) or not value or not value.isascii() or not value.isdecimal():
-        raise ValueError(f"{label} must be an unsigned integer at {path}:{line}")
-    parsed = int(value)
-    if parsed > MAX_U64:
-        raise ValueError(f"{label} exceeds u64 at {path}:{line}")
-    return parsed
+    try:
+        return _runner_csv_u64(value, label=label)
+    except ValueError as error:
+        raise ValueError(
+            f"{label} must be a canonical Rust u64 at {path}:{line}"
+        ) from error
 
 
 def _file_digest(path: Path) -> str:

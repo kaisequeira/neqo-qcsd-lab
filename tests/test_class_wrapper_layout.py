@@ -134,7 +134,7 @@ def test_wrapper_rejects_alternate_fresh_layout_paths(
 
 
 @pytest.mark.parametrize(
-    ("arguments", "message"),
+    ("arguments", "returncode", "message"),
     (
         (
             (
@@ -142,20 +142,22 @@ def test_wrapper_rejects_alternate_fresh_layout_paths(
                 "--acquisition-root",
                 "artifacts/alternate-acquisition",
             ),
-            "acquisition root must use the canonical path",
+            1,
+            "acquisition-status requires scoped request authority",
         ),
         (
             ("stability", "--stability-root", "artifacts/alternate-stability"),
+            2,
             "stability root must use the canonical path",
         ),
     ),
 )
 def test_wrapper_rejects_alternate_acquisition_roots(
-    arguments: tuple[str, ...], message: str
+    arguments: tuple[str, ...], returncode: int, message: str
 ) -> None:
     result = _run(*arguments)
 
-    assert result.returncode == 2
+    assert result.returncode == returncode
     assert message in result.stderr
 
 

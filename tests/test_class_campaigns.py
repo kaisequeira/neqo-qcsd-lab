@@ -404,8 +404,22 @@ def test_campaign_publication_is_create_only_and_round_trips_yaml(
         )
 
 
-def test_single_campaign_reconstruction_rejects_limit_and_cs_variant_drift(
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    (
+        ("timeout_seconds", 121),
+        ("max_response_bytes", 1_048_575),
+        ("capture_seconds", 181),
+        ("capture_megabytes", 63),
+        ("max_attempts", 2),
+        ("per_origin_cooldown_seconds", 29),
+        ("settle_seconds", 2),
+    ),
+)
+def test_single_campaign_reconstruction_rejects_every_limit_drift(
     tmp_path: Path,
+    field: str,
+    replacement: int,
 ) -> None:
     cohort = _cohort_receipt(tmp_path)
     assembly = _assembly_receipt(tmp_path, cohort)
@@ -425,13 +439,80 @@ def test_single_campaign_reconstruction_rejects_limit_and_cs_variant_drift(
     )
 
     changed_limit = yaml.safe_load(yaml.safe_dump(formal))
-    changed_limit["limits"]["timeout_seconds"] = 121
+    changed_limit["limits"][field] = replacement
     with pytest.raises(ValueError, match="deterministic generator"):
         validate_campaign_document(
             changed_limit,
             cohort_receipt=cohort,
             cohort_assembly_receipt=assembly,
         )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "seed",
+        "sample-order",
+        "defense-order",
+        "static-schedule",
+        "buflo-parameters",
+        "cs-parameters",
+    ),
+)
+def test_single_campaign_reconstruction_rejects_order_and_runtime_input_drift(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    cohort = _cohort_receipt(tmp_path)
+    assembly = _assembly_receipt(tmp_path, cohort)
+    documents = campaign_documents(cohort, cohort_assembly_receipt=assembly)
+    formal = yaml.safe_load(
+        yaml.safe_dump(documents["classifier-multiorigin100-v1-formal-01-1200.yml"])
+    )
+    if mutation == "seed":
+        formal["seed"] += 1
+    elif mutation == "sample-order":
+        formal["sample_order"]["window_size"] = 15
+    elif mutation == "defense-order":
+        formal["defense_order"]["block"] = 1
+    elif mutation == "static-schedule":
+        certification = documents[
+            "classifier-multiorigin100-v1-certification-900-1200.yml"
+        ]
+        formal = yaml.safe_load(yaml.safe_dump(certification))
+        next(
+            item
+            for item in formal["defenses"]
+            if isinstance(item, dict) and item.get("name") == "static"
+        )["schedule"] = "../defense-params/other-static.csv"
+    elif mutation == "buflo-parameters":
+        next(
+            item
+            for item in formal["defenses"]
+            if isinstance(item, dict) and item.get("name") == "buflo"
+        )["parameters"] = "../defense-params/other-buflo.json"
+    else:
+        next(
+            item
+            for item in formal["defenses"]
+            if isinstance(item, dict) and item.get("name") == "cs-buflo"
+        )["parameters"] = "../defense-params/cs-buflo-cpsp-live.json"
+
+    with pytest.raises(ValueError, match="deterministic generator"):
+        validate_campaign_document(
+            formal,
+            cohort_receipt=cohort,
+            cohort_assembly_receipt=assembly,
+        )
+
+
+def test_single_campaign_reconstruction_rejects_noncanonical_cs_variant(
+    tmp_path: Path,
+) -> None:
+    cohort = _cohort_receipt(tmp_path)
+    assembly = _assembly_receipt(tmp_path, cohort)
+    documents = campaign_documents(cohort, cohort_assembly_receipt=assembly)
+    formal = documents["classifier-multiorigin100-v1-formal-01-1200.yml"]
 
     changed_variant = yaml.safe_load(yaml.safe_dump(formal))
     cs_buflo = next(

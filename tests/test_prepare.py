@@ -10,47 +10,165 @@ import pytest
 
 import qcsd_lab.prepare as prepare
 from qcsd_lab.discover import DiscoveryResult
+from qcsd_lab.cdp_targets import CDP_TARGET_INSTRUMENTATION_POLICY
+from qcsd_lab.discovery_evidence import (
+    DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION,
+    PASSIVE_RENDER_CONTRACT_SHA256,
+    evidence_sha256,
+    passive_render_contract,
+)
 from qcsd_lab.manifest import runtime_manifest, validate_manifest
 
 
 def discovered() -> DiscoveryResult:
+    resources = [
+        {
+            "id": 0,
+            "url": "https://page.test/",
+            "type": "Document",
+            "content_length": None,
+            "data_length": 0,
+            "chaff_priority": False,
+            "known_valid": False,
+            "depends_on": [],
+            "headers": [["accept", "text/html"]],
+        },
+        {
+            "id": 1,
+            "url": "https://cdn.test/app.js",
+            "type": "Script",
+            "content_length": None,
+            "data_length": 0,
+            "chaff_priority": False,
+            "known_valid": False,
+            "depends_on": [0],
+            "headers": [
+                ["accept", "*/*"],
+                ["referer", "https://page.test/"],
+            ],
+        },
+    ]
+    source = {
+        "session_path": [],
+        "target_id": "root-page",
+        "target_type": "page",
+        "generation": 0,
+        "parent_session_path": None,
+        "parent_frame_id": None,
+    }
+    render = {
+        "schema_version": 1,
+        "clock": "monotonic-relative-ms",
+        "navigation_started_ms": 0,
+        "load_event_ms": 0,
+        "last_relevant_event_ms": 0,
+        "quiet_started_ms": 10_000,
+        "cutoff_ms": 13_000,
+        "active_request_ids": [],
+        "active_request_count": 0,
+        "cutoff_reason": "quiescent",
+    }
+    events = []
+    for resource in resources:
+        occurrence = f"request-{resource['id']:08d}"
+        dependency_evidence = (
+            []
+            if resource["id"] == 0
+            else [
+                {
+                    "kind": "document-url",
+                    "value": "https://page.test/",
+                    "resolved_resource_id": 0,
+                }
+            ]
+        )
+        events.extend(
+            [
+                {
+                    "sequence": len(events) + 1,
+                    "monotonic_ms": 0,
+                    "kind": "network-request",
+                    "source": source,
+                    "network_id": f"network-{resource['id']}",
+                    "occurrence_id": occurrence,
+                    "occurrence_index": 0,
+                    "method": "GET",
+                    "url": resource["url"],
+                    "frame_id": "root-frame",
+                    "resource_type": resource["type"],
+                    "safe_request_headers": resource["headers"],
+                    "interception_required": True,
+                    "redirected": False,
+                    "redirect_from_occurrence_id": None,
+                    "mapping": {"kind": "resource", "resource_id": resource["id"]},
+                    "dependency_evidence": dependency_evidence,
+                    "resolved_dependency_resource_ids": resource["depends_on"],
+                },
+                {
+                    "sequence": len(events) + 2,
+                    "monotonic_ms": 0,
+                    "kind": "fetch-request",
+                    "source": source,
+                    "fetch_id": f"fetch-{resource['id']}",
+                    "network_id": f"network-{resource['id']}",
+                    "redirected_fetch_id": None,
+                    "network_occurrence_id": occurrence,
+                    "method": "GET",
+                    "url": resource["url"],
+                    "frame_id": "root-frame",
+                    "policy_decision": "continue",
+                    "policy_reason": None,
+                    "relationship": "primary",
+                },
+                {
+                    "sequence": len(events) + 3,
+                    "monotonic_ms": 0,
+                    "kind": "network-terminal",
+                    "source": source,
+                    "network_id": f"network-{resource['id']}",
+                    "outcome": "finished",
+                    "network_occurrence_ids": [occurrence],
+                },
+            ]
+        )
+    audit = {
+        "schema_version": DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION,
+        "instrumentation_policy": CDP_TARGET_INSTRUMENTATION_POLICY,
+        "passive_render_contract_sha256": PASSIVE_RENDER_CONTRACT_SHA256,
+        "render_observation_sha256": evidence_sha256(render),
+        "events": events,
+        "summary": {
+            "event_count": len(events),
+            "target_event_count": 0,
+            "network_request_count": 2,
+            "fetch_request_count": 2,
+            "fetch_internal_restart_count": 0,
+            "terminal_event_count": 2,
+            "resource_occurrence_count": 2,
+            "exclusion_occurrence_count": 0,
+        },
+    }
     return DiscoveryResult(
         source_url="https://page.test/",
         final_url="https://page.test/",
         chromium_version="test-chromium",
-        settle_ms=3_000,
-        observed_request_count=3,
+        settle_ms=10_000,
+        observed_request_count=2,
         observed_origins=["https://cdn.test", "https://page.test"],
         approved_origins=["https://cdn.test", "https://page.test"],
         exclusions=[],
-        resources=[
-            {
-                "id": 0,
-                "url": "https://page.test/",
-                "type": "Document",
-                "content_length": None,
-                "data_length": 0,
-                "chaff_priority": False,
-                "known_valid": False,
-                "depends_on": [],
-                "headers": [["accept", "text/html"]],
-            },
-            {
-                "id": 1,
-                "url": "https://cdn.test/app.js",
-                "type": "Script",
-                "content_length": None,
-                "data_length": 0,
-                "chaff_priority": False,
-                "known_valid": False,
-                "depends_on": [0],
-                "headers": [
-                    ["accept", "*/*"],
-                    ["referer", "https://page.test/"],
-                ],
-            },
-        ],
+        resources=resources,
+        origin_ip_pins={
+            "https://cdn.test": "1.1.1.1",
+            "https://page.test": "8.8.8.8",
+        },
         expandable_origins=["https://cdn.test", "https://page.test"],
+        passive_render_contract=passive_render_contract(),
+        passive_render_contract_sha256=PASSIVE_RENDER_CONTRACT_SHA256,
+        render_observation=render,
+        render_observation_sha256=evidence_sha256(render),
+        discovery_event_audit=audit,
+        discovery_event_audit_sha256=evidence_sha256(audit),
     )
 
 
@@ -163,6 +281,48 @@ def install_fake_preparation(
     return commands
 
 
+@pytest.mark.parametrize("phase", ["probe", "stability"])
+def test_prepare_treats_rust_exit_101_as_nonrecoverable_internal_failure(
+    phase, tmp_path, monkeypatch
+):
+    panic = "thread 'main' panicked at neqo-bin/src/qcsd/mod.rs:1:1:"
+    monkeypatch.setattr(
+        prepare,
+        "_run_neqo",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 101, panic),
+    )
+    manifest = {"resources": discovered().resources}
+
+    with pytest.raises(prepare.PreparationError) as raised:
+        if phase == "probe":
+            prepare._probe(
+                manifest,
+                tmp_path,
+                max_response_bytes=1_024,
+                timeout_seconds=1,
+            )
+        else:
+            prepare._probe_response_stability(
+                manifest,
+                tmp_path,
+                max_response_bytes=1_024,
+                timeout_seconds=1,
+                stability_runs=2,
+                stability_interval_seconds=0,
+            )
+
+    assert type(raised.value) is prepare.PreparationError
+    assert "failed (101)" in str(raised.value)
+    assert panic in str(raised.value)
+
+
+def test_prepare_retains_non_panic_nonzero_exit_as_explicitly_recoverable():
+    result = subprocess.CompletedProcess([], 7, "transient transport failure")
+
+    with pytest.raises(prepare.RecoverablePreparationError, match=r"failed \(7\)"):
+        prepare._raise_neqo_execution_failure("Neqo test", result)
+
+
 def test_prepare_writes_one_policy_free_frozen_workload(tmp_path, monkeypatch):
     commands = install_fake_preparation(monkeypatch)
 
@@ -248,13 +408,29 @@ def test_prepare_complete_coverage_freezes_multi_origin_admission(tmp_path, monk
     value = json.loads(result.path.read_text())
     validate_manifest(value)
     assert value["preparation"]["coverage_admission"] == {
-        "schema_version": 1,
+        "schema_version": 3,
         "policy": "all-approved-origins-and-rendered-resources",
         "required_origins": ["https://cdn.test", "https://page.test"],
         "required_resources": [
             {"id": 0, "url": "https://page.test/"},
             {"id": 1, "url": "https://cdn.test/app.js"},
         ],
+        "passive_render_contract_sha256": PASSIVE_RENDER_CONTRACT_SHA256,
+        "render_observation_sha256": value["preparation"][
+            "render_observation_sha256"
+        ],
+        "discovery_event_audit_sha256": value["preparation"][
+            "discovery_event_audit_sha256"
+        ],
+        "origin_ip_pins_sha256": evidence_sha256(
+            value["preparation"]["origin_ip_pins"]
+        ),
+        "browser_request_headers_sha256": evidence_sha256(
+            value["preparation"]["browser_request_headers"]
+        ),
+        "network_request_count": 2,
+        "resource_occurrence_count": 2,
+        "exclusion_occurrence_count": 0,
     }
     assert result.resource_count == 2
     assert result.origin_count == 2
@@ -504,8 +680,12 @@ def test_prepare_rejects_a_runner_ceiling_mismatch(tmp_path, monkeypatch):
     [
         (("sideways", "0", "1200"), "invalid direction"),
         (("incoming", "connection-zero", "1200"), "invalid connection"),
+        (("incoming", "00", "1200"), "invalid connection"),
+        (("incoming", str(2**64), "1200"), "invalid connection"),
         (("incoming", "0", "0"), "invalid observed_udp_length"),
         (("incoming", "0", ""), "invalid observed_udp_length"),
+        (("incoming", "0", "١٢٠٠"), "invalid observed_udp_length"),
+        (("incoming", "0", "9" * 10_000), "invalid observed_udp_length"),
     ],
 )
 def test_udp_qualification_rejects_malformed_semantic_packet_fields(row, message, tmp_path):

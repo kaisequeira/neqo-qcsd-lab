@@ -437,13 +437,15 @@ def validate_build_execution_envelope(
 
     schema_version = value.get("schema_version") if isinstance(value, Mapping) else None
     required = _BUILD_V1_KEYS | (
-        {"host_storage_preflight", "role_provenance"} if schema_version == 2 else set()
+        {"host_storage_preflight", "role_provenance"}
+        if schema_version in {2, 3}
+        else set()
     )
     if (
         not isinstance(value, Mapping)
         or set(value) != required
         or type(schema_version) is not int
-        or schema_version not in {1, 2}
+        or schema_version not in {1, 2, 3}
         or value.get("artifact_type") != BUILD_EXECUTION_ARTIFACT_TYPE
     ):
         raise ValueError("no-cache build execution receipt schema is invalid")
@@ -475,7 +477,7 @@ def validate_build_execution_envelope(
 
     docker = value["docker"]
     docker_keys = {"client_version", "server_version"}
-    if schema_version == 2:
+    if schema_version in {2, 3}:
         docker_keys |= {
             "context",
             "endpoint",
@@ -491,7 +493,7 @@ def validate_build_execution_envelope(
         or any(not isinstance(docker[key], str) or not docker[key] for key in docker)
     ):
         raise ValueError("no-cache build Docker identity is invalid")
-    if schema_version == 2 and (
+    if schema_version in {2, 3} and (
         docker["context"] not in {"default", "desktop-linux"}
         or docker["endpoint"]
         not in {
@@ -526,10 +528,10 @@ def validate_build_execution_envelope(
             )
         ):
             raise ValueError(f"no-cache build {target} image binding is invalid")
-        if schema_version == 2 and record["tag"] != BUILD_IMAGE_TAGS[target]:
+        if schema_version in {2, 3} and record["tag"] != BUILD_IMAGE_TAGS[target]:
             raise ValueError(f"no-cache build {target} image role tag is invalid")
         image_ids[target] = record["id"]
-    if schema_version == 2 and len(set(image_ids.values())) != len(image_ids):
+    if schema_version in {2, 3} and len(set(image_ids.values())) != len(image_ids):
         raise ValueError("no-cache build image roles do not have distinct immutable IDs")
 
     commands = value["commands"]
@@ -540,11 +542,13 @@ def validate_build_execution_envelope(
         prefix = ["docker"]
         if schema_version == 2:
             prefix.extend(["--context", docker["context"]])
+        elif schema_version == 3:
+            prefix.extend(["--host", docker["endpoint"]])
         prefix.extend(["build", "--pull", "--no-cache"])
         argv = command.get("argv") if isinstance(command, Mapping) else None
         iidfile_value: str | None = None
         iidfile: PurePosixPath | None = None
-        if schema_version == 2 and isinstance(argv, list) and len(argv) >= len(prefix) + 2:
+        if schema_version in {2, 3} and isinstance(argv, list) and len(argv) >= len(prefix) + 2:
             iidfile_value = argv[len(prefix) + 1] if argv[len(prefix)] == "--iidfile" else None
             if isinstance(iidfile_value, str):
                 iidfile = PurePosixPath(iidfile_value)
@@ -577,7 +581,7 @@ def validate_build_execution_envelope(
             or dockerfile.parent != build_root
             or build_root.parent == build_root
             or (
-                schema_version == 2
+                schema_version in {2, 3}
                 and (
                     iidfile is None
                     or not iidfile.is_absolute()
@@ -602,7 +606,7 @@ def validate_build_execution_envelope(
         recorded_build_root = build_root
 
     if (
-        schema_version == 2
+        schema_version in {2, 3}
         and expected_build_root is not None
         and recorded_build_root != PurePosixPath(str(Path(expected_build_root).resolve()))
     ):
@@ -625,7 +629,7 @@ def validate_build_execution_envelope(
 
     host_storage_preflight = None
     role_provenance = None
-    if schema_version == 2:
+    if schema_version in {2, 3}:
         role_provenance = _validate_role_provenance(
             value["role_provenance"],
             image_ids=image_ids,

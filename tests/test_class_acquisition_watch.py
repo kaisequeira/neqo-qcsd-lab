@@ -5,8 +5,10 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 import signal
 import subprocess
+import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -52,10 +54,13 @@ class Fixture:
 
 @pytest.fixture
 def acquisition(tmp_path: Path) -> Fixture:
-    paths = watch.WatchPaths.from_lab_root(tmp_path)
+    paths = watch.WatchPaths.from_lab_root(
+        tmp_path,
+        state_base=tmp_path / "host-watch-state",
+    )
     paths.candidate_catalogue.parent.mkdir(parents=True)
     paths.acquisition_root.mkdir(parents=True)
-    paths.mutation_lock.write_bytes(b"")
+    paths.action_lock.write_bytes(b"")
     paths.stability_root.mkdir(parents=True)
     paths.workload_root.mkdir(parents=True)
     paths.launcher.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
@@ -91,7 +96,7 @@ def acquisition(tmp_path: Path) -> Fixture:
     image = "sha256:" + "a" * 64
     provenance_payload = {
         "study_id": watch.STUDY_ID,
-        "acquisition_schema_version": 1,
+        "acquisition_schema_version": watch.ACQUISITION_SCHEMA_VERSION,
         "candidate_catalogue_sha256": catalogue_sha256,
         "candidate_catalogue_payload_sha256": catalogue["payload_sha256"],
         "candidate_count": watch.CANDIDATE_COUNT,
@@ -112,7 +117,20 @@ def acquisition(tmp_path: Path) -> Fixture:
             "neqo_patch_sha256": watch.EMPTY_SHA256,
         },
         "browser_tool": "playwright-chromium",
-        "navigation_implementation": "playwright-cdp-catalogue-domain-boundary-v1",
+        "navigation_implementation": (
+            "playwright-cdp-catalogue-domain-boundary-redirect-pin-convergence-v3"
+        ),
+        "cdp_target_instrumentation_policy": watch._CDP_TARGET_INSTRUMENTATION_POLICY,
+        "passive_render_contract": copy.deepcopy(watch._PASSIVE_RENDER_CONTRACT),
+        "passive_render_contract_sha256": watch._PASSIVE_RENDER_CONTRACT_SHA256,
+        "browser_navigation_timeout_ms": watch.BROWSER_NAVIGATION_TIMEOUT_MS,
+        "passive_render_hard_cap_after_load_ms": watch.PASSIVE_RENDER_HARD_CAP_MS,
+        "acquisition_action_timing_contract": copy.deepcopy(
+            watch._ACQUISITION_ACTION_TIMING_CONTRACT
+        ),
+        "baseline_scheduling_contract": copy.deepcopy(
+            watch._BASELINE_SCHEDULING_CONTRACT
+        ),
         "registrable_domain_policy": "exact-frozen-tranco-candidate-domain",
         "domain_safety_policy": {},
         "domain_safety_policy_sha256": "d" * 64,
@@ -131,6 +149,7 @@ def acquisition(tmp_path: Path) -> Fixture:
         },
     }
     _write_receipt(paths.checkpoint, watch.CHECKPOINT_TYPE, checkpoint_payload)
+    watch._ensure_state_namespace(paths)
     return Fixture(paths, image, candidate_ids)
 
 
@@ -181,13 +200,13 @@ def _result(action: str, details: dict[str, Any], *, runner_root: str | None = N
             "labels": ["t+30s", "t+24h", "t+72h"],
             "all_three_required_per_page_receipt": True,
             "acquisition_owner": "resumable-qcsd-class-study-production-runner",
-            "runner_sleeps_between_windows": False,
+            "runner_wait_policy": copy.deepcopy(watch._RUN_WAIT_POLICY),
         }
         status = "complete"
         blockers: list[str] = []
     else:
         payload["bounded_candidates"] = watch.MAX_CANDIDATES
-        payload["runner_slept"] = False
+        payload["runner_wait_policy"] = copy.deepcopy(watch._RUN_WAIT_POLICY)
         status = "ready" if payload["complete"] else "pending"
         blockers = [] if payload["complete"] else ["rerun from coordinator state"]
     return {
@@ -205,20 +224,49 @@ def _completed(value: Any, *, returncode: int = 0, stderr: str = "") -> subproce
     return subprocess.CompletedProcess((), returncode, stdout, stderr)
 
 
+def _admission() -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "artifact_type": watch.DOCKER_ADMISSION_TYPE,
+        "docker_context": "default",
+        "docker_host": "unix:///var/run/docker.sock",
+        "docker_server_id": "test-daemon-01",
+        "host_boot_id": watch._host_boot_id(),
+    }
+
+
 class FakeRunner:
     def __init__(self, responses: list[Any]) -> None:
         self.responses = list(responses)
         self.calls: list[tuple[tuple[str, ...], Path, dict[str, str]]] = []
 
-    def __call__(self, command, *, cwd, env, lock_fd):
-        assert env[watch.LOCK_ENV] == str(lock_fd)
+    def __call__(
+        self,
+        command,
+        *,
+        cwd,
+        env,
+        authority_fd,
+        state_root,
+        source_binding_sha256,
+    ):
+        assert watch.LOCK_ENV not in env
+        assert state_root.name == self._paths(command).namespace_sha256
+        assert re.fullmatch(r"[0-9a-f]{64}", source_binding_sha256)
         self.calls.append((tuple(command), cwd, dict(env)))
+        if tuple(command) == watch._admission_command(self._paths(command)):
+            return _completed(_admission())
         if not self.responses:
             raise AssertionError("unexpected coordinator call")
         response = self.responses.pop(0)
         if callable(response):
             response = response(tuple(command), cwd, dict(env))
         return response
+
+    @staticmethod
+    def _paths(command: tuple[str, ...] | list[str]) -> watch.WatchPaths:
+        launcher = Path(command[1] if command[0] == "/usr/bin/bash" else command[0])
+        return watch.WatchPaths.from_lab_root(launcher.parent)
 
 
 class FakeClock:
@@ -243,7 +291,15 @@ class FakeMonotonic:
 
 
 def test_due_work_uses_exact_command_environment_and_paths(acquisition: Fixture) -> None:
+    assert watch.ACQUISITION_SCHEMA_VERSION == 3
+    assert watch.ACQUISITION_TIMEOUT_MS == 60_000
+    assert watch.PENDING_BASELINE_GUARD_MS == 2_400_000
+    assert watch.MAX_CANDIDATES == 1
+    assert watch.ACQUISITION_ACTION_TIMEOUT_SECONDS == 1_800
+    assert watch.ACQUISITION_ACTION_CLEANUP_SECONDS == 120
+    assert watch.RUN_RUNTIME_SECONDS == 1_920
     expected_run_command = (
+        "/usr/bin/bash",
         str(acquisition.paths.launcher),
         "class-study",
         "acquisition-run",
@@ -256,7 +312,7 @@ def test_due_work_uses_exact_command_environment_and_paths(acquisition: Fixture)
         "--workload-root",
         str(acquisition.paths.workload_root),
         "--acquisition-max-candidates",
-        str(watch.CANDIDATE_COUNT),
+        str(watch.MAX_CANDIDATES),
         "--acquisition-timeout-ms",
         str(watch.ACQUISITION_TIMEOUT_MS),
     )
@@ -266,7 +322,7 @@ def test_due_work_uses_exact_command_environment_and_paths(acquisition: Fixture)
     complete = _details(terminal=watch.CANDIDATE_COUNT)
 
     def run_response(command, _cwd, _env):
-        assert command[2] == "acquisition-run"
+        assert command[3] == "acquisition-run"
         acquisition.advance_checkpoint()
         return _completed(_result("acquisition-run", complete))
 
@@ -291,6 +347,7 @@ def test_due_work_uses_exact_command_environment_and_paths(acquisition: Fixture)
 
     assert result["details"]["complete"] is True
     assert [call[0] for call in runner.calls] == [
+        watch._admission_command(acquisition.paths),
         watch._status_command(acquisition.paths),
         watch._run_command(acquisition.paths),
         watch._status_command(acquisition.paths),
@@ -300,10 +357,14 @@ def test_due_work_uses_exact_command_environment_and_paths(acquisition: Fixture)
     assert all("PRESERVED" not in call[2] for call in runner.calls)
     assert all("BASH_ENV" not in call[2] for call in runner.calls)
     assert all("PYTHONPATH" not in call[2] for call in runner.calls)
+    assert all(watch.SCOPE_ROOT_ENV not in call[2] for call in runner.calls)
+    coordinator_calls = [
+        call for call in runner.calls if call[0] != watch._admission_command(acquisition.paths)
+    ]
     assert all(
-        call[2][watch.PREPARE_IMAGE_ENV] == acquisition.image for call in runner.calls
+        call[2][watch.PREPARE_IMAGE_ENV] == acquisition.image for call in coordinator_calls
     )
-    assert all(call[2][watch.LOCK_ENV].isdigit() for call in runner.calls)
+    assert all(watch.LOCK_ENV not in call[2] for call in runner.calls)
 
 
 def test_complete_exits_without_creating_completion_receipt(acquisition: Fixture) -> None:
@@ -313,7 +374,7 @@ def test_complete_exits_without_creating_completion_receipt(acquisition: Fixture
     watch.watch_acquisition(paths=acquisition.paths, runner=runner)
 
     assert not (acquisition.paths.acquisition_root / "completion.json").exists()
-    assert len(runner.calls) == 1
+    assert len(runner.calls) == 2
 
 
 def test_waits_to_target_with_five_second_heartbeats_and_no_busy_spin(
@@ -323,7 +384,6 @@ def test_waits_to_target_with_five_second_heartbeats_and_no_busy_spin(
     target = start + timedelta(seconds=12)
     target_text = target.isoformat().replace("+00:00", "Z")
     waiting = _details(probing=1, blocked=True, next_due=target_text)
-    due = _details(probing=1, due=1, blocked=True)
     complete = _details(terminal=watch.CANDIDATE_COUNT)
 
     def run_response(_command, _cwd, _env):
@@ -348,7 +408,7 @@ def test_waits_to_target_with_five_second_heartbeats_and_no_busy_spin(
 
     assert clock.sleeps == [5.0, 5.0, 2.0]
     assert clock.value == target
-    assert [call[0][2] for call in runner.calls] == [
+    assert [call[0][3] for call in runner.calls[1:]] == [
         "acquisition-status",
         "acquisition-run",
         "acquisition-status",
@@ -397,8 +457,8 @@ def test_wait_revalidates_host_source_without_polling_status_containers(
         source_validator=validate,
     )
 
-    assert validations == [0.0, 60.0, 65.0]
-    assert [call[0][2] for call in runner.calls] == [
+    assert validations == [0.0, 0.0, 0.0, 0.0, 0.0, 60.0, 65.0, 65.0, 65.0, 65.0, 65.0]
+    assert [call[0][3] for call in runner.calls[1:]] == [
         "acquisition-status",
         "acquisition-run",
         "acquisition-status",
@@ -474,7 +534,7 @@ def test_clock_jump_delegates_missed_terminalisation_to_existing_runner(
     )
 
     assert clock.sleeps == [5.0]
-    assert sum(call[0][2] == "acquisition-run" for call in runner.calls) == 1
+    assert sum(call[0][3] == "acquisition-run" for call in runner.calls[1:]) == 1
 
 
 def test_lock_contention_fails_before_calling_coordinator(acquisition: Fixture) -> None:
@@ -541,6 +601,42 @@ def test_mismatched_prepare_image_and_child_failure_fail_closed(acquisition: Fix
         watch.watch_acquisition(paths=acquisition.paths, runner=FakeRunner([failed]))
 
 
+@pytest.mark.parametrize(
+    "field",
+    [
+        "acquisition_schema_version",
+        "navigation_implementation",
+        "cdp_target_instrumentation_policy",
+        "passive_render_contract",
+        "passive_render_contract_sha256",
+        "browser_navigation_timeout_ms",
+        "passive_render_hard_cap_after_load_ms",
+        "acquisition_action_timing_contract",
+        "baseline_scheduling_contract",
+        "origin_policy",
+    ],
+)
+def test_watcher_rejects_discovery_contract_drift(
+    acquisition: Fixture, field: str
+) -> None:
+    provenance = json.loads(acquisition.paths.provenance.read_text(encoding="utf-8"))
+    payload = copy.deepcopy(provenance["payload"])
+    if field == "passive_render_contract":
+        payload[field]["minimum_after_load_ms"] += 1
+    elif field == "acquisition_action_timing_contract":
+        payload[field]["inner_timeout"]["soft_deadline_ms"] -= 1
+    elif field == "baseline_scheduling_contract":
+        payload[field]["minimum_baseline_spacing_ms"] -= 1
+    elif field.endswith("_ms") or field == "acquisition_schema_version":
+        payload[field] -= 1
+    else:
+        payload[field] = "stale-contract"
+    _write_receipt(acquisition.paths.provenance, watch.PROVENANCE_TYPE, payload)
+
+    with pytest.raises(watch.WatchError, match="another study or catalogue"):
+        watch._validate_immutable_binding(acquisition.paths)
+
+
 def _restore_provenance_binding(acquisition: Fixture) -> Fixture:
     provenance = json.loads(acquisition.paths.provenance.read_text(encoding="utf-8"))
     payload = copy.deepcopy(provenance["payload"])
@@ -570,6 +666,47 @@ def test_due_run_must_advance_checkpoint(acquisition: Fixture) -> None:
         watch.watch_acquisition(paths=acquisition.paths, runner=runner)
 
 
+def test_launch_drift_to_a_blocked_boundary_restatuses_without_fabrication(
+    acquisition: Fixture,
+) -> None:
+    start = datetime(2026, 8, 29, tzinfo=UTC)
+    target = start + timedelta(seconds=2)
+    target_text = target.isoformat().replace("+00:00", "Z")
+    due = _details(probing=1, due=1, blocked=True)
+    drifted = _details(probing=1, blocked=True, next_due=target_text)
+    complete = _details(terminal=watch.CANDIDATE_COUNT)
+
+    def final_run(_command, _cwd, _env):
+        acquisition.advance_checkpoint()
+        return _completed(_result("acquisition-run", complete))
+
+    runner = FakeRunner(
+        [
+            _completed(_result("acquisition-status", due)),
+            _completed(_result("acquisition-run", drifted)),
+            _completed(_result("acquisition-status", drifted)),
+            final_run,
+            _completed(_result("acquisition-status", complete)),
+        ]
+    )
+    clock = FakeClock(start)
+    watch.watch_acquisition(
+        paths=acquisition.paths,
+        runner=runner,
+        clock=clock,
+        sleeper=clock.sleep,
+    )
+
+    assert clock.value == target
+    assert [call[0][3] for call in runner.calls[1:]] == [
+        "acquisition-status",
+        "acquisition-run",
+        "acquisition-status",
+        "acquisition-run",
+        "acquisition-status",
+    ]
+
+
 def test_expired_next_due_runs_immediately_without_redundant_status(
     acquisition: Fixture,
 ) -> None:
@@ -592,71 +729,11 @@ def test_expired_next_due_runs_immediately_without_redundant_status(
 
     watch.watch_acquisition(paths=acquisition.paths, runner=runner, clock=lambda: now)
 
-    assert [call[0][2] for call in runner.calls] == [
+    assert [call[0][3] for call in runner.calls[1:]] == [
         "acquisition-status",
         "acquisition-run",
         "acquisition-status",
     ]
-
-
-def test_main_maps_keyboard_interrupt_and_sigterm_handler_to_resume_exit(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    monkeypatch.setattr(
-        watch,
-        "watch_acquisition",
-        lambda **_arguments: (_ for _ in ()).throw(KeyboardInterrupt),
-    )
-
-    assert watch.main([]) == 130
-    assert "resume from checkpoint" in capsys.readouterr().err
-    with pytest.raises(KeyboardInterrupt):
-        watch._raise_keyboard_interrupt(signal.SIGTERM, None)
-
-
-def test_subprocess_runner_terminates_the_entire_child_process_group(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    signals: list[tuple[int, signal.Signals]] = []
-    popen_keywords: dict[str, Any] = {}
-
-    class InterruptedProcess:
-        pid = 4242
-        returncode = -signal.SIGTERM
-        calls = 0
-
-        def communicate(self, timeout=None):
-            self.calls += 1
-            if self.calls == 1:
-                raise KeyboardInterrupt
-            assert timeout == 10
-            return "", ""
-
-    process = InterruptedProcess()
-
-    def popen(*_args, **kwargs):
-        popen_keywords.update(kwargs)
-        return process
-
-    monkeypatch.setattr(watch.subprocess, "Popen", popen)
-    monkeypatch.setattr(
-        watch.os,
-        "killpg",
-        lambda pid, signum: signals.append((pid, signum)),
-    )
-
-    with pytest.raises(KeyboardInterrupt):
-        watch._subprocess_runner(
-            ("ignored-child",),
-            cwd=tmp_path,
-            env={"PATH": "/usr/bin:/bin"},
-            lock_fd=3,
-        )
-
-    assert signals == [(4242, signal.SIGTERM)]
-    assert popen_keywords["pass_fds"] == (3,)
-    assert popen_keywords["start_new_session"] is True
 
 
 @pytest.mark.parametrize("heartbeat", (0.5, float("inf"), float("nan")))
@@ -671,129 +748,295 @@ def test_heartbeat_rejects_subsecond_and_nonfinite_values(
         )
 
 
-def test_orphan_cleanup_requires_exact_labels_image_and_mounts(
-    acquisition: Fixture, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    binding = watch._validate_acquisition_binding(acquisition.paths)
-    present = True
-    calls: list[tuple[str, ...]] = []
-
-    def inspect_value() -> dict[str, Any]:
-        return {
-            "Id": "1" * 64,
-            "Name": f"/{watch.CONTAINER_NAME}",
-            "Image": binding.prepare_image,
-            "Config": {
-                "Labels": {
-                    **watch.CONTAINER_LABELS,
-                    "org.qcsd.image-id": binding.prepare_image,
-                }
-            },
-            "Mounts": [
-                {
-                    "Source": str(acquisition.paths.acquisition_root),
-                    "Destination": watch.CONTAINER_ACQUISITION_ROOT,
-                    "RW": True,
-                },
-                {
-                    "Source": str(acquisition.paths.stability_root),
-                    "Destination": (
-                        f"/lab/artifacts/{watch.STUDY_ID}-stability"
-                    ),
-                    "RW": True,
-                },
-                {
-                    "Source": str(acquisition.paths.workload_root),
-                    "Destination": "/lab/config/workloads",
-                    "RW": True,
-                },
-            ],
+def test_trusted_environment_ignores_shell_python_docker_and_home_overrides() -> None:
+    environment = watch._safe_host_environment(
+        {
+            "PATH": "/tmp/attacker",
+            "HOME": "/tmp/attacker-home",
+            "BASH_ENV": "/tmp/hook",
+            "PYTHONPATH": "/tmp/imports",
+            "DOCKER_HOST": "tcp://attacker.example:2376",
+            "DOCKER_CONTEXT": "attacker",
+            "DOCKER_CONFIG": "/tmp/docker",
+            "XDG_RUNTIME_DIR": "/tmp/runtime",
+            "DBUS_SESSION_BUS_ADDRESS": "unix:path=/tmp/bus",
         }
+    )
 
-    def docker(_paths, *arguments):
-        nonlocal present
-        calls.append(tuple(arguments))
-        if arguments[:2] == ("container", "inspect"):
-            if not present:
-                return _completed("", returncode=1, stderr="No such container")
-            return _completed([inspect_value()])
-        if arguments[:2] == ("container", "ls"):
-            assert not present
-            return _completed("")
-        if arguments[:2] == ("container", "stop"):
-            present = False
-            return _completed(watch.CONTAINER_NAME)
-        raise AssertionError(arguments)
-
-    monkeypatch.setattr(watch, "_docker_command", docker)
-    watch._cleanup_orphan_container(acquisition.paths, binding)
-
-    assert any(call[:2] == ("container", "stop") for call in calls)
-    assert not any(call[:2] == ("container", "rm") for call in calls)
+    assert environment["PATH"] == "/usr/bin:/bin"
+    assert environment["HOME"] == "/nonexistent"
+    assert environment["DOCKER_CONTEXT"] == "default"
+    assert environment["GIT_NO_REPLACE_OBJECTS"] == "1"
+    assert environment["GIT_OPTIONAL_LOCKS"] == "0"
+    assert environment["XDG_RUNTIME_DIR"] == f"/run/user/{os.getuid()}"
+    assert environment["DBUS_SESSION_BUS_ADDRESS"] == (
+        f"unix:path=/run/user/{os.getuid()}/bus"
+    )
+    assert not {
+        "BASH_ENV",
+        "PYTHONPATH",
+        "DOCKER_HOST",
+        "DOCKER_CONFIG",
+    } & environment.keys()
 
 
-def test_orphan_cleanup_never_touches_a_mismatched_container(
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        lambda value: value.pop("host_boot_id"),
+        lambda value: value.__setitem__("docker_context", "attacker"),
+        lambda value: value.__setitem__("docker_host", "tcp://remote:2376"),
+        lambda value: value.__setitem__("docker_server_id", "bad server id"),
+        lambda value: value.__setitem__("artifact_type", "other"),
+    ),
+)
+def test_docker_admission_requires_exact_local_binding(mutation) -> None:
+    value = _admission()
+    mutation(value)
+    with pytest.raises(watch.WatchError, match="Docker admission"):
+        watch._validate_docker_admission(value)
+
+
+def test_admission_precedes_first_checkpoint_read_and_source_precedes_admission(
     acquisition: Fixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    binding = watch._validate_acquisition_binding(acquisition.paths)
-    calls: list[tuple[str, ...]] = []
-    wrong = {
-        "Id": "2" * 64,
-        "Name": f"/{watch.CONTAINER_NAME}",
-        "Image": binding.prepare_image,
-        "Config": {"Labels": {**watch.CONTAINER_LABELS, "org.qcsd.image-id": "wrong"}},
-        "Mounts": [],
-    }
-
-    def docker(_paths, *arguments):
-        calls.append(tuple(arguments))
-        return _completed([wrong])
-
-    monkeypatch.setattr(watch, "_docker_command", docker)
-    with pytest.raises(watch.WatchError, match="refusing to manage"):
-        watch._cleanup_orphan_container(acquisition.paths, binding)
-    assert calls == [("container", "inspect", watch.CONTAINER_NAME)]
-
-
-def test_startup_stops_orphan_before_checkpoint_and_source_validation(
-    acquisition: Fixture, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    binding = watch._validate_immutable_binding(acquisition.paths)
+    complete = _details(terminal=watch.CANDIDATE_COUNT)
     events: list[str] = []
+    real_checkpoint = watch._validate_checkpoint
 
-    monkeypatch.setattr(
-        watch,
-        "_validate_immutable_binding",
-        lambda _paths: events.append("immutable") or binding,
-    )
-    monkeypatch.setattr(
-        watch,
-        "_cleanup_orphan_container",
-        lambda _paths, _binding: events.append("cleanup"),
-    )
-    monkeypatch.setattr(
-        watch,
-        "_validate_checkpoint",
-        lambda _paths, _binding: events.append("checkpoint") or "a" * 64,
-    )
+    def checkpoint(paths, binding):
+        events.append("checkpoint")
+        return real_checkpoint(paths, binding)
 
-    def drifted(_paths, _binding) -> None:
+    def source(_paths, _binding):
         events.append("source")
-        raise watch.WatchError("source drift")
 
-    monkeypatch.setattr(watch, "_validate_host_source", drifted)
-    with pytest.raises(watch.WatchError, match="source drift"):
-        watch.watch_acquisition(paths=acquisition.paths)
+    def runner(
+        command,
+        *,
+        cwd,
+        env,
+        authority_fd,
+        state_root,
+        source_binding_sha256,
+    ):
+        assert cwd == acquisition.paths.lab_root
+        assert watch.LOCK_ENV not in env
+        assert authority_fd >= 0
+        assert state_root == acquisition.paths.state_root
+        assert re.fullmatch(r"[0-9a-f]{64}", source_binding_sha256)
+        action = command[3]
+        events.append(action)
+        if action == "acquisition-admission":
+            return _completed(_admission())
+        return _completed(_result("acquisition-status", complete))
 
-    assert events == ["immutable", "cleanup", "checkpoint", "source", "cleanup"]
+    monkeypatch.setattr(watch, "_validate_checkpoint", checkpoint)
+    watch.watch_acquisition(
+        paths=acquisition.paths,
+        runner=runner,
+        source_validator=source,
+    )
+
+    assert events.index("source") < events.index("acquisition-admission")
+    assert events.index("acquisition-admission") < events.index("checkpoint")
+    assert events[-2:] == ["source", "checkpoint"]
 
 
-def test_host_source_validator_rejects_checkout_drift(
+def test_status_checkpoint_race_fails_closed_after_action(acquisition: Fixture) -> None:
+    complete = _details(terminal=watch.CANDIDATE_COUNT)
+
+    def status_mutation(_command, _cwd, _env):
+        acquisition.advance_checkpoint()
+        return _completed(_result("acquisition-status", complete))
+
+    with pytest.raises(watch.WatchError, match="mutated or raced"):
+        watch.watch_acquisition(
+            paths=acquisition.paths,
+            runner=FakeRunner([status_mutation]),
+        )
+
+
+def test_source_binding_is_rechecked_after_action(
+    acquisition: Fixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    complete = _details(terminal=watch.CANDIDATE_COUNT)
+    calls = 0
+
+    def source(_paths, _binding):
+        nonlocal calls
+        calls += 1
+        if calls == 4:
+            raise watch.WatchError("post-action source drift")
+
+    with pytest.raises(watch.WatchError, match="post-action source drift"):
+        watch.watch_acquisition(
+            paths=acquisition.paths,
+            runner=FakeRunner([_completed(_result("acquisition-status", complete))]),
+            source_validator=source,
+        )
+
+
+def test_lock_path_replacement_during_action_fails_and_new_lock_is_reacquirable(
+    acquisition: Fixture,
+) -> None:
+    complete = _details(terminal=watch.CANDIDATE_COUNT)
+
+    def replace_lock(_command, _cwd, _env):
+        staged = acquisition.paths.mutation_lock.with_suffix(".replacement")
+        staged.write_bytes(b"")
+        os.replace(staged, acquisition.paths.mutation_lock)
+        return _completed(_result("acquisition-status", complete))
+
+    with pytest.raises(watch.WatchError, match="lock pathname identity changed"):
+        watch.watch_acquisition(
+            paths=acquisition.paths,
+            runner=FakeRunner([replace_lock]),
+        )
+
+    descriptor = os.open(acquisition.paths.mutation_lock, os.O_RDWR)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    finally:
+        os.close(descriptor)
+
+
+def test_signal_is_latched_before_lock_acquisition_and_lock_is_reacquirable(
+    acquisition: Fixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_acquire = watch._acquire_mutation_lock
+
+    def acquire(path):
+        descriptor = real_acquire(path)
+        handler = signal.getsignal(signal.SIGTERM)
+        assert callable(handler)
+        handler(signal.SIGTERM, None)
+        return descriptor
+
+    monkeypatch.setattr(watch, "_acquire_mutation_lock", acquire)
+    with pytest.raises(watch.WatchSignalInterrupt) as interrupted:
+        watch.watch_acquisition(paths=acquisition.paths, runner=FakeRunner([]))
+    assert interrupted.value.signum == signal.SIGTERM
+
+    descriptor = os.open(acquisition.paths.mutation_lock, os.O_RDWR)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    finally:
+        os.close(descriptor)
+
+
+def test_signal_latched_after_final_success_check_is_not_swallowed(
+    acquisition: Fixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    complete = _details(terminal=watch.CANDIDATE_COUNT)
+    original_raise = watch._SignalLatch.raise_if_set
+    checks = 0
+
+    def latch_immediately_after_fourth_check(latch: watch._SignalLatch) -> None:
+        nonlocal checks
+        checks += 1
+        original_raise(latch)
+        if checks == 4:
+            handler = signal.getsignal(signal.SIGTERM)
+            assert callable(handler)
+            handler(signal.SIGTERM, None)
+
+    monkeypatch.setattr(
+        watch._SignalLatch,
+        "raise_if_set",
+        latch_immediately_after_fourth_check,
+    )
+    with pytest.raises(watch.WatchSignalInterrupt) as interrupted:
+        watch.watch_acquisition(
+            paths=acquisition.paths,
+            runner=FakeRunner([_completed(_result("acquisition-status", complete))]),
+        )
+    assert interrupted.value.signum == signal.SIGTERM
+    assert checks == 4
+    assert watch._active_signal_latch is None
+
+    descriptor = os.open(acquisition.paths.mutation_lock, os.O_RDWR)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    finally:
+        os.close(descriptor)
+
+
+def test_signal_latch_unblocks_watched_signal_and_restores_exact_prior_mask() -> None:
+    original_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
+    entered_mask = set(original_mask) | {signal.SIGTERM}
+    try:
+        with pytest.raises(watch.WatchSignalInterrupt) as interrupted:
+            with watch._SignalLatch() as latch:
+                active_mask = signal.pthread_sigmask(signal.SIG_BLOCK, set())
+                assert active_mask == entered_mask.difference(latch.watched)
+                os.kill(os.getpid(), signal.SIGTERM)
+        assert interrupted.value.signum == signal.SIGTERM
+        restored_mask = signal.pthread_sigmask(signal.SIG_BLOCK, set())
+        assert restored_mask == entered_mask
+    finally:
+        if signal.SIGTERM in signal.sigpending():
+            signal.sigwait({signal.SIGTERM})
+        signal.pthread_sigmask(signal.SIG_SETMASK, original_mask)
+
+
+@pytest.mark.parametrize(
+    ("signum", "status"),
+    (
+        (signal.SIGHUP, 129),
+        (signal.SIGINT, 130),
+        (signal.SIGQUIT, 131),
+        (signal.SIGTERM, 143),
+    ),
+)
+def test_main_maps_latched_terminal_signals_to_resume_status(
+    signum: int,
+    status: int,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        watch,
+        "watch_acquisition",
+        lambda **_kwargs: (_ for _ in ()).throw(watch.WatchSignalInterrupt(signum)),
+    )
+    assert watch.main([]) == status
+    assert "resume from checkpoint" in capsys.readouterr().err
+
+
+def test_stable_receipt_read_detects_path_replacement(
+    acquisition: Fixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_read = watch.os.read
+    replaced = False
+
+    def racing_read(descriptor: int, length: int) -> bytes:
+        nonlocal replaced
+        content = real_read(descriptor, length)
+        if content and not replaced:
+            replaced = True
+            replacement = acquisition.paths.checkpoint.with_suffix(".replacement")
+            replacement.write_bytes(acquisition.paths.checkpoint.read_bytes())
+            os.replace(replacement, acquisition.paths.checkpoint)
+        return content
+
+    monkeypatch.setattr(watch.os, "read", racing_read)
+    with pytest.raises(watch.WatchError, match="changed while it was read"):
+        watch._read_stable_file(
+            acquisition.paths.checkpoint,
+            root=acquisition.paths.lab_root,
+            label="checkpoint",
+        )
+
+
+def test_host_source_validator_uses_two_identical_fixed_git_snapshots(
     acquisition: Fixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     binding = watch._validate_acquisition_binding(acquisition.paths)
+    calls: list[tuple[tuple[str, ...], Path | None]] = []
 
     def git_text(_paths, *arguments, cwd=None):
+        calls.append((arguments, cwd))
         if arguments == ("rev-parse", "HEAD"):
             return (
                 binding.source["neqo_commit"]
@@ -803,9 +1046,1442 @@ def test_host_source_validator_rejects_checkout_drift(
         if arguments == ("ls-files", "--stage", "--", "neqo-qcsd"):
             return f"160000 {binding.source['neqo_pinned_commit']} 0\tneqo-qcsd"
         if arguments == ("status", "--porcelain", "--untracked-files=all"):
-            return " M drifted.py" if cwd is None else ""
+            return ""
         raise AssertionError((arguments, cwd))
 
     monkeypatch.setattr(watch, "_git_text", git_text)
-    with pytest.raises(watch.WatchError, match="drifted"):
+    monkeypatch.setattr(watch, "_verify_git_checkout_binding", lambda *_args: None)
+    monkeypatch.setattr(watch, "_verify_git_index_bytes", lambda *_args: None)
+    _REAL_VALIDATE_HOST_SOURCE(acquisition.paths, binding)
+    assert len(calls) == 10
+
+
+def test_host_source_validator_rejects_snapshot_race(
+    acquisition: Fixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    binding = watch._validate_acquisition_binding(acquisition.paths)
+    snapshots = iter(
+        (
+            ("a", "b", "c", "", ""),
+            ("a", "b", "c", " M raced", ""),
+        )
+    )
+    monkeypatch.setattr(watch, "_host_source_snapshot", lambda _paths: next(snapshots))
+    with pytest.raises(watch.WatchError, match="changed while source was verified"):
         _REAL_VALIDATE_HOST_SOURCE(acquisition.paths, binding)
+
+
+def test_watch_git_verifier_rejects_clean_filter_bytes(tmp_path: Path) -> None:
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    subprocess.run(("git", "-C", checkout, "init", "-q"), check=True)
+    subprocess.run(("git", "-C", checkout, "config", "user.name", "test"), check=True)
+    subprocess.run(("git", "-C", checkout, "config", "user.email", "test@example.invalid"), check=True)
+    (checkout / "payload").write_bytes(b"clean")
+    (checkout / ".gitattributes").write_text("payload filter=hide\n", encoding="ascii")
+    subprocess.run(("git", "-C", checkout, "add", "."), check=True)
+    subprocess.run(("git", "-C", checkout, "commit", "-qm", "initial"), check=True)
+    subprocess.run(
+        ("git", "-C", checkout, "config", "filter.hide.clean", "printf clean"),
+        check=True,
+    )
+    (checkout / "payload").write_bytes(b"evil!")
+    assert subprocess.check_output(
+        ("git", "-C", checkout, "status", "--porcelain")
+    ) == b""
+    paths = watch.WatchPaths.from_lab_root(checkout, state_base=tmp_path / "state")
+    watch._verify_git_checkout_binding(paths, checkout, checkout / ".git")
+    with pytest.raises(watch.WatchError, match="raw bytes"):
+        watch._verify_git_index_bytes(paths, checkout)
+
+
+def test_watch_git_binding_rejects_local_exclude_and_worktree_redirect(
+    tmp_path: Path,
+) -> None:
+    checkout = tmp_path / "checkout"
+    alternate = tmp_path / "alternate"
+    checkout.mkdir()
+    alternate.mkdir()
+    subprocess.run(("git", "-C", checkout, "init", "-q"), check=True)
+    paths = watch.WatchPaths.from_lab_root(checkout, state_base=tmp_path / "state")
+    (checkout / ".git/info/exclude").write_text("hidden.py\n", encoding="ascii")
+    with pytest.raises(watch.WatchError, match="hide checkout bytes"):
+        watch._verify_git_checkout_binding(paths, checkout, checkout / ".git")
+    (checkout / ".git/info/exclude").write_text("# comments only\n", encoding="ascii")
+    subprocess.run(
+        ("git", "-C", checkout, "config", "core.worktree", str(alternate)), check=True
+    )
+    with pytest.raises(watch.WatchError, match="redirected worktree"):
+        watch._verify_git_checkout_binding(paths, checkout, checkout / ".git")
+
+
+def _scope_inventory(state_root: Path | None = None) -> tuple[set[Path], set[str]]:
+    roots = set(state_root.glob("scope.*")) if state_root is not None else set()
+    completed = subprocess.run(
+        (
+            "/usr/bin/systemctl",
+            "--user",
+            "list-units",
+            "--all",
+            "--plain",
+            "--no-legend",
+            "qcsd-class-watch-*.scope",
+        ),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+        timeout=5,
+        env=watch._safe_host_environment(),
+    )
+    if completed.returncode != 0:
+        pytest.skip("user systemd is unavailable")
+    units = {line.split()[0] for line in completed.stdout.splitlines() if line.split()}
+    return roots, units
+
+
+def _force_remove_test_scope_root(root: Path, *, state_root: Path) -> None:
+    """Remove a test-owned inert fixture, including deliberately corrupt records."""
+    assert root.parent == state_root
+    token = root.name.rsplit(".", 1)[-1]
+    assert re.fullmatch(r"[0-9a-f]{32}", token)
+    assert watch._wait_scope_absent(
+        f"qcsd-class-watch-{token}.scope", watch._safe_host_environment()
+    )
+    for child in root.iterdir():
+        assert child.is_file() and not child.is_symlink()
+        child.unlink()
+    root.rmdir()
+
+
+def _scope_test_state(tmp_path: Path) -> tuple[Path, int]:
+    paths = watch.WatchPaths.from_lab_root(
+        tmp_path,
+        state_base=tmp_path / "watch-state",
+    )
+    state_root = watch._ensure_state_namespace(paths)
+    descriptor = watch._acquire_mutation_lock(paths.mutation_lock)
+    return state_root, descriptor
+
+
+def test_state_namespace_promotes_exact_interrupted_publication(tmp_path: Path) -> None:
+    paths = watch.WatchPaths.from_lab_root(
+        tmp_path / "lab",
+        state_base=tmp_path / "watch-state",
+    )
+    watch._create_private_state_directory(paths.state_base, label="test state base")
+    watch._create_private_state_directory(paths.state_root, label="test state namespace")
+    expected = dict(watch._state_namespace_identity(paths))
+    expected["namespace_sha256"] = paths.namespace_sha256
+    staged = paths.state_root / "NAMESPACE.json.next"
+    staged.write_bytes(_canonical(expected))
+    staged.chmod(0o600)
+
+    assert watch._ensure_state_namespace(paths) == paths.state_root
+    assert (paths.state_root / "NAMESPACE.json").read_bytes() == _canonical(expected)
+    assert not staged.exists()
+
+
+def test_state_namespace_removes_only_safe_stale_publication(tmp_path: Path) -> None:
+    paths = watch.WatchPaths.from_lab_root(
+        tmp_path / "lab",
+        state_base=tmp_path / "watch-state",
+    )
+    state_root = watch._ensure_state_namespace(paths)
+    staged = state_root / "NAMESPACE.json.next"
+    staged.write_bytes(b"interrupted publication")
+    staged.chmod(0o600)
+
+    assert watch._ensure_state_namespace(paths) == state_root
+    assert not staged.exists()
+
+
+def test_state_namespace_does_not_replace_unsafe_receipt_path(tmp_path: Path) -> None:
+    paths = watch.WatchPaths.from_lab_root(
+        tmp_path / "lab",
+        state_base=tmp_path / "watch-state",
+    )
+    watch._create_private_state_directory(paths.state_base, label="test state base")
+    watch._create_private_state_directory(paths.state_root, label="test state namespace")
+    namespace = paths.state_root / "NAMESPACE.json"
+    namespace.symlink_to(tmp_path / "missing-target")
+
+    with pytest.raises(watch.WatchError, match="private single regular file"):
+        watch._ensure_state_namespace(paths)
+    assert namespace.is_symlink()
+
+
+def _publish_test_scope_request(
+    root: Path,
+    supervision: dict[str, Any],
+    *,
+    wrapper_pid: int,
+) -> None:
+    request = {
+        "action_sha256": supervision["action_sha256"],
+        "artifact_type": "qcsd-class-watch-scope-request",
+        "request_authority_sha256": supervision["request_authority_sha256"],
+        "request_nonce": supervision["request_nonce"],
+        "schema_version": 1,
+        "scope_token": supervision["scope_token"],
+        "scope_unit": supervision["scope_unit"],
+        "source_binding_sha256": supervision["source_binding_sha256"],
+        "state_namespace_sha256": supervision["state_namespace_sha256"],
+        "wrapper_pid": wrapper_pid,
+    }
+    (root / "REQUEST").write_bytes(_canonical(request))
+    (root / "REQUEST").chmod(0o600)
+
+
+def _locked_descriptor(path: Path) -> int:
+    path.write_bytes(b"")
+    descriptor = os.open(path, os.O_RDWR)
+    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    return descriptor
+
+
+def test_real_scope_gates_execution_authenticates_current_scope_and_leaves_no_residue(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_root, descriptor = _scope_test_state(tmp_path)
+    before = _scope_inventory(state_root)
+    marker = tmp_path / "action-started"
+    lock_state = os.fstat(descriptor)
+    lock_identity = f"{lock_state.st_dev}:{lock_state.st_ino}"
+    real_publish = watch._publish_scope_go
+
+    def publish(root: Path, *, authority: str) -> None:
+        assert not marker.exists()
+        record, _, recovery = watch._read_scope_record(root, state_root=state_root)
+        assert recovery is False
+        assert record["phase"] == "armed-for-exec"
+        real_publish(root, authority=authority)
+
+    monkeypatch.setattr(watch, "_publish_scope_go", publish)
+    try:
+        completed = watch._subprocess_runner(
+            (
+                "/usr/bin/bash",
+                "--noprofile",
+                "--norc",
+                "-c",
+                    (
+                        f"birth_identity=$(/usr/bin/stat -Lc '%d:%i' "
+                        f"\"${{{watch.SCOPE_ROOT_ENV}}}/BIRTH.lock\") || exit 89; "
+                        "for fd_path in /proc/$$/fd/*; do "
+                        "observed=$(/usr/bin/stat -Lc '%d:%i' -- \"${fd_path}\") || exit 90; "
+                        f"test \"${{observed}}\" != {lock_identity} || exit 91; "
+                        "test \"${observed}\" != \"${birth_identity}\" || exit 92; "
+                        "done; "
+                        f"test ! -e /proc/$$/fd/{descriptor} && "
+                            "printf started >\"$1\""
+                    ),
+                    "acquisition-admission",
+                    str(marker),
+                ),
+            cwd=tmp_path,
+            env={},
+            authority_fd=descriptor,
+            state_root=state_root,
+            source_binding_sha256="a" * 64,
+        )
+    finally:
+        os.close(descriptor)
+    assert completed.returncode == 0
+    assert completed.stdout == ""
+    assert completed.stderr == ""
+    assert marker.read_text(encoding="ascii") == "started"
+    assert _scope_inventory(state_root) == before
+
+
+def test_pending_signal_at_scope_decision_never_publishes_go_or_action(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_root, descriptor = _scope_test_state(tmp_path)
+    before = _scope_inventory(state_root)
+    marker = tmp_path / "action-started"
+    published = False
+    real_publish = watch._publish_scope_go
+
+    def publish(root: Path, *, authority: str) -> None:
+        nonlocal published
+        published = True
+        real_publish(root, authority=authority)
+
+    monkeypatch.setattr(watch, "_publish_scope_go", publish)
+    monkeypatch.setattr(watch.signal, "sigpending", lambda: {signal.SIGTERM})
+    try:
+        with pytest.raises(watch.WatchSignalInterrupt) as interrupted:
+            watch._subprocess_runner(
+                (
+                    "/usr/bin/bash",
+                    "--noprofile",
+                    "--norc",
+                    "-c",
+                    'printf started >"$1"',
+                    "acquisition-admission",
+                    str(marker),
+                ),
+                cwd=tmp_path,
+                env={},
+                authority_fd=descriptor,
+                state_root=state_root,
+                source_binding_sha256="a" * 64,
+            )
+    finally:
+        os.close(descriptor)
+    assert interrupted.value.signum == signal.SIGTERM
+    assert published is False
+    assert not marker.exists()
+    assert _scope_inventory(state_root) == before
+
+
+@pytest.mark.parametrize("mismatch", ("action", "source"))
+def test_internal_scope_admission_rejects_expected_binding_mismatch(
+    tmp_path: Path,
+    mismatch: str,
+) -> None:
+    state_root, descriptor = _scope_test_state(tmp_path)
+    before = _scope_inventory(state_root)
+    action_value = (
+        "b" * 64 if mismatch == "action" else f"${{{watch.SCOPE_ACTION_ENV}}}"
+    )
+    source_value = (
+        "b" * 64 if mismatch == "source" else f"${{{watch.SCOPE_SOURCE_ENV}}}"
+    )
+    script = (
+        "exec /usr/bin/python3 -I \"$1\" "
+        "--recover-stale-scopes-internal "
+        f"--state-root-internal \"${{{watch.SCOPE_STATE_ROOT_ENV}}}\" "
+        f"--current-scope-root-internal \"${{{watch.SCOPE_ROOT_ENV}}}\" "
+        f"--current-authority-internal \"${{{watch.SCOPE_AUTHORITY_ENV}}}\" "
+        f"--expected-action-sha256-internal \"{action_value}\" "
+        f"--expected-source-binding-sha256-internal \"{source_value}\""
+    )
+    try:
+        completed = watch._subprocess_runner(
+            (
+                "/usr/bin/bash",
+                "--noprofile",
+                "--norc",
+                "-c",
+                script,
+                "acquisition-admission",
+                str(Path(__file__).parents[1] / "tools/class_acquisition_watch.py"),
+            ),
+            cwd=tmp_path,
+            env={},
+            authority_fd=descriptor,
+            state_root=state_root,
+            source_binding_sha256="a" * 64,
+        )
+    finally:
+        os.close(descriptor)
+    assert completed.returncode == 1
+    assert "scope recovery failed" in completed.stderr
+    assert _scope_inventory(state_root) == before
+
+
+@pytest.mark.parametrize(
+    "omitted",
+    ("--expected-action-sha256-internal", "--expected-source-binding-sha256-internal"),
+)
+def test_internal_recovery_cli_requires_both_expected_bindings(
+    tmp_path: Path,
+    omitted: str,
+) -> None:
+    arguments = [
+        "--recover-stale-scopes-internal",
+        "--state-root-internal",
+        str(tmp_path / "state"),
+        "--current-scope-root-internal",
+        str(tmp_path / "scope"),
+        "--current-authority-internal",
+        "a" * 64,
+        "--expected-action-sha256-internal",
+        "b" * 64,
+        "--expected-source-binding-sha256-internal",
+        "c" * 64,
+    ]
+    index = arguments.index(omitted)
+    del arguments[index : index + 2]
+
+    assert watch.main(arguments) == 1
+
+
+@pytest.mark.parametrize("redirect", (True, False), ids=("closed-stdio", "retained-stdio"))
+def test_real_scope_kills_setsid_descendant_fails_and_releases_inherited_lock(
+    tmp_path: Path,
+    redirect: bool,
+) -> None:
+    state_root, descriptor = _scope_test_state(tmp_path)
+    before = _scope_inventory(state_root)
+    lock_path = state_root / "WATCH.lock"
+    try:
+        with pytest.raises(watch.WatchError, match="surviving cgroup descendant"):
+            watch._subprocess_runner(
+                (
+                    "/usr/bin/bash",
+                    "--noprofile",
+                    "--norc",
+                    "-c",
+                    (
+                        "/usr/bin/setsid /usr/bin/bash --noprofile --norc -c "
+                        f"'{('exec >/dev/null 2>&1; ' if redirect else '')}"
+                        "/usr/bin/sleep 60' & "
+                        "printf 'parent-finished\\n'"
+                    ),
+                    "acquisition-status",
+                ),
+                cwd=tmp_path,
+                env={},
+                authority_fd=descriptor,
+                state_root=state_root,
+                source_binding_sha256="a" * 64,
+            )
+    finally:
+        os.close(descriptor)
+
+    reacquired = os.open(lock_path, os.O_RDWR)
+    try:
+        fcntl.flock(reacquired, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    finally:
+        os.close(reacquired)
+    assert _scope_inventory(state_root) == before
+
+
+def test_stale_durable_scope_record_is_sigkilled_recovered_and_removed(
+    tmp_path: Path,
+) -> None:
+    state_root, descriptor = _scope_test_state(tmp_path)
+    before = _scope_inventory(state_root)
+    token = "f" * 32
+    unit = f"qcsd-class-watch-{token}.scope"
+    root, supervision, birth_lock_fd = watch._create_scope_root(
+        state_root=state_root,
+        unit=unit,
+        command=("/usr/bin/sleep", "60", "acquisition-status"),
+        authority_fd=descriptor,
+        source_binding_sha256="a" * 64,
+    )
+    os.close(birth_lock_fd)
+    stale = dict(supervision)
+    stale.update(
+        {
+            "supervisor_pid": 999_999_999,
+            "supervisor_start_time": 1,
+            "supervisor_session": 1,
+            "supervisor_process_group": 1,
+        }
+    )
+    environment = watch._safe_host_environment()
+    process = subprocess.Popen(
+        (
+            "/usr/bin/systemd-run",
+            "--user",
+            "--scope",
+            "--collect",
+            "--quiet",
+            "--expand-environment=no",
+            f"--unit={unit}",
+            "--property=KillMode=control-group",
+            "--property=KillSignal=SIGKILL",
+            "--",
+            "/usr/bin/sleep",
+            "60",
+        ),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=environment,
+        start_new_session=True,
+    )
+    try:
+        deadline = watch.time.monotonic() + 5
+        while watch.time.monotonic() < deadline:
+            state = watch._scope_state(unit, environment)
+            if state.processes:
+                break
+            watch.time.sleep(0.05)
+        else:
+            pytest.fail("test scope did not become populated")
+        wrapper_pid = next(pid for pid in state.processes if pid > 0)
+        _publish_test_scope_request(root, stale, wrapper_pid=wrapper_pid)
+        wrapper_process = watch._process_identity(wrapper_pid)
+        assert wrapper_process is not None
+        start_time, session, process_group = wrapper_process
+        armed = watch._replace_scope_phase(
+            root,
+            stale,
+            phase="request-authorised",
+            wrapper_identity=(wrapper_pid, start_time, session, process_group),
+            state_root=state_root,
+        )
+        watch._replace_scope_phase(
+            root,
+            armed,
+            phase="armed-for-exec",
+            wrapper_identity=(wrapper_pid, start_time, session, process_group),
+            state_root=state_root,
+        )
+
+        assert watch._recover_stale_scope_roots(state_root=state_root) == 1
+        process.communicate(timeout=5)
+    finally:
+        if process.poll() is None:
+            subprocess.run(
+                (
+                    "/usr/bin/systemctl",
+                    "--user",
+                    "kill",
+                    "--kill-whom=all",
+                    "--signal=SIGKILL",
+                    "--",
+                    unit,
+                ),
+                env=environment,
+                check=False,
+                timeout=5,
+            )
+            process.kill()
+            process.communicate(timeout=5)
+        os.close(descriptor)
+    assert not root.exists()
+    assert _scope_inventory(state_root) == before
+
+
+def test_sigkill_supervisor_releases_lock_and_restart_recovers_live_scope(
+    tmp_path: Path,
+) -> None:
+    paths = watch.WatchPaths.from_lab_root(
+        tmp_path,
+        state_base=tmp_path / "watch-state",
+    )
+    state_root = watch._ensure_state_namespace(paths)
+    before = _scope_inventory(state_root)
+    marker = tmp_path / "action-started"
+    repository = Path(__file__).parents[1]
+    child_program = """
+import os
+import sys
+from pathlib import Path
+from tools import class_acquisition_watch as watch
+
+paths = watch.WatchPaths.from_lab_root(Path(sys.argv[1]), state_base=Path(sys.argv[2]))
+state_root = watch._ensure_state_namespace(paths)
+descriptor = watch._acquire_mutation_lock(paths.mutation_lock)
+command = (
+    "/usr/bin/bash", "--noprofile", "--norc", "-c",
+    f"printf started > {sys.argv[3]}; /usr/bin/sleep 60",
+    "acquisition-status",
+)
+try:
+    watch._subprocess_runner(
+        command,
+        cwd=Path(sys.argv[1]),
+        env={},
+        authority_fd=descriptor,
+        state_root=state_root,
+        source_binding_sha256="a" * 64,
+    )
+finally:
+    os.close(descriptor)
+"""
+    supervisor = subprocess.Popen(
+        (
+            sys.executable,
+            "-c",
+            child_program,
+            str(tmp_path),
+            str(paths.state_base),
+            str(marker),
+        ),
+        cwd=repository,
+        env=watch._safe_host_environment(),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    recovered_descriptor: int | None = None
+    environment = watch._safe_host_environment()
+    try:
+        deadline = watch.time.monotonic() + 10
+        scope_root: Path | None = None
+        while watch.time.monotonic() < deadline:
+            roots = list(state_root.glob("scope.*"))
+            if len(roots) == 1 and marker.exists():
+                record, _, recovery = watch._read_scope_record(
+                    roots[0],
+                    state_root=state_root,
+                )
+                if not recovery and record["phase"] == "armed-for-exec":
+                    scope_root = roots[0]
+                    break
+            watch.time.sleep(0.05)
+        assert scope_root is not None, "supervised action did not become armed"
+
+        supervisor.kill()
+        assert supervisor.wait(timeout=5) == -signal.SIGKILL
+
+        # The scoped action never inherited this supervisory lock, so a new
+        # watcher can acquire it immediately and recover the still-live unit.
+        recovered_descriptor = watch._acquire_mutation_lock(paths.mutation_lock)
+        assert watch._recover_stale_scope_roots(state_root=state_root) == 1
+        assert not scope_root.exists()
+    finally:
+        if supervisor.poll() is None:
+            supervisor.kill()
+            supervisor.wait(timeout=5)
+        for scope_root in list(state_root.glob("scope.*")):
+            token = scope_root.name.rsplit(".", 1)[1]
+            unit = f"qcsd-class-watch-{token}.scope"
+            subprocess.run(
+                (
+                    "/usr/bin/systemctl",
+                    "--user",
+                    "kill",
+                    "--kill-whom=all",
+                    "--signal=SIGKILL",
+                    "--",
+                    unit,
+                ),
+                env=environment,
+                check=False,
+                timeout=5,
+            )
+            watch._wait_scope_empty(
+                unit,
+                environment,
+                deadline=watch.time.monotonic() + 5,
+            )
+            if scope_root.exists():
+                _force_remove_test_scope_root(scope_root, state_root=state_root)
+        if recovered_descriptor is not None:
+            os.close(recovered_descriptor)
+    assert _scope_inventory(state_root) == before
+
+
+@pytest.mark.parametrize(
+    "interruption_phase",
+    ("after-popen-before-request", "request-authorised", "armed-for-exec"),
+)
+def test_sigkill_handshake_restart_closes_delayed_scope_birth(
+    tmp_path: Path,
+    interruption_phase: str,
+) -> None:
+    paths = watch.WatchPaths.from_lab_root(
+        tmp_path,
+        state_base=tmp_path / "watch-state",
+    )
+    state_root = watch._ensure_state_namespace(paths)
+    before = _scope_inventory(state_root)
+    marker = tmp_path / "interruption-point"
+    repository = Path(__file__).parents[1]
+    child_program = r'''
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+from tools import class_acquisition_watch as watch
+
+paths = watch.WatchPaths.from_lab_root(Path(sys.argv[1]), state_base=Path(sys.argv[2]))
+state_root = watch._ensure_state_namespace(paths)
+descriptor = watch._acquire_mutation_lock(paths.mutation_lock)
+marker = Path(sys.argv[3])
+phase = sys.argv[4]
+if phase == "after-popen-before-request":
+    watch._SCOPE_WRAPPER = (
+        "/usr/bin/sleep 1\n" + watch._SCOPE_WRAPPER.replace("{1..300}", "{1..20}")
+    )
+    real_popen = subprocess.Popen
+    def delayed_popen(command, **kwargs):
+        process = real_popen(command, **kwargs)
+        if isinstance(command, tuple) and watch._HOST_SCOPE_LAUNCHER in command:
+            marker.write_text("after-popen-before-request", encoding="ascii")
+        return process
+    watch.subprocess.Popen = delayed_popen
+else:
+    watch._SCOPE_WRAPPER = watch._SCOPE_WRAPPER.replace("{1..300}", "{1..100}")
+    real_replace = watch._replace_scope_phase
+    def delayed_phase(root, supervision, *, phase: str, wrapper_identity, state_root):
+        updated = real_replace(
+            root,
+            supervision,
+            phase=phase,
+            wrapper_identity=wrapper_identity,
+            state_root=state_root,
+        )
+        if phase == sys.argv[4]:
+            marker.write_text(phase, encoding="ascii")
+            time.sleep(60)
+        return updated
+    watch._replace_scope_phase = delayed_phase
+command = (
+    "/usr/bin/bash", "--noprofile", "--norc", "-c", "/usr/bin/sleep 60",
+    "acquisition-status",
+)
+try:
+    watch._subprocess_runner(
+        command,
+        cwd=Path(sys.argv[1]),
+        env={},
+        authority_fd=descriptor,
+        state_root=state_root,
+        source_binding_sha256="a" * 64,
+    )
+finally:
+    os.close(descriptor)
+'''
+    supervisor = subprocess.Popen(
+        (
+            sys.executable,
+            "-c",
+            child_program,
+            str(tmp_path),
+            str(paths.state_base),
+            str(marker),
+            interruption_phase,
+        ),
+        cwd=repository,
+        env=watch._safe_host_environment(),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    recovered_descriptor: int | None = None
+    environment = watch._safe_host_environment()
+    try:
+        deadline = watch.time.monotonic() + 10
+        scope_root: Path | None = None
+        while watch.time.monotonic() < deadline:
+            roots = list(state_root.glob("scope.*"))
+            if len(roots) == 1 and marker.exists():
+                scope_root = roots[0]
+                if interruption_phase == "after-popen-before-request":
+                    assert not (scope_root / "REQUEST").exists()
+                break
+            if supervisor.poll() is not None:
+                pytest.fail("test supervisor exited before the requested interruption")
+            watch.time.sleep(0.05)
+        assert scope_root is not None, "supervisor did not reach the interruption point"
+
+        supervisor.kill()
+        assert supervisor.wait(timeout=5) == -signal.SIGKILL
+        recovered_descriptor = watch._acquire_mutation_lock(paths.mutation_lock)
+        assert watch._recover_stale_scope_roots(state_root=state_root) == 1
+        watch.time.sleep(0.2)
+        assert not scope_root.exists()
+    finally:
+        if supervisor.poll() is None:
+            supervisor.kill()
+            supervisor.wait(timeout=5)
+        for scope_root in list(state_root.glob("scope.*")):
+            token = scope_root.name.rsplit(".", 1)[1]
+            unit = f"qcsd-class-watch-{token}.scope"
+            subprocess.run(
+                (
+                    "/usr/bin/systemctl",
+                    "--user",
+                    "kill",
+                    "--kill-whom=all",
+                    "--signal=SIGKILL",
+                    "--",
+                    unit,
+                ),
+                env=environment,
+                check=False,
+                timeout=5,
+            )
+            watch._wait_scope_empty(
+                unit,
+                environment,
+                deadline=watch.time.monotonic() + 5,
+            )
+            try:
+                birth_fd = watch._wait_scope_birth_lock(
+                    scope_root,
+                    record=None,
+                    deadline=watch.time.monotonic() + 5,
+                )
+            except watch.WatchError:
+                birth_fd = None
+            if birth_fd is not None:
+                os.close(birth_fd)
+            if scope_root.exists():
+                _force_remove_test_scope_root(scope_root, state_root=state_root)
+        if recovered_descriptor is not None:
+            os.close(recovered_descriptor)
+    assert _scope_inventory(state_root) == before
+
+
+def test_prelaunch_scope_publication_failure_removes_staged_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state_root, descriptor = _scope_test_state(tmp_path)
+    before = _scope_inventory(state_root)
+    real_replace = watch.os.replace
+    calls = 0
+
+    def replace(source, destination):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("injected directory publication failure")
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(watch.os, "replace", replace)
+    try:
+        with pytest.raises(watch.WatchError, match="durable acquisition scope root"):
+            watch._create_scope_root(
+                state_root=state_root,
+                unit="qcsd-class-watch-" + "e" * 32 + ".scope",
+                command=("ignored", "acquisition-status"),
+                authority_fd=descriptor,
+                source_binding_sha256="a" * 64,
+            )
+    finally:
+        os.close(descriptor)
+    assert _scope_inventory(state_root) == before
+
+
+def test_unpublished_prelaunch_root_is_recovered_without_a_unit(tmp_path: Path) -> None:
+    state_root, descriptor = _scope_test_state(tmp_path)
+    before = _scope_inventory(state_root)
+    token = "a" * 32
+    root = state_root / f"scope.next.{token}"
+    root.mkdir(mode=0o700)
+    try:
+        assert watch._recover_stale_scope_roots(state_root=state_root) == 1
+    finally:
+        if root.exists():
+            _force_remove_test_scope_root(root, state_root=state_root)
+        os.close(descriptor)
+    assert _scope_inventory(state_root) == before
+
+
+def test_staged_prelaunch_record_is_recovered_without_a_unit(tmp_path: Path) -> None:
+    state_root, descriptor = _scope_test_state(tmp_path)
+    before = _scope_inventory(state_root)
+    token = "9" * 32
+    root = state_root / f"scope.next.{token}"
+    root.mkdir(mode=0o700)
+    (root / "SUPERVISION.next").write_bytes(b"interrupted pre-publication write")
+    (root / "SUPERVISION.next").chmod(0o600)
+    try:
+        assert watch._recover_stale_scope_roots(state_root=state_root) == 1
+    finally:
+        if root.exists():
+            _force_remove_test_scope_root(root, state_root=state_root)
+        os.close(descriptor)
+    assert _scope_inventory(state_root) == before
+
+
+def test_final_scope_root_without_durable_record_fails_closed(tmp_path: Path) -> None:
+    state_root, descriptor = _scope_test_state(tmp_path)
+    before = _scope_inventory(state_root)
+    root = state_root / ("scope." + "8" * 32)
+    root.mkdir(mode=0o700)
+    (root / "SUPERVISION.next").write_bytes(b"interrupted write")
+    (root / "SUPERVISION.next").chmod(0o600)
+    try:
+        with pytest.raises(watch.WatchError, match="no durable lifecycle record"):
+            watch._recover_stale_scope_roots(state_root=state_root)
+    finally:
+        _force_remove_test_scope_root(root, state_root=state_root)
+        os.close(descriptor)
+    assert _scope_inventory(state_root) == before
+
+
+def test_stale_atomic_write_remnant_does_not_block_scope_recovery(
+    tmp_path: Path,
+) -> None:
+    state_root, descriptor = _scope_test_state(tmp_path)
+    before = _scope_inventory(state_root)
+    root, supervision, birth_lock_fd = watch._create_scope_root(
+        state_root=state_root,
+        unit="qcsd-class-watch-" + "c" * 32 + ".scope",
+        command=("ignored", "acquisition-status"),
+        authority_fd=descriptor,
+        source_binding_sha256="a" * 64,
+    )
+    os.close(birth_lock_fd)
+    stale = dict(supervision)
+    stale.update(
+        {
+            "supervisor_pid": 999_999_999,
+            "supervisor_start_time": 1,
+            "supervisor_session": 1,
+            "supervisor_process_group": 1,
+        }
+    )
+    watch._atomic_scope_record(root / "SUPERVISION", stale)
+    staged = root / "SUPERVISION.next"
+    staged.write_bytes(b"interrupted atomic write")
+    staged.chmod(0o600)
+    try:
+        assert watch._recover_stale_scope_roots(state_root=state_root) == 1
+    finally:
+        if root.exists():
+            _force_remove_test_scope_root(root, state_root=state_root)
+        os.close(descriptor)
+    assert _scope_inventory(state_root) == before
+
+
+def test_recovery_validates_every_root_before_mutating_any_root(tmp_path: Path) -> None:
+    state_root, descriptor = _scope_test_state(tmp_path)
+    before = _scope_inventory(state_root)
+    first, supervision, birth_lock_fd = watch._create_scope_root(
+        state_root=state_root,
+        unit="qcsd-class-watch-" + "1" * 32 + ".scope",
+        command=("ignored", "acquisition-status"),
+        authority_fd=descriptor,
+        source_binding_sha256="a" * 64,
+    )
+    os.close(birth_lock_fd)
+    stale = dict(supervision)
+    stale.update(
+        {
+            "supervisor_pid": 999_999_999,
+            "supervisor_start_time": 1,
+            "supervisor_session": 1,
+            "supervisor_process_group": 1,
+        }
+    )
+    watch._atomic_scope_record(first / "SUPERVISION", stale)
+    first_before = (first / "SUPERVISION").read_bytes()
+    malformed = state_root / ("scope." + "2" * 32)
+    malformed.mkdir(mode=0o700)
+    (malformed / "SUPERVISION").write_bytes(b"not canonical JSON\n")
+    (malformed / "SUPERVISION").chmod(0o600)
+    try:
+        with pytest.raises(watch.WatchError, match="malformed"):
+            watch._recover_stale_scope_roots(state_root=state_root)
+        assert first.exists()
+        assert (first / "SUPERVISION").read_bytes() == first_before
+        assert not (first / "RECOVERY").exists()
+    finally:
+        for root in (first, malformed):
+            if root.exists():
+                _force_remove_test_scope_root(root, state_root=state_root)
+        os.close(descriptor)
+    assert _scope_inventory(state_root) == before
+
+
+def test_scope_record_token_unit_and_root_are_structurally_bound(tmp_path: Path) -> None:
+    state_root, descriptor = _scope_test_state(tmp_path)
+    before = _scope_inventory(state_root)
+    root, _, birth_lock_fd = watch._create_scope_root(
+        state_root=state_root,
+        unit="qcsd-class-watch-" + "3" * 32 + ".scope",
+        command=("ignored", "acquisition-status"),
+        authority_fd=descriptor,
+        source_binding_sha256="a" * 64,
+    )
+    os.close(birth_lock_fd)
+    mismatched = state_root / ("scope." + "4" * 32)
+    root.rename(mismatched)
+    try:
+        with pytest.raises(watch.WatchError, match="malformed identity"):
+            watch._recover_stale_scope_roots(state_root=state_root)
+    finally:
+        _force_remove_test_scope_root(mismatched, state_root=state_root)
+        os.close(descriptor)
+    assert _scope_inventory(state_root) == before
+
+
+def test_scope_record_is_bound_to_exact_watch_lock_inode(tmp_path: Path) -> None:
+    state_root, original_descriptor = _scope_test_state(tmp_path)
+    before = _scope_inventory(state_root)
+    root, supervision, birth_lock_fd = watch._create_scope_root(
+        state_root=state_root,
+        unit="qcsd-class-watch-" + "5" * 32 + ".scope",
+        command=("ignored", "acquisition-status"),
+        authority_fd=original_descriptor,
+        source_binding_sha256="a" * 64,
+    )
+    os.close(birth_lock_fd)
+    stale = dict(supervision)
+    stale.update(
+        {
+            "supervisor_pid": 999_999_999,
+            "supervisor_start_time": 1,
+            "supervisor_session": 1,
+            "supervisor_process_group": 1,
+        }
+    )
+    watch._atomic_scope_record(root / "SUPERVISION", stale)
+    replacement = state_root / "WATCH.lock.replacement"
+    replacement.write_bytes(b"")
+    replacement.chmod(0o600)
+    os.replace(replacement, state_root / "WATCH.lock")
+    replacement_descriptor = watch._acquire_mutation_lock(state_root / "WATCH.lock")
+    try:
+        with pytest.raises(watch.WatchError, match="another supervisor lock"):
+            watch._recover_stale_scope_roots(state_root=state_root)
+    finally:
+        _force_remove_test_scope_root(root, state_root=state_root)
+        os.close(replacement_descriptor)
+        os.close(original_descriptor)
+    assert _scope_inventory(state_root) == before
+
+
+def test_scope_record_is_bound_to_exact_birth_lock_inode(tmp_path: Path) -> None:
+    state_root, descriptor = _scope_test_state(tmp_path)
+    before = _scope_inventory(state_root)
+    root, supervision, birth_lock_fd = watch._create_scope_root(
+        state_root=state_root,
+        unit="qcsd-class-watch-" + "6" * 32 + ".scope",
+        command=("ignored", "acquisition-status"),
+        authority_fd=descriptor,
+        source_binding_sha256="a" * 64,
+    )
+    os.close(birth_lock_fd)
+    stale = dict(supervision)
+    stale.update(
+        {
+            "supervisor_pid": 999_999_999,
+            "supervisor_start_time": 1,
+            "supervisor_session": 1,
+            "supervisor_process_group": 1,
+        }
+    )
+    watch._atomic_scope_record(root / "SUPERVISION", stale)
+    replacement = root / "replacement"
+    replacement.write_bytes(b"")
+    replacement.chmod(0o600)
+    os.replace(replacement, root / "BIRTH.lock")
+    try:
+        with pytest.raises(watch.WatchError, match="birth lock identity"):
+            watch._recover_stale_scope_roots(state_root=state_root)
+        assert (root / "SUPERVISION").exists()
+        assert not (root / "RECOVERY").exists()
+    finally:
+        _force_remove_test_scope_root(root, state_root=state_root)
+        os.close(descriptor)
+    assert _scope_inventory(state_root) == before
+
+
+def test_live_scope_supervision_record_blocks_unrelated_recovery(tmp_path: Path) -> None:
+    state_root, descriptor = _scope_test_state(tmp_path)
+    before = _scope_inventory(state_root)
+    root, _, birth_lock_fd = watch._create_scope_root(
+        state_root=state_root,
+        unit="qcsd-class-watch-" + "b" * 32 + ".scope",
+        command=("ignored", "acquisition-status"),
+        authority_fd=descriptor,
+        source_binding_sha256="a" * 64,
+    )
+    os.close(birth_lock_fd)
+    try:
+        with pytest.raises(watch.WatchError, match="another live acquisition scope"):
+            watch._recover_stale_scope_roots(state_root=state_root)
+    finally:
+        _force_remove_test_scope_root(root, state_root=state_root)
+        os.close(descriptor)
+    assert _scope_inventory(state_root) == before
+
+
+def test_subprocess_runner_latches_signal_without_async_exception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    descriptor = _locked_descriptor(tmp_path / "lock")
+
+    def scoped(
+        command,
+        *,
+        cwd,
+        env,
+        authority_fd,
+        state_root,
+        source_binding_sha256,
+        latch,
+    ):
+        assert authority_fd == descriptor
+        assert state_root == tmp_path
+        assert source_binding_sha256 == "a" * 64
+        handler = signal.getsignal(signal.SIGQUIT)
+        assert callable(handler)
+        handler(signal.SIGQUIT, None)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(watch, "_scope_completed", scoped)
+    try:
+        with pytest.raises(watch.WatchSignalInterrupt) as interrupted:
+            watch._subprocess_runner(
+                ("ignored", "acquisition-status"),
+                cwd=tmp_path,
+                env={},
+                authority_fd=descriptor,
+                state_root=tmp_path,
+                source_binding_sha256="a" * 64,
+            )
+    finally:
+        os.close(descriptor)
+    assert interrupted.value.signum == signal.SIGQUIT
+
+
+def test_scope_state_fails_closed_when_kernel_cgroup_is_unreadable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    unit = "qcsd-class-watch-" + "d" * 32 + ".scope"
+    monkeypatch.setattr(
+        watch,
+        "_systemctl",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            (),
+            0,
+            (
+                "LoadState=loaded\n"
+                "ActiveState=active\n"
+                "SubState=running\n"
+                f"ControlGroup=/definitely-missing/{unit}\n"
+            ),
+            "",
+        ),
+    )
+    with pytest.raises(watch.WatchError, match="kernel path is unavailable"):
+        watch._scope_state(unit, watch._safe_host_environment())
+
+
+def test_qcsd_admission_rejects_extra_arguments_before_docker() -> None:
+    root = Path(__file__).parents[1]
+    completed = subprocess.run(
+        (
+            "/usr/bin/bash",
+            str(root / "qcsd-lab"),
+            "class-study",
+            "acquisition-admission",
+            "unexpected",
+        ),
+        cwd=root,
+        env=watch._safe_host_environment(),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+    assert completed.returncode == 2
+    assert "rejects unsupported argument" in completed.stderr
+
+
+@pytest.mark.parametrize("omitted", ("all", watch.SCOPE_ACTION_ENV, watch.SCOPE_SOURCE_ENV))
+def test_qcsd_admission_requires_complete_scope_authority_before_docker(
+    tmp_path: Path,
+    omitted: str,
+) -> None:
+    root = Path(__file__).parents[1]
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    docker = fake_bin / "docker"
+    marker = tmp_path / "docker-was-called"
+    docker.write_text(f"#!/bin/sh\n: > {marker}\nexit 97\n", encoding="utf-8")
+    docker.chmod(0o755)
+    environment = watch._safe_host_environment()
+    environment["PATH"] = f"{fake_bin}:/usr/bin:/bin"
+    if omitted != "all":
+        environment.update(
+            {
+                watch.SCOPE_STATE_ROOT_ENV: str(tmp_path / "state"),
+                watch.SCOPE_ROOT_ENV: str(tmp_path / "scope"),
+                watch.SCOPE_AUTHORITY_ENV: "a" * 64,
+                watch.SCOPE_ACTION_ENV: "b" * 64,
+                watch.SCOPE_SOURCE_ENV: "c" * 64,
+            }
+        )
+        del environment[omitted]
+
+    completed = subprocess.run(
+        (
+            "/usr/bin/bash",
+            str(root / "qcsd-lab"),
+            "class-study",
+            "acquisition-admission",
+        ),
+        cwd=root,
+        env=environment,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+
+    assert completed.returncode == 1
+    assert "requires scoped request authority" in completed.stderr
+    assert not marker.exists()
+
+
+def test_qcsd_rejects_cross_action_scope_digest_before_recovery_or_docker(
+    tmp_path: Path,
+) -> None:
+    root = Path(__file__).parents[1]
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    docker = fake_bin / "docker"
+    marker = tmp_path / "docker-was-called"
+    docker.write_text(f"#!/bin/sh\n: > {marker}\nexit 97\n", encoding="utf-8")
+    docker.chmod(0o755)
+    paths = watch.WatchPaths.from_lab_root(root)
+    replayed_digest = watch._sha256_bytes(
+        watch._canonical_json_bytes(list(watch._status_command(paths)))
+    )
+    environment = watch._safe_host_environment()
+    environment["PATH"] = f"{fake_bin}:/usr/bin:/bin"
+    environment.update(
+        {
+            watch.SCOPE_STATE_ROOT_ENV: str(tmp_path / "state"),
+            watch.SCOPE_ROOT_ENV: str(tmp_path / "scope"),
+            watch.SCOPE_AUTHORITY_ENV: "a" * 64,
+            watch.SCOPE_ACTION_ENV: replayed_digest,
+            watch.SCOPE_SOURCE_ENV: "c" * 64,
+        }
+    )
+
+    completed = subprocess.run(
+        (
+            "/usr/bin/bash",
+            str(root / "qcsd-lab"),
+            "class-study",
+            "acquisition-admission",
+        ),
+        cwd=root,
+        env=environment,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+
+    assert completed.returncode == 1
+    assert "scoped request action does not match current argv" in completed.stderr
+    assert "could not validate scoped watcher authority" not in completed.stderr
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize(
+    ("action", "arguments"),
+    (
+        (
+            "acquisition-run",
+            ("--acquisition-max-candidates", "1", "--acquisition-timeout-ms", "60000"),
+        ),
+        ("acquisition-status", ()),
+    ),
+)
+def test_direct_qcsd_acquisition_action_has_no_watcher_authority_before_docker(
+    tmp_path: Path,
+    action: str,
+    arguments: tuple[str, ...],
+) -> None:
+    root = Path(__file__).parents[1]
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    docker = fake_bin / "docker"
+    marker = tmp_path / "docker-was-called"
+    docker.write_text(f"#!/bin/sh\n: > {marker}\nexit 97\n", encoding="utf-8")
+    docker.chmod(0o755)
+    environment = watch._safe_host_environment()
+    environment["PATH"] = f"{fake_bin}:/usr/bin:/bin"
+
+    completed = subprocess.run(
+        (
+            "/usr/bin/bash",
+            str(root / "qcsd-lab"),
+            "class-study",
+            action,
+            *arguments,
+        ),
+        cwd=root,
+        env=environment,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+
+    assert completed.returncode == 1
+    assert f"class-study {action} requires scoped request authority" in completed.stderr
+    assert not marker.exists()
+
+
+def test_watcher_has_no_direct_docker_discovery_or_cleanup() -> None:
+    source = (Path(__file__).parents[1] / "tools/class_acquisition_watch.py").read_text(
+        encoding="utf-8"
+    )
+    assert "subprocess.run((\"docker\"" not in source
+    assert "container inspect" not in source
+    assert "container rm" not in source
+    assert "_cleanup_orphan_container" not in source
+    assert "acquisition-admission" in source
+
+
+def test_acquisition_run_has_nested_truthful_action_deadlines() -> None:
+    watcher_source = (
+        Path(__file__).parents[1] / "tools/class_acquisition_watch.py"
+    ).read_text(encoding="utf-8")
+    launcher_source = (Path(__file__).parents[1] / "qcsd-lab").read_text(
+        encoding="utf-8"
+    )
+    assert "MAX_CANDIDATES = 1" in watcher_source
+    assert 'kill_signal = "SIGINT" if graceful_run else "SIGKILL"' in watcher_source
+    assert "ACQUISITION_ACTION_TIMEOUT_SECONDS = 1_800" in watcher_source
+    assert "ACQUISITION_ACTION_CLEANUP_SECONDS = 120" in watcher_source
+    assert watch.RUN_RUNTIME_SECONDS == 1_920
+    assert watch.ACQUISITION_OUTER_HARD_SECONDS == 2_040
+    assert watch.MINIMUM_BASELINE_SPACING_SECONDS == 2_400
+    assert watch._ACQUISITION_ACTION_TIMING_CONTRACT[
+        "direct_public_acquisition_run"
+    ] == "forbidden-without-validated-watcher-scope-authority"
+    assert watch._ACQUISITION_ACTION_TIMING_CONTRACT[
+        "successful_ledger_attempt_duration_limit_ms"
+    ] == 1_800_000
+    assert watch._ACQUISITION_ACTION_TIMING_CONTRACT[
+        "whole_action_duration_evidence"
+    ] == "externally-enforced-process-status-no-per-action-duration-receipt"
+    assert watch._BASELINE_SCHEDULING_CONTRACT == {
+        "schema_version": 1,
+        "policy": "serial-nonoverlapping-stability-window-reservations-v1",
+        "minimum_baseline_spacing_ms": 2_400_000,
+        "window_start_reservation_ms": 2_400_000,
+        "longest_probe_window_width_ms": 1_800_000,
+        "acquisition_outer_configured_hard_cutoff_ms": 2_040_000,
+        "status_configured_hard_cutoff_ms": 310_000,
+        "scheduler_margin_ms": 50_000,
+        "navigation_phase": "separate-bounded-action-before-baseline",
+        "short_probe": "same-action-wait-until-t+30s-earliest",
+        "outer_probes": "watcher-launches-acquisition-run-at-window-earliest",
+        "serial_action_start_offsets_ms": [0, 85_500_000, 258_300_000],
+        "stability_window_earliest_offsets_ms": [
+            25_000,
+            85_500_000,
+            258_300_000,
+        ],
+        "collision_scope": (
+            "baseline-arming-and-t+24h-t+72h-action-starts-across-candidates"
+        ),
+        "strict_serial_zero_duration_projection": {
+            "candidate_count": 600,
+            "algorithm": "greedy-earliest-safe-baseline",
+            "last_baseline_offset_ms": 5_655_900_000,
+            "last_t+72h_earliest_offset_ms": 5_914_200_000,
+        },
+    }
+    assert "-- /usr/bin/timeout --signal=INT --kill-after=120s 1800s" \
+        in launcher_source
+    assert "canonical one-candidate action bounds" in launcher_source
+
+
+@pytest.mark.parametrize("fault_label", (
+    "acquisition scope output removal",
+    "acquisition scope birth-lock removal",
+    "acquisition scope recovery-record removal",
+    "acquisition scope root removal",
+))
+def test_scope_teardown_crash_boundaries_are_restart_recoverable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault_label: str
+) -> None:
+    state_root, descriptor = _scope_test_state(tmp_path)
+    root, supervision, birth_fd = watch._create_scope_root(
+        state_root=state_root, unit="qcsd-class-watch-" + "d" * 32 + ".scope",
+        command=("ignored", "acquisition-status"), authority_fd=descriptor,
+        source_binding_sha256="a" * 64,
+    )
+    (root / "stdout").write_text("complete", encoding="ascii")
+    (root / "stdout").chmod(0o600)
+    recovery = watch._publish_scope_recovery(root, supervision, state_root=state_root)
+    real_fsync = watch._fsync_scope_directory
+    faulted = False
+    def inject(path: Path, *, label: str) -> None:
+        nonlocal faulted
+        real_fsync(path, label=label)
+        if not faulted and label == fault_label:
+            faulted = True
+            raise watch.WatchError("injected teardown crash")
+    monkeypatch.setattr(watch, "_fsync_scope_directory", inject)
+    try:
+        with pytest.raises(watch.WatchError, match="injected teardown crash"):
+            watch._finish_scope_teardown(
+                root, state_root=state_root, recovery=recovery,
+                birth_lock_fd=birth_fd,
+            )
+    finally:
+        os.close(birth_fd)
+    assert faulted
+    monkeypatch.setattr(watch, "_fsync_scope_directory", real_fsync)
+    expected_recovered = 1 if root.exists() else 0
+    assert watch._recover_stale_scope_roots(state_root=state_root) == expected_recovered
+    assert not root.exists()
+    os.close(descriptor)
+
+
+@pytest.mark.parametrize(
+    "command_factory",
+    (watch._admission_command, watch._status_command, watch._run_command),
+    ids=("admission", "status", "run"),
+)
+def test_internal_scope_accepts_each_current_canonical_action_binding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    command_factory,
+) -> None:
+    paths = watch.WatchPaths.from_lab_root(tmp_path, state_base=tmp_path / "state")
+    binding = watch.AcquisitionBinding(
+        "image@sha256:" + "1" * 64, "2" * 64, "3" * 64, frozenset(),
+        {"lab_commit": "4" * 40, "neqo_commit": "5" * 40, "neqo_pinned_commit": "5" * 40},
+    )
+    action = watch._sha256_bytes(
+        watch._canonical_json_bytes(list(command_factory(paths)))
+    )
+    source = watch._source_binding_sha256(binding)
+    monkeypatch.setattr(watch, "_paths_from_state_namespace", lambda _root: paths)
+    monkeypatch.setattr(watch, "_validate_immutable_binding", lambda _paths: binding)
+    monkeypatch.setattr(watch, "_validate_host_source", lambda *_args: None)
+    monkeypatch.setattr(watch, "_validate_scope_root", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(watch, "_recover_stale_scope_roots", lambda **_kwargs: 0)
+    assert watch.main((
+        "--recover-stale-scopes-internal", "--state-root-internal", str(paths.state_root),
+        "--current-scope-root-internal", str(paths.state_root / ("scope." + "e" * 32)),
+        "--current-authority-internal", "6" * 64,
+        "--expected-action-sha256-internal", action,
+        "--expected-source-binding-sha256-internal", source,
+    )) == 0
+    assert json.loads(capsys.readouterr().out) == {"recovered_scope_roots": 0}
+
+
+def test_recorded_watch_lock_holder_must_be_exact_supervisor(tmp_path: Path) -> None:
+    state_root, descriptor = _scope_test_state(tmp_path)
+    root, supervision, birth_fd = watch._create_scope_root(
+        state_root=state_root, unit="qcsd-class-watch-" + "f" * 32 + ".scope",
+        command=("ignored", "acquisition-status"), authority_fd=descriptor,
+        source_binding_sha256="a" * 64,
+    )
+    other = subprocess.Popen(("/usr/bin/sleep", "10"))
+    try:
+        identity = watch._process_identity(other.pid)
+        assert identity is not None
+        forged = dict(supervision)
+        forged.update(supervisor_pid=other.pid, supervisor_start_time=identity[0],
+                      supervisor_session=identity[1], supervisor_process_group=identity[2])
+        with pytest.raises(watch.WatchError, match="does not hold the exact watch lock"):
+            watch._assert_recorded_watch_lock_holder(state_root, forged)
+    finally:
+        other.terminate()
+        other.wait(timeout=5)
+        os.close(birth_fd)
+        _force_remove_test_scope_root(root, state_root=state_root)
+        os.close(descriptor)

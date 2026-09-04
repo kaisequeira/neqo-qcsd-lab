@@ -24,3 +24,15 @@ config/workloads/tranco-[0-9][0-9][0-9][0-9][0-9][0-9][0-9].json
 **/target
 *.pcap
 *.pcapng
+*.qlog
+*.sqlog
+*.log
+*~
+.DS_Store
+.ansible
+.envrc
+.vscode
+lcov.info
+mutants.out*
+config/workloads/*.probe-*
+config/workloads/*.tmp

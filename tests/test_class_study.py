@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from qcsd_lab.class_handoff import SCHEMA_VERSION as HANDOFF_SCHEMA_VERSION
 from qcsd_lab.class_study import (
     CANDIDATE_COUNT,
     CANDIDATES_PER_STRATUM,
@@ -32,9 +33,42 @@ from qcsd_lab.class_study import (
     validate_study_receipt,
     write_study_receipt,
 )
+from qcsd_lab.experiment import (
+    KERNEL_TX_EVIDENCE_FILES,
+    KERNEL_TX_EVIDENCE_RECEIPT_SOURCE,
+)
 
 LIST_SHA = "a" * 64
 OTHER_LIST_SHA = "b" * 64
+
+
+def test_checked_in_handoff_contract_matches_current_exporter_and_kernel_sidecar() -> None:
+    root = Path(__file__).resolve().parents[1]
+    study = json.loads((root / "config/class-study/v1/study.json").read_text())
+    evaluation = study["classifier_contract"]
+    kernel = evaluation["handoff_kernel_tx_evidence"]
+
+    assert evaluation["handoff_schema_version"] == HANDOFF_SCHEMA_VERSION == 3
+    assert kernel == {
+        "row_field": "kernel_tx_evidence",
+        "null_for_runtime_kinds": [
+            "none",
+            "front",
+            "tamaraw",
+            "traffic_morphing",
+            "wtf_pad",
+            "walkie_talkie",
+            "cs_buflo",
+        ],
+        "required_for_runtime_kind": "buflo",
+        "required_runner_wakeup_schema_version": 11,
+        "accepted_sample_inventory_relationship": (
+            "separate-checksum-bound-sidecar-does-not-change-the-five-file-accepted-"
+            "sample-inventory"
+        ),
+        "sidecar_source": KERNEL_TX_EVIDENCE_RECEIPT_SOURCE,
+        "sidecar_files": sorted(KERNEL_TX_EVIDENCE_FILES),
+    }
 
 
 def _candidates() -> tuple[ClassCandidate, ...]:

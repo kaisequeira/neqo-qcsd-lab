@@ -134,21 +134,113 @@
     "service_worker_dependency": "forbidden",
     "cross-domain-redirect-alias": "forbidden",
     "approved_origins": "explicit-and-frozen",
+    "passive_render_contract": {
+      "schema_version": 1,
+      "policy": "bounded-passive-render-quiescence-v1",
+      "viewport": {
+        "width": 1365,
+        "height": 768,
+        "deviceScaleFactor": 1
+      },
+      "cache": "disabled",
+      "service_workers": "bypassed-and-registration-blocked",
+      "interaction": "none",
+      "minimum_after_load_ms": 10000,
+      "quiet_window_ms": 3000,
+      "quiet_window_begins": "after-minimum-or-last-relevant-event-whichever-is-later",
+      "hard_cap_after_load_ms": 30000,
+      "poll_interval_ms": 100,
+      "active_request_scope": "all-network-request-occurrences",
+      "relevant_events": [
+        "network-request",
+        "fetch-request",
+        "network-terminal",
+        "target-attached",
+        "target-detached",
+        "target-destroyed",
+        "target-info-changed"
+      ],
+      "hard_cap_policy": "typed-candidate-rejection"
+    },
+    "passive_render_contract_sha256": "690d1715642ae553f7329bb13f2458f3089545a4483460874abd7d546faa192d",
+    "browser_navigation_timeout_ms": 60000,
+    "passive_render_hard_cap_after_load_ms": 30000,
+    "acquisition_action_timing_contract": {
+      "schema_version": 1,
+      "policy": "single-candidate-whole-action-deadline-v1",
+      "bounded_candidates": 1,
+      "browser_navigation_timeout_ms": 60000,
+      "browser_navigation_timeout_scope": "navigation-component-only",
+      "passive_render_hard_cap_after_load_ms": 30000,
+      "passive_render_timeout_scope": "post-load-component-only",
+      "inner_timeout": {
+        "scope": "in-container-coordinator-process-group",
+        "soft_deadline_ms": 1800000,
+        "soft_signal": "SIGINT",
+        "cleanup_grace_ms": 120000,
+        "hard_signal": "SIGKILL",
+        "hard_deadline_ms": 1920000
+      },
+      "outer_timeout": {
+        "scope": "canonical-host-acquisition-watch-user-systemd-scope",
+        "runtime_max_ms": 1920000,
+        "runtime_signal": "SIGINT",
+        "cleanup_grace_ms": 120000,
+        "final_signal": "SIGKILL",
+        "hard_deadline_ms": 2040000
+      },
+      "direct_public_acquisition_run": "forbidden-without-validated-watcher-scope-authority",
+      "successful_ledger_attempt_duration_limit_ms": 1800000,
+      "whole_action_duration_evidence": "externally-enforced-process-status-no-per-action-duration-receipt",
+      "interruption_recovery": "pending-start-becomes-interrupted-never-completed"
+    },
+    "baseline_scheduling_contract": {
+      "schema_version": 1,
+      "policy": "serial-nonoverlapping-stability-window-reservations-v1",
+      "minimum_baseline_spacing_ms": 2400000,
+      "window_start_reservation_ms": 2400000,
+      "longest_probe_window_width_ms": 1800000,
+      "acquisition_outer_configured_hard_cutoff_ms": 2040000,
+      "status_configured_hard_cutoff_ms": 310000,
+      "scheduler_margin_ms": 50000,
+      "navigation_phase": "separate-bounded-action-before-baseline",
+      "short_probe": "same-action-wait-until-t+30s-earliest",
+      "outer_probes": "watcher-launches-acquisition-run-at-window-earliest",
+      "serial_action_start_offsets_ms": [
+        0,
+        85500000,
+        258300000
+      ],
+      "stability_window_earliest_offsets_ms": [
+        25000,
+        85500000,
+        258300000
+      ],
+      "collision_scope": "baseline-arming-and-t+24h-t+72h-action-starts-across-candidates",
+      "strict_serial_zero_duration_projection": {
+        "candidate_count": 600,
+        "algorithm": "greedy-earliest-safe-baseline",
+        "last_baseline_offset_ms": 5655900000,
+        "last_t+72h_earliest_offset_ms": 5914200000
+      }
+    },
     "resource_origin_policy": {
       "multi_origin_pages_allowed": true,
       "single_origin_pages_allowed": true,
       "origin_count_quota": null,
       "origin_count_used_for_selection": false,
+      "origin_count_technical_admission": "origin-count-is-not-a-ranking-or-quota-input-among-technically-admitted-candidates-but-the-preregistered-caps-can-reject-a-candidate",
       "candidate_domain_boundary_applies_to": "primary-page-navigation-identity-and-redirects-not-subresource-origins",
       "navigation_seed_scope": "page-specific-document-navigation-origins-only;one-page-origin-ledger-must-not-seed-another-page",
       "cross_origin_subresource_discovery": "iteratively-observe-denied-public-https-get-origins-then-refetch-with-the-expanded-frozen-allow-list",
       "origin_expansion_request_policy": "only-observed-https-get-origins-are-promotable;post-and-other-method-origins-remain-audited-but-never-approved",
-      "retained_subresource_policy": "retain-every-discovered-public-https-get-subresource-in-an-accepted-converged-workload",
+      "retained_subresource_policy": "retain-every-observed-public-https-get-request-instance-including-repeated-url-occurrences-in-an-accepted-converged-workload",
+      "request_instance_identity": "deterministic-observation-order-resource-id-with-preceding-initiator-and-redirect-dependency-edges",
       "maximum_approved_origins": 32,
       "maximum_observed_audit_origins": 512,
       "maximum_convergence_passes": 8,
-      "limit_failure_policy": "reject-the-class-above-32-origins-or-without-convergence-after-eight-passes;never-silently-truncate-an-accepted-workload",
-      "complete_coverage_required": "at-least-one-rendered-resource-from-every-approved-origin-and-every-retained-resource",
+      "limit_failure_policy": "typed-class-rejection-above-32-approved-or-512-audited-origins-or-without-convergence-after-eight-passes;never-silently-truncate-an-accepted-workload",
+      "complete_coverage_required": "at-least-one-rendered-request-instance-from-every-approved-origin-and-every-retained-request-instance",
       "same_graph_across_modes": "every-accepted-fitting-certification-canary-and-formal-run-must-rederive-the-runtime-manifest-from-the-admitted-prepared-manifest-and-match-the-complete-response-and-endpoint-origin-sets",
       "defence_specific_resource_projection": "forbidden",
       "realised_origin_count_distribution_must_be_reported": true,
@@ -656,8 +748,11 @@
     ],
     "handoff_dataset_launch_key": "class_study_launches",
     "handoff_launch_policy": "ten-distinct-block-specific-launch-claims-must-hash-verify",
+    "handoff_historical_post_key": "historical_post_snapshot",
+    "handoff_historical_post_path": "inputs/class-study-historical-post-snapshot.json",
+    "handoff_historical_post_policy": "independently-reconstructed-exact-ordered-formal-blocks-source-authorities-build-and-bracketing-time-must-verify-before-export-and-the-copied-receipt-is-sha256-and-payload-bound",
     "cohort_binding_policy": "selection-and-assembly-receipts-and-every-admitted-prepared-workload-sha256-must-verify",
-    "handoff_schema_version": 2,
+    "handoff_schema_version": 3,
     "handoff_sample_input_bindings": [
       "campaign_sha256",
       "application_workload_sha256",
@@ -668,7 +763,28 @@
       "defense_parameters_provenance_sha256",
       "max_response_bytes",
       "max_udp_payload_size"
-    ]
+    ],
+    "handoff_kernel_tx_evidence": {
+      "row_field": "kernel_tx_evidence",
+      "null_for_runtime_kinds": [
+        "none",
+        "front",
+        "tamaraw",
+        "traffic_morphing",
+        "wtf_pad",
+        "walkie_talkie",
+        "cs_buflo"
+      ],
+      "required_for_runtime_kind": "buflo",
+      "required_runner_wakeup_schema_version": 11,
+      "accepted_sample_inventory_relationship": "separate-checksum-bound-sidecar-does-not-change-the-five-file-accepted-sample-inventory",
+      "sidecar_source": "accepted-kernel-tx-sidecar-v1",
+      "sidecar_files": [
+        "kernel-tx-evidence.json",
+        "router-capture.pcapng",
+        "router-receipt.json"
+      ]
+    }
   },
   "historical_corpus_guard": {
     "root": "../../../handoffs/classifier-multiorigin5-v2",

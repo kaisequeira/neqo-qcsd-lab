@@ -40,6 +40,8 @@ TRANCO_RECEIPT_TYPE = "qcsd-class-study-tranco-snapshot"
 STABILITY_RECEIPT_TYPE = "qcsd-class-study-page-stability"
 CANDIDATE_RECEIPT_TYPE = "qcsd-class-study-candidate-catalogue"
 CATALOGUE_SCHEMA_VERSION = 1
+STABILITY_ACQUISITION_EVIDENCE_SCHEMA_VERSION = 3
+HISTORICAL_STABILITY_ACQUISITION_EVIDENCE_SCHEMA_VERSION = 2
 
 MAX_DISCOVERED_PAGES = 4
 MAX_PAGE_CANDIDATES = 1 + MAX_DISCOVERED_PAGES
@@ -227,9 +229,14 @@ class StabilityObservation:
     body_sha256: str
     resource_graph_sha256: str
     prepared_workload_sha256: str
+    passive_render_contract_sha256: str | None = None
+    render_observation_sha256: str | None = None
+    discovery_event_audit_sha256: str | None = None
+    document_response_receipt_path: str | None = None
+    document_response_receipt_sha256: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        result = {
             "probe_id": self.probe_id,
             "observed_at": self.observed_at,
             "elapsed_ms": self.elapsed_ms,
@@ -241,6 +248,28 @@ class StabilityObservation:
             "resource_graph_sha256": self.resource_graph_sha256,
             "prepared_workload_sha256": self.prepared_workload_sha256,
         }
+        discovery_evidence = {
+            "passive_render_contract_sha256": self.passive_render_contract_sha256,
+            "render_observation_sha256": self.render_observation_sha256,
+            "discovery_event_audit_sha256": self.discovery_event_audit_sha256,
+        }
+        response_evidence = {
+            "document_response_receipt_path": self.document_response_receipt_path,
+            "document_response_receipt_sha256": self.document_response_receipt_sha256,
+        }
+        if any(value is not None for value in discovery_evidence.values()):
+            if any(value is None for value in discovery_evidence.values()):
+                raise ValueError("stability observation discovery evidence is incomplete")
+            result.update(discovery_evidence)
+        if any(value is not None for value in response_evidence.values()):
+            if any(value is None for value in response_evidence.values()) or not all(
+                value is not None for value in discovery_evidence.values()
+            ):
+                raise ValueError(
+                    "stability observation document-response evidence is incomplete"
+                )
+            result.update(response_evidence)
+        return result
 
 
 @dataclass(frozen=True)
@@ -828,6 +857,25 @@ def derive_stability_decision(
                 "body_sha256": observation.body_sha256,
                 "resource_graph_sha256": observation.resource_graph_sha256,
                 "prepared_workload_sha256": observation.prepared_workload_sha256,
+                **(
+                    {
+                        "passive_render_contract_sha256": (
+                            observation.passive_render_contract_sha256
+                        ),
+                        "render_observation_sha256": observation.render_observation_sha256,
+                        "discovery_event_audit_sha256": (
+                            observation.discovery_event_audit_sha256
+                        ),
+                        "document_response_receipt_path": (
+                            observation.document_response_receipt_path
+                        ),
+                        "document_response_receipt_sha256": (
+                            observation.document_response_receipt_sha256
+                        ),
+                    }
+                    if observation.passive_render_contract_sha256 is not None
+                    else {}
+                ),
             }
         )
 
@@ -838,9 +886,10 @@ def derive_stability_decision(
         ("body_bytes", "body-length-drift"),
         ("body_sha256", "body-sha256-drift"),
         ("resource_graph_sha256", "resource-graph-sha256-drift"),
+        ("passive_render_contract_sha256", "passive-render-contract-drift"),
     )
     for field, reason in comparisons:
-        if len({signature[field] for signature in signatures}) != 1:
+        if field in signatures[0] and len({signature[field] for signature in signatures}) != 1:
             _add_reason(reasons, reason)
     # The full prepared manifest includes per-run packet qualification and
     # provenance, so its byte hash is not a longitudinal identity.  The first
@@ -901,10 +950,19 @@ def validate_stability_receipt(value: Mapping[str, Any]) -> StabilityDecision:
         "observations",
         "decision",
     }
+    evidence_schema = payload.get("acquisition_evidence_schema_version")
+    if evidence_schema is not None:
+        expected_fields.add("acquisition_evidence_schema_version")
     if set(payload) != expected_fields:
         raise ValueError("stability receipt payload fields differ from the contract")
     if payload["study_id"] != STUDY_ID or payload["catalogue_schema_version"] != 1:
         raise ValueError("stability receipt identifies the wrong study or schema")
+    if evidence_schema not in {
+        None,
+        HISTORICAL_STABILITY_ACQUISITION_EVIDENCE_SCHEMA_VERSION,
+        STABILITY_ACQUISITION_EVIDENCE_SCHEMA_VERSION,
+    }:
+        raise ValueError("stability receipt acquisition-evidence schema is invalid")
     candidate = _candidate_from_identity(payload["candidate"])
     page = _page_candidate_from_dict(payload["page"])
     if candidate.domain != page.candidate_domain:
@@ -1012,9 +1070,32 @@ def _stability_payload(
     observations: Sequence[StabilityObservation],
     decision: StabilityDecision,
 ) -> dict[str, Any]:
+    current_evidence = all(
+        observation.document_response_receipt_sha256 is not None
+        for observation in observations
+    )
+    historical_acquisition_evidence = all(
+        observation.passive_render_contract_sha256 is not None
+        for observation in observations
+    )
     return {
         "study_id": STUDY_ID,
         "catalogue_schema_version": CATALOGUE_SCHEMA_VERSION,
+        **(
+            {
+                "acquisition_evidence_schema_version": (
+                    STABILITY_ACQUISITION_EVIDENCE_SCHEMA_VERSION
+                )
+            }
+            if current_evidence
+            else {
+                "acquisition_evidence_schema_version": (
+                    HISTORICAL_STABILITY_ACQUISITION_EVIDENCE_SCHEMA_VERSION
+                )
+            }
+            if historical_acquisition_evidence
+            else {}
+        ),
         "candidate": _candidate_identity(candidate),
         "page": page.as_dict(),
         "tranco": {
@@ -1031,6 +1112,20 @@ def _stability_payload(
 def _validate_observation_shapes(observations: Sequence[StabilityObservation]) -> None:
     if len(observations) != len(STABILITY_PROBE_WINDOWS):
         raise ValueError("stability evidence must contain exactly three observations")
+    current_flags = {
+        observation.passive_render_contract_sha256 is not None
+        for observation in observations
+    }
+    if len(current_flags) != 1:
+        raise ValueError("stability evidence mixes historical and current observations")
+    response_receipt_flags = {
+        observation.document_response_receipt_sha256 is not None
+        for observation in observations
+    }
+    if len(response_receipt_flags) != 1:
+        raise ValueError("stability evidence mixes response-receipt schema versions")
+    if response_receipt_flags == {True} and current_flags != {True}:
+        raise ValueError("stability response receipts require discovery evidence")
     for window, observation in zip(STABILITY_PROBE_WINDOWS, observations, strict=True):
         if not isinstance(observation, StabilityObservation):
             raise ValueError("stability observations have the wrong type")
@@ -1045,11 +1140,49 @@ def _validate_observation_shapes(observations: Sequence[StabilityObservation]) -
             raise ValueError("stability response body length is invalid")
         if not isinstance(observation.content_type, str):
             raise ValueError("stability response content type must be a string")
-        for label, digest in (
+        response_receipt_values = (
+            observation.document_response_receipt_path,
+            observation.document_response_receipt_sha256,
+        )
+        if any(value is not None for value in response_receipt_values) and any(
+            value is None for value in response_receipt_values
+        ):
+            raise ValueError("stability document-response receipt binding is incomplete")
+        if observation.document_response_receipt_path is not None and (
+            not isinstance(observation.document_response_receipt_path, str)
+            or not observation.document_response_receipt_path
+        ):
+            raise ValueError("stability document-response receipt path is invalid")
+        digests: list[tuple[str, str | None]] = [
             ("body SHA-256", observation.body_sha256),
             ("resource-graph SHA-256", observation.resource_graph_sha256),
             ("prepared-workload SHA-256", observation.prepared_workload_sha256),
-        ):
+        ]
+        if observation.passive_render_contract_sha256 is not None:
+            digests.extend(
+                [
+                    (
+                        "passive-render contract SHA-256",
+                        observation.passive_render_contract_sha256,
+                    ),
+                    (
+                        "render observation SHA-256",
+                        observation.render_observation_sha256,
+                    ),
+                    (
+                        "discovery event audit SHA-256",
+                        observation.discovery_event_audit_sha256,
+                    ),
+                ]
+            )
+        if observation.document_response_receipt_sha256 is not None:
+            digests.append(
+                (
+                    "document-response receipt SHA-256",
+                    observation.document_response_receipt_sha256,
+                )
+            )
+        for label, digest in digests:
             _validate_sha256(digest, label=label)
         if not isinstance(observation.final_url, str):
             raise ValueError("stability final URL must be a string")
@@ -1068,9 +1201,22 @@ def _observation_from_dict(value: Any) -> StabilityObservation:
         "resource_graph_sha256",
         "prepared_workload_sha256",
     }
-    if not isinstance(value, Mapping) or set(value) != fields:
+    evidence_fields = {
+        "passive_render_contract_sha256",
+        "render_observation_sha256",
+        "discovery_event_audit_sha256",
+    }
+    response_receipt_fields = {
+        "document_response_receipt_path",
+        "document_response_receipt_sha256",
+    }
+    if not isinstance(value, Mapping) or set(value) not in {
+        frozenset(fields),
+        frozenset(fields | evidence_fields),
+        frozenset(fields | evidence_fields | response_receipt_fields),
+    }:
         raise ValueError("stability observation fields differ from the contract")
-    return StabilityObservation(**{field: value[field] for field in fields})
+    return StabilityObservation(**dict(value))
 
 
 def _candidate_identity(candidate: ClassCandidate) -> dict[str, Any]:

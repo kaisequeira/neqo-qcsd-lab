@@ -33,6 +33,7 @@ from qcsd_lab.class_handoff import (
     ARTIFACT_TYPE,
     CLASSIFIER_FIELDS,
     FORBIDDEN_CLASSIFIER_FIELDS,
+    SCHEMA_VERSION as HANDOFF_SCHEMA_VERSION,
 )
 from qcsd_lab.class_study import FORMAL_MODES
 
@@ -114,7 +115,7 @@ def _fixture(tmp_path: Path):
                     )
                     rows.append(
                         {
-                            "schema_version": 2,
+                            "schema_version": HANDOFF_SCHEMA_VERSION,
                             "sample_id": sample_id,
                             "class_label": class_label,
                             "workload_id": class_label,
@@ -128,6 +129,7 @@ def _fixture(tmp_path: Path):
                             "paired_class_visit_id": (
                                 f"block-{block:02d}/{class_label}/visit-{visit:02d}"
                             ),
+                            "kernel_tx_evidence": None,
                             "products": {
                                 "trace_csv": {
                                     "path": trace.relative_to(root).as_posix(),
@@ -145,7 +147,7 @@ def _fixture(tmp_path: Path):
     per_mode = _DIMENSIONS.classes * _DIMENSIONS.blocks * _DIMENSIONS.visits_per_block
     per_block = _DIMENSIONS.classes * len(_DIMENSIONS.modes) * _DIMENSIONS.visits_per_block
     dataset = {
-        "schema_version": 2,
+        "schema_version": HANDOFF_SCHEMA_VERSION,
         "artifact_type": ARTIFACT_TYPE,
         "study_id": _DIMENSIONS.study_id,
         "evidence_role": "formal",

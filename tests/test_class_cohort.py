@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 import qcsd_lab.class_cohort as cohort_module
+from qcsd_lab.acquisition_errors import RecoverableAcquisitionError
 from qcsd_lab.class_acquisition import (
     initialise_runner,
     run_due_acquisition,
@@ -47,7 +48,7 @@ LIST_SHA = "a" * 64
 
 class _RejectingBackend:
     def discover_navigation(self, domain: str):
-        raise RuntimeError(f"unavailable: {domain}")
+        raise RecoverableAcquisitionError(f"unavailable: {domain}")
 
 
 def _candidates() -> tuple[ClassCandidate, ...]:

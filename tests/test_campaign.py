@@ -1968,7 +1968,8 @@ def test_completed_candidate_binding_requires_current_wakeup_schema(
         terminal_validation_calls.append(
             (kind, require_application_complete, require_current_schema, schema)
         )
-        return (require_current_schema and schema == 10) or (
+        expected_current_schema = 11 if kind == "buflo" else 10
+        return (require_current_schema and schema == expected_current_schema) or (
             not require_current_schema and 1 <= schema <= 9
         )
 
@@ -1980,7 +1981,7 @@ def test_completed_candidate_binding_requires_current_wakeup_schema(
     monkeypatch.setattr(
         orchestrator.capture_engine,
         "_runner_wakeup_metrics_valid",
-        lambda value: value.get("schema_version") in {2, 5, 6, 7, 8, 9, 10},
+        lambda value: value.get("schema_version") in {2, 5, 6, 7, 8, 9, 10, 11},
     )
     monkeypatch.setattr(
         orchestrator.capture_engine,
@@ -2119,7 +2120,8 @@ def test_completed_candidate_binding_requires_current_wakeup_schema(
             context=context,
             historical_candidate_source={**historical_source, "lab_dirty": True},
         )
-    run["runner_wakeup_metrics"]["schema_version"] = 10
+    current_schema = 11 if runtime_kind == "buflo" else 10
+    run["runner_wakeup_metrics"]["schema_version"] = current_schema
     _validate_run_binding(
         run,
         manifest=manifest,
@@ -2135,7 +2137,7 @@ def test_completed_candidate_binding_requires_current_wakeup_schema(
         (runtime_kind, True, True, 5),
         (runtime_kind, True, True, 6),
         (runtime_kind, True, False, 6),
-        (runtime_kind, True, True, 10),
+        (runtime_kind, True, True, current_schema),
     ]
 
 

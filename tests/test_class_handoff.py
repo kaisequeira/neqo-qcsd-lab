@@ -4,25 +4,41 @@ import copy
 import csv
 import hashlib
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from qcsd_lab.capture import ObserverPacket
+from qcsd_lab.discovery_evidence import (
+    CDP_TARGET_INSTRUMENTATION_POLICY,
+    DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION,
+    PASSIVE_RENDER_CONTRACT_SHA256,
+    evidence_sha256,
+    passive_render_contract,
+)
 from qcsd_lab.class_handoff import (
     _DIMENSIONS,
+    CLASS_STUDY_HISTORICAL_POST_INPUT,
     CLASSIFIER_FIELDS,
     SCHEMA_VERSION,
-    _export_class_handoff,
+    _export_class_handoff as _production_export_class_handoff,
     _read_classifier_trace,
     _StudyDimensions,
     _validate_sealed_workloads,
     _validate_source_results,
-    _verify_class_handoff,
+    _verify_class_handoff as _production_verify_class_handoff,
     _write_checksums,
 )
 from qcsd_lab.class_study import class_study_launch_identity, class_study_launch_key
+from qcsd_lab.experiment import (
+    KERNEL_TX_EVIDENCE_DIRECTORY,
+    KERNEL_TX_EVIDENCE_FILES,
+    KERNEL_TX_EVIDENCE_RECEIPT_KEY,
+    KERNEL_TX_EVIDENCE_RECEIPT_SCHEMA_VERSION,
+    KERNEL_TX_EVIDENCE_RECEIPT_SOURCE,
+)
 from qcsd_lab.manifest import canonical_bytes, runtime_manifest
 from qcsd_lab.util import source_metadata
 from qcsd_lab.verification import VerifiedResult
@@ -79,16 +95,135 @@ def _prepared_workload(workload_id: str, origin_count: int) -> dict:
         "neqo_dirty": False,
         "neqo_patch_sha256": hashlib.sha256(b"").hexdigest(),
     }
+    target_source = {
+        "session_path": [],
+        "target_id": "fixture-page",
+        "target_type": "page",
+        "generation": 0,
+        "parent_session_path": None,
+        "parent_frame_id": None,
+    }
+    events = []
+    for resource in resources:
+        resource_id = resource["id"]
+        occurrence_id = f"request-{resource_id:08d}"
+        dependency_evidence = (
+            []
+            if resource_id == 0
+            else [
+                {
+                    "kind": "document-url",
+                    "value": resources[0]["url"],
+                    "resolved_resource_id": 0,
+                }
+            ]
+        )
+        events.extend(
+            [
+                {
+                    "sequence": len(events) + 1,
+                    "monotonic_ms": 0,
+                    "kind": "network-request",
+                    "source": target_source,
+                    "network_id": f"network-{resource_id}",
+                    "occurrence_id": occurrence_id,
+                    "occurrence_index": 0,
+                    "method": "GET",
+                    "url": resource["url"],
+                    "frame_id": "root-frame",
+                    "resource_type": resource["type"],
+                    "safe_request_headers": resource["headers"],
+                    "interception_required": True,
+                    "redirected": False,
+                    "redirect_from_occurrence_id": None,
+                    "mapping": {"kind": "resource", "resource_id": resource_id},
+                    "dependency_evidence": dependency_evidence,
+                    "resolved_dependency_resource_ids": resource["depends_on"],
+                },
+                {
+                    "sequence": len(events) + 2,
+                    "monotonic_ms": 0,
+                    "kind": "fetch-request",
+                    "source": target_source,
+                    "fetch_id": f"fetch-{resource_id}",
+                    "network_id": f"network-{resource_id}",
+                    "redirected_fetch_id": None,
+                    "network_occurrence_id": occurrence_id,
+                    "method": "GET",
+                    "url": resource["url"],
+                    "frame_id": "root-frame",
+                    "policy_decision": "continue",
+                    "policy_reason": None,
+                    "relationship": "primary",
+                },
+                {
+                    "sequence": len(events) + 3,
+                    "monotonic_ms": 0,
+                    "kind": "network-terminal",
+                    "source": target_source,
+                    "network_id": f"network-{resource_id}",
+                    "outcome": "finished",
+                    "network_occurrence_ids": [occurrence_id],
+                },
+            ]
+        )
+    render_observation = {
+        "schema_version": 1,
+        "clock": "monotonic-relative-ms",
+        "navigation_started_ms": 0,
+        "load_event_ms": 0,
+        "last_relevant_event_ms": 0,
+        "quiet_started_ms": 10_000,
+        "cutoff_ms": 13_000,
+        "active_request_ids": [],
+        "active_request_count": 0,
+        "cutoff_reason": "quiescent",
+    }
+    render_observation_sha256 = evidence_sha256(render_observation)
+    discovery_event_audit = {
+        "schema_version": DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION,
+        "instrumentation_policy": CDP_TARGET_INSTRUMENTATION_POLICY,
+        "passive_render_contract_sha256": PASSIVE_RENDER_CONTRACT_SHA256,
+        "render_observation_sha256": render_observation_sha256,
+        "events": events,
+        "summary": {
+            "event_count": len(events),
+            "target_event_count": 0,
+            "network_request_count": len(resources),
+            "fetch_request_count": len(resources),
+            "fetch_internal_restart_count": 0,
+            "terminal_event_count": len(resources),
+            "resource_occurrence_count": len(resources),
+            "exclusion_occurrence_count": 0,
+        },
+    }
+    discovery_event_audit_sha256 = evidence_sha256(discovery_event_audit)
+    origin_ip_pins = {value: "1.1.1.1" for value in sorted(origins)}
+    browser_request_headers = [
+        {"resource_id": resource["id"], "headers": resource["headers"]}
+        for resource in resources
+    ]
     return {
         "preparation": {
             "source_url": resources[0]["url"],
             "final_url": resources[0]["url"],
             "chromium_version": "test-chromium",
-            "settle_ms": 3_000,
+            "settle_ms": 10_000,
             "observed_request_count": len(resources),
             "observed_origins": origins,
             "approved_origins": origins,
+            "origin_ip_pins": origin_ip_pins,
             "exclusions": [],
+            "browser_request_headers": browser_request_headers,
+            "request_header_transformation": (
+                "browser-safe-input-to-neqo-stability-frozen-runtime-v1"
+            ),
+            "passive_render_contract": passive_render_contract(),
+            "passive_render_contract_sha256": PASSIVE_RENDER_CONTRACT_SHA256,
+            "render_observation": render_observation,
+            "render_observation_sha256": render_observation_sha256,
+            "discovery_event_audit": discovery_event_audit,
+            "discovery_event_audit_sha256": discovery_event_audit_sha256,
             "max_response_bytes": 1_048_576,
             "timeout_seconds": 30,
             "stability_runs": 3,
@@ -137,12 +272,22 @@ def _prepared_workload(workload_id: str, origin_count: int) -> dict:
             "lab_source": source,
             "prepare_image_digest": source["image_digest"],
             "coverage_admission": {
-                "schema_version": 1,
+                "schema_version": 3,
                 "policy": "all-approved-origins-and-rendered-resources",
                 "required_origins": origins,
                 "required_resources": [
                     {"id": resource["id"], "url": resource["url"]} for resource in resources
                 ],
+                "passive_render_contract_sha256": PASSIVE_RENDER_CONTRACT_SHA256,
+                "render_observation_sha256": render_observation_sha256,
+                "discovery_event_audit_sha256": discovery_event_audit_sha256,
+                "origin_ip_pins_sha256": evidence_sha256(origin_ip_pins),
+                "browser_request_headers_sha256": evidence_sha256(
+                    browser_request_headers
+                ),
+                "network_request_count": len(resources),
+                "resource_occurrence_count": len(resources),
+                "exclusion_occurrence_count": 0,
             },
         },
         "resources": resources,
@@ -494,6 +639,86 @@ def _fixture(tmp_path: Path):
     return receipts, verify
 
 
+def _fixture_post_snapshot(
+    receipts: tuple[VerifiedResult, ...],
+    dimensions: _StudyDimensions,
+) -> Path:
+    """Write the exact post-formal authority expected by the handoff seam."""
+
+    formal_results = []
+    for receipt in receipts:
+        configuration = receipt.experiment["configuration"]
+        binding = {
+            "root": str(receipt.root.resolve()),
+            "evidence_sha256": _sha256(receipt.root / "evidence.sha256"),
+            "class_study_launch_sha256": configuration["class_study_launch_sha256"],
+            "class_study_foundation_sha256": configuration[
+                "class_study_foundation_sha256"
+            ],
+            "class_study_readiness_sha256": configuration[
+                "class_study_readiness_sha256"
+            ],
+            "class_study_historical_pre_snapshot_sha256": configuration[
+                "class_study_historical_pre_snapshot_sha256"
+            ],
+        }
+        successor_sha256 = configuration.get("class_study_successor_sha256")
+        if successor_sha256 is not None:
+            binding.update(
+                class_study_id=configuration["class_study_id"],
+                class_study_successor_sha256=successor_sha256,
+            )
+        formal_results.append(binding)
+    payload = {
+        "phase": "post-formal",
+        "study_id": dimensions.study_id,
+        "recorded_at": "2026-09-30T00:00:00+00:00",
+        "source": receipts[0].experiment["source"],
+        "readiness": {
+            "sha256": receipts[0].experiment["configuration"][
+                "class_study_readiness_sha256"
+            ]
+        },
+        "pre_formal_snapshot": {
+            "sha256": receipts[0].experiment["configuration"][
+                "class_study_historical_pre_snapshot_sha256"
+            ]
+        },
+        "formal_results": formal_results,
+        "payload_sha256": "9" * 64,
+    }
+    path = receipts[0].root.parent / f"{dimensions.study_id}-historical-post.json"
+    path.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+    return path
+
+
+def _fixture_post_validator(path: Path, *, expected_phase: str) -> dict:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert expected_phase == "post-formal"
+    return {"path": str(path.resolve()), "sha256": _sha256(path), **payload}
+
+
+def _export_class_handoff(result_roots, destination, **kwargs):
+    """Exercise the production seam with exact compact-fixture post authority."""
+
+    verifier = kwargs["source_verifier"]
+    dimensions = kwargs["dimensions"]
+    receipts = tuple(verifier(Path(root)) for root in result_roots)
+    kwargs.setdefault(
+        "historical_post_snapshot",
+        _fixture_post_snapshot(receipts, dimensions),
+    )
+    kwargs.setdefault("historical_post_validator", _fixture_post_validator)
+    return _production_export_class_handoff(result_roots, destination, **kwargs)
+
+
+def _verify_class_handoff(path, **kwargs):
+    """Exercise the production verifier with the compact receipt validator."""
+
+    kwargs.setdefault("historical_post_validator", _fixture_post_validator)
+    return _production_verify_class_handoff(path, **kwargs)
+
+
 def _bind_fixture_run(receipt: VerifiedResult, sample: dict) -> None:
     configuration = receipt.experiment["configuration"]
     workload = next(
@@ -596,6 +821,8 @@ def _candidate_fixture(
             sample_root = receipt.root / sample["path"]
             install_evidence(sample_root)
             _bind_fixture_run(receipt, sample)
+            if runtime_kind == "buflo":
+                _install_kernel_tx_sidecar(receipt, sample)
             for name in ("run.json", "schedule.csv", "events.csv", "packets.csv"):
                 path = sample_root / "neqo" / name
                 relative = path.relative_to(receipt.root).as_posix()
@@ -610,6 +837,23 @@ def _candidate_fixture(
         return by_root[Path(path).resolve()]
 
     return dimensions, receipts, verify
+
+
+def _install_kernel_tx_sidecar(receipt: VerifiedResult, sample: dict) -> None:
+    directory = f"{KERNEL_TX_EVIDENCE_DIRECTORY}/{sample['sample_id']}"
+    artifacts: dict[str, str] = {}
+    for name in sorted(KERNEL_TX_EVIDENCE_FILES):
+        path = receipt.root / directory / name
+        _write(path, f"{sample['sample_id']}:{name}\n".encode())
+        digest = _sha256(path)
+        artifacts[name] = digest
+        receipt.checksums[f"{directory}/{name}"] = digest
+    sample["diagnostics"][KERNEL_TX_EVIDENCE_RECEIPT_KEY] = {
+        "schema_version": KERNEL_TX_EVIDENCE_RECEIPT_SCHEMA_VERSION,
+        "source": KERNEL_TX_EVIDENCE_RECEIPT_SOURCE,
+        "directory": directory,
+        "artifacts": artifacts,
+    }
 
 
 def _write_runner_rows(path: Path, fields: tuple[str, ...], rows: list[dict[str, str]]) -> None:
@@ -803,6 +1047,7 @@ def _export_candidate_fixture(
     return _export_class_handoff(
         [receipt.root for receipt in receipts],
         destination,
+        historical_post_snapshot=_fixture_post_snapshot(receipts, dimensions),
         dimensions=dimensions,
         source_verifier=verify,
         trace_extractor=_trace,
@@ -811,6 +1056,7 @@ def _export_candidate_fixture(
         performance_extractor=_performance_extractor,
         cohort_loader=_cohort_loader,
         assembly_validator=_assembly_validator,
+        historical_post_validator=_fixture_post_validator,
     )
 
 
@@ -832,11 +1078,12 @@ def _verify_candidate_fixture(
         performance_extractor=_performance_extractor,
         cohort_loader=_cohort_loader,
         assembly_validator=_assembly_validator,
+        historical_post_validator=_fixture_post_validator,
     )
 
 
 def test_default_contract_is_exactly_ten_blocks_and_16000_samples() -> None:
-    assert SCHEMA_VERSION == 2
+    assert SCHEMA_VERSION == 3
     assert _DIMENSIONS.block_count == 10
     assert _DIMENSIONS.class_count == 100
     assert _DIMENSIONS.visits_per_block == 2
@@ -880,7 +1127,13 @@ def test_compact_export_is_create_only_closed_and_deeply_verifiable(tmp_path: Pa
         == result
     )
     dataset = json.loads((result / "dataset.json").read_text(encoding="utf-8"))
-    assert dataset["schema_version"] == 2
+    assert dataset["schema_version"] == 3
+    post_snapshot = result / CLASS_STUDY_HISTORICAL_POST_INPUT
+    assert dataset["historical_post_snapshot"] == {
+        "path": CLASS_STUDY_HISTORICAL_POST_INPUT,
+        "sha256": _sha256(post_snapshot),
+        "payload_sha256": "9" * 64,
+    }
     assert dataset["sample_count"] == 12
     assert dataset["counts_by_mode"] == {"front": 6, "undefended": 6}
     assert dataset["counts_by_split"] == {
@@ -944,7 +1197,8 @@ def test_compact_export_is_create_only_closed_and_deeply_verifiable(tmp_path: Pa
     assert len(list((result / "raw").rglob("packets.csv"))) == 12
     assert len(list((result / "raw").rglob("capture.pcap"))) == 12
     first_row = json.loads((result / "samples.jsonl").read_text(encoding="utf-8").splitlines()[0])
-    assert first_row["schema_version"] == 2
+    assert first_row["schema_version"] == 3
+    assert first_row["kernel_tx_evidence"] is None
     assert set(first_row["input_bindings"]) == {
         "campaign_sha256",
         "application_workload_sha256",
@@ -956,7 +1210,7 @@ def test_compact_export_is_create_only_closed_and_deeply_verifiable(tmp_path: Pa
         "max_response_bytes",
         "max_udp_payload_size",
     }
-    assert "Schema 2" in (result / "README.md").read_text(encoding="utf-8")
+    assert "Schema 3" in (result / "README.md").read_text(encoding="utf-8")
     assert first_row["correctness"]["passed"] is True
     assert first_row["performance"]["udp_payload_lengths_missing"] == {
         "outgoing": 0,
@@ -968,6 +1222,67 @@ def test_compact_export_is_create_only_closed_and_deeply_verifiable(tmp_path: Pa
             [receipt.root for receipt in receipts],
             destination,
             dimensions=_TINY,
+            source_verifier=verify,
+            trace_extractor=_trace,
+            classic_pcap_writer=_classic_writer,
+            correctness_validator=_correctness_validator,
+            performance_extractor=_performance_extractor,
+            cohort_loader=_cohort_loader,
+            assembly_validator=_assembly_validator,
+        )
+
+
+def test_export_requires_a_verified_post_formal_snapshot(tmp_path: Path) -> None:
+    receipts, verify = _fixture(tmp_path)
+    destination = tmp_path / "handoff"
+
+    with pytest.raises(ValueError, match="historical-post snapshot"):
+        _production_export_class_handoff(
+            [receipt.root for receipt in receipts],
+            destination,
+            historical_post_snapshot=tmp_path / "missing-post.json",
+            dimensions=_TINY,
+            source_verifier=verify,
+            trace_extractor=_trace,
+            classic_pcap_writer=_classic_writer,
+            correctness_validator=_correctness_validator,
+            performance_extractor=_performance_extractor,
+            cohort_loader=_cohort_loader,
+            assembly_validator=_assembly_validator,
+            historical_post_validator=_fixture_post_validator,
+        )
+    assert not destination.exists()
+
+
+def test_verifier_rejects_resealed_post_snapshot_block_substitution(tmp_path: Path) -> None:
+    receipts, verify = _fixture(tmp_path)
+    destination = _export_class_handoff(
+        [receipt.root for receipt in receipts],
+        tmp_path / "handoff",
+        dimensions=_TINY,
+        source_verifier=verify,
+        trace_extractor=_trace,
+        classic_pcap_writer=_classic_writer,
+        correctness_validator=_correctness_validator,
+        performance_extractor=_performance_extractor,
+        cohort_loader=_cohort_loader,
+        assembly_validator=_assembly_validator,
+    )
+    post_path = destination / CLASS_STUDY_HISTORICAL_POST_INPUT
+    post = json.loads(post_path.read_text(encoding="utf-8"))
+    post["formal_results"][0]["root"] = str(receipts[1].root)
+    post_path.write_text(json.dumps(post, sort_keys=True) + "\n", encoding="utf-8")
+    dataset_path = destination / "dataset.json"
+    dataset = json.loads(dataset_path.read_text(encoding="utf-8"))
+    dataset["historical_post_snapshot"]["sha256"] = _sha256(post_path)
+    dataset_path.write_text(json.dumps(dataset, sort_keys=True) + "\n", encoding="utf-8")
+    _reseal_handoff(destination)
+
+    with pytest.raises(ValueError, match="exact source blocks"):
+        _verify_class_handoff(
+            destination,
+            dimensions=_TINY,
+            deep=False,
             source_verifier=verify,
             trace_extractor=_trace,
             classic_pcap_writer=_classic_writer,
@@ -1010,6 +1325,191 @@ def test_direct_deep_verifier_reopens_current_candidate_algorithm_evidence(
         )
         == destination.resolve()
     )
+
+
+def test_buflo_kernel_tx_sidecars_are_separate_and_fully_bound(tmp_path: Path) -> None:
+    dimensions, receipts, verify = _candidate_fixture(
+        tmp_path,
+        mode="buflo",
+        runtime_kind="buflo",
+        install_evidence=_install_buflo_candidate_evidence,
+    )
+    destination = _export_candidate_fixture(
+        tmp_path / "handoff",
+        dimensions=dimensions,
+        receipts=receipts,
+        verify=verify,
+    )
+    rows = [
+        json.loads(line)
+        for line in (destination / "samples.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    buflo_rows = [row for row in rows if row["runtime_kind"] == "buflo"]
+    assert len(buflo_rows) == 6
+    assert all(row["kernel_tx_evidence"] is None for row in rows if row not in buflo_rows)
+    assert not list((destination / "raw").rglob("router-capture.pcapng"))
+    for row in buflo_rows:
+        run = json.loads((destination / row["products"]["run"]["path"]).read_text())
+        assert run["runner_wakeup_metrics"]["schema_version"] == 11
+        assert set(row["source"]["artifacts"]) == {
+            "pcapng",
+            "run",
+            "schedule",
+            "events",
+            "packets",
+        }
+        binding = row["kernel_tx_evidence"]
+        assert binding["schema_version"] == 1
+        assert binding["source_receipt"]["diagnostics_key"] == (
+            KERNEL_TX_EVIDENCE_RECEIPT_KEY
+        )
+        assert set(binding["artifacts"]) == KERNEL_TX_EVIDENCE_FILES
+        for artifact in binding["artifacts"].values():
+            copied = destination / artifact["path"]
+            assert copied.is_file()
+            assert artifact["path"].startswith("kernel-tx-evidence/block-")
+            assert _sha256(copied) == artifact["sha256"]
+
+
+@pytest.mark.parametrize("mutation", ["directory", "hash", "missing"])
+def test_export_rejects_invalid_buflo_kernel_tx_source_binding(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    dimensions, receipts, verify = _candidate_fixture(
+        tmp_path,
+        mode="buflo",
+        runtime_kind="buflo",
+        install_evidence=_install_buflo_candidate_evidence,
+    )
+    receipt = receipts[0]
+    sample = next(item for item in receipt.experiment["samples"] if item["defense"] == "buflo")
+    retained = sample["diagnostics"][KERNEL_TX_EVIDENCE_RECEIPT_KEY]
+    if mutation == "directory":
+        retained["directory"] = f"{KERNEL_TX_EVIDENCE_DIRECTORY}/substituted"
+    else:
+        name = sorted(KERNEL_TX_EVIDENCE_FILES)[0]
+        if mutation == "hash":
+            retained["artifacts"][name] = "9" * 64
+        else:
+            (receipt.root / retained["directory"] / name).unlink()
+
+    destination = tmp_path / "handoff"
+    with pytest.raises(ValueError, match="BuFLO kernel-TX source"):
+        _export_candidate_fixture(
+            destination,
+            dimensions=dimensions,
+            receipts=receipts,
+            verify=verify,
+        )
+    assert not destination.exists()
+
+
+@pytest.mark.parametrize("mutation", ["missing", "tampered", "substituted", "extra"])
+def test_verifier_rejects_coherently_resealed_kernel_tx_inventory_mutation(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    dimensions, receipts, verify = _candidate_fixture(
+        tmp_path,
+        mode="buflo",
+        runtime_kind="buflo",
+        install_evidence=_install_buflo_candidate_evidence,
+    )
+    destination = _export_candidate_fixture(
+        tmp_path / "handoff",
+        dimensions=dimensions,
+        receipts=receipts,
+        verify=verify,
+    )
+    rows = [
+        json.loads(line)
+        for line in (destination / "samples.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    buflo_rows = [row for row in rows if row["runtime_kind"] == "buflo"]
+    name = "kernel-tx-evidence.json"
+    first = destination / buflo_rows[0]["kernel_tx_evidence"]["artifacts"][name]["path"]
+    if mutation == "missing":
+        first.unlink()
+    elif mutation == "tampered":
+        first.write_bytes(b"tampered kernel evidence\n")
+    elif mutation == "substituted":
+        second = destination / buflo_rows[1]["kernel_tx_evidence"]["artifacts"][name]["path"]
+        first.write_bytes(second.read_bytes())
+    else:
+        _write(destination / KERNEL_TX_EVIDENCE_DIRECTORY / "unbound.json", b"extra\n")
+    _reseal_handoff(destination)
+
+    with pytest.raises(ValueError):
+        _verify_candidate_fixture(
+            destination,
+            dimensions=dimensions,
+            verify=verify,
+            deep=False,
+        )
+
+
+def test_verifier_rejects_unbound_fifo_without_opening_it(tmp_path: Path) -> None:
+    receipts, verify = _fixture(tmp_path)
+    destination = _export_class_handoff(
+        [receipt.root for receipt in receipts],
+        tmp_path / "handoff",
+        dimensions=_TINY,
+        source_verifier=verify,
+        trace_extractor=_trace,
+        classic_pcap_writer=_classic_writer,
+        correctness_validator=_correctness_validator,
+        performance_extractor=_performance_extractor,
+        cohort_loader=_cohort_loader,
+        assembly_validator=_assembly_validator,
+    )
+    fifo = destination / KERNEL_TX_EVIDENCE_DIRECTORY / "unbound.fifo"
+    os.mkfifo(fifo)
+    try:
+        with pytest.raises(ValueError, match="special filesystem entry"):
+            _verify_class_handoff(
+                destination,
+                dimensions=_TINY,
+                deep=False,
+                source_verifier=verify,
+                trace_extractor=_trace,
+                classic_pcap_writer=_classic_writer,
+                correctness_validator=_correctness_validator,
+                performance_extractor=_performance_extractor,
+                cohort_loader=_cohort_loader,
+                assembly_validator=_assembly_validator,
+            )
+    finally:
+        fifo.unlink()
+
+
+def test_verifier_rejects_non_buflo_kernel_tx_claim(tmp_path: Path) -> None:
+    dimensions, receipts, verify = _candidate_fixture(
+        tmp_path,
+        mode="buflo",
+        runtime_kind="buflo",
+        install_evidence=_install_buflo_candidate_evidence,
+    )
+    destination = _export_candidate_fixture(
+        tmp_path / "handoff",
+        dimensions=dimensions,
+        receipts=receipts,
+        verify=verify,
+    )
+    rows_path = destination / "samples.jsonl"
+    rows = [json.loads(line) for line in rows_path.read_text(encoding="utf-8").splitlines()]
+    claimed = next(row["kernel_tx_evidence"] for row in rows if row["runtime_kind"] == "buflo")
+    next(row for row in rows if row["runtime_kind"] != "buflo")["kernel_tx_evidence"] = claimed
+    _write_handoff_rows(rows_path, rows)
+    _reseal_handoff(destination)
+
+    with pytest.raises(ValueError, match="differs from its source identity"):
+        _verify_candidate_fixture(
+            destination,
+            dimensions=dimensions,
+            verify=verify,
+            deep=False,
+        )
 
 
 @pytest.mark.parametrize(
@@ -1351,6 +1851,15 @@ def test_deep_verifier_detects_rewritten_product_bytes(tmp_path: Path) -> None:
 def _reseal_handoff(root: Path) -> None:
     (root / "SHA256SUMS").unlink()
     _write_checksums(root)
+
+
+def _write_handoff_rows(path: Path, rows: list[dict]) -> None:
+    path.write_text(
+        "".join(
+            json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n" for row in rows
+        ),
+        encoding="utf-8",
+    )
 
 
 def test_export_rejects_coherently_resealed_multi_origin_baseline_graph_substitution(

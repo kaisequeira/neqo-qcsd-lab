@@ -90,6 +90,18 @@ def test_direction_metrics_use_target_order_not_incoming_terminal_order() -> Non
     }
 
 
+def test_handoff_csv_unsigned_uses_exact_rust_u64_domain() -> None:
+    maximum = str(fidelity_module.RUNNER_CSV_U64_MAX)
+
+    assert handoff._csv_unsigned(maximum, label="handoff value") == 2**64 - 1
+    with pytest.raises(ValueError, match="u64 domain"):
+        handoff._csv_unsigned(str(2**64), label="handoff value")
+    with pytest.raises(ValueError, match="canonical ASCII"):
+        handoff._csv_unsigned("01", label="handoff value")
+    with pytest.raises(ValueError, match="not positive"):
+        handoff._csv_unsigned("0", label="handoff value", positive=True)
+
+
 def _runner_wakeup_receipt(schema_version: int, *, guard_entries: int = 0) -> dict[str, object]:
     if guard_entries < 0 or (schema_version not in {9, 10} and guard_entries != 0):
         raise ValueError("guarded-release fixtures require runner-wakeup schema 9 or 10")
@@ -401,6 +413,7 @@ def _complete_buflo_run(
     cancelled_capacity: int = 0,
     pending_parser_boundaries: int = 0,
     terminal_incoming_at_stop: int | None = None,
+    current_runner: bool = True,
 ) -> dict[str, object]:
     if terminal_incoming_at_stop is None:
         terminal_incoming_at_stop = scheduled_incoming
@@ -440,6 +453,15 @@ def _complete_buflo_run(
         "buflo_minimum_duration_reached": True,
         "buflo_event_guard_triggered": False,
     }
+    runner_wakeup_metrics = _runner_wakeup_receipt(
+        10, guard_entries=max(scheduled_outgoing - 1, 0)
+    )
+    if current_runner:
+        if scheduled_outgoing != 1:
+            raise ValueError("current kernel-TX fixture supports one outgoing opportunity")
+        from tests.test_kernel_tx import _runner_wakeup_v11
+
+        runner_wakeup_metrics = _runner_wakeup_v11()
     return {
         "completion_status": "complete",
         "error": None,
@@ -449,9 +471,7 @@ def _complete_buflo_run(
             "schema_version": 2,
             "defense": {"kind": "buflo"},
         },
-        "runner_wakeup_metrics": _runner_wakeup_receipt(
-            10, guard_entries=max(scheduled_outgoing - 1, 0)
-        ),
+        "runner_wakeup_metrics": runner_wakeup_metrics,
         "defense_diagnostics": diagnostics,
         "chaff_responses": [
             {"outcome": "buflo_terminal_subcell_tail_cancelled"}
@@ -622,11 +642,20 @@ def _complete_cs_buflo_run() -> dict[str, object]:
     }
 
 
-def test_current_buflo_terminal_receipt_covers_one_guarded_release() -> None:
-    run = _complete_buflo_run(scheduled_outgoing=2, scheduled_incoming=2)
+def test_schema_ten_buflo_guarded_release_remains_historical() -> None:
+    run = _complete_buflo_run(
+        scheduled_outgoing=2,
+        scheduled_incoming=2,
+        current_runner=False,
+    )
     metrics = run["runner_wakeup_metrics"]
 
     assert fidelity_module.new_defense_terminal_receipts_valid(
+        run,
+        "buflo",
+        require_application_complete=True,
+    )
+    assert not fidelity_module.new_defense_terminal_receipts_valid(
         run,
         "buflo",
         require_application_complete=True,
@@ -788,6 +817,172 @@ def _install_formal_source_verifier(
     return verified_roots
 
 
+def _kernel_tx_handoff_fixture(
+    tmp_path: Path,
+) -> tuple[
+    Path,
+    dict[str, object],
+    dict[str, object],
+    list[dict[str, object]],
+]:
+    from tests.test_kernel_tx import _evidence, _runner_wakeup_v11
+
+    source_root = (tmp_path / "source").resolve()
+    sample_id = "sample-001"
+    source_run = source_root / "samples/example/as-defined/visit-001/buflo/neqo/run.json"
+    source_run.parent.mkdir(parents=True)
+    wakeups = _runner_wakeup_v11()
+    run: dict[str, object] = {"runner_wakeup_metrics": wakeups}
+    run_bytes = json.dumps(run, sort_keys=True, separators=(",", ":")).encode()
+    source_run.write_bytes(run_bytes)
+    run_digest = hashlib.sha256(run_bytes).hexdigest()
+
+    capture_bytes = b"sealed post-veth pcapng"
+    capture_digest = hashlib.sha256(capture_bytes).hexdigest()
+    evidence, router_receipt, router_packets = _evidence(wakeups["buflo_kernel_tx"])
+
+    def replace_fixture_digest(value: object) -> object:
+        if isinstance(value, dict):
+            return {key: replace_fixture_digest(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [replace_fixture_digest(item) for item in value]
+        if value == "a" * 64:
+            return run_digest
+        if value == "b" * 64:
+            return capture_digest
+        return value
+
+    evidence = replace_fixture_digest(evidence)
+    router_receipt = replace_fixture_digest(router_receipt)
+    assert isinstance(evidence, dict)
+    assert isinstance(router_receipt, dict)
+    sidecar = source_root / handoff.KERNEL_TX_EVIDENCE_DIRECTORY / sample_id
+    sidecar.mkdir(parents=True)
+    sidecar_files = {
+        "router-capture.pcapng": capture_bytes,
+        "router-receipt.json": json.dumps(
+            router_receipt, sort_keys=True, separators=(",", ":")
+        ).encode(),
+        "kernel-tx-evidence.json": json.dumps(
+            evidence, sort_keys=True, separators=(",", ":")
+        ).encode(),
+    }
+    artifacts: dict[str, str] = {}
+    checksums = {
+        source_run.relative_to(source_root).as_posix(): run_digest,
+    }
+    for name, content in sidecar_files.items():
+        path = sidecar / name
+        path.write_bytes(content)
+        digest = hashlib.sha256(content).hexdigest()
+        artifacts[name] = digest
+        checksums[path.relative_to(source_root).as_posix()] = digest
+    sample = {
+        "sample_id": sample_id,
+        "runtime_kind": "buflo",
+        "diagnostics": {
+            handoff.KERNEL_TX_EVIDENCE_RECEIPT_KEY: {
+                "schema_version": handoff.KERNEL_TX_EVIDENCE_RECEIPT_SCHEMA_VERSION,
+                "source": handoff.KERNEL_TX_EVIDENCE_RECEIPT_SOURCE,
+                "directory": f"{handoff.KERNEL_TX_EVIDENCE_DIRECTORY}/{sample_id}",
+                "artifacts": artifacts,
+            }
+        },
+    }
+    receipt = VerifiedResult(
+        root=source_root,
+        experiment={"samples": [sample]},
+        checksums=checksums,
+        accepted_samples={},
+    )
+    root = (tmp_path / "handoff-kernel").resolve()
+    (root / "raw").mkdir(parents=True)
+    (root / handoff.KERNEL_TX_EVIDENCE_DIRECTORY).mkdir()
+    local_run = root / "raw/sample-001.run.json"
+    local_run.write_bytes(run_bytes)
+    binding = handoff._export_kernel_tx_sidecar(
+        root,
+        receipt,
+        sample,
+        run=run,
+    )
+    assert isinstance(binding, dict)
+    row: dict[str, object] = {
+        "sample_id": sample_id,
+        "runtime_kind": "buflo",
+        "raw_run_path": "raw/sample-001.run.json",
+        "kernel_tx_evidence": binding,
+    }
+    return root, row, run, router_packets
+
+
+def test_focused_handoff_copies_and_deep_verifies_kernel_tx_sidecar(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, row, run, router_packets = _kernel_tx_handoff_fixture(tmp_path)
+
+    expected = {
+        f"kernel-tx-evidence/sample-001/{name}"
+        for name in handoff.KERNEL_TX_EVIDENCE_FILES
+    }
+    assert handoff._validate_kernel_tx_binding(root, row, run=run) == expected
+    monkeypatch.setattr(
+        "qcsd_lab.kernel_tx_runtime.extract_router_udp_packets",
+        lambda _path: router_packets,
+    )
+    handoff._deep_validate_kernel_tx_binding(root, row, run=run)
+    assert not any(
+        path.is_relative_to(root / "raw/sample-001")
+        for path in (root / handoff.KERNEL_TX_EVIDENCE_DIRECTORY).rglob("*")
+    )
+
+
+def test_focused_handoff_kernel_tx_deep_verification_rejects_coherent_reseal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, row, run, router_packets = _kernel_tx_handoff_fixture(tmp_path)
+    binding = row["kernel_tx_evidence"]
+    assert isinstance(binding, dict)
+    artifacts = binding["artifacts"]
+    assert isinstance(artifacts, dict)
+    artifact = artifacts["kernel-tx-evidence.json"]
+    assert isinstance(artifact, dict)
+    path = root / str(artifact["path"])
+    evidence = json.loads(path.read_text(encoding="utf-8"))
+    evidence["aggregate"]["matched_item_count"] = 1
+    path.write_text(json.dumps(evidence, sort_keys=True, separators=(",", ":")), encoding="utf-8")
+    artifact["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+
+    assert handoff._validate_kernel_tx_binding(root, row, run=run)
+    monkeypatch.setattr(
+        "qcsd_lab.kernel_tx_runtime.extract_router_udp_packets",
+        lambda _path: router_packets,
+    )
+    with pytest.raises(ValueError, match="failed deep validation"):
+        handoff._deep_validate_kernel_tx_binding(root, row, run=run)
+
+
+@pytest.mark.parametrize("mutation", ["missing", "extra-directory", "symlink"])
+def test_focused_handoff_kernel_tx_inventory_is_exact(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    root, row, run, _router_packets = _kernel_tx_handoff_fixture(tmp_path)
+    sidecar = root / handoff.KERNEL_TX_EVIDENCE_DIRECTORY / "sample-001"
+    if mutation == "missing":
+        (sidecar / "router-receipt.json").unlink()
+    elif mutation == "extra-directory":
+        (sidecar / "extra").mkdir()
+    else:
+        (sidecar / "router-receipt.json").unlink()
+        (sidecar / "router-receipt.json").symlink_to("kernel-tx-evidence.json")
+
+    with pytest.raises(ValueError, match="kernel-TX directory"):
+        handoff._validate_kernel_tx_binding(root, row, run=run)
+
+
 def test_formal_handoff_reverifies_and_binds_authoritative_result(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -811,7 +1006,7 @@ def test_public_formal_handoff_validation_rechecks_sources_when_not_deep(
 ) -> None:
     root, dataset, rows, _checksums, receipt = _formal_source_binding_fixture(tmp_path)
     verified_roots = _install_formal_source_verifier(monkeypatch, receipt)
-    for directory in ("stripped", "traces"):
+    for directory in ("stripped", "traces", handoff.KERNEL_TX_EVIDENCE_DIRECTORY):
         (root / directory).mkdir(parents=True)
     (root / "README.md").write_text("formal test handoff\n", encoding="utf-8")
     dataset.update(
@@ -821,7 +1016,12 @@ def test_public_formal_handoff_validation_rechecks_sources_when_not_deep(
             "counts_by_defense": {"buflo": 1},
         }
     )
-    rows[0].update(schema_version=1, packet_count=0)
+    dataset["schema_version"] = handoff.HANDOFF_SCHEMA_VERSION
+    rows[0].update(
+        schema_version=handoff.HANDOFF_SCHEMA_VERSION,
+        packet_count=0,
+        kernel_tx_evidence=None,
+    )
     (root / "dataset.json").write_text(json.dumps(dataset, sort_keys=True) + "\n", encoding="utf-8")
     (root / "samples.jsonl").write_text(
         json.dumps(rows[0], sort_keys=True, separators=(",", ":")) + "\n",
@@ -1357,7 +1557,7 @@ def test_buflo_algorithm_diagnostics_bind_typed_tail_action_and_control_packet(
         events_path=events,
         packets_path=packets,
     )
-    assert run["runner_wakeup_metrics"]["schema_version"] == 10
+    assert run["runner_wakeup_metrics"]["schema_version"] == 11
     assert algorithm["schema_version"] == 4
     assert evaluation_module._load_algorithm_diagnostics(algorithm, defense="buflo") == algorithm
     assert algorithm["buflo_state"]["schema_version"] == 3

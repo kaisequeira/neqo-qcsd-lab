@@ -12,7 +12,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .acquisition_errors import RecoverableAcquisitionError
 from .discover import DiscoveryResult, discover_page, origin
+from .discovery_evidence import (
+    evidence_sha256,
+    validate_passive_render_contract,
+    validate_render_observation,
+    verify_discovery_event_audit,
+)
+from .fidelity import _runner_csv_u64
 from .manifest import (
     COMPLETE_COVERAGE_POLICY,
     canonical_bytes,
@@ -55,7 +63,11 @@ NEQO_PROVENANCE_KEYS = (
 
 
 class PreparationError(RuntimeError):
-    """A browser discovery or direct Neqo preparation check failed."""
+    """A malformed or internally inconsistent preparation result."""
+
+
+class RecoverablePreparationError(PreparationError, RecoverableAcquisitionError):
+    """A transient live HTTP/3 preparation failure that may be retried."""
 
 
 @dataclass(frozen=True)
@@ -112,6 +124,10 @@ def prepare_workload(
     coverage_admission = (
         _complete_coverage_admission(discovery) if require_complete_coverage else None
     )
+    browser_request_headers = [
+        {"resource_id": resource["id"], "headers": resource.get("headers", [])}
+        for resource in discovery.resources
+    ]
     root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=f".{workload_id}-prepare-", dir=root) as temporary:
         directory = Path(temporary)
@@ -142,7 +158,7 @@ def prepare_workload(
     stable = set(evidence["stable_resource_ids"])
     if unstable := required - stable:
         identifiers = ", ".join(map(str, sorted(unstable)))
-        raise PreparationError(
+        raise RecoverablePreparationError(
             f"repeated Neqo fetches changed or failed for resource IDs: {identifiers}"
         )
     try:
@@ -153,6 +169,21 @@ def prepare_workload(
         ) from error
     _freeze_request_headers(resources, runs)
     provenance = _neqo_provenance(runs)
+    discovery_evidence_values = {
+        "passive_render_contract": discovery.passive_render_contract,
+        "passive_render_contract_sha256": discovery.passive_render_contract_sha256,
+        "render_observation": discovery.render_observation,
+        "render_observation_sha256": discovery.render_observation_sha256,
+        "discovery_event_audit": discovery.discovery_event_audit,
+        "discovery_event_audit_sha256": discovery.discovery_event_audit_sha256,
+    }
+    present_discovery_evidence = {
+        key: value for key, value in discovery_evidence_values.items() if value is not None
+    }
+    if present_discovery_evidence and len(present_discovery_evidence) != len(
+        discovery_evidence_values
+    ):
+        raise PreparationError("browser discovery returned incomplete bounded-render evidence")
     manifest = {
         "preparation": {
             "source_url": discovery.source_url,
@@ -162,7 +193,17 @@ def prepare_workload(
             "observed_request_count": discovery.observed_request_count,
             "observed_origins": discovery.observed_origins,
             "approved_origins": discovery.approved_origins,
+            **(
+                {"origin_ip_pins": discovery.origin_ip_pins}
+                if discovery.origin_ip_pins
+                else {}
+            ),
             "exclusions": exclusions,
+            "browser_request_headers": browser_request_headers,
+            "request_header_transformation": (
+                "browser-safe-input-to-neqo-stability-frozen-runtime-v1"
+            ),
+            **present_discovery_evidence,
             "prepare_image_digest": os.environ.get("QCSD_LAB_IMAGE_DIGEST", "native"),
             "lab_source": source_metadata(),
             "max_response_bytes": max_response_bytes,
@@ -259,8 +300,7 @@ def _probe(
         label="Neqo HTTP/3 probe",
     )
     if result.returncode:
-        detail = result.stdout.strip() or "no client output"
-        raise PreparationError(f"Neqo HTTP/3 probe failed ({result.returncode}): {detail}")
+        _raise_neqo_execution_failure("Neqo HTTP/3 probe", result)
     try:
         resolved = load_json(output)
         validate_manifest(resolved)
@@ -299,7 +339,7 @@ def resolve_probe_output(
             f"{resource['id']} ({resource['url']})"
             for resource in sorted(unavailable, key=lambda item: item["id"])
         )
-        raise PreparationError(
+        raise RecoverablePreparationError(
             "complete coverage requires every browser-rendered resource to pass the HTTP/3 "
             f"preflight; unavailable resource IDs/URLs: {details}"
         )
@@ -356,6 +396,14 @@ def _complete_coverage_admission(discovery: DiscoveryResult) -> dict[str, Any]:
     """Bind an opt-in requirement covering every approved origin and rendered GET."""
 
     expandable = discovery.expandable_origins
+    if (
+        not isinstance(discovery.origin_ip_pins, dict)
+        or not discovery.origin_ip_pins
+        or set(discovery.origin_ip_pins) != set(discovery.approved_origins)
+    ):
+        raise PreparationError(
+            "complete coverage requires one frozen origin-IP pin for every approved origin"
+        )
     if not isinstance(expandable, list):
         raise PreparationError(
             "complete coverage requires the final browser discovery's "
@@ -388,30 +436,76 @@ def _complete_coverage_admission(discovery: DiscoveryResult) -> dict[str, Any]:
     approved_origin_set = set(discovery.approved_origins)
     unreported_approved = approved_origin_set - set(canonical_expandable)
     if unreported_approved:
-        raise PreparationError(
+        raise RecoverablePreparationError(
             "complete coverage final browser expandable-origin ledger omits approved "
             "HTTPS GET origins: " + ", ".join(sorted(unreported_approved))
         )
     newly_observed = set(canonical_expandable) - approved_origin_set
     if newly_observed:
-        raise PreparationError(
+        raise RecoverablePreparationError(
             "complete coverage final browser discovery observed new HTTPS GET origins "
             "after convergence: " + ", ".join(sorted(newly_observed))
         )
     retained_origins = {origin(resource["url"]) for resource in discovery.resources}
     missing = set(discovery.approved_origins) - retained_origins
     if missing:
-        raise PreparationError(
+        raise RecoverablePreparationError(
             "complete coverage requires a browser-rendered HTTPS GET from every approved "
             "origin; missing origins: " + ", ".join(sorted(missing))
         )
+    evidence_values = (
+        discovery.passive_render_contract,
+        discovery.passive_render_contract_sha256,
+        discovery.render_observation,
+        discovery.render_observation_sha256,
+        discovery.discovery_event_audit,
+        discovery.discovery_event_audit_sha256,
+    )
+    if any(value is None for value in evidence_values):
+        raise PreparationError(
+            "complete coverage requires current bounded-render discovery evidence"
+        )
+    validate_passive_render_contract(
+        discovery.passive_render_contract,
+        digest=discovery.passive_render_contract_sha256,
+    )
+    validate_render_observation(discovery.render_observation)
+    if (
+        evidence_sha256(discovery.render_observation)
+        != discovery.render_observation_sha256
+        or evidence_sha256(discovery.discovery_event_audit)
+        != discovery.discovery_event_audit_sha256
+    ):
+        raise PreparationError("complete-coverage discovery evidence SHA-256 is invalid")
+    summary = verify_discovery_event_audit(
+        discovery.discovery_event_audit,
+        render_observation=discovery.render_observation,
+        resources=discovery.resources,
+        exclusions=discovery.exclusions,
+        approved_origins=discovery.approved_origins,
+        observed_request_count=discovery.observed_request_count,
+        expected_observed_origins=discovery.observed_origins,
+    )
     return {
-        "schema_version": 1,
+        "schema_version": 3,
         "policy": COMPLETE_COVERAGE_POLICY,
         "required_origins": list(discovery.approved_origins),
         "required_resources": [
             {"id": resource["id"], "url": resource["url"]} for resource in discovery.resources
         ],
+        "passive_render_contract_sha256": discovery.passive_render_contract_sha256,
+        "render_observation_sha256": discovery.render_observation_sha256,
+        "discovery_event_audit_sha256": discovery.discovery_event_audit_sha256,
+        "origin_ip_pins_sha256": evidence_sha256(discovery.origin_ip_pins),
+        "browser_request_headers_sha256": evidence_sha256(
+            [
+                {"resource_id": resource["id"], "headers": resource.get("headers", [])}
+                for resource in discovery.resources
+            ]
+        ),
+        "network_request_count": summary["network_request_count"],
+        "resource_occurrence_count": summary["resource_occurrence_count"],
+        "exclusion_occurrence_count": summary["exclusion_occurrence_count"],
     }
 
 
@@ -456,10 +550,7 @@ def _probe_response_stability(
             label=f"Neqo stability run {index + 1}",
         )
         if result.returncode:
-            detail = result.stdout.strip() or "no client output"
-            raise PreparationError(
-                f"Neqo stability run {index + 1} failed ({result.returncode}): {detail}"
-            )
+            _raise_neqo_execution_failure(f"Neqo stability run {index + 1}", result)
         try:
             run_data = load_json(output / "run.json")
         except (OSError, ValueError, json.JSONDecodeError) as error:
@@ -543,27 +634,25 @@ def _qualify_udp_payloads(
                 f"Neqo stability run {run_index + 1} packets.csv line {line_number} "
                 "has an invalid direction"
             )
-        if (
-            not isinstance(connection, str)
-            or not connection.isascii()
-            or not connection.isdigit()
-            or int(connection) > 2**64 - 1
-        ):
+        try:
+            _runner_csv_u64(connection, label="runner packet connection")
+        except ValueError:
             raise PreparationError(
                 f"Neqo stability run {run_index + 1} packets.csv line {line_number} "
                 "has an invalid connection"
+            ) from None
+        try:
+            parsed_length = _runner_csv_u64(
+                observed_length, label="runner packet observed UDP length"
             )
-        if (
-            not isinstance(observed_length, str)
-            or not observed_length.isascii()
-            or not observed_length.isdigit()
-            or int(observed_length) < 1
-        ):
+        except ValueError:
+            parsed_length = 0
+        if parsed_length < 1:
             raise PreparationError(
                 f"Neqo stability run {run_index + 1} packets.csv line {line_number} "
                 "has an invalid observed_udp_length"
             )
-        lengths[direction].append(int(observed_length))
+        lengths[direction].append(parsed_length)
 
     missing_directions = [direction for direction, values in lengths.items() if not values]
     if missing_directions:
@@ -616,9 +705,29 @@ def _run_neqo(
         return run(measured_command, log=log, check=False, timeout=host_timeout)
     except ProcessTimeoutError as error:
         detail = error.result.stdout.strip() or "no client output"
-        raise PreparationError(
+        raise RecoverablePreparationError(
             f"{label} exceeded its enforced {host_timeout:g}s host timeout: {detail}"
         ) from error
+
+
+def _raise_neqo_execution_failure(
+    label: str, result: subprocess.CompletedProcess[str]
+) -> None:
+    """Classify an exited preparation client without masking Rust panics.
+
+    Rust's panic runtime conventionally exits with status 101.  Treat every
+    such exit as an internal preparation failure even when its panic marker was
+    truncated or suppressed; acquisition will durably checkpoint and abort it.
+    Other non-zero exits retain the existing recoverable live-network policy.
+    """
+
+    if result.returncode == 0:
+        raise ValueError("Neqo execution failure classifier requires a non-zero exit")
+    detail = result.stdout.strip() or "no client output"
+    message = f"{label} failed ({result.returncode}): {detail}"
+    if result.returncode == 101:
+        raise PreparationError(message)
+    raise RecoverablePreparationError(message)
 
 
 def response_stability_evidence(runs: list[dict[str, Any]]) -> dict[str, Any]:

@@ -69,6 +69,350 @@ def _record(role: str, *, block: int | None = None) -> dict[str, object]:
     }
 
 
+def _fitting_runtime_projection(role: str) -> dict[str, object]:
+    kinds = {
+        "undefended": "none",
+        "static": "static",
+        "front": "front",
+        "tamaraw": "tamaraw",
+        "traffic-morphing": "traffic_morphing",
+        "wtf-pad": "wtf_pad",
+        "walkie-talkie": "walkie_talkie",
+        "buflo": "buflo",
+        "cs-buflo": "cs_buflo",
+    }
+    runtime: dict[str, dict[str, object]] = {}
+    for index, mode in enumerate(COMPATIBILITY_MODES, start=1):
+        kind = kinds[mode]
+        if mode == "undefended":
+            identity = {
+                "identity_type": "source-bound-no-defense",
+                "runtime_kind": kind,
+            }
+        elif mode in {"front", "tamaraw"}:
+            identity = {
+                "identity_type": "source-bound-built-in",
+                "runtime_kind": kind,
+            }
+        elif mode == "static":
+            identity = {
+                "identity_type": "hash-bound-static-schedule",
+                "runtime_kind": kind,
+                "schedule_sha256": f"{index:x}" * 64,
+                "mode": "chaff-and-shape",
+            }
+        else:
+            identity = {
+                "identity_type": "hash-bound-parameter-artifact",
+                "runtime_kind": kind,
+                "parameters_sha256": f"{index:x}" * 64,
+                "provenance_sha256": "a" * 64,
+                "input_policy": "sealed-class-study-fitting-v1",
+            }
+        runtime[mode] = identity
+    return {
+        "defense_runtime_inputs": runtime,
+        "qualification_set": (
+            "classifier-multiorigin100-v1-pilot120-full-v1"
+            if role == "pilot-compatibility"
+            else "classifier-multiorigin100-v1-final100-full-v1"
+        ),
+        "qualification_set_manifest_sha256": "9" * 64,
+    }
+
+
+def _fitting_generation_authority(
+    role: str,
+    source_record: dict[str, object],
+) -> dict[str, object]:
+    runtime = _fitting_runtime_projection(role)
+    identities = runtime["defense_runtime_inputs"]
+    assert isinstance(identities, dict)
+    return {
+        "schema_version": 1,
+        "evidence_role": role,
+        "source_result": {
+            "root": source_record["root"],
+            "evidence_sha256": source_record["evidence_sha256"],
+        },
+        "bundle": {
+            "root": f"/evidence/{role}-bundle",
+            "stage": "pilot" if role == "pilot-compatibility" else "authoritative",
+            "provenance_sha256": "a" * 64,
+            "parameter_sha256": {
+                mode: identities[mode]["parameters_sha256"]
+                for mode in ("traffic-morphing", "wtf-pad", "walkie-talkie")
+            },
+        },
+        "capture_runtime": runtime,
+    }
+
+
+def _loaded_fitting_generation_campaign(
+    tmp_path: Path,
+    role: str,
+) -> orchestrator.Campaign:
+    inputs = tmp_path / "inputs"
+    workloads = inputs / "workloads"
+    sidecars = inputs / "qualification"
+    prefixes = inputs / "prefixes"
+    bundle = inputs / "fitted-bundle"
+    for root in (workloads, sidecars, prefixes, bundle):
+        root.mkdir(parents=True, exist_ok=True)
+    workload_path = workloads / "class-000.json"
+    sidecar_path = sidecars / "class-000.json"
+    prefix_path = prefixes / "class-000.json"
+    manifest_path = sidecars / "_qualification-set.json"
+    for path in (workload_path, sidecar_path, prefix_path, manifest_path):
+        path.write_text("{}\n", encoding="utf-8")
+    workload = orchestrator.Workload(
+        id="class-000",
+        visits=1,
+        path=workload_path,
+        source_bytes=workload_path.read_bytes(),
+        sha256=util.sha256_file(workload_path),
+        data={},
+        resource_count=1,
+        origin_count=1,
+        chaff_qualification_path=sidecar_path,
+        chaff_qualification_sha256=util.sha256_file(sidecar_path),
+        chaff_qualification_scope="full",
+        chaff_prefix_spec_path=prefix_path,
+        chaff_prefix_spec_sha256=util.sha256_file(prefix_path),
+        qualification_set_manifest_path=manifest_path,
+        qualification_set_manifest_sha256=util.sha256_file(manifest_path),
+    )
+    defenses = [Defense("undefended", "none", True)]
+    schedule = inputs / "static.csv"
+    schedule.write_text("0.0,1200\n", encoding="utf-8")
+    defenses.append(
+        Defense(
+            "static",
+            "static",
+            False,
+            schedule="static.csv",
+            schedule_path=schedule,
+            schedule_sha256=util.sha256_file(schedule),
+            mode="chaff-and-shape",
+        )
+    )
+    defenses.extend((Defense("front", "front", False), Defense("tamaraw", "tamaraw", False)))
+    provenance = bundle / "provenance.json"
+    provenance.write_text("{}\n", encoding="utf-8")
+    fitted = {
+        "traffic-morphing": ("traffic_morphing", "traffic-morphing.json"),
+        "wtf-pad": ("wtf_pad", "wtf-pad.json"),
+        "walkie-talkie": ("walkie_talkie", "walkie-talkie.json"),
+    }
+    for mode, (kind, filename) in fitted.items():
+        parameter = bundle / filename
+        parameter.write_text(json.dumps({"mode": mode}) + "\n", encoding="utf-8")
+        defenses.append(
+            Defense(
+                mode,
+                kind,
+                False,
+                parameters=filename,
+                parameters_path=parameter,
+                parameters_sha256=util.sha256_file(parameter),
+                parameters_provenance="provenance.json",
+                parameters_provenance_path=provenance,
+                parameters_provenance_sha256=util.sha256_file(provenance),
+                parameters_input_policy="sealed-class-study-fitting-v1",
+            )
+        )
+    for mode, kind in (("buflo", "buflo"), ("cs-buflo", "cs_buflo")):
+        root = inputs / mode
+        root.mkdir()
+        parameter = root / "parameters.json"
+        parameter_provenance = root / "provenance.json"
+        parameter.write_text("{}\n", encoding="utf-8")
+        parameter_provenance.write_text("{}\n", encoding="utf-8")
+        defenses.append(
+            Defense(
+                mode,
+                kind,
+                False,
+                parameters="parameters.json",
+                parameters_path=parameter,
+                parameters_sha256=util.sha256_file(parameter),
+                parameters_provenance="provenance.json",
+                parameters_provenance_path=parameter_provenance,
+                parameters_provenance_sha256=util.sha256_file(parameter_provenance),
+                parameters_input_policy="candidate",
+            )
+        )
+    campaign_path = tmp_path / f"{role}.yml"
+    campaign_path.write_text("schema: 2\n", encoding="utf-8")
+    return orchestrator.Campaign(
+        path=campaign_path,
+        source_bytes=campaign_path.read_bytes(),
+        name=f"{STUDY_ID}-{role}-1200",
+        purpose="evaluation",
+        seed=1,
+        profile="research-1200",
+        workloads=(workload,),
+        request_policies=("as-defined",),
+        defenses=tuple(defenses),
+        limits=Limits(),
+        chaff_qualification_set=(
+            "classifier-multiorigin100-v1-pilot120-full-v1"
+            if role == "pilot-compatibility"
+            else "classifier-multiorigin100-v1-final100-full-v1"
+        ),
+        schema_version=2,
+        evidence_role=role,
+        class_study_cohort_sha256="a" * 64,
+        class_study_cohort_assembly_sha256="b" * 64,
+        class_study_id=STUDY_ID,
+    )
+
+
+def test_successor_status_never_skips_pre_formal_snapshot() -> None:
+    stages = {
+        key: {"state": "absent"}
+        for key in (
+            "readiness",
+            "historical_pre_snapshot",
+            "historical_post_snapshot",
+            "handoff",
+            "evaluation",
+            "comparison_review",
+            "validation_attestation",
+        )
+    }
+    records = [
+        _record("authoritative-fitting"),
+        _record("certification"),
+        *(
+            _record("canary", block=block)
+            for block in range(1, pipeline.FORMAL_BLOCK_COUNT + 1)
+        ),
+        *(
+            _record("formal", block=block)
+            for block in range(1, pipeline.FORMAL_BLOCK_COUNT + 1)
+        ),
+    ]
+
+    assert pipeline._successor_next_required_stage(stages, records) == (
+        "successor-readiness"
+    )
+    stages["readiness"] = {"state": "verified"}
+    assert pipeline._successor_next_required_stage(stages, records) == (
+        "historical-pre-formal-snapshot"
+    )
+    stages["historical_pre_snapshot"] = {"state": "verified"}
+    assert pipeline._successor_next_required_stage(stages, records[:-1]) == (
+        "canary/formal-capture"
+    )
+    assert pipeline._successor_next_required_stage(stages, records) == (
+        "historical-post-formal-snapshot"
+    )
+    stages["historical_post_snapshot"] = {"state": "verified"}
+    assert pipeline._successor_next_required_stage(stages, records) == "formal-handoff"
+    stages["handoff"] = {"state": "verified"}
+    assert pipeline._successor_next_required_stage(stages, records) == "attack-evaluation"
+    stages["evaluation"] = {"state": "verified"}
+    assert pipeline._successor_next_required_stage(stages, records) == (
+        "original-study-comparison-review"
+    )
+    stages["comparison_review"] = {"state": "verified"}
+    assert pipeline._successor_next_required_stage(stages, records) == (
+        "final-validation-attestation"
+    )
+    stages["validation_attestation"] = {"state": "verified"}
+    assert pipeline._successor_next_required_stage(stages, records) == "complete"
+
+
+def test_successor_status_does_not_let_an_early_attestation_skip_stages() -> None:
+    stages = {
+        key: {"state": "absent"}
+        for key in (
+            "readiness",
+            "historical_pre_snapshot",
+            "historical_post_snapshot",
+            "handoff",
+            "evaluation",
+            "comparison_review",
+            "validation_attestation",
+        )
+    }
+    stages["validation_attestation"] = {"state": "verified"}
+    records = [
+        _record("authoritative-fitting"),
+        _record("certification"),
+        *(
+            _record("canary", block=block)
+            for block in range(1, pipeline.FORMAL_BLOCK_COUNT + 1)
+        ),
+        *(
+            _record("formal", block=block)
+            for block in range(1, pipeline.FORMAL_BLOCK_COUNT + 1)
+        ),
+    ]
+
+    assert pipeline._successor_next_required_stage(stages, records) == (
+        "successor-readiness"
+    )
+    stages["readiness"] = {"state": "verified"}
+    assert pipeline._successor_next_required_stage(stages, records) == (
+        "historical-pre-formal-snapshot"
+    )
+    stages["historical_pre_snapshot"] = {"state": "verified"}
+    assert pipeline._successor_next_required_stage(stages, records[:-1]) == (
+        "canary/formal-capture"
+    )
+    assert pipeline._successor_next_required_stage(stages, records) == (
+        "historical-post-formal-snapshot"
+    )
+    stages["historical_post_snapshot"] = {"state": "verified"}
+    assert pipeline._successor_next_required_stage(stages, records) == "formal-handoff"
+    stages["handoff"] = {"state": "verified"}
+    assert pipeline._successor_next_required_stage(stages, records) == "attack-evaluation"
+    stages["evaluation"] = {"state": "verified"}
+    assert pipeline._successor_next_required_stage(stages, records) == (
+        "original-study-comparison-review"
+    )
+    stages["comparison_review"] = {"state": "verified"}
+    assert pipeline._successor_next_required_stage(stages, records) == "complete"
+
+
+def test_export_cannot_bypass_historical_post_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    records = [
+        _record("certification"),
+        *(
+            _record("canary", block=block)
+            for block in range(1, pipeline.FORMAL_BLOCK_COUNT + 1)
+        ),
+        *(
+            _record("formal", block=block)
+            for block in range(1, pipeline.FORMAL_BLOCK_COUNT + 1)
+        ),
+    ]
+    monkeypatch.setattr(pipeline, "_validate_fresh_layout_arguments", lambda **_kwargs: None)
+    monkeypatch.setattr(pipeline, "_optional_admission", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(pipeline, "_result_index", lambda *_args, **_kwargs: records)
+    monkeypatch.setattr(
+        pipeline,
+        "export_class_handoff",
+        lambda *_args, **_kwargs: pytest.fail(
+            "handoff export ran without post-formal authority"
+        ),
+    )
+
+    with pytest.raises(ValueError, match="--historical-post-snapshot"):
+        pipeline.run_class_study_action(
+            "export",
+            final_cohort_receipt_path=tmp_path / "cohort.json",
+            final_cohort_assembly_path=tmp_path / "assembly.json",
+            result_roots=tuple(Path(record["root"]) for record in records),
+            destination=tmp_path / "handoff",
+        )
+
+
 def _qualification_authority() -> dict[str, object]:
     source = {
         "image_digest": "sha256:" + "1" * 64,
@@ -563,6 +907,18 @@ def test_formal_result_accepts_preserved_retry_success_within_budget(monkeypatch
 def _candidate_verified_result(
     tmp_path: Path, run: dict[str, object]
 ) -> tuple[VerifiedResult, dict[str, object]]:
+    diagnostics = run.get("defense_diagnostics")
+    wakeups = run.get("runner_wakeup_metrics")
+    if (
+        isinstance(diagnostics, dict)
+        and diagnostics.get("buflo_scheduled_outgoing_cells") == 1
+        and isinstance(wakeups, dict)
+        and wakeups.get("schema_version") == 10
+    ):
+        from tests.test_kernel_tx import _runner_wakeup_v11
+
+        run = json.loads(json.dumps(run))
+        run["runner_wakeup_metrics"] = _runner_wakeup_v11()
     root = (tmp_path / "candidate-result").resolve()
     sample_relative = "samples/class-000/as-defined/visit-001/buflo"
     sample_root = root / sample_relative
@@ -718,15 +1074,98 @@ def test_class_result_reopens_current_candidate_terminal_receipt(tmp_path: Path)
     pipeline._validate_current_candidate_sample_receipt(verified, sample, role="certification")
 
 
-def test_class_result_reopens_current_guarded_buflo_receipt(tmp_path: Path) -> None:
+def test_class_result_recomputes_established_defense_activation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tests.test_fidelity import _empty_activation_schedule
+
+    root = (tmp_path / "established-result").resolve()
+    sample_root = root / "samples/class-000/as-defined/visit-000/static"
+    (sample_root / "neqo").mkdir(parents=True)
+    run = {
+        "resolved_configuration": {
+            "schema_version": 2,
+            "max_udp_payload_size": 1_200,
+            "defense": {
+                "kind": "static",
+                "padding_only": True,
+                "schedule": "static-control.csv",
+            },
+        },
+        "defense_diagnostics": {
+            "scheduled_incoming_requested_bytes": 0,
+            "scheduled_incoming_advertised_bytes": 0,
+            "scheduled_incoming_consumed_bytes": 0,
+            "scheduled_incoming_retired_bytes": 0,
+            "scheduled_incoming_unresolved_bytes": 0,
+        },
+    }
+    (sample_root / "neqo/run.json").write_text(
+        json.dumps(run, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    for relative in (
+        "capture.pcapng",
+        "neqo/packets.csv",
+        "neqo/events.csv",
+        "neqo/schedule.csv",
+    ):
+        path = sample_root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"sealed\n")
+    artifacts = {
+        path.relative_to(root).as_posix(): util.sha256_file(path)
+        for path in sample_root.rglob("*")
+        if path.is_file()
+    }
+    sample = {
+        "sample_id": "class-000-static",
+        "path": "samples/class-000/as-defined/visit-000/static",
+        "defense": "static",
+        "runtime_kind": "static",
+        "artifacts": artifacts,
+    }
+    verified = VerifiedResult(
+        root=root,
+        experiment={"configuration": {}},
+        checksums=dict(artifacts),
+        accepted_samples={str(sample["sample_id"]): dict(artifacts)},
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "resolve_class_sample_run_binding",
+        lambda *args, **kwargs: object(),
+    )
+    monkeypatch.setattr(pipeline, "validate_class_sample_run_binding", lambda *args: None)
+    monkeypatch.setattr(
+        pipeline,
+        "_schedule_realization_metrics_from_path",
+        lambda _path: _empty_activation_schedule(),
+    )
+
+    with pytest.raises(ValueError, match="defence activation"):
+        pipeline._validate_class_sample_run_receipt(
+            verified,
+            sample,
+            role="certification",
+        )
+
+
+def test_class_result_rejects_schema_ten_guarded_buflo_receipt(tmp_path: Path) -> None:
     from tests.test_buflo_handoff import _complete_buflo_run
 
     verified, sample = _candidate_verified_result(
         tmp_path,
-        _complete_buflo_run(scheduled_outgoing=2, scheduled_incoming=2),
+        _complete_buflo_run(
+            scheduled_outgoing=2,
+            scheduled_incoming=2,
+            current_runner=False,
+        ),
     )
 
-    pipeline._validate_current_candidate_sample_receipt(verified, sample, role="certification")
+    with pytest.raises(ValueError, match="runner-wakeup schema-11 with kernel-TX evidence"):
+        pipeline._validate_current_candidate_sample_receipt(verified, sample, role="certification")
 
 
 def test_class_result_rejects_historical_schema_eight_runner_receipt(tmp_path: Path) -> None:
@@ -736,7 +1175,7 @@ def test_class_result_rejects_historical_schema_eight_runner_receipt(tmp_path: P
     run["runner_wakeup_metrics"] = _runner_wakeup_receipt(8)
     verified, sample = _candidate_verified_result(tmp_path, run)
 
-    with pytest.raises(ValueError, match="runner-wakeup schema-10"):
+    with pytest.raises(ValueError, match="runner-wakeup schema-11 with kernel-TX evidence"):
         pipeline._validate_current_candidate_sample_receipt(verified, sample, role="certification")
 
 
@@ -1439,12 +1878,326 @@ def test_coordinator_authorises_ordered_predecessor_roles_only_inside_scope(
         "class_study_cohort_assembly_sha256": "b" * 64,
     }
     predecessor_record = _record(predecessor)
+    fitting_generation = None
+    if role == "pilot-compatibility":
+        runtime = _fitting_runtime_projection(role)
+        configuration.update(
+            defense_runtime_inputs=runtime["defense_runtime_inputs"],
+            chaff_qualification_set=runtime["qualification_set"],
+            chaff_qualification_set_manifest_sha256=(
+                runtime["qualification_set_manifest_sha256"]
+            ),
+        )
+        fitting_generation = _fitting_generation_authority(role, predecessor_record)
 
     with orchestrator._class_study_coordinator_capture_authority(
         configuration,
         (predecessor_record,),
+        fitting_generation,
     ):
         orchestrator._require_class_study_coordinator_capture_authority(configuration)
+
+    with pytest.raises(ValueError, match="validated prerequisite ledger"):
+        orchestrator._require_class_study_coordinator_capture_authority(configuration)
+
+
+@pytest.mark.parametrize(
+    ("role", "source_role"),
+    (
+        ("pilot-compatibility", "pilot-fitting"),
+        ("certification", "authoritative-fitting"),
+    ),
+)
+@pytest.mark.parametrize("resume", (False, True), ids=("launch", "resume"))
+def test_fitted_capture_preflight_rejects_stale_same_cohort_stage_result(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    role: str,
+    source_role: str,
+    resume: bool,
+) -> None:
+    """A same-stage/cohort bundle cannot be attributed to another fit result."""
+
+    selected = _record(source_role)
+    selected["root"] = str(tmp_path / "selected-fitting-result")
+    stale_root = tmp_path / "stale-same-cohort-fitting-result"
+    campaign_path = None if resume else tmp_path / f"{role}.yml"
+    frozen_result_root = tmp_path / "capture-result" if resume else None
+    observed: list[Path] = []
+
+    def stale_generation(**kwargs):
+        observed.append(kwargs["source_result_root"])
+        assert kwargs["campaign_path"] == campaign_path
+        assert kwargs["frozen_result_root"] == frozen_result_root
+        value = _fitting_generation_authority(role, selected)
+        value["source_result"] = {
+            "root": str(stale_root),
+            "evidence_sha256": selected["evidence_sha256"],
+        }
+        return value
+
+    monkeypatch.setattr(
+        pipeline,
+        "verify_class_study_fitting_generation",
+        stale_generation,
+    )
+    with pytest.raises(ValueError, match="another prerequisite result"):
+        pipeline._validate_capture_fitting_generation(
+            role,
+            prerequisite_records=(selected,),
+            campaign_path=campaign_path,
+            frozen_result_root=frozen_result_root,
+        )
+    assert observed == [Path(str(selected["root"]))]
+
+
+@pytest.mark.parametrize(
+    ("role", "stage"),
+    (
+        ("pilot-compatibility", "pilot"),
+        ("certification", "authoritative"),
+    ),
+)
+@pytest.mark.parametrize("resume", (False, True), ids=("launch", "resume"))
+def test_generation_verifier_independently_refits_exact_prerequisite_result(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    role: str,
+    stage: str,
+    resume: bool,
+) -> None:
+    import qcsd_lab.class_fitting as class_fitting
+
+    campaign = _loaded_fitting_generation_campaign(tmp_path / "campaign", role)
+    source = tmp_path / "selected-fitting-result"
+    source.mkdir()
+    (source / "evidence.sha256").write_text("sealed\n", encoding="utf-8")
+    calls: list[tuple[Path, Path]] = []
+
+    def verify_bundle(root: Path, *, qualification_context, source_result_root: Path):
+        calls.append((root, source_result_root))
+        assert qualification_context.workload_root == campaign.workloads[0].path.parent
+        assert qualification_context.sidecar_root == (
+            campaign.workloads[0].chaff_qualification_path.parent
+        )
+        assert qualification_context.prefix_spec_root == (
+            campaign.workloads[0].chaff_prefix_spec_path.parent
+        )
+        assert qualification_context.require_current_implementation is not resume
+        return SimpleNamespace(
+            stage=stage,
+            artifact_hashes={
+                kind: util.sha256_file(
+                    campaign.workloads[0].path.parent.parent / "fitted-bundle" / name
+                )
+                for kind, name in class_fitting.BUNDLE_FILES.items()
+            },
+        )
+
+    frozen_result = tmp_path / "capture-result"
+    if resume:
+        monkeypatch.setattr(
+            orchestrator,
+            "_campaign_from_frozen_inputs",
+            lambda _path: campaign,
+        )
+    else:
+        monkeypatch.setattr(orchestrator, "load_campaign", lambda _path: campaign)
+    monkeypatch.setattr(class_fitting, "verify_class_fitting_bundle", verify_bundle)
+    generation = orchestrator.verify_class_study_fitting_generation(
+        source_result_root=source,
+        campaign_path=None if resume else campaign.path,
+        frozen_result_root=frozen_result if resume else None,
+    )
+
+    assert calls == [(campaign.defenses[4].parameters_path.parent, source.resolve())]
+    assert generation["source_result"] == {
+        "root": str(source.resolve()),
+        "evidence_sha256": util.sha256_file(source / "evidence.sha256"),
+    }
+    assert generation["capture_runtime"]["qualification_set_manifest_sha256"] == (
+        campaign.workloads[0].qualification_set_manifest_sha256
+    )
+
+
+@pytest.mark.parametrize(
+    ("role", "source_role"),
+    (
+        ("pilot-compatibility", "pilot-fitting"),
+        ("certification", "authoritative-fitting"),
+    ),
+)
+@pytest.mark.parametrize("mutation", ("parameter", "provenance", "qualification-manifest"))
+def test_fitted_generation_capability_binds_runtime_inputs_before_launch_and_resume(
+    role: str,
+    source_role: str,
+    mutation: str,
+) -> None:
+    source = _record(source_role)
+    runtime = _fitting_runtime_projection(role)
+    configuration = {
+        "name": f"{STUDY_ID}-{role}-1200",
+        "evidence_role": role,
+        "class_study_id": STUDY_ID,
+        "campaign_sha256": "c" * 64,
+        "class_study_cohort_sha256": "a" * 64,
+        "class_study_cohort_assembly_sha256": "b" * 64,
+        "defense_runtime_inputs": runtime["defense_runtime_inputs"],
+        "chaff_qualification_set": runtime["qualification_set"],
+        "chaff_qualification_set_manifest_sha256": (
+            runtime["qualification_set_manifest_sha256"]
+        ),
+    }
+    generation = _fitting_generation_authority(role, source)
+
+    with orchestrator._class_study_coordinator_capture_authority(
+        configuration,
+        (source,),
+        generation,
+    ):
+        orchestrator._require_class_study_coordinator_capture_authority(configuration)
+        drifted = json.loads(json.dumps(configuration))
+        if mutation == "parameter":
+            drifted["defense_runtime_inputs"]["traffic-morphing"][
+                "parameters_sha256"
+            ] = "0" * 64
+        elif mutation == "provenance":
+            drifted["defense_runtime_inputs"]["walkie-talkie"][
+                "provenance_sha256"
+            ] = "0" * 64
+        else:
+            drifted["chaff_qualification_set_manifest_sha256"] = "0" * 64
+        with pytest.raises(ValueError, match="runtime differs from fitted-generation"):
+            orchestrator._require_class_study_coordinator_capture_authority(drifted)
+
+    stale = json.loads(json.dumps(generation))
+    stale["source_result"]["root"] = "/evidence/stale-same-cohort-fitting-result"
+    with pytest.raises(ValueError, match="another prerequisite result"):
+        with orchestrator._class_study_coordinator_capture_authority(
+            configuration,
+            (source,),
+            stale,
+        ):
+            pytest.fail("stale fitting-generation capability was admitted")
+
+
+@pytest.mark.parametrize(
+    ("role", "source_role"),
+    (
+        ("pilot-compatibility", "pilot-fitting"),
+        ("certification", "authoritative-fitting"),
+    ),
+)
+@pytest.mark.parametrize("resume", (False, True), ids=("launch", "resume"))
+@pytest.mark.parametrize("mutation", ("parameter", "provenance"))
+def test_fitted_generation_capability_rejects_bundle_runtime_mismatch(
+    role: str,
+    source_role: str,
+    resume: bool,
+    mutation: str,
+) -> None:
+    source = _record(source_role)
+    runtime = _fitting_runtime_projection(role)
+    runtime_inputs = runtime["defense_runtime_inputs"]
+    assert isinstance(runtime_inputs, dict)
+    configuration = {
+        "name": f"{STUDY_ID}-{role}-1200",
+        "evidence_role": role,
+        "class_study_id": STUDY_ID,
+        "campaign_sha256": "c" * 64,
+        "class_study_cohort_sha256": "a" * 64,
+        "class_study_cohort_assembly_sha256": "b" * 64,
+        "chaff_qualification_set": runtime["qualification_set"],
+        "chaff_qualification_set_manifest_sha256": (
+            runtime["qualification_set_manifest_sha256"]
+        ),
+    }
+    if resume:
+        defenses = []
+        for name, identity in runtime_inputs.items():
+            record = {"name": name, "kind": identity["runtime_kind"]}
+            if identity["identity_type"] == "hash-bound-parameter-artifact":
+                record.update(
+                    parameters_sha256=identity["parameters_sha256"],
+                    provenance_sha256=identity["provenance_sha256"],
+                    input_policy=identity["input_policy"],
+                )
+            elif identity["identity_type"] == "hash-bound-static-schedule":
+                record.update(
+                    schedule_sha256=identity["schedule_sha256"],
+                    mode=identity["mode"],
+                )
+            defenses.append(record)
+        configuration["defenses"] = defenses
+    else:
+        configuration["defense_runtime_inputs"] = runtime_inputs
+
+    generation = _fitting_generation_authority(role, source)
+    bundle = generation["bundle"]
+    assert isinstance(bundle, dict)
+    if mutation == "parameter":
+        parameters = bundle["parameter_sha256"]
+        assert isinstance(parameters, dict)
+        parameters["traffic-morphing"] = "0" * 64
+    else:
+        bundle["provenance_sha256"] = "0" * 64
+
+    with pytest.raises(ValueError, match="bundle differs from its capture runtime"):
+        with orchestrator._class_study_coordinator_capture_authority(
+            configuration,
+            (source,),
+            generation,
+        ):
+            pytest.fail("incoherent fitting-generation capability was admitted")
+
+
+@pytest.mark.parametrize(
+    ("role", "source_role", "other_role"),
+    (
+        ("pilot-compatibility", "pilot-fitting", "certification"),
+        ("certification", "authoritative-fitting", "pilot-compatibility"),
+    ),
+)
+def test_fitted_generation_capability_is_scoped_to_one_role_and_campaign(
+    role: str,
+    source_role: str,
+    other_role: str,
+) -> None:
+    source = _record(source_role)
+    runtime = _fitting_runtime_projection(role)
+    configuration = {
+        "name": f"{STUDY_ID}-{role}-1200",
+        "evidence_role": role,
+        "class_study_id": STUDY_ID,
+        "campaign_sha256": "c" * 64,
+        "class_study_cohort_sha256": "a" * 64,
+        "class_study_cohort_assembly_sha256": "b" * 64,
+        "defense_runtime_inputs": runtime["defense_runtime_inputs"],
+        "chaff_qualification_set": runtime["qualification_set"],
+        "chaff_qualification_set_manifest_sha256": (
+            runtime["qualification_set_manifest_sha256"]
+        ),
+    }
+    generation = _fitting_generation_authority(role, source)
+
+    with orchestrator._class_study_coordinator_capture_authority(
+        configuration,
+        (source,),
+        generation,
+    ):
+        orchestrator._require_class_study_coordinator_capture_authority(configuration)
+        mutations = (
+            {**configuration, "campaign_sha256": "d" * 64},
+            {**configuration, "class_study_cohort_sha256": "d" * 64},
+            {
+                **configuration,
+                "name": f"{STUDY_ID}-{other_role}-1200",
+                "evidence_role": other_role,
+            },
+        )
+        for mutation in mutations:
+            with pytest.raises(ValueError, match="validated prerequisite ledger"):
+                orchestrator._require_class_study_coordinator_capture_authority(mutation)
 
     with pytest.raises(ValueError, match="validated prerequisite ledger"):
         orchestrator._require_class_study_coordinator_capture_authority(configuration)
@@ -2304,7 +3057,9 @@ def test_receipt_and_campaign_publishers_reject_alternate_lineage_before_mutatio
 
 def test_launcher_rewrites_class_paths_and_never_mounts_workspace_rw():
     launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
-    assert '"${image_id}" "${class_container_args[@]}"' in launcher
+    assert (
+        '"${class_image_command[@]}" "${class_container_args[@]}"' in launcher
+    )
     assert (
         "--pilot-cohort|--pilot-cohort-assembly|--final-cohort|--final-cohort-assembly"
     ) in launcher
@@ -2338,7 +3093,9 @@ def test_launcher_rewrites_class_paths_and_never_mounts_workspace_rw():
     )
 
 
-def test_acquisition_run_is_bounded_and_never_sleeps(monkeypatch, tmp_path):
+def test_acquisition_run_is_canonically_bounded_and_reports_wait_policy(
+    monkeypatch, tmp_path
+):
     import qcsd_lab.class_acquisition as acquisition
 
     monkeypatch.setattr(util, "LAB_ROOT", tmp_path)
@@ -2375,18 +3132,20 @@ def test_acquisition_run_is_bounded_and_never_sleeps(monkeypatch, tmp_path):
         acquisition_root=runner,
         stability_root=stability,
         workload_root=workloads,
-        acquisition_max_candidates=7,
-        acquisition_timeout_ms=45_000,
+        acquisition_max_candidates=1,
+        acquisition_timeout_ms=60_000,
     )
 
     assert result.status == "pending"
-    assert result.details["bounded_candidates"] == 7
-    assert result.details["runner_slept"] is False
+    assert result.details["bounded_candidates"] == 1
+    assert result.details["runner_wait_policy"] == pipeline.ACQUISITION_RUN_WAIT_POLICY
     assert "rerun now" in result.blockers[0]
-    assert seen["max_candidates"] == 7
-    assert seen["timeout_ms"] == 45_000
+    assert "waits locally for its t+30s probe" in result.blockers[0]
+    assert "never sleeps" not in result.blockers[0]
+    assert seen["max_candidates"] == 1
+    assert seen["timeout_ms"] == 60_000
 
-    with pytest.raises(ValueError, match="between 1 and 60000"):
+    with pytest.raises(ValueError, match="acquisition-max-candidates 1"):
         pipeline.run_class_study_action(
             "acquisition-run",
             candidate_catalogue_path=catalogue,
@@ -2394,6 +3153,15 @@ def test_acquisition_run_is_bounded_and_never_sleeps(monkeypatch, tmp_path):
             stability_root=stability,
             workload_root=workloads,
             acquisition_timeout_ms=60_001,
+        )
+    with pytest.raises(ValueError, match="acquisition-max-candidates 1"):
+        pipeline.run_class_study_action(
+            "acquisition-run",
+            candidate_catalogue_path=catalogue,
+            acquisition_root=runner,
+            stability_root=stability,
+            workload_root=workloads,
+            acquisition_max_candidates=2,
         )
 
 

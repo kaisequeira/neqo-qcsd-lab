@@ -829,6 +829,8 @@ def test_successor_full_final_lineage_reconstructs_positive_promotion(
             }
             record = {
                 **binding,
+                "evidence_role": role,
+                "block": block,
                 "samples": (
                     attestation.FINAL_CLASS_COUNT if role == "canary" else 1_600
                 ),
@@ -869,11 +871,21 @@ def test_successor_full_final_lineage_reconstructs_positive_promotion(
         checksums={},
         accepted_samples={},
     )
-    monkeypatch.setattr(
-        pipeline,
-        "verify_class_study_result",
-        lambda path, **_kwargs: records[Path(path).resolve()],
-    )
+    def verify_class_result(
+        path: Path,
+        *,
+        expected_role: str,
+        expected_block: int,
+        **_kwargs,
+    ) -> dict[str, Any]:
+        record = records[Path(path).resolve()]
+        if record["evidence_role"] != expected_role:
+            raise ValueError("class-study result has the wrong expected evidence role")
+        if record["block"] != expected_block:
+            raise ValueError("class-study result has the wrong acquisition block")
+        return record
+
+    monkeypatch.setattr(pipeline, "verify_class_study_result", verify_class_result)
     monkeypatch.setattr(
         attestation,
         "_class_result_binding",
@@ -906,6 +918,7 @@ def test_successor_full_final_lineage_reconstructs_positive_promotion(
         "recorded_at": "2026-08-29T03:00:00+10:00",
         "pre_formal_snapshot": attestation._file_binding(historical_pre),
         "formal_results": [bindings[path.resolve()] for path in formal_roots],
+        "payload_sha256": _digest("8"),
     }
     monkeypatch.setattr(
         attestation,
@@ -915,8 +928,58 @@ def test_successor_full_final_lineage_reconstructs_positive_promotion(
         ),
     )
 
+    reconstructed = attestation._validate_post_snapshot_formal_results(
+        readiness=readiness,
+        readiness_attestation=readiness_path,
+        pre=pre_value,
+        pre_snapshot=historical_pre,
+        formal_result_roots=formal_roots,
+        recorded_at=attestation._aware_timestamp(
+            post_value["recorded_at"], label="fixture post snapshot"
+        ),
+    )
+    assert reconstructed == post_value["formal_results"]
+    with pytest.raises(ValueError, match="wrong acquisition block"):
+        attestation._validate_post_snapshot_formal_results(
+            readiness=readiness,
+            readiness_attestation=readiness_path,
+            pre=pre_value,
+            pre_snapshot=historical_pre,
+            formal_result_roots=[formal_roots[1], formal_roots[0], *formal_roots[2:]],
+            recorded_at=attestation._aware_timestamp(
+                post_value["recorded_at"], label="fixture post snapshot"
+            ),
+        )
+    records[formal_roots[0].resolve()]["evidence_role"] = "canary"
+    with pytest.raises(ValueError, match="wrong expected evidence role"):
+        attestation._validate_post_snapshot_formal_results(
+            readiness=readiness,
+            readiness_attestation=readiness_path,
+            pre=pre_value,
+            pre_snapshot=historical_pre,
+            formal_result_roots=formal_roots,
+            recorded_at=attestation._aware_timestamp(
+                post_value["recorded_at"], label="fixture post snapshot"
+            ),
+        )
+    records[formal_roots[0].resolve()]["evidence_role"] = "formal"
+    with pytest.raises(ValueError, match="predates formal block completion"):
+        attestation._validate_post_snapshot_formal_results(
+            readiness=readiness,
+            readiness_attestation=readiness_path,
+            pre=pre_value,
+            pre_snapshot=historical_pre,
+            formal_result_roots=formal_roots,
+            recorded_at=attestation._aware_timestamp(
+                "2026-08-29T02:00:00+10:00", label="fixture early post snapshot"
+            ),
+        )
+
     handoff = tmp_path / "handoff"
     handoff.mkdir()
+    embedded_post = handoff / attestation.CLASS_STUDY_HISTORICAL_POST_INPUT
+    embedded_post.parent.mkdir(parents=True)
+    embedded_post.write_bytes(historical_post.read_bytes())
     blocks = [
         {
             "result_root": str(path.resolve()),
@@ -932,6 +995,11 @@ def test_successor_full_final_lineage_reconstructs_positive_promotion(
         "blocks": blocks,
         "execution_source": {"value": source},
         "exporter_source": source,
+        "historical_post_snapshot": {
+            "path": attestation.CLASS_STUDY_HISTORICAL_POST_INPUT,
+            "sha256": sha256_file(historical_post),
+            "payload_sha256": post_value["payload_sha256"],
+        },
     }
     (handoff / "dataset.json").write_text(
         json.dumps(dataset, sort_keys=True) + "\n", encoding="utf-8"
@@ -998,6 +1066,13 @@ def test_successor_full_final_lineage_reconstructs_positive_promotion(
     assert final["evidence"]["successor_restart"] == attestation._file_binding(restart)
     assert len(final["evidence"]["canary_results"]) == 10
     assert len(final["evidence"]["formal_results"]) == 10
+
+    embedded_post.write_text("substituted embedded post\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="handoff differs from formal source evidence"):
+        attestation.validate_class_validation_attestation(
+            created,
+            deep_code_gate=False,
+        )
 
 
 def test_comparison_review_is_exhaustive_hash_bound_and_create_only(
@@ -1129,7 +1204,7 @@ def test_readiness_receipt_reconstruction_rejects_hard_gate_identity_tamper(
         "artifact_type": attestation.READINESS_RECEIPT_TYPE,
         "study_id": attestation.STUDY_ID,
         "cohort_version": 23,
-        "implementation_status": "candidate-ready-for-formal-capture",
+        "implementation_status": attestation.READINESS_IMPLEMENTATION_STATUS,
         "promotion_authority": False,
         "implementation_scope": attestation.IMPLEMENTATION_SCOPE,
         "paper_equivalent": False,

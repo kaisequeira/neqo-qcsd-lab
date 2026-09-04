@@ -66,6 +66,7 @@ RESTART_RECEIPT_TYPE = "qcsd-class-study-successor-restart"
 SUCCESSOR_COHORT_RECEIPT_TYPE = "qcsd-class-study-successor-cohort"
 QUALIFICATION_PLAN_RECEIPT_TYPE = "qcsd-class-study-successor-qualification-plan"
 READINESS_RECEIPT_TYPE = "qcsd-class-study-readiness-attestation"
+READINESS_IMPLEMENTATION_STATUS = "candidate-ready-for-pre-formal-snapshot"
 SUCCESSOR_STUDY_PREFIX = "classifier-multiorigin100-v2"
 CERTIFICATION_NAME = f"{STUDY_ID}-certification-900-1200"
 CERTIFICATION_SAMPLE_COUNT = FINAL_CLASS_COUNT * len(COMPATIBILITY_MODES)
@@ -666,7 +667,7 @@ def _successor_readiness_value(
         "artifact_type": READINESS_RECEIPT_TYPE,
         "study_id": study_id,
         "cohort_version": foundation["cohort_version"],
-        "implementation_status": "candidate-ready-for-formal-capture",
+        "implementation_status": READINESS_IMPLEMENTATION_STATUS,
         "promotion_authority": False,
         "implementation_scope": "client_only_quic",
         "paper_equivalent": False,

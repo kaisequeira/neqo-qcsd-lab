@@ -158,10 +158,34 @@ def test_launcher_routes_only_consolidated_public_commands():
     assert 'network_mode="none"' in launcher
     assert '--network "${network_mode}"' in launcher
     assert "verify_fit_neqo_checkout" in launcher
+    acquisition_watch = launcher.split(
+        'if [[ "${1:-}" == "class-study" && "${2:-}" == "acquisition-watch" ]]', 1
+    )[1].split("\nfi", 1)[0]
+    assert 'exec /usr/bin/python3 -I "${ROOT}/tools/class_acquisition_watch.py"' in acquisition_watch
+    assert ".venv/bin/python" not in acquisition_watch
     assert 'git -C "${ROOT}" rev-parse HEAD:neqo-qcsd' in launcher
     assert 'git -C "${ROOT}" ls-files --stage -- neqo-qcsd' in launcher
     assert 'git -C "${ROOT}/neqo-qcsd" status --porcelain --untracked-files=all' in launcher
     assert 'if [[ "${1:-}" == "fit" ]]' in launcher
+    pinned_cdp = launcher.rsplit(
+        'if [[ "${1:-}" == "test" && "${2:-}" == "pinned-cdp" ]]; then', 1
+    )[-1].split("\nfi", 1)[0]
+    assert 'image="${PREPARE_IMAGE}"' not in pinned_cdp
+    assert 'QCSD_RUN_PINNED_CDP_PROBE=1' in pinned_cdp
+    assert '--entrypoint /opt/qcsd-lab/.venv/bin/python' in pinned_cdp
+    assert 'tests/test_cdp_chromium_integration.py' in pinned_cdp
+    assert 'qcsd_run_attached_docker "${container[@]}"' in pinned_cdp
+
+
+def test_launcher_selects_prepare_image_only_for_pinned_cdp_test() -> None:
+    launcher_path = Path(__file__).parents[1] / "qcsd-lab"
+    launcher = launcher_path.read_text(encoding="utf-8")
+    selection = launcher.split('case "${1:-}" in', 1)[1].split(
+        'if ! _qcsd_docker_api image inspect', 1
+    )[0]
+    assert 'test) image="${COLLECTION_IMAGE}"' in selection
+    assert '"${2:-}" == "pinned-cdp"' in selection
+    assert 'image="${PREPARE_IMAGE}"' in selection
     fit_preflight = launcher.split("verify_fit_neqo_checkout() {", 1)[1].split("\n}", 1)[0]
     assert 'v["neqo_dirty"]' in fit_preflight
     assert 'v["neqo_patch_sha256"]' in fit_preflight
@@ -188,6 +212,203 @@ def test_launcher_routes_only_consolidated_public_commands():
     for removed in ("--dev", "--dry-run"):
         token = rf"(?<![A-Za-z0-9_-]){re.escape(removed)}(?![A-Za-z0-9_-])"
         assert re.search(token, launcher) is None
+
+
+def test_launcher_raw_index_verifier_rejects_clean_filter_forgery(tmp_path: Path) -> None:
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    subprocess.run(["git", "-C", checkout, "init", "-q"], check=True)
+    subprocess.run(["git", "-C", checkout, "config", "user.name", "test"], check=True)
+    subprocess.run(["git", "-C", checkout, "config", "user.email", "test@example.invalid"], check=True)
+    (checkout / "payload").write_bytes(b"clean")
+    (checkout / ".gitattributes").write_text("payload filter=hide\n", encoding="ascii")
+    subprocess.run(["git", "-C", checkout, "add", "."], check=True)
+    subprocess.run(["git", "-C", checkout, "commit", "-qm", "initial"], check=True)
+    subprocess.run(
+        ["git", "-C", checkout, "config", "filter.hide.clean", "printf clean"],
+        check=True,
+    )
+    # Keep the size equal to the committed payload so Git consults the clean
+    # filter instead of rejecting the cached entry from size metadata alone.
+    (checkout / "payload").write_bytes(b"evil!")
+    status = subprocess.run(
+        ["git", "-C", checkout, "status", "--porcelain", "--untracked-files=all"],
+        check=True,
+        capture_output=True,
+    )
+    assert status.stdout == b"", "the fixture must reproduce Git clean-filter hiding"
+
+    launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
+    functions = launcher.split("_qcsd_trusted_git() {", 1)[1].split(
+        'if [[ "${1:-}" == "-h"', 1
+    )[0]
+    command = "_qcsd_trusted_git() {" + functions + "\n_qcsd_verify_git_index_bytes \"$1\"\n"
+    result = subprocess.run(
+        ["bash", "--noprofile", "--norc", "-c", command, "verify", str(checkout)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+
+
+def test_launcher_checkout_binding_rejects_local_worktree_redirect(tmp_path: Path) -> None:
+    checkout = tmp_path / "checkout"
+    alternate = tmp_path / "alternate"
+    checkout.mkdir()
+    alternate.mkdir()
+    subprocess.run(["git", "-C", checkout, "init", "-q"], check=True)
+    subprocess.run(
+        ["git", "-C", checkout, "config", "core.worktree", str(alternate)],
+        check=True,
+    )
+    launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
+    functions = launcher.split("_qcsd_trusted_git() {", 1)[1].split(
+        "_qcsd_verify_git_index_bytes() {", 1
+    )[0]
+    command = (
+        "_qcsd_trusted_git() {"
+        + functions
+        + '\n_qcsd_verify_git_checkout_binding "$1" "$1/.git"\n'
+    )
+    result = subprocess.run(
+        ["bash", "--noprofile", "--norc", "-c", command, "verify", str(checkout)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+
+
+def test_launcher_checkout_binding_rejects_hidden_untracked_source(tmp_path: Path) -> None:
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    subprocess.run(["git", "-C", checkout, "init", "-q"], check=True)
+    exclude = checkout / ".git/info/exclude"
+    exclude.write_text("hidden.py\n", encoding="ascii")
+    (checkout / "hidden.py").write_text("raise RuntimeError('in build context')\n")
+    status = subprocess.run(
+        ["git", "-C", checkout, "status", "--porcelain", "--untracked-files=all"],
+        check=True,
+        capture_output=True,
+    )
+    assert status.stdout == b"", "the fixture must hide the untracked source from Git"
+    launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
+    functions = launcher.split("_qcsd_trusted_git() {", 1)[1].split(
+        "_qcsd_verify_git_index_bytes() {", 1
+    )[0]
+    command = (
+        "_qcsd_trusted_git() {"
+        + functions
+        + '\n_qcsd_verify_git_checkout_binding "$1" "$1/.git"\n'
+    )
+    result = subprocess.run(
+        ["bash", "--noprofile", "--norc", "-c", command, "verify", str(checkout)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+
+
+def test_launcher_raw_index_verifier_rejects_intermediate_symlink(tmp_path: Path) -> None:
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    subprocess.run(["git", "-C", checkout, "init", "-q"], check=True)
+    subprocess.run(["git", "-C", checkout, "config", "user.name", "test"], check=True)
+    subprocess.run(["git", "-C", checkout, "config", "user.email", "test@example.invalid"], check=True)
+    nested = checkout / "nested"
+    nested.mkdir()
+    (nested / "payload").write_bytes(b"clean")
+    subprocess.run(["git", "-C", checkout, "add", "."], check=True)
+    subprocess.run(["git", "-C", checkout, "commit", "-qm", "initial"], check=True)
+    moved = tmp_path / "moved"
+    nested.rename(moved)
+    nested.symlink_to(moved, target_is_directory=True)
+
+    launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
+    functions = launcher.split("_qcsd_trusted_git() {", 1)[1].split(
+        'if [[ "${1:-}" == "-h"', 1
+    )[0]
+    command = "_qcsd_trusted_git() {" + functions + "\n_qcsd_verify_git_index_bytes \"$1\"\n"
+    result = subprocess.run(
+        ["bash", "--noprofile", "--norc", "-c", command, "verify", str(checkout)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+
+
+def test_launcher_trusted_git_ignores_replace_refs(tmp_path: Path) -> None:
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    subprocess.run(["git", "-C", checkout, "init", "-q"], check=True)
+    subprocess.run(["git", "-C", checkout, "config", "user.name", "test"], check=True)
+    subprocess.run(["git", "-C", checkout, "config", "user.email", "test@example.invalid"], check=True)
+    payload = checkout / "payload"
+    payload.write_text("original\n")
+    subprocess.run(["git", "-C", checkout, "add", "payload"], check=True)
+    subprocess.run(["git", "-C", checkout, "commit", "-qm", "original"], check=True)
+    original = subprocess.check_output(["git", "-C", checkout, "rev-parse", "HEAD"], text=True).strip()
+    payload.write_text("replacement\n")
+    subprocess.run(["git", "-C", checkout, "commit", "-qam", "replacement"], check=True)
+    replacement = subprocess.check_output(["git", "-C", checkout, "rev-parse", "HEAD"], text=True).strip()
+    subprocess.run(["git", "-C", checkout, "reset", "--soft", original], check=True)
+    subprocess.run(["git", "-C", checkout, "replace", original, replacement], check=True)
+    forged = subprocess.run(
+        ["git", "-C", checkout, "status", "--porcelain"],
+        check=True,
+        capture_output=True,
+    )
+    assert forged.stdout == b"", "the fixture must reproduce replace-ref clean forgery"
+
+    launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
+    trusted = launcher.split("_qcsd_trusted_git() {", 1)[1].split("\n}", 1)[0]
+    command = '_qcsd_trusted_git() {' + trusted + '\n}\n_qcsd_trusted_git -C "$1" status --porcelain\n'
+    result = subprocess.run(
+        ["bash", "--noprofile", "--norc", "-c", command, "verify", str(checkout)],
+        check=True,
+        capture_output=True,
+    )
+    assert result.stdout != b""
+
+
+def test_acquisition_actions_repeat_exact_scoped_validation_across_go() -> None:
+    launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
+    scope_call = '"${class_watch_scope_recovery[@]}" >/dev/null'
+    assert launcher.count(scope_call) == 2
+    scope_setup = launcher.index("class_watch_scope_recovery=(")
+    first_call = launcher.index(scope_call, scope_setup)
+    admission_branch = launcher.index(
+        '"${class_study_action}" == "acquisition-admission" ]]; then', first_call
+    )
+    guardian = launcher.index("require_docker", admission_branch)
+    assert first_call < guardian
+    require_body = launcher.split("require_docker() {", 1)[1].split("\n}", 1)[0]
+    assert require_body.index("_qcsd_validate_lifecycle_guardian") < require_body.index(
+        scope_call
+    )
+    assert "--recover-stale-scopes-internal" in launcher[scope_setup:first_call]
+    assert "_qcsd_docker_api" not in launcher[scope_setup:first_call]
+    assert "qcsd_run_" not in launcher[scope_setup:first_call]
+
+
+def test_acquisition_scope_digest_binds_current_argv_before_recovery() -> None:
+    launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
+    digest = launcher.index('class_watch_current_action_sha256="$(')
+    comparison = launcher.index(
+        "scoped request action does not match current argv",
+        digest,
+    )
+    recovery = launcher.index("class_watch_scope_recovery=(", comparison)
+
+    assert '["/usr/bin/bash", *sys.argv[1:]]' in launcher[digest:comparison]
+    assert '"${ROOT}/qcsd-lab" "${QCSD_ORIGINAL_ARGV[@]}"' in launcher[
+        digest:comparison
+    ]
+    assert '"${QCSD_CLASS_WATCH_ACTION_SHA256}"' in launcher[digest:comparison]
+    assert comparison < recovery
 
 
 def test_launcher_grants_results_write_access_only_to_result_writers():

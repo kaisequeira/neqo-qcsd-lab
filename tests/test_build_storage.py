@@ -120,7 +120,7 @@ def _build_receipt(
         "client_version": "29.0.1",
         "server_version": "29.0.1",
     }
-    if schema_version == 2:
+    if schema_version in {2, 3}:
         docker.update(
             {
                 "context": "default",
@@ -141,14 +141,16 @@ def _build_receipt(
     for target in ("collection", "prepare", "reference"):
         tag = (
             build_storage.BUILD_IMAGE_TAGS[target]
-            if schema_version == 2
+            if schema_version in {2, 3}
             else f"neqo-qcsd-lab-{target}:test"
         )
         argv = ["docker"]
         if schema_version == 2:
             argv.extend(["--context", docker["context"]])
+        elif schema_version == 3:
+            argv.extend(["--host", docker["endpoint"]])
         argv.extend(["build", "--pull", "--no-cache"])
-        if schema_version == 2:
+        if schema_version in {2, 3}:
             argv.extend(
                 [
                     "--iidfile",
@@ -187,7 +189,7 @@ def _build_receipt(
             target: {
                 "tag": (
                     build_storage.BUILD_IMAGE_TAGS[target]
-                    if schema_version == 2
+                    if schema_version in {2, 3}
                     else f"neqo-qcsd-lab-{target}:test"
                 ),
                 "id": image_ids[target],
@@ -220,7 +222,7 @@ def _build_receipt(
             "scope": ("Docker-layer-cache-disabled;declared-BuildKit-dependency-cache-mounts-only"),
         },
     }
-    if schema_version == 2:
+    if schema_version in {2, 3}:
         assert host_storage_preflight is not None
         value["host_storage_preflight"] = host_storage_preflight
         value["role_provenance"] = {
@@ -375,6 +377,36 @@ def test_valid_non_wsl_schema_2_records_exact_non_applicable_evidence() -> None:
     )
 
     assert validated["host_storage_preflight"] == preflight
+
+
+def test_valid_schema_3_binds_the_executed_pinned_host_build_argv() -> None:
+    preflight = _non_wsl_preflight()
+    value = _build_receipt(schema_version=3, host_storage_preflight=preflight)
+
+    validated = build_storage.validate_build_execution_envelope(
+        value,
+        expected_cohort_version=34,
+        expected_probe_sha256=PROBE_SHA256,
+    )
+
+    assert validated["schema_version"] == 3
+    assert all(
+        command["argv"][:3]
+        == ["docker", "--host", "unix:///var/run/docker.sock"]
+        for command in value["commands"]
+    )
+
+
+def test_schema_3_rejects_context_argv_even_when_rehashed() -> None:
+    value = _build_receipt(
+        schema_version=3, host_storage_preflight=_non_wsl_preflight()
+    )
+    for command in value["commands"]:
+        command["argv"][1:3] = ["--context", value["docker"]["context"]]
+    _rehash(value)
+
+    with pytest.raises(ValueError, match="--pull --no-cache"):
+        build_storage.validate_build_execution_envelope(value)
 
 
 def test_schema_two_host_reader_binds_commands_to_the_exact_checkout(

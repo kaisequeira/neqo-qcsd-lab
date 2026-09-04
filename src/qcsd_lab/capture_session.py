@@ -768,6 +768,13 @@ def _collect_attempt(
         raise ValueError("every defended capture requires prepared source and qualified chaff")
 
     selected_scheduler_contract = _capture_scheduler_contract()
+    if (
+        defense.kind == "buflo"
+        and selected_scheduler_contract != _BUFLO_ETF_SCHEDULER_CONTRACT
+    ):
+        raise ValueError(
+            "current BuFLO capture requires the kernel-TX ETF scheduler contract"
+        )
     observer_topology_required = (
         selected_scheduler_contract == _BUFLO_ETF_SCHEDULER_CONTRACT
     )
@@ -1806,7 +1813,6 @@ def _validate_run_binding(
         defense.kind in {"buflo", "cs_buflo"} and run_data.get("completion_status") == "complete"
     )
     scheduler_required = _capture_scheduler_contract() is not None
-    process_scheduler = run_data.get("process_scheduler")
     if (
         run_data.get("seed") != seed
         or run_data.get("request_policy") != context.request_policy

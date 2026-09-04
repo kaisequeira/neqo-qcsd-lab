@@ -6,6 +6,12 @@ from pathlib import Path
 import pytest
 
 from qcsd_lab.class_acquisition import validate_class_study_preparation
+from qcsd_lab.cdp_targets import CDP_TARGET_INSTRUMENTATION_POLICY
+from qcsd_lab.discovery_evidence import (
+    PASSIVE_RENDER_CONTRACT_SHA256,
+    evidence_sha256,
+    passive_render_contract,
+)
 from qcsd_lab.manifest import (
     EMPTY_SHA256,
     runtime_manifest,
@@ -14,6 +20,7 @@ from qcsd_lab.manifest import (
     validate_research_preparation,
     write_frozen_manifest,
 )
+from qcsd_lab.discovery_evidence import DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION
 
 
 FROZEN_R3_MANIFEST_SHA256 = {
@@ -123,13 +130,148 @@ def prepared_manifest():
 
 def class_study_prepared_manifest():
     value = prepared_manifest()
-    value["preparation"]["coverage_admission"] = {
+    value["resources"][1]["type"] = "Script"
+    render = {
         "schema_version": 1,
+        "clock": "monotonic-relative-ms",
+        "navigation_started_ms": 0,
+        "load_event_ms": 0,
+        "last_relevant_event_ms": 0,
+        "quiet_started_ms": 10_000,
+        "cutoff_ms": 13_000,
+        "active_request_ids": [],
+        "active_request_count": 0,
+        "cutoff_reason": "quiescent",
+    }
+    source = {
+        "session_path": [],
+        "target_id": "fixture-page",
+        "target_type": "page",
+        "generation": 0,
+        "parent_session_path": None,
+        "parent_frame_id": None,
+    }
+    events = []
+    for item in value["resources"]:
+        resource_id = item["id"]
+        occurrence_id = f"request-{resource_id}"
+        dependencies = item.get("depends_on", [])
+        evidence = (
+            []
+            if resource_id == 0
+            else [
+                {
+                    "kind": "document-url",
+                    "value": value["resources"][0]["url"],
+                    "resolved_resource_id": 0,
+                }
+            ]
+        )
+        events.extend(
+            [
+                {
+                    "sequence": len(events) + 1,
+                    "monotonic_ms": 0,
+                    "kind": "network-request",
+                    "source": source,
+                    "network_id": f"network-{resource_id}",
+                    "occurrence_id": occurrence_id,
+                    "occurrence_index": 0,
+                    "method": "GET",
+                    "url": item["url"],
+                    "frame_id": "root-frame",
+                    "resource_type": item["type"],
+                    "safe_request_headers": item.get("headers", []),
+                    "interception_required": True,
+                    "redirected": False,
+                    "redirect_from_occurrence_id": None,
+                    "mapping": {"kind": "resource", "resource_id": resource_id},
+                    "dependency_evidence": evidence,
+                    "resolved_dependency_resource_ids": dependencies,
+                },
+                {
+                    "sequence": len(events) + 2,
+                    "monotonic_ms": 0,
+                    "kind": "fetch-request",
+                    "source": source,
+                    "fetch_id": f"fetch-{resource_id}",
+                    "network_id": f"network-{resource_id}",
+                    "redirected_fetch_id": None,
+                    "network_occurrence_id": occurrence_id,
+                    "method": "GET",
+                    "url": item["url"],
+                    "frame_id": "root-frame",
+                    "policy_decision": "continue",
+                    "policy_reason": None,
+                    "relationship": "primary",
+                },
+                {
+                    "sequence": len(events) + 3,
+                    "monotonic_ms": 0,
+                    "kind": "network-terminal",
+                    "source": source,
+                    "network_id": f"network-{resource_id}",
+                    "outcome": "finished",
+                    "network_occurrence_ids": [occurrence_id],
+                },
+            ]
+        )
+    audit = {
+        "schema_version": DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION,
+        "instrumentation_policy": CDP_TARGET_INSTRUMENTATION_POLICY,
+        "passive_render_contract_sha256": PASSIVE_RENDER_CONTRACT_SHA256,
+        "render_observation_sha256": evidence_sha256(render),
+        "events": events,
+        "summary": {
+            "event_count": len(events),
+            "target_event_count": 0,
+            "network_request_count": len(value["resources"]),
+            "fetch_request_count": len(value["resources"]),
+            "fetch_internal_restart_count": 0,
+            "terminal_event_count": len(value["resources"]),
+            "resource_occurrence_count": len(value["resources"]),
+            "exclusion_occurrence_count": 0,
+        },
+    }
+    preparation = value["preparation"]
+    preparation.update(
+        {
+            "settle_ms": 10_000,
+            "passive_render_contract": passive_render_contract(),
+            "passive_render_contract_sha256": PASSIVE_RENDER_CONTRACT_SHA256,
+            "render_observation": render,
+            "render_observation_sha256": evidence_sha256(render),
+            "discovery_event_audit": audit,
+            "discovery_event_audit_sha256": evidence_sha256(audit),
+            "origin_ip_pins": {"https://example.com": "1.1.1.1"},
+            "browser_request_headers": [
+                {"resource_id": item["id"], "headers": item.get("headers", [])}
+                for item in value["resources"]
+            ],
+            "request_header_transformation": (
+                "browser-safe-input-to-neqo-stability-frozen-runtime-v1"
+            ),
+        }
+    )
+    value["preparation"]["coverage_admission"] = {
+        "schema_version": 3,
         "policy": "all-approved-origins-and-rendered-resources",
         "required_origins": list(value["preparation"]["approved_origins"]),
         "required_resources": [
             {"id": item["id"], "url": item["url"]} for item in value["resources"]
         ],
+        "passive_render_contract_sha256": PASSIVE_RENDER_CONTRACT_SHA256,
+        "render_observation_sha256": evidence_sha256(render),
+        "discovery_event_audit_sha256": evidence_sha256(audit),
+        "origin_ip_pins_sha256": evidence_sha256(
+            value["preparation"]["origin_ip_pins"]
+        ),
+        "browser_request_headers_sha256": evidence_sha256(
+            value["preparation"]["browser_request_headers"]
+        ),
+        "network_request_count": len(value["resources"]),
+        "resource_occurrence_count": len(value["resources"]),
+        "exclusion_occurrence_count": 0,
     }
     return value
 
@@ -468,6 +610,52 @@ def test_class_study_preparation_requires_and_accepts_exact_complete_coverage():
         validate_class_study_preparation(value, workload_id="class-001")
 
 
+def test_class_study_preparation_binds_source_url_to_audited_root_document():
+    value = class_study_prepared_manifest()
+    value["preparation"]["source_url"] = "https://example.com/never-observed"
+
+    with pytest.raises(ValueError, match="prepared source URL"):
+        validate_class_study_preparation(value, workload_id="class-001")
+
+
+def test_class_study_preparation_binds_final_url_to_audited_redirect_chain():
+    value = class_study_prepared_manifest()
+    value["preparation"]["final_url"] = "https://example.com/never-observed"
+
+    with pytest.raises(ValueError, match="prepared final URL"):
+        validate_class_study_preparation(value, workload_id="class-001")
+
+
+@pytest.mark.parametrize(
+    "observed_origins",
+    [[], ["https://ghost.example"], ["https://example.com", "https://ghost.example"]],
+)
+def test_class_study_preparation_reconstructs_observed_origins_from_audit(
+    observed_origins,
+):
+    value = class_study_prepared_manifest()
+    value["preparation"]["observed_origins"] = observed_origins
+
+    with pytest.raises(ValueError, match="observed-origin ledger"):
+        validate_class_study_preparation(value, workload_id="class-001")
+
+
+def test_class_study_preparation_rejects_conflicting_pins_for_one_hostname():
+    value = class_study_prepared_manifest()
+    value["preparation"]["approved_origins"].append("https://example.com:8443")
+    value["preparation"]["observed_origins"].append("https://example.com:8443")
+    value["preparation"]["origin_ip_pins"]["https://example.com:8443"] = "8.8.8.8"
+    value["preparation"]["coverage_admission"]["required_origins"].append(
+        "https://example.com:8443"
+    )
+    value["preparation"]["coverage_admission"]["origin_ip_pins_sha256"] = (
+        evidence_sha256(value["preparation"]["origin_ip_pins"])
+    )
+
+    with pytest.raises(ValueError, match="conflict for a shared hostname"):
+        validate_class_study_preparation(value, workload_id="class-001")
+
+
 @pytest.mark.parametrize(
     ("mutation", "message"),
     [
@@ -490,7 +678,7 @@ def test_class_study_preparation_requires_and_accepts_exact_complete_coverage():
                     "https://cdn.example"
                 ),
             ),
-            "no retained resource for approved origins",
+            "origin-IP pins must exactly cover approved origins",
         ),
     ],
 )

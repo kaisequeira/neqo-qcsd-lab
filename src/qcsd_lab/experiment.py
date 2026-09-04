@@ -644,6 +644,7 @@ def validate_accepted_scheduler_runtime_receipt(
     current_buflo_role = _buflo_study_experiment(experiment) and not _historical_buflo_v36_experiment(
         experiment
     )
+    runtime_kind = sample.get("runtime_kind")
     from .fidelity import terminal_evidence_render_receipt_valid
 
     if not terminal_evidence_render_receipt_valid(
@@ -652,7 +653,15 @@ def validate_accepted_scheduler_runtime_receipt(
         require_empty=True,
     ):
         raise ValueError("accepted sample has invalid terminal evidence rendering state")
-    if current_class_role and runner_schema not in {10, 11}:
+    if (current_buflo_role or current_class_role) and runtime_kind == "buflo":
+        if runner_schema != 11:
+            raise ValueError(
+                "current BuFLO sample requires runner-wakeup schema 11 with kernel-TX evidence"
+            )
+    elif (current_buflo_role or current_class_role) and runtime_kind == "cs_buflo":
+        if runner_schema != 10:
+            raise ValueError("current CS-BuFLO sample requires runner-wakeup schema 10")
+    elif current_class_role and runner_schema not in {10, 11}:
         raise ValueError("current class-study sample requires runner-wakeup schema 10/11")
     required = scheduler_runtime_receipt_required(run, experiment)
     if not required:
@@ -815,11 +824,12 @@ def validate_accepted_kernel_tx_evidence(
         raise ValueError("accepted kernel-TX sample lacks its runner receipt")
     run = load_json(run_path)
     wakeups = run.get("runner_wakeup_metrics") if isinstance(run, Mapping) else None
+    runner_schema = wakeups.get("schema_version") if isinstance(wakeups, Mapping) else None
     raw = wakeups.get("buflo_kernel_tx") if isinstance(wakeups, Mapping) else None
-    required = isinstance(raw, Mapping)
+    required = sample.get("runtime_kind") == "buflo" and runner_schema == 11
     retained, target = _kernel_tx_sidecar_reference(root, sample)
     if not required:
-        if retained is not None:
+        if raw is not None or retained is not None:
             raise ValueError("non-kernel sample claims a kernel-TX evidence sidecar")
         return
     from .fidelity import terminal_evidence_render_receipt_valid
@@ -830,7 +840,7 @@ def validate_accepted_kernel_tx_evidence(
         require_empty=True,
     ):
         raise ValueError("accepted kernel-TX sample has invalid terminal rendering evidence")
-    if sample.get("runtime_kind") != "buflo" or retained is None:
+    if not isinstance(raw, Mapping) or retained is None:
         raise ValueError("schema-11 BuFLO sample lacks its kernel-TX evidence sidecar")
     files = _validate_kernel_tx_sidecar_files(root, sample, retained, target)
     router_receipt = load_json(files["router-receipt.json"])

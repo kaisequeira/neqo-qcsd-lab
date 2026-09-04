@@ -1073,7 +1073,11 @@ def test_buflo_schema_four_diagnostics_aggregate_stop_drain_and_preserve_history
         algorithm_breakdowns([sample, legacy_sample])
 
 
-def test_handoff_loader_checks_trace_digest_and_shape_contract(tmp_path: Path) -> None:
+@pytest.mark.parametrize("schema_version", [1, 2])
+def test_handoff_loader_checks_trace_digest_and_shape_contract(
+    tmp_path: Path,
+    schema_version: int,
+) -> None:
     traces = tmp_path / "traces"
     traces.mkdir()
     trace = traces / "sample.csv"
@@ -1085,7 +1089,7 @@ def test_handoff_loader_checks_trace_digest_and_shape_contract(tmp_path: Path) -
     )
     digest = hashlib.sha256(trace.read_bytes()).hexdigest()
     row = {
-        "schema_version": 1,
+        "schema_version": schema_version,
         "sample_id": "sample",
         "class_label": "site",
         "workload_id": "site-r1",

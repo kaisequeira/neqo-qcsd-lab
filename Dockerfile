@@ -18,6 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends git python3 && 
 WORKDIR /source
 COPY . .
 RUN set -eu; \
+    export GIT_NO_REPLACE_OBJECTS=1 GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_OPTIONAL_LOCKS=0; \
     lab_commit="$(git rev-parse HEAD)"; \
     lab_status="$(git status --porcelain --untracked-files=all)"; \
     lab_dirty=false; \

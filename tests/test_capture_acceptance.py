@@ -1071,6 +1071,33 @@ def test_controlled_schema_six_walkie_talkie_uses_real_a_r_c_wire_path(
         assert diagnostics[field] == 0
 
 
+def test_current_buflo_capture_requires_kernel_tx_scheduler_before_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(capture_session, "_capture_scheduler_contract", lambda: None)
+    attempt = tmp_path / "attempt"
+    context = SimpleNamespace(
+        qcsd_profile="live",
+        request_policy="as-defined",
+        limits=capture_session.Limits(),
+        udp_payload_ceiling=1_200,
+    )
+
+    with pytest.raises(ValueError, match="kernel-TX ETF scheduler contract"):
+        capture_session._collect_attempt(
+            attempt,
+            tmp_path / "runtime.json",
+            tmp_path / "chaff.json",
+            "site",
+            capture_session.Defense(name="buflo", kind="buflo", baseline=False),
+            7,
+            context,
+            application_workload_source=tmp_path / "prepared.json",
+        )
+
+    assert not attempt.exists()
+
+
 def _configuration(
     directory: Path,
     address: str,

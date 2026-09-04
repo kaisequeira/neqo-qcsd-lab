@@ -448,9 +448,25 @@ def test_seal_rejects_self_rebound_experiment_purpose(tmp_path: Path) -> None:
     assert not (root / "evidence.sha256").exists()
 
 
-def test_verify_rejects_consistently_resealed_mutable_configuration(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    (
+        ("timeout_seconds", 121),
+        ("max_response_bytes", 1_048_575),
+        ("capture_seconds", 181),
+        ("capture_megabytes", 63),
+        ("max_attempts", 2),
+        ("per_origin_cooldown_seconds", 29),
+        ("settle_seconds", 2),
+    ),
+)
+def test_verify_rejects_every_consistently_resealed_limit_mutation(
+    tmp_path: Path,
+    field: str,
+    replacement: int,
+) -> None:
     root, experiment = _make_result(tmp_path, complete=True)
-    experiment["configuration"]["limits"]["max_attempts"] = 2
+    experiment["configuration"]["limits"][field] = replacement
     experiment["input_digest"] = input_digest(
         root,
         source=experiment["source"],

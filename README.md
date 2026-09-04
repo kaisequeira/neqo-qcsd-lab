@@ -51,11 +51,11 @@ defence-control traffic is explicitly receipted and is an expected QCSD-only
 difference from the bilateral TCP study; it is never described as
 paper-equivalent or as a server padding-complete signal.
 
-Current-source BuFLO runs use summary schema 4 and runner-wakeup schema 10.
+Current-source BuFLO runs use summary schema 4 and runner-wakeup schema 11.
 Summary schema 4 binds the typed schedule-stop policy, stop timestamp,
 sub-cell capacity, direction counts at stop, and exact post-stop advertised
 credit drain; historical summary schemas 2 and 3 remain readable but cannot
-admit a fresh candidate capture. Historical runner-wakeup schemas 1–9 remain
+admit a fresh candidate capture. Historical runner-wakeup schemas 1–10 remain
 readable for their pinned source cohorts but cannot admit a fresh candidate
 capture; an apparent current-source downgrade is rejected. Schema 7 retains
 schema 6's complete metric inventory, including BuFLO exact-incoming retry drives,
@@ -104,8 +104,8 @@ defensive-unreachable branch for a valid live guard and accepted frequency.
 Production counter access is therefore checked by the target-gated live smoke
 test rather than inferred from either defensive outcome.
 
-For schema 10, let `W = deadline − release`, where `W` is 5 ms for aligned
-adapter windows and 4.999 ms for fractional windows. Ordinary-output admission
+For historical schema 10, let `W = deadline − release`, where `W` is 5 ms
+for aligned adapter windows and 4.999 ms for fractional windows. Ordinary-output admission
 is `release − 2W` (10 ms or 9.998 ms before release); guard entry and active
 waiting begin at `release − W`; and the strict physical-realisation interval is
 `[release, release + W)`. Schema 10 preserves that geometry and the no-catch-up
@@ -186,26 +186,39 @@ SHA-256
 the immutable schema-9 semantics hash remains
 `6ab6713bde70c803a7f243432277edda4f6b850d732c9246f88413e61f487503`.
 
-This source-level remediation addresses the clock-domain
-divergence mechanism exposed by v46 without moving the guard earlier, widening
-the window, queuing catch-up cells, or increasing the adapter-window
-active-wait allocation; v47 must prove the remediation live.
+V47 exercised schema 10 at clean Lab `236da73c…` / Rust `ba72df21…`. Its fresh
+build and isolated reference execution passed, but its first and sole mandatory
+timing-stress launch failed terminally. At 70.600 seconds, outgoing slot 7060
+was dispatched 5,133,680 ns after release and 134,680 ns after its strict
+deadline; paired incoming slot 7061 missed and retired 1,200 scheduled-credit
+bytes. V47 is therefore immutable historical evidence, not authority for the
+current source.
 
-Fresh accepted BuFLO samples require every guard to be dispatch-ready and all
-typed failure counts to be zero. Schemas 9 and 10 record counter availability,
-calibration, authoritative confirmation, early-confirmation retry,
-elapsed-counter, maximum-gap, and maximum-calibration-span evidence; schema 10
-additionally records the watchdog fields above. The
-removed raw-monotonic and thread-CPU auxiliary clocks are not sampled on the
-exact-release critical path. Every entered guard is recorded before its result
-is propagated; when transport dispatch is attempted, its result precedes
-guard-metric recording, while a pre-dispatch typed failure is recorded without
-fabricating a socket handoff. The exact release and strict adapter-normalised
-half-open `[release, deadline)` physical realisation interval are unchanged.
-After
-the outgoing handoff, the runner immediately drives only endpoints with
-accepted scheduled receive credit that has not yet produced a `MAX_STREAM_DATA`
-frame. Each
+Runner-wakeup schema 11 retains the schema-10 layout for non-kernel metrics and
+adds `buflo_kernel_tx`. Exact BuFLO egress now uses a helper-owned Linux
+`SO_TXTIME`/`SCM_TXTIME` transaction against `CLOCK_TAI`: the datagram must be
+queued by the release-minus-5-ms cutoff, high-priority strict non-deadline ETF
+performs the release, and ordinary traffic remains on a separate FIFO band.
+The Rust receipt binds TX-scheduler and TX-software error-queue timestamps,
+qdisc and clock configuration, thread priorities, privilege drop, scheduler
+state, and helper lifecycle. Legacy userspace exact-release guard metrics are
+retained as a zero-valued compatibility projection in kernel mode.
+
+Raw `buflo_kernel_tx` evidence is insufficient on its own. The Lab captures at
+router ingress after the client veth and before netem, verifies the interfaces,
+routes, qdiscs, offloads, NAT, capture bounds, and qdisc end state, and requires
+item-by-item reconciliation with zero unresolved qdisc or capture drops. A
+separately hash-bound `kernel-tx-evidence` sidecar preserves this proof without
+altering the accepted sample's five-file inventory. Fresh accepted BuFLO
+samples require runner-wakeup schema 11 and successful kernel and Lab evidence;
+schemas 1–10 remain readable only for their immutable historical cohorts. The
+exact 1,200-byte target, strict adapter-normalised half-open
+`[release, deadline)` window, no-catch-up rule, client-only scope, and ordinary
+HTTP/3 server are unchanged.
+
+Outgoing-before-incoming logical order remains explicit. The runner drives
+only endpoints with accepted scheduled receive credit that has not yet
+produced a `MAX_STREAM_DATA` frame. Each
 unresolved BuFLO incoming identity remains owned by that exact logical slot
 and current endpoint until physical advertisement or the unchanged deadline.
 Same-tick identities are refreshed when a slot legitimately moves or fans out,
@@ -213,15 +226,11 @@ while a foreign slot cannot borrow the window. Transport callbacks can trigger
 another owner-only drive; otherwise the runner falls back to one-quarter,
 one-half, three-quarter, and terminal-deadline wake-ups. A fan-out still has
 one logical terminal outcome and therefore at most one deadline-miss row.
-For an exact BuFLO outgoing/incoming pair, current source treats the outgoing
-socket handoff and the captured cross-endpoint credit handoff as one ordered
-dispatch transaction before the ordinary global post-output reduction. The
-outgoing datagram is still reconciled first; only its already-captured,
-identity-bound incoming owner may then receive one direct endpoint drive. The
-direct path fails closed if the outgoing cell is not terminal, an outgoing
-target remains committed, the credit owner changes, or the original deadline
-expires. It does not widen the strict adapter-normalised half-open window,
-create catch-up traffic, or change the generic and CS-BuFLO output paths.
+For an exact BuFLO outgoing/incoming pair, only the already-captured,
+identity-bound incoming owner may receive a direct endpoint drive. The direct
+path fails closed if the credit owner changes or the original deadline expires.
+It does not widen the strict adapter-normalised half-open window, create
+catch-up traffic, or change the generic and CS-BuFLO output paths.
 CS-BuFLO retains its
 three one-quarter, one-half, and three-quarter owner-only retries. The
 half-open deadline remains
@@ -229,10 +238,10 @@ strict: a release or credit advertisement at or after the deadline is a typed
 hard failure and is never caught up. Historical schema 2 receipts retain their
 exact 250 microsecond
 active-wait semantics and remain readable, but cannot admit a fresh candidate
-capture. Five-millisecond active waiting can consume approximately 25% of one CPU
-while canonical 20 ms BuFLO is active, so active-wait nanoseconds and measured client
-CPU are retained as performance evidence rather than treated as unavailable
-infrastructure overhead.
+capture. Five-millisecond active waiting consumed approximately 25% of one CPU
+in the historical schema-9/10 userspace path. Current schema 11 instead
+measures kernel-helper activity, timer wakeups, and client CPU as performance
+evidence; no CPU cost is inferred before fresh capture.
 
 One local engineering probe of the schema-9 hybrid wait exercised 5,000 slots
 over 100 seconds with zero misses and zero early confirmations; its maximum
@@ -260,7 +269,31 @@ natural byte invalidates provisional stop evidence in the implementation, with
 the cumulative invalidation count retained in the final receipt.  This drain
 is not the paper's server padding-done signal.
 
-The newest executed checkpoint is cohort v46. It binds clean Lab
+The newest immutable scientific checkpoint is cohort v47. It binds clean Lab
+`236da73cb9091f37f0ea78256a72bd9e9ed62d60`, Neqo/gitlink
+`ba72df21b0f6ef0b7607e11928895be83402b063`, collection image
+`sha256:2da4c0da8c661a335cc86e9f22b20f52b6b60126ff9e07f493550cf7705d607a`,
+preparation image
+`sha256:c9d529354c295b47e209188071f426637a1cac424c3f2ec68a220f98a3bbb622`,
+and reference image
+`sha256:faf4bdc17caaac36e39975d509945393419cdd0c1afd997b7573256c5e3ef5b2`.
+Its pull/no-cache build and isolated reference execution passed; their
+whole-file SHA-256 values are
+`3b1edab74d76baee8c58bb145c344825baa1117d28905e215c8e72eba5e13cbd`
+and
+`7f5ed067e7d215f6dc42e2f06c70794f0c18257203363ecac9f511b3e01edb42`.
+
+The mandatory v47 timing stress stopped terminally at 0/12 on the first and
+sole launch. At the 70.600-second tick, outgoing slot 7060 had release
+`70,600,000,804 ns`, dispatch `70,605,134,484 ns`, and deadline
+`70,604,999,804 ns`: dispatch was 5,133,680 ns after release and 134,680 ns
+after the deadline. The maximum authoritative-over-counter lag was 5,206,204
+ns. Paired incoming slot 7061 missed and retired 1,200 scheduled-credit bytes.
+The ordinary 18-cell regression, code gate, controlled qualification, and
+class-study foundation did not start. V47 is immutable schema-10 evidence and
+cannot authorise schema-11 source.
+
+The preceding receipt-bearing checkpoint, cohort v46, binds clean Lab
 `b5387ffa43f12173eddfd11cc7c3cfd008f3e2b1`, Neqo/gitlink
 `9428ec4fc03e9640369630fedc4ba6443870eb11`, collection image
 `sha256:5b83101a7c2f4b1fb42d2e8316cc20087ddc7d4032c4871f5f77be533dd99656`,
@@ -399,51 +432,78 @@ and are not claimed.
 
 Before the ordinary 18-cell regression can run, a mandatory excluded timing
 stress captures twelve BuFLO visits with exactly one physical launch per visit.
-The corrected schema-2 contract requires an exact inclusive prefix of 5,001
+The current schema-3 contract requires an exact inclusive prefix of 5,001
 opportunities per direction at targets zero through 100 seconds. After that
 prefix, each visit may contain a contiguous, paired whole-cell/parser-drain
 suffix on the same 20 ms cadence, up to the configured limit of 6,000
-opportunities per direction. A visit therefore contributes 5,000–5,999 guarded
-outgoing releases, and the twelve-visit gate contributes exactly the observed
-dynamic total within 60,000–71,988 guards. Every observed guard and suffix
-event remains subject to the unchanged exact-size, strict adapter-normalised
-half-open window,
-zero-miss, zero-catch-up, and exact incoming-credit requirements.
+opportunities per direction. Schema 11 queues and independently observes all
+5,001–6,000 outgoing opportunities, including `t=0`. The separately reported
+post-`t=0` release population is therefore 5,000–5,999 per visit and
+60,000–71,988 across the twelve-visit gate; that `N−1` population preserves
+the historical timing-sensitivity denominator without pretending that `t=0`
+was unobserved. Every prefix and suffix opportunity remains subject to the
+unchanged exact-size, strict adapter-normalised half-open window, zero-miss,
+zero-catch-up, exact incoming-credit, and complete kernel/Lab reconciliation
+requirements.
 
 Logical outgoing-before-incoming order is proven by direction, target, and slot
 identity. Physical `schedule.csv` row order records terminal resolution and is
 not misrepresented as dispatch order. The aggregate binds the per-visit
-opportunity and drain lengths, dynamic guard and byte totals, histograms,
-observed sensitivity, terminal schedule-stop receipt, and sub-cell drain
-receipt. Authoritative `experiment.json` is source-, image-, cohort-, network-,
-parameter-, workload-, qualification-, and opportunity-contract-bound and
-cannot pass after a missing, rejected, or incomplete reserved attempt. The
-regression receipt remains bound to the same stress evidence. Current-source
-captures require BuFLO summary schema 4, runner-wakeup schema 10, and the complete
-scheduler receipt; older cohort ledgers remain historical evidence only.
+opportunity and drain lengths, dynamic post-`t=0` release and byte totals,
+post-veth lateness histograms, observed sensitivity, terminal schedule-stop
+receipt, sub-cell drain receipt, schema-11 sender jobs, Linux transmit
+feedback, qdisc outcomes, and independent observer matches. Authoritative
+`experiment.json` is source-, image-, cohort-, network-, parameter-, workload-,
+qualification-, and opportunity-contract-bound and cannot pass after a
+missing, rejected, or incomplete reserved attempt. The regression receipt
+remains bound to the same stress evidence. Current-source captures require
+timing-stress parameter/provenance schema 3, BuFLO summary schema 4,
+runner-wakeup schema 11, the complete kernel sender receipt, and the separately
+validated Lab observer sidecar; timing schemas 1 and 2 remain historical-only.
 
-Post-v46 engineering source retains the client-only runtime, 20 ms cadence,
-1,200-byte target, ordinary-output admission at `release − 2W`, guard and
-active-wait entry at `release − W`, the strict adapter-normalised
-`[release, release + W)` realisation window, and the no-catch-up rule, where
-`W` is 5 ms aligned or 4.999 ms fractional.
-Runner-wakeup schema 10 adds the
-periodic authoritative watchdog, checked-`u64` chronology/partitions, exact
-retained-failure and mixed-residual/histogram integrity, and fail-closed
-divergence evidence described above; the Lab gates accept the additive schema
-while continuing to validate historical schemas against their frozen
-contracts. Rust commit
-`ba72df21b0f6ef0b7607e11928895be83402b063` and Lab engineering commit
-`c6dfc6ccbce6f4dafc329fd1cb3dff132b802bfb` bind the implementation and its
-matching gitlink; this README-only follow-up changes no runtime or evidence
-interface. V46 remains evidence only for its own schema-9 commits and cannot
-authorise this source. Fresh cohort v47
-must repeat the pull/no-cache build, isolated reference gate, 12/12 timing
-stress, 18/18 regression, regression-bound code gate, and 160/160 controlled
-qualification before expanded-class acquisition can begin. All acquisition,
-fitting, qualification, 900-cell certification, and 16,000-cell formal
-numerators remain zero for current source. The complete earlier cohort
-chronology is retained in the authoritative workspace
+Timing-stress schema 3 accepts only the exact current `schedule.csv` header:
+the historical prefix followed by the complete nullable QCSD suffix in its
+defined order. Missing, extra, duplicated, or reordered fields fail before
+schedule interpretation. All authoritative runner-CSV paths now share one
+canonical Rust-`u64` parser. It accepts only ASCII decimal `0` through
+`18446744073709551615` and rejects signs, whitespace, Unicode digits,
+fractions, leading zeroes other than `0`, overlong text, and overflow before
+timing, size, composition, credit, fitting, plotting, or handoff arithmetic.
+
+Current production schema 11 is committed in Rust
+`7999788ccaafefb6442d34e7a1e5ae6a1d3efb52` and Lab
+`213a26b1f522321d2b0c727819c58a5ae822dfa1`. The clean Rust head and committed
+gitlink are `e3ea858a31677067da969f50c1ac5aba50592c7c`. Lab
+`8939e6ac2f71a1f27a30233bf4ec172fad2e33d1` is the committed pre-launcher
+base, not the identity that may be used for the next build. The current Lab
+checkout contains the acquisition/CDP, launcher/lifecycle, canonical runner-CSV
+`u64`, timing-stress, focused/class-handoff, and documentation hardening. The
+next immutable build must use a clean commit containing that work and this
+README; its exact identity is resolved at launch by `git rev-parse HEAD` and
+bound into the build receipt rather than copied prospectively into this file.
+
+V48 failed during the pre-receipt collection-image build after 230
+`neqo-bin` tests passed and three environment-sensitive fixtures failed. It
+produced no image, build receipt, reference execution, or capture. V49's
+embedded six-command Rust gate passed, including 233/233 `neqo-bin` tests and
+strict workspace Clippy, but the build was deliberately cancelled during
+release-binary compilation because the Lab launcher repair was still required.
+It likewise produced no image or immutable receipt, reference, or capture.
+Both attempts are diagnostic only.
+
+For current source, the fresh build, reference, and regression-bound code-gate
+receipts are absent; timing stress is 0/12, regression 0/18, and controlled
+qualification 0/160. Real acquisition observations remain zero. Pilot fitting,
+qualification, and compatibility are 0/480, 0/720, and 0/1,080;
+authoritative fitting and final qualification are 0/2,000 and 0/600;
+certification and canaries are 0/900 and 0/1,000; formal capture is 0/16,000.
+Handoff, evaluation, comparison, and attestation are absent. With this Lab
+hardening in a clean immutable checkout, the next fresh cohort must use an
+unused version of at least 50 and repeat the pull/no-cache build, isolated
+reference gate, 12/12
+timing stress, 18/18 regression, regression-bound code gate, and 160/160
+controlled qualification before expanded-class acquisition can begin. The
+complete earlier cohort chronology is retained in the authoritative workspace
 [`PROJECT.md`](../PROJECT.md).
 
 The current Lab boundary additionally classifies typed client defence/QCSD
@@ -456,10 +516,15 @@ process-local, campaign-identity-bound authority created by the `class-study`
 coordinator after it verifies the prerequisite ledger; generic `run` or
 `resume` cannot bypass that ordering.
 
-At the 2 September 2026 operational checkpoint, Docker 29.0.1 is healthy with
-12 CPUs, approximately 16.5 GB memory, and no running containers. The physical
-volume backing its data VHDX has more than the required 64 GiB free. These are
-admission conditions only and do not advance a scientific numerator. Cohort
+At the 4 September 2026 03:04:53 AEST operational checkpoint, a read-only
+probe found Docker 29.0.1 healthy on Linux AArch64 with daemon ID
+`48f27adb-00f1-41ce-80fe-41360d2eb712`, 12 CPUs, approximately 16.5 GB memory,
+and no running containers. The physical volume backing its data VHDX remains
+subject to the 64 GiB build-time admission gate. The earlier unrelated
+telemetry workload no longer creates a scheduling conflict, but final source
+verification and a fresh no-cache build still precede any scientific run.
+These are operational conditions only and do not advance a scientific
+numerator. Cohort
 v32 passed its
 fresh pull/no-cache build and isolated reference execution, then stopped in the
 first established-mode regression campaign at 4/14 accepted cells. The two
@@ -525,16 +590,47 @@ Host-side Python parsers run in isolated mode, load the exact source-controlled
 validator rather than the caller's import path, and canonicalise the checkout
 root before the first command.
 
-The current receipt is build-execution schema 2 with four nested schema-1
+All launcher-owned Docker API calls, attached or detached runs, and builds now
+require a functioning per-user systemd manager on cgroup v2. Each client tree
+runs in a uniquely named transient service or scope with control-group kill
+semantics; API calls have whole-tree runtime bounds, while interrupted runs and
+builds must prove the exact cgroup empty before cleanup can complete. Exact
+helper-source, boot, daemon, endpoint, context, process, scope, status-channel,
+container or network, and private nonce bindings are retained for recovery.
+Run/build children remain stopped behind durable birth and supervision
+handshakes; source, latched signal, PID, start time, session, and process group
+are revalidated immediately before release. At the next launch every lifecycle
+root is validated before any Docker mutation, with run/build launcher recovery
+preceding connected-network recovery and unresolved build taint preserved. An
+authorised create whose object ID remains unavailable does not expire after a
+fixed delay: admission stays blocked until the uniquely labelled object appears
+and can be authenticated and removed. Malformed, non-monotonic, ambiguous,
+cross-daemon, live-owner, unreadable `/proc` or cgroup, or unprovably non-empty
+state blocks the command. Systems without functional user-systemd/cgroup-v2
+containment are unsupported for evidentiary execution and fail closed. Durable
+records live beneath the private `/var/tmp/qcsd-docker-lifecycle-<uid>/`
+namespace, and a private per-user lifecycle lock serialises admission and
+recovery across checkouts. The acquisition watcher reaches that boundary only
+through an internal five-field bridge binding state root, scope root,
+request-authority digest, action digest, and source-binding digest; all five
+are rechecked after the exclusive lifecycle lock and immediately before
+stale Docker-state mutation. The separate acquisition-watcher authority may
+contain only its own stale watcher scopes before this Docker admission point;
+it cannot inspect or mutate Docker state.
+
+Fresh builds now emit build-execution schema 3 with four nested schema-1
 storage observations, exact IID-bearing command vectors, three distinct role
 IDs, fixed role tags, and independently re-verifiable per-role provenance. It
 is fully revalidated against the clean source, Docker identity, no-cache
 commands, Dockerfile, lockfiles, checkout root, and probe hash before its
-create-only write. Missing, ambiguous, malformed,
+create-only write. Schema 3 records each build as an explicit
+`docker --host <pinned-local-endpoint>` command; schema 2 used the pinned
+Docker context and remains readable for its immutable historical cohorts.
+Missing, ambiguous, malformed,
 unhealthy, low-capacity, changing, remote, aliased, concurrent, shadowed, or
 semantically invalid evidence prevents a receipt. Historical build-execution
-schema-1 receipts remain readable and relocatable. V34 successfully emitted
-and independently revalidated the first schema-2 receipt; its hashes and image
+schemas 1 and 2 remain readable and relocatable. V34 successfully emitted and
+independently revalidated the first schema-2 receipt; its hashes and image
 identities remain bound to the pre-correction v34 source.
 
 Earlier on 1 September 2026, a read-only probe found only about 2.19 GB
@@ -553,34 +649,22 @@ maintained in
 [`../PROJECT.md`](../PROJECT.md); the exact extended-class protocol and
 matrices are maintained in [`../CLASS-STUDY.md`](../CLASS-STUDY.md).
 
-### Non-evidentiary ETF capability probe
+### Disabled non-evidentiary ETF capability probe
 
-The host-only `etf-probe` command exercises a disposable Docker bridge/veth
-topology before any production kernel-timed egress integration is admitted:
+The underlying `etf-probe` module describes a disposable Docker bridge/veth
+diagnostic for the production kernel-timed egress path, but the public
+`./qcsd-lab etf-probe` entry point is intentionally disabled. After guarded
+Docker admission and stale-state recovery it exits with status 1, before the
+nested Python Docker lifecycle or any destination receipt can be created. The
+module must not be presented as runnable until those nested create, signal,
+cleanup, and recovery operations use the mandatory durable lifecycle helper.
 
-```shell
-./qcsd-lab etf-probe \
-  --destination artifacts/etf-capability-probe-v1.json
-```
-
-The destination must not already exist. The command creates a read-only,
-create-once schema-1 receipt and never modifies a BuFLO result, campaign,
-handoff, or attestation. It installs a two-band root PRIO qdisc with high-band
-CLOCK_TAI ETF and low-band FIFO, records and restores the initial qdisc, and
-uses post-veth receive timestamps to enforce the strict half-open five
-millisecond window. A helper queues the timed datagram while the main process
-is stopped; its one-owner socket-priority transaction must read back priority
-6, reset and read back 0, and then prove that an ordinary datagram on the same
-socket bypasses the pending ETF packet through FIFO. TX_SCHED and TX_SOFTWARE
-feedback, qdisc accounting, four negative controls, CPU affinity, cleanup, and
-the unavailable-or-available `SCM_PRIORITY` ancillary capability are all
-receipted fail closed. No socket-priority fallback is implicit.
-
-This diagnostic is explicitly `evidentiary=false` and
-`authorizes_capture=false`. A passing receipt demonstrates only that the
-selected host, kernel, Docker engine, and image expose the prerequisite
-mechanics at that instant; it cannot satisfy or advance any reference, code,
-qualification, capture, or final-attestation gate.
+The planned schema-1 receipt is explicitly `evidentiary=false` and
+`authorizes_capture=false`. Even after the launcher boundary is implemented, a
+passing receipt could demonstrate only that one host, kernel, Docker engine,
+and image exposed the prerequisite PRIO/ETF, timestamping, socket-priority,
+and cleanup mechanics at that instant; it could not satisfy or advance any
+reference, code, qualification, capture, or final-attestation gate.
 
 ### Prospective 100-class final campaign
 
@@ -627,6 +711,65 @@ reports each realised class's origin count, together with the origin histogram
 and single-/multi-origin totals, in
 `dataset.json.resource_origin_profile`.
 
+The current passive-render contract is fixed before navigation: a
+1365×768 viewport at device scale factor 1, disabled cache, bypassed and
+blocked service workers, and no scroll or scripted interaction. After the
+`load` event it observes for at least 10 seconds and then requires a full
+3-second interval with neither a relevant request/target event nor an active
+network request. That quiet interval starts only after the 10-second minimum,
+or after the last later event. A page still non-quiescent 30 seconds after
+`load` receives a typed whole-candidate rejection. The compatibility
+`settle_ms=10000` field records only the minimum observation duration, never
+the actual cutoff; the hash-bound render receipt records navigation, load,
+last-event, quiet-start and cutoff monotonic times, active IDs/count, and the
+cutoff reason. Consequently, the admitted graph covers passive activity in
+this exact bounded render, not resources requiring scrolling, interaction,
+account state, or activity beginning after the hard cap.
+
+Browser discovery is bound to
+`playwright-1.52-public-cdp-recursive-non-flat-paused-debugger-targets-v3`. It uses
+Chromium's public non-flat CDP transport to recursively auto-attach page-related
+iframe, dedicated-worker, and shared-worker targets while each child is paused.
+Every child acknowledges `Debugger`, `Network`, cache/service-worker bypass, recursive
+auto-attach, and an explicit target-information barrier before resume; the root
+page and iframe sessions also enable request-stage `Fetch`. Actual
+`Network.requestWillBeSent` occurrences alone create replay-resource ledger
+entries. `Fetch.requestPaused` remains the before-I/O policy gate and is
+reconciled against that Network evidence, including Chromium's page-owned
+interception of worker requests. Request identities include the
+session path, target ID and generation, Network request ID, and occurrence
+index; only unique page/iframe redirect migration is accepted. Target crashes,
+unsupported related targets, ambiguous/cross-generation reuse, cache or
+service-worker responses, unmatched Network/Fetch or terminal events, and
+traffic emitted before setup acknowledgement or unresolved setup/policy work at
+the deliberate shutdown boundary fail closed.
+
+Each accepted preparation seals a content-minimised, replayable event
+projection: sequence and relative time, target/session/frame/generation,
+Network and Fetch IDs, method and URL, redirect identities, policy outcome,
+terminal outcome, unique resource-or-exclusion occurrence mapping, and raw
+initiator evidence. It contains no request headers, cookies, response bodies,
+or payload secrets. An independent verifier reconstructs FIFO Network/Fetch
+association (including explicitly counted internal Fetch restarts), terminal
+closure, redirects, and latest-preceding dependency edges before accepting the
+manifest. `Debugger` is enabled before any relevant target resumes so recursive
+`initiator.stack.callFrames` evidence is available. Non-network schemes such as
+`data:` are recorded as non-interceptable exclusions and do not falsely require
+a Fetch event. The sanitised projection, render receipt, contract and their
+digests are bound through preparation, longitudinal stability, and cohort
+assembly. Raw CDP headers/bodies are deliberately not retained; the resulting
+claim is exact conformance of the sealed projection and derived graph under the
+pinned instrumentation, not archival replay of Chromium's unsanitised protocol
+stream.
+
+The opt-in `./qcsd-lab test pinned-cdp` command exercises the real pinned
+Playwright 1.52/Chromium topology in the preparation image. It runs as the host
+UID:GID with all capabilities dropped and Docker networking disabled, while a
+local in-container server proves cross-site iframe, worker/shared-worker,
+duplicate-URL, redirect, and shutdown behaviour. Mocked deterministic tests
+have passed during engineering, but the probe must still pass in the next
+freshly built current-source preparation image before acquisition.
+
 The same complete graph is now independently rederived at every downstream
 evidence boundary. For each accepted fitting, pilot-compatibility,
 certification, canary, and formal sample, the verifier derives the runtime
@@ -636,9 +779,22 @@ the campaign, application/runtime manifests, qualified chaff, mode-appropriate
 parameter/provenance inputs, seed, request policy, and launch limits. This is
 applied uniformly to all nine selectable modes; no defence may project the
 application workload to one origin or discard a resource. The prospective
-formal handoff uses schema 2 and repeats the nine input hashes/limits in every
+formal handoff uses schema 3 and repeats the nine input hashes/limits in every
 sample row before rechecking them against the sealed source result and copied
-run receipt.
+run receipt. For a schema-11 BuFLO sample it additionally copies the three
+kernel-TX sidecar files into a separate checksum-closed subtree and binds their
+source/copy identities in a nullable row field; this does not change the
+accepted sample's five-file inventory.
+
+Formal export is unavailable until the independently reconstructed
+post-formal historical snapshot verifies the exact ordered formal blocks
+1–10, their first-launch and promotion-authority hashes, common source,
+runtime inputs, no-cache build identity, and pre/post acquisition timing. The
+schema-3 handoff copies that receipt to
+`inputs/class-study-historical-post-snapshot.json` and binds both its file and
+payload SHA-256 in `dataset.json`. Handoff verification—and therefore every
+evaluation launched from the handoff—reconstructs that binding again; a list
+of sealed class results alone is not export authority.
 
 This is an allowance and preservation rule, not a multi-origin sampling quota.
 The final 100 classes have not yet been acquired, so their realised
@@ -773,19 +929,40 @@ from the host with:
 
 The supervisor validates the catalogue, foundation, exact prepare-image
 digest, provenance, and checkpoint before doing any work. It invokes the
-existing bounded `acquisition-run` action only when work is due, remains
-interruptible while waiting, and resumes from the same `checkpoint.json` when
-the command is restarted. It creates no alternative state or completion
+existing one-candidate `acquisition-run` action only when work is due and
+resumes from the same `checkpoint.json` when the command is restarted. Page
+navigation is a separate action completed before a baseline is armed. The
+baseline-arming action then waits interruptibly to the `t+30s` window and runs
+that probe without another Docker/status launch; the host watcher waits for
+the `t+24h` and `t+72h` windows. It creates no alternative state or completion
 receipt. The optional `--heartbeat-seconds` value controls signal-responsive
-host sleep slices and must be greater than zero and no more than five seconds;
-it does not poll Docker at that frequency.
+host wait slices and must be a finite number from one through five seconds; it
+does not poll Docker at that frequency.
 
-Operationally, this stage is longer than 72 hours. Serial acquisition and the
-190-second pending-baseline guard permit new baselines no faster than once per
-25 seconds, so opening 600 baselines takes at least 4 h 9 min 35 s and the last
-candidate's earliest `t+72h` probe is at least 75 h 54 min 35 s after the first
-baseline. This excludes navigation, preparation, Docker, network, and retry
-time; preflight and supervision must allow additional margin.
+The 60-second browser navigation timeout and 30-second passive-render cap are
+component limits, not a whole-attempt duration claim. The launcher instead
+applies a configured whole-action policy: `SIGINT` at 1,800 seconds, an inner
+hard kill after a 120-second cleanup grace, and an outer user-systemd backup
+with `RuntimeMaxSec=1920s` plus a final 120-second stop grace. A completed
+navigation or probe ledger attempt longer than 1,800 seconds is invalid;
+interrupted attempts remain interrupted and are never promoted to completed
+attempts. The whole-process cut-off is externally enforced and currently has
+process-status evidence rather than a separate per-action duration receipt.
+Direct `class-study acquisition-run` and `acquisition-status` invocations lack
+the watcher's create-only scope authority and fail before Docker access.
+
+Operationally, this strict serial schedule is much longer than 72 hours. A
+40-minute action-start reservation covers the configured 2,040-second outer
+cut-off, a 310-second status envelope, and a 50-second scheduler margin. It is
+enforced across every candidate's baseline-arming, `t+24h`, and `t+72h` action
+starts, including cross-offset collisions. The configured zero-work
+earliest-next greedy rule places the 600th baseline 65 d 11 h 5 min after the
+first and its earliest `t+72h` probe at 68 d 10 h 50 min. These figures are a
+deterministic projection, not a globally optimal or universal lower bound;
+deliberately delaying an earlier baseline can change the final endpoint.
+Navigation, preparation, Docker, network, retries, and interruptions add real
+wall time. The configured cut-off is a policy bound, not a call-tree-derived
+guarantee of successful completion.
 
 ### Retained focused candidate workflow
 
@@ -825,7 +1002,7 @@ CODE_GATE="artifacts/buflo-study/code-gate-v${COHORT_VERSION}.json"
 # On WSL, first require 64 GiB on the actual Docker data-VHDX backing volume.
 # Serially builds the three fixed roles with --pull --no-cache and --iidfile,
 # repeats the backing-volume and daemon checks at every target boundary, and
-# creates the immutable schema-2 build receipt.
+# creates the immutable schema-3 build receipt.
 ./qcsd-lab build --cohort-version "$COHORT_VERSION"
 ./qcsd-lab buflo-study reference \
   --reference-root "$REFERENCE_ROOT" --destination "$REFERENCE" \
@@ -969,7 +1146,7 @@ done
 ```
 
 Omitting `--cohort-version` preserves the cohort-version-1 command contract;
-new successful builds still emit build-execution schema 2. A code,
+new successful builds emit build-execution schema 3. A code,
 parameter, workload, chaff, or acceptance-rule change after rehearsal instead
 starts a new positive version: first run
 `./qcsd-lab build --cohort-version N`, then pass the same option to every
@@ -1007,16 +1184,32 @@ author implementations. The dedicated handoff and evaluator do not modify the
 sealed `classifier-multiorigin5-v2` corpus, and classifiers receive only
 identifier-free timestamp, direction, and observer-frame length.
 
+New focused formal exports use handoff schema 2. A nullable
+`kernel_tx_evidence` row field is populated only for schema-11 BuFLO and copies
+exactly `router-capture.pcapng`, `router-receipt.json`, and
+`kernel-tx-evidence.json` into
+`kernel-tx-evidence/<sample>/`. `SHA256SUMS` closes this separate subtree; deep
+verification replays the evidence against the copied `run.json`, router
+receipt, and capture. Historical focused schema 1 remains readable only for
+non-formal compatibility, while formal validation requires schema 2 and
+reopens the original sealed result roots even when optional deep replay is
+disabled. The accepted source sample still has exactly five files. No
+current-source focused handoff exists.
+
 ### `build`
 
 ```shell
-./qcsd-lab build
+: "${COHORT_VERSION:?export an unused positive cohort version}"
+./qcsd-lab build --cohort-version "$COHORT_VERSION"
 ```
 
-Builds the collection image and the workload-preparation image from the current
-lab checkout and Neqo submodule. There is no development-mode flag. Source
-commits, dirty state, and patch hashes are embedded as provenance when the
-checkout is not clean.
+Builds the collection, workload-preparation, and isolated reference images
+from the current Lab checkout and Neqo submodule. The version must be a
+previously unused positive integer and its create-only build receipt must not
+exist. The launcher requires exact clean raw-byte Lab and Neqo checkouts before
+the first Docker build; there is no development-mode or dirty-source override.
+The clean source identities, lockfiles, image IDs, and image digests are bound
+into the versioned build receipt.
 
 ### `prepare`
 
@@ -1788,6 +1981,21 @@ this command succeeds against the real 120-sample result.
 
 Runs the deterministic Python suite in the collection image. It does not use
 the public Internet or start a research campaign.
+
+### `test pinned-cdp`
+
+```shell
+./qcsd-lab test pinned-cdp
+```
+
+Runs only the real-browser recursive-target probe in the pinned preparation
+image. The launcher selects that image explicitly, sets the opt-in probe flag,
+runs as the invoking UID:GID, drops every capability, and uses Docker network
+mode `none`. The test's own loopback HTTP server exercises a cross-site iframe,
+dedicated and shared workers, duplicate URLs, a redirect, request-stage
+interception ownership, and deliberate context shutdown. This is an
+environment/integration gate, not a public-network acquisition or scientific
+sample.
 
 ### `test live`
 

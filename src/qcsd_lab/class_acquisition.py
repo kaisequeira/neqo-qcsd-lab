@@ -21,17 +21,39 @@ from pathlib import Path
 from typing import Any, Protocol
 from urllib.parse import urlsplit
 
+from .acquisition_errors import (
+    RecoverableAcquisitionError,
+    TerminalAcquisitionPolicyError,
+)
+from .acquisition_timing import (
+    ACTION_TIMING_CONTRACT,
+    BASELINE_SCHEDULING_CONTRACT,
+    MINIMUM_BASELINE_SPACING_MS,
+    baseline_is_safe,
+    earliest_safe_baseline,
+    validate_baseline_schedule,
+)
+from .cdp_targets import CDP_TARGET_INSTRUMENTATION_POLICY
 from .class_catalogue import (
     HTML_MEDIA_TYPES,
     STABILITY_PROBE_WINDOWS,
     DiscoveredLink,
     PageCandidate,
     StabilityObservation,
+    derive_stability_decision,
     load_candidate_catalogue_receipt,
     select_page_candidates,
+    validate_page_candidate,
 )
 from .class_study import bind_receipt, canonical_json_bytes, validate_hash_bound_receipt
 from .discover import DiscoveryResult, _host_resolver_rules, discover_page, origin
+from .discovery_evidence import (
+    DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION,
+    PASSIVE_RENDER_CONTRACT,
+    PASSIVE_RENDER_CONTRACT_SHA256,
+    evidence_sha256,
+    validate_render_observation,
+)
 from .manifest import runtime_manifest, validate_research_preparation
 from .prepare import PreparedWorkload, prepare_workload
 from .util import (
@@ -45,19 +67,22 @@ from .util import (
     source_metadata,
 )
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 3
 PROVENANCE_TYPE = "qcsd-class-study-acquisition-provenance"
 TERMINAL_TYPE = "qcsd-class-study-acquisition-terminal"
+TERMINAL_SCHEMA_VERSION = 2
 COMPLETION_TYPE = "qcsd-class-study-acquisition-completion"
 CHECKPOINT_TYPE = "qcsd-class-study-acquisition-checkpoint"
+DOCUMENT_RESPONSE_RECEIPT_TYPE = "qcsd-class-study-document-response"
 MAX_ORIGIN_PASSES = 8
 MAX_APPROVED_ORIGINS = 32
 MAX_OBSERVED_AUDIT_ORIGINS = 512
 MAX_PROBE_ATTEMPTS = 3
 MAX_ACQUISITION_BACKEND_TIMEOUT_MS = 60_000
-PENDING_BASELINE_GUARD_MS = (
-    MAX_PROBE_ATTEMPTS * MAX_ACQUISITION_BACKEND_TIMEOUT_MS + 10_000
+MAX_PASSIVE_RENDER_AFTER_LOAD_MS = int(
+    PASSIVE_RENDER_CONTRACT["hard_cap_after_load_ms"]
 )
+PENDING_BASELINE_GUARD_MS = MINIMUM_BASELINE_SPACING_MS
 TERMINAL_KINDS = frozenset(
     {
         "eligible",
@@ -77,6 +102,27 @@ NAVIGATION_REJECTION_KINDS = frozenset(
         "redirect-outside-candidate-boundary",
     }
 )
+CURRENT_OBSERVATION_FIELDS = frozenset(
+    {
+        *StabilityObservation.__dataclass_fields__,
+        "runner_provenance_sha256",
+        "approved_origins",
+        "discovery_observed_origins",
+        "discovery_expandable_origins",
+        "discovery_origin_ip_pins",
+        "preparation_origin_ip_pins",
+        "discovery_instrumentation_policy",
+        "render_observation",
+        "chromium_version",
+        "neqo_provenance",
+        "prepared_path",
+        "probe_completed_at",
+    }
+)
+
+
+class TerminalProbePolicyError(TerminalAcquisitionPolicyError):
+    """A deterministic safety, policy, or finite-cap probe rejection."""
 
 
 def validate_class_study_preparation(
@@ -84,6 +130,28 @@ def validate_class_study_preparation(
 ) -> None:
     """Require the class study's bounded complete-coverage preparation contract."""
 
+    candidate_preparation = manifest.get("preparation")
+    candidate_exclusions = (
+        candidate_preparation.get("exclusions", [])
+        if isinstance(candidate_preparation, Mapping)
+        else []
+    )
+    unapproved_get_exclusions = [
+        item
+        for item in candidate_exclusions
+        if isinstance(item, Mapping) and item.get("reason") == "origin not approved"
+    ]
+    if unapproved_get_exclusions:
+        raise ValueError(
+            f"class-study workload {workload_id!r} complete coverage cannot contain "
+            "unapproved-origin HTTPS GET exclusions: "
+            + ", ".join(
+                sorted(
+                    str(item.get("url", "<malformed>"))
+                    for item in unapproved_get_exclusions
+                )
+            )
+        )
     validate_research_preparation(manifest, workload_id=workload_id)
     preparation = manifest["preparation"]
     if "coverage_admission" not in preparation:
@@ -91,18 +159,29 @@ def validate_class_study_preparation(
             f"class-study workload {workload_id!r} requires a complete-coverage "
             "admission binding every approved origin and rendered resource"
         )
-    unapproved_get_exclusions = [
-        item
-        for item in preparation["exclusions"]
-        if item["reason"] == "origin not approved"
-    ]
-    if unapproved_get_exclusions:
+    coverage = preparation["coverage_admission"]
+    audit = preparation.get("discovery_event_audit")
+    if (
+        not isinstance(coverage, Mapping)
+        or coverage.get("schema_version") != 3
+        or coverage.get("origin_ip_pins_sha256")
+        != evidence_sha256(preparation.get("origin_ip_pins"))
+        or preparation.get("request_header_transformation")
+        != "browser-safe-input-to-neqo-stability-frozen-runtime-v1"
+        or coverage.get("browser_request_headers_sha256")
+        != evidence_sha256(preparation.get("browser_request_headers"))
+        or preparation.get("passive_render_contract") != PASSIVE_RENDER_CONTRACT
+        or preparation.get("passive_render_contract_sha256")
+        != PASSIVE_RENDER_CONTRACT_SHA256
+        or preparation.get("settle_ms")
+        != PASSIVE_RENDER_CONTRACT["minimum_after_load_ms"]
+        or not isinstance(audit, Mapping)
+        or audit.get("schema_version") != DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION
+        or audit.get("instrumentation_policy") != CDP_TARGET_INSTRUMENTATION_POLICY
+    ):
         raise ValueError(
-            f"class-study workload {workload_id!r} complete coverage cannot contain "
-            "unapproved-origin HTTPS GET exclusions: "
-            + ", ".join(
-                sorted({item["url"] for item in unapproved_get_exclusions})
-            )
+            f"class-study workload {workload_id!r} requires bounded-render "
+            "discovery-evidence and origin-pin coverage schema three"
         )
     approved_origins = preparation["approved_origins"]
     observed_origins = preparation["observed_origins"]
@@ -112,7 +191,7 @@ def validate_class_study_preparation(
             f"{MAX_APPROVED_ORIGINS}-origin admission cap"
         )
     if len(observed_origins) > MAX_OBSERVED_AUDIT_ORIGINS:
-        raise ValueError(
+        raise TerminalProbePolicyError(
             f"class-study workload {workload_id!r} exceeds the "
             f"{MAX_OBSERVED_AUDIT_ORIGINS}-origin audit cap"
         )
@@ -122,8 +201,41 @@ class MissedProbeWindow(ValueError):
     """A valid acquisition checkpoint whose next mandatory window expired."""
 
 
-class TerminalProbePolicyError(ValueError):
-    """A deterministic safety, policy, or finite-cap probe rejection."""
+class InternalAcquisitionError(RuntimeError):
+    """A durable fail-closed acquisition fault requiring source intervention."""
+
+
+def _exception_reason(error: BaseException) -> str:
+    try:
+        message = str(error) or "exception carried no message"
+    except BaseException:  # noqa: BLE001 - formatting must not defeat durable checkpointing
+        message = "exception string conversion failed"
+    return f"{type(error).__name__}: {message}"
+
+
+def _internal_error_record(
+    *,
+    stage: str,
+    attempt: int,
+    recorded_at: datetime,
+    error: BaseException,
+    reason: str,
+    page_ordinal: int | None = None,
+    probe_id: str | None = None,
+) -> dict[str, Any]:
+    prefix = f"{type(error).__name__}: "
+    if not reason.startswith(prefix) or not reason.removeprefix(prefix):
+        raise AssertionError("internal acquisition reason lost its exception identity")
+    return {
+        "schema_version": 1,
+        "stage": stage,
+        "attempt": attempt,
+        "page_ordinal": page_ordinal,
+        "probe_id": probe_id,
+        "exception_type": type(error).__name__,
+        "message": reason.removeprefix(prefix),
+        "recorded_at": _format_time(recorded_at),
+    }
 
 
 DOMAIN_SAFETY_POLICY = {
@@ -188,6 +300,22 @@ class PreparedProbe:
     prepared: PreparedWorkload
     chromium_version: str
     neqo_provenance: Mapping[str, str]
+    passive_render_contract_sha256: str | None = None
+    render_observation: Mapping[str, Any] | None = None
+    render_observation_sha256: str | None = None
+    discovery_event_audit_sha256: str | None = None
+    preparation_origin_ip_pins: Mapping[str, str] | None = None
+    document_response_chromium_version: str | None = None
+
+
+@dataclass(frozen=True)
+class BrowserDocumentResponse:
+    """Content-minimised identity of the browser's primary document response."""
+
+    final_url: str
+    status: int
+    content_type: str
+    chromium_version: str
 
 
 class AcquisitionBackend(Protocol):
@@ -201,6 +329,8 @@ class AcquisitionBackend(Protocol):
         url: str,
         approved_origins: Sequence[str],
         output_root: Path,
+        *,
+        origin_ip_pins: Mapping[str, str] | None = None,
     ) -> PreparedProbe: ...
 
 
@@ -215,7 +345,11 @@ class ExistingAcquisitionBackend:
         self,
         *,
         navigation: Callable[[str], NavigationDiscovery] | None = None,
-        content_type_probe: Callable[[str, Sequence[str], int], str] | None = None,
+        content_type_probe: Callable[
+            [str, Sequence[str], int, Mapping[str, str] | None],
+            str | BrowserDocumentResponse,
+        ]
+        | None = None,
         timeout_ms: int = 60_000,
     ) -> None:
         if (
@@ -247,8 +381,24 @@ class ExistingAcquisitionBackend:
         url: str,
         approved_origins: Sequence[str],
         output_root: Path,
+        *,
+        origin_ip_pins: Mapping[str, str] | None = None,
     ) -> PreparedProbe:
-        pins = public_origin_ip_pins(approved_origins)
+        if output_root.exists() or output_root.is_symlink():
+            try:
+                _regular_directory(output_root)
+            except ValueError as error:
+                raise TerminalProbePolicyError(
+                    "prepared-probe output root is not an owned regular directory"
+                ) from error
+        else:
+            _new_directory(output_root)
+        pins = _validated_frozen_origin_ip_pins(
+            approved_origins,
+            origin_ip_pins
+            if origin_ip_pins is not None
+            else public_origin_ip_pins(approved_origins),
+        )
         prepared = prepare_workload(
             workload_id,
             url,
@@ -265,14 +415,18 @@ class ExistingAcquisitionBackend:
         manifest = load_json(prepared.path)
         validate_class_study_preparation(manifest, workload_id=workload_id)
         preparation = manifest["preparation"]
-        expected_matches = tuple(
-            item for item in preparation["expected_responses"] if item["resource_id"] == 0
-        )
-        if len(expected_matches) != 1:
+        current_image = os.environ.get("QCSD_LAB_IMAGE_DIGEST", "native")
+        current_source = dict(source_metadata())
+        if current_image == "native" and current_source.get("image_digest") is None:
+            current_source["image_digest"] = "native"
+        if (
+            preparation.get("prepare_image_digest") != current_image
+            or preparation.get("lab_source") != current_source
+        ):
             raise TerminalProbePolicyError(
-                "prepared navigation has no unique primary response"
+                "prepared workload source/image differs from acquisition runtime"
             )
-        [expected] = expected_matches
+        expected = _prepared_primary_response(manifest)
         if (
             type(expected["status"]) is not int
             or type(expected["bytes"]) is not int
@@ -282,12 +436,34 @@ class ExistingAcquisitionBackend:
             or any(character not in "0123456789abcdef" for character in expected["body_sha256"])
         ):
             raise TerminalProbePolicyError("prepared primary response identity is invalid")
-        content_type = self._content_type_probe(url, approved_origins, self._timeout_ms)
+        document_response = self._content_type_probe(
+            url, approved_origins, self._timeout_ms, pins
+        )
+        if isinstance(document_response, str):
+            document_response = BrowserDocumentResponse(
+                final_url=preparation["final_url"],
+                status=expected["status"],
+                content_type=_normalise_content_type(document_response),
+                chromium_version=preparation["chromium_version"],
+            )
+        if (
+            not isinstance(document_response, BrowserDocumentResponse)
+            or document_response.final_url != preparation["final_url"]
+            or document_response.status != expected["status"]
+            or _normalise_content_type(document_response.content_type)
+            not in HTML_MEDIA_TYPES
+            or document_response.chromium_version != preparation["chromium_version"]
+            or preparation.get("origin_ip_pins") != pins
+        ):
+            raise TerminalProbePolicyError(
+                "browser document response differs from prepared primary response"
+            )
+        observed_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
         return PreparedProbe(
-            observed_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-            final_url=preparation["final_url"],
-            status=expected["status"],
-            content_type=content_type,
+            observed_at=observed_at,
+            final_url=document_response.final_url,
+            status=document_response.status,
+            content_type=_normalise_content_type(document_response.content_type),
             body_bytes=expected["bytes"],
             body_sha256=expected["body_sha256"],
             resource_graph_sha256=_prepared_replay_identity_sha256(manifest),
@@ -302,6 +478,18 @@ class ExistingAcquisitionBackend:
                     "migration_commit",
                 )
             },
+            passive_render_contract_sha256=preparation[
+                "passive_render_contract_sha256"
+            ],
+            render_observation=preparation["render_observation"],
+            render_observation_sha256=preparation["render_observation_sha256"],
+            discovery_event_audit_sha256=preparation[
+                "discovery_event_audit_sha256"
+            ],
+            preparation_origin_ip_pins=pins,
+            document_response_chromium_version=(
+                document_response.chromium_version
+            ),
         )
 
 
@@ -323,201 +511,511 @@ def _prepared_replay_identity_sha256(manifest: Mapping[str, Any]) -> str:
     if not isinstance(expected, list) or not isinstance(approved, list):
         raise ValueError("prepared replay identity is incomplete")
     identity = {
-        "schema_version": 1,
+        "schema_version": 3,
         "source_url": preparation.get("source_url"),
         "final_url": preparation.get("final_url"),
         "approved_origins": approved,
+        "origin_ip_pins": preparation.get("origin_ip_pins"),
+        "browser_request_headers": preparation.get("browser_request_headers"),
+        "request_header_transformation": preparation.get(
+            "request_header_transformation"
+        ),
         "expected_responses": expected,
+        "passive_render_contract_sha256": preparation.get(
+            "passive_render_contract_sha256"
+        ),
         "runtime_manifest": runtime_manifest(dict(manifest)),
     }
     return sha256_bytes(canonical_json_bytes(identity))
 
 
-def catalogue_boundary_navigation(domain: str, *, timeout_ms: int = 60_000) -> NavigationDiscovery:
-    """Extract navigation candidates using the frozen catalogue domain boundary.
+def _prepared_primary_response(manifest: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Derive the final root-document response from its exact redirect chain."""
 
-    The Tranco candidate domain itself is the preregistered boundary.  This is
-    stricter than guessing an eTLD+1 and fails closed for links outside that
-    exact host boundary (subdomains included by the catalogue selector).
-    """
+    preparation = manifest.get("preparation")
+    resources = manifest.get("resources")
+    if not isinstance(preparation, Mapping) or not isinstance(resources, list):
+        raise TerminalProbePolicyError("prepared navigation primary graph is malformed")
+    audit = preparation.get("discovery_event_audit")
+    events = audit.get("events") if isinstance(audit, Mapping) else None
+    if not isinstance(events, list):
+        raise TerminalProbePolicyError("prepared navigation has no request audit")
+    resource_events: dict[int, Mapping[str, Any]] = {}
+    for event in events:
+        mapping = event.get("mapping") if isinstance(event, Mapping) else None
+        if (
+            isinstance(mapping, Mapping)
+            and mapping.get("kind") == "resource"
+            and type(mapping.get("resource_id")) is int
+        ):
+            resource_id = mapping["resource_id"]
+            if resource_id in resource_events:
+                raise TerminalProbePolicyError(
+                    "prepared navigation resource mapping is ambiguous"
+                )
+            resource_events[resource_id] = event
+    current = resource_events.get(0)
+    if not isinstance(current, Mapping):
+        raise TerminalProbePolicyError("prepared navigation has no root resource")
+    source = current.get("source")
+    if (
+        current.get("resource_type") != "Document"
+        or not isinstance(source, Mapping)
+        or source.get("session_path") != []
+        or source.get("target_type") != "page"
+        or source.get("generation") != 0
+    ):
+        raise TerminalProbePolicyError(
+            "prepared navigation resource zero is not the root document"
+        )
+    while True:
+        successors = [
+            event
+            for event in resource_events.values()
+            if event.get("redirected") is True
+            and event.get("redirect_from_occurrence_id") == current.get("occurrence_id")
+            and event.get("network_id") == current.get("network_id")
+            and event.get("source") == source
+        ]
+        if not successors:
+            break
+        if len(successors) != 1:
+            raise TerminalProbePolicyError(
+                "prepared root-document redirect chain is ambiguous"
+            )
+        current = successors[0]
+        if current.get("resource_type") != "Document":
+            raise TerminalProbePolicyError(
+                "prepared root-document redirect chain changed resource type"
+            )
+    mapping = current.get("mapping")
+    resource_id = mapping.get("resource_id") if isinstance(mapping, Mapping) else None
+    resource = next(
+        (
+            item
+            for item in resources
+            if isinstance(item, Mapping) and item.get("id") == resource_id
+        ),
+        None,
+    )
+    if (
+        not isinstance(resource, Mapping)
+        or resource.get("type") != "Document"
+        or resource.get("url") != preparation.get("final_url")
+        or current.get("url") != preparation.get("final_url")
+    ):
+        raise TerminalProbePolicyError(
+            "prepared root-document redirect chain does not reach the final URL"
+        )
+    expected_matches = [
+        item
+        for item in preparation.get("expected_responses", [])
+        if isinstance(item, Mapping) and item.get("resource_id") == resource_id
+    ]
+    if len(expected_matches) != 1:
+        raise TerminalProbePolicyError(
+            "prepared navigation has no unique final primary response"
+        )
+    return expected_matches[0]
+
+
+def _create_document_response_receipt(
+    runner_root: Path,
+    *,
+    workload_id: str,
+    requested_url: str,
+    approved_origins: Sequence[str],
+    origin_ip_pins: Mapping[str, str],
+    probe_started_at: str,
+    prepared: PreparedProbe,
+    runner_provenance_sha256: str,
+    runner_provenance: Mapping[str, Any],
+) -> dict[str, str]:
+    """Durably bind one browser document observation before checkpointing it."""
+
+    frozen_pins = _validated_frozen_origin_ip_pins(approved_origins, origin_ip_pins)
+    preparation_pins = prepared.preparation_origin_ip_pins or frozen_pins
+    if dict(preparation_pins) != frozen_pins:
+        raise TerminalProbePolicyError(
+            "document response and preparation used different origin-IP pins"
+        )
+    content_type = _normalise_content_type(prepared.content_type)
+    browser_version = (
+        prepared.document_response_chromium_version or prepared.chromium_version
+    )
+    payload = {
+        "document_response_schema_version": 1,
+        "workload_id": workload_id,
+        "requested_url": requested_url,
+        "final_url": prepared.final_url,
+        "status": prepared.status,
+        "content_type": content_type,
+        "body_bytes": prepared.body_bytes,
+        "body_sha256": prepared.body_sha256,
+        "resource_graph_sha256": prepared.resource_graph_sha256,
+        "prepared_workload_sha256": prepared.prepared.sha256,
+        "probe_started_at": probe_started_at,
+        "response_observed_at": prepared.observed_at,
+        "approved_origins": list(approved_origins),
+        "origin_ip_pins": frozen_pins,
+        "origin_ip_pins_sha256": evidence_sha256(frozen_pins),
+        "chromium_version": browser_version,
+        "preparation_chromium_version": prepared.chromium_version,
+        "neqo_provenance": dict(prepared.neqo_provenance),
+        "cdp_target_instrumentation_policy": CDP_TARGET_INSTRUMENTATION_POLICY,
+        "browser_tool": runner_provenance["browser_tool"],
+        "runner_provenance_sha256": runner_provenance_sha256,
+        "image_digest": runner_provenance["image_digest"],
+        "source": runner_provenance["source"],
+    }
+    receipt = bind_receipt(payload, receipt_type=DOCUMENT_RESPONSE_RECEIPT_TYPE)
+    relative = f"document-response-receipts/{workload_id}.json"
+    destination = runner_root / relative
+    _create_json(destination, receipt)
+    return {"path": relative, "sha256": sha256_file(destination)}
+
+
+class _NavigationPinExpansion(Exception):
+    """An allowed document redirect named origins absent from the frozen pass."""
+
+    def __init__(self, origins: set[str]) -> None:
+        self.origins = tuple(sorted(origins))
+        super().__init__(", ".join(self.origins))
+
+
+def catalogue_boundary_navigation(domain: str, *, timeout_ms: int = 60_000) -> NavigationDiscovery:
+    """Extract candidates after bounded, public-IP-pinned redirect convergence."""
 
     if timeout_ms < 1:
         raise ValueError("navigation timeout must be positive")
     deadline = time.monotonic() + timeout_ms / 1_000
     if reason := unsafe_catalogue_domain_reason(domain):
         raise TerminalProbePolicyError(reason)
-    registrable = domain
-    navigation_origins = [f"https://{domain}"]
-    www_origin = f"https://www.{domain}"
-    try:
-        public_origin_ip_pins((www_origin,))
-    except OSError:
-        pass
-    else:
-        navigation_origins.append(www_origin)
-    navigation_pins = public_origin_ip_pins(navigation_origins)
     try:
         from playwright.sync_api import Error as PlaywrightError
         from playwright.sync_api import sync_playwright
     except ImportError as error:
         raise RuntimeError("navigation discovery requires the discovery Docker image") from error
 
+    navigation_pins = public_origin_ip_pins((f"https://{domain}",))
+
+    for pass_index in range(MAX_ORIGIN_PASSES):
+        if time.monotonic() >= deadline:
+            raise RecoverableAcquisitionError(
+                "navigation redirect convergence exhausted its total timeout"
+            )
+        try:
+            return _catalogue_boundary_navigation_pass(
+                domain,
+                deadline=deadline,
+                navigation_pins=navigation_pins,
+                sync_playwright=sync_playwright,
+                playwright_error=PlaywrightError,
+            )
+        except _NavigationPinExpansion as expansion:
+            new_origins = set(expansion.origins) - set(navigation_pins)
+            if not new_origins:
+                raise RuntimeError(
+                    "navigation redirect pin expansion made no progress"
+                ) from expansion
+            if len(navigation_pins) + len(new_origins) > MAX_APPROVED_ORIGINS:
+                raise TerminalProbePolicyError(
+                    "navigation redirect discovery exceeded its finite origin cap"
+                ) from expansion
+            if pass_index + 1 >= MAX_ORIGIN_PASSES:
+                raise TerminalProbePolicyError(
+                    "navigation redirect origins did not converge within the finite pass cap"
+                ) from expansion
+            existing_by_hostname = {
+                urlsplit(value).hostname: address
+                for value, address in navigation_pins.items()
+            }
+            reused: dict[str, str] = {}
+            unresolved: list[str] = []
+            for value in sorted(new_origins):
+                hostname = urlsplit(value).hostname
+                if hostname in existing_by_hostname:
+                    reused[value] = existing_by_hostname[hostname]
+                else:
+                    unresolved.append(value)
+            navigation_pins.update(reused)
+            navigation_pins.update(public_origin_ip_pins(tuple(unresolved)))
+            _validated_frozen_origin_ip_pins(
+                tuple(sorted(navigation_pins)), navigation_pins
+            )
+    raise AssertionError("navigation redirect convergence loop terminated unexpectedly")
+
+
+def _catalogue_boundary_navigation_pass(
+    domain: str,
+    *,
+    deadline: float,
+    navigation_pins: Mapping[str, str],
+    sync_playwright: Any,
+    playwright_error: type[Exception],
+) -> NavigationDiscovery:
+    """Run one browser pass against an immutable exact-origin DNS pin set."""
+
+    registrable = domain
+    observed_origins: set[str] = set()
+    current_page_origins: set[str] = set()
+    unpinned_document_origins: set[str] = set()
+    rejected_document_urls: set[str] = set()
+    page_observed_origins: list[tuple[str, tuple[str, ...]]] = []
+    verified: list[DiscoveredLink] = []
+    rejections: list[NavigationRejection] = []
+
     def remaining_timeout() -> int:
         return max(0, round((deadline - time.monotonic()) * 1_000))
 
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(
-            headless=True,
-            executable_path=os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH"),
-            args=[
-                "--no-sandbox",
-                "--host-resolver-rules=" + _host_resolver_rules(navigation_pins),
-            ],
-        )
-        try:
-            context = browser.new_context(ignore_https_errors=False, service_workers="block")
-            observed_origins: set[str] = set()
-            current_page_origins: set[str] = set()
-            page_observed_origins: list[tuple[str, tuple[str, ...]]] = []
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(
+                headless=True,
+                executable_path=os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH"),
+                args=[
+                    "--no-sandbox",
+                    "--host-resolver-rules=" + _host_resolver_rules(navigation_pins),
+                ],
+            )
+            try:
+                context = browser.new_context(ignore_https_errors=False, service_workers="block")
+                unowned_document_urls: set[str] = set()
 
-            def route_request(route: Any) -> None:
-                request = route.request
-                if not _navigation_request_allowed(request.method, request.url, domain):
-                    route.abort()
-                else:
-                    # Only document-navigation origins are discovery seeds.
-                    # Same-domain and cross-origin subresources belong to the
-                    # later iterative resource-graph discovery.  Keeping them
-                    # out here also prevents a late request from the previous
-                    # optional page from contaminating the next page's seed.
+                def route_request(route: Any) -> None:
+                    request = route.request
+                    is_primary_navigation = False
                     if request.is_navigation_request():
-                        request_origin = origin(request.url)
-                        if request_origin is not None:
-                            observed_origins.add(request_origin)
-                            current_page_origins.add(request_origin)
+                        try:
+                            is_primary_navigation = request.frame == page.main_frame
+                        except playwright_error:
+                            # Playwright documents that Request.frame can throw
+                            # before Chromium has created/attached the frame.
+                            # Such a document is never admitted speculatively.
+                            unowned_document_urls.add(request.url)
+                            route.abort()
+                            return
+                    if not _navigation_request_allowed(request.method, request.url, domain):
+                        if is_primary_navigation:
+                            rejected_document_urls.add(request.url)
+                        route.abort()
+                        return
+                    request_origin = origin(request.url)
+                    if request_origin is None:
+                        if is_primary_navigation:
+                            rejected_document_urls.add(request.url)
+                        route.abort()
+                        return
+                    if request_origin not in navigation_pins:
+                        # Preliminary link extraction does not need unpinned
+                        # subresources.  Document origins, however, are retained
+                        # as an expansion request and retried only after public
+                        # resolution has been frozen into a fresh browser pass.
+                        if is_primary_navigation:
+                            unpinned_document_origins.add(request_origin)
+                        route.abort()
+                        return
+                    if is_primary_navigation:
+                        assert request_origin is not None
+                        observed_origins.add(request_origin)
+                        current_page_origins.add(request_origin)
                     route.continue_()
 
-            context.route("**/*", route_request)
-            page = context.new_page()
-            homepage_budget = remaining_timeout()
-            if homepage_budget < 1:
-                raise ValueError("navigation exhausted its total timeout before homepage")
-            current_page_origins.clear()
-            homepage_response = page.goto(
-                f"https://{domain}/", wait_until="load", timeout=homepage_budget
-            )
-            if homepage_response is None:
-                raise ValueError("canonical homepage navigation returned no response")
-            homepage_type = _normalise_content_type(
-                str(homepage_response.headers.get("content-type", ""))
-            )
-            if homepage_type not in HTML_MEDIA_TYPES or not _navigation_request_allowed(
-                "GET", page.url, domain
-            ):
-                raise TerminalProbePolicyError(
-                    "canonical homepage did not resolve to an in-boundary HTML document"
-                )
-            if challenge := browser_challenge_reason(page):
-                raise TerminalProbePolicyError(challenge)
-            page_observed_origins.append(
-                (f"https://{domain}/", tuple(sorted(current_page_origins)))
-            )
-            hrefs = tuple(
-                str(value)
-                for value in page.locator("a[href]").evaluate_all(
-                    "elements => elements.map(element => element.href)"
-                )
-            )
-            provisional = select_page_candidates(
-                domain,
-                registrable_domain=registrable,
-                discovered_links=tuple(
-                    DiscoveredLink(url=url, content_type="text/html") for url in hrefs
-                ),
-            )[1:]
-            verified: list[DiscoveredLink] = []
-            rejections: list[NavigationRejection] = []
-            for candidate_index, candidate in enumerate(provisional):
-                link_budget = remaining_timeout()
-                if link_budget < 1:
-                    rejections.extend(
-                        NavigationRejection(
-                            url=remaining.url,
-                            kind="navigation-time-budget-exhausted",
-                            reason="total navigation timeout expired before optional link",
-                        )
-                        for remaining in provisional[candidate_index:]
+                context.route("**/*", route_request)
+                page = context.new_page()
+                homepage_budget = remaining_timeout()
+                if homepage_budget < 1:
+                    raise RecoverableAcquisitionError(
+                        "navigation exhausted its total timeout before homepage"
                     )
-                    break
+                current_page_origins.clear()
+                rejected_document_urls.clear()
                 try:
-                    current_page_origins.clear()
-                    response = page.goto(
-                        candidate.url,
-                        wait_until="domcontentloaded",
-                        timeout=link_budget,
+                    homepage_response = page.goto(
+                        f"https://{domain}/", wait_until="load", timeout=homepage_budget
                     )
-                except PlaywrightError as error:
-                    # Link verification is optional; an unreachable or slow
-                    # secondary page must not invalidate a valid homepage.
-                    rejections.append(
-                        NavigationRejection(
-                            url=candidate.url,
-                            kind="playwright-navigation-failure",
-                            reason=str(error),
-                        )
+                except playwright_error as error:
+                    if unowned_document_urls:
+                        raise TerminalProbePolicyError(
+                            "document navigation ownership could not be established"
+                        ) from error
+                    if unpinned_document_origins:
+                        raise _NavigationPinExpansion(unpinned_document_origins) from error
+                    if rejected_document_urls:
+                        raise TerminalProbePolicyError(
+                            "canonical homepage document navigation left the allowed HTTPS "
+                            "candidate-domain boundary: "
+                            + ", ".join(sorted(rejected_document_urls))
+                        ) from error
+                    raise
+                if unpinned_document_origins:
+                    raise _NavigationPinExpansion(unpinned_document_origins)
+                if rejected_document_urls:
+                    raise TerminalProbePolicyError(
+                        "canonical homepage document navigation left the allowed HTTPS "
+                        "candidate-domain boundary: "
+                        + ", ".join(sorted(rejected_document_urls))
                     )
-                    continue
-                if response is None:
-                    rejections.append(
-                        NavigationRejection(
-                            url=candidate.url,
-                            kind="navigation-returned-no-response",
-                            reason="optional link navigation returned no response",
-                        )
+                if unowned_document_urls:
+                    raise TerminalProbePolicyError(
+                        "document navigation ownership could not be established"
                     )
-                    continue
-                policy_rejection = _navigation_link_policy_rejection(
-                    final_url=page.url,
-                    content_type=str(response.headers.get("content-type", "")),
-                    boundary=domain,
+                if homepage_response is None:
+                    raise RecoverableAcquisitionError(
+                        "canonical homepage navigation returned no response"
+                    )
+                homepage_type = _normalise_content_type(
+                    str(homepage_response.headers.get("content-type", ""))
                 )
-                if policy_rejection is not None:
-                    kind, reason = policy_rejection
-                    rejections.append(
-                        NavigationRejection(
-                            url=candidate.url,
-                            kind=kind,
-                            reason=reason,
-                        )
+                if homepage_type not in HTML_MEDIA_TYPES or not _navigation_request_allowed(
+                    "GET", page.url, domain
+                ):
+                    raise TerminalProbePolicyError(
+                        "canonical homepage did not resolve to an in-boundary HTML document"
                     )
-                    continue
-                verified_link = _verified_navigation_link(
-                    candidate,
-                    final_url=page.url,
-                    content_type=str(response.headers.get("content-type", "")),
-                    boundary=domain,
+                if challenge := browser_challenge_reason(page):
+                    raise TerminalProbePolicyError(challenge)
+                page_observed_origins.append(
+                    (f"https://{domain}/", tuple(sorted(current_page_origins)))
                 )
-                if verified_link is not None:
-                    if challenge := browser_challenge_reason(page):
+                hrefs = tuple(
+                    str(value)
+                    for value in page.locator("a[href]").evaluate_all(
+                        "elements => elements.map(element => element.href)"
+                    )
+                )
+                provisional = select_page_candidates(
+                    domain,
+                    registrable_domain=registrable,
+                    discovered_links=tuple(
+                        DiscoveredLink(url=url, content_type="text/html") for url in hrefs
+                    ),
+                )[1:]
+                for candidate_index, candidate in enumerate(provisional):
+                    link_budget = remaining_timeout()
+                    if link_budget < 1:
+                        rejections.extend(
+                            NavigationRejection(
+                                url=remaining.url,
+                                kind="navigation-time-budget-exhausted",
+                                reason="total navigation timeout expired before optional link",
+                            )
+                            for remaining in provisional[candidate_index:]
+                        )
+                        break
+                    try:
+                        current_page_origins.clear()
+                        rejected_document_urls.clear()
+                        unowned_document_urls.clear()
+                        response = page.goto(
+                            candidate.url,
+                            wait_until="domcontentloaded",
+                            timeout=link_budget,
+                        )
+                    except playwright_error as error:
+                        if unpinned_document_origins:
+                            raise _NavigationPinExpansion(unpinned_document_origins) from error
+                        if rejected_document_urls:
+                            rejections.append(
+                                NavigationRejection(
+                                    url=candidate.url,
+                                    kind="redirect-outside-candidate-boundary",
+                                    reason=(
+                                        "optional link document navigation left the allowed "
+                                        "HTTPS candidate-domain boundary: "
+                                        + ", ".join(sorted(rejected_document_urls))
+                                    ),
+                                )
+                            )
+                            continue
+                        # Link verification is optional; an unreachable or slow
+                        # secondary page must not invalidate a valid homepage.
                         rejections.append(
                             NavigationRejection(
                                 url=candidate.url,
-                                kind="captcha-or-challenge",
-                                reason=challenge,
+                                kind="playwright-navigation-failure",
+                                reason=str(error),
                             )
                         )
                         continue
-                    verified.append(verified_link)
-                    page_observed_origins.append(
-                        (candidate.url, tuple(sorted(current_page_origins)))
+                    if unpinned_document_origins:
+                        raise _NavigationPinExpansion(unpinned_document_origins)
+                    if rejected_document_urls:
+                        rejections.append(
+                            NavigationRejection(
+                                url=candidate.url,
+                                kind="redirect-outside-candidate-boundary",
+                                reason=(
+                                    "optional link document navigation left the allowed HTTPS "
+                                    "candidate-domain boundary: "
+                                    + ", ".join(sorted(rejected_document_urls))
+                                ),
+                            )
+                        )
+                        continue
+                    if response is None:
+                        rejections.append(
+                            NavigationRejection(
+                                url=candidate.url,
+                                kind="navigation-returned-no-response",
+                                reason="optional link navigation returned no response",
+                            )
+                        )
+                        continue
+                    policy_rejection = _navigation_link_policy_rejection(
+                        final_url=page.url,
+                        content_type=str(response.headers.get("content-type", "")),
+                        boundary=domain,
                     )
-            page.close()
-        finally:
-            browser.close()
+                    if policy_rejection is not None:
+                        kind, reason = policy_rejection
+                        rejections.append(
+                            NavigationRejection(
+                                url=candidate.url,
+                                kind=kind,
+                                reason=reason,
+                            )
+                        )
+                        continue
+                    verified_link = _verified_navigation_link(
+                        candidate,
+                        final_url=page.url,
+                        content_type=str(response.headers.get("content-type", "")),
+                        boundary=domain,
+                    )
+                    if verified_link is not None:
+                        if challenge := browser_challenge_reason(page):
+                            rejections.append(
+                                NavigationRejection(
+                                    url=candidate.url,
+                                    kind="captcha-or-challenge",
+                                    reason=challenge,
+                                )
+                            )
+                            continue
+                        verified.append(verified_link)
+                        page_observed_origins.append(
+                            (candidate.url, tuple(sorted(current_page_origins)))
+                        )
+                page.close()
+            finally:
+                browser.close()
+    except _NavigationPinExpansion:
+        raise
+    except RecoverableAcquisitionError as error:
+        if unpinned_document_origins:
+            raise _NavigationPinExpansion(unpinned_document_origins) from error
+        raise
+    except playwright_error as error:
+        if unpinned_document_origins:
+            raise _NavigationPinExpansion(unpinned_document_origins) from error
+        raise RecoverableAcquisitionError(f"Playwright navigation failed: {error}") from error
+    if unpinned_document_origins:
+        # Some browser versions return a response after a request-stage abort;
+        # the next pass is still mandatory before accepting that navigation.
+        raise _NavigationPinExpansion(unpinned_document_origins)
     if len(observed_origins) > MAX_APPROVED_ORIGINS:
-        raise TerminalProbePolicyError(
-            "navigation discovery exceeded its finite origin cap"
-        )
+        raise TerminalProbePolicyError("navigation discovery exceeded its finite origin cap")
     return NavigationDiscovery(
         registrable,
         tuple(verified),
@@ -542,6 +1040,9 @@ def initialise_runner(
     foundation = _foundation_attestation_binding(foundation_attestation)
     destination = _new_directory(root)
     (destination / "terminals").mkdir()
+    (destination / "document-response-receipts").mkdir()
+    (destination / "prepared-probes").mkdir()
+    fsync_directory(destination)
     durable_create(destination / ".class-study-acquisition.lock", b"")
     provenance = bind_receipt(
         {
@@ -555,19 +1056,35 @@ def initialise_runner(
             "image_digest": os.environ.get("QCSD_LAB_IMAGE_DIGEST", "native"),
             "source": source_metadata(),
             "browser_tool": browser_tool,
-            "navigation_implementation": "playwright-cdp-catalogue-domain-boundary-v1",
+            "navigation_implementation": (
+                "playwright-cdp-catalogue-domain-boundary-redirect-pin-convergence-v3"
+            ),
+            "cdp_target_instrumentation_policy": CDP_TARGET_INSTRUMENTATION_POLICY,
+            "passive_render_contract": PASSIVE_RENDER_CONTRACT,
+            "passive_render_contract_sha256": PASSIVE_RENDER_CONTRACT_SHA256,
+            "browser_navigation_timeout_ms": MAX_ACQUISITION_BACKEND_TIMEOUT_MS,
+            "passive_render_hard_cap_after_load_ms": (
+                MAX_PASSIVE_RENDER_AFTER_LOAD_MS
+            ),
+            "acquisition_action_timing_contract": ACTION_TIMING_CONTRACT,
+            "baseline_scheduling_contract": BASELINE_SCHEDULING_CONTRACT,
             "registrable_domain_policy": "exact-frozen-tranco-candidate-domain",
             "domain_safety_policy": DOMAIN_SAFETY_POLICY,
             "domain_safety_policy_sha256": sha256_bytes(canonical_json_bytes(DOMAIN_SAFETY_POLICY)),
             "origin_policy": {
                 "max_passes": MAX_ORIGIN_PASSES,
+                "max_navigation_redirect_passes": MAX_ORIGIN_PASSES,
                 "max_origins": MAX_APPROVED_ORIGINS,
                 "max_observed_audit_origins": MAX_OBSERVED_AUDIT_ORIGINS,
                 "max_navigation_attempts": MAX_PROBE_ATTEMPTS,
                 "max_probe_attempts_per_window": MAX_PROBE_ATTEMPTS,
-                "pending_baseline_guard_ms": PENDING_BASELINE_GUARD_MS,
                 "navigation_seed_scope": ("page-specific-document-navigation-origins-only"),
-                "resource_graph_scope": ("iteratively-converged-public-https-get-origins"),
+                "resource_graph_scope": (
+                    "iteratively-converged-public-https-get-request-instances"
+                ),
+                "request_instance_identity": (
+                    "observation-order-resource-id-with-preceding-initiator-and-redirect-edges"
+                ),
                 "dns": "all-answers-global-and-browser-host-resolver-pinned",
                 "neqo": "QCSD_PUBLIC_ORIGIN_ONLY-resolve-once-connect-exact-address",
             },
@@ -604,6 +1121,7 @@ def run_due_acquisition(
     backend: AcquisitionBackend,
     now: datetime | None = None,
     clock: Callable[[], datetime] | None = None,
+    sleeper: Callable[[float], None] | None = None,
     max_candidates: int = 1,
 ) -> dict[str, Any]:
     """Process bounded due work and return progress plus the next due instant."""
@@ -616,11 +1134,46 @@ def run_due_acquisition(
     initial_time = now or clock_function()
     if initial_time.tzinfo is None:
         raise ValueError("now must be timezone-aware")
+    last_clock = initial_time.astimezone(UTC)
+    wait_function = sleeper
+    if wait_function is None:
+        wait_function = getattr(clock, "sleep", None) if clock is not None else None
+    if wait_function is None:
+        wait_function = time.sleep
+
+    def read_clock() -> datetime:
+        nonlocal last_clock
+        value = last_clock if now is not None else clock_function()
+        if not isinstance(value, datetime) or value.tzinfo is None:
+            raise ValueError("acquisition clock must return a timezone-aware datetime")
+        value = value.astimezone(UTC)
+        if value < last_clock:
+            raise ValueError("acquisition clock moved backwards during a bounded action")
+        last_clock = value
+        return value
+
+    def wait_until(target: datetime) -> datetime:
+        nonlocal last_clock
+        if target.tzinfo is None:
+            raise ValueError("acquisition wait target must be timezone-aware")
+        target = target.astimezone(UTC)
+        if now is not None:
+            if target > last_clock:
+                last_clock = target
+            return last_clock
+        while True:
+            current_clock = read_clock()
+            remaining = (target - current_clock).total_seconds()
+            if remaining <= 0:
+                return current_clock
+            wait_function(min(remaining, 1.0))
     runner = _regular_directory(root)
     provenance_path = runner / "provenance.json"
     provenance = load_json(provenance_path)
     provenance_payload = validate_hash_bound_receipt(provenance, expected_type=PROVENANCE_TYPE)
     _validate_runner_runtime(provenance_payload)
+    if provenance_payload.get("acquisition_schema_version") != SCHEMA_VERSION:
+        raise ValueError("historical acquisition runners are verification-only")
     _catalogue, candidates = load_candidate_catalogue_receipt(candidate_catalogue_path)
     if provenance_payload["candidate_catalogue_sha256"] != sha256_file(candidate_catalogue_path):
         raise ValueError("runner provenance is bound to another catalogue")
@@ -633,7 +1186,7 @@ def run_due_acquisition(
         # A long navigation/preparation can make a 30-second probe due while
         # this invocation is still running; that due probe must pre-empt the
         # next unused baseline rather than being missed by a stale snapshot.
-        current = initial_time if now is not None else clock_function()
+        current = read_clock()
         due_candidates: set[str] = set()
         missed_candidates: set[str] = set()
         for candidate in candidates:
@@ -645,18 +1198,40 @@ def run_due_acquisition(
                     due_candidates.add(candidate.candidate_id)
             except MissedProbeWindow:
                 missed_candidates.add(candidate.candidate_id)
+        ready_candidates = {
+            candidate.candidate_id
+            for candidate in candidates
+            if states[candidate.candidate_id]["terminal"] is None
+            and states[candidate.candidate_id]["state"] == "baseline-ready"
+        }
+        pending_candidates = {
+            candidate.candidate_id
+            for candidate in candidates
+            if states[candidate.candidate_id]["terminal"] is None
+            and states[candidate.candidate_id]["state"] == "pending"
+        }
+        baseline_safe_now = baseline_is_safe(
+            current,
+            _checkpoint_baselines(states),
+        )
+        # Live work always outranks bookkeeping for a window that is already
+        # irrecoverably lost.  With the canonical one-candidate action bound,
+        # terminalising a stale candidate first could push an unrelated probe
+        # from its inclusive latest edge to one microsecond too late.
+        if due_candidates:
+            selected_ids = due_candidates
+        elif missed_candidates:
+            selected_ids = missed_candidates
+        elif ready_candidates and baseline_safe_now:
+            selected_ids = ready_candidates
+        elif pending_candidates and not _pending_navigation_blocked(states, current):
+            selected_ids = pending_candidates
+        else:
+            selected_ids = set()
         ordered_candidates = tuple(
             candidate
             for candidate in candidates
-            if (candidate.candidate_id in missed_candidates)
-            or (not missed_candidates and candidate.candidate_id in due_candidates)
-            or (
-                not missed_candidates
-                and not due_candidates
-                and not _pending_baseline_blocked(states, current)
-                and states[candidate.candidate_id]["terminal"] is None
-                and states[candidate.candidate_id]["state"] == "pending"
-            )
+            if candidate.candidate_id in selected_ids
         )
         if not ordered_candidates:
             break
@@ -665,6 +1240,7 @@ def run_due_acquisition(
         if state["terminal"] is not None:
             continue
         if candidate.candidate_id in missed_candidates:
+            _record_pending_probe_interruptions(state, recovered_at=current)
             _terminalise(
                 runner,
                 state,
@@ -672,6 +1248,7 @@ def run_due_acquisition(
                 "probe-window-missed",
                 "host resumed after the latest admissible probe window",
                 provenance_path,
+                terminalised_at=current,
             )
             processed += 1
             _save_acquisition_checkpoint(
@@ -683,6 +1260,7 @@ def run_due_acquisition(
             continue
         if state["state"] == "pending":
             attempts = state.setdefault("navigation_attempts", [])
+            navigation_terminal_clock = current
             pending_navigation = state.get("pending_navigation")
             if pending_navigation is not None:
                 attempt, started = _validate_pending_navigation(pending_navigation)
@@ -690,9 +1268,7 @@ def run_due_acquisition(
                     {
                         "attempt": attempt,
                         "started_at": _format_time(started),
-                        "completed_at": _format_time(
-                            current if now is not None else clock_function()
-                        ),
+                        "completed_at": _format_time(read_clock()),
                         "outcome": "interrupted",
                         "reason": "prior invocation ended before recording an outcome",
                     }
@@ -710,7 +1286,7 @@ def run_due_acquisition(
                     (item["attempt"] for item in attempts),
                     default=0,
                 )
-                started = current if now is not None else clock_function()
+                started = read_clock()
                 state["pending_navigation"] = {
                     "attempt": attempt,
                     "started_at": _format_time(started),
@@ -721,29 +1297,34 @@ def run_due_acquisition(
                     catalogue_path=candidate_catalogue_path,
                     candidates=states,
                 )
+                internal_error: Exception | None = None
                 try:
                     navigation = backend.discover_navigation(candidate.domain)
-                    try:
-                        pages = select_page_candidates(
-                            candidate.domain,
-                            registrable_domain=navigation.registrable_domain,
-                            discovered_links=navigation.links,
-                        )
-                        navigation_origins_by_page = _navigation_origins_by_page(
-                            navigation, pages
-                        )
-                    except (TypeError, ValueError) as error:
-                        raise TerminalProbePolicyError(str(error)) from error
+                    pages = select_page_candidates(
+                        candidate.domain,
+                        registrable_domain=navigation.registrable_domain,
+                        discovered_links=navigation.links,
+                    )
+                    navigation_origins_by_page = _navigation_origins_by_page(
+                        navigation, pages
+                    )
                 except TerminalProbePolicyError as error:
                     outcome = "terminal-policy-rejection"
                     reason = str(error)
-                except Exception as error:  # noqa: BLE001 - recoverable navigation boundary
+                except RecoverableAcquisitionError as error:
                     outcome = "recoverable-failure"
                     reason = str(error)
+                    internal_error = None
+                except Exception as error:  # noqa: BLE001 - checkpoint before aborting
+                    outcome = "internal-acquisition-error"
+                    reason = _exception_reason(error)
+                    internal_error = error
                 else:
                     outcome = "completed"
                     reason = None
-                completion = current if now is not None else clock_function()
+                    internal_error = None
+                completion = read_clock()
+                navigation_terminal_clock = completion
                 attempts.append(
                     {
                         "attempt": attempt,
@@ -754,6 +1335,14 @@ def run_due_acquisition(
                     }
                 )
                 state.pop("pending_navigation", None)
+                if internal_error is not None:
+                    state["internal_acquisition_error"] = _internal_error_record(
+                        stage="navigation",
+                        attempt=attempt,
+                        recorded_at=completion,
+                        error=internal_error,
+                        reason=reason,
+                    )
                 if outcome != "completed":
                     _save_acquisition_checkpoint(
                         checkpoint_path,
@@ -761,6 +1350,10 @@ def run_due_acquisition(
                         catalogue_path=candidate_catalogue_path,
                         candidates=states,
                     )
+                if internal_error is not None:
+                    raise InternalAcquisitionError(
+                        f"acquisition stopped after durable internal navigation failure: {reason}"
+                    ) from internal_error
                 if outcome == "completed" or outcome == "terminal-policy-rejection":
                     break
             if navigation is None or pages is None or navigation_origins_by_page is None:
@@ -778,6 +1371,7 @@ def run_due_acquisition(
                     "pre-probe-rejection",
                     rejection_reason,
                     provenance_path,
+                    terminalised_at=navigation_terminal_clock,
                 )
                 processed += 1
                 _save_acquisition_checkpoint(
@@ -789,10 +1383,7 @@ def run_due_acquisition(
                 continue
             state.update(
                 {
-                    "state": "probing",
-                    "baseline_started_at": _format_time(
-                        current if now is not None else clock_function()
-                    ),
+                    "state": "baseline-ready",
                     "pages": [
                         {
                             "page": page.as_dict(),
@@ -819,14 +1410,52 @@ def run_due_acquisition(
                 candidates=states,
             )
             continue
-        due_pages = _due_pages(state, current, candidate_id=candidate.candidate_id)
+        if state["state"] == "baseline-ready":
+            baseline = read_clock()
+            if not baseline_is_safe(baseline, _checkpoint_baselines(states)):
+                raise ValueError("candidate baseline violates the serial scheduling contract")
+            state["state"] = "probing"
+            state["baseline_started_at"] = _format_time(baseline)
+            _save_acquisition_checkpoint(
+                checkpoint_path,
+                provenance_path=provenance_path,
+                catalogue_path=candidate_catalogue_path,
+                candidates=states,
+            )
+            current = wait_until(
+                baseline
+                + timedelta(milliseconds=STABILITY_PROBE_WINDOWS[0].earliest_ms)
+            )
+        try:
+            due_pages = _due_pages(state, current, candidate_id=candidate.candidate_id)
+        except MissedProbeWindow:
+            _record_pending_probe_interruptions(state, recovered_at=current)
+            _terminalise(
+                runner,
+                state,
+                candidate.candidate_id,
+                "probe-window-missed",
+                "bounded action passed the latest admissible probe window",
+                provenance_path,
+                terminalised_at=current,
+            )
+            processed += 1
+            _save_acquisition_checkpoint(
+                checkpoint_path,
+                provenance_path=provenance_path,
+                catalogue_path=candidate_catalogue_path,
+                candidates=states,
+            )
+            continue
         if not due_pages:
             continue
         retry_pages = list(due_pages)
         window_missed = False
+        terminal_clock = current
         while retry_pages:
             runnable_pages: list[dict[str, Any]] = []
-            attempt_clock = current if now is not None else clock_function()
+            attempt_clock = read_clock()
+            terminal_clock = attempt_clock
             for due_page in retry_pages:
                 probe_index = len(due_page["observations"])
                 probe_id = STABILITY_PROBE_WINDOWS[probe_index].probe_id
@@ -912,11 +1541,23 @@ def run_due_acquisition(
                         page.url,
                         approved,
                         runner / "prepared-probes",
+                        origin_ip_pins=discovery.origin_ip_pins,
                     )
                     started_at = _format_time(probe_started)
                     elapsed = round(
                         (probe_started - _timestamp(baseline_started_at)).total_seconds()
                         * 1000
+                    )
+                    document_response_receipt = _create_document_response_receipt(
+                        runner,
+                        workload_id=pending_probe["workload_id"],
+                        requested_url=page.url,
+                        approved_origins=approved,
+                        origin_ip_pins=discovery.origin_ip_pins,
+                        probe_started_at=started_at,
+                        prepared=prepared,
+                        runner_provenance_sha256=sha256_file(provenance_path),
+                        runner_provenance=provenance_payload,
                     )
                     observation = StabilityObservation(
                         probe_id=probe_id,
@@ -929,6 +1570,19 @@ def run_due_acquisition(
                         body_sha256=prepared.body_sha256,
                         resource_graph_sha256=prepared.resource_graph_sha256,
                         prepared_workload_sha256=prepared.prepared.sha256,
+                        passive_render_contract_sha256=(
+                            prepared.passive_render_contract_sha256
+                        ),
+                        render_observation_sha256=prepared.render_observation_sha256,
+                        discovery_event_audit_sha256=(
+                            prepared.discovery_event_audit_sha256
+                        ),
+                        document_response_receipt_path=(
+                            document_response_receipt["path"]
+                        ),
+                        document_response_receipt_sha256=(
+                            document_response_receipt["sha256"]
+                        ),
                     )
                     return due_page, {
                         "approved_origins": approved,
@@ -940,21 +1594,48 @@ def run_due_acquisition(
                             "discovery_observed_origins": discovery.observed_origins,
                             "discovery_expandable_origins": discovery.expandable_origins,
                             "discovery_origin_ip_pins": discovery.origin_ip_pins,
+                            "preparation_origin_ip_pins": dict(
+                                prepared.preparation_origin_ip_pins
+                                or discovery.origin_ip_pins
+                            ),
+                            "discovery_instrumentation_policy": (
+                                discovery.instrumentation_policy
+                            ),
+                            "passive_render_contract_sha256": (
+                                prepared.passive_render_contract_sha256
+                            ),
+                            "render_observation": dict(prepared.render_observation or {}),
+                            "render_observation_sha256": (
+                                prepared.render_observation_sha256
+                            ),
+                            "discovery_event_audit_sha256": (
+                                prepared.discovery_event_audit_sha256
+                            ),
                             "chromium_version": prepared.chromium_version,
                             "neqo_provenance": dict(prepared.neqo_provenance),
                             "prepared_path": str(prepared.prepared.path.resolve()),
                             "probe_completed_at": prepared.observed_at,
                         },
                     }
-                except TerminalProbePolicyError as error:
-                    return due_page, {"terminal_policy_error": str(error)}
-                except Exception as error:  # noqa: BLE001 - recoverable probe boundary
+                except TerminalAcquisitionPolicyError as error:
+                    return due_page, {
+                        "terminal_policy_error": str(error),
+                        "terminal_policy_evidence": error.evidence,
+                    }
+                except RecoverableAcquisitionError as error:
                     return due_page, {"recoverable_error": str(error)}
+                except Exception as error:  # noqa: BLE001 - returned for durable checkpointing
+                    return due_page, {
+                        "internal_error": _exception_reason(error),
+                        "internal_exception": error,
+                    }
 
             with ThreadPoolExecutor(max_workers=min(5, len(runnable_pages))) as executor:
                 outcomes = tuple(executor.map(acquire_page, runnable_pages))
             retry_pages = []
-            completion_clock = current if now is not None else clock_function()
+            completion_clock = read_clock()
+            terminal_clock = completion_clock
+            internal_failures: list[tuple[dict[str, Any], BaseException]] = []
             for due_page, outcome in outcomes:
                 pending_probe = due_page.pop("pending_probe")
                 attempt_record = {
@@ -964,11 +1645,13 @@ def run_due_acquisition(
                     ),
                     "outcome": "completed",
                     "reason": None,
+                    "policy_evidence": None,
                 }
                 if "terminal_policy_error" in outcome:
                     attempt_record.update(
                         outcome="terminal-policy-rejection",
                         reason=outcome["terminal_policy_error"],
+                        policy_evidence=outcome.get("terminal_policy_evidence"),
                     )
                     due_page["rejection"] = {
                         "kind": "probe-policy-rejection",
@@ -990,24 +1673,56 @@ def run_due_acquisition(
                         }
                     else:
                         retry_pages.append(due_page)
+                elif "internal_error" in outcome:
+                    error = outcome.get("internal_exception")
+                    if not isinstance(error, BaseException):
+                        raise AssertionError("internal acquisition result lost its exception")
+                    attempt_record.update(
+                        outcome="internal-acquisition-error",
+                        reason=outcome["internal_error"],
+                    )
+                    internal_failures.append((due_page, error))
                 else:
                     due_page["approved_origins"] = outcome["approved_origins"]
                     due_page["observations"].append(outcome["observation"])
                 due_page.setdefault("probe_attempts", []).append(attempt_record)
+            if internal_failures:
+                failed_page, failed_error = internal_failures[0]
+                failed_attempt = next(
+                    record
+                    for record in reversed(failed_page["probe_attempts"])
+                    if record["outcome"] == "internal-acquisition-error"
+                )
+                state["internal_acquisition_error"] = _internal_error_record(
+                    stage="probe",
+                    attempt=failed_attempt["attempt"],
+                    recorded_at=_timestamp(failed_attempt["completed_at"]),
+                    error=failed_error,
+                    reason=failed_attempt["reason"],
+                    page_ordinal=failed_page["page"]["ordinal"],
+                    probe_id=failed_attempt["probe_id"],
+                )
             _save_acquisition_checkpoint(
                 checkpoint_path,
                 provenance_path=provenance_path,
                 catalogue_path=candidate_catalogue_path,
                 candidates=states,
             )
+            if internal_failures:
+                raise InternalAcquisitionError(
+                    "acquisition stopped after durable internal probe failure: "
+                    + _exception_reason(internal_failures[0][1])
+                ) from internal_failures[0][1]
             if retry_pages:
-                retry_clock = current if now is not None else clock_function()
+                retry_clock = read_clock()
+                terminal_clock = retry_clock
                 try:
                     _due_pages(state, retry_clock, candidate_id=candidate.candidate_id)
                 except MissedProbeWindow:
                     window_missed = True
                     break
         if window_missed:
+            _record_pending_probe_interruptions(state, recovered_at=terminal_clock)
             _terminalise(
                 runner,
                 state,
@@ -1015,6 +1730,7 @@ def run_due_acquisition(
                 "probe-window-missed",
                 "recoverable probe retries exceeded the latest admissible window",
                 provenance_path,
+                terminalised_at=terminal_clock,
             )
         if all(
             page.get("rejection") is not None
@@ -1028,7 +1744,10 @@ def run_due_acquisition(
                 page = PageCandidate(**page_state["page"])
                 observations = tuple(
                     StabilityObservation(
-                        **{key: item[key] for key in StabilityObservation.__dataclass_fields__}
+                        **{
+                            key: item.get(key)
+                            for key in StabilityObservation.__dataclass_fields__
+                        }
                     )
                     for item in page_state["observations"]
                 )
@@ -1065,6 +1784,7 @@ def run_due_acquisition(
                     "eligible",
                     None,
                     provenance_path,
+                    terminalised_at=terminal_clock,
                     stability_receipt=selected,
                     admitted_workload=workload_root / f"{candidate.candidate_id}.json",
                 )
@@ -1076,6 +1796,7 @@ def run_due_acquisition(
                     "stable-page-unavailable",
                     "no page passed all stability gates",
                     provenance_path,
+                    terminalised_at=terminal_clock,
                 )
         processed += 1
         _save_acquisition_checkpoint(
@@ -1093,7 +1814,7 @@ def run_due_acquisition(
     return acquisition_status(
         runner,
         candidate_catalogue_path=candidate_catalogue_path,
-        now=initial_time if now is not None else clock_function(),
+        now=read_clock(),
     )
 
 
@@ -1120,7 +1841,10 @@ def acquisition_status(
     due_now = 0
     missed = 0
     for candidate_id, state in states.items():
-        if state["terminal"] is None and state["state"] == "pending":
+        if state["terminal"] is None and state["state"] in {
+            "pending",
+            "baseline-ready",
+        }:
             pending += 1
         if state["terminal"] is None and state["state"] == "probing":
             probing += 1
@@ -1140,6 +1864,13 @@ def acquisition_status(
                     )
                     if due > current:
                         next_due = due if next_due is None or due < next_due else next_due
+    pending_due = _next_pending_start(states, current)
+    if pending_due is not None:
+        next_due = (
+            pending_due
+            if next_due is None or pending_due < next_due
+            else next_due
+        )
     terminal = sum(state["terminal"] is not None for state in states.values())
     pending_blocked = bool(pending) and _pending_baseline_blocked(states, current)
     return {
@@ -1164,6 +1895,8 @@ def write_acquisition_completion(root: Path, *, candidate_catalogue_path: Path) 
         load_json(Path(root) / "provenance.json"), expected_type=PROVENANCE_TYPE
     )
     _validate_runner_runtime(provenance_value)
+    if provenance_value.get("acquisition_schema_version") != SCHEMA_VERSION:
+        raise ValueError("historical acquisition runners cannot publish new completion evidence")
     status = acquisition_status(root, candidate_catalogue_path=candidate_catalogue_path)
     if not status["complete"]:
         raise ValueError("acquisition completion requires terminal evidence for all candidates")
@@ -1179,6 +1912,7 @@ def write_acquisition_completion(root: Path, *, candidate_catalogue_path: Path) 
         terminals,
         provenance_sha256=sha256_file(runner / "provenance.json"),
         runner_provenance=provenance,
+        runner_root=runner,
     )
     receipt = bind_receipt(
         {
@@ -1229,6 +1963,7 @@ def validate_acquisition_completion(
         checkpoint["payload"]["candidates"],
         provenance_sha256=payload["provenance_sha256"],
         runner_provenance=provenance,
+        runner_root=runner_root,
     )
     if payload.get("observed_toolchain") != observed_toolchain:
         raise ValueError("completion observed toolchain identity differs from checkpoint")
@@ -1242,6 +1977,8 @@ def validate_acquisition_completion(
             runner_root / binding["path"],
             candidate=candidate_by_id[candidate_id],
             provenance_sha256=payload["provenance_sha256"],
+            candidate_state=checkpoint["payload"]["candidates"][candidate_id],
+            acquisition_schema_version=provenance["acquisition_schema_version"],
         )
         if dict(binding) != verified:
             raise ValueError("terminal evidence SHA-256 mismatch")
@@ -1267,6 +2004,10 @@ def _converge_origins(
         raise TerminalProbePolicyError("navigation origins exceeded the finite origin cap")
     for _pass in range(MAX_ORIGIN_PASSES):
         result = backend.discover(url, sorted(approved))
+        if len(result.observed_origins) > MAX_OBSERVED_AUDIT_ORIGINS:
+            raise TerminalProbePolicyError(
+                "discovery exceeded its finite observed-origin audit cap"
+            )
         expandable = result.expandable_origins
         if expandable is None:
             raise TerminalProbePolicyError(
@@ -1316,7 +2057,8 @@ def browser_document_content_type(
     url: str,
     approved_origins: Sequence[str],
     timeout_ms: int,
-) -> str:
+    origin_ip_pins: Mapping[str, str] | None = None,
+) -> BrowserDocumentResponse:
     """Observe the primary browser response MIME type under the frozen origin set."""
 
     if timeout_ms < 1:
@@ -1324,46 +2066,70 @@ def browser_document_content_type(
     approved = {origin(value) for value in approved_origins}
     if None in approved or not approved or len(approved) > MAX_APPROVED_ORIGINS:
         raise TerminalProbePolicyError("content-type probe approved origins are invalid")
-    pins = public_origin_ip_pins(tuple(value for value in approved if value is not None))
+    canonical_approved = tuple(sorted(value for value in approved if value is not None))
+    pins = _validated_frozen_origin_ip_pins(
+        canonical_approved,
+        origin_ip_pins
+        if origin_ip_pins is not None
+        else public_origin_ip_pins(canonical_approved),
+    )
     try:
+        from playwright.sync_api import Error as PlaywrightError
         from playwright.sync_api import sync_playwright
     except ImportError as error:
         raise RuntimeError(
             "content-type verification requires the discovery Docker image"
         ) from error
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(
-            headless=True,
-            executable_path=os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH"),
-            args=[
-                "--no-sandbox",
-                "--host-resolver-rules=" + _host_resolver_rules(pins),
-            ],
-        )
-        context = browser.new_context(ignore_https_errors=False, service_workers="block")
-
-        def route_request(route: Any) -> None:
-            request = route.request
-            if request.method != "GET" or origin(request.url) not in approved:
-                route.abort()
-            else:
-                route.continue_()
-
-        context.route("**/*", route_request)
-        page = context.new_page()
-        response = page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
-        if response is None or origin(page.url) not in approved:
-            raise TerminalProbePolicyError(
-                "content-type probe did not finish on an approved origin"
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(
+                headless=True,
+                executable_path=os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH"),
+                args=[
+                    "--no-sandbox",
+                    "--host-resolver-rules=" + _host_resolver_rules(pins),
+                ],
             )
-        if challenge := browser_challenge_reason(page):
-            raise TerminalProbePolicyError(challenge)
-        media_type = _normalise_content_type(str(response.headers.get("content-type", "")))
-        page.close()
-        browser.close()
+            try:
+                chromium_version = str(browser.version)
+                context = browser.new_context(ignore_https_errors=False, service_workers="block")
+
+                def route_request(route: Any) -> None:
+                    request = route.request
+                    if request.method != "GET" or origin(request.url) not in approved:
+                        route.abort()
+                    else:
+                        route.continue_()
+
+                context.route("**/*", route_request)
+                page = context.new_page()
+                response = page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+                if response is None or origin(page.url) not in approved:
+                    raise TerminalProbePolicyError(
+                        "content-type probe did not finish on an approved origin"
+                    )
+                if challenge := browser_challenge_reason(page):
+                    raise TerminalProbePolicyError(challenge)
+                media_type = _normalise_content_type(
+                    str(response.headers.get("content-type", ""))
+                )
+                final_url = page.url
+                status = response.status
+                page.close()
+            finally:
+                browser.close()
+    except PlaywrightError as error:
+        raise RecoverableAcquisitionError(
+            f"Playwright content-type probe failed: {error}"
+        ) from error
     if media_type not in HTML_MEDIA_TYPES:
         raise TerminalProbePolicyError("primary response is not HTML")
-    return media_type
+    return BrowserDocumentResponse(
+        final_url=final_url,
+        status=status,
+        content_type=media_type,
+        chromium_version=chromium_version,
+    )
 
 
 def _normalise_content_type(value: str) -> str:
@@ -1438,6 +2204,7 @@ def public_origin_ip_pins(origins: Sequence[str]) -> dict[str, str]:
     """Resolve and pin public DNS answers, rejecting every non-public answer."""
 
     pins: dict[str, str] = {}
+    pins_by_hostname: dict[str, str] = {}
     for value in sorted(set(origins)):
         approved = origin(value)
         if approved is None:
@@ -1462,22 +2229,68 @@ def public_origin_ip_pins(origins: Sequence[str]) -> dict[str, str]:
             (".localhost", ".local", ".internal", ".home", ".lan")
         ):
             raise TerminalProbePolicyError("public-origin policy rejects local hostnames")
-        answers = {
-            ipaddress.ip_address(record[4][0])
-            for record in socket.getaddrinfo(
+        if canonical in pins_by_hostname:
+            pins[approved] = pins_by_hostname[canonical]
+            continue
+        port = urlsplit(approved).port or 443
+        try:
+            records = socket.getaddrinfo(
                 canonical,
-                443,
+                port,
                 family=socket.AF_UNSPEC,
                 type=socket.SOCK_STREAM,
             )
-        }
-        if not answers or any(not _is_public_network_address(address) for address in answers):
+        except socket.gaierror as error:
+            raise RecoverableAcquisitionError(
+                f"public-origin DNS lookup failed for {canonical}: {error}"
+            ) from error
+        answers = {ipaddress.ip_address(record[4][0]) for record in records}
+        if not answers:
+            raise RecoverableAcquisitionError(
+                f"public-origin DNS lookup returned no answers for {canonical}"
+            )
+        if any(not _is_public_network_address(address) for address in answers):
             raise TerminalProbePolicyError(
                 f"public-origin policy rejected DNS answers for {canonical}"
             )
         selected = min(answers, key=lambda address: (address.version, int(address)))
+        pins_by_hostname[canonical] = selected.compressed
         pins[approved] = selected.compressed
     return pins
+
+
+def _validated_frozen_origin_ip_pins(
+    origins: Sequence[str], pins: Mapping[str, str]
+) -> dict[str, str]:
+    approved = sorted(set(origins))
+    if not isinstance(pins, Mapping) or set(pins) != set(approved):
+        raise TerminalProbePolicyError(
+            "frozen origin-IP pins do not exactly cover approved origins"
+        )
+    result: dict[str, str] = {}
+    pins_by_hostname: dict[str, str] = {}
+    for approved_origin in approved:
+        if origin(approved_origin) != approved_origin:
+            raise TerminalProbePolicyError("frozen origin-IP pin key is not canonical")
+        raw_address = pins[approved_origin]
+        if not isinstance(raw_address, str):
+            raise TerminalProbePolicyError("frozen origin-IP pin is malformed")
+        try:
+            address = ipaddress.ip_address(raw_address)
+        except ValueError as error:
+            raise TerminalProbePolicyError("frozen origin-IP pin is malformed") from error
+        if address.compressed != raw_address or not _is_public_network_address(address):
+            raise TerminalProbePolicyError("frozen origin-IP pin is not canonical public IP")
+        hostname = urlsplit(approved_origin).hostname
+        if hostname is None:
+            raise TerminalProbePolicyError("frozen origin-IP pin key is not canonical")
+        previous = pins_by_hostname.setdefault(hostname, raw_address)
+        if previous != raw_address:
+            raise TerminalProbePolicyError(
+                "frozen origin-IP pins conflict for a shared hostname"
+            )
+        result[approved_origin] = raw_address
+    return result
 
 
 def browser_challenge_reason(page: Any) -> str | None:
@@ -1646,11 +2459,334 @@ def _verified_bound_file(binding: Mapping[str, Any], *, label: str) -> Path:
     return path
 
 
+def _terminal_source_state(kind: str) -> str:
+    if kind == "pre-probe-rejection":
+        return "pending"
+    if kind in {"eligible", "stable-page-unavailable", "probe-window-missed"}:
+        return "probing"
+    raise ValueError("terminal evidence has an unsupported outcome kind")
+
+
+def _normalised_terminal_state_sha256(
+    state: Mapping[str, Any], *, kind: str
+) -> str:
+    """Hash the exact state that existed immediately before terminalisation."""
+
+    source_state = _terminal_source_state(kind)
+    actual_state = state.get("state")
+    terminal_binding = state.get("terminal")
+    if actual_state == source_state:
+        if terminal_binding is not None:
+            raise ValueError("pre-terminal checkpoint unexpectedly has a terminal binding")
+    elif actual_state == "terminal":
+        if not isinstance(terminal_binding, Mapping) or set(terminal_binding) != {
+            "path",
+            "sha256",
+        }:
+            raise ValueError("terminal checkpoint binding is malformed")
+    else:
+        raise ValueError("terminal outcome is impossible from the checkpoint state")
+    normalised = dict(state)
+    normalised["state"] = source_state
+    normalised["terminal"] = None
+    return sha256_bytes(canonical_json_bytes(normalised))
+
+
+def _checkpoint_stability_observations(
+    page_state: Mapping[str, Any],
+) -> tuple[StabilityObservation, ...]:
+    observations: list[StabilityObservation] = []
+    for raw in page_state.get("observations", []):
+        if not isinstance(raw, Mapping) or set(raw) != CURRENT_OBSERVATION_FIELDS:
+            raise ValueError("terminal checkpoint observation is malformed")
+        observation = StabilityObservation(
+            **{
+                key: raw.get(key)
+                for key in StabilityObservation.__dataclass_fields__
+            }
+        )
+        expected = observation.as_dict()
+        if any(key not in raw or raw[key] != value for key, value in expected.items()):
+            raise ValueError("terminal checkpoint stability observation differs")
+        if observation.document_response_receipt_sha256 is None:
+            raise ValueError("current terminal lacks document-response evidence")
+        observations.append(observation)
+    return tuple(observations)
+
+
+def _validate_terminal_page_rejection(page_state: Mapping[str, Any]) -> None:
+    rejection = page_state.get("rejection")
+    if not isinstance(rejection, Mapping) or set(rejection) != {"kind", "reason"}:
+        raise ValueError("terminal checkpoint page rejection is malformed")
+    if not isinstance(rejection["reason"], str) or not rejection["reason"]:
+        raise ValueError("terminal checkpoint page rejection has no reason")
+    observation_count = len(page_state["observations"])
+    if observation_count >= len(STABILITY_PROBE_WINDOWS):
+        raise ValueError("completed terminal page cannot also be rejected")
+    probe_id = STABILITY_PROBE_WINDOWS[observation_count].probe_id
+    attempts = [
+        item
+        for item in page_state["probe_attempts"]
+        if item.get("probe_id") == probe_id
+    ]
+    if not attempts:
+        raise ValueError("terminal page rejection has no matching probe attempt")
+    final = attempts[-1]
+    if rejection["kind"] == "probe-policy-rejection":
+        if (
+            final["outcome"] != "terminal-policy-rejection"
+            or rejection["reason"] != final["reason"]
+        ):
+            raise ValueError("terminal policy rejection differs from its probe attempt")
+        return
+    if rejection["kind"] != "probe-retry-exhausted":
+        raise ValueError("terminal checkpoint page rejection kind is invalid")
+    if len(attempts) != MAX_PROBE_ATTEMPTS or final["outcome"] not in {
+        "interrupted",
+        "recoverable-failure",
+    }:
+        raise ValueError("probe exhaustion is not supported by its attempt ledger")
+    generic_reason = (
+        f"recoverable acquisition failures exhausted {MAX_PROBE_ATTEMPTS} attempts"
+    )
+    detailed_reason = f"{generic_reason}: {final['reason']}"
+    if rejection["reason"] not in {generic_reason, detailed_reason}:
+        raise ValueError("probe exhaustion reason differs from its attempt ledger")
+    if rejection["reason"] == detailed_reason and final["outcome"] != "recoverable-failure":
+        raise ValueError("detailed probe exhaustion lacks a recoverable failure")
+
+
+def _validate_probing_terminal_state(
+    state: Mapping[str, Any],
+    *,
+    candidate: Any,
+    terminalised_at: datetime,
+    enforce_duration_limit: bool,
+) -> tuple[
+    tuple[
+        Mapping[str, Any],
+        PageCandidate,
+        tuple[StabilityObservation, ...],
+        Any,
+    ],
+    ...,
+]:
+    expected_state_fields = {
+        "state",
+        "pages",
+        "terminal",
+        "navigation_attempts",
+        "baseline_started_at",
+        "navigation_observed_origins",
+        "navigation_rejections",
+    }
+    if set(state) != expected_state_fields:
+        raise ValueError("probing terminal checkpoint fields differ from the contract")
+    attempts = state["navigation_attempts"]
+    if (
+        not isinstance(attempts, list)
+        or not attempts
+        or attempts[-1].get("outcome") != "completed"
+        or sum(item.get("outcome") == "completed" for item in attempts) != 1
+    ):
+        raise ValueError("probing terminal lacks one completed navigation")
+    baseline = _timestamp(state["baseline_started_at"])
+    if baseline < _timestamp(attempts[-1]["completed_at"]):
+        raise ValueError("probing baseline predates completed navigation")
+    if terminalised_at < baseline:
+        raise ValueError("terminal timestamp predates the probing baseline")
+    global_origins = _canonical_navigation_origins(
+        state["navigation_observed_origins"],
+        label="terminal global navigation origin ledger",
+    )
+    _validate_navigation_rejections(
+        state["navigation_rejections"], boundary=candidate.domain
+    )
+    raw_pages = state["pages"]
+    if not isinstance(raw_pages, list) or not 1 <= len(raw_pages) <= 5:
+        raise ValueError("terminal checkpoint page sequence is invalid")
+    page_records: list[
+        tuple[
+            Mapping[str, Any],
+            PageCandidate,
+            tuple[StabilityObservation, ...],
+            Any,
+        ]
+    ] = []
+    seen_urls: set[str] = set()
+    for ordinal, page_state in enumerate(raw_pages):
+        base_fields = {
+            "page",
+            "observations",
+            "probe_attempts",
+            "approved_origins",
+            "navigation_observed_origins",
+        }
+        if (
+            not isinstance(page_state, Mapping)
+            or set(page_state)
+            not in {
+                frozenset(base_fields),
+                frozenset(base_fields | {"pending_probe"}),
+                frozenset(base_fields | {"rejection"}),
+            }
+        ):
+            raise ValueError("terminal checkpoint page fields differ from the contract")
+        raw_page = page_state["page"]
+        page_fields = set(PageCandidate.__dataclass_fields__)
+        if not isinstance(raw_page, Mapping) or set(raw_page) != page_fields:
+            raise ValueError("terminal checkpoint page identity is malformed")
+        page = PageCandidate(**dict(raw_page))
+        validate_page_candidate(page)
+        if (
+            page.candidate_domain != candidate.domain
+            or page.registrable_domain != candidate.domain
+            or page.ordinal != ordinal
+            or page.url in seen_urls
+        ):
+            raise ValueError("terminal checkpoint page sequence differs from its candidate")
+        seen_urls.add(page.url)
+        navigation_origins = _canonical_navigation_origins(
+            page_state["navigation_observed_origins"],
+            label="terminal per-page navigation origin ledger",
+        )
+        if not set(navigation_origins).issubset(global_origins):
+            raise ValueError("terminal page navigation origins exceed the global ledger")
+        approved_origins = _canonical_navigation_origins(
+            page_state["approved_origins"],
+            label="terminal page approved-origin ledger",
+        )
+        _validate_probe_attempts(
+            page_state,
+            candidate_id=candidate.candidate_id,
+            baseline_started_at=state["baseline_started_at"],
+            enforce_duration_limit=enforce_duration_limit,
+        )
+        observations = _checkpoint_stability_observations(page_state)
+        if observations:
+            final_approved = page_state["observations"][-1].get("approved_origins")
+            if list(approved_origins) != final_approved:
+                raise ValueError("terminal page approved origins differ from its last probe")
+        elif approved_origins:
+            raise ValueError("unobserved terminal page carries approved origins")
+        if "rejection" in page_state:
+            _validate_terminal_page_rejection(page_state)
+            decision = None
+        else:
+            decision = (
+                derive_stability_decision(
+                    page,
+                    baseline_started_at=state["baseline_started_at"],
+                    observations=observations,
+                )
+                if len(observations) == len(STABILITY_PROBE_WINDOWS)
+                else None
+            )
+        for attempt in page_state["probe_attempts"]:
+            if terminalised_at < _timestamp(attempt["completed_at"]):
+                raise ValueError("terminal timestamp predates completed probe work")
+        page_records.append((page_state, page, observations, decision))
+    return tuple(page_records)
+
+
+def _validate_current_terminal_state(
+    state: Mapping[str, Any],
+    *,
+    candidate: Any,
+    kind: str,
+    reason: str | None,
+    terminalised_at: datetime,
+    enforce_duration_limit: bool,
+) -> tuple[Mapping[str, Any], PageCandidate, tuple[StabilityObservation, ...]] | None:
+    if kind == "pre-probe-rejection":
+        if set(state) != {"state", "pages", "terminal", "navigation_attempts"}:
+            raise ValueError("pre-probe terminal checkpoint fields differ from the contract")
+        attempts = state["navigation_attempts"]
+        if not isinstance(attempts, list) or not attempts or state["pages"] != []:
+            raise ValueError("pre-probe terminal checkpoint is malformed")
+        final = attempts[-1]
+        if terminalised_at < _timestamp(final["completed_at"]):
+            raise ValueError("terminal timestamp predates navigation completion")
+        if final["outcome"] == "terminal-policy-rejection":
+            expected_reason = final["reason"]
+        elif (
+            len(attempts) == MAX_PROBE_ATTEMPTS
+            and final["outcome"] in {"interrupted", "recoverable-failure"}
+        ):
+            expected_reason = (
+                f"recoverable navigation failures exhausted {MAX_PROBE_ATTEMPTS} "
+                f"attempts: {final['reason']}"
+            )
+        else:
+            raise ValueError("pre-probe terminal has no legal producer outcome")
+        if reason != expected_reason:
+            raise ValueError("pre-probe terminal reason differs from its attempt ledger")
+        return None
+
+    pages = _validate_probing_terminal_state(
+        state,
+        candidate=candidate,
+        terminalised_at=terminalised_at,
+        enforce_duration_limit=enforce_duration_limit,
+    )
+    incomplete = tuple(
+        record
+        for record in pages
+        if "rejection" not in record[0]
+        and len(record[2]) < len(STABILITY_PROBE_WINDOWS)
+    )
+    if kind == "probe-window-missed":
+        if not incomplete:
+            raise ValueError("missed-window terminal has no incomplete page")
+        try:
+            _due_pages(state, terminalised_at, candidate_id=candidate.candidate_id)
+        except MissedProbeWindow:
+            pass
+        else:
+            raise ValueError("missed-window terminal timestamp is still admissible")
+        retry_reason = "recoverable probe retries exceeded the latest admissible window"
+        if reason == retry_reason:
+            retry_supported = False
+            for page_state, _page, observations, _decision in incomplete:
+                probe_id = STABILITY_PROBE_WINDOWS[len(observations)].probe_id
+                current_attempts = [
+                    item
+                    for item in page_state["probe_attempts"]
+                    if item.get("probe_id") == probe_id
+                ]
+                retry_supported |= bool(
+                    current_attempts
+                    and current_attempts[-1]["outcome"] == "recoverable-failure"
+                )
+            if not retry_supported:
+                raise ValueError("retry-missed terminal lacks a recoverable probe attempt")
+        elif reason not in {
+            "host resumed after the latest admissible probe window",
+            "bounded action passed the latest admissible probe window",
+        }:
+            raise ValueError("missed-window terminal reason is not a producer outcome")
+        return None
+
+    if incomplete:
+        raise ValueError("stability terminal retains an incomplete page")
+    eligible = tuple(record for record in pages if record[3] is not None and record[3].eligible)
+    if kind == "stable-page-unavailable":
+        if reason != "no page passed all stability gates" or eligible:
+            raise ValueError("stable-page-unavailable differs from derived page decisions")
+        return None
+    if kind != "eligible" or reason is not None or not eligible:
+        raise ValueError("eligible terminal differs from derived page decisions")
+    page_state, page, observations, _decision = eligible[0]
+    return page_state, page, observations
+
+
 def _validated_terminal_binding(
     terminal: Path,
     *,
     candidate: Any,
     provenance_sha256: str,
+    candidate_state: Mapping[str, Any],
+    acquisition_schema_version: int,
 ) -> dict[str, str]:
     """Validate an immutable terminal deeply enough to recover its checkpoint."""
 
@@ -1660,14 +2796,32 @@ def _validated_terminal_binding(
     if terminal.read_bytes() != canonical_json_bytes(receipt):
         raise ValueError("terminal evidence is not canonically encoded")
     payload = validate_hash_bound_receipt(receipt, expected_type=TERMINAL_TYPE)
-    if set(payload) != {
+    legacy_fields = {
         "candidate_id",
         "kind",
         "reason",
         "provenance_sha256",
         "stability_receipt",
         "admitted_workload",
-    }:
+    }
+    current_fields = legacy_fields | {
+        "terminal_schema_version",
+        "terminalised_at",
+        "checkpoint_state_sha256",
+    }
+    if acquisition_schema_version == 1:
+        if set(payload) != legacy_fields:
+            raise ValueError("legacy terminal evidence fields differ from the contract")
+    elif acquisition_schema_version in {2, SCHEMA_VERSION}:
+        if set(payload) != current_fields:
+            raise ValueError("terminal evidence fields differ from the contract")
+        if payload["terminal_schema_version"] != TERMINAL_SCHEMA_VERSION:
+            raise ValueError("terminal evidence schema differs from the current contract")
+    else:
+        raise ValueError("terminal evidence belongs to an unsupported acquisition schema")
+    if acquisition_schema_version in {2, SCHEMA_VERSION} and not isinstance(
+        candidate_state, Mapping
+    ):
         raise ValueError("terminal evidence fields differ from the contract")
     if (
         payload["candidate_id"] != candidate.candidate_id
@@ -1679,9 +2833,29 @@ def _validated_terminal_binding(
     if kind not in TERMINAL_KINDS:
         raise ValueError("terminal evidence has an unsupported outcome kind")
     if (kind == "eligible" and reason is not None) or (
-        kind != "eligible" and not isinstance(reason, str)
+        kind != "eligible" and (not isinstance(reason, str) or not reason)
     ):
         raise ValueError("terminal evidence reason differs from its outcome kind")
+    selected_checkpoint = None
+    if acquisition_schema_version in {2, SCHEMA_VERSION}:
+        terminalised_raw = payload["terminalised_at"]
+        if (
+            not isinstance(terminalised_raw, str)
+            or _format_time(_timestamp(terminalised_raw)) != terminalised_raw
+        ):
+            raise ValueError("terminal evidence timestamp is not canonical UTC")
+        if payload["checkpoint_state_sha256"] != _normalised_terminal_state_sha256(
+            candidate_state, kind=kind
+        ):
+            raise ValueError("terminal evidence does not bind the checkpoint state")
+        selected_checkpoint = _validate_current_terminal_state(
+            candidate_state,
+            candidate=candidate,
+            kind=kind,
+            reason=reason,
+            terminalised_at=_timestamp(terminalised_raw),
+            enforce_duration_limit=(acquisition_schema_version == SCHEMA_VERSION),
+        )
     stability_binding = payload["stability_receipt"]
     workload_binding = payload["admitted_workload"]
     if kind == "eligible":
@@ -1703,6 +2877,37 @@ def _validated_terminal_binding(
             != sha256_file(workload_path)
         ):
             raise ValueError("eligible terminal stability/workload binding is invalid")
+        if acquisition_schema_version in {2, SCHEMA_VERSION}:
+            if selected_checkpoint is None:
+                raise ValueError("eligible terminal has no selected checkpoint page")
+            page_state, page, observations = selected_checkpoint
+            expected_candidate = {
+                "candidate_id": candidate.candidate_id,
+                "domain": candidate.domain,
+                "rank": candidate.rank,
+                "stratum": candidate.stratum.id,
+            }
+            if (
+                stability_path.name != f"page-{page.ordinal:02d}.json"
+                or stability_path.parent.name != candidate.candidate_id
+                or workload_path.name != f"{candidate.candidate_id}.json"
+                or stability_payload["candidate"] != expected_candidate
+                or stability_payload["page"] != page.as_dict()
+                or stability_payload["baseline_started_at"]
+                != candidate_state["baseline_started_at"]
+                or stability_payload["observations"]
+                != [observation.as_dict() for observation in observations]
+                or stability_payload["decision"] != derive_stability_decision(
+                    page,
+                    baseline_started_at=candidate_state["baseline_started_at"],
+                    observations=observations,
+                ).as_dict()
+                or page_state["observations"][0]["prepared_workload_sha256"]
+                != sha256_file(workload_path)
+            ):
+                raise ValueError(
+                    "eligible terminal does not match its exact checkpoint selection"
+                )
     elif stability_binding is not None or workload_binding is not None:
         raise ValueError("ineligible terminal unexpectedly binds admitted evidence")
     return {
@@ -1738,11 +2943,106 @@ def _validate_runner_runtime(provenance: Mapping[str, Any]) -> None:
         raise ValueError("class acquisition foundation binding changed")
     current_image = os.environ.get("QCSD_LAB_IMAGE_DIGEST", "native")
     current_source = source_metadata()
+    schema_version = provenance.get("acquisition_schema_version")
+    current_contract_invalid = schema_version == SCHEMA_VERSION and (
+        provenance.get("cdp_target_instrumentation_policy")
+        != CDP_TARGET_INSTRUMENTATION_POLICY
+        or provenance.get("passive_render_contract") != PASSIVE_RENDER_CONTRACT
+        or provenance.get("passive_render_contract_sha256")
+        != PASSIVE_RENDER_CONTRACT_SHA256
+        or provenance.get("browser_navigation_timeout_ms")
+        != MAX_ACQUISITION_BACKEND_TIMEOUT_MS
+        or provenance.get("passive_render_hard_cap_after_load_ms")
+        != MAX_PASSIVE_RENDER_AFTER_LOAD_MS
+        or provenance.get("acquisition_action_timing_contract")
+        != ACTION_TIMING_CONTRACT
+        or provenance.get("baseline_scheduling_contract")
+        != BASELINE_SCHEDULING_CONTRACT
+    )
     if (
         provenance.get("image_digest") != current_image
         or provenance.get("source") != current_source
+        or schema_version not in {1, 2, SCHEMA_VERSION}
+        or current_contract_invalid
     ):
         raise ValueError("class acquisition runtime differs from its frozen source/prepare image")
+
+
+def _validate_document_response_receipt(
+    observation: Mapping[str, Any],
+    *,
+    page: Mapping[str, Any],
+    prepared_path: Path,
+    runner_root: Path,
+    provenance_sha256: str,
+    runner_provenance: Mapping[str, Any],
+    approved_origins: Sequence[str],
+    origin_ip_pins: Mapping[str, str],
+    chromium_version: str,
+    neqo_provenance: Mapping[str, str],
+) -> None:
+    workload_id = prepared_path.stem
+    runner = Path(os.path.abspath(runner_root))
+    prepared_root = runner / "prepared-probes"
+    expected_prepared = (prepared_root / f"{workload_id}.json").resolve(
+        strict=False
+    )
+    if (
+        prepared_root.is_symlink()
+        or not prepared_root.is_dir()
+        or str(prepared_path) != str(expected_prepared)
+    ):
+        raise ValueError("checkpoint prepared workload path is not canonical")
+    relative = f"document-response-receipts/{workload_id}.json"
+    if observation.get("document_response_receipt_path") != relative:
+        raise ValueError("checkpoint document-response receipt path is not canonical")
+    receipt_path = runner / relative
+    if receipt_path.is_symlink() or not receipt_path.is_file():
+        raise ValueError("checkpoint document-response receipt is not a regular file")
+    receipt = load_json(receipt_path)
+    if receipt_path.read_bytes() != canonical_json_bytes(receipt):
+        raise ValueError("checkpoint document-response receipt is not canonical JSON")
+    if sha256_file(receipt_path) != observation.get("document_response_receipt_sha256"):
+        raise ValueError("checkpoint document-response receipt SHA-256 does not verify")
+    payload = validate_hash_bound_receipt(
+        receipt, expected_type=DOCUMENT_RESPONSE_RECEIPT_TYPE
+    )
+    page_identity = page.get("page")
+    requested_url = (
+        page_identity.get("url") if isinstance(page_identity, Mapping) else None
+    )
+    content_type = _normalise_content_type(str(observation.get("content_type", "")))
+    if observation.get("content_type") != content_type:
+        raise ValueError("checkpoint document response content type is not normalised")
+    expected_payload = {
+        "document_response_schema_version": 1,
+        "workload_id": workload_id,
+        "requested_url": requested_url,
+        "final_url": observation.get("final_url"),
+        "status": observation.get("status"),
+        "content_type": content_type,
+        "body_bytes": observation.get("body_bytes"),
+        "body_sha256": observation.get("body_sha256"),
+        "resource_graph_sha256": observation.get("resource_graph_sha256"),
+        "prepared_workload_sha256": observation.get("prepared_workload_sha256"),
+        "probe_started_at": observation.get("observed_at"),
+        "response_observed_at": observation.get("probe_completed_at"),
+        "approved_origins": list(approved_origins),
+        "origin_ip_pins": dict(origin_ip_pins),
+        "origin_ip_pins_sha256": evidence_sha256(origin_ip_pins),
+        "chromium_version": chromium_version,
+        "preparation_chromium_version": chromium_version,
+        "neqo_provenance": dict(neqo_provenance),
+        "cdp_target_instrumentation_policy": CDP_TARGET_INSTRUMENTATION_POLICY,
+        "browser_tool": runner_provenance["browser_tool"],
+        "runner_provenance_sha256": provenance_sha256,
+        "image_digest": runner_provenance["image_digest"],
+        "source": runner_provenance["source"],
+    }
+    if payload != expected_payload:
+        raise ValueError(
+            "checkpoint document-response receipt differs from its observation"
+        )
 
 
 def _validate_observation_provenance(
@@ -1750,8 +3050,21 @@ def _validate_observation_provenance(
     *,
     provenance_sha256: str,
     runner_provenance: Mapping[str, Any],
+    runner_root: Path | None = None,
 ) -> dict[str, Any] | None:
     identities: dict[str, dict[str, Any]] = {}
+    require_current_evidence = (
+        runner_provenance.get("acquisition_schema_version") == SCHEMA_VERSION
+    )
+    prepared_root: Path | None = None
+    if require_current_evidence:
+        if runner_root is None:
+            raise ValueError("current checkpoint validation requires its runner root")
+        prepared_root = Path(os.path.abspath(runner_root)) / "prepared-probes"
+        if prepared_root.is_symlink() or not prepared_root.is_dir():
+            raise ValueError(
+                "acquisition prepared-probe root is not a regular directory"
+            )
     for state in states.values():
         if state.get("terminal") is None:
             continue
@@ -1760,19 +3073,75 @@ def _validate_observation_provenance(
             if not isinstance(approved, list) or len(approved) > MAX_APPROVED_ORIGINS:
                 raise ValueError("checkpoint approved-origin evidence is invalid")
             for observation in page.get("observations", []):
+                if require_current_evidence and (
+                    not isinstance(observation, Mapping)
+                    or set(observation) != CURRENT_OBSERVATION_FIELDS
+                ):
+                    raise ValueError(
+                        "current checkpoint observation fields differ from the contract"
+                    )
                 observation_approved = observation.get("approved_origins")
                 discovered = observation.get("discovery_observed_origins")
                 expandable = observation.get("discovery_expandable_origins")
                 pins = observation.get("discovery_origin_ip_pins")
                 neqo = observation.get("neqo_provenance")
                 chromium = observation.get("chromium_version")
+                render_observation = observation.get("render_observation")
+                render_observation_sha256 = observation.get(
+                    "render_observation_sha256"
+                )
+                discovery_event_audit_sha256 = observation.get(
+                    "discovery_event_audit_sha256"
+                )
+                prepared_path_value = observation.get("prepared_path")
+                prepared_path = (
+                    Path(prepared_path_value)
+                    if isinstance(prepared_path_value, str)
+                    else None
+                )
+                approved_ledger_valid = _is_canonical_origin_ledger(
+                    observation_approved,
+                    maximum=MAX_APPROVED_ORIGINS,
+                    allow_empty=False,
+                )
+                pins_valid = False
+                if approved_ledger_valid and isinstance(pins, Mapping):
+                    try:
+                        pins_valid = _validated_frozen_origin_ip_pins(
+                            observation_approved, pins
+                        ) == dict(pins)
+                    except TerminalProbePolicyError:
+                        pass
+                current_evidence_invalid = require_current_evidence and (
+                    observation.get("discovery_instrumentation_policy")
+                    != CDP_TARGET_INSTRUMENTATION_POLICY
+                    or observation.get("passive_render_contract_sha256")
+                    != PASSIVE_RENDER_CONTRACT_SHA256
+                    or not isinstance(render_observation, Mapping)
+                    or not isinstance(render_observation_sha256, str)
+                    or evidence_sha256(render_observation)
+                    != render_observation_sha256
+                    or not isinstance(discovery_event_audit_sha256, str)
+                    or len(discovery_event_audit_sha256) != 64
+                    or any(
+                        character not in "0123456789abcdef"
+                        for character in discovery_event_audit_sha256
+                    )
+                    or prepared_path is None
+                    or prepared_root is None
+                    or Path(os.path.abspath(prepared_path)).parent != prepared_root
+                    or str(prepared_path)
+                    != str((prepared_root / prepared_path.name).resolve(strict=False))
+                    or prepared_path.is_symlink()
+                    or not prepared_path.is_file()
+                    or sha256_file(prepared_path)
+                    != observation.get("prepared_workload_sha256")
+                )
                 if (
                     observation.get("runner_provenance_sha256") != provenance_sha256
-                    or not _is_canonical_origin_ledger(
-                        observation_approved,
-                        maximum=MAX_APPROVED_ORIGINS,
-                        allow_empty=False,
-                    )
+                    or observation.get("discovery_instrumentation_policy")
+                    != CDP_TARGET_INSTRUMENTATION_POLICY
+                    or not approved_ledger_valid
                     or not _is_canonical_origin_ledger(
                         discovered,
                         maximum=MAX_OBSERVED_AUDIT_ORIGINS,
@@ -1785,20 +3154,93 @@ def _validate_observation_provenance(
                     )
                     or not set(expandable).issubset(discovered)
                     or not set(expandable).issubset(observation_approved)
-                    or not isinstance(pins, Mapping)
-                    or set(pins) != set(observation_approved)
-                    or any(
-                        not isinstance(address, str) or not _is_public_network_address(address)
-                        for address in pins.values()
-                    )
+                    or not pins_valid
                     or not isinstance(chromium, str)
                     or not chromium
+                    or current_evidence_invalid
                     or not isinstance(neqo, Mapping)
                     or not neqo
                     or _timestamp(observation["probe_completed_at"])
                     < _timestamp(observation["observed_at"])
                 ):
                     raise ValueError("checkpoint observation provenance is invalid")
+                if require_current_evidence:
+                    assert isinstance(render_observation, Mapping)
+                    assert prepared_path is not None
+                    try:
+                        validate_render_observation(render_observation)
+                        prepared_manifest = load_json(prepared_path)
+                        validate_class_study_preparation(
+                            prepared_manifest,
+                            workload_id=prepared_path.stem,
+                        )
+                    except (OSError, TypeError, ValueError) as error:
+                        raise ValueError(
+                            "checkpoint bounded-render preparation evidence is invalid"
+                        ) from error
+                    prepared_evidence = prepared_manifest["preparation"]
+                    expected = _prepared_primary_response(prepared_manifest)
+                    expected_neqo = {
+                        key: str(prepared_evidence[key])
+                        for key in (
+                            "neqo_version",
+                            "neqo_base_commit",
+                            "published_qcsd_commit",
+                            "migration_commit",
+                        )
+                    }
+                    preparation_pins = prepared_evidence.get("origin_ip_pins")
+                    expected_runner_source = dict(
+                        runner_provenance.get("source", {})
+                    )
+                    if (
+                        runner_provenance.get("image_digest") == "native"
+                        and expected_runner_source.get("image_digest") is None
+                    ):
+                        expected_runner_source["image_digest"] = "native"
+                    if (
+                        prepared_evidence["passive_render_contract_sha256"]
+                        != observation["passive_render_contract_sha256"]
+                        or prepared_evidence["render_observation_sha256"]
+                        != render_observation_sha256
+                        or prepared_evidence["render_observation"] != render_observation
+                        or prepared_evidence["discovery_event_audit_sha256"]
+                        != discovery_event_audit_sha256
+                        or observation.get("final_url")
+                        != prepared_evidence["final_url"]
+                        or observation.get("status") != expected["status"]
+                        or observation.get("body_bytes") != expected["bytes"]
+                        or observation.get("body_sha256")
+                        != expected["body_sha256"]
+                        or observation.get("resource_graph_sha256")
+                        != _prepared_replay_identity_sha256(prepared_manifest)
+                        or observation_approved
+                        != prepared_evidence["approved_origins"]
+                        or observation.get("preparation_origin_ip_pins")
+                        != preparation_pins
+                        or pins != preparation_pins
+                        or chromium != prepared_evidence["chromium_version"]
+                        or neqo != expected_neqo
+                        or prepared_evidence.get("prepare_image_digest")
+                        != runner_provenance.get("image_digest")
+                        or prepared_evidence.get("lab_source")
+                        != expected_runner_source
+                    ):
+                        raise ValueError(
+                            "checkpoint observation differs from its prepared discovery evidence"
+                        )
+                    _validate_document_response_receipt(
+                        observation,
+                        page=page,
+                        prepared_path=prepared_path,
+                        runner_root=runner_root,
+                        provenance_sha256=provenance_sha256,
+                        runner_provenance=runner_provenance,
+                        approved_origins=observation_approved,
+                        origin_ip_pins=preparation_pins,
+                        chromium_version=chromium,
+                        neqo_provenance=expected_neqo,
+                    )
                 identity = {"chromium_version": chromium, "neqo_provenance": dict(neqo)}
                 identities[sha256_bytes(canonical_json_bytes(identity))] = identity
     if not identities:
@@ -1886,7 +3328,9 @@ def _validate_pending_navigation(pending: object) -> tuple[int, datetime]:
     return attempt, _timestamp(pending["started_at"])
 
 
-def _validate_navigation_attempts(state: Mapping[str, Any]) -> None:
+def _validate_navigation_attempts(
+    state: Mapping[str, Any], *, enforce_duration_limit: bool = False
+) -> None:
     attempts = state.get("navigation_attempts", [])
     if not isinstance(attempts, list) or len(attempts) > MAX_PROBE_ATTEMPTS:
         raise ValueError("acquisition navigation-attempt ledger is malformed")
@@ -1902,6 +3346,16 @@ def _validate_navigation_attempts(state: Mapping[str, Any]) -> None:
             "reason",
         }:
             raise ValueError("acquisition navigation-attempt ledger is malformed")
+        started_at = (
+            _timestamp(item["started_at"])
+            if isinstance(item.get("started_at"), str)
+            else None
+        )
+        completed_at = (
+            _timestamp(item["completed_at"])
+            if isinstance(item.get("completed_at"), str)
+            else None
+        )
         if (
             item["attempt"] != expected_attempt
             or finalised
@@ -1909,12 +3363,23 @@ def _validate_navigation_attempts(state: Mapping[str, Any]) -> None:
             not in {
                 "completed",
                 "interrupted",
+                "internal-acquisition-error",
                 "recoverable-failure",
                 "terminal-policy-rejection",
             }
             or not isinstance(item["started_at"], str)
             or not isinstance(item["completed_at"], str)
-            or _timestamp(item["completed_at"]) < _timestamp(item["started_at"])
+            or started_at is None
+            or completed_at is None
+            or completed_at < started_at
+            or (
+                enforce_duration_limit
+                and item["outcome"] == "completed"
+                and (completed_at - started_at).total_seconds() * 1_000
+                > ACTION_TIMING_CONTRACT[
+                    "successful_ledger_attempt_duration_limit_ms"
+                ]
+            )
             or (item["outcome"] == "completed" and item["reason"] is not None)
             or (
                 item["outcome"] != "completed"
@@ -1925,6 +3390,7 @@ def _validate_navigation_attempts(state: Mapping[str, Any]) -> None:
         completed += item["outcome"] == "completed"
         finalised = item["outcome"] in {
             "completed",
+            "internal-acquisition-error",
             "terminal-policy-rejection",
         }
         expected_attempt += 1
@@ -1944,6 +3410,7 @@ def _validate_probe_attempts(
     *,
     candidate_id: str,
     baseline_started_at: str | None = None,
+    enforce_duration_limit: bool = False,
 ) -> None:
     attempts = page.get("probe_attempts", [])
     if not isinstance(attempts, list):
@@ -1954,7 +3421,7 @@ def _validate_probe_attempts(
     probe_ids = tuple(window.probe_id for window in STABILITY_PROBE_WINDOWS)
     expected_attempts = {probe_id: 1 for probe_id in probe_ids}
     for item in attempts:
-        if not isinstance(item, Mapping) or set(item) != {
+        base_fields = {
             "probe_id",
             "workload_id",
             "attempt",
@@ -1962,8 +3429,37 @@ def _validate_probe_attempts(
             "completed_at",
             "outcome",
             "reason",
+        }
+        if not isinstance(item, Mapping) or set(item) not in {
+            frozenset(base_fields),
+            frozenset(base_fields | {"policy_evidence"}),
         }:
             raise ValueError("acquisition probe-attempt ledger is malformed")
+        policy_evidence = item.get("policy_evidence")
+        if policy_evidence is not None:
+            if item.get("outcome") != "terminal-policy-rejection" or not isinstance(
+                policy_evidence, Mapping
+            ):
+                raise ValueError("acquisition probe policy evidence is malformed")
+            expected_policy_fields = {
+                "passive_render_contract",
+                "passive_render_contract_sha256",
+                "render_observation",
+                "render_observation_sha256",
+            }
+            if (
+                set(policy_evidence) != expected_policy_fields
+                or policy_evidence["passive_render_contract"]
+                != PASSIVE_RENDER_CONTRACT
+                or policy_evidence["passive_render_contract_sha256"]
+                != PASSIVE_RENDER_CONTRACT_SHA256
+                or evidence_sha256(policy_evidence["render_observation"])
+                != policy_evidence["render_observation_sha256"]
+            ):
+                raise ValueError("acquisition probe policy evidence does not verify")
+            validate_render_observation(
+                policy_evidence["render_observation"], allow_failure=True
+            )
         probe_id = item["probe_id"]
         attempt = item["attempt"]
         probe_index = probe_ids.index(probe_id) if probe_id in probe_ids else -1
@@ -1974,11 +3470,18 @@ def _validate_probe_attempts(
         )
         start_in_window = True
         if observed_at is not None and baseline_started_at is not None and probe_index >= 0:
-            elapsed_ms = round(
-                (observed_at - _timestamp(baseline_started_at)).total_seconds() * 1000
-            )
             window = STABILITY_PROBE_WINDOWS[probe_index]
-            start_in_window = window.earliest_ms <= elapsed_ms <= window.latest_ms
+            elapsed = observed_at - _timestamp(baseline_started_at)
+            start_in_window = (
+                timedelta(milliseconds=window.earliest_ms)
+                <= elapsed
+                <= timedelta(milliseconds=window.latest_ms)
+            )
+        completed_at = (
+            _timestamp(item["completed_at"])
+            if isinstance(item.get("completed_at"), str)
+            else None
+        )
         if (
             probe_index < 0
             or any(previous not in successful for previous in probe_ids[:probe_index])
@@ -1998,13 +3501,24 @@ def _validate_probe_attempts(
             not in {
                 "completed",
                 "interrupted",
+                "internal-acquisition-error",
                 "recoverable-failure",
                 "terminal-policy-rejection",
             }
             or not isinstance(item["observed_at"], str)
             or not start_in_window
             or not isinstance(item["completed_at"], str)
-            or _timestamp(item["completed_at"]) < _timestamp(item["observed_at"])
+            or completed_at is None
+            or observed_at is None
+            or completed_at < observed_at
+            or (
+                enforce_duration_limit
+                and item["outcome"] == "completed"
+                and (completed_at - observed_at).total_seconds() * 1_000
+                > ACTION_TIMING_CONTRACT[
+                    "successful_ledger_attempt_duration_limit_ms"
+                ]
+            )
             or (
                 item["outcome"] == "completed"
                 and item["reason"] is not None
@@ -2023,6 +3537,8 @@ def _validate_probe_attempts(
             successful.add(probe_id)
             finalised.add(probe_id)
         elif item["outcome"] == "terminal-policy-rejection":
+            finalised.add(probe_id)
+        elif item["outcome"] == "internal-acquisition-error":
             finalised.add(probe_id)
     observations = page.get("observations", [])
     if (
@@ -2053,6 +3569,151 @@ def _validate_probe_attempts(
             raise ValueError("pending acquisition probe attempt is not sequential")
 
 
+def _validate_baseline_ready_state(
+    state: Mapping[str, Any], *, candidate: Any
+) -> None:
+    expected_fields = {
+        "state",
+        "pages",
+        "terminal",
+        "navigation_attempts",
+        "navigation_observed_origins",
+        "navigation_rejections",
+    }
+    if set(state) != expected_fields or state.get("terminal") is not None:
+        raise ValueError("baseline-ready checkpoint fields differ from the contract")
+    attempts = state["navigation_attempts"]
+    if (
+        not isinstance(attempts, list)
+        or not attempts
+        or attempts[-1].get("outcome") != "completed"
+        or sum(item.get("outcome") == "completed" for item in attempts) != 1
+    ):
+        raise ValueError("baseline-ready checkpoint lacks one completed navigation")
+    global_origins = set(
+        _canonical_navigation_origins(
+            state["navigation_observed_origins"],
+            label="baseline-ready global navigation origin ledger",
+        )
+    )
+    _validate_navigation_rejections(
+        state["navigation_rejections"], boundary=candidate.domain
+    )
+    pages = state["pages"]
+    if not isinstance(pages, list) or not 1 <= len(pages) <= 5:
+        raise ValueError("baseline-ready checkpoint page sequence is invalid")
+    seen_urls: set[str] = set()
+    expected_page_fields = {
+        "page",
+        "observations",
+        "probe_attempts",
+        "approved_origins",
+        "navigation_observed_origins",
+    }
+    for ordinal, page_state in enumerate(pages):
+        if not isinstance(page_state, Mapping) or set(page_state) != expected_page_fields:
+            raise ValueError("baseline-ready checkpoint page fields differ from the contract")
+        raw_page = page_state["page"]
+        if not isinstance(raw_page, Mapping) or set(raw_page) != set(
+            PageCandidate.__dataclass_fields__
+        ):
+            raise ValueError("baseline-ready checkpoint page identity is malformed")
+        page = PageCandidate(**dict(raw_page))
+        validate_page_candidate(page)
+        if (
+            page.candidate_domain != candidate.domain
+            or page.registrable_domain != candidate.domain
+            or page.ordinal != ordinal
+            or page.url in seen_urls
+        ):
+            raise ValueError("baseline-ready checkpoint page sequence differs")
+        seen_urls.add(page.url)
+        page_origins = set(
+            _canonical_navigation_origins(
+                page_state["navigation_observed_origins"],
+                label="baseline-ready per-page navigation origin ledger",
+            )
+        )
+        if not page_origins.issubset(global_origins):
+            raise ValueError(
+                "baseline-ready per-page navigation origins exceed the global ledger"
+            )
+        if (
+            page_state["observations"] != []
+            or page_state["probe_attempts"] != []
+            or page_state["approved_origins"] != []
+        ):
+            raise ValueError("baseline-ready checkpoint already contains probe evidence")
+
+
+def _validate_internal_acquisition_error(state: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    value = state.get("internal_acquisition_error")
+    if value is None:
+        return None
+    keys = {
+        "schema_version",
+        "stage",
+        "attempt",
+        "page_ordinal",
+        "probe_id",
+        "exception_type",
+        "message",
+        "recorded_at",
+    }
+    if (
+        not isinstance(value, Mapping)
+        or set(value) != keys
+        or value["schema_version"] != 1
+        or isinstance(value["schema_version"], bool)
+        or value["stage"] not in {"navigation", "probe"}
+        or type(value["attempt"]) is not int
+        or value["attempt"] < 1
+        or not isinstance(value["exception_type"], str)
+        or not value["exception_type"]
+        or not isinstance(value["message"], str)
+        or not value["message"]
+        or not isinstance(value["recorded_at"], str)
+        or state.get("terminal") is not None
+        or state.get("state") == "terminal"
+    ):
+        raise ValueError("internal acquisition error checkpoint is malformed")
+    _timestamp(value["recorded_at"])
+    expected_reason = f"{value['exception_type']}: {value['message']}"
+    if value["stage"] == "navigation":
+        if value["page_ordinal"] is not None or value["probe_id"] is not None:
+            raise ValueError("navigation internal acquisition error has probe identity")
+        matches = [
+            item
+            for item in state.get("navigation_attempts", [])
+            if item.get("attempt") == value["attempt"]
+            and item.get("outcome") == "internal-acquisition-error"
+            and item.get("reason") == expected_reason
+            and item.get("completed_at") == value["recorded_at"]
+        ]
+    else:
+        if (
+            type(value["page_ordinal"]) is not int
+            or value["page_ordinal"] < 0
+            or not isinstance(value["probe_id"], str)
+            or value["probe_id"] not in {window.probe_id for window in STABILITY_PROBE_WINDOWS}
+        ):
+            raise ValueError("probe internal acquisition error identity is malformed")
+        matches = [
+            item
+            for page in state.get("pages", [])
+            if page.get("page", {}).get("ordinal") == value["page_ordinal"]
+            for item in page.get("probe_attempts", [])
+            if item.get("probe_id") == value["probe_id"]
+            and item.get("attempt") == value["attempt"]
+            and item.get("outcome") == "internal-acquisition-error"
+            and item.get("reason") == expected_reason
+            and item.get("completed_at") == value["recorded_at"]
+        ]
+    if len(matches) != 1:
+        raise ValueError("internal acquisition error is not bound to one failed attempt")
+    return value
+
+
 def _due_pages(
     state: Mapping[str, Any], now: datetime, *, candidate_id: str
 ) -> list[dict[str, Any]]:
@@ -2073,10 +3734,12 @@ def _due_pages(
                 page_ordinal=page["page"]["ordinal"],
                 probe_id=window.probe_id,
             )
-            pending_elapsed = round((pending_started - baseline).total_seconds() * 1000)
-            elapsed = round((now - baseline).total_seconds() * 1000)
+            pending_elapsed = pending_started - baseline
+            elapsed = now - baseline
             if (
-                not window.earliest_ms <= pending_elapsed <= window.latest_ms
+                not timedelta(milliseconds=window.earliest_ms)
+                <= pending_elapsed
+                <= timedelta(milliseconds=window.latest_ms)
                 or now < pending_started
             ):
                 raise ValueError("pending acquisition probe time is malformed")
@@ -2084,20 +3747,57 @@ def _due_pages(
             # is not evidence that a completed network acquisition occurred.
             # Once the outer window closes, never run fresh work under that old
             # timestamp; terminalise the candidate as a missed probe instead.
-            if elapsed > window.latest_ms:
+            if elapsed > timedelta(milliseconds=window.latest_ms):
                 raise MissedProbeWindow(f"missed mandatory acquisition window {window.probe_id}")
             result.append(page)
             continue
-        elapsed = round((now - baseline).total_seconds() * 1000)
-        if elapsed > window.latest_ms:
+        elapsed = now - baseline
+        if elapsed > timedelta(milliseconds=window.latest_ms):
             raise MissedProbeWindow(f"missed mandatory acquisition window {window.probe_id}")
-        if elapsed >= window.earliest_ms:
+        if elapsed >= timedelta(milliseconds=window.earliest_ms):
             result.append(page)
     return result
 
 
-def _pending_baseline_blocked(states: Mapping[str, Any], now: datetime) -> bool:
-    guard = timedelta(milliseconds=PENDING_BASELINE_GUARD_MS)
+def _record_pending_probe_interruptions(
+    state: dict[str, Any], *, recovered_at: datetime
+) -> None:
+    """Resolve durable probe starts without inventing a network completion."""
+
+    recovery = recovered_at.astimezone(UTC)
+    for page in state.get("pages", []):
+        pending = page.get("pending_probe")
+        if pending is None:
+            continue
+        started = _timestamp(pending["observed_at"])
+        if recovery < started:
+            raise ValueError("pending acquisition probe recovery predates its start")
+        page.setdefault("probe_attempts", []).append(
+            {
+                **pending,
+                "completed_at": _format_time(recovery),
+                "outcome": "interrupted",
+                "reason": "prior invocation ended before recording an outcome",
+            }
+        )
+        page.pop("pending_probe")
+
+
+def _checkpoint_baselines(states: Mapping[str, Any]) -> tuple[datetime, ...]:
+    """Return every already-armed baseline, including terminal candidates."""
+
+    return tuple(
+        _timestamp(state["baseline_started_at"])
+        for state in states.values()
+        if isinstance(state, Mapping)
+        and isinstance(state.get("baseline_started_at"), str)
+    )
+
+
+def _incomplete_probe_starts(
+    states: Mapping[str, Any],
+) -> tuple[datetime, ...]:
+    starts: set[datetime] = set()
     for state in states.values():
         if state.get("terminal") is not None or state.get("state") != "probing":
             continue
@@ -2109,9 +3809,49 @@ def _pending_baseline_blocked(states: Mapping[str, Any], now: datetime) -> bool:
             if index >= len(STABILITY_PROBE_WINDOWS) or page.get("pending_probe"):
                 continue
             earliest = baseline + timedelta(milliseconds=STABILITY_PROBE_WINDOWS[index].earliest_ms)
-            if now < earliest <= now + guard:
-                return True
-    return False
+            starts.add(earliest)
+    return tuple(sorted(starts))
+
+
+def _pending_navigation_blocked(states: Mapping[str, Any], now: datetime) -> bool:
+    """Protect the next watcher-launched probe from a long navigation action."""
+
+    reservation = timedelta(milliseconds=PENDING_BASELINE_GUARD_MS)
+    return any(
+        now < start < now + reservation
+        for start in _incomplete_probe_starts(states)
+    )
+
+
+def _next_pending_start(
+    states: Mapping[str, Any], now: datetime
+) -> datetime | None:
+    candidates: list[datetime] = []
+    if any(
+        state.get("terminal") is None and state.get("state") == "baseline-ready"
+        for state in states.values()
+    ):
+        safe = earliest_safe_baseline(now, _checkpoint_baselines(states))
+        if safe > now:
+            candidates.append(safe)
+    candidates.extend(start for start in _incomplete_probe_starts(states) if start > now)
+    return min(candidates) if candidates else None
+
+
+def _pending_baseline_blocked(states: Mapping[str, Any], now: datetime) -> bool:
+    ready = any(
+        state.get("terminal") is None and state.get("state") == "baseline-ready"
+        for state in states.values()
+    )
+    if ready and baseline_is_safe(now, _checkpoint_baselines(states)):
+        return False
+    pending_navigation = any(
+        state.get("terminal") is None and state.get("state") == "pending"
+        for state in states.values()
+    )
+    if pending_navigation and not _pending_navigation_blocked(states, now):
+        return False
+    return ready or pending_navigation
 
 
 def _terminalise(
@@ -2122,13 +3862,34 @@ def _terminalise(
     reason: str | None,
     provenance_path: Path,
     *,
+    terminalised_at: datetime,
     stability_receipt: Path | None = None,
     admitted_workload: Path | None = None,
 ) -> None:
+    source_state_sha256 = _normalised_terminal_state_sha256(state, kind=kind)
+    recorded_at = terminalised_at.astimezone(UTC)
+    recorded_timestamps = [
+        _timestamp(item["completed_at"])
+        for item in state.get("navigation_attempts", [])
+        if isinstance(item, Mapping) and isinstance(item.get("completed_at"), str)
+    ]
+    for page in state.get("pages", []):
+        if not isinstance(page, Mapping):
+            continue
+        recorded_timestamps.extend(
+            _timestamp(item["completed_at"])
+            for item in page.get("probe_attempts", [])
+            if isinstance(item, Mapping) and isinstance(item.get("completed_at"), str)
+        )
+    if recorded_timestamps:
+        recorded_at = max(recorded_at, *recorded_timestamps)
     payload = {
+        "terminal_schema_version": TERMINAL_SCHEMA_VERSION,
         "candidate_id": candidate_id,
         "kind": kind,
         "reason": reason,
+        "terminalised_at": _format_time(recorded_at),
+        "checkpoint_state_sha256": source_state_sha256,
         "provenance_sha256": sha256_file(provenance_path),
         "stability_receipt": (
             {
@@ -2233,6 +3994,9 @@ def _load_checkpoint_state(
 ) -> tuple[dict[str, Any], int]:
     value = load_json(path)
     payload = validate_hash_bound_receipt(value, expected_type=CHECKPOINT_TYPE)
+    provenance_payload = validate_hash_bound_receipt(
+        load_json(provenance_path), expected_type=PROVENANCE_TYPE
+    )
     if payload["provenance_sha256"] != sha256_file(provenance_path) or payload[
         "candidate_catalogue_sha256"
     ] != sha256_file(catalogue_path):
@@ -2261,16 +4025,21 @@ def _load_checkpoint_state(
             raise ValueError(f"unexpected acquisition terminal path: {entry}")
 
     provenance_sha256 = sha256_file(provenance_path)
+    acquisition_schema_version = provenance_payload.get("acquisition_schema_version")
+    current_schema = acquisition_schema_version == SCHEMA_VERSION
     recoveries: list[tuple[dict[str, Any], dict[str, str]]] = []
+    internal_failures: list[str] = []
     for candidate in candidates:
         state = states[candidate.candidate_id]
-        if not isinstance(state, dict) or state.get("state") not in {
-            "pending",
-            "probing",
-            "terminal",
-        }:
+        permitted_states = {"pending", "probing", "terminal"}
+        if current_schema:
+            permitted_states.add("baseline-ready")
+        if not isinstance(state, dict) or state.get("state") not in permitted_states:
             raise ValueError("acquisition checkpoint candidate state is invalid")
-        _validate_navigation_attempts(state)
+        _validate_navigation_attempts(
+            state,
+            enforce_duration_limit=current_schema,
+        )
         if "navigation_rejections" in state:
             _validate_navigation_rejections(
                 state["navigation_rejections"], boundary=candidate.domain
@@ -2289,7 +4058,8 @@ def _load_checkpoint_state(
                 _validate_probe_attempts(
                     page_state,
                     candidate_id=candidate.candidate_id,
-                    baseline_started_at=state["baseline_started_at"],
+                    baseline_started_at=state.get("baseline_started_at"),
+                    enforce_duration_limit=current_schema,
                 )
                 page_origins = _canonical_navigation_origins(
                     page_state.get("navigation_observed_origins"),
@@ -2299,8 +4069,12 @@ def _load_checkpoint_state(
                     raise ValueError(
                         "checkpoint per-page navigation origins exceed the global ledger"
                     )
-        elif state["state"] == "probing" or state.get("pages"):
+        elif state["state"] in {"baseline-ready", "probing"} or state.get("pages"):
             raise ValueError("checkpoint lacks its navigation origin ledger")
+        if state["state"] == "baseline-ready":
+            _validate_baseline_ready_state(state, candidate=candidate)
+        if _validate_internal_acquisition_error(state) is not None:
+            internal_failures.append(candidate.candidate_id)
         binding = state.get("terminal")
         terminal = terminals / f"{candidate.candidate_id}.json"
         if terminal.exists() or terminal.is_symlink():
@@ -2308,6 +4082,8 @@ def _load_checkpoint_state(
                 terminal,
                 candidate=candidate,
                 provenance_sha256=provenance_sha256,
+                candidate_state=state,
+                acquisition_schema_version=acquisition_schema_version,
             )
             if binding is None:
                 recoveries.append((state, verified))
@@ -2315,6 +4091,27 @@ def _load_checkpoint_state(
                 raise ValueError("checkpoint terminal binding is inconsistent")
         elif binding is not None or state["state"] == "terminal":
             raise ValueError("checkpoint references missing terminal evidence")
+    if current_schema:
+        validate_baseline_schedule(_checkpoint_baselines(states))
+    _validate_document_response_receipt_namespace(
+        path.parent,
+        states,
+        required=(
+            acquisition_schema_version in {2, SCHEMA_VERSION}
+        ),
+    )
+    _validate_prepared_probe_namespace(
+        path.parent,
+        states,
+        required=(
+            acquisition_schema_version in {2, SCHEMA_VERSION}
+        ),
+    )
+    if internal_failures:
+        raise InternalAcquisitionError(
+            "acquisition checkpoint contains durable internal failures for: "
+            + ", ".join(internal_failures)
+        )
     if recoveries and persist_recoveries:
         for state, binding in recoveries:
             state["state"] = "terminal"
@@ -2327,6 +4124,113 @@ def _load_checkpoint_state(
         )
         value = load_json(path)
     return value, len(recoveries)
+
+
+def _validate_document_response_receipt_namespace(
+    root: Path,
+    states: Mapping[str, Any],
+    *,
+    required: bool,
+) -> None:
+    """Reject evidence files outside the checkpointed create-only namespace."""
+
+    receipt_root = root / "document-response-receipts"
+    if not receipt_root.exists() and not receipt_root.is_symlink():
+        if required:
+            raise ValueError("acquisition document-response receipt root does not exist")
+        return
+    if receipt_root.is_symlink() or not receipt_root.is_dir():
+        raise ValueError(
+            "acquisition document-response receipt root is not a regular directory"
+        )
+    expected_names: set[str] = set()
+    for state in states.values():
+        if not isinstance(state, Mapping):
+            continue
+        for page in state.get("pages", []):
+            if not isinstance(page, Mapping):
+                continue
+            attempts = page.get("probe_attempts", [])
+            for attempt in attempts if isinstance(attempts, list) else ():
+                if isinstance(attempt, Mapping) and isinstance(
+                    attempt.get("workload_id"), str
+                ):
+                    expected_names.add(f"{attempt['workload_id']}.json")
+            pending = page.get("pending_probe")
+            if isinstance(pending, Mapping) and isinstance(
+                pending.get("workload_id"), str
+            ):
+                expected_names.add(f"{pending['workload_id']}.json")
+    temporary_prefixes = {f".{name}{ATOMIC_TEMP_MARKER}" for name in expected_names}
+    for entry in receipt_root.iterdir():
+        if entry.is_symlink() or not entry.is_file():
+            raise ValueError(
+                "acquisition document-response receipt namespace is unsafe"
+            )
+        if entry.name in expected_names or any(
+            entry.name.startswith(prefix) for prefix in temporary_prefixes
+        ):
+            continue
+        raise ValueError(
+            f"unexpected acquisition document-response receipt path: {entry}"
+        )
+
+
+def _validate_prepared_probe_namespace(
+    root: Path,
+    states: Mapping[str, Any],
+    *,
+    required: bool,
+) -> None:
+    """Keep every probe manifest inside the create-only runner namespace."""
+
+    prepared_root = root / "prepared-probes"
+    if not prepared_root.exists() and not prepared_root.is_symlink():
+        if required:
+            raise ValueError("acquisition prepared-probe root does not exist")
+        return
+    if prepared_root.is_symlink() or not prepared_root.is_dir():
+        raise ValueError(
+            "acquisition prepared-probe root is not a regular directory"
+        )
+    expected_names: set[str] = set()
+    for state in states.values():
+        if not isinstance(state, Mapping):
+            continue
+        for page in state.get("pages", []):
+            if not isinstance(page, Mapping):
+                continue
+            attempts = page.get("probe_attempts", [])
+            for attempt in attempts if isinstance(attempts, list) else ():
+                if isinstance(attempt, Mapping) and isinstance(
+                    attempt.get("workload_id"), str
+                ):
+                    expected_names.add(f"{attempt['workload_id']}.json")
+            pending = page.get("pending_probe")
+            if isinstance(pending, Mapping) and isinstance(
+                pending.get("workload_id"), str
+            ):
+                expected_names.add(f"{pending['workload_id']}.json")
+    temporary_file_prefixes = {
+        f".{name}{ATOMIC_TEMP_MARKER}" for name in expected_names
+    }
+    temporary_directory_prefixes = {
+        f".{name.removesuffix('.json')}-prepare-" for name in expected_names
+    }
+    for entry in prepared_root.iterdir():
+        if entry.is_symlink():
+            raise ValueError("acquisition prepared-probe namespace is unsafe")
+        if entry.name in expected_names and entry.is_file():
+            continue
+        if entry.is_file() and any(
+            entry.name.startswith(prefix) for prefix in temporary_file_prefixes
+        ):
+            continue
+        if entry.is_dir() and any(
+            entry.name.startswith(prefix) for prefix in temporary_directory_prefixes
+        ):
+            continue
+        raise ValueError(f"unexpected acquisition prepared-probe path: {entry}")
 
 
 def _new_directory(path: Path) -> Path:

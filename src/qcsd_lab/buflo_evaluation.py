@@ -50,6 +50,7 @@ from .fidelity import (
 from .util import LAB_ROOT, load_json, require_disjoint_path, sha256_file, source_metadata
 
 SCHEMA_VERSION = 1
+STUDY_HANDOFF_SCHEMA_VERSIONS = frozenset({1, 2})
 EVALUATION_RECEIPT_SCHEMA_VERSION = 2
 FORMAL_DEFENSES = ("undefended", "buflo", "cs-buflo")
 FORMAL_BLOCKS = tuple(range(10))
@@ -746,7 +747,10 @@ def load_study_handoff(root: Path) -> tuple[StudySample, ...]:
             row = json.loads(line)
         except json.JSONDecodeError as error:
             raise ValueError(f"study handoff JSONL line {line_number} is invalid") from error
-        if not isinstance(row, dict) or row.get("schema_version") != SCHEMA_VERSION:
+        if (
+            not isinstance(row, dict)
+            or row.get("schema_version") not in STUDY_HANDOFF_SCHEMA_VERSIONS
+        ):
             raise ValueError("study handoff sample schema is invalid")
         required_strings = (
             "sample_id",

@@ -67,3 +67,61 @@ def test_wrapper_selects_prepare_for_acquisition_and_keeps_workspace_read_only()
     assert 'echo "class-study rejects a blanket workspace read-write mount"' in launcher
     assert '--volume "${ROOT}:/lab:rw"' not in launcher
     assert '--env "QCSD_PUBLIC_ORIGIN_ONLY=1"' in launcher
+
+
+def test_unprivileged_class_runtime_has_identity_zero_caps_and_direct_tini() -> None:
+    launcher = (ROOT / "qcsd-lab").read_text(encoding="utf-8")
+    runtime_policy = launcher.split(
+        'if [[ "${1:-}" == "class-study" &&\n'
+        '      ! ( ( "${class_study_action}" == "capture" ||',
+        maxsplit=1,
+    )[1].split("\nelif [[", maxsplit=1)[0]
+
+    # An explicit container identity is required for every writable overlay.
+    # The former --user-only path then entered collection-entrypoint without
+    # its required UID/GID environment and failed before the coordinator ran.
+    assert '--user "$(id -u):$(id -g)"' in runtime_policy
+    assert "--cap-drop ALL" in runtime_policy
+    assert "--cap-add" not in runtime_policy
+    assert "NET_ADMIN" not in runtime_policy
+    assert "NET_RAW" not in runtime_policy
+    assert "--entrypoint /usr/bin/tini" in runtime_policy
+    assert "class_image_command=(-- /usr/local/bin/qcsd-lab-internal)" in runtime_policy
+
+    # Every class-study launch site must supply the direct command after the
+    # image.  The array is empty for privileged capture/resume, preserving the
+    # image's normal collection-entrypoint in those two cases.
+    assert "class_image_command=()" in launcher
+    assert (
+        launcher.count(
+            '"${class_image_command[@]}" "${class_container_args[@]}"'
+        )
+        == 3
+    )
+
+
+def test_class_runtime_privilege_and_network_boundaries_remain_exact() -> None:
+    launcher = (ROOT / "qcsd-lab").read_text(encoding="utf-8")
+    runtime_policy = launcher.split(
+        'if [[ "${1:-}" == "class-study" &&\n'
+        '      ! ( ( "${class_study_action}" == "capture" ||',
+        maxsplit=1,
+    )[1].split("\nfi", maxsplit=1)[0]
+    privileged_fallback = runtime_policy.rsplit("\nelse\n", maxsplit=1)[1]
+
+    assert '"${class_study_action}" == "resume"' in runtime_policy
+    assert '"${class_study_execute}" == "1"' in runtime_policy
+    assert "--cap-add NET_RAW --cap-add NET_ADMIN" in privileged_fallback
+    assert "--cap-add SETUID --cap-add SETGID --cap-add SETPCAP" in privileged_fallback
+    assert '--env "QCSD_LAB_UID=$(id -u)"' in privileged_fallback
+    assert '--env "QCSD_LAB_GID=$(id -g)"' in privileged_fallback
+
+    network_policy = launcher.split('network_mode="bridge"', maxsplit=1)[1].split(
+        'if [[ "${1:-}" == "class-study" &&', maxsplit=1
+    )[0]
+    assert '"${class_study_action}" != "acquisition-run"' in network_policy
+    assert '"${class_study_action}" == "qualify-prefix"' in network_policy
+    assert '"${class_study_live}" == "1"' in network_policy
+    assert '"${class_study_action}" == "capture"' in network_policy
+    assert '"${class_study_action}" == "resume"' in network_policy
+    assert '"${class_study_execute}" == "1"' in network_policy

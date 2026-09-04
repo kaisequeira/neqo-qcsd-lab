@@ -27,6 +27,7 @@ from typing import Any
 
 import yaml
 
+from .acquisition_timing import RUN_WAIT_POLICY
 from .chaff_qualification import (
     FULL_QUALIFICATION_SCOPE,
     NAMED_QUALIFICATION_PREFIX_DIRECTORY,
@@ -81,6 +82,7 @@ from .class_run_binding import (
     resolve_class_sample_run_binding,
     validate_class_sample_run_binding,
 )
+from .defenses import defense_from_runtime_identity
 from .class_layout import (
     AUTHORITATIVE_COHORT_ASSEMBLY_FILENAME,
     AUTHORITATIVE_COHORT_FILENAME,
@@ -118,7 +120,11 @@ from .class_study import (
     validate_hash_bound_receipt as validate_study_bound_receipt,
 )
 from .experiment import ACCEPTED_ARTIFACTS, resolved_sample_directory
-from .fidelity import new_defense_terminal_receipts_valid
+from .fidelity import (
+    _schedule_realization_metrics_from_path,
+    fidelity_eligible,
+    new_defense_terminal_receipts_valid,
+)
 from .orchestrator import (
     CLASS_STUDY_LAUNCH_INPUT,
     CLASS_STUDY_SUCCESSOR_CONFIGURATION_KEY,
@@ -127,6 +133,7 @@ from .orchestrator import (
     preflight_campaign,
     resume_campaign,
     run_campaign,
+    verify_class_study_fitting_generation,
 )
 from .util import load_json, sha256_file
 from .verification import VerifiedResult, verify_result
@@ -320,6 +327,9 @@ class CohortAdmission:
         }
 
 
+ACQUISITION_RUN_WAIT_POLICY = dict(RUN_WAIT_POLICY)
+
+
 def stability_gate() -> dict[str, Any]:
     """Return the exact, human-readable three-window admission contract."""
 
@@ -328,7 +338,7 @@ def stability_gate() -> dict[str, Any]:
         "labels": [window.probe_id for window in STABILITY_PROBE_WINDOWS],
         "all_three_required_per_page_receipt": True,
         "acquisition_owner": "resumable-qcsd-class-study-production-runner",
-        "runner_sleeps_between_windows": False,
+        "runner_wait_policy": dict(ACQUISITION_RUN_WAIT_POLICY),
     }
 
 
@@ -1888,10 +1898,16 @@ def run_class_study_action(
             )
             return ClassStudyActionResult(action, "complete", details)
         if action == "acquisition-run":
-            if acquisition_max_candidates < 1:
-                raise ValueError("--acquisition-max-candidates must be positive")
-            if not 1 <= acquisition_timeout_ms <= 60_000:
-                raise ValueError("--acquisition-timeout-ms must be between 1 and 60000")
+            # This is a production evidence boundary, not a general-purpose
+            # batching interface.  Keep the coordinator itself fail-closed so
+            # invoking the in-image CLI directly cannot evade the one-candidate
+            # checkpoint cadence or substitute a shorter browser timeout than
+            # the immutable acquisition provenance records.
+            if acquisition_max_candidates != 1 or acquisition_timeout_ms != 60_000:
+                raise ValueError(
+                    "acquisition-run requires --acquisition-max-candidates 1 "
+                    "and --acquisition-timeout-ms 60000"
+                )
             details = run_due_acquisition(
                 runner,
                 candidate_catalogue_path=catalogue,
@@ -1905,7 +1921,7 @@ def run_class_study_action(
                     "valid": True,
                     "runner_root": str(Path(runner).resolve()),
                     "bounded_candidates": acquisition_max_candidates,
-                    "runner_slept": False,
+                    "runner_wait_policy": dict(ACQUISITION_RUN_WAIT_POLICY),
                 }
             )
             return ClassStudyActionResult(
@@ -1915,9 +1931,15 @@ def run_class_study_action(
                 ()
                 if details["complete"]
                 else (
-                    ("rerun now; bounded acquisition work is due and the runner never sleeps")
+                    (
+                        "rerun now; one bounded acquisition action is due; "
+                        "a newly armed baseline waits locally for its t+30s probe"
+                    )
                     if details.get("work_due_now") is True
-                    else ("rerun only when next_due is reached; the runner never sleeps"),
+                    else (
+                        "rerun when next_due is reached; the host watcher waits between "
+                        "the t+24h and t+72h probe actions"
+                    ),
                 ),
             )
         completion = write_acquisition_completion(
@@ -2684,6 +2706,9 @@ def run_class_study_action(
         output = export_class_handoff(
             formal_roots,
             _required(destination, "--destination"),
+            historical_post_snapshot=_required(
+                historical_post_snapshot, "--historical-post-snapshot"
+            ),
         )
         verified = verify_class_handoff(output, deep=deep)
         return ClassStudyActionResult(
@@ -3036,6 +3061,12 @@ def _coordinate_capture(
         prerequisite_ledger: tuple[Mapping[str, Any], ...] = ()
         if not (successor_restart_sha256 is not None and role == "authoritative-fitting"):
             prerequisite_ledger = _validate_capture_prerequisites(role, block, records)
+        fitting_generation = _validate_capture_fitting_generation(
+            role,
+            prerequisite_records=prerequisite_ledger,
+            campaign_path=campaign_path,
+            frozen_result_root=None,
+        )
         foundation_authority = _validate_capture_foundation(
             role,
             foundation_attestation=foundation_attestation,
@@ -3072,6 +3103,8 @@ def _coordinate_capture(
                 details["foundation_authority"] = foundation_authority
             if capacity is not None:
                 details["capacity_preflight"] = capacity
+            if fitting_generation is not None:
+                details["fitting_generation_authority"] = fitting_generation
             return ClassStudyActionResult(
                 action,
                 "ready",
@@ -3085,6 +3118,7 @@ def _coordinate_capture(
                     "campaign_sha256": sha256_file(campaign_path),
                 },
                 prerequisite_ledger,
+                fitting_generation,
             ),
             _capture_authority_environment(foundation_authority),
             _capture_authority_environment(authority),
@@ -3121,6 +3155,12 @@ def _coordinate_capture(
         prerequisite_ledger = ()
         if not (successor_restart_sha256 is not None and role == "authoritative-fitting"):
             prerequisite_ledger = _validate_capture_prerequisites(role, block, records)
+        fitting_generation = _validate_capture_fitting_generation(
+            role,
+            prerequisite_records=prerequisite_ledger,
+            campaign_path=None,
+            frozen_result_root=source,
+        )
         foundation_authority = _validate_capture_foundation(
             role,
             foundation_attestation=foundation_attestation,
@@ -3158,6 +3198,8 @@ def _coordinate_capture(
                 details["foundation_authority"] = foundation_authority
             if capacity is not None:
                 details["capacity_preflight"] = capacity
+            if fitting_generation is not None:
+                details["fitting_generation_authority"] = fitting_generation
             return ClassStudyActionResult(
                 action,
                 "ready",
@@ -3168,6 +3210,7 @@ def _coordinate_capture(
             _class_study_coordinator_capture_authority(
                 {**dict(configuration), "name": experiment.get("name")},
                 prerequisite_ledger,
+                fitting_generation,
             ),
             _capture_authority_environment(foundation_authority),
             _capture_authority_environment(authority),
@@ -3685,6 +3728,45 @@ def _validate_capture_prerequisites(
     return tuple(required)
 
 
+def _validate_capture_fitting_generation(
+    role: str,
+    *,
+    prerequisite_records: Sequence[Mapping[str, Any]],
+    campaign_path: Path | None,
+    frozen_result_root: Path | None,
+) -> dict[str, Any] | None:
+    """Bind a fitted capture to the exact fitting result that precedes it."""
+
+    source_role = {
+        "pilot-compatibility": "pilot-fitting",
+        "certification": "authoritative-fitting",
+    }.get(role)
+    if source_role is None:
+        return None
+    source_record = _require_role(prerequisite_records, source_role)
+    source_root = source_record.get("root")
+    source_evidence_sha256 = source_record.get("evidence_sha256")
+    if (
+        not isinstance(source_root, str)
+        or not isinstance(source_evidence_sha256, str)
+        or _SHA256.fullmatch(source_evidence_sha256) is None
+    ):
+        raise ValueError("fitting-generation prerequisite result identity is incomplete")
+    generation = verify_class_study_fitting_generation(
+        source_result_root=Path(source_root),
+        campaign_path=campaign_path,
+        frozen_result_root=frozen_result_root,
+    )
+    source = generation.get("source_result")
+    if (
+        not isinstance(source, Mapping)
+        or Path(str(source.get("root"))).resolve() != Path(source_root).resolve()
+        or source.get("evidence_sha256") != source_evidence_sha256
+    ):
+        raise ValueError("fitting-generation verification used another prerequisite result")
+    return generation
+
+
 def _require_capture_admission_binding(
     value: Mapping[str, Any],
     *,
@@ -4119,7 +4201,8 @@ def _validate_current_candidate_sample_receipt(
         schema = summary.get("schema_version") if isinstance(summary, Mapping) else None
         raise ValueError(
             f"{role} {mode} sample {sample_id} lacks a valid current "
-            f"schema-4 terminal receipt and runner-wakeup schema-10 evidence "
+            f"schema-4 terminal receipt and runner-wakeup "
+            f"schema-{'11 with kernel-TX evidence' if runtime_kind == 'buflo' else '10'} "
             f"(observed terminal schema {schema!r})"
         )
     # Import lazily so the coordinator's core/result metadata import graph stays
@@ -4197,6 +4280,27 @@ def _validate_class_sample_run_receipt(
         allow_derived_runtime_without_frozen_copy=role == "canary",
     )
     validate_class_sample_run_binding(run, sample, binding)
+    diagnostics = run.get("defense_diagnostics") if isinstance(run, Mapping) else None
+    if not isinstance(diagnostics, dict):
+        diagnostics = {}
+    schedule = _schedule_realization_metrics_from_path(sample_root / "neqo/schedule.csv")
+    defense = defense_from_runtime_identity(
+        str(sample.get("defense")),
+        str(sample.get("runtime_kind")),
+    )
+    if not fidelity_eligible(
+        defense,
+        diagnostics,
+        sample_eligible=True,
+        missed_events=schedule.get("missed_events"),
+        outgoing_size_mismatches=schedule.get("outgoing_size_mismatch_events"),
+        schedule_metrics=schedule,
+        resolved_configuration=(
+            run.get("resolved_configuration") if isinstance(run, Mapping) else None
+        ),
+        require_defense_activation=True,
+    ):
+        raise ValueError(f"{role} sample has no independently valid defence activation evidence")
 
 
 def _validate_non_fitting_result(
@@ -5424,20 +5528,7 @@ def _successor_study_status(
             **attestation,
         }
 
-    expected_roles = {
-        "authoritative-fitting": 1,
-        "certification": 1,
-        "canary": FORMAL_BLOCK_COUNT,
-        "formal": FORMAL_BLOCK_COUNT,
-    }
-    observed_roles = Counter(record["evidence_role"] for record in records)
-    next_stage = "successor-readiness"
-    if readiness is not None:
-        next_stage = "canary/formal-capture"
-    if all(observed_roles[role] == count for role, count in expected_roles.items()):
-        next_stage = "handoff/evaluation/comparison"
-    if stages["validation_attestation"]["state"] == "verified":
-        next_stage = "complete"
+    next_stage = _successor_next_required_stage(stages, records)
     return {
         "study_id": study_id,
         "claim": "hash-namespaced-successor-restart",
@@ -5448,6 +5539,38 @@ def _successor_study_status(
         "next_required_stage": next_stage,
         "attestation_generated": next_stage == "complete",
     }
+
+
+def _successor_next_required_stage(
+    stages: Mapping[str, Mapping[str, Any]],
+    records: Sequence[Mapping[str, Any]],
+) -> str:
+    """Report successor progress without implying absent capture authority."""
+
+    if stages["readiness"]["state"] != "verified":
+        return "successor-readiness"
+    if stages["historical_pre_snapshot"]["state"] != "verified":
+        return "historical-pre-formal-snapshot"
+    expected_roles = {
+        "authoritative-fitting": 1,
+        "certification": 1,
+        "canary": FORMAL_BLOCK_COUNT,
+        "formal": FORMAL_BLOCK_COUNT,
+    }
+    observed_roles = Counter(record["evidence_role"] for record in records)
+    if not all(observed_roles[role] == count for role, count in expected_roles.items()):
+        return "canary/formal-capture"
+    if stages["historical_post_snapshot"]["state"] != "verified":
+        return "historical-post-formal-snapshot"
+    if stages["handoff"]["state"] != "verified":
+        return "formal-handoff"
+    if stages["evaluation"]["state"] != "verified":
+        return "attack-evaluation"
+    if stages["comparison_review"]["state"] != "verified":
+        return "original-study-comparison-review"
+    if stages["validation_attestation"]["state"] != "verified":
+        return "final-validation-attestation"
+    return "complete"
 
 
 def _require_fresh_admission_paths(

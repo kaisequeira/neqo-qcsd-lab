@@ -1899,13 +1899,22 @@ def test_generated_successor_certification_and_formal_load_freeze_and_reload(
     lab_root = tmp_path / "lab"
     workload_root = lab_root / "config/workloads"
     workload_root.mkdir(parents=True)
-    source_manifest = (
-        Path(__file__).parents[1] / "config/workloads/rfc9114-text-r2.json"
-    ).read_bytes()
+    from tests.test_class_campaign_execution import _complete_origin_workload
+
+    fixture_root = tmp_path / "current-workload-fixtures"
+    fixture_root.mkdir()
     selected_ids = tuple(decision["successor_selection"]["final"])
+    manifest_hashes = {}
     for workload_id in selected_ids:
-        (workload_root / f"{workload_id}.json").write_bytes(source_manifest)
-    manifest_sha256 = sha256_file(workload_root / f"{selected_ids[0]}.json")
+        complete = _complete_origin_workload(
+            fixture_root,
+            visits=1,
+            workload_id=workload_id,
+            origin_count=2,
+        )
+        destination = workload_root / f"{workload_id}.json"
+        destination.write_bytes(complete.source_bytes)
+        manifest_hashes[workload_id] = sha256_file(destination)
     monkeypatch.setattr(orchestrator, "LAB_ROOT", lab_root)
 
     # The successor plan intentionally carries compatible cohort envelopes;
@@ -1932,7 +1941,7 @@ def test_generated_successor_certification_and_formal_load_freeze_and_reload(
         class_cohort,
         "cohort_workload_hashes",
         lambda _value, *, cohort, workload_ids: {
-            workload_id: manifest_sha256 for workload_id in workload_ids
+            workload_id: manifest_hashes[workload_id] for workload_id in workload_ids
         },
     )
 

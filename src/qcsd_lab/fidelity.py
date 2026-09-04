@@ -843,8 +843,12 @@ def _read_runner_packets(
     previous_time: dict[tuple[int, str], int] = {}
     for index, row in enumerate(rows):
         _validate_qcsd_trace_extension(row, label=f"runner packet {index}")
-        monotonic_us = _unsigned(row.get("monotonic_us"), "runner packet time")
-        connection = _unsigned(row.get("connection"), "runner connection")
+        monotonic_us = _runner_csv_u64(
+            row.get("monotonic_us"), label="runner packet time"
+        )
+        connection = _runner_csv_u64(
+            row.get("connection"), label="runner connection"
+        )
         if connection not in endpoint_overheads:
             raise ValueError(f"runner packet references unknown connection {connection}")
         direction = _direction(row.get("direction"), "runner packet trace")
@@ -854,9 +858,21 @@ def _read_runner_packets(
                 "runner packet timestamps are not monotonic within one connection and direction"
             )
         previous_time[stream] = monotonic_us
-        udp_length = _positive(row.get("observed_udp_length"), "runner UDP length")
-        if udp_length > 65_535:
+        udp_length = _runner_csv_u64(
+            row.get("observed_udp_length"), label="runner UDP length"
+        )
+        if not 0 < udp_length <= 65_535:
             raise ValueError("runner UDP length exceeds the UDP domain")
+        scheduled_target = row.get("scheduled_target")
+        slot_id = row.get("slot_id")
+        if scheduled_target:
+            scheduled_size = _runner_csv_u64(
+                scheduled_target, label="runner scheduled target"
+            )
+            if not 0 < scheduled_size <= 65_535:
+                raise ValueError("runner scheduled target exceeds the UDP domain")
+        if slot_id:
+            _runner_csv_u64(slot_id, label="runner slot id")
         packets.append(
             _RunnerPacket(
                 index,
@@ -1162,26 +1178,40 @@ def _validate_qcsd_trace_extension(row: Mapping[str, str], *, label: str) -> Non
     )
     consumption_fields = ("credit_consumed_at_us", "credit_consumption_delay_us")
     terminal_field = "terminal_defense_elapsed_us"
+
+    def complete_unsigned(fields: tuple[str, ...]) -> bool:
+        if not all(values[field] for field in fields):
+            return False
+        try:
+            for field in fields:
+                _runner_csv_u64(values[field], label=f"{label} {field}")
+        except ValueError:
+            return False
+        return True
+
     advertisement_present = any(values[field] for field in advertisement_fields)
     consumption_present = any(values[field] for field in consumption_fields)
-    advertisement_complete = all(values[field].isdecimal() for field in advertisement_fields)
-    consumption_complete = all(values[field].isdecimal() for field in consumption_fields)
+    advertisement_complete = complete_unsigned(advertisement_fields)
+    consumption_complete = complete_unsigned(consumption_fields)
     if advertisement_present and not advertisement_complete:
         raise ValueError(f"{label} has incomplete receive-credit advertisement evidence")
     if consumption_present and not consumption_complete:
         raise ValueError(f"{label} has incomplete receive-credit consumption evidence")
     terminal_present = bool(values[terminal_field])
-    terminal_complete = values[terminal_field].isdecimal()
+    terminal_complete = complete_unsigned((terminal_field,))
     if terminal_present != (schema == "3") or (terminal_present and not terminal_complete):
         raise ValueError(f"{label} has invalid controller terminal-time evidence")
     if terminal_present and row.get("target_time_us") not in {None, ""}:
         target = row["target_time_us"]
-        if (
-            not isinstance(target, str)
-            or not target.isdecimal()
-            or int(values[terminal_field]) < int(target)
-        ):
-            raise ValueError(f"{label} has a controller terminal time before its target")
+        try:
+            terminal_at = _runner_csv_u64(
+                values[terminal_field], label=f"{label} {terminal_field}"
+            )
+            target_at = _runner_csv_u64(target, label=f"{label} target_time_us")
+        except ValueError as error:
+            raise ValueError(f"{label} has invalid controller/target timing") from error
+        if terminal_at < target_at:
+            raise ValueError(f"{label} terminal time predates its defense target")
     if consumption_present and (schema not in {"2", "3"} or not advertisement_complete):
         raise ValueError(f"{label} has unbound receive-credit consumption evidence")
     if not values["send_policy"]:
@@ -1198,9 +1228,13 @@ def _validate_qcsd_trace_extension(row: Mapping[str, str], *, label: str) -> Non
         return
     if values["send_policy"] not in {"exact", "congestion_sensitive", "unscheduled"}:
         raise ValueError(f"{label} has an invalid QCSD send policy")
-    if not values["desired_udp_bytes"].isdecimal():
-        raise ValueError(f"{label} has invalid QCSD size evidence")
-    if int(values["desired_udp_bytes"]) <= 0:
+    try:
+        desired_udp_bytes = _runner_csv_u64(
+            values["desired_udp_bytes"], label=f"{label} desired_udp_bytes"
+        )
+    except ValueError as error:
+        raise ValueError(f"{label} has invalid QCSD size evidence") from error
+    if desired_udp_bytes <= 0:
         raise ValueError(f"{label} has a non-positive QCSD desired size")
     incoming_credit_terminal = (
         row.get("direction") == "incoming"
@@ -1218,15 +1252,24 @@ def _validate_qcsd_trace_extension(row: Mapping[str, str], *, label: str) -> Non
         # Serialized action rows carry their typed policy and desired size
         # before transport produces the terminal observation.
         return
-    if observed_present and not values["observed_udp_bytes"].isdecimal():
-        raise ValueError(f"{label} has invalid QCSD size evidence")
+    if observed_present:
+        try:
+            _runner_csv_u64(
+                values["observed_udp_bytes"], label=f"{label} observed_udp_bytes"
+            )
+        except ValueError as error:
+            raise ValueError(f"{label} has invalid QCSD size evidence") from error
     optional_numbers = (
         *LEGACY_SCHEDULE_QCSD_FIELDS[4:11],
         *advertisement_fields,
         *consumption_fields,
     )
-    if any(value and not value.isdecimal() for value in (values[key] for key in optional_numbers)):
-        raise ValueError(f"{label} has invalid QCSD composition evidence")
+    try:
+        for field in optional_numbers:
+            if values[field]:
+                _runner_csv_u64(values[field], label=f"{label} {field}")
+    except ValueError as error:
+        raise ValueError(f"{label} has invalid QCSD composition evidence") from error
     components = LEGACY_SCHEDULE_QCSD_FIELDS[4:10]
     populated_components = [bool(values[key]) for key in components]
     if incoming_credit_terminal and any(
@@ -1237,27 +1280,49 @@ def _validate_qcsd_trace_extension(row: Mapping[str, str], *, label: str) -> Non
         raise ValueError(f"{label} attaches peer-consumption timing to a non-incoming slot")
     if incoming_credit_terminal and row.get("action_time_us") not in {None, ""}:
         action_time = row["action_time_us"]
-        if not isinstance(action_time, str) or not action_time.isdecimal():
-            raise ValueError(f"{label} has invalid receive-credit action timing")
-        action = int(action_time)
-        advertised = int(values["credit_advertised_at_us"])
-        advertised_delay = int(values["credit_advertisement_delay_us"])
+        try:
+            action = _runner_csv_u64(action_time, label=f"{label} action_time_us")
+        except ValueError as error:
+            raise ValueError(f"{label} has invalid receive-credit action timing") from error
+        advertised = _runner_csv_u64(
+            values["credit_advertised_at_us"],
+            label=f"{label} credit_advertised_at_us",
+        )
+        advertised_delay = _runner_csv_u64(
+            values["credit_advertisement_delay_us"],
+            label=f"{label} credit_advertisement_delay_us",
+        )
         if advertised < action or advertised_delay != advertised - action:
             raise ValueError(f"{label} has invalid receive-credit advertisement timing")
         if consumption_present:
-            consumed = int(values["credit_consumed_at_us"])
-            consumed_delay = int(values["credit_consumption_delay_us"])
+            consumed = _runner_csv_u64(
+                values["credit_consumed_at_us"],
+                label=f"{label} credit_consumed_at_us",
+            )
+            consumed_delay = _runner_csv_u64(
+                values["credit_consumption_delay_us"],
+                label=f"{label} credit_consumption_delay_us",
+            )
             if consumed < advertised or consumed_delay != consumed - action:
                 raise ValueError(f"{label} has invalid receive-credit consumption timing")
     if any(populated_components) and (
         not all(populated_components)
-        or sum(int(values[key]) for key in components) != int(values["observed_udp_bytes"])
+        or sum(
+            _runner_csv_u64(values[key], label=f"{label} {key}") for key in components
+        )
+        != _runner_csv_u64(
+            values["observed_udp_bytes"], label=f"{label} observed_udp_bytes"
+        )
     ):
         raise ValueError(f"{label} has inconsistent QCSD byte composition")
     if values["congestion_reason"] not in {"", "congestion_limited", "pacing_limited"}:
         raise ValueError(f"{label} has an invalid QCSD congestion reason")
     if values["send_policy"] == "exact" and any(populated_components):
-        if schema not in {"2", "3"} or not values["lateness_us"].isdecimal():
+        try:
+            _runner_csv_u64(values["lateness_us"], label=f"{label} lateness_us")
+        except ValueError as error:
+            raise ValueError(f"{label} has incomplete exact packet composition evidence") from error
+        if schema not in {"2", "3"}:
             raise ValueError(f"{label} has incomplete exact packet composition evidence")
     elif values["send_policy"] == "exact" and values["lateness_us"]:
         raise ValueError(f"{label} gives an exact outcome unexplained lateness")
@@ -1383,11 +1448,11 @@ def _schedule_realization_metrics_from_path(path: Path) -> dict[str, Any]:
         if reason:
             miss_reasons[reason] = miss_reasons.get(reason, 0) + 1
         try:
-            slot = int(row["slot_id"])
-            action_time = int(row["action_time_us"])
-            target_time = int(row["target_time_us"])
-            if min(slot, action_time, target_time) < 0:
-                raise ValueError
+            slot = _csv_uint(row, "slot_id")
+            action_time = _csv_uint(row, "action_time_us")
+            target_time = _csv_uint(row, "target_time_us")
+            if row.get("connection"):
+                _csv_uint(row, "connection")
         except (KeyError, TypeError, ValueError):
             invalid_rows += 1
         else:
@@ -1545,8 +1610,8 @@ def _schedule_realization_metrics_from_path(path: Path) -> dict[str, Any]:
                 invalid_typed_rows += 1
         if direction == "outgoing" and satisfaction in {"satisfied", "full"}:
             try:
-                requested = int(row["size"])
-                observed = int(row["observed_size"])
+                requested = _csv_uint(row, "size")
+                observed = _csv_uint(row, "observed_size")
             except (KeyError, TypeError, ValueError):
                 outgoing_size_mismatches += 1
                 continue
@@ -1555,11 +1620,11 @@ def _schedule_realization_metrics_from_path(path: Path) -> dict[str, Any]:
                 outgoing_size_error_bytes += abs(requested - observed)
         if direction == "outgoing" and satisfaction in {"full", "partial", "suppressed"}:
             try:
-                terminal_desired_bytes += int(row["size"])
+                terminal_desired_bytes += _csv_uint(row, "size")
                 terminal_observed_bytes += (
                     _csv_uint(row, "observed_udp_bytes")
                     if satisfaction == "suppressed"
-                    else int(row["observed_size"])
+                    else _csv_uint(row, "observed_size")
                 )
             except (KeyError, TypeError, ValueError):
                 invalid_rows += 1
@@ -1608,11 +1673,29 @@ def _schedule_realization_metrics_from_path(path: Path) -> dict[str, Any]:
     }
 
 
-def _csv_uint(row: Mapping[str, Any], field: str) -> int:
-    value = row[field]
-    if not isinstance(value, str) or not value or not value.isdecimal():
-        raise ValueError(f"schedule field {field} is not an unsigned integer")
+RUNNER_CSV_U64_MAX = 2**64 - 1
+_RUNNER_CSV_U64_MAX_TEXT = str(RUNNER_CSV_U64_MAX)
+
+
+def _runner_csv_u64(value: Any, *, label: str) -> int:
+    """Parse the canonical unsigned integer domain emitted by Rust trace rows."""
+
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{label} is not an unsigned integer")
+    if len(value) > len(_RUNNER_CSV_U64_MAX_TEXT):
+        raise ValueError(f"{label} is outside the Rust u64 domain")
+    if value != "0" and (
+        value[0] not in "123456789"
+        or any(character not in "0123456789" for character in value[1:])
+    ):
+        raise ValueError(f"{label} is not a canonical ASCII unsigned integer")
+    if len(value) == len(_RUNNER_CSV_U64_MAX_TEXT) and value > _RUNNER_CSV_U64_MAX_TEXT:
+        raise ValueError(f"{label} is outside the Rust u64 domain")
     return int(value)
+
+
+def _csv_uint(row: Mapping[str, Any], field: str) -> int:
+    return _runner_csv_u64(row[field], label=f"schedule field {field}")
 
 
 _INTEGER = "integer"
@@ -2232,7 +2315,7 @@ RUNNER_WAKEUP_V10_POLL_SOURCES = frozenset(
         "instant-authoritative-fallback-v1",
     }
 )
-RUNNER_WAKEUP_V10_U64_MAX = 2**64 - 1
+RUNNER_WAKEUP_V10_U64_MAX = RUNNER_CSV_U64_MAX
 RUNNER_WAKEUP_V11_SEMANTICS = (
     f"{RUNNER_WAKEUP_SEMANTICS}; "
     "runner_schema10_layout_is_retained_for_non_kernel_metrics; "
@@ -2809,6 +2892,269 @@ def _scheduled_incoming_diagnostics_match(diagnostics: dict[str, Any]) -> bool:
     )
 
 
+_ESTABLISHED_RUNTIME_KIND = {
+    "static": "static",
+    "front": "front",
+    "tamaraw": "tamaraw",
+    "traffic-morphing": "traffic_morphing",
+    "wtf-pad": "wtf_pad",
+    "walkie-talkie": "walkie_talkie",
+}
+
+
+def _current_exact_schedule_activation(
+    schedule: Mapping[str, Any] | None,
+    *,
+    allow_empty: bool,
+) -> bool:
+    """Require a complete current exact-event ledger, including a valid empty one.
+
+    A zero-row schedule is meaningful only for adaptations such as WTF-PAD,
+    where real traffic can activate the automaton without the sampled timer
+    producing padding.  Fixed schedules must pass ``allow_empty=False``.
+    """
+
+    if not isinstance(schedule, Mapping):
+        return False
+    integer_fields = (
+        "scheduled_events",
+        "scheduled_outgoing_events",
+        "scheduled_incoming_events",
+        "satisfied_events",
+        "missed_events",
+        "outgoing_size_mismatch_events",
+        "outgoing_size_absolute_error_bytes",
+        "duplicate_terminal_slots",
+        "invalid_terminal_rows",
+        "invalid_typed_outcome_rows",
+        "incoming_credit_missing_events",
+        "incoming_credit_consumption_missing_events",
+        "invalid_credit_advertisement_events",
+        "invalid_credit_consumption_events",
+    )
+    if any(type(schedule.get(field)) is not int or schedule[field] < 0 for field in integer_fields):
+        return False
+    count = schedule["scheduled_events"]
+    outgoing = schedule["scheduled_outgoing_events"]
+    incoming = schedule["scheduled_incoming_events"]
+    satisfactions = schedule.get("terminal_satisfactions")
+    targets = schedule.get("target_times_us_by_direction")
+    sizes = schedule.get("scheduled_sizes_by_direction")
+    if (
+        (count == 0 and not allow_empty)
+        or outgoing + incoming != count
+        or schedule["satisfied_events"] != count
+        or schedule["missed_events"] != 0
+        or schedule["outgoing_size_mismatch_events"] != 0
+        or schedule["outgoing_size_absolute_error_bytes"] != 0
+        or schedule.get("terminal_slots_unique") is not True
+        or schedule["duplicate_terminal_slots"] != 0
+        or schedule["invalid_terminal_rows"] != 0
+        or schedule["invalid_typed_outcome_rows"] != 0
+        or schedule["incoming_credit_missing_events"] != 0
+        or schedule["incoming_credit_consumption_missing_events"] != 0
+        or schedule["invalid_credit_advertisement_events"] != 0
+        or schedule["invalid_credit_consumption_events"] != 0
+        or satisfactions != ({"satisfied": count} if count else {})
+        or not isinstance(targets, Mapping)
+        or set(targets) != {"outgoing", "incoming"}
+        or not isinstance(sizes, Mapping)
+        or set(sizes) != {"outgoing", "incoming"}
+        or not _new_schedule_terminal_contract(schedule, congestion_sensitive=False)
+    ):
+        return False
+    for direction, expected_count in (("outgoing", outgoing), ("incoming", incoming)):
+        directional_targets = targets[direction]
+        directional_sizes = sizes[direction]
+        if (
+            not isinstance(directional_targets, list)
+            or len(directional_targets) != expected_count
+            or any(type(value) is not int or value < 0 for value in directional_targets)
+            or not isinstance(directional_sizes, list)
+            or len(directional_sizes) != expected_count
+            or any(type(value) is not int or value <= 0 for value in directional_sizes)
+        ):
+            return False
+    return True
+
+
+def _established_defense_activation_valid(
+    defense: str,
+    diagnostics: Mapping[str, Any],
+    schedule: Mapping[str, Any] | None,
+    resolved_configuration: Mapping[str, Any] | None,
+) -> bool:
+    """Prove that an established mode processed traffic and realised its policy.
+
+    Zero errors alone are not activation evidence.  This predicate binds the
+    terminal counters to a current exact schedule and to the runner's resolved
+    defence kind.  WTF-PAD deliberately permits zero sampled padding events,
+    but only after a real packet has driven its silent-to-burst automaton.
+    """
+
+    runtime_kind = _ESTABLISHED_RUNTIME_KIND.get(defense)
+    if runtime_kind is None or not isinstance(resolved_configuration, Mapping):
+        return False
+    resolved_defense = resolved_configuration.get("defense")
+    maximum_udp = resolved_configuration.get("max_udp_payload_size")
+    if (
+        resolved_configuration.get("schema_version") != 2
+        or type(maximum_udp) is not int
+        or maximum_udp <= 0
+        or not isinstance(resolved_defense, Mapping)
+        or resolved_defense.get("kind") != runtime_kind
+    ):
+        return False
+
+    allow_empty = defense in {"traffic-morphing", "wtf-pad"}
+    if not _current_exact_schedule_activation(schedule, allow_empty=allow_empty):
+        return False
+    assert isinstance(schedule, Mapping)
+    sizes = schedule["scheduled_sizes_by_direction"]
+    targets = schedule["target_times_us_by_direction"]
+    incoming_sizes = sizes["incoming"]
+    outgoing_sizes = sizes["outgoing"]
+    if (
+        any(value > maximum_udp for value in (*incoming_sizes, *outgoing_sizes))
+        or diagnostics.get("scheduled_incoming_requested_bytes") != sum(incoming_sizes)
+        or diagnostics.get("scheduled_incoming_advertised_bytes") != sum(incoming_sizes)
+        or diagnostics.get("scheduled_incoming_consumed_bytes") != sum(incoming_sizes)
+    ):
+        return False
+
+    if defense == "static":
+        return (
+            resolved_defense.get("padding_only") is True
+            and isinstance(resolved_defense.get("schedule"), str)
+            and bool(resolved_defense["schedule"])
+            and schedule["scheduled_events"] > 0
+        )
+
+    if defense == "front":
+        client_maximum = resolved_defense.get("n_client_packets")
+        server_maximum = resolved_defense.get("n_server_packets")
+        packet_size = resolved_defense.get("packet_size")
+        return (
+            type(client_maximum) is int
+            and type(server_maximum) is int
+            and type(packet_size) is int
+            and 1 <= schedule["scheduled_outgoing_events"] <= client_maximum
+            and 1 <= schedule["scheduled_incoming_events"] <= server_maximum
+            and packet_size <= maximum_udp
+            and all(value == packet_size for value in (*incoming_sizes, *outgoing_sizes))
+        )
+
+    if defense == "tamaraw":
+        incoming_interval = resolved_defense.get("incoming_interval_us")
+        outgoing_interval = resolved_defense.get("outgoing_interval_us")
+        packet_size = resolved_defense.get("packet_size")
+        modulo = resolved_defense.get("modulo")
+        if (
+            type(incoming_interval) is not int
+            or type(outgoing_interval) is not int
+            or type(packet_size) is not int
+            or type(modulo) is not int
+            or min(incoming_interval, outgoing_interval, packet_size, modulo) <= 0
+            or packet_size > maximum_udp
+            or any(value != packet_size for value in (*incoming_sizes, *outgoing_sizes))
+        ):
+            return False
+        for direction, interval in (
+            ("incoming", incoming_interval),
+            ("outgoing", outgoing_interval),
+        ):
+            count = schedule[f"scheduled_{direction}_events"]
+            if count < modulo or count % modulo or sorted(targets[direction]) != [
+                index * interval for index in range(count)
+            ]:
+                return False
+        return True
+
+    if defense == "traffic-morphing":
+        packets = diagnostics.get("morphing_egress_packets")
+        source_bytes = diagnostics.get("morphing_egress_source_bytes")
+        target_bytes = diagnostics.get("morphing_egress_target_bytes")
+        requested = diagnostics.get("morphing_ingress_requested_bytes")
+        received = diagnostics.get("morphing_ingress_received_bytes")
+        return (
+            isinstance(resolved_defense.get("matrix"), str)
+            and bool(resolved_defense["matrix"])
+            and isinstance(resolved_defense.get("workload_id"), str)
+            and bool(resolved_defense["workload_id"])
+            and type(packets) is int
+            and packets > 0
+            and type(source_bytes) is int
+            and packets <= source_bytes <= packets * maximum_udp
+            and type(target_bytes) is int
+            and source_bytes <= target_bytes <= packets * maximum_udp
+            and schedule["scheduled_outgoing_events"] == 0
+            and requested == sum(incoming_sizes)
+            and received == sum(incoming_sizes)
+        )
+
+    if defense == "wtf-pad":
+        packet_size = resolved_defense.get("packet_size")
+        maximum_events = resolved_defense.get("max_padding_events")
+        padding_events = diagnostics.get("padding_events")
+        incoming_desired = diagnostics.get("wtf_pad_incoming_desired_bytes")
+        incoming_requested = diagnostics.get("wtf_pad_incoming_requested_bytes")
+        incoming_received = diagnostics.get("wtf_pad_incoming_received_bytes")
+        return (
+            isinstance(resolved_defense.get("histograms"), str)
+            and bool(resolved_defense["histograms"])
+            and type(packet_size) is int
+            and 0 < packet_size <= maximum_udp
+            and type(maximum_events) is int
+            and maximum_events > 0
+            and type(padding_events) is int
+            and 0 <= padding_events <= maximum_events
+            and schedule["scheduled_events"] == padding_events
+            and all(value == packet_size for value in (*incoming_sizes, *outgoing_sizes))
+            and incoming_desired == sum(incoming_sizes)
+            and incoming_requested == sum(incoming_sizes)
+            and incoming_received == sum(incoming_sizes)
+            and type(diagnostics.get("wtf_pad_silent_to_burst")) is int
+            and diagnostics["wtf_pad_silent_to_burst"] > 0
+        )
+
+    if defense != "walkie-talkie":
+        return False
+    packet_size = resolved_defense.get("packet_size")
+    expected_batches = diagnostics.get("walkie_talkie_expected_application_batches")
+    realization = diagnostics.get("walkie_talkie_burst_realization")
+    target_outgoing = diagnostics.get("walkie_talkie_target_outgoing_cells")
+    target_incoming = diagnostics.get("walkie_talkie_target_incoming_cells")
+    observed_outgoing = diagnostics.get("walkie_talkie_observed_outgoing_cells")
+    observed_incoming = diagnostics.get("walkie_talkie_observed_incoming_cells")
+    return (
+        isinstance(resolved_defense.get("molded"), str)
+        and bool(resolved_defense["molded"])
+        and isinstance(resolved_defense.get("workload_id"), str)
+        and bool(resolved_defense["workload_id"])
+        and type(packet_size) is int
+        and 0 < packet_size <= maximum_udp
+        and all(value == packet_size for value in (*incoming_sizes, *outgoing_sizes))
+        and type(expected_batches) is int
+        and expected_batches > 0
+        and isinstance(realization, list)
+        and len(realization) == expected_batches
+        and type(target_outgoing) is int
+        and type(target_incoming) is int
+        and target_outgoing > 0
+        and target_incoming > 0
+        and schedule["scheduled_outgoing_events"] == target_outgoing
+        and schedule["scheduled_incoming_events"] == target_incoming
+        and target_outgoing == observed_outgoing
+        and target_incoming == observed_incoming
+        and sum(item["target_outgoing_cells"] for item in realization) == target_outgoing
+        and sum(item["target_incoming_cells"] for item in realization) == target_incoming
+        and sum(item["observed_outgoing_cells"] for item in realization) == observed_outgoing
+        and sum(item["observed_incoming_cells"] for item in realization) == observed_incoming
+        and diagnostics.get("walkie_talkie_natural_outgoing_bytes", 0) > 0
+        and diagnostics.get("walkie_talkie_natural_incoming_bytes", 0) > 0
+    )
+
+
 def _diagnostic_value_matches(kind: str, value: Any) -> bool:
     if kind == _INTEGER:
         return type(value) is int and value >= 0
@@ -2938,10 +3284,8 @@ def new_defense_terminal_receipts_valid(
     ):
         return False
     wakeup_metrics = run["runner_wakeup_metrics"]
-    if require_current_schema and (
-        wakeup_metrics["schema_version"] not in {10, 11}
-        or (wakeup_metrics["schema_version"] == 11 and defense_kind != "buflo")
-    ):
+    current_runner_schema = 11 if defense_kind == "buflo" else 10
+    if require_current_schema and wakeup_metrics["schema_version"] != current_runner_schema:
         return False
     if (
         wakeup_metrics["schema_version"] == 11
@@ -5633,6 +5977,8 @@ def fidelity_eligible(
     missed_events: Any = None,
     outgoing_size_mismatches: Any = None,
     schedule_metrics: Mapping[str, Any] | None = None,
+    resolved_configuration: Mapping[str, Any] | None = None,
+    require_defense_activation: bool = False,
 ) -> bool:
     defense = _canonical_fidelity_defense(defense)
     if not sample_eligible:
@@ -5655,6 +6001,17 @@ def fidelity_eligible(
     ):
         return False
     if not _diagnostics_match_contract(defense, diagnostics):
+        return False
+    if (
+        require_defense_activation
+        and defense in _ESTABLISHED_RUNTIME_KIND
+        and not _established_defense_activation_valid(
+            defense,
+            diagnostics,
+            schedule_metrics,
+            resolved_configuration,
+        )
+    ):
         return False
     if defense == "traffic-morphing":
         return (

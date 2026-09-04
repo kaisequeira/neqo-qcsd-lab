@@ -55,6 +55,7 @@ from .class_fitting import (
     verify_numeric_fitting_bundle,
 )
 from .class_handoff import (
+    CLASS_STUDY_HISTORICAL_POST_INPUT,
     CLASS_STUDY_LAUNCH_INPUT,
     CLASS_STUDY_LAUNCHES_PATH,
     verify_class_handoff,
@@ -77,6 +78,7 @@ from .verification import verify_result
 SCHEMA_VERSION = 1
 FOUNDATION_RECEIPT_TYPE = "qcsd-class-study-foundation-attestation"
 READINESS_RECEIPT_TYPE = "qcsd-class-study-readiness-attestation"
+READINESS_IMPLEMENTATION_STATUS = "candidate-ready-for-pre-formal-snapshot"
 VALIDATION_RECEIPT_TYPE = "qcsd-class-study-validation-attestation"
 HISTORICAL_SNAPSHOT_RECEIPT_TYPE = "qcsd-class-study-historical-snapshot"
 COMPARISON_REVIEW_RECEIPT_TYPE = "qcsd-class-study-comparison-review"
@@ -1214,7 +1216,7 @@ def _readiness_value(
         "artifact_type": READINESS_RECEIPT_TYPE,
         "study_id": STUDY_ID,
         "cohort_version": cohort_version,
-        "implementation_status": "candidate-ready-for-formal-capture",
+        "implementation_status": READINESS_IMPLEMENTATION_STATUS,
         "promotion_authority": False,
         "implementation_scope": IMPLEMENTATION_SCOPE,
         "paper_equivalent": False,
@@ -1464,6 +1466,7 @@ def _validation_value(
     handoff_root = verify_class_handoff(handoff, deep=True)
     dataset = _load_regular_json(handoff_root / "dataset.json", "class handoff dataset")
     blocks = dataset.get("blocks")
+    embedded_post = dataset.get("historical_post_snapshot")
     if (
         dataset.get("study_id") != readiness["study_id"]
         or dataset.get("sample_count") != FORMAL_SAMPLE_COUNT
@@ -1477,6 +1480,24 @@ def _validation_value(
         != [record["evidence_sha256"] for record in formal_records]
         or dataset.get("execution_source", {}).get("value") != current_source
         or dataset.get("exporter_source") != current_source
+        or embedded_post
+        != {
+            "path": CLASS_STUDY_HISTORICAL_POST_INPUT,
+            "sha256": sha256_file(
+                _regular_file(
+                    historical_post_snapshot,
+                    "historical post snapshot",
+                )
+            ),
+            "payload_sha256": post.get("payload_sha256"),
+        }
+        or sha256_file(
+            _regular_file(
+                handoff_root / CLASS_STUDY_HISTORICAL_POST_INPUT,
+                "embedded historical post snapshot",
+            )
+        )
+        != embedded_post.get("sha256")
     ):
         raise ValueError("class validation handoff differs from formal source evidence")
 
@@ -1625,7 +1646,14 @@ def _historical_snapshot_value(
             readiness_attestation
         ):
             raise ValueError("class historical snapshots have different source/readiness")
-        results = [_class_result_binding(path) for path in formal_result_roots]
+        results = _validate_post_snapshot_formal_results(
+            readiness=readiness,
+            readiness_attestation=readiness_attestation,
+            pre=pre,
+            pre_snapshot=pre_snapshot,
+            formal_result_roots=formal_result_roots,
+            recorded_at=timestamp,
+        )
         pre_binding = _file_binding(pre_snapshot)
     guard = validate_historical_corpus_guard(deep=True)
     return {
@@ -1641,6 +1669,151 @@ def _historical_snapshot_value(
         "pre_formal_snapshot": pre_binding,
         "formal_results": results,
     }
+
+
+def _validate_post_snapshot_formal_results(
+    *,
+    readiness: Mapping[str, Any],
+    readiness_attestation: Path,
+    pre: Mapping[str, Any],
+    pre_snapshot: Path,
+    formal_result_roots: Sequence[Path],
+    recorded_at: datetime,
+) -> list[dict[str, str]]:
+    """Reconstruct the exact ten formal blocks before publishing post-history.
+
+    A generic sealed class result is not post-formal authority.  This boundary
+    repeats the role/block, source, promotion-authority, fitted-input, build,
+    and chronology checks so an independently valid pilot/certification result
+    cannot advance the handoff gate.
+    """
+
+    from .class_pipeline import verify_class_study_result
+
+    admission = _admission_from_readiness(readiness)
+    readiness_sha256 = sha256_file(
+        _regular_file(readiness_attestation, "class readiness attestation")
+    )
+    pre_sha256 = sha256_file(_regular_file(pre_snapshot, "historical pre snapshot"))
+    evidence = readiness.get("evidence")
+    foundation = evidence.get("foundation") if isinstance(evidence, Mapping) else None
+    foundation_sha256 = foundation.get("sha256") if isinstance(foundation, Mapping) else None
+    if not isinstance(foundation_sha256, str) or _DIGEST.fullmatch(foundation_sha256) is None:
+        raise ValueError("post-formal snapshot readiness has no foundation identity")
+    certification = (
+        evidence.get("certification_result") if isinstance(evidence, Mapping) else None
+    )
+    certification_root = _root_from_result_binding(
+        certification, label="certification result"
+    )
+    certification_time = _aware_timestamp(
+        verify_result(certification_root).experiment.get("completed_at"),
+        label="certification completion",
+    )
+    pre_time = _aware_timestamp(pre.get("recorded_at"), label="pre-formal snapshot")
+    runtime_inputs = _validated_runtime_inputs(
+        readiness.get("summary", {}).get("certification_defense_runtime_inputs"),
+        expected_modes=COMPATIBILITY_MODES,
+        label="post-formal readiness certification",
+    )
+    qualification_sha256 = readiness.get("summary", {}).get(
+        "final_qualification_set_manifest_sha256"
+    )
+    parameters = readiness.get("summary", {}).get(
+        "certification_defense_parameter_sha256"
+    )
+    if (
+        not isinstance(qualification_sha256, str)
+        or _DIGEST.fullmatch(qualification_sha256) is None
+        or not isinstance(parameters, Mapping)
+        or set(parameters) != _PARAMETER_MODES
+    ):
+        raise ValueError("post-formal snapshot readiness runtime identity is incomplete")
+    expected_parameters = {
+        mode: parameters[mode] for mode in FORMAL_MODES if mode in _PARAMETER_MODES
+    }
+    readiness_successor = (
+        evidence.get("successor_restart") if isinstance(evidence, Mapping) else None
+    )
+    successor_sha256 = (
+        readiness_successor.get("sha256")
+        if isinstance(readiness_successor, Mapping)
+        else None
+    )
+    successor_study = str(readiness.get("study_id", "")).startswith(
+        "classifier-multiorigin100-v2-"
+    )
+    if successor_study != (
+        isinstance(successor_sha256, str)
+        and _DIGEST.fullmatch(successor_sha256) is not None
+    ):
+        raise ValueError("post-formal snapshot successor identity is incomplete")
+
+    bindings: list[dict[str, str]] = []
+    verified_results = []
+    starts: list[datetime] = []
+    completions: list[datetime] = []
+    for block, root in enumerate(formal_result_roots, start=1):
+        record = verify_class_study_result(
+            root,
+            admission=admission,
+            expected_role="formal",
+            expected_block=block,
+        )
+        expected_authority = {
+            "class_study_foundation_sha256": foundation_sha256,
+            "class_study_readiness_sha256": readiness_sha256,
+            "class_study_historical_pre_snapshot_sha256": pre_sha256,
+        }
+        if any(record.get(key) != digest for key, digest in expected_authority.items()):
+            raise ValueError(
+                "post-formal block uses different foundation/readiness/pre-formal authority"
+            )
+        if (
+            record.get("class_study_id") != readiness.get("study_id")
+            or record.get("class_study_successor_sha256") != successor_sha256
+            or _validated_runtime_inputs(
+                record.get("defense_runtime_inputs"),
+                expected_modes=FORMAL_MODES,
+                label=f"post-formal block {block:02d}",
+            )
+            != {mode: runtime_inputs[mode] for mode in FORMAL_MODES}
+            or record.get("defense_parameter_sha256") != expected_parameters
+            or record.get("chaff_qualification_set_manifest_sha256")
+            != qualification_sha256
+        ):
+            raise ValueError("post-formal block differs from readiness runtime identity")
+        verified = verify_result(Path(root))
+        if verified.experiment.get("source") != readiness.get("source"):
+            raise ValueError("post-formal block uses a different immutable source")
+        starts.append(
+            _aware_timestamp(
+                verified.experiment.get("started_at"),
+                label=f"formal block {block:02d} start",
+            )
+        )
+        completions.append(
+            _aware_timestamp(
+                verified.experiment.get("completed_at"),
+                label=f"formal block {block:02d} completion",
+            )
+        )
+        verified_results.append(verified)
+        bindings.append(_class_result_binding(Path(root)))
+
+    environments = [
+        _validate_result_environment(verified, readiness["source"])
+        for verified in verified_results
+    ]
+    if _one_build_execution_identity(environments) != readiness.get(
+        "build_execution_identity"
+    ):
+        raise ValueError("post-formal blocks use a different no-cache build")
+    if not certification_time <= pre_time <= min(starts):
+        raise ValueError("pre-formal snapshot does not precede the exact formal blocks")
+    if recorded_at < max(completions):
+        raise ValueError("post-formal snapshot predates formal block completion")
+    return bindings
 
 
 def _comparison_review_value(
@@ -2355,7 +2528,7 @@ def _validate_readiness_envelope(payload: Mapping[str, Any]) -> None:
         payload.get("attestation_schema_version") != SCHEMA_VERSION
         or payload.get("artifact_type") != READINESS_RECEIPT_TYPE
         or payload.get("study_id") != STUDY_ID
-        or payload.get("implementation_status") != "candidate-ready-for-formal-capture"
+        or payload.get("implementation_status") != READINESS_IMPLEMENTATION_STATUS
         or payload.get("promotion_authority") is not False
         or payload.get("implementation_scope") != IMPLEMENTATION_SCOPE
         or payload.get("paper_equivalent") is not False

@@ -21,7 +21,15 @@ from qcsd_lab import (
 from qcsd_lab.capture_session import Defense, Limits
 from qcsd_lab.class_acquisition import validate_class_study_preparation
 from qcsd_lab.class_campaigns import FINAL_QUALIFICATION_SET
+from qcsd_lab.class_study import STUDY_ID
+from qcsd_lab.cdp_targets import CDP_TARGET_INSTRUMENTATION_POLICY
 from qcsd_lab.discover import origin
+from qcsd_lab.discovery_evidence import (
+    DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION,
+    PASSIVE_RENDER_CONTRACT_SHA256,
+    evidence_sha256,
+    passive_render_contract,
+)
 from qcsd_lab.orchestrator import Campaign, Workload, plan_campaign
 from qcsd_lab.util import sha256_file
 
@@ -351,16 +359,135 @@ def _complete_origin_workload(
             for index, resource_origin in enumerate(origins[1:], start=1)
         ),
     ]
+    target_source = {
+        "session_path": [],
+        "target_id": "fixture-page",
+        "target_type": "page",
+        "generation": 0,
+        "parent_session_path": None,
+        "parent_frame_id": None,
+    }
+    events = []
+    for resource in resources:
+        resource_id = resource["id"]
+        occurrence_id = f"request-{resource_id:08d}"
+        dependency_evidence = (
+            []
+            if resource_id == 0
+            else [
+                {
+                    "kind": "document-url",
+                    "value": resources[0]["url"],
+                    "resolved_resource_id": 0,
+                }
+            ]
+        )
+        events.extend(
+            [
+                {
+                    "sequence": len(events) + 1,
+                    "monotonic_ms": 0,
+                    "kind": "network-request",
+                    "source": target_source,
+                    "network_id": f"network-{resource_id}",
+                    "occurrence_id": occurrence_id,
+                    "occurrence_index": 0,
+                    "method": "GET",
+                    "url": resource["url"],
+                    "frame_id": "root-frame",
+                    "resource_type": resource["type"],
+                    "safe_request_headers": resource["headers"],
+                    "interception_required": True,
+                    "redirected": False,
+                    "redirect_from_occurrence_id": None,
+                    "mapping": {"kind": "resource", "resource_id": resource_id},
+                    "dependency_evidence": dependency_evidence,
+                    "resolved_dependency_resource_ids": resource["depends_on"],
+                },
+                {
+                    "sequence": len(events) + 2,
+                    "monotonic_ms": 0,
+                    "kind": "fetch-request",
+                    "source": target_source,
+                    "fetch_id": f"fetch-{resource_id}",
+                    "network_id": f"network-{resource_id}",
+                    "redirected_fetch_id": None,
+                    "network_occurrence_id": occurrence_id,
+                    "method": "GET",
+                    "url": resource["url"],
+                    "frame_id": "root-frame",
+                    "policy_decision": "continue",
+                    "policy_reason": None,
+                    "relationship": "primary",
+                },
+                {
+                    "sequence": len(events) + 3,
+                    "monotonic_ms": 0,
+                    "kind": "network-terminal",
+                    "source": target_source,
+                    "network_id": f"network-{resource_id}",
+                    "outcome": "finished",
+                    "network_occurrence_ids": [occurrence_id],
+                },
+            ]
+        )
+    render_observation = {
+        "schema_version": 1,
+        "clock": "monotonic-relative-ms",
+        "navigation_started_ms": 0,
+        "load_event_ms": 0,
+        "last_relevant_event_ms": 0,
+        "quiet_started_ms": 10_000,
+        "cutoff_ms": 13_000,
+        "active_request_ids": [],
+        "active_request_count": 0,
+        "cutoff_reason": "quiescent",
+    }
+    render_observation_sha256 = evidence_sha256(render_observation)
+    discovery_event_audit = {
+        "schema_version": DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION,
+        "instrumentation_policy": CDP_TARGET_INSTRUMENTATION_POLICY,
+        "passive_render_contract_sha256": PASSIVE_RENDER_CONTRACT_SHA256,
+        "render_observation_sha256": render_observation_sha256,
+        "events": events,
+        "summary": {
+            "event_count": len(events),
+            "target_event_count": 0,
+            "network_request_count": len(resources),
+            "fetch_request_count": len(resources),
+            "fetch_internal_restart_count": 0,
+            "terminal_event_count": len(resources),
+            "resource_occurrence_count": len(resources),
+            "exclusion_occurrence_count": 0,
+        },
+    }
+    discovery_event_audit_sha256 = evidence_sha256(discovery_event_audit)
+    origin_ip_pins = {value: "1.1.1.1" for value in sorted(origins)}
+    browser_request_headers = [
+        {"resource_id": resource["id"], "headers": resource["headers"]}
+        for resource in resources
+    ]
     manifest = {
         "preparation": {
             "source_url": resources[0]["url"],
             "final_url": resources[0]["url"],
             "chromium_version": "test-chromium",
-            "settle_ms": 3_000,
+            "settle_ms": 10_000,
             "observed_request_count": len(resources),
-            "observed_origins": origins,
+            "observed_origins": sorted(origins),
             "approved_origins": origins,
+            "origin_ip_pins": origin_ip_pins,
             "exclusions": [],
+            "browser_request_headers": browser_request_headers,
+            "request_header_transformation": (
+                "browser-safe-input-to-neqo-stability-frozen-runtime-v1"
+            ),
+            "passive_render_contract": passive_render_contract(),
+            "passive_render_contract_sha256": PASSIVE_RENDER_CONTRACT_SHA256,
+            "render_observation": render_observation,
+            "render_observation_sha256": render_observation_sha256,
+            "discovery_event_audit": discovery_event_audit,
+            "discovery_event_audit_sha256": discovery_event_audit_sha256,
             "prepare_image_digest": _SOURCE["image_digest"],
             "lab_source": _SOURCE,
             "max_response_bytes": 1_048_576,
@@ -409,13 +536,23 @@ def _complete_origin_workload(
                 for resource in resources
             ],
             "coverage_admission": {
-                "schema_version": 1,
+                "schema_version": 3,
                 "policy": "all-approved-origins-and-rendered-resources",
                 "required_origins": origins,
                 "required_resources": [
                     {"id": resource["id"], "url": resource["url"]}
                     for resource in resources
                 ],
+                "passive_render_contract_sha256": PASSIVE_RENDER_CONTRACT_SHA256,
+                "render_observation_sha256": render_observation_sha256,
+                "discovery_event_audit_sha256": discovery_event_audit_sha256,
+                "origin_ip_pins_sha256": evidence_sha256(origin_ip_pins),
+                "browser_request_headers_sha256": evidence_sha256(
+                    browser_request_headers
+                ),
+                "network_request_count": len(resources),
+                "resource_occurrence_count": len(resources),
+                "exclusion_occurrence_count": 0,
             },
         },
         "resources": resources,
@@ -1186,6 +1323,64 @@ def test_class_launch_claim_is_global_format_invariant_and_recovers_only_prelaun
             source=source,
             started_at=started,
         )
+
+
+@pytest.mark.parametrize("successor", (False, True))
+@pytest.mark.parametrize("mutation", ("missing", "mismatch", "symlink"))
+def test_downstream_launch_validation_requires_exact_global_registry_marker(
+    tmp_path: Path,
+    successor: bool,
+    mutation: str,
+) -> None:
+    """The frozen claim alone cannot establish the one-launch authority."""
+
+    study_id = (
+        "classifier-multiorigin100-v2-g01-0123456789ab"
+        if successor
+        else STUDY_ID
+    )
+    namespace = f".{study_id}-launches"
+    campaign = replace(
+        _campaign(tuple(_workload(index) for index in range(100))),
+        name=f"{study_id}-formal-01-1200",
+        class_study_id=study_id,
+        class_study_cohort_sha256="a" * 64,
+        class_study_cohort_assembly_sha256="b" * 64,
+        class_study_successor_sha256=("c" * 64 if successor else None),
+        class_study_launch_namespace=namespace,
+    )
+    root = tmp_path / "results" / campaign.name / "run-001"
+    inputs = root / "inputs"
+    registry = root.parents[1] / namespace
+    inputs.mkdir(parents=True)
+    registry.mkdir()
+    (inputs / "source.json").write_text(
+        json.dumps(_SOURCE, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    value = orchestrator._bind_class_study_launch(
+        orchestrator._class_study_launch_payload(
+            campaign,
+            result_root=root,
+            source=_SOURCE,
+            created_at="2026-08-28T00:00:00+00:00",
+        )
+    )
+    frozen = inputs / orchestrator.CLASS_STUDY_LAUNCH_INPUT.removeprefix("inputs/")
+    encoded = json.dumps(value, indent=2, sort_keys=True) + "\n"
+    frozen.write_text(encoded, encoding="utf-8")
+    marker = registry / f"{value['payload']['launch_key']}.json"
+    marker.write_text(encoded, encoding="utf-8")
+
+    assert orchestrator._validate_class_study_launch(root, campaign) == sha256_file(frozen)
+    marker.unlink()
+    if mutation == "mismatch":
+        marker.write_text("{}\n", encoding="utf-8")
+    elif mutation == "symlink":
+        marker.symlink_to(frozen)
+
+    with pytest.raises(ValueError, match="global first-launch claim differs"):
+        orchestrator._validate_class_study_launch(root, campaign)
 
 
 @pytest.mark.parametrize(

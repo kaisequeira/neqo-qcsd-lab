@@ -1,13 +1,22 @@
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import re
+from collections.abc import Mapping
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from .discovery_evidence import (
+    PASSIVE_RENDER_CONTRACT_SHA256,
+    evidence_sha256,
+    validate_passive_render_contract,
+    validate_render_observation,
+    verify_discovery_event_audit,
+)
 from .util import SOURCE_METADATA_KEYS, sha256_bytes
 
 SENSITIVE = {"authorization", "cookie", "cookie2", "proxy-authorization"}
@@ -74,8 +83,32 @@ PREPARATION_KEYS = {
     "prepare_image_digest",
     "udp_payload_qualification",
     "coverage_admission",
+    "passive_render_contract",
+    "passive_render_contract_sha256",
+    "render_observation",
+    "render_observation_sha256",
+    "discovery_event_audit",
+    "discovery_event_audit_sha256",
+    "origin_ip_pins",
+    "browser_request_headers",
+    "request_header_transformation",
 }
-LEGACY_OPTIONAL_PREPARATION_KEYS = {"udp_payload_qualification", "coverage_admission"}
+DISCOVERY_EVIDENCE_PREPARATION_KEYS = {
+    "passive_render_contract",
+    "passive_render_contract_sha256",
+    "render_observation",
+    "render_observation_sha256",
+    "discovery_event_audit",
+    "discovery_event_audit_sha256",
+}
+LEGACY_OPTIONAL_PREPARATION_KEYS = {
+    "udp_payload_qualification",
+    "coverage_admission",
+    "origin_ip_pins",
+    "browser_request_headers",
+    "request_header_transformation",
+    *DISCOVERY_EVIDENCE_PREPARATION_KEYS,
+}
 EXPECTED_RESPONSE_KEYS = {"resource_id", "status", "bytes", "body_sha256"}
 COMPLETE_COVERAGE_POLICY = "all-approved-origins-and-rendered-resources"
 COVERAGE_ADMISSION_KEYS = {
@@ -85,6 +118,18 @@ COVERAGE_ADMISSION_KEYS = {
     "required_resources",
 }
 COVERAGE_ADMISSION_RESOURCE_KEYS = {"id", "url"}
+COVERAGE_ADMISSION_V2_KEYS = COVERAGE_ADMISSION_KEYS | {
+    "passive_render_contract_sha256",
+    "render_observation_sha256",
+    "discovery_event_audit_sha256",
+    "network_request_count",
+    "resource_occurrence_count",
+    "exclusion_occurrence_count",
+}
+COVERAGE_ADMISSION_V3_KEYS = COVERAGE_ADMISSION_V2_KEYS | {
+    "origin_ip_pins_sha256",
+    "browser_request_headers_sha256",
+}
 UDP_PAYLOAD_QUALIFICATION_KEYS = {
     "schema_version",
     "configured_udp_payload_ceiling",
@@ -435,6 +480,29 @@ def _validate_preparation(
         raise ValueError("manifest preparation final URL origin must be approved")
     if any(https_origin(resource["url"]) not in approved for resource in resources):
         raise ValueError("manifest preparation resources must use approved origins")
+    if "origin_ip_pins" in value:
+        _validate_preparation_origin_ip_pins(
+            value["origin_ip_pins"], approved_origins=value["approved_origins"]
+        )
+    header_evidence_fields = {
+        "browser_request_headers",
+        "request_header_transformation",
+    } & set(value)
+    if header_evidence_fields and header_evidence_fields != {
+        "browser_request_headers",
+        "request_header_transformation",
+    }:
+        raise ValueError("manifest preparation browser-header evidence is incomplete")
+    browser_headers_by_id: dict[int, list[list[str]]] | None = None
+    if header_evidence_fields:
+        if (
+            value["request_header_transformation"]
+            != "browser-safe-input-to-neqo-stability-frozen-runtime-v1"
+        ):
+            raise ValueError("manifest preparation request-header transformation is invalid")
+        browser_headers_by_id = _validate_browser_request_headers(
+            value["browser_request_headers"], resource_ids=resource_ids
+        )
     positive = ("max_response_bytes", "timeout_seconds", "stability_runs")
     non_negative = ("settle_ms", "observed_request_count", "stability_seed")
     if any(
@@ -496,12 +564,50 @@ def _validate_preparation(
         for item in exclusions
     ):
         raise ValueError("manifest preparation exclusions require url and reason")
+    evidence_fields = set(value) & DISCOVERY_EVIDENCE_PREPARATION_KEYS
+    if evidence_fields and evidence_fields != DISCOVERY_EVIDENCE_PREPARATION_KEYS:
+        raise ValueError("manifest preparation discovery evidence is incomplete")
+    if evidence_fields:
+        validate_passive_render_contract(
+            value["passive_render_contract"],
+            digest=value["passive_render_contract_sha256"],
+        )
+        validate_render_observation(value["render_observation"])
+        if (
+            evidence_sha256(value["render_observation"])
+            != value["render_observation_sha256"]
+            or evidence_sha256(value["discovery_event_audit"])
+            != value["discovery_event_audit_sha256"]
+        ):
+            raise ValueError("manifest preparation discovery evidence SHA-256 is invalid")
+        if (
+            value["discovery_event_audit"].get("render_observation_sha256")
+            != value["render_observation_sha256"]
+        ):
+            raise ValueError("discovery audit is bound to another render observation")
+        audit_resources = resources
+        if browser_headers_by_id is not None:
+            audit_resources = deepcopy(resources)
+            for resource in audit_resources:
+                resource["headers"] = browser_headers_by_id[resource["id"]]
+        verify_discovery_event_audit(
+            value["discovery_event_audit"],
+            render_observation=value["render_observation"],
+            resources=audit_resources,
+            exclusions=exclusions,
+            approved_origins=value["approved_origins"],
+            observed_request_count=value["observed_request_count"],
+            expected_root_document_url=value["source_url"],
+            expected_final_document_url=value["final_url"],
+            expected_observed_origins=value["observed_origins"],
+        )
     if "coverage_admission" in value:
         _validate_coverage_admission(
             value["coverage_admission"],
             approved_origins=value["approved_origins"],
             resources=resources,
             exclusions=exclusions,
+            preparation=value,
         )
     responses = value["expected_responses"]
     if not isinstance(responses, list) or len(responses) != len(resource_ids):
@@ -543,13 +649,25 @@ def _validate_coverage_admission(
     approved_origins: list[str],
     resources: list[dict[str, Any]],
     exclusions: list[dict[str, str]],
+    preparation: Mapping[str, Any],
 ) -> None:
-    if not isinstance(value, dict) or set(value) != COVERAGE_ADMISSION_KEYS:
+    if not isinstance(value, dict):
         raise ValueError(
             "manifest preparation coverage admission requires exact schema, policy, origins, "
             "and resource IDs"
         )
-    if value["schema_version"] != 1 or isinstance(value["schema_version"], bool):
+    schema_version = value.get("schema_version")
+    expected_keys = {
+        1: COVERAGE_ADMISSION_KEYS,
+        2: COVERAGE_ADMISSION_V2_KEYS,
+        3: COVERAGE_ADMISSION_V3_KEYS,
+    }.get(schema_version)
+    if set(value) != expected_keys:
+        raise ValueError(
+            "manifest preparation coverage admission requires exact schema, policy, origins, "
+            "and resource IDs"
+        )
+    if schema_version not in {1, 2, 3} or isinstance(schema_version, bool):
         raise ValueError("manifest preparation coverage admission schema is invalid")
     if value["policy"] != COMPLETE_COVERAGE_POLICY:
         raise ValueError("manifest preparation coverage admission policy is invalid")
@@ -586,6 +704,148 @@ def _validate_coverage_admission(
             "manifest preparation coverage admission cannot contain HTTP/3-unavailable or "
             "orphaned exclusions: " + ", ".join(sorted({item["url"] for item in unavailable}))
         )
+    if schema_version in {2, 3}:
+        if not DISCOVERY_EVIDENCE_PREPARATION_KEYS <= set(preparation):
+            raise ValueError("coverage admission schema two requires discovery evidence")
+        audit = preparation["discovery_event_audit"]
+        summary = audit.get("summary") if isinstance(audit, Mapping) else None
+        expected_evidence = {
+            "passive_render_contract_sha256": preparation[
+                "passive_render_contract_sha256"
+            ],
+            "render_observation_sha256": preparation["render_observation_sha256"],
+            "discovery_event_audit_sha256": preparation[
+                "discovery_event_audit_sha256"
+            ],
+            "network_request_count": (
+                summary.get("network_request_count") if isinstance(summary, Mapping) else None
+            ),
+            "resource_occurrence_count": (
+                summary.get("resource_occurrence_count") if isinstance(summary, Mapping) else None
+            ),
+            "exclusion_occurrence_count": (
+                summary.get("exclusion_occurrence_count") if isinstance(summary, Mapping) else None
+            ),
+        }
+        if any(value[key] != expected for key, expected in expected_evidence.items()):
+            raise ValueError("coverage admission discovery-evidence binding does not verify")
+        if value["passive_render_contract_sha256"] != PASSIVE_RENDER_CONTRACT_SHA256:
+            raise ValueError("coverage admission binds an obsolete render contract")
+    if schema_version == 3:
+        pins = preparation.get("origin_ip_pins")
+        _validate_preparation_origin_ip_pins(
+            pins, approved_origins=approved_origins
+        )
+        if value["origin_ip_pins_sha256"] != evidence_sha256(pins):
+            raise ValueError("coverage admission origin-IP pin binding does not verify")
+        browser_headers = preparation.get("browser_request_headers")
+        if (
+            preparation.get("request_header_transformation")
+            != "browser-safe-input-to-neqo-stability-frozen-runtime-v1"
+            or value["browser_request_headers_sha256"]
+            != evidence_sha256(browser_headers)
+        ):
+            raise ValueError("coverage admission browser-header binding does not verify")
+
+
+def _validate_preparation_origin_ip_pins(
+    value: Any, *, approved_origins: list[str]
+) -> None:
+    """Validate the exact public address selected for every approved origin."""
+
+    if not isinstance(value, dict) or list(value) != sorted(value) or set(value) != set(
+        approved_origins
+    ):
+        raise ValueError(
+            "manifest preparation origin-IP pins must exactly cover approved origins"
+        )
+    hostname_addresses: dict[str, str] = {}
+    for approved_origin, raw_address in value.items():
+        if not isinstance(approved_origin, str) or not isinstance(raw_address, str):
+            raise ValueError("manifest preparation origin-IP pin is malformed")
+        try:
+            address = ipaddress.ip_address(raw_address)
+        except ValueError as error:
+            raise ValueError("manifest preparation origin-IP pin is malformed") from error
+        if address.compressed != raw_address or not _is_public_network_address(address):
+            raise ValueError("manifest preparation origin-IP pin is not canonical public IP")
+        hostname = urlsplit(approved_origin).hostname
+        if hostname is None:
+            raise ValueError("manifest preparation origin-IP pin is malformed")
+        previous = hostname_addresses.setdefault(hostname, raw_address)
+        if previous != raw_address:
+            raise ValueError(
+                "manifest preparation origin-IP pins conflict for a shared hostname"
+            )
+
+
+def _is_public_network_address(
+    address: ipaddress.IPv4Address | ipaddress.IPv6Address,
+) -> bool:
+    """Mirror the exact client-side public-origin policy without DNS access."""
+
+    octets = address.packed
+    if isinstance(address, ipaddress.IPv4Address):
+        a, b, c, _d = octets
+        return not (
+            a == 0
+            or a == 10
+            or a == 127
+            or a >= 224
+            or (a == 100 and 64 <= b <= 127)
+            or (a == 169 and b == 254)
+            or (a == 172 and 16 <= b <= 31)
+            or (a == 192 and b == 0)
+            or (a == 192 and b == 168)
+            or (a == 192 and b == 88 and c == 99)
+            or (a == 198 and b in {18, 19})
+            or (a == 198 and b == 51 and c == 100)
+            or (a == 203 and b == 0 and c == 113)
+        )
+    global_unicast = octets[0] & 0xE0 == 0x20
+    ietf_special = octets[0] == 0x20 and octets[1] == 0x01 and octets[2] & 0xFE == 0
+    deprecated_6to4 = octets[0] == 0x20 and octets[1] == 0x02
+    documentation = octets[:4] == bytes((0x20, 0x01, 0x0D, 0xB8)) or (
+        octets[0] == 0x3F and octets[1] == 0xFF and octets[2] & 0xF0 == 0
+    )
+    return global_unicast and not ietf_special and not deprecated_6to4 and not documentation
+
+
+def _validate_browser_request_headers(
+    value: Any, *, resource_ids: set[int]
+) -> dict[int, list[list[str]]]:
+    if not isinstance(value, list):
+        raise ValueError("manifest preparation browser request headers are malformed")
+    by_id: dict[int, list[list[str]]] = {}
+    for item in value:
+        if (
+            not isinstance(item, dict)
+            or set(item) != {"resource_id", "headers"}
+            or type(item["resource_id"]) is not int
+            or item["resource_id"] in by_id
+            or not isinstance(item["headers"], list)
+        ):
+            raise ValueError("manifest preparation browser request headers are malformed")
+        headers = item["headers"]
+        if (
+            any(
+                not isinstance(header, list)
+                or len(header) != 2
+                or any(not isinstance(part, str) for part in header)
+                for header in headers
+            )
+            or len({header[0] for header in headers}) != len(headers)
+            or safe_discovery_headers(dict(headers)) != headers
+        ):
+            raise ValueError("manifest preparation browser request headers are not canonical")
+        by_id[item["resource_id"]] = deepcopy(headers)
+    if set(by_id) != resource_ids or [item["resource_id"] for item in value] != sorted(
+        resource_ids
+    ):
+        raise ValueError(
+            "manifest preparation browser request headers must cover resources in ID order"
+        )
+    return by_id
 
 
 def _validate_udp_payload_qualification(value: Any, *, stability_runs: int) -> None:

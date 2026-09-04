@@ -18,6 +18,7 @@ from qcsd_lab.experiment import (
     result_path,
     set_sample_eligibility,
     transition_sample,
+    validate_accepted_kernel_tx_evidence,
     validate_accepted_observer_topology_receipt,
     validate_accepted_samples,
     validate_resume_fingerprints,
@@ -276,6 +277,61 @@ def test_current_class_sample_rejects_historical_runner_wakeup_schema(
 
     with pytest.raises(ValueError, match="class-study.*schema 10"):
         validate_accepted_samples(root, experiment)
+
+
+@pytest.mark.parametrize(
+    ("runtime_kind", "runner_schema", "message"),
+    [
+        ("buflo", 10, "BuFLO sample requires runner-wakeup schema 11"),
+        ("cs_buflo", 11, "CS-BuFLO sample requires runner-wakeup schema 10"),
+    ],
+)
+def test_current_class_candidates_require_mode_specific_runner_schema(
+    tmp_path: Path,
+    runtime_kind: str,
+    runner_schema: int,
+    message: str,
+) -> None:
+    root, experiment = _initialize_class_experiment(tmp_path, role="certification")
+    sample = experiment["samples"][0]
+    sample.update(defense=runtime_kind.replace("_", "-"), runtime_kind=runtime_kind, baseline=False)
+    transition_sample(experiment, sample["sample_id"], "running", increment_attempt=True)
+    sample_root = _write_artifacts(root)
+    atomic_json(
+        sample_root / "neqo/run.json",
+        {
+            "runner_wakeup_metrics": {"schema_version": runner_schema},
+            "terminal_evidence_render_errors": [],
+        },
+    )
+    accept_sample(root, experiment, sample["sample_id"])
+
+    with pytest.raises(ValueError, match=message):
+        validate_accepted_samples(root, experiment)
+
+
+def test_schema_eleven_buflo_rejects_absent_kernel_sidecar(tmp_path: Path) -> None:
+    sample = {
+        **_sample(),
+        "state": "accepted",
+        "defense": "buflo",
+        "runtime_kind": "buflo",
+        "baseline": False,
+    }
+    sample_root = tmp_path / sample["path"]
+    atomic_json(
+        sample_root / "neqo/run.json",
+        {
+            "terminal_evidence_render_errors": [],
+            "runner_wakeup_metrics": {
+                "schema_version": 11,
+                "buflo_kernel_tx": {"fixture": "raw-kernel-receipt"},
+            }
+        },
+    )
+
+    with pytest.raises(ValueError, match="lacks its kernel-TX evidence sidecar"):
+        validate_accepted_kernel_tx_evidence(tmp_path, sample)
 
 
 def test_buflo_study_schema_ten_rejects_missing_scheduler_runtime_receipt(
