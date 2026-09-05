@@ -1,5 +1,7 @@
 # QCSD lab
 
+Documentation audit: 2026-09-06, Australia/Sydney (AEST, UTC+10)
+
 This repository is the experiment orchestrator for the QCSD Neqo fork. It has
 one workflow: freeze a workload, expand a campaign into sequential samples,
 capture each Neqo run directly, seal the evidence, and derive plots and a
@@ -637,21 +639,27 @@ exact source and passed its fresh no-cache build and isolated reference gates,
 then its sole first timing launch failed the historical schema-3 whole-run
 TAI-minus-MONOTONIC drift ceiling.
 
-Current clean Rust `ce0d7a21756ce795d6f50d750a1c25e0fa006327` and its exact
-implementation-bearing Lab parent
+Current clean Rust `ce0d7a21756ce795d6f50d750a1c25e0fa006327` and the historical
+implementation-bearing Lab timing commit
 `e1ab7d71580055307042188c1ab1f4e0a05bbd60` retain all physical timing
 requirements while replacing that obsolete global gate with nested kernel
-receipt schema 2. The current clean Lab documentation commit is a direct child
-of that parent and resolves its gitlink to the same Rust commit. Each direct
-enqueue TAI bracket is corroborated
-by item-local post-TX MONOTONIC evidence; the REALTIME intersection remains
-hard, global MONOTONIC drift is diagnostic, the physical TX interval remains
-inside `[release, release + 5 ms)`, and incoming evidence additionally requires
+receipt schema 2. The immediate pre-batching clean Lab base is
+`364eb793c53fc7aee513ac5b2f1aa2552d82489c`; the post-batching implementation
+checkpoint is `84d6a19d155f54cee2bb1539abb6ff7797ac26ac` and resolves its gitlink to
+the same Rust commit. Each direct enqueue TAI bracket is corroborated by
+item-local post-TX MONOTONIC evidence; the REALTIME intersection remains hard,
+global MONOTONIC drift is diagnostic, the physical TX interval remains inside
+`[release, release + 5 ms)`, and incoming evidence additionally requires
 `tx_lower >= enqueue_lower`. The Lab timing-stress contract is schema 4.
 Pinned focused Rust passed 23/23 with strict Clippy, host formatting/checking
 passed, and Lab clock/timing/parameter 164/164, lifecycle adversarial 8/8, CLI
-38/38, and supervisor 215 with seven skipped passed. These are engineering
-checks only; a complete Lab suite has not run for this head, and no v58 build,
+38/38, and supervisor 215 with seven skipped passed. Those results belong to
+the pre-batching lineage. For the post-batching source, the acquisition suite
+passed 96/96 and the merged acquisition/watcher/timing/cohort/CLI/successor/
+attestation suite passed 450/450. The complete Lab suite passed 2,841 tests
+with 12 explicit skips and 23 warnings before the final diagnostic-only blocker
+wording correction; all 124 `class_pipeline` tests then passed on the exact
+implementation checkpoint. These are engineering checks only; no v58 build,
 reference, timing, regression, code-gate, or controlled receipt exists.
 
 The retained post-v55 Lab engineering lineage also hardens durable Docker HANDOFF
@@ -799,7 +807,12 @@ certification and canaries are 0/900 and 0/1,000; formal capture is 0/16,000.
 Handoff, evaluation, comparison, and attestation are absent. V57's build and
 reference passed only for Lab `b7811dab7124ffdde113fae111ef8bab4810ebba`
 and Rust `edf44779db0dacac37b8a71f5ccf5ea102e34c29`; its terminal first timing
-launch consumed that cohort. The next fresh cohort is v58. It must repeat the
+launch consumed that cohort. The 6 September post-batching Lab implementation
+checkpoint `84d6a19d155f54cee2bb1539abb6ff7797ac26ac` adds the bounded
+two-candidate acquisition and its schema-4 evidence boundary, but has no
+source-bound build, live acquisition, or candidate-capture receipt and
+therefore advances none of those numerators.
+The next fresh cohort is v58. It must repeat the
 pull/no-cache build, isolated reference gate, 12/12 timing stress, 18/18
 regression, regression-bound code gate, and 160/160 controlled qualification
 before expanded-class acquisition can begin. V55–v57 cannot be retried. The
@@ -817,15 +830,22 @@ process-local, campaign-identity-bound authority created by the `class-study`
 coordinator after it verifies the prerequisite ledger; generic `run` or
 `resume` cannot bypass that ordering.
 
-At the 4 September 2026 18:17:04 AEST operational checkpoint, a read-only
+At the historical 4 September 2026 18:17:04 AEST operational checkpoint, a read-only
 probe found Docker 29.0.1 healthy on Linux AArch64 with daemon ID
 `48f27adb-00f1-41ce-80fe-41360d2eb712`, 12 CPUs, approximately 16.5 GB memory,
 and no running containers. The physical volume backing its data VHDX remains
 subject to the 64 GiB build-time admission gate. The earlier unrelated
 telemetry workload no longer creates a scheduling conflict, but final source
 verification and a fresh no-cache build still precede any scientific run.
-These are operational conditions only and do not advance a scientific
-numerator. Cohort
+At the 6 September 2026 documentation audit Docker remained reachable.
+Unrelated `telemetry-system` containers were running, so measured-capture
+scheduler preflight would correctly fail closed until they are intentionally
+stopped; class acquisition does not request that scheduler partition and
+remains launchable. Docker also listed one unnamed Dead Rust-test ghost while
+exact inspection returned `no such object`. That stale, unlabelled listing is
+not selected by QCSD running-container checks and has no safely scoped live
+prune route. These are operational conditions only and do not advance a
+scientific numerator. Cohort
 v32 passed its
 fresh pull/no-cache build and isolated reference execution, then stopped in the
 first established-mode regression campaign at 4/14 accepted cells. The two
@@ -1236,16 +1256,55 @@ from the host with:
 ```
 
 The supervisor validates the catalogue, foundation, exact prepare-image
-digest, provenance, and checkpoint before doing any work. It invokes the
-existing one-candidate `acquisition-run` action only when work is due and
-resumes from the same `checkpoint.json` when the command is restarted. Page
-navigation is a separate action completed before a baseline is armed. The
-baseline-arming action then waits interruptibly to the `t+30s` window and runs
-that probe without another Docker/status launch; the host watcher waits for
-the `t+24h` and `t+72h` windows. It creates no alternative state or completion
-receipt. The optional `--heartbeat-seconds` value controls signal-responsive
-host wait slices and must be a finite number from one through five seconds; it
-does not poll Docker at that frequency.
+digest, provenance, and checkpoint before doing any work. It invokes one
+bounded `acquisition-run` action only when work is due and resumes from the
+same `checkpoint.json` when the command is restarted. An action may advance a
+deterministic compatible pair, but never more than two candidates or five live
+page workers. Starting from the catalogue-order anchor, selection scans later
+candidates in immutable catalogue order and pairs the first one with the same
+priority and stage; a probe partner must also share the probe identifier, and
+the combined retained page count must fit the five-worker cap. Incompatible
+intervening candidates are skipped for that action. The anchor runs alone only
+when no later candidate satisfies every compatibility condition. The
+coordinator checkpoints the active batch and pending attempts before parallel
+work and merges outcomes in catalogue order. Page navigation is a separate
+action completed before a baseline is armed. A paired baseline uses one
+atomically recorded timestamp;
+the baseline action then waits interruptibly to the `t+30s` window and runs the
+capped page batch without another Docker/status launch. The host watcher waits
+for the `t+24h` and `t+72h` windows. It creates no alternative state or
+completion receipt. The optional `--heartbeat-seconds` value controls
+signal-responsive host wait slices and must be a finite number from one
+through five seconds; it does not poll Docker at that frequency.
+
+The current acquisition uses provenance schema 4, checkpoint schema 2,
+active-batch schema 1, terminal schema 3, and completion schema 2. Its
+provenance embeds the exact action-timing contract at nested schema 2 and the
+baseline-scheduling contract at nested schema 2; the checkpoint carries the
+append-only `baseline_batches` ledger and nullable transactional
+`active_batch`. Genuine committed producers exist for acquisition schemas 1
+and 3; schema 2 is preserved against its declared intermediate verifier
+contract but has no committed producer or artefact. All three remain
+verification-only and cannot be resumed or used to publish new evidence. The
+immutable public limits are two candidates per action and five simultaneous
+live pages. The production watcher always invokes `acquisition-run` with two as
+its bound; the supported value one exists only for internal and deterministic
+test use, not as a production watcher tuning control.
+
+Status separates unfinished states from immediately actionable work.
+It reports `acquisition_schema_version=4`, `checkpoint_schema_version=2`,
+`maximum_candidates_per_action=2`, `global_live_page_cap=5`, and either a null
+`active_batch` or a summary with the exact `batch_id`, `stage`, `published_at`,
+`candidate_ids`, `live_page_count`, and `attempt_count` fields.
+`due_now_count`, `finalisable_count`, and `missed_window_count` are disjoint
+subsets of `probing_count`, and their sum cannot exceed `probing_count`:
+finalisable candidates need only deterministic terminal/publication recovery
+and are not counted as live due probes. `work_due_now` is true when
+`recovery_required_count` is positive, any of those three counts is positive,
+or `pending_count` is positive while `pending_start_blocked` is false.
+Completion requires all 600 candidates terminal,
+`recovery_required_count=0`, `finalisable_count=0`, no active batch, zero
+pending or probing candidates, and no `next_due` value.
 
 The 60-second browser navigation timeout and 30-second passive-render cap are
 component limits, not a whole-attempt duration claim. The launcher instead
@@ -1259,18 +1318,24 @@ process-status evidence rather than a separate per-action duration receipt.
 Direct `class-study acquisition-run` and `acquisition-status` invocations lack
 the watcher's create-only scope authority and fail before Docker access.
 
-Operationally, this strict serial schedule is much longer than 72 hours. A
-40-minute action-start reservation covers the configured 2,040-second outer
-cut-off, a 310-second status envelope, and a 50-second scheduler margin. It is
-enforced across every candidate's baseline-arming, `t+24h`, and `t+72h` action
-starts, including cross-offset collisions. The configured zero-work
-earliest-next greedy rule places the 600th baseline 65 d 11 h 5 min after the
-first and its earliest `t+72h` probe at 68 d 10 h 50 min. These figures are a
-deterministic projection, not a globally optimal or universal lower bound;
-deliberately delaying an earlier baseline can change the final endpoint.
-Navigation, preparation, Docker, network, retries, and interruptions add real
-wall time. The configured cut-off is a policy bound, not a call-tree-derived
-guarantee of successful completion.
+Operationally, the serialised batch schedule is still much longer than 72
+hours. A 40-minute action-start reservation covers the configured 2,040-second
+outer cut-off, a 310-second status envelope, and a 50-second scheduler margin.
+It is enforced between baseline batches and their `t+24h` and `t+72h` action
+starts, including cross-offset collisions; the members of one recorded batch
+share its reservation. With zero work and all candidates forming compatible
+pairs, the best-compatible earliest-next greedy projection creates 300 batches,
+places the last baseline 32 d 5 h 20 min after the first, and places its
+earliest `t+72h` probe at 35 d 5 h 5 min. This is not a guaranteed duration.
+Whenever no later compatible partner exists for an anchor, singleton fallback
+can raise the batch count towards 600: the
+all-singleton projection places the last baseline at 65 d 11 h 5 min and its
+earliest `t+72h` probe at 68 d 10 h 50 min (approximately 68 days). Neither
+projection is a globally optimal or universal lower bound; deliberately
+delaying an earlier baseline can change the final endpoint. Navigation,
+preparation, Docker, network, retries, and
+interruptions add real wall time. The configured cut-off is a policy bound,
+not a call-tree-derived guarantee of successful completion.
 
 ### Retained focused candidate workflow
 
