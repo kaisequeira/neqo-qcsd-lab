@@ -38,6 +38,22 @@ def _write_receipt(path: Path, receipt_type: str, payload: dict[str, Any]) -> No
     path.write_bytes(_canonical(_receipt(receipt_type, payload)))
 
 
+def _batch(prefix: str, body: dict[str, Any]) -> dict[str, Any]:
+    value = copy.deepcopy(body)
+    value["batch_id"] = f"{prefix}-{hashlib.sha256(_canonical(body)).hexdigest()}"
+    return value
+
+
+def _checkpoint_payload(acquisition: Fixture) -> dict[str, Any]:
+    return copy.deepcopy(
+        json.loads(acquisition.paths.checkpoint.read_text(encoding="utf-8"))["payload"]
+    )
+
+
+def _replace_checkpoint(acquisition: Fixture, payload: dict[str, Any]) -> None:
+    _write_receipt(acquisition.paths.checkpoint, watch.CHECKPOINT_TYPE, payload)
+
+
 @dataclass
 class Fixture:
     paths: watch.WatchPaths
@@ -141,8 +157,11 @@ def acquisition(tmp_path: Path) -> Fixture:
     _write_receipt(paths.provenance, watch.PROVENANCE_TYPE, provenance_payload)
     provenance_sha256 = hashlib.sha256(paths.provenance.read_bytes()).hexdigest()
     checkpoint_payload = {
+        "checkpoint_schema_version": watch.CHECKPOINT_SCHEMA_VERSION,
         "provenance_sha256": provenance_sha256,
         "candidate_catalogue_sha256": catalogue_sha256,
+        "baseline_batches": [],
+        "active_batch": None,
         "candidates": {
             candidate_id: {"state": "pending", "pages": [], "terminal": None}
             for candidate_id in candidate_ids
@@ -163,20 +182,35 @@ def _details(
     terminal: int = 0,
     probing: int = 0,
     due: int = 0,
+    finalisable: int = 0,
     missed: int = 0,
     recovery: int = 0,
     blocked: bool = False,
     next_due: str | None = None,
+    active_batch: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     pending = watch.CANDIDATE_COUNT - terminal - probing
-    complete = terminal == watch.CANDIDATE_COUNT
-    work_due = bool(due or missed or (pending and not blocked))
+    complete = (
+        terminal == watch.CANDIDATE_COUNT
+        and finalisable == 0
+        and recovery == 0
+        and active_batch is None
+    )
+    work_due = bool(
+        recovery or due or finalisable or missed or (pending and not blocked)
+    )
     return {
+        "acquisition_schema_version": watch.ACQUISITION_SCHEMA_VERSION,
+        "checkpoint_schema_version": watch.CHECKPOINT_SCHEMA_VERSION,
+        "maximum_candidates_per_action": watch.MAX_CANDIDATES,
+        "global_live_page_cap": watch.GLOBAL_LIVE_PAGE_CAP,
+        "active_batch": copy.deepcopy(active_batch),
         "candidate_count": watch.CANDIDATE_COUNT,
         "terminal_count": terminal,
         "pending_count": pending,
         "probing_count": probing,
         "due_now_count": due,
+        "finalisable_count": finalisable,
         "missed_window_count": missed,
         "recovery_required_count": recovery,
         "pending_start_blocked": blocked,
@@ -200,6 +234,10 @@ def _result(action: str, details: dict[str, Any], *, runner_root: str | None = N
             "labels": ["t+30s", "t+24h", "t+72h"],
             "all_three_required_per_page_receipt": True,
             "acquisition_owner": "resumable-qcsd-class-study-production-runner",
+            "batching": {
+                "maximum_candidates_per_action": watch.MAX_CANDIDATES,
+                "global_live_page_cap": watch.GLOBAL_LIVE_PAGE_CAP,
+            },
             "runner_wait_policy": copy.deepcopy(watch._RUN_WAIT_POLICY),
         }
         status = "complete"
@@ -291,10 +329,12 @@ class FakeMonotonic:
 
 
 def test_due_work_uses_exact_command_environment_and_paths(acquisition: Fixture) -> None:
-    assert watch.ACQUISITION_SCHEMA_VERSION == 3
+    assert watch.ACQUISITION_SCHEMA_VERSION == 4
+    assert watch.CHECKPOINT_SCHEMA_VERSION == 2
     assert watch.ACQUISITION_TIMEOUT_MS == 60_000
     assert watch.PENDING_BASELINE_GUARD_MS == 2_400_000
-    assert watch.MAX_CANDIDATES == 1
+    assert watch.MAX_CANDIDATES == 2
+    assert watch.GLOBAL_LIVE_PAGE_CAP == 5
     assert watch.ACQUISITION_ACTION_TIMEOUT_SECONDS == 1_800
     assert watch.ACQUISITION_ACTION_CLEANUP_SECONDS == 120
     assert watch.RUN_RUNTIME_SECONDS == 1_920
@@ -365,6 +405,79 @@ def test_due_work_uses_exact_command_environment_and_paths(acquisition: Fixture)
         call[2][watch.PREPARE_IMAGE_ENV] == acquisition.image for call in coordinator_calls
     )
     assert all(watch.LOCK_ENV not in call[2] for call in runner.calls)
+
+
+def test_action_status_validates_transactional_active_batch_summary() -> None:
+    active = {
+        "batch_id": "active-" + "a" * 64,
+        "stage": "navigation",
+        "published_at": "2026-08-29T01:00:00Z",
+        "candidate_ids": ["tranco-0000001", "tranco-0000002"],
+        "live_page_count": 2,
+        "attempt_count": 2,
+    }
+    details = _details(recovery=2, active_batch=active)
+    watch._validate_action_result(
+        _result("acquisition-status", details), action="acquisition-status"
+    )
+
+    probe_active = copy.deepcopy(active)
+    probe_active.update(
+        {"stage": "probe", "live_page_count": 5, "attempt_count": 5}
+    )
+    watch._validate_action_result(
+        _result(
+            "acquisition-status",
+            _details(
+                terminal=watch.CANDIDATE_COUNT - 2,
+                probing=2,
+                recovery=5,
+                active_batch=probe_active,
+            ),
+        ),
+        action="acquisition-status",
+    )
+
+    for field, value in (("stage", "baseline"), ("attempt_count", 1)):
+        invalid = copy.deepcopy(details)
+        invalid["active_batch"][field] = value
+        with pytest.raises(watch.WatchError, match="active batch"):
+            watch._validate_action_result(
+                _result("acquisition-status", invalid),
+                action="acquisition-status",
+            )
+
+
+def test_action_status_validates_finalisable_work_as_disjoint_and_due() -> None:
+    finalisable = _details(
+        terminal=watch.CANDIDATE_COUNT - 1,
+        probing=1,
+        finalisable=1,
+    )
+    watch._validate_action_result(
+        _result("acquisition-status", finalisable),
+        action="acquisition-status",
+    )
+
+    overlapping = _details(
+        terminal=watch.CANDIDATE_COUNT - 1,
+        probing=1,
+        due=1,
+        finalisable=1,
+    )
+    with pytest.raises(watch.WatchError, match="counts are inconsistent"):
+        watch._validate_action_result(
+            _result("acquisition-status", overlapping),
+            action="acquisition-status",
+        )
+
+    false_due_flag = copy.deepcopy(finalisable)
+    false_due_flag["work_due_now"] = False
+    with pytest.raises(watch.WatchError, match="due-work flag"):
+        watch._validate_action_result(
+            _result("acquisition-status", false_due_flag),
+            action="acquisition-status",
+        )
 
 
 def test_complete_exits_without_creating_completion_receipt(acquisition: Fixture) -> None:
@@ -635,6 +748,285 @@ def test_watcher_rejects_discovery_contract_drift(
 
     with pytest.raises(watch.WatchError, match="another study or catalogue"):
         watch._validate_immutable_binding(acquisition.paths)
+
+
+def test_watcher_reconciles_baseline_batches_with_candidate_state(
+    acquisition: Fixture,
+) -> None:
+    payload = _checkpoint_payload(acquisition)
+    candidate_ids = acquisition.candidate_ids[:2]
+    baseline_started_at = "2026-08-29T01:00:00Z"
+    for index, candidate_id in enumerate(candidate_ids):
+        payload["candidates"][candidate_id] = {
+            "state": "probing",
+            "pages": [{"page": {"ordinal": index}}],
+            "terminal": None,
+            "baseline_started_at": baseline_started_at,
+        }
+    payload["baseline_batches"] = [
+        _batch(
+            "baseline",
+            {
+                "baseline_started_at": baseline_started_at,
+                "candidate_ids": candidate_ids,
+                "live_page_count": 2,
+            },
+        )
+    ]
+    _replace_checkpoint(acquisition, payload)
+    binding = watch._validate_immutable_binding(acquisition.paths)
+    watch._validate_checkpoint(acquisition.paths, binding)
+
+    mutations = (
+        lambda value: value["baseline_batches"][0].__setitem__(
+            "live_page_count", 1
+        ),
+        lambda value: value["candidates"][candidate_ids[0]].__setitem__(
+            "baseline_started_at", "2026-08-29T01:00:01Z"
+        ),
+        lambda value: value["baseline_batches"].append(
+            copy.deepcopy(value["baseline_batches"][0])
+        ),
+        lambda value: value["baseline_batches"][0]["candidate_ids"].reverse(),
+        lambda value: value["baseline_batches"].clear(),
+    )
+    for mutate in mutations:
+        invalid = copy.deepcopy(payload)
+        mutate(invalid)
+        # Recompute content addressing only when the mutation is intended to
+        # exercise cross-ledger truth rather than the ID check itself.
+        if len(invalid["baseline_batches"]) == 1:
+            body = {
+                name: item
+                for name, item in invalid["baseline_batches"][0].items()
+                if name != "batch_id"
+            }
+            invalid["baseline_batches"][0] = _batch("baseline", body)
+        _replace_checkpoint(acquisition, invalid)
+        with pytest.raises(watch.WatchError, match="baseline batch"):
+            watch._validate_checkpoint(acquisition.paths, binding)
+
+
+def test_watcher_rejects_cross_offset_baseline_batch_collision(
+    acquisition: Fixture,
+) -> None:
+    payload = _checkpoint_payload(acquisition)
+    candidate_ids = acquisition.candidate_ids[:2]
+    starts = ("2026-08-29T01:00:00Z", "2026-08-31T01:00:00Z")
+    batches = []
+    for candidate_id, started_at in zip(candidate_ids, starts, strict=True):
+        payload["candidates"][candidate_id] = {
+            "state": "probing",
+            "pages": [{"page": {"ordinal": 0}}],
+            "terminal": None,
+            "baseline_started_at": started_at,
+        }
+        batches.append(
+            _batch(
+                "baseline",
+                {
+                    "baseline_started_at": started_at,
+                    "candidate_ids": [candidate_id],
+                    "live_page_count": 1,
+                },
+            )
+        )
+    payload["baseline_batches"] = batches
+    _replace_checkpoint(acquisition, payload)
+
+    with pytest.raises(watch.WatchError, match="violate the serial schedule"):
+        watch._validate_checkpoint(
+            acquisition.paths,
+            watch._validate_immutable_binding(acquisition.paths),
+        )
+
+
+def test_watcher_reconciles_transactional_navigation_batch(
+    acquisition: Fixture,
+) -> None:
+    payload = _checkpoint_payload(acquisition)
+    candidate_ids = acquisition.candidate_ids[:2]
+    started_at = "2026-08-29T01:00:00Z"
+    attempts = []
+    for candidate_id in candidate_ids:
+        payload["candidates"][candidate_id]["pending_navigation"] = {
+            "attempt": 1,
+            "started_at": started_at,
+        }
+        attempts.append(
+            {
+                "candidate_id": candidate_id,
+                "page_ordinal": None,
+                "probe_id": None,
+                "workload_id": None,
+                "attempt": 1,
+                "started_at": started_at,
+            }
+        )
+    payload["active_batch"] = _batch(
+        "active",
+        {
+            "active_batch_schema_version": 1,
+            "stage": "navigation",
+            "published_at": started_at,
+            "candidate_ids": candidate_ids,
+            "live_page_count": 2,
+            "attempts": attempts,
+        },
+    )
+    _replace_checkpoint(acquisition, payload)
+    binding = watch._validate_immutable_binding(acquisition.paths)
+    watch._validate_checkpoint(acquisition.paths, binding)
+
+    invalid = copy.deepcopy(payload)
+    invalid["active_batch"]["stage"] = "baseline"
+    body = {name: item for name, item in invalid["active_batch"].items() if name != "batch_id"}
+    invalid["active_batch"] = _batch("active", body)
+    _replace_checkpoint(acquisition, invalid)
+    with pytest.raises(watch.WatchError, match="active batch stage"):
+        watch._validate_checkpoint(acquisition.paths, binding)
+
+    invalid = copy.deepcopy(payload)
+    invalid["active_batch"]["published_at"] = "2026-08-29T01:00:00.000000Z"
+    for attempt in invalid["active_batch"]["attempts"]:
+        attempt["started_at"] = invalid["active_batch"]["published_at"]
+        invalid["candidates"][attempt["candidate_id"]]["pending_navigation"][
+            "started_at"
+        ] = invalid["active_batch"]["published_at"]
+    body = {
+        name: item
+        for name, item in invalid["active_batch"].items()
+        if name != "batch_id"
+    }
+    invalid["active_batch"] = _batch("active", body)
+    _replace_checkpoint(acquisition, invalid)
+    with pytest.raises(watch.WatchError, match="canonical UTC timestamp"):
+        watch._validate_checkpoint(acquisition.paths, binding)
+
+    invalid = copy.deepcopy(payload)
+    invalid["candidates"][candidate_ids[0]]["pending_navigation"]["attempt"] = 2
+    _replace_checkpoint(acquisition, invalid)
+    with pytest.raises(watch.WatchError, match="differ from pending candidate state"):
+        watch._validate_checkpoint(acquisition.paths, binding)
+
+def test_watcher_reconciles_transactional_probe_batch(
+    acquisition: Fixture,
+) -> None:
+    payload = _checkpoint_payload(acquisition)
+    candidate_id = acquisition.candidate_ids[0]
+    baseline_started_at = "2026-08-29T00:59:30Z"
+    started_at = "2026-08-29T01:00:00Z"
+    workload_id = f"{candidate_id}-p00-t30s-a001"
+    pending_probe = {
+        "probe_id": "t+30s",
+        "workload_id": workload_id,
+        "attempt": 1,
+        "observed_at": started_at,
+    }
+    payload["candidates"][candidate_id] = {
+        "state": "probing",
+        "pages": [{"page": {"ordinal": 0}, "pending_probe": pending_probe}],
+        "terminal": None,
+        "baseline_started_at": baseline_started_at,
+    }
+    payload["baseline_batches"] = [
+        _batch(
+            "baseline",
+            {
+                "baseline_started_at": baseline_started_at,
+                "candidate_ids": [candidate_id],
+                "live_page_count": 1,
+            },
+        )
+    ]
+    payload["active_batch"] = _batch(
+        "active",
+        {
+            "active_batch_schema_version": 1,
+            "stage": "probe",
+            "published_at": started_at,
+            "candidate_ids": [candidate_id],
+            "live_page_count": 1,
+            "attempts": [
+                {
+                    "candidate_id": candidate_id,
+                    "page_ordinal": 0,
+                    "probe_id": "t+30s",
+                    "workload_id": workload_id,
+                    "attempt": 1,
+                    "started_at": started_at,
+                }
+            ],
+        },
+    )
+    _replace_checkpoint(acquisition, payload)
+    binding = watch._validate_immutable_binding(acquisition.paths)
+    watch._validate_checkpoint(acquisition.paths, binding)
+
+    invalid = copy.deepcopy(payload)
+    invalid["active_batch"]["attempts"][0]["page_ordinal"] = 1
+    body = {name: item for name, item in invalid["active_batch"].items() if name != "batch_id"}
+    invalid["active_batch"] = _batch("active", body)
+    _replace_checkpoint(acquisition, invalid)
+    with pytest.raises(watch.WatchError, match="differ from pending candidate state"):
+        watch._validate_checkpoint(acquisition.paths, binding)
+
+    invalid = copy.deepcopy(payload)
+    second_workload = f"{candidate_id}-p01-t24h-a001"
+    invalid["candidates"][candidate_id]["pages"].append(
+        {
+            "page": {"ordinal": 1},
+            "pending_probe": {
+                "probe_id": "t+24h",
+                "workload_id": second_workload,
+                "attempt": 1,
+                "observed_at": started_at,
+            },
+        }
+    )
+    baseline_body = {
+        name: item
+        for name, item in invalid["baseline_batches"][0].items()
+        if name != "batch_id"
+    }
+    baseline_body["live_page_count"] = 2
+    invalid["baseline_batches"][0] = _batch("baseline", baseline_body)
+    invalid["active_batch"]["live_page_count"] = 2
+    invalid["active_batch"]["attempts"].append(
+        {
+            "candidate_id": candidate_id,
+            "page_ordinal": 1,
+            "probe_id": "t+24h",
+            "workload_id": second_workload,
+            "attempt": 1,
+            "started_at": started_at,
+        }
+    )
+    body = {
+        name: item
+        for name, item in invalid["active_batch"].items()
+        if name != "batch_id"
+    }
+    invalid["active_batch"] = _batch("active", body)
+    _replace_checkpoint(acquisition, invalid)
+    with pytest.raises(watch.WatchError, match="mixes identities or windows"):
+        watch._validate_checkpoint(acquisition.paths, binding)
+
+
+def test_watcher_rejects_pending_attempt_without_active_batch(
+    acquisition: Fixture,
+) -> None:
+    payload = _checkpoint_payload(acquisition)
+    payload["candidates"][acquisition.candidate_ids[0]]["pending_navigation"] = {
+        "attempt": 1,
+        "started_at": "2026-08-29T01:00:00Z",
+    }
+    _replace_checkpoint(acquisition, payload)
+    with pytest.raises(watch.WatchError, match="without an active batch"):
+        watch._validate_checkpoint(
+            acquisition.paths,
+            watch._validate_immutable_binding(acquisition.paths),
+        )
 
 
 def _restore_provenance_binding(acquisition: Fixture) -> Fixture:
@@ -2275,8 +2667,10 @@ def test_qcsd_rejects_cross_action_scope_digest_before_recovery_or_docker(
     (
         (
             "acquisition-run",
-            ("--acquisition-max-candidates", "1", "--acquisition-timeout-ms", "60000"),
+            ("--acquisition-max-candidates", "2", "--acquisition-timeout-ms", "60000"),
         ),
+        ("acquisition-run", ("--acquisition-max-candidates", "1")),
+        ("acquisition-run", ()),
         ("acquisition-status", ()),
     ),
 )
@@ -2318,6 +2712,45 @@ def test_direct_qcsd_acquisition_action_has_no_watcher_authority_before_docker(
     assert not marker.exists()
 
 
+@pytest.mark.parametrize("value", ("0", "3", "true"))
+def test_direct_qcsd_rejects_unbounded_acquisition_batch_before_authority_or_docker(
+    tmp_path: Path,
+    value: str,
+) -> None:
+    root = Path(__file__).parents[1]
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    marker = tmp_path / "docker-was-called"
+    docker = fake_bin / "docker"
+    docker.write_text(f"#!/bin/sh\n: > {marker}\nexit 97\n", encoding="utf-8")
+    docker.chmod(0o755)
+    environment = watch._safe_host_environment()
+    environment["PATH"] = f"{fake_bin}:/usr/bin:/bin"
+
+    completed = subprocess.run(
+        (
+            "/usr/bin/bash",
+            str(root / "qcsd-lab"),
+            "class-study",
+            "acquisition-run",
+            "--acquisition-max-candidates",
+            value,
+        ),
+        cwd=root,
+        env=environment,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+
+    assert completed.returncode == 2
+    assert "accepts at most two candidates per action" in completed.stderr
+    assert not marker.exists()
+
+
 def test_watcher_has_no_direct_docker_discovery_or_cleanup() -> None:
     source = (Path(__file__).parents[1] / "tools/class_acquisition_watch.py").read_text(
         encoding="utf-8"
@@ -2330,13 +2763,19 @@ def test_watcher_has_no_direct_docker_discovery_or_cleanup() -> None:
 
 
 def test_acquisition_run_has_nested_truthful_action_deadlines() -> None:
+    from qcsd_lab.acquisition_timing import (
+        ACTION_TIMING_CONTRACT,
+        BASELINE_SCHEDULING_CONTRACT,
+    )
+
     watcher_source = (
         Path(__file__).parents[1] / "tools/class_acquisition_watch.py"
     ).read_text(encoding="utf-8")
     launcher_source = (Path(__file__).parents[1] / "qcsd-lab").read_text(
         encoding="utf-8"
     )
-    assert "MAX_CANDIDATES = 1" in watcher_source
+    assert "MAX_CANDIDATES = 2" in watcher_source
+    assert "GLOBAL_LIVE_PAGE_CAP = 5" in watcher_source
     assert 'kill_signal = "SIGINT" if graceful_run else "SIGKILL"' in watcher_source
     assert "ACQUISITION_ACTION_TIMEOUT_SECONDS = 1_800" in watcher_source
     assert "ACQUISITION_ACTION_CLEANUP_SECONDS = 120" in watcher_source
@@ -2352,9 +2791,13 @@ def test_acquisition_run_has_nested_truthful_action_deadlines() -> None:
     assert watch._ACQUISITION_ACTION_TIMING_CONTRACT[
         "whole_action_duration_evidence"
     ] == "externally-enforced-process-status-no-per-action-duration-receipt"
+    assert watch._ACQUISITION_ACTION_TIMING_CONTRACT == ACTION_TIMING_CONTRACT
+    assert watch._BASELINE_SCHEDULING_CONTRACT == BASELINE_SCHEDULING_CONTRACT
     assert watch._BASELINE_SCHEDULING_CONTRACT == {
-        "schema_version": 1,
-        "policy": "serial-nonoverlapping-stability-window-reservations-v1",
+        "schema_version": 2,
+        "policy": "serial-nonoverlapping-stability-window-batch-reservations-v2",
+        "maximum_candidates_per_batch": 2,
+        "global_live_page_cap": 5,
         "minimum_baseline_spacing_ms": 2_400_000,
         "window_start_reservation_ms": 2_400_000,
         "longest_probe_window_width_ms": 1_800_000,
@@ -2364,6 +2807,9 @@ def test_acquisition_run_has_nested_truthful_action_deadlines() -> None:
         "navigation_phase": "separate-bounded-action-before-baseline",
         "short_probe": "same-action-wait-until-t+30s-earliest",
         "outer_probes": "watcher-launches-acquisition-run-at-window-earliest",
+        "within_batch_baseline": "one-equal-baseline-per-recorded-baseline-batch",
+        "schedule_validation_unit": "baseline-batches-not-raw-candidate-timestamps",
+        "unpaired_candidate_policy": "singleton-when-no-compatible-partner",
         "serial_action_start_offsets_ms": [0, 85_500_000, 258_300_000],
         "stability_window_earliest_offsets_ms": [
             25_000,
@@ -2371,18 +2817,23 @@ def test_acquisition_run_has_nested_truthful_action_deadlines() -> None:
             258_300_000,
         ],
         "collision_scope": (
-            "baseline-arming-and-t+24h-t+72h-action-starts-across-candidates"
+            "baseline-arming-and-t+24h-t+72h-action-starts-across-batches"
         ),
         "strict_serial_zero_duration_projection": {
             "candidate_count": 600,
-            "algorithm": "greedy-earliest-safe-baseline",
-            "last_baseline_offset_ms": 5_655_900_000,
-            "last_t+72h_earliest_offset_ms": 5_914_200_000,
+            "maximum_candidates_per_batch": 2,
+            "batch_count": 300,
+            "algorithm": "greedy-earliest-safe-baseline-batches",
+            "pairing_assumption": (
+                "all-candidates-form-300-compatible-two-candidate-batches"
+            ),
+            "last_baseline_offset_ms": 2_784_000_000,
+            "last_t+72h_earliest_offset_ms": 3_042_300_000,
         },
     }
     assert "-- /usr/bin/timeout --signal=INT --kill-after=120s 1800s" \
         in launcher_source
-    assert "canonical one-candidate action bounds" in launcher_source
+    assert "accepts at most two candidates per action" in launcher_source
 
 
 @pytest.mark.parametrize("fault_label", (
@@ -2442,6 +2893,7 @@ def test_internal_scope_accepts_each_current_canonical_action_binding(
     paths = watch.WatchPaths.from_lab_root(tmp_path, state_base=tmp_path / "state")
     binding = watch.AcquisitionBinding(
         "image@sha256:" + "1" * 64, "2" * 64, "3" * 64, frozenset(),
+        (),
         {"lab_commit": "4" * 40, "neqo_commit": "5" * 40, "neqo_pinned_commit": "5" * 40},
     )
     action = watch._sha256_bytes(

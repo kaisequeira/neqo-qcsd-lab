@@ -8,6 +8,8 @@ import pytest
 from qcsd_lab.acquisition_timing import (
     ACTION_TIMING_CONTRACT,
     BASELINE_SCHEDULING_CONTRACT,
+    GLOBAL_LIVE_PAGE_CAP,
+    MAX_CANDIDATES_PER_ACTION,
     MINIMUM_BASELINE_SPACING_MS,
     SERIAL_ACTION_START_OFFSETS_MS,
     STABILITY_WINDOW_EARLIEST_OFFSETS_MS,
@@ -22,6 +24,11 @@ from qcsd_lab.acquisition_timing import (
 
 def test_contract_derivation_is_exact_and_exceeds_long_window_width() -> None:
     assert MINIMUM_BASELINE_SPACING_MS == 2_400_000
+    assert MAX_CANDIDATES_PER_ACTION == 2
+    assert GLOBAL_LIVE_PAGE_CAP == 5
+    assert ACTION_TIMING_CONTRACT["schema_version"] == 2
+    assert ACTION_TIMING_CONTRACT["bounded_candidates"] == 2
+    assert ACTION_TIMING_CONTRACT["global_live_page_cap"] == 5
     assert ACTION_TIMING_CONTRACT["inner_timeout"] == {
         "scope": "in-container-coordinator-process-group",
         "soft_deadline_ms": 1_800_000,
@@ -111,36 +118,46 @@ def test_registered_offsets_match_the_acquisition_windows() -> None:
     assert SERIAL_ACTION_START_OFFSETS_MS == (0, 85_500_000, 258_300_000)
 
 
-def test_strict_serial_600_candidate_projection_is_receipted_exactly() -> None:
+def test_strict_serial_300_batch_projection_is_receipted_exactly() -> None:
     start = datetime(2026, 9, 4, tzinfo=UTC)
-    schedule = greedy_baseline_schedule(start, 600)
+    schedule = greedy_baseline_schedule(start, 300)
     projection = BASELINE_SCHEDULING_CONTRACT[
         "strict_serial_zero_duration_projection"
     ]
     assert (schedule[-1] - start).total_seconds() * 1_000 == projection[
         "last_baseline_offset_ms"
     ]
-    assert projection["last_baseline_offset_ms"] == 5_655_900_000
+    assert projection == {
+        "candidate_count": 600,
+        "maximum_candidates_per_batch": 2,
+        "batch_count": 300,
+        "pairing_assumption": (
+            "all-candidates-form-300-compatible-two-candidate-batches"
+        ),
+        "algorithm": "greedy-earliest-safe-baseline-batches",
+        "last_baseline_offset_ms": 2_784_000_000,
+        "last_t+72h_earliest_offset_ms": 3_042_300_000,
+    }
     last_t72_earliest = schedule[-1] + timedelta(
         milliseconds=STABILITY_WINDOW_EARLIEST_OFFSETS_MS[-1]
     )
     assert (last_t72_earliest - start).total_seconds() * 1_000 == projection[
         "last_t+72h_earliest_offset_ms"
     ]
-    assert projection["last_t+72h_earliest_offset_ms"] == 5_914_200_000
+    assert projection["last_t+72h_earliest_offset_ms"] == 3_042_300_000
 
 
 def test_greedy_projection_is_not_misrepresented_as_a_global_lower_bound() -> None:
     start = datetime(2026, 9, 4, tzinfo=UTC)
-    greedy = greedy_baseline_schedule(start, 600)
+    greedy = greedy_baseline_schedule(start, 300)
     delayed = [start, start + timedelta(minutes=90)]
     next_candidate = delayed[-1] + timedelta(
         milliseconds=MINIMUM_BASELINE_SPACING_MS
     )
-    for _ in range(598):
+    for _ in range(298):
         next_candidate = earliest_safe_baseline(next_candidate, delayed)
         delayed.append(next_candidate)
         next_candidate += timedelta(milliseconds=MINIMUM_BASELINE_SPACING_MS)
     validate_baseline_schedule(delayed)
-    assert delayed[-1] - start == timedelta(days=64, hours=5, minutes=30)
+    assert delayed[-1] - start == timedelta(days=32, hours=3, minutes=10)
     assert delayed[-1] < greedy[-1]

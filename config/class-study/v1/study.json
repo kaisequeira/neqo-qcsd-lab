@@ -166,9 +166,13 @@
     "browser_navigation_timeout_ms": 60000,
     "passive_render_hard_cap_after_load_ms": 30000,
     "acquisition_action_timing_contract": {
-      "schema_version": 1,
-      "policy": "single-candidate-whole-action-deadline-v1",
-      "bounded_candidates": 1,
+      "schema_version": 2,
+      "policy": "bounded-compatible-candidate-batch-whole-action-deadline-v2",
+      "bounded_candidates": 2,
+      "global_live_page_cap": 5,
+      "batch_selection": "same-priority-same-stage-immutable-catalogue-order-compatible-pair-otherwise-singleton",
+      "transactional_publication": "active-batch-and-pending-attempts-published-before-parallel-work",
+      "coordinator_merge": "deterministic-immutable-catalogue-order-after-all-workers-return",
       "browser_navigation_timeout_ms": 60000,
       "browser_navigation_timeout_scope": "navigation-component-only",
       "passive_render_hard_cap_after_load_ms": 30000,
@@ -192,11 +196,13 @@
       "direct_public_acquisition_run": "forbidden-without-validated-watcher-scope-authority",
       "successful_ledger_attempt_duration_limit_ms": 1800000,
       "whole_action_duration_evidence": "externally-enforced-process-status-no-per-action-duration-receipt",
-      "interruption_recovery": "pending-start-becomes-interrupted-never-completed"
+      "interruption_recovery": "published-active-batch-attempts-become-interrupted-never-completed"
     },
     "baseline_scheduling_contract": {
-      "schema_version": 1,
-      "policy": "serial-nonoverlapping-stability-window-reservations-v1",
+      "schema_version": 2,
+      "policy": "serial-nonoverlapping-stability-window-batch-reservations-v2",
+      "maximum_candidates_per_batch": 2,
+      "global_live_page_cap": 5,
       "minimum_baseline_spacing_ms": 2400000,
       "window_start_reservation_ms": 2400000,
       "longest_probe_window_width_ms": 1800000,
@@ -206,6 +212,9 @@
       "navigation_phase": "separate-bounded-action-before-baseline",
       "short_probe": "same-action-wait-until-t+30s-earliest",
       "outer_probes": "watcher-launches-acquisition-run-at-window-earliest",
+      "within_batch_baseline": "one-equal-baseline-per-recorded-baseline-batch",
+      "schedule_validation_unit": "baseline-batches-not-raw-candidate-timestamps",
+      "unpaired_candidate_policy": "singleton-when-no-compatible-partner",
       "serial_action_start_offsets_ms": [
         0,
         85500000,
@@ -216,12 +225,15 @@
         85500000,
         258300000
       ],
-      "collision_scope": "baseline-arming-and-t+24h-t+72h-action-starts-across-candidates",
+      "collision_scope": "baseline-arming-and-t+24h-t+72h-action-starts-across-batches",
       "strict_serial_zero_duration_projection": {
         "candidate_count": 600,
-        "algorithm": "greedy-earliest-safe-baseline",
-        "last_baseline_offset_ms": 5655900000,
-        "last_t+72h_earliest_offset_ms": 5914200000
+        "maximum_candidates_per_batch": 2,
+        "batch_count": 300,
+        "pairing_assumption": "all-candidates-form-300-compatible-two-candidate-batches",
+        "algorithm": "greedy-earliest-safe-baseline-batches",
+        "last_baseline_offset_ms": 2784000000,
+        "last_t+72h_earliest_offset_ms": 3042300000
       }
     },
     "resource_origin_policy": {

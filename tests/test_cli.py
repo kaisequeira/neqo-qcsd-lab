@@ -141,6 +141,23 @@ def test_buflo_cohort_version_is_positive_unique_and_defaults_to_one():
         assert exit_status.value.code == 2
 
 
+def test_class_acquisition_batch_size_defaults_to_two_and_is_bounded() -> None:
+    parser = cli.parser()
+    assert parser.parse_args(["class-study", "acquisition-run"]).acquisition_max_candidates == 2
+    assert (
+        parser.parse_args(
+            ["class-study", "acquisition-run", "--acquisition-max-candidates", "1"]
+        ).acquisition_max_candidates
+        == 1
+    )
+    for value in ("0", "3"):
+        with pytest.raises(SystemExit) as exit_status:
+            parser.parse_args(
+                ["class-study", "acquisition-run", "--acquisition-max-candidates", value]
+            )
+        assert exit_status.value.code == 2
+
+
 def test_launcher_routes_only_consolidated_public_commands():
     launcher_path = Path(__file__).parents[1] / "qcsd-lab"
     launcher = launcher_path.read_text(encoding="utf-8")

@@ -27,7 +27,11 @@ from typing import Any
 
 import yaml
 
-from .acquisition_timing import RUN_WAIT_POLICY
+from .acquisition_timing import (
+    GLOBAL_LIVE_PAGE_CAP,
+    MAX_CANDIDATES_PER_ACTION,
+    RUN_WAIT_POLICY,
+)
 from .chaff_qualification import (
     FULL_QUALIFICATION_SCOPE,
     NAMED_QUALIFICATION_PREFIX_DIRECTORY,
@@ -338,6 +342,10 @@ def stability_gate() -> dict[str, Any]:
         "labels": [window.probe_id for window in STABILITY_PROBE_WINDOWS],
         "all_three_required_per_page_receipt": True,
         "acquisition_owner": "resumable-qcsd-class-study-production-runner",
+        "batching": {
+            "maximum_candidates_per_action": MAX_CANDIDATES_PER_ACTION,
+            "global_live_page_cap": GLOBAL_LIVE_PAGE_CAP,
+        },
         "runner_wait_policy": dict(ACQUISITION_RUN_WAIT_POLICY),
     }
 
@@ -1726,7 +1734,7 @@ def run_class_study_action(
     acquisition_root: Path | None = None,
     acquisition_started_at: str | None = None,
     acquisition_browser_tool: str = "playwright-chromium",
-    acquisition_max_candidates: int = 1,
+    acquisition_max_candidates: int = MAX_CANDIDATES_PER_ACTION,
     acquisition_timeout_ms: int = 60_000,
     pilot_cohort_receipt_path: Path | None = None,
     pilot_cohort_assembly_path: Path | None = None,
@@ -1898,14 +1906,17 @@ def run_class_study_action(
             )
             return ClassStudyActionResult(action, "complete", details)
         if action == "acquisition-run":
-            # This is a production evidence boundary, not a general-purpose
-            # batching interface.  Keep the coordinator itself fail-closed so
-            # invoking the in-image CLI directly cannot evade the one-candidate
-            # checkpoint cadence or substitute a shorter browser timeout than
-            # the immutable acquisition provenance records.
-            if acquisition_max_candidates != 1 or acquisition_timeout_ms != 60_000:
+            # This is a production evidence boundary, not an unbounded batching
+            # interface. Keep the coordinator fail-closed so invoking the
+            # in-image CLI cannot exceed the immutable two-candidate/global-page
+            # bounds or substitute another browser timeout.
+            if (
+                type(acquisition_max_candidates) is not int
+                or not 1 <= acquisition_max_candidates <= MAX_CANDIDATES_PER_ACTION
+                or acquisition_timeout_ms != 60_000
+            ):
                 raise ValueError(
-                    "acquisition-run requires --acquisition-max-candidates 1 "
+                    "acquisition-run requires --acquisition-max-candidates 1 or 2 "
                     "and --acquisition-timeout-ms 60000"
                 )
             details = run_due_acquisition(
@@ -1916,6 +1927,12 @@ def run_class_study_action(
                 backend=ExistingAcquisitionBackend(timeout_ms=acquisition_timeout_ms),
                 max_candidates=acquisition_max_candidates,
             )
+            if (
+                details.get("maximum_candidates_per_action")
+                != MAX_CANDIDATES_PER_ACTION
+                or details.get("global_live_page_cap") != GLOBAL_LIVE_PAGE_CAP
+            ):
+                raise ValueError("acquisition-run returned another immutable batch contract")
             details.update(
                 {
                     "valid": True,
@@ -1932,8 +1949,9 @@ def run_class_study_action(
                 if details["complete"]
                 else (
                     (
-                        "rerun now; one bounded acquisition action is due; "
-                        "a newly armed baseline waits locally for its t+30s probe"
+                        "rerun now; bounded acquisition work is due: interrupted recovery, "
+                        "deterministic finalisation, missed-window terminalisation, a live "
+                        "probe, or an unblocked navigation/baseline batch"
                     )
                     if details.get("work_due_now") is True
                     else (

@@ -3197,8 +3197,14 @@ def test_acquisition_run_is_canonically_bounded_and_reports_wait_policy(
     def run(root, **kwargs):
         seen.update(kwargs)
         return {
+            "acquisition_schema_version": 4,
+            "checkpoint_schema_version": 2,
+            "maximum_candidates_per_action": 2,
+            "global_live_page_cap": 5,
+            "active_batch": None,
             "candidate_count": CANDIDATE_COUNT,
             "terminal_count": 17,
+            "finalisable_count": 0,
             "complete": False,
             "work_due_now": True,
             "next_due": "2026-09-01T00:00:00Z",
@@ -3212,20 +3218,24 @@ def test_acquisition_run_is_canonically_bounded_and_reports_wait_policy(
         acquisition_root=runner,
         stability_root=stability,
         workload_root=workloads,
-        acquisition_max_candidates=1,
+        acquisition_max_candidates=2,
         acquisition_timeout_ms=60_000,
     )
 
     assert result.status == "pending"
-    assert result.details["bounded_candidates"] == 1
+    assert result.details["bounded_candidates"] == 2
+    assert result.details["maximum_candidates_per_action"] == 2
+    assert result.details["global_live_page_cap"] == 5
+    assert result.details["finalisable_count"] == 0
     assert result.details["runner_wait_policy"] == pipeline.ACQUISITION_RUN_WAIT_POLICY
     assert "rerun now" in result.blockers[0]
-    assert "waits locally for its t+30s probe" in result.blockers[0]
+    assert "interrupted recovery" in result.blockers[0]
+    assert "unblocked navigation/baseline batch" in result.blockers[0]
     assert "never sleeps" not in result.blockers[0]
-    assert seen["max_candidates"] == 1
+    assert seen["max_candidates"] == 2
     assert seen["timeout_ms"] == 60_000
 
-    with pytest.raises(ValueError, match="acquisition-max-candidates 1"):
+    with pytest.raises(ValueError, match="acquisition-max-candidates 1 or 2"):
         pipeline.run_class_study_action(
             "acquisition-run",
             candidate_catalogue_path=catalogue,
@@ -3234,15 +3244,26 @@ def test_acquisition_run_is_canonically_bounded_and_reports_wait_policy(
             workload_root=workloads,
             acquisition_timeout_ms=60_001,
         )
-    with pytest.raises(ValueError, match="acquisition-max-candidates 1"):
+    with pytest.raises(ValueError, match="acquisition-max-candidates 1 or 2"):
         pipeline.run_class_study_action(
             "acquisition-run",
             candidate_catalogue_path=catalogue,
             acquisition_root=runner,
             stability_root=stability,
             workload_root=workloads,
-            acquisition_max_candidates=2,
+            acquisition_max_candidates=3,
         )
+
+    result = pipeline.run_class_study_action(
+        "acquisition-run",
+        candidate_catalogue_path=catalogue,
+        acquisition_root=runner,
+        stability_root=stability,
+        workload_root=workloads,
+        acquisition_max_candidates=1,
+    )
+    assert result.details["bounded_candidates"] == 1
+    assert seen["max_candidates"] == 1
 
 
 @pytest.mark.parametrize(

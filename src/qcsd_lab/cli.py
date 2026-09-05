@@ -7,6 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from .acquisition_timing import MAX_CANDIDATES_PER_ACTION
 from .orchestrator import (
     CampaignIncomplete,
     preflight_campaign,
@@ -214,7 +215,12 @@ def parser() -> argparse.ArgumentParser:
     class_study.add_argument(
         "--acquisition-browser-tool", default="playwright-chromium"
     )
-    class_study.add_argument("--acquisition-max-candidates", type=int, default=1)
+    class_study.add_argument(
+        "--acquisition-max-candidates",
+        type=int,
+        choices=range(1, MAX_CANDIDATES_PER_ACTION + 1),
+        default=MAX_CANDIDATES_PER_ACTION,
+    )
     class_study.add_argument("--acquisition-timeout-ms", type=int, default=60_000)
     class_study.add_argument("--stability-root", type=Path)
     class_study.add_argument("--stability-input", type=Path)

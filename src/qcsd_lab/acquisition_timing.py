@@ -1,4 +1,4 @@
-"""Canonical timing and serial scheduling contract for class acquisition.
+"""Canonical timing and bounded-batch scheduling contract for class acquisition.
 
 The browser navigation timeout and the passive post-load cap are component
 limits.  Neither bounds DNS, browser start-up, origin convergence, Neqo replay,
@@ -22,6 +22,8 @@ ACQUISITION_ACTION_OUTER_HARD_TIMEOUT_MS = 2_040_000
 STATUS_RUNTIME_MS = 300_000
 STATUS_CLEANUP_GRACE_MS = 10_000
 SERIAL_SCHEDULER_MARGIN_MS = 50_000
+MAX_CANDIDATES_PER_ACTION = 2
+GLOBAL_LIVE_PAGE_CAP = 5
 
 MINIMUM_BASELINE_SPACING_MS = (
     ACQUISITION_ACTION_OUTER_HARD_TIMEOUT_MS
@@ -38,14 +40,25 @@ STABILITY_WINDOW_EARLIEST_OFFSETS_MS = (25_000, 85_500_000, 258_300_000)
 # The t+30s observation is pre-armed and executed inside the action that
 # establishes the baseline, so it is not another serial launcher start.  The
 # baseline action and the two later watcher-launched probes are the three
-# starts that must be reserved against every other candidate.
+# starts that must be reserved against every other baseline batch.
 SERIAL_ACTION_START_OFFSETS_MS = (0, 85_500_000, 258_300_000)
 LONGEST_STABILITY_WINDOW_WIDTH_MS = 1_800_000
 
 ACTION_TIMING_CONTRACT = {
-    "schema_version": 1,
-    "policy": "single-candidate-whole-action-deadline-v1",
-    "bounded_candidates": 1,
+    "schema_version": 2,
+    "policy": "bounded-compatible-candidate-batch-whole-action-deadline-v2",
+    "bounded_candidates": MAX_CANDIDATES_PER_ACTION,
+    "global_live_page_cap": GLOBAL_LIVE_PAGE_CAP,
+    "batch_selection": (
+        "same-priority-same-stage-immutable-catalogue-order-compatible-pair-"
+        "otherwise-singleton"
+    ),
+    "transactional_publication": (
+        "active-batch-and-pending-attempts-published-before-parallel-work"
+    ),
+    "coordinator_merge": (
+        "deterministic-immutable-catalogue-order-after-all-workers-return"
+    ),
     "browser_navigation_timeout_ms": 60_000,
     "browser_navigation_timeout_scope": "navigation-component-only",
     "passive_render_hard_cap_after_load_ms": 30_000,
@@ -75,12 +88,16 @@ ACTION_TIMING_CONTRACT = {
     "whole_action_duration_evidence": (
         "externally-enforced-process-status-no-per-action-duration-receipt"
     ),
-    "interruption_recovery": "pending-start-becomes-interrupted-never-completed",
+    "interruption_recovery": (
+        "published-active-batch-attempts-become-interrupted-never-completed"
+    ),
 }
 
 BASELINE_SCHEDULING_CONTRACT = {
-    "schema_version": 1,
-    "policy": "serial-nonoverlapping-stability-window-reservations-v1",
+    "schema_version": 2,
+    "policy": "serial-nonoverlapping-stability-window-batch-reservations-v2",
+    "maximum_candidates_per_batch": MAX_CANDIDATES_PER_ACTION,
+    "global_live_page_cap": GLOBAL_LIVE_PAGE_CAP,
     "minimum_baseline_spacing_ms": MINIMUM_BASELINE_SPACING_MS,
     "window_start_reservation_ms": WINDOW_START_RESERVATION_MS,
     "longest_probe_window_width_ms": LONGEST_STABILITY_WINDOW_WIDTH_MS,
@@ -94,18 +111,26 @@ BASELINE_SCHEDULING_CONTRACT = {
     "navigation_phase": "separate-bounded-action-before-baseline",
     "short_probe": "same-action-wait-until-t+30s-earliest",
     "outer_probes": "watcher-launches-acquisition-run-at-window-earliest",
+    "within_batch_baseline": "one-equal-baseline-per-recorded-baseline-batch",
+    "schedule_validation_unit": "baseline-batches-not-raw-candidate-timestamps",
+    "unpaired_candidate_policy": "singleton-when-no-compatible-partner",
     "serial_action_start_offsets_ms": list(SERIAL_ACTION_START_OFFSETS_MS),
     "stability_window_earliest_offsets_ms": list(
         STABILITY_WINDOW_EARLIEST_OFFSETS_MS
     ),
     "collision_scope": (
-        "baseline-arming-and-t+24h-t+72h-action-starts-across-candidates"
+        "baseline-arming-and-t+24h-t+72h-action-starts-across-batches"
     ),
     "strict_serial_zero_duration_projection": {
         "candidate_count": 600,
-        "algorithm": "greedy-earliest-safe-baseline",
-        "last_baseline_offset_ms": 5_655_900_000,
-        "last_t+72h_earliest_offset_ms": 5_914_200_000,
+        "maximum_candidates_per_batch": MAX_CANDIDATES_PER_ACTION,
+        "batch_count": 300,
+        "pairing_assumption": (
+            "all-candidates-form-300-compatible-two-candidate-batches"
+        ),
+        "algorithm": "greedy-earliest-safe-baseline-batches",
+        "last_baseline_offset_ms": 2_784_000_000,
+        "last_t+72h_earliest_offset_ms": 3_042_300_000,
     },
 }
 
@@ -201,7 +226,7 @@ def earliest_safe_baseline(
 
 
 def validate_baseline_schedule(baselines: Iterable[datetime]) -> None:
-    """Reject a ledger that could schedule two serial probe actions together."""
+    """Reject batch baselines that could schedule two serial actions together."""
 
     values = tuple(baselines)
     if any(not isinstance(value, datetime) or value.tzinfo is None for value in values):
@@ -215,7 +240,7 @@ def validate_baseline_schedule(baselines: Iterable[datetime]) -> None:
 
 
 def greedy_baseline_schedule(start: datetime, count: int) -> tuple[datetime, ...]:
-    """Apply the deterministic earliest-next greedy rule with zero work time."""
+    """Schedule ``count`` serial baseline batches with zero work time."""
 
     if type(count) is not int or count < 0:
         raise ValueError("acquisition schedule count must be a non-negative integer")

@@ -25,14 +25,16 @@ import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from itertools import pairwise
 from pathlib import Path
 from typing import Any, Protocol
 
 STUDY_ID = "classifier-multiorigin100-v1"
 CANDIDATE_COUNT = 600
 SCHEMA_VERSION = 1
-ACQUISITION_SCHEMA_VERSION = 3
+ACQUISITION_SCHEMA_VERSION = 4
+CHECKPOINT_SCHEMA_VERSION = 2
 CATALOGUE_TYPE = "qcsd-class-study-candidate-catalogue"
 PROVENANCE_TYPE = "qcsd-class-study-acquisition-provenance"
 CHECKPOINT_TYPE = "qcsd-class-study-acquisition-checkpoint"
@@ -47,9 +49,11 @@ PINNED_CONTEXT_ENV = "QCSD_DOCKER_PINNED_CONTEXT"
 PINNED_HOST_ENV = "QCSD_DOCKER_PINNED_HOST"
 PINNED_SERVER_ID_ENV = "QCSD_DOCKER_PINNED_SERVER_ID"
 CONTAINER_ACQUISITION_ROOT = f"/lab/artifacts/{STUDY_ID}-acquisition"
-# One coordinator action may advance at most one candidate.  The watcher
-# checkpoints between actions, so interruption never obscures a large batch.
-MAX_CANDIDATES = 1
+# One coordinator action may advance a compatible pair, while every page-level
+# worker shares this immutable process-wide concurrency budget. The core
+# coordinator publishes its transactional batch before starting either worker.
+MAX_CANDIDATES = 2
+GLOBAL_LIVE_PAGE_CAP = 5
 BROWSER_NAVIGATION_TIMEOUT_MS = 60_000
 PASSIVE_RENDER_HARD_CAP_MS = 30_000
 # Retained as the public coordinator-CLI timeout name. This is the browser
@@ -213,9 +217,20 @@ _ORIGIN_POLICY = {
     "neqo": "QCSD_PUBLIC_ORIGIN_ONLY-resolve-once-connect-exact-address",
 }
 _ACQUISITION_ACTION_TIMING_CONTRACT = {
-    "schema_version": 1,
-    "policy": "single-candidate-whole-action-deadline-v1",
+    "schema_version": 2,
+    "policy": "bounded-compatible-candidate-batch-whole-action-deadline-v2",
     "bounded_candidates": MAX_CANDIDATES,
+    "global_live_page_cap": GLOBAL_LIVE_PAGE_CAP,
+    "batch_selection": (
+        "same-priority-same-stage-immutable-catalogue-order-compatible-pair-"
+        "otherwise-singleton"
+    ),
+    "transactional_publication": (
+        "active-batch-and-pending-attempts-published-before-parallel-work"
+    ),
+    "coordinator_merge": (
+        "deterministic-immutable-catalogue-order-after-all-workers-return"
+    ),
     "browser_navigation_timeout_ms": BROWSER_NAVIGATION_TIMEOUT_MS,
     "browser_navigation_timeout_scope": "navigation-component-only",
     "passive_render_hard_cap_after_load_ms": PASSIVE_RENDER_HARD_CAP_MS,
@@ -246,12 +261,14 @@ _ACQUISITION_ACTION_TIMING_CONTRACT = {
         "externally-enforced-process-status-no-per-action-duration-receipt"
     ),
     "interruption_recovery": (
-        "pending-start-becomes-interrupted-never-completed"
+        "published-active-batch-attempts-become-interrupted-never-completed"
     ),
 }
 _BASELINE_SCHEDULING_CONTRACT = {
-    "schema_version": 1,
-    "policy": "serial-nonoverlapping-stability-window-reservations-v1",
+    "schema_version": 2,
+    "policy": "serial-nonoverlapping-stability-window-batch-reservations-v2",
+    "maximum_candidates_per_batch": MAX_CANDIDATES,
+    "global_live_page_cap": GLOBAL_LIVE_PAGE_CAP,
     "minimum_baseline_spacing_ms": PENDING_BASELINE_GUARD_MS,
     "window_start_reservation_ms": PENDING_BASELINE_GUARD_MS,
     "longest_probe_window_width_ms": 1_800_000,
@@ -266,16 +283,24 @@ _BASELINE_SCHEDULING_CONTRACT = {
     "navigation_phase": "separate-bounded-action-before-baseline",
     "short_probe": "same-action-wait-until-t+30s-earliest",
     "outer_probes": "watcher-launches-acquisition-run-at-window-earliest",
+    "within_batch_baseline": "one-equal-baseline-per-recorded-baseline-batch",
+    "schedule_validation_unit": "baseline-batches-not-raw-candidate-timestamps",
+    "unpaired_candidate_policy": "singleton-when-no-compatible-partner",
     "serial_action_start_offsets_ms": [0, 85_500_000, 258_300_000],
     "stability_window_earliest_offsets_ms": [25_000, 85_500_000, 258_300_000],
     "collision_scope": (
-        "baseline-arming-and-t+24h-t+72h-action-starts-across-candidates"
+        "baseline-arming-and-t+24h-t+72h-action-starts-across-batches"
     ),
     "strict_serial_zero_duration_projection": {
         "candidate_count": CANDIDATE_COUNT,
-        "algorithm": "greedy-earliest-safe-baseline",
-        "last_baseline_offset_ms": 5_655_900_000,
-        "last_t+72h_earliest_offset_ms": 5_914_200_000,
+        "maximum_candidates_per_batch": MAX_CANDIDATES,
+        "batch_count": 300,
+        "algorithm": "greedy-earliest-safe-baseline-batches",
+        "pairing_assumption": (
+            "all-candidates-form-300-compatible-two-candidate-batches"
+        ),
+        "last_baseline_offset_ms": 2_784_000_000,
+        "last_t+72h_earliest_offset_ms": 3_042_300_000,
     },
 }
 _RUN_WAIT_POLICY = {
@@ -284,16 +309,25 @@ _RUN_WAIT_POLICY = {
     "t+24h-and-t+72h": "host-watcher-launch-at-earliest-no-container-wait",
 }
 _CHECKPOINT_PAYLOAD_KEYS = {
+    "checkpoint_schema_version",
     "provenance_sha256",
     "candidate_catalogue_sha256",
+    "baseline_batches",
+    "active_batch",
     "candidates",
 }
 _STATUS_KEYS = {
+    "acquisition_schema_version",
+    "checkpoint_schema_version",
+    "maximum_candidates_per_action",
+    "global_live_page_cap",
+    "active_batch",
     "candidate_count",
     "terminal_count",
     "pending_count",
     "probing_count",
     "due_now_count",
+    "finalisable_count",
     "missed_window_count",
     "recovery_required_count",
     "pending_start_blocked",
@@ -425,6 +459,7 @@ class AcquisitionBinding:
     catalogue_sha256: str
     provenance_sha256: str
     candidate_ids: frozenset[str]
+    candidate_order: tuple[str, ...]
     source: Mapping[str, Any]
 
 
@@ -701,7 +736,7 @@ def _container_binding_path(value: str, *, paths: WatchPaths, label: str) -> Pat
     )
 
 
-def _validate_catalogue(paths: WatchPaths) -> tuple[Mapping[str, Any], frozenset[str], str]:
+def _validate_catalogue(paths: WatchPaths) -> tuple[Mapping[str, Any], tuple[str, ...], str]:
     snapshot = _load_canonical_receipt(
         paths.candidate_catalogue,
         root=paths.lab_root,
@@ -737,7 +772,7 @@ def _validate_catalogue(paths: WatchPaths) -> tuple[Mapping[str, Any], frozenset
         candidate_ids.append(candidate_id)
     if len(set(candidate_ids)) != CANDIDATE_COUNT:
         raise WatchError("candidate catalogue candidate identities are not unique")
-    return catalogue, frozenset(candidate_ids), snapshot.sha256
+    return catalogue, tuple(candidate_ids), snapshot.sha256
 
 
 def _validate_foundation(binding: Any, *, paths: WatchPaths) -> None:
@@ -793,7 +828,8 @@ def _validate_immutable_binding(paths: WatchPaths) -> AcquisitionBinding:
         directory=False,
         label="acquisition provenance",
     )
-    catalogue, candidate_ids, catalogue_sha256 = _validate_catalogue(paths)
+    catalogue, candidate_order, catalogue_sha256 = _validate_catalogue(paths)
+    candidate_ids = frozenset(candidate_order)
     provenance_snapshot = _load_canonical_receipt(
         paths.provenance,
         root=paths.lab_root,
@@ -803,7 +839,7 @@ def _validate_immutable_binding(paths: WatchPaths) -> AcquisitionBinding:
     provenance = provenance_snapshot.value
     payload = provenance["payload"]
     if set(payload) != _PROVENANCE_PAYLOAD_KEYS:
-        raise WatchError("acquisition provenance payload fields differ from the v3 contract")
+        raise WatchError("acquisition provenance payload fields differ from the v4 contract")
     if (
         payload["study_id"] != STUDY_ID
         or payload["acquisition_schema_version"] != ACQUISITION_SCHEMA_VERSION
@@ -853,6 +889,7 @@ def _validate_immutable_binding(paths: WatchPaths) -> AcquisitionBinding:
         catalogue_sha256=catalogue_sha256,
         provenance_sha256=provenance_snapshot.sha256,
         candidate_ids=candidate_ids,
+        candidate_order=candidate_order,
         source=dict(source),
     )
     return binding
@@ -880,9 +917,11 @@ def _validate_checkpoint(paths: WatchPaths, binding: AcquisitionBinding) -> Rece
     checkpoint = snapshot.value
     payload = checkpoint["payload"]
     if set(payload) != _CHECKPOINT_PAYLOAD_KEYS:
-        raise WatchError("acquisition checkpoint payload fields differ from the v1 contract")
+        raise WatchError("acquisition checkpoint payload fields differ from the v2 contract")
     if (
-        payload["provenance_sha256"] != binding.provenance_sha256
+        payload["checkpoint_schema_version"] != CHECKPOINT_SCHEMA_VERSION
+        or isinstance(payload["checkpoint_schema_version"], bool)
+        or payload["provenance_sha256"] != binding.provenance_sha256
         or payload["candidate_catalogue_sha256"] != binding.catalogue_sha256
     ):
         raise WatchError("acquisition checkpoint evidence bindings do not verify")
@@ -891,7 +930,424 @@ def _validate_checkpoint(paths: WatchPaths, binding: AcquisitionBinding) -> Rece
         raise WatchError("acquisition checkpoint candidate set differs from the catalogue")
     if any(not isinstance(state, dict) for state in states.values()):
         raise WatchError("acquisition checkpoint contains a non-object candidate state")
+    baseline_by_candidate = _validate_baseline_batches(
+        payload["baseline_batches"],
+        binding=binding,
+        states=states,
+    )
+    _validate_active_batch(
+        payload["active_batch"],
+        binding=binding,
+        states=states,
+        baseline_by_candidate=baseline_by_candidate,
+    )
     return snapshot
+
+
+def _candidate_id_list(
+    value: Any,
+    *,
+    binding: AcquisitionBinding,
+    label: str,
+) -> list[str]:
+    if (
+        not isinstance(value, list)
+        or not 1 <= len(value) <= MAX_CANDIDATES
+        or any(not isinstance(item, str) for item in value)
+        or len(set(value)) != len(value)
+        or not set(value).issubset(binding.candidate_ids)
+        or [binding.candidate_order.index(item) for item in value]
+        != sorted(binding.candidate_order.index(item) for item in value)
+    ):
+        raise WatchError(f"{label} candidate identities are invalid")
+    return value
+
+
+def _validate_live_page_count(value: Any, *, label: str) -> int:
+    if type(value) is not int or not 0 <= value <= GLOBAL_LIVE_PAGE_CAP:
+        raise WatchError(f"{label} live-page count exceeds the global cap")
+    return value
+
+
+def _content_addressed_batch_id(prefix: str, value: Mapping[str, Any]) -> str:
+    body = {name: item for name, item in value.items() if name != "batch_id"}
+    return f"{prefix}-{_sha256_bytes(_canonical_json_bytes(body))}"
+
+
+def _validate_baseline_batches(
+    value: Any,
+    *,
+    binding: AcquisitionBinding,
+    states: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Mapping[str, Any]]:
+    if not isinstance(value, list):
+        raise WatchError("acquisition checkpoint baseline batch ledger is malformed")
+    batch_ids: set[str] = set()
+    batch_by_candidate: dict[str, Mapping[str, Any]] = {}
+    previous_baseline: datetime | None = None
+    action_starts: list[tuple[datetime, str]] = []
+    for batch in value:
+        if not isinstance(batch, dict) or set(batch) != {
+            "batch_id",
+            "baseline_started_at",
+            "candidate_ids",
+            "live_page_count",
+        }:
+            raise WatchError("acquisition checkpoint baseline batch is malformed")
+        batch_id = batch["batch_id"]
+        if (
+            not isinstance(batch_id, str)
+            or batch_id != _content_addressed_batch_id("baseline", batch)
+            or batch_id in batch_ids
+        ):
+            raise WatchError("acquisition checkpoint baseline batch identity is invalid")
+        batch_ids.add(batch_id)
+        baseline = _parse_timestamp(
+            batch["baseline_started_at"],
+            label="acquisition checkpoint baseline batch time",
+        )
+        if previous_baseline is not None and baseline <= previous_baseline:
+            raise WatchError(
+                "acquisition checkpoint baseline batches are not append-ordered"
+            )
+        previous_baseline = baseline
+        action_starts.extend(
+            (
+                baseline + timedelta(milliseconds=offset),
+                batch_id,
+            )
+            for offset in _BASELINE_SCHEDULING_CONTRACT[
+                "serial_action_start_offsets_ms"
+            ]
+        )
+        candidate_ids = _candidate_id_list(
+            batch["candidate_ids"],
+            binding=binding,
+            label="acquisition checkpoint baseline batch",
+        )
+        if set(batch_by_candidate).intersection(candidate_ids):
+            raise WatchError(
+                "acquisition checkpoint schedules a candidate in two baseline batches"
+            )
+        live_pages = _validate_live_page_count(
+            batch["live_page_count"],
+            label="acquisition checkpoint baseline batch",
+        )
+        observed_live_pages = 0
+        for candidate_id in candidate_ids:
+            state = states[candidate_id]
+            pages = state.get("pages")
+            if (
+                state.get("baseline_started_at") != batch["baseline_started_at"]
+                or not isinstance(pages, list)
+                or not pages
+            ):
+                raise WatchError(
+                    "acquisition checkpoint baseline batch differs from candidate state"
+                )
+            observed_live_pages += len(pages)
+            batch_by_candidate[candidate_id] = batch
+        if live_pages != observed_live_pages:
+            raise WatchError(
+                "acquisition checkpoint baseline batch live-page count is false"
+            )
+    ordered_starts = sorted(action_starts)
+    for (left, left_batch), (right, right_batch) in pairwise(ordered_starts):
+        if (
+            left_batch != right_batch
+            and right - left < timedelta(milliseconds=PENDING_BASELINE_GUARD_MS)
+        ):
+            raise WatchError(
+                "acquisition checkpoint baseline batches violate the serial schedule"
+            )
+    state_candidates = {
+        candidate_id
+        for candidate_id, state in states.items()
+        if "baseline_started_at" in state
+    }
+    if set(batch_by_candidate) != state_candidates:
+        raise WatchError(
+            "acquisition checkpoint baseline batches do not exactly cover candidate state"
+        )
+    return batch_by_candidate
+
+
+def _validate_active_batch(
+    value: Any,
+    *,
+    binding: AcquisitionBinding,
+    states: Mapping[str, Mapping[str, Any]] | None = None,
+    baseline_by_candidate: Mapping[str, Mapping[str, Any]] | None = None,
+) -> Mapping[str, Any] | None:
+    if value is None:
+        if states is not None and _pending_attempts(states):
+            raise WatchError(
+                "acquisition checkpoint has pending attempts without an active batch"
+            )
+        return None
+    if not isinstance(value, dict) or set(value) != {
+        "active_batch_schema_version",
+        "batch_id",
+        "stage",
+        "published_at",
+        "candidate_ids",
+        "live_page_count",
+        "attempts",
+    }:
+        raise WatchError("acquisition checkpoint active batch is malformed")
+    if value["active_batch_schema_version"] != 1 or isinstance(
+        value["active_batch_schema_version"], bool
+    ):
+        raise WatchError("acquisition checkpoint active batch schema is invalid")
+    if (
+        not isinstance(value["batch_id"], str)
+        or value["batch_id"] != _content_addressed_batch_id("active", value)
+    ):
+        raise WatchError("acquisition checkpoint active batch identity is invalid")
+    if value["stage"] not in {"navigation", "probe"}:
+        raise WatchError("acquisition checkpoint active batch stage is invalid")
+    _parse_timestamp(
+        value["published_at"],
+        label="acquisition checkpoint active batch publication time",
+    )
+    candidate_ids = _candidate_id_list(
+        value["candidate_ids"],
+        binding=binding,
+        label="acquisition checkpoint active batch",
+    )
+    live_pages = _validate_live_page_count(
+        value["live_page_count"],
+        label="acquisition checkpoint active batch",
+    )
+    attempts = value["attempts"]
+    if not isinstance(attempts, list):
+        raise WatchError("acquisition checkpoint active batch attempts are malformed")
+    attempt_identities: set[tuple[Any, ...]] = set()
+    for attempt in attempts:
+        if not isinstance(attempt, dict) or set(attempt) != {
+            "candidate_id",
+            "page_ordinal",
+            "probe_id",
+            "workload_id",
+            "attempt",
+            "started_at",
+        }:
+            raise WatchError("acquisition checkpoint active batch attempt is malformed")
+        if attempt["candidate_id"] not in candidate_ids:
+            raise WatchError("acquisition checkpoint active batch attempt names another candidate")
+        if (
+            type(attempt["attempt"]) is not int
+            or not 1 <= attempt["attempt"] <= MAX_PROBE_ATTEMPTS
+        ):
+            raise WatchError("acquisition checkpoint active batch attempt count is invalid")
+        if value["stage"] == "navigation":
+            if any(
+                attempt[name] is not None
+                for name in ("page_ordinal", "probe_id", "workload_id")
+            ):
+                raise WatchError(
+                    "acquisition checkpoint active navigation attempt has page identity"
+                )
+        elif (
+            type(attempt["page_ordinal"]) is not int
+            or attempt["page_ordinal"] < 0
+            or attempt["probe_id"] not in {item["probe_id"] for item in _EXPECTED_WINDOWS}
+            or not isinstance(attempt["workload_id"], str)
+            or not attempt["workload_id"]
+        ):
+            raise WatchError("acquisition checkpoint active probe identity is invalid")
+        _parse_timestamp(
+            attempt["started_at"],
+            label="acquisition checkpoint active batch attempt start",
+        )
+        if attempt["started_at"] != value["published_at"]:
+            raise WatchError(
+                "acquisition checkpoint active batch attempts have unequal start times"
+            )
+        identity = tuple(attempt[name] for name in (
+            "candidate_id",
+            "page_ordinal",
+            "probe_id",
+            "workload_id",
+            "attempt",
+        ))
+        if identity in attempt_identities:
+            raise WatchError("acquisition checkpoint active batch attempt is duplicated")
+        attempt_identities.add(identity)
+    if not attempts or len(attempts) != live_pages:
+        raise WatchError(
+            "acquisition checkpoint active batch attempts differ from its live-page count"
+        )
+    observed_candidate_ids = list(
+        dict.fromkeys(attempt["candidate_id"] for attempt in attempts)
+    )
+    if observed_candidate_ids != candidate_ids:
+        raise WatchError(
+            "acquisition checkpoint active candidate ordering is invalid"
+        )
+    if value["stage"] == "navigation" and len(attempts) != len(candidate_ids):
+        raise WatchError(
+            "acquisition checkpoint active navigation cardinality is invalid"
+        )
+    if value["stage"] == "probe":
+        probe_identities = [
+            (attempt["candidate_id"], attempt["page_ordinal"])
+            for attempt in attempts
+        ]
+        if (
+            len(probe_identities) != len(set(probe_identities))
+            or len({attempt["probe_id"] for attempt in attempts}) != 1
+        ):
+            raise WatchError(
+                "acquisition checkpoint active probe batch mixes identities or windows"
+            )
+        expected_order = sorted(
+            attempts,
+            key=lambda attempt: (
+                binding.candidate_order.index(attempt["candidate_id"]),
+                attempt["page_ordinal"],
+            ),
+        )
+        if attempts != expected_order:
+            raise WatchError(
+                "acquisition checkpoint active probe attempts are not deterministically ordered"
+            )
+    if states is not None:
+        _reconcile_active_attempts(
+            value,
+            candidate_ids=candidate_ids,
+            binding=binding,
+            states=states,
+            baseline_by_candidate=baseline_by_candidate or {},
+        )
+    return value
+
+
+def _pending_attempts(
+    states: Mapping[str, Mapping[str, Any]],
+) -> list[tuple[str, str, Mapping[str, Any], Mapping[str, Any] | None]]:
+    pending: list[tuple[str, str, Mapping[str, Any], Mapping[str, Any] | None]] = []
+    for candidate_id, state in states.items():
+        navigation = state.get("pending_navigation")
+        if "pending_navigation" in state:
+            if not isinstance(navigation, Mapping):
+                raise WatchError(
+                    "acquisition checkpoint pending navigation is malformed"
+                )
+            pending.append((candidate_id, "navigation", navigation, None))
+        pages = state.get("pages")
+        if "pages" in state and not isinstance(pages, list):
+            raise WatchError("acquisition checkpoint candidate page ledger is malformed")
+        if not isinstance(pages, list):
+            continue
+        for page in pages:
+            if not isinstance(page, Mapping):
+                raise WatchError("acquisition checkpoint candidate page is malformed")
+            probe = page.get("pending_probe")
+            if "pending_probe" in page:
+                if not isinstance(probe, Mapping):
+                    raise WatchError("acquisition checkpoint pending probe is malformed")
+                pending.append((candidate_id, "probe", probe, page))
+    return pending
+
+
+def _reconcile_active_attempts(
+    active: Mapping[str, Any],
+    *,
+    candidate_ids: list[str],
+    binding: AcquisitionBinding,
+    states: Mapping[str, Mapping[str, Any]],
+    baseline_by_candidate: Mapping[str, Mapping[str, Any]],
+) -> None:
+    stage = active["stage"]
+    expected_pending = _pending_attempts(states)
+    if any(pending_stage != stage for _, pending_stage, _, _ in expected_pending):
+        raise WatchError("acquisition checkpoint mixes active attempt stages")
+    expected_attempts: list[dict[str, Any]] = []
+    pending_by_candidate: dict[
+        str, list[tuple[str, Mapping[str, Any], Mapping[str, Any] | None]]
+    ] = {}
+    for candidate_id, pending_stage, pending, page in expected_pending:
+        pending_by_candidate.setdefault(candidate_id, []).append(
+            (pending_stage, pending, page)
+        )
+    for candidate_id in binding.candidate_order:
+        for pending_stage, pending, page in pending_by_candidate.get(candidate_id, []):
+            state = states[candidate_id]
+            if candidate_id not in candidate_ids or pending_stage != stage:
+                raise WatchError(
+                    "acquisition checkpoint pending attempt falls outside its active batch"
+                )
+            if stage == "navigation":
+                if state.get("state") != "pending" or set(pending) != {
+                    "attempt",
+                    "started_at",
+                }:
+                    raise WatchError(
+                        "acquisition checkpoint active navigation state is malformed"
+                    )
+                expected_attempts.append(
+                    {
+                        "candidate_id": candidate_id,
+                        "page_ordinal": None,
+                        "probe_id": None,
+                        "workload_id": None,
+                        "attempt": pending["attempt"],
+                        "started_at": pending["started_at"],
+                    }
+                )
+                continue
+            if (
+                state.get("state") != "probing"
+                or candidate_id not in baseline_by_candidate
+            ):
+                raise WatchError("acquisition checkpoint active probe state is malformed")
+            page_value = page.get("page") if isinstance(page, Mapping) else None
+            ordinal = (
+                page_value.get("ordinal") if isinstance(page_value, Mapping) else None
+            )
+            if (
+                type(ordinal) is not int
+                or ordinal < 0
+                or set(pending)
+                != {"probe_id", "workload_id", "attempt", "observed_at"}
+            ):
+                raise WatchError("acquisition checkpoint active probe state is malformed")
+            expected_attempts.append(
+                {
+                    "candidate_id": candidate_id,
+                    "page_ordinal": ordinal,
+                    "probe_id": pending["probe_id"],
+                    "workload_id": pending["workload_id"],
+                    "attempt": pending["attempt"],
+                    "started_at": pending["observed_at"],
+                }
+            )
+    if active["attempts"] != expected_attempts:
+        raise WatchError(
+            "acquisition checkpoint active attempts differ from pending candidate state"
+        )
+    expected_candidate_ids = list(dict.fromkeys(
+        attempt["candidate_id"] for attempt in expected_attempts
+    ))
+    if candidate_ids != expected_candidate_ids:
+        raise WatchError(
+            "acquisition checkpoint active candidates differ from pending candidate state"
+        )
+
+
+def _active_batch_summary(value: Any, *, binding: AcquisitionBinding) -> dict[str, Any] | None:
+    active = _validate_active_batch(value, binding=binding)
+    if active is None:
+        return None
+    return {
+        "batch_id": active["batch_id"],
+        "stage": active["stage"],
+        "published_at": active["published_at"],
+        "candidate_ids": active["candidate_ids"],
+        "live_page_count": active["live_page_count"],
+        "attempt_count": len(active["attempts"]),
+    }
 
 
 def _git_text(paths: WatchPaths, *arguments: str, cwd: Path | None = None) -> str:
@@ -3706,6 +4162,10 @@ def _validate_action_result(value: Any, *, action: str) -> dict[str, Any]:
             "labels": ["t+30s", "t+24h", "t+72h"],
             "all_three_required_per_page_receipt": True,
             "acquisition_owner": "resumable-qcsd-class-study-production-runner",
+            "batching": {
+                "maximum_candidates_per_action": MAX_CANDIDATES,
+                "global_live_page_cap": GLOBAL_LIVE_PAGE_CAP,
+            },
             "runner_wait_policy": _RUN_WAIT_POLICY,
         }:
             raise WatchError("acquisition-status result carries another stability gate")
@@ -3724,12 +4184,63 @@ def _validate_action_result(value: Any, *, action: str) -> dict[str, Any]:
 
 
 def _validate_status_details(details: Mapping[str, Any], *, action: str) -> None:
+    if (
+        details["acquisition_schema_version"] != ACQUISITION_SCHEMA_VERSION
+        or isinstance(details["acquisition_schema_version"], bool)
+        or details["checkpoint_schema_version"] != CHECKPOINT_SCHEMA_VERSION
+        or isinstance(details["checkpoint_schema_version"], bool)
+        or details["maximum_candidates_per_action"] != MAX_CANDIDATES
+        or isinstance(details["maximum_candidates_per_action"], bool)
+        or details["global_live_page_cap"] != GLOBAL_LIVE_PAGE_CAP
+        or isinstance(details["global_live_page_cap"], bool)
+    ):
+        raise WatchError(f"{action} result carries another acquisition schema or batch cap")
+    active_batch = details["active_batch"]
+    if active_batch is not None:
+        if not isinstance(active_batch, dict) or set(active_batch) != {
+            "batch_id",
+            "stage",
+            "published_at",
+            "candidate_ids",
+            "live_page_count",
+            "attempt_count",
+        }:
+            raise WatchError(f"{action} result active batch summary is malformed")
+        if (
+            not isinstance(active_batch["batch_id"], str)
+            or not active_batch["batch_id"]
+            or active_batch["stage"] not in {"navigation", "probe"}
+        ):
+            raise WatchError(f"{action} result active batch identity is invalid")
+        _parse_timestamp(
+            active_batch["published_at"],
+            label=f"{action} active batch publication time",
+        )
+        candidate_ids = active_batch["candidate_ids"]
+        if (
+            not isinstance(candidate_ids, list)
+            or not 1 <= len(candidate_ids) <= MAX_CANDIDATES
+            or any(not isinstance(item, str) for item in candidate_ids)
+            or len(set(candidate_ids)) != len(candidate_ids)
+        ):
+            raise WatchError(f"{action} result active batch candidates are invalid")
+        live_page_count = _validate_live_page_count(
+            active_batch["live_page_count"],
+            label=f"{action} active batch",
+        )
+        if (
+            type(active_batch["attempt_count"]) is not int
+            or live_page_count == 0
+            or active_batch["attempt_count"] != live_page_count
+        ):
+            raise WatchError(f"{action} result active batch attempt count is invalid")
     count_names = (
         "candidate_count",
         "terminal_count",
         "pending_count",
         "probing_count",
         "due_now_count",
+        "finalisable_count",
         "missed_window_count",
         "recovery_required_count",
     )
@@ -3743,17 +4254,25 @@ def _validate_status_details(details: Mapping[str, Any], *, action: str) -> None
         details["candidate_count"] != CANDIDATE_COUNT
         or details["terminal_count"] + details["pending_count"] + details["probing_count"]
         != CANDIDATE_COUNT
-        or details["due_now_count"] > details["probing_count"]
-        or details["missed_window_count"] > details["probing_count"]
-        or details["due_now_count"] + details["missed_window_count"]
+        or details["due_now_count"]
+        + details["finalisable_count"]
+        + details["missed_window_count"]
         > details["probing_count"]
         or details["recovery_required_count"]
-        > details["pending_count"] + details["probing_count"]
+        > details["pending_count"]
+        + details["probing_count"]
+        + (active_batch["attempt_count"] if active_batch is not None else 0)
+        or (
+            active_batch is not None
+            and details["recovery_required_count"]
+            < active_batch["attempt_count"]
+        )
         or (details["pending_start_blocked"] and not details["pending_count"])
     ):
         raise WatchError(f"{action} result counts are inconsistent")
     expected_due = bool(
         details["due_now_count"]
+        or details["finalisable_count"]
         or details["missed_window_count"]
         or details["recovery_required_count"]
         or (details["pending_count"] and not details["pending_start_blocked"])
@@ -3763,6 +4282,8 @@ def _validate_status_details(details: Mapping[str, Any], *, action: str) -> None
     expected_complete = (
         details["terminal_count"] == CANDIDATE_COUNT
         and details["recovery_required_count"] == 0
+        and details["finalisable_count"] == 0
+        and active_batch is None
     )
     if details["complete"] != expected_complete:
         raise WatchError(f"{action} result completion flag is inconsistent")
@@ -3784,7 +4305,10 @@ def _parse_timestamp(value: Any, *, label: str) -> datetime:
         raise WatchError(f"{label} is not a valid timestamp") from error
     if parsed.tzinfo is None:
         raise WatchError(f"{label} is not timezone-aware")
-    return parsed.astimezone(UTC)
+    canonical = parsed.astimezone(UTC)
+    if canonical.isoformat().replace("+00:00", "Z") != value:
+        raise WatchError(f"{label} is not a canonical UTC timestamp")
+    return canonical
 
 
 def _utc_now(clock: Callable[[], datetime]) -> datetime:
@@ -3893,6 +4417,12 @@ def _run_verified_action(
     _validate_lock_identity(paths.mutation_lock, authority_fd)
     _revalidate_immutable_and_source(paths, binding, source_validator)
     after = _validate_checkpoint(paths, binding)
+    observed_active_batch = _active_batch_summary(
+        after.value["payload"]["active_batch"],
+        binding=binding,
+    )
+    if result["details"]["active_batch"] != observed_active_batch:
+        raise WatchError(f"{action} result active batch differs from the checkpoint")
     if action == "acquisition-status" and after.sha256 != before.sha256:
         raise WatchError("acquisition-status mutated or raced the checkpoint")
     if action == "acquisition-run" and after.sha256 == before.sha256:
@@ -3906,6 +4436,7 @@ def _run_verified_action(
             details["complete"] is False
             and details["work_due_now"] is False
             and details["due_now_count"] == 0
+            and details["finalisable_count"] == 0
             and details["missed_window_count"] == 0
             and details["recovery_required_count"] == 0
             and details["pending_start_blocked"] is True

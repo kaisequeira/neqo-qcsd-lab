@@ -8,6 +8,7 @@ import pytest
 
 import qcsd_lab.class_cohort as cohort_module
 from qcsd_lab.acquisition_errors import RecoverableAcquisitionError
+from qcsd_lab.acquisition_timing import MAX_CANDIDATES_PER_ACTION
 from qcsd_lab.class_acquisition import (
     initialise_runner,
     run_due_acquisition,
@@ -116,14 +117,19 @@ def _completion(tmp_path: Path, catalogue: Path) -> Path:
         started_at="2026-08-28T00:00:00Z",
         browser_tool="test",
     )
-    run_due_acquisition(
-        runner,
-        candidate_catalogue_path=catalogue,
-        stability_root=stability,
-        workload_root=workloads,
-        backend=_RejectingBackend(),
-        max_candidates=CANDIDATE_COUNT,
-    )
+    for _ in range(CANDIDATE_COUNT):
+        status = run_due_acquisition(
+            runner,
+            candidate_catalogue_path=catalogue,
+            stability_root=stability,
+            workload_root=workloads,
+            backend=_RejectingBackend(),
+            max_candidates=MAX_CANDIDATES_PER_ACTION,
+        )
+        if status["complete"]:
+            break
+    else:
+        raise AssertionError("bounded acquisition did not terminalise the catalogue")
     return write_acquisition_completion(runner, candidate_catalogue_path=catalogue)
 
 

@@ -3624,6 +3624,10 @@ from qcsd_lab.class_layout import (
     PILOT_COHORT_FILENAME,
     class_study_layout,
 )
+from qcsd_lab.acquisition_timing import (
+    GLOBAL_LIVE_PAGE_CAP,
+    MAX_CANDIDATES_PER_ACTION,
+)
 
 layout = class_study_layout()
 for field in (
@@ -3654,9 +3658,11 @@ for filename in (
     FINAL_SELECTION_FILENAME,
 ):
     print(filename)
+print(MAX_CANDIDATES_PER_ACTION)
+print(GLOBAL_LIVE_PAGE_CAP)
 '
   )
-  if (( ${#class_layout_fields[@]} != 22 )); then
+  if (( ${#class_layout_fields[@]} != 24 )); then
     echo "class-study could not derive the canonical Lab layout" >&2
     exit 1
   fi
@@ -3682,6 +3688,8 @@ for filename in (
   class_final_cohort="${class_study_config_root}/${class_layout_fields[19]}"
   class_final_cohort_assembly="${class_study_config_root}/${class_layout_fields[20]}"
   class_final_selection="${class_study_config_root}/${class_layout_fields[21]}"
+  class_acquisition_canonical_max_candidates="${class_layout_fields[22]}"
+  class_acquisition_global_live_page_cap="${class_layout_fields[23]}"
   class_candidate_catalogue="${class_study_config_root}/classifier-multiorigin100-v1-candidates.json"
   class_pilot_qualification_manifest="${class_pilot_qualification_root}/_qualification-set.json"
   class_final_qualification_manifest="${class_final_qualification_root}/_qualification-set.json"
@@ -3792,11 +3800,24 @@ for filename in (
       ;;
   esac
 
-  if [[ "${class_study_action}" == "acquisition-run" &&
-        ( "${class_acquisition_max_candidates}" != "1" ||
-          "${class_acquisition_timeout_ms}" != "60000" ) ]]; then
-    echo "class-study acquisition-run requires the canonical one-candidate action bounds" >&2
-    exit 2
+  if [[ "${class_study_action}" == "acquisition-run" ]]; then
+    if [[ "${class_acquisition_canonical_max_candidates}" != "2" ||
+          "${class_acquisition_global_live_page_cap}" != "5" ]]; then
+      echo "class-study acquisition batching constants are not canonical" >&2
+      exit 1
+    fi
+    if [[ -n "${class_acquisition_max_candidates}" &&
+          "${class_acquisition_max_candidates}" != "1" &&
+          "${class_acquisition_max_candidates}" != \
+            "${class_acquisition_canonical_max_candidates}" ]]; then
+      echo "class-study acquisition-run accepts at most two candidates per action" >&2
+      exit 2
+    fi
+    if [[ -n "${class_acquisition_timeout_ms}" &&
+          "${class_acquisition_timeout_ms}" != "60000" ]]; then
+      echo "class-study acquisition-run requires --acquisition-timeout-ms 60000" >&2
+      exit 2
+    fi
   fi
   if [[ "${class_study_action}" == "evaluate" &&
         -z "${class_path_hosts[--dlsvm-cache-directory]:-}" ]]; then

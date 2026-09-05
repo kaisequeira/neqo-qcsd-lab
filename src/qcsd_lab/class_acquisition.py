@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import ipaddress
 import os
-import shutil
+import re
 import socket
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -18,6 +18,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from threading import Lock
 from typing import Any, Protocol
 from urllib.parse import urlsplit
 
@@ -28,6 +29,8 @@ from .acquisition_errors import (
 from .acquisition_timing import (
     ACTION_TIMING_CONTRACT,
     BASELINE_SCHEDULING_CONTRACT,
+    GLOBAL_LIVE_PAGE_CAP,
+    MAX_CANDIDATES_PER_ACTION,
     MINIMUM_BASELINE_SPACING_MS,
     baseline_is_safe,
     earliest_safe_baseline,
@@ -67,21 +70,22 @@ from .util import (
     source_metadata,
 )
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 PROVENANCE_TYPE = "qcsd-class-study-acquisition-provenance"
 TERMINAL_TYPE = "qcsd-class-study-acquisition-terminal"
-TERMINAL_SCHEMA_VERSION = 2
+CHECKPOINT_SCHEMA_VERSION = 2
+TERMINAL_SCHEMA_VERSION = 3
 COMPLETION_TYPE = "qcsd-class-study-acquisition-completion"
+COMPLETION_SCHEMA_VERSION = 2
 CHECKPOINT_TYPE = "qcsd-class-study-acquisition-checkpoint"
+ACTIVE_BATCH_SCHEMA_VERSION = 1
 DOCUMENT_RESPONSE_RECEIPT_TYPE = "qcsd-class-study-document-response"
 MAX_ORIGIN_PASSES = 8
 MAX_APPROVED_ORIGINS = 32
 MAX_OBSERVED_AUDIT_ORIGINS = 512
 MAX_PROBE_ATTEMPTS = 3
 MAX_ACQUISITION_BACKEND_TIMEOUT_MS = 60_000
-MAX_PASSIVE_RENDER_AFTER_LOAD_MS = int(
-    PASSIVE_RENDER_CONTRACT["hard_cap_after_load_ms"]
-)
+MAX_PASSIVE_RENDER_AFTER_LOAD_MS = int(PASSIVE_RENDER_CONTRACT["hard_cap_after_load_ms"])
 PENDING_BASELINE_GUARD_MS = MINIMUM_BASELINE_SPACING_MS
 TERMINAL_KINDS = frozenset(
     {
@@ -100,6 +104,29 @@ NAVIGATION_REJECTION_KINDS = frozenset(
         "playwright-navigation-failure",
         "redirect-has-query-fragment-or-userinfo",
         "redirect-outside-candidate-boundary",
+    }
+)
+SCHEMA_ONE_OBSERVATION_FIELDS = frozenset(
+    {
+        "probe_id",
+        "observed_at",
+        "elapsed_ms",
+        "final_url",
+        "status",
+        "content_type",
+        "body_bytes",
+        "body_sha256",
+        "resource_graph_sha256",
+        "prepared_workload_sha256",
+        "runner_provenance_sha256",
+        "approved_origins",
+        "discovery_observed_origins",
+        "discovery_expandable_origins",
+        "discovery_origin_ip_pins",
+        "chromium_version",
+        "neqo_provenance",
+        "prepared_path",
+        "probe_completed_at",
     }
 )
 CURRENT_OBSERVATION_FIELDS = frozenset(
@@ -125,9 +152,7 @@ class TerminalProbePolicyError(TerminalAcquisitionPolicyError):
     """A deterministic safety, policy, or finite-cap probe rejection."""
 
 
-def validate_class_study_preparation(
-    manifest: dict[str, Any], *, workload_id: str
-) -> None:
+def validate_class_study_preparation(manifest: dict[str, Any], *, workload_id: str) -> None:
     """Require the class study's bounded complete-coverage preparation contract."""
 
     candidate_preparation = manifest.get("preparation")
@@ -146,10 +171,7 @@ def validate_class_study_preparation(
             f"class-study workload {workload_id!r} complete coverage cannot contain "
             "unapproved-origin HTTPS GET exclusions: "
             + ", ".join(
-                sorted(
-                    str(item.get("url", "<malformed>"))
-                    for item in unapproved_get_exclusions
-                )
+                sorted(str(item.get("url", "<malformed>")) for item in unapproved_get_exclusions)
             )
         )
     validate_research_preparation(manifest, workload_id=workload_id)
@@ -171,10 +193,8 @@ def validate_class_study_preparation(
         or coverage.get("browser_request_headers_sha256")
         != evidence_sha256(preparation.get("browser_request_headers"))
         or preparation.get("passive_render_contract") != PASSIVE_RENDER_CONTRACT
-        or preparation.get("passive_render_contract_sha256")
-        != PASSIVE_RENDER_CONTRACT_SHA256
-        or preparation.get("settle_ms")
-        != PASSIVE_RENDER_CONTRACT["minimum_after_load_ms"]
+        or preparation.get("passive_render_contract_sha256") != PASSIVE_RENDER_CONTRACT_SHA256
+        or preparation.get("settle_ms") != PASSIVE_RENDER_CONTRACT["minimum_after_load_ms"]
         or not isinstance(audit, Mapping)
         or audit.get("schema_version") != DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION
         or audit.get("instrumentation_policy") != CDP_TARGET_INSTRUMENTATION_POLICY
@@ -352,10 +372,7 @@ class ExistingAcquisitionBackend:
         | None = None,
         timeout_ms: int = 60_000,
     ) -> None:
-        if (
-            type(timeout_ms) is not int
-            or not 1 <= timeout_ms <= MAX_ACQUISITION_BACKEND_TIMEOUT_MS
-        ):
+        if type(timeout_ms) is not int or not 1 <= timeout_ms <= MAX_ACQUISITION_BACKEND_TIMEOUT_MS:
             raise ValueError("acquisition backend timeout must be in [1, 60000] ms")
         self._navigation = navigation
         self._content_type_probe = content_type_probe or browser_document_content_type
@@ -436,9 +453,7 @@ class ExistingAcquisitionBackend:
             or any(character not in "0123456789abcdef" for character in expected["body_sha256"])
         ):
             raise TerminalProbePolicyError("prepared primary response identity is invalid")
-        document_response = self._content_type_probe(
-            url, approved_origins, self._timeout_ms, pins
-        )
+        document_response = self._content_type_probe(url, approved_origins, self._timeout_ms, pins)
         if isinstance(document_response, str):
             document_response = BrowserDocumentResponse(
                 final_url=preparation["final_url"],
@@ -450,8 +465,7 @@ class ExistingAcquisitionBackend:
             not isinstance(document_response, BrowserDocumentResponse)
             or document_response.final_url != preparation["final_url"]
             or document_response.status != expected["status"]
-            or _normalise_content_type(document_response.content_type)
-            not in HTML_MEDIA_TYPES
+            or _normalise_content_type(document_response.content_type) not in HTML_MEDIA_TYPES
             or document_response.chromium_version != preparation["chromium_version"]
             or preparation.get("origin_ip_pins") != pins
         ):
@@ -478,18 +492,12 @@ class ExistingAcquisitionBackend:
                     "migration_commit",
                 )
             },
-            passive_render_contract_sha256=preparation[
-                "passive_render_contract_sha256"
-            ],
+            passive_render_contract_sha256=preparation["passive_render_contract_sha256"],
             render_observation=preparation["render_observation"],
             render_observation_sha256=preparation["render_observation_sha256"],
-            discovery_event_audit_sha256=preparation[
-                "discovery_event_audit_sha256"
-            ],
+            discovery_event_audit_sha256=preparation["discovery_event_audit_sha256"],
             preparation_origin_ip_pins=pins,
-            document_response_chromium_version=(
-                document_response.chromium_version
-            ),
+            document_response_chromium_version=(document_response.chromium_version),
         )
 
 
@@ -517,13 +525,9 @@ def _prepared_replay_identity_sha256(manifest: Mapping[str, Any]) -> str:
         "approved_origins": approved,
         "origin_ip_pins": preparation.get("origin_ip_pins"),
         "browser_request_headers": preparation.get("browser_request_headers"),
-        "request_header_transformation": preparation.get(
-            "request_header_transformation"
-        ),
+        "request_header_transformation": preparation.get("request_header_transformation"),
         "expected_responses": expected,
-        "passive_render_contract_sha256": preparation.get(
-            "passive_render_contract_sha256"
-        ),
+        "passive_render_contract_sha256": preparation.get("passive_render_contract_sha256"),
         "runtime_manifest": runtime_manifest(dict(manifest)),
     }
     return sha256_bytes(canonical_json_bytes(identity))
@@ -550,9 +554,7 @@ def _prepared_primary_response(manifest: Mapping[str, Any]) -> Mapping[str, Any]
         ):
             resource_id = mapping["resource_id"]
             if resource_id in resource_events:
-                raise TerminalProbePolicyError(
-                    "prepared navigation resource mapping is ambiguous"
-                )
+                raise TerminalProbePolicyError("prepared navigation resource mapping is ambiguous")
             resource_events[resource_id] = event
     current = resource_events.get(0)
     if not isinstance(current, Mapping):
@@ -565,9 +567,7 @@ def _prepared_primary_response(manifest: Mapping[str, Any]) -> Mapping[str, Any]
         or source.get("target_type") != "page"
         or source.get("generation") != 0
     ):
-        raise TerminalProbePolicyError(
-            "prepared navigation resource zero is not the root document"
-        )
+        raise TerminalProbePolicyError("prepared navigation resource zero is not the root document")
     while True:
         successors = [
             event
@@ -580,9 +580,7 @@ def _prepared_primary_response(manifest: Mapping[str, Any]) -> Mapping[str, Any]
         if not successors:
             break
         if len(successors) != 1:
-            raise TerminalProbePolicyError(
-                "prepared root-document redirect chain is ambiguous"
-            )
+            raise TerminalProbePolicyError("prepared root-document redirect chain is ambiguous")
         current = successors[0]
         if current.get("resource_type") != "Document":
             raise TerminalProbePolicyError(
@@ -591,11 +589,7 @@ def _prepared_primary_response(manifest: Mapping[str, Any]) -> Mapping[str, Any]
     mapping = current.get("mapping")
     resource_id = mapping.get("resource_id") if isinstance(mapping, Mapping) else None
     resource = next(
-        (
-            item
-            for item in resources
-            if isinstance(item, Mapping) and item.get("id") == resource_id
-        ),
+        (item for item in resources if isinstance(item, Mapping) and item.get("id") == resource_id),
         None,
     )
     if (
@@ -613,9 +607,7 @@ def _prepared_primary_response(manifest: Mapping[str, Any]) -> Mapping[str, Any]
         if isinstance(item, Mapping) and item.get("resource_id") == resource_id
     ]
     if len(expected_matches) != 1:
-        raise TerminalProbePolicyError(
-            "prepared navigation has no unique final primary response"
-        )
+        raise TerminalProbePolicyError("prepared navigation has no unique final primary response")
     return expected_matches[0]
 
 
@@ -640,9 +632,7 @@ def _create_document_response_receipt(
             "document response and preparation used different origin-IP pins"
         )
     content_type = _normalise_content_type(prepared.content_type)
-    browser_version = (
-        prepared.document_response_chromium_version or prepared.chromium_version
-    )
+    browser_version = prepared.document_response_chromium_version or prepared.chromium_version
     payload = {
         "document_response_schema_version": 1,
         "workload_id": workload_id,
@@ -727,8 +717,7 @@ def catalogue_boundary_navigation(domain: str, *, timeout_ms: int = 60_000) -> N
                     "navigation redirect origins did not converge within the finite pass cap"
                 ) from expansion
             existing_by_hostname = {
-                urlsplit(value).hostname: address
-                for value, address in navigation_pins.items()
+                urlsplit(value).hostname: address for value, address in navigation_pins.items()
             }
             reused: dict[str, str] = {}
             unresolved: list[str] = []
@@ -740,9 +729,7 @@ def catalogue_boundary_navigation(domain: str, *, timeout_ms: int = 60_000) -> N
                     unresolved.append(value)
             navigation_pins.update(reused)
             navigation_pins.update(public_origin_ip_pins(tuple(unresolved)))
-            _validated_frozen_origin_ip_pins(
-                tuple(sorted(navigation_pins)), navigation_pins
-            )
+            _validated_frozen_origin_ip_pins(tuple(sorted(navigation_pins)), navigation_pins)
     raise AssertionError("navigation redirect convergence loop terminated unexpectedly")
 
 
@@ -853,8 +840,7 @@ def _catalogue_boundary_navigation_pass(
                 if rejected_document_urls:
                     raise TerminalProbePolicyError(
                         "canonical homepage document navigation left the allowed HTTPS "
-                        "candidate-domain boundary: "
-                        + ", ".join(sorted(rejected_document_urls))
+                        "candidate-domain boundary: " + ", ".join(sorted(rejected_document_urls))
                     )
                 if unowned_document_urls:
                     raise TerminalProbePolicyError(
@@ -1063,9 +1049,7 @@ def initialise_runner(
             "passive_render_contract": PASSIVE_RENDER_CONTRACT,
             "passive_render_contract_sha256": PASSIVE_RENDER_CONTRACT_SHA256,
             "browser_navigation_timeout_ms": MAX_ACQUISITION_BACKEND_TIMEOUT_MS,
-            "passive_render_hard_cap_after_load_ms": (
-                MAX_PASSIVE_RENDER_AFTER_LOAD_MS
-            ),
+            "passive_render_hard_cap_after_load_ms": (MAX_PASSIVE_RENDER_AFTER_LOAD_MS),
             "acquisition_action_timing_contract": ACTION_TIMING_CONTRACT,
             "baseline_scheduling_contract": BASELINE_SCHEDULING_CONTRACT,
             "registrable_domain_policy": "exact-frozen-tranco-candidate-domain",
@@ -1103,6 +1087,8 @@ def initialise_runner(
     checkpoint = _checkpoint(
         provenance_sha256=sha256_file(destination / "provenance.json"),
         catalogue_sha256=sha256_file(candidate_catalogue_path),
+        baseline_batches=(),
+        active_batch=None,
         candidates={
             candidate.candidate_id: {"state": "pending", "pages": [], "terminal": None}
             for candidate in candidates
@@ -1122,12 +1108,12 @@ def run_due_acquisition(
     now: datetime | None = None,
     clock: Callable[[], datetime] | None = None,
     sleeper: Callable[[float], None] | None = None,
-    max_candidates: int = 1,
+    max_candidates: int = MAX_CANDIDATES_PER_ACTION,
 ) -> dict[str, Any]:
-    """Process bounded due work and return progress plus the next due instant."""
+    """Process one bounded, compatible batch and return current progress."""
 
-    if max_candidates < 1:
-        raise ValueError("max_candidates must be positive")
+    if type(max_candidates) is not int or not 1 <= max_candidates <= MAX_CANDIDATES_PER_ACTION:
+        raise ValueError(f"max_candidates must be in [1, {MAX_CANDIDATES_PER_ACTION}]")
     if now is not None and clock is not None:
         raise ValueError("supply now or clock, not both")
     clock_function = clock or (lambda: datetime.now(UTC))
@@ -1141,16 +1127,19 @@ def run_due_acquisition(
     if wait_function is None:
         wait_function = time.sleep
 
+    clock_lock = Lock()
+
     def read_clock() -> datetime:
         nonlocal last_clock
-        value = last_clock if now is not None else clock_function()
-        if not isinstance(value, datetime) or value.tzinfo is None:
-            raise ValueError("acquisition clock must return a timezone-aware datetime")
-        value = value.astimezone(UTC)
-        if value < last_clock:
-            raise ValueError("acquisition clock moved backwards during a bounded action")
-        last_clock = value
-        return value
+        with clock_lock:
+            value = last_clock if now is not None else clock_function()
+            if not isinstance(value, datetime) or value.tzinfo is None:
+                raise ValueError("acquisition clock must return a timezone-aware datetime")
+            value = value.astimezone(UTC)
+            if value < last_clock:
+                raise ValueError("acquisition clock moved backwards during a bounded action")
+            last_clock = value
+            return value
 
     def wait_until(target: datetime) -> datetime:
         nonlocal last_clock
@@ -1167,6 +1156,7 @@ def run_due_acquisition(
             if remaining <= 0:
                 return current_clock
             wait_function(min(remaining, 1.0))
+
     runner = _regular_directory(root)
     provenance_path = runner / "provenance.json"
     provenance = load_json(provenance_path)
@@ -1178,68 +1168,180 @@ def run_due_acquisition(
     if provenance_payload["candidate_catalogue_sha256"] != sha256_file(candidate_catalogue_path):
         raise ValueError("runner provenance is bound to another catalogue")
     checkpoint_path = runner / "checkpoint.json"
-    checkpoint = _load_checkpoint(checkpoint_path, provenance_path, candidate_catalogue_path)
-    states = checkpoint["payload"]["candidates"]
-    processed = 0
-    while processed < max_candidates:
-        # Re-read the clock and priority set after every network-bound item.
-        # A long navigation/preparation can make a 30-second probe due while
-        # this invocation is still running; that due probe must pre-empt the
-        # next unused baseline rather than being missed by a stale snapshot.
-        current = read_clock()
-        due_candidates: set[str] = set()
-        missed_candidates: set[str] = set()
+    checkpoint, persisted_terminal_recoveries = _load_checkpoint(
+        checkpoint_path,
+        provenance_path,
+        candidate_catalogue_path,
+        maximum_recovery_candidates=max_candidates,
+    )
+    if persisted_terminal_recoveries:
+        # Publishing an immutable terminal and binding it into the mutable
+        # checkpoint are one logical action.  A resume that finishes that
+        # transaction must not also start unrelated network work.
+        return acquisition_status(
+            runner,
+            candidate_catalogue_path=candidate_catalogue_path,
+            now=read_clock(),
+        )
+    payload = checkpoint["payload"]
+    states = payload["candidates"]
+    baseline_batches = list(payload["baseline_batches"])
+    active_batch = payload["active_batch"]
+
+    def save_checkpoint() -> None:
+        _save_acquisition_checkpoint(
+            checkpoint_path,
+            provenance_path=provenance_path,
+            catalogue_path=candidate_catalogue_path,
+            baseline_batches=baseline_batches,
+            active_batch=active_batch,
+            candidates=states,
+        )
+
+    def publish_active(value: Mapping[str, Any]) -> None:
+        nonlocal active_batch
+        active_batch = dict(value)
+        save_checkpoint()
+
+    def clear_active() -> None:
+        nonlocal active_batch
+        active_batch = None
+
+    if active_batch is not None:
+        _recover_active_batch(states, active_batch, recovered_at=read_clock())
+        active_batch = None
+        save_checkpoint()
+        return acquisition_status(
+            runner,
+            candidate_catalogue_path=candidate_catalogue_path,
+            now=read_clock(),
+        )
+
+    def classify(
+        current_time: datetime,
+    ) -> tuple[list[Any], list[Any], list[Any], list[Any], list[Any]]:
+        finalisable_values: list[Any] = []
+        due_values: list[tuple[Any, list[dict[str, Any]], str]] = []
+        missed_values: list[Any] = []
+        ready_values: list[Any] = []
+        pending_values: list[Any] = []
         for candidate in candidates:
             state = states[candidate.candidate_id]
-            if state["terminal"] is not None or state["state"] != "probing":
+            if state["terminal"] is not None:
                 continue
-            try:
-                if _due_pages(state, current, candidate_id=candidate.candidate_id):
-                    due_candidates.add(candidate.candidate_id)
-            except MissedProbeWindow:
-                missed_candidates.add(candidate.candidate_id)
-        ready_candidates = {
-            candidate.candidate_id
-            for candidate in candidates
-            if states[candidate.candidate_id]["terminal"] is None
-            and states[candidate.candidate_id]["state"] == "baseline-ready"
-        }
-        pending_candidates = {
-            candidate.candidate_id
-            for candidate in candidates
-            if states[candidate.candidate_id]["terminal"] is None
-            and states[candidate.candidate_id]["state"] == "pending"
-        }
-        baseline_safe_now = baseline_is_safe(
-            current,
-            _checkpoint_baselines(states),
+            if state["state"] == "probing":
+                if _probe_candidate_is_finalisable(state):
+                    finalisable_values.append(candidate)
+                    continue
+                try:
+                    pages = _due_pages(
+                        state,
+                        current_time,
+                        candidate_id=candidate.candidate_id,
+                    )
+                except MissedProbeWindow:
+                    missed_values.append(candidate)
+                else:
+                    if pages:
+                        probe_ids = {
+                            STABILITY_PROBE_WINDOWS[len(page["observations"])].probe_id
+                            for page in pages
+                        }
+                        if len(probe_ids) != 1:
+                            raise ValueError("one candidate has incompatible due probe windows")
+                        due_values.append((candidate, pages, probe_ids.pop()))
+            elif state["state"] == "baseline-ready":
+                ready_values.append(candidate)
+            elif state["state"] == "pending":
+                pending_values.append(candidate)
+        return (
+            finalisable_values,
+            due_values,
+            missed_values,
+            ready_values,
+            pending_values,
         )
-        # Live work always outranks bookkeeping for a window that is already
-        # irrecoverably lost.  With the canonical one-candidate action bound,
-        # terminalising a stale candidate first could push an unrelated probe
-        # from its inclusive latest edge to one microsecond too late.
-        if due_candidates:
-            selected_ids = due_candidates
-        elif missed_candidates:
-            selected_ids = missed_candidates
-        elif ready_candidates and baseline_safe_now:
-            selected_ids = ready_candidates
-        elif pending_candidates and not _pending_navigation_blocked(states, current):
-            selected_ids = pending_candidates
-        else:
-            selected_ids = set()
-        ordered_candidates = tuple(
-            candidate
-            for candidate in candidates
-            if candidate.candidate_id in selected_ids
-        )
-        if not ordered_candidates:
+
+    baseline_plan: tuple[tuple[Any, ...], datetime] | None = None
+    scheduling_rechecks = 0
+    while True:
+        current = read_clock()
+        finalisable, due, missed, ready, pending = classify(current)
+        if due or finalisable or missed:
             break
-        candidate = ordered_candidates[0]
-        state = states[candidate.candidate_id]
-        if state["terminal"] is not None:
-            continue
-        if candidate.candidate_id in missed_candidates:
+        if ready and baseline_is_safe(current, _baseline_batch_starts(baseline_batches)):
+            selected_ready = _select_compatible_batch(
+                [
+                    (candidate, len(states[candidate.candidate_id]["pages"]), "t+30s")
+                    for candidate in ready
+                ],
+                maximum=max_candidates,
+            )
+            actual_baseline = read_clock()
+            if not baseline_is_safe(
+                actual_baseline,
+                _baseline_batch_starts(baseline_batches),
+            ):
+                scheduling_rechecks += 1
+                if scheduling_rechecks > MAX_CANDIDATES_PER_ACTION:
+                    raise ValueError("clock repeatedly crossed a baseline scheduling boundary")
+                continue
+            baseline_plan = (selected_ready, actual_baseline)
+        break
+
+    if due:
+        selected = _select_compatible_batch(
+            [(candidate, len(pages), probe_id) for candidate, pages, probe_id in due],
+            maximum=max_candidates,
+        )
+        selected_ids = {candidate.candidate_id for candidate in selected}
+        selected_due = {
+            candidate.candidate_id: pages
+            for candidate, pages, _probe_id in due
+            if candidate.candidate_id in selected_ids
+        }
+        _run_probe_batch(
+            selected,
+            initial_pages=selected_due,
+            runner=runner,
+            provenance_path=provenance_path,
+            provenance_payload=provenance_payload,
+            candidate_catalogue_path=candidate_catalogue_path,
+            stability_root=stability_root,
+            workload_root=workload_root,
+            backend=backend,
+            states=states,
+            baseline_batches=baseline_batches,
+            read_clock=read_clock,
+            publish=publish_active,
+            clear=clear_active,
+            save_checkpoint=save_checkpoint,
+            missed_reason="recoverable probe retries exceeded the latest admissible window",
+        )
+    elif finalisable:
+        for candidate in finalisable[:max_candidates]:
+            state = states[candidate.candidate_id]
+            _terminalise_completed_probe_candidate(
+                candidate,
+                state,
+                runner=runner,
+                provenance_path=provenance_path,
+                candidate_catalogue_path=candidate_catalogue_path,
+                stability_root=stability_root,
+                workload_root=workload_root,
+                terminalised_at=_finalisable_probe_terminal_time(state),
+                baseline_batch=_baseline_batch_for_candidate(
+                    baseline_batches,
+                    candidate_id=candidate.candidate_id,
+                ),
+            )
+            if state["terminal"] is None:
+                raise AssertionError("finalisable probe candidate did not terminalise")
+        save_checkpoint()
+    elif missed:
+        selected = tuple(missed[:max_candidates])
+        for candidate in selected:
+            state = states[candidate.candidate_id]
             _record_pending_probe_interruptions(state, recovered_at=current)
             _terminalise(
                 runner,
@@ -1249,246 +1351,440 @@ def run_due_acquisition(
                 "host resumed after the latest admissible probe window",
                 provenance_path,
                 terminalised_at=current,
+                baseline_batch=_baseline_batch_for_candidate(
+                    baseline_batches, candidate_id=candidate.candidate_id
+                ),
             )
-            processed += 1
-            _save_acquisition_checkpoint(
-                checkpoint_path,
-                provenance_path=provenance_path,
-                catalogue_path=candidate_catalogue_path,
-                candidates=states,
-            )
-            continue
-        if state["state"] == "pending":
-            attempts = state.setdefault("navigation_attempts", [])
-            navigation_terminal_clock = current
-            pending_navigation = state.get("pending_navigation")
-            if pending_navigation is not None:
-                attempt, started = _validate_pending_navigation(pending_navigation)
-                attempts.append(
-                    {
-                        "attempt": attempt,
-                        "started_at": _format_time(started),
-                        "completed_at": _format_time(read_clock()),
-                        "outcome": "interrupted",
-                        "reason": "prior invocation ended before recording an outcome",
-                    }
-                )
-                state.pop("pending_navigation", None)
-            navigation = None
-            pages = None
-            navigation_origins_by_page = None
-            navigation_final = bool(
-                attempts
-                and attempts[-1]["outcome"] == "terminal-policy-rejection"
-            )
-            while len(attempts) < MAX_PROBE_ATTEMPTS and not navigation_final:
-                attempt = 1 + max(
-                    (item["attempt"] for item in attempts),
-                    default=0,
-                )
-                started = read_clock()
-                state["pending_navigation"] = {
-                    "attempt": attempt,
-                    "started_at": _format_time(started),
-                }
-                _save_acquisition_checkpoint(
-                    checkpoint_path,
-                    provenance_path=provenance_path,
-                    catalogue_path=candidate_catalogue_path,
-                    candidates=states,
-                )
-                internal_error: Exception | None = None
-                try:
-                    navigation = backend.discover_navigation(candidate.domain)
-                    pages = select_page_candidates(
-                        candidate.domain,
-                        registrable_domain=navigation.registrable_domain,
-                        discovered_links=navigation.links,
-                    )
-                    navigation_origins_by_page = _navigation_origins_by_page(
-                        navigation, pages
-                    )
-                except TerminalProbePolicyError as error:
-                    outcome = "terminal-policy-rejection"
-                    reason = str(error)
-                except RecoverableAcquisitionError as error:
-                    outcome = "recoverable-failure"
-                    reason = str(error)
-                    internal_error = None
-                except Exception as error:  # noqa: BLE001 - checkpoint before aborting
-                    outcome = "internal-acquisition-error"
-                    reason = _exception_reason(error)
-                    internal_error = error
-                else:
-                    outcome = "completed"
-                    reason = None
-                    internal_error = None
-                completion = read_clock()
-                navigation_terminal_clock = completion
-                attempts.append(
-                    {
-                        "attempt": attempt,
-                        "started_at": _format_time(started),
-                        "completed_at": _format_time(completion),
-                        "outcome": outcome,
-                        "reason": reason,
-                    }
-                )
-                state.pop("pending_navigation", None)
-                if internal_error is not None:
-                    state["internal_acquisition_error"] = _internal_error_record(
-                        stage="navigation",
-                        attempt=attempt,
-                        recorded_at=completion,
-                        error=internal_error,
-                        reason=reason,
-                    )
-                if outcome != "completed":
-                    _save_acquisition_checkpoint(
-                        checkpoint_path,
-                        provenance_path=provenance_path,
-                        catalogue_path=candidate_catalogue_path,
-                        candidates=states,
-                    )
-                if internal_error is not None:
-                    raise InternalAcquisitionError(
-                        f"acquisition stopped after durable internal navigation failure: {reason}"
-                    ) from internal_error
-                if outcome == "completed" or outcome == "terminal-policy-rejection":
-                    break
-            if navigation is None or pages is None or navigation_origins_by_page is None:
-                if attempts[-1]["outcome"] == "terminal-policy-rejection":
-                    rejection_reason = attempts[-1]["reason"]
-                else:
-                    rejection_reason = (
-                        f"recoverable navigation failures exhausted "
-                        f"{MAX_PROBE_ATTEMPTS} attempts: {attempts[-1]['reason']}"
-                    )
-                _terminalise(
-                    runner,
-                    state,
-                    candidate.candidate_id,
-                    "pre-probe-rejection",
-                    rejection_reason,
-                    provenance_path,
-                    terminalised_at=navigation_terminal_clock,
-                )
-                processed += 1
-                _save_acquisition_checkpoint(
-                    checkpoint_path,
-                    provenance_path=provenance_path,
-                    catalogue_path=candidate_catalogue_path,
-                    candidates=states,
-                )
-                continue
-            state.update(
-                {
-                    "state": "baseline-ready",
-                    "pages": [
-                        {
-                            "page": page.as_dict(),
-                            "observations": [],
-                            "probe_attempts": [],
-                            "approved_origins": [],
-                            "navigation_observed_origins": list(
-                                navigation_origins_by_page[page.url]
-                            ),
-                        }
-                        for page in pages
-                    ],
-                    "navigation_observed_origins": list(navigation.observed_origins),
-                    "navigation_rejections": [
-                        rejection.as_dict() for rejection in navigation.rejections
-                    ],
-                }
-            )
-            processed += 1
-            _save_acquisition_checkpoint(
-                checkpoint_path,
-                provenance_path=provenance_path,
-                catalogue_path=candidate_catalogue_path,
-                candidates=states,
-            )
-            continue
-        if state["state"] == "baseline-ready":
-            baseline = read_clock()
-            if not baseline_is_safe(baseline, _checkpoint_baselines(states)):
-                raise ValueError("candidate baseline violates the serial scheduling contract")
+        save_checkpoint()
+    elif baseline_plan is not None:
+        selected, baseline = baseline_plan
+        baseline_batch = _new_baseline_batch(
+            selected,
+            states=states,
+            baseline_started_at=baseline,
+        )
+        baseline_batches.append(baseline_batch)
+        for candidate in selected:
+            state = states[candidate.candidate_id]
             state["state"] = "probing"
             state["baseline_started_at"] = _format_time(baseline)
-            _save_acquisition_checkpoint(
-                checkpoint_path,
+        save_checkpoint()
+        current = wait_until(
+            baseline + timedelta(milliseconds=STABILITY_PROBE_WINDOWS[0].earliest_ms)
+        )
+        initial_pages: dict[str, list[dict[str, Any]]] = {}
+        missed_after_wait: list[Any] = []
+        for candidate in selected:
+            try:
+                initial_pages[candidate.candidate_id] = _due_pages(
+                    states[candidate.candidate_id],
+                    current,
+                    candidate_id=candidate.candidate_id,
+                )
+            except MissedProbeWindow:
+                missed_after_wait.append(candidate)
+        if missed_after_wait:
+            for candidate in missed_after_wait:
+                _terminalise(
+                    runner,
+                    states[candidate.candidate_id],
+                    candidate.candidate_id,
+                    "probe-window-missed",
+                    "bounded action passed the latest admissible probe window",
+                    provenance_path,
+                    terminalised_at=current,
+                    baseline_batch=baseline_batch,
+                )
+            save_checkpoint()
+        remaining = tuple(
+            candidate
+            for candidate in selected
+            if candidate.candidate_id not in {value.candidate_id for value in missed_after_wait}
+        )
+        if remaining:
+            _run_probe_batch(
+                remaining,
+                initial_pages=initial_pages,
+                runner=runner,
                 provenance_path=provenance_path,
-                catalogue_path=candidate_catalogue_path,
-                candidates=states,
+                provenance_payload=provenance_payload,
+                candidate_catalogue_path=candidate_catalogue_path,
+                stability_root=stability_root,
+                workload_root=workload_root,
+                backend=backend,
+                states=states,
+                baseline_batches=baseline_batches,
+                read_clock=read_clock,
+                publish=publish_active,
+                clear=clear_active,
+                save_checkpoint=save_checkpoint,
+                missed_reason=("recoverable probe retries exceeded the latest admissible window"),
             )
-            current = wait_until(
-                baseline
-                + timedelta(milliseconds=STABILITY_PROBE_WINDOWS[0].earliest_ms)
+    elif pending and not _pending_navigation_blocked(states, current):
+        selected = _select_compatible_batch(
+            [(candidate, 1, "navigation") for candidate in pending],
+            maximum=max_candidates,
+        )
+        _run_navigation_batch(
+            selected,
+            runner=runner,
+            provenance_path=provenance_path,
+            backend=backend,
+            states=states,
+            read_clock=read_clock,
+            publish=publish_active,
+            clear=clear_active,
+            save_checkpoint=save_checkpoint,
+        )
+    else:
+        save_checkpoint()
+
+    return acquisition_status(
+        runner,
+        candidate_catalogue_path=candidate_catalogue_path,
+        now=read_clock(),
+    )
+
+
+def _select_compatible_batch(
+    options: Sequence[tuple[Any, int, str]],
+    *,
+    maximum: int,
+) -> tuple[Any, ...]:
+    """Select an anchor and its first compatible catalogue-order partner."""
+
+    if not options or type(maximum) is not int or not 1 <= maximum <= MAX_CANDIDATES_PER_ACTION:
+        raise ValueError("candidate batch selection inputs are invalid")
+    anchor, anchor_pages, anchor_key = options[0]
+    if (
+        type(anchor_pages) is not int
+        or not 1 <= anchor_pages <= GLOBAL_LIVE_PAGE_CAP
+        or not isinstance(anchor_key, str)
+        or not anchor_key
+    ):
+        raise ValueError("candidate batch option is invalid")
+    if maximum == 1:
+        return (anchor,)
+    for partner, partner_pages, partner_key in options[1:]:
+        if (
+            type(partner_pages) is not int
+            or not 1 <= partner_pages <= GLOBAL_LIVE_PAGE_CAP
+            or not isinstance(partner_key, str)
+            or not partner_key
+        ):
+            raise ValueError("candidate batch option is invalid")
+        if partner_key == anchor_key and anchor_pages + partner_pages <= GLOBAL_LIVE_PAGE_CAP:
+            return anchor, partner
+    return (anchor,)
+
+
+def _batch_identifier(prefix: str, payload: Mapping[str, Any]) -> str:
+    if prefix not in {"active", "baseline"}:
+        raise ValueError("acquisition batch prefix is invalid")
+    return f"{prefix}-{sha256_bytes(canonical_json_bytes(payload))}"
+
+
+def _new_baseline_batch(
+    candidates: Sequence[Any],
+    *,
+    states: Mapping[str, Any],
+    baseline_started_at: datetime,
+) -> dict[str, Any]:
+    candidate_ids = [candidate.candidate_id for candidate in candidates]
+    live_page_count = sum(len(states[candidate_id]["pages"]) for candidate_id in candidate_ids)
+    if (
+        not 1 <= len(candidate_ids) <= MAX_CANDIDATES_PER_ACTION
+        or len(candidate_ids) != len(set(candidate_ids))
+        or not 1 <= live_page_count <= GLOBAL_LIVE_PAGE_CAP
+    ):
+        raise ValueError("baseline acquisition batch inputs are invalid")
+    body = {
+        "baseline_started_at": _format_time(baseline_started_at),
+        "candidate_ids": candidate_ids,
+        "live_page_count": live_page_count,
+    }
+    return {"batch_id": _batch_identifier("baseline", body), **body}
+
+
+def _new_active_batch(
+    stage: str,
+    *,
+    published_at: datetime,
+    attempts: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    if stage not in {"navigation", "probe"} or not attempts:
+        raise ValueError("active acquisition batch inputs are invalid")
+    values = [dict(attempt) for attempt in attempts]
+    candidate_ids = list(dict.fromkeys(item["candidate_id"] for item in values))
+    if (
+        not 1 <= len(candidate_ids) <= MAX_CANDIDATES_PER_ACTION
+        or not 1 <= len(values) <= GLOBAL_LIVE_PAGE_CAP
+        or any(item.get("started_at") != _format_time(published_at) for item in values)
+    ):
+        raise ValueError("active acquisition batch inputs are invalid")
+    body = {
+        "active_batch_schema_version": ACTIVE_BATCH_SCHEMA_VERSION,
+        "stage": stage,
+        "published_at": _format_time(published_at),
+        "candidate_ids": candidate_ids,
+        "live_page_count": len(values),
+        "attempts": values,
+    }
+    return {"batch_id": _batch_identifier("active", body), **body}
+
+
+def _run_navigation_batch(
+    candidates: Sequence[Any],
+    *,
+    runner: Path,
+    provenance_path: Path,
+    backend: AcquisitionBackend,
+    states: Mapping[str, dict[str, Any]],
+    read_clock: Callable[[], datetime],
+    publish: Callable[[Mapping[str, Any]], None],
+    clear: Callable[[], None],
+    save_checkpoint: Callable[[], None],
+) -> None:
+    """Run at most two navigation attempts and merge only in catalogue order."""
+
+    unresolved = list(candidates)
+    while unresolved:
+        runnable: list[Any] = []
+        for candidate in unresolved:
+            attempts = states[candidate.candidate_id].setdefault("navigation_attempts", [])
+            if len(attempts) >= MAX_PROBE_ATTEMPTS:
+                continue
+            if not attempts or attempts[-1]["outcome"] in {
+                "recoverable-failure",
+                "interrupted",
+            }:
+                runnable.append(candidate)
+        if not runnable:
+            break
+        published_at = read_clock()
+        active_attempts: list[dict[str, Any]] = []
+        for candidate in runnable:
+            state = states[candidate.candidate_id]
+            attempt = len(state["navigation_attempts"]) + 1
+            started_at = _format_time(published_at)
+            state["pending_navigation"] = {
+                "attempt": attempt,
+                "started_at": started_at,
+            }
+            active_attempts.append(
+                {
+                    "candidate_id": candidate.candidate_id,
+                    "page_ordinal": None,
+                    "probe_id": None,
+                    "workload_id": None,
+                    "attempt": attempt,
+                    "started_at": started_at,
+                }
             )
-        try:
-            due_pages = _due_pages(state, current, candidate_id=candidate.candidate_id)
-        except MissedProbeWindow:
-            _record_pending_probe_interruptions(state, recovered_at=current)
-            _terminalise(
-                runner,
-                state,
-                candidate.candidate_id,
-                "probe-window-missed",
-                "bounded action passed the latest admissible probe window",
-                provenance_path,
-                terminalised_at=current,
+        publish(
+            _new_active_batch(
+                "navigation",
+                published_at=published_at,
+                attempts=active_attempts,
             )
-            processed += 1
-            _save_acquisition_checkpoint(
-                checkpoint_path,
-                provenance_path=provenance_path,
-                catalogue_path=candidate_catalogue_path,
-                candidates=states,
+        )
+
+        def acquire(candidate: Any) -> dict[str, Any]:
+            try:
+                navigation = backend.discover_navigation(candidate.domain)
+                pages = select_page_candidates(
+                    candidate.domain,
+                    registrable_domain=navigation.registrable_domain,
+                    discovered_links=navigation.links,
+                )
+                origins_by_page = _navigation_origins_by_page(navigation, pages)
+            except TerminalProbePolicyError as error:
+                result: dict[str, Any] = {
+                    "outcome": "terminal-policy-rejection",
+                    "reason": str(error),
+                }
+            except RecoverableAcquisitionError as error:
+                result = {"outcome": "recoverable-failure", "reason": str(error)}
+            except Exception as error:  # noqa: BLE001 - coordinator records every result
+                result = {
+                    "outcome": "internal-acquisition-error",
+                    "reason": _exception_reason(error),
+                    "internal_exception": error,
+                }
+            else:
+                result = {
+                    "outcome": "completed",
+                    "reason": None,
+                    "navigation": navigation,
+                    "pages": pages,
+                    "origins_by_page": origins_by_page,
+                }
+            result["completed_at"] = _format_time(read_clock())
+            return result
+
+        with ThreadPoolExecutor(max_workers=len(runnable)) as executor:
+            outcomes = tuple(executor.map(acquire, runnable))
+
+        internal_failures: list[tuple[Any, BaseException]] = []
+        next_unresolved: list[Any] = []
+        for candidate, outcome in zip(runnable, outcomes, strict=True):
+            state = states[candidate.candidate_id]
+            pending_attempt = state.pop("pending_navigation")
+            state["navigation_attempts"].append(
+                {
+                    **pending_attempt,
+                    "completed_at": outcome["completed_at"],
+                    "outcome": outcome["outcome"],
+                    "reason": outcome["reason"],
+                }
             )
+            if outcome["outcome"] == "completed":
+                navigation = outcome["navigation"]
+                pages = outcome["pages"]
+                origins_by_page = outcome["origins_by_page"]
+                state.update(
+                    {
+                        "state": "baseline-ready",
+                        "pages": [
+                            {
+                                "page": page.as_dict(),
+                                "observations": [],
+                                "probe_attempts": [],
+                                "approved_origins": [],
+                                "navigation_observed_origins": list(origins_by_page[page.url]),
+                            }
+                            for page in pages
+                        ],
+                        "navigation_observed_origins": list(navigation.observed_origins),
+                        "navigation_rejections": [
+                            rejection.as_dict() for rejection in navigation.rejections
+                        ],
+                    }
+                )
+            elif outcome["outcome"] == "recoverable-failure":
+                next_unresolved.append(candidate)
+            elif outcome["outcome"] == "internal-acquisition-error":
+                error = outcome.get("internal_exception")
+                if not isinstance(error, BaseException):
+                    raise AssertionError("internal acquisition result lost its exception")
+                state["internal_acquisition_error"] = _internal_error_record(
+                    stage="navigation",
+                    attempt=pending_attempt["attempt"],
+                    recorded_at=_timestamp(outcome["completed_at"]),
+                    error=error,
+                    reason=outcome["reason"],
+                )
+                internal_failures.append((candidate, error))
+        clear()
+        save_checkpoint()
+        if internal_failures:
+            first_candidate, first_error = internal_failures[0]
+            raise InternalAcquisitionError(
+                "acquisition stopped after durable internal navigation failure for "
+                f"{first_candidate.candidate_id}: {_exception_reason(first_error)}"
+            ) from first_error
+        unresolved = next_unresolved
+
+    # The outcome checkpoint above is the recoverable pre-terminal state.
+    for candidate in candidates:
+        state = states[candidate.candidate_id]
+        if state["state"] != "pending":
             continue
-        if not due_pages:
-            continue
-        retry_pages = list(due_pages)
-        window_missed = False
-        terminal_clock = current
-        while retry_pages:
-            runnable_pages: list[dict[str, Any]] = []
-            attempt_clock = read_clock()
-            terminal_clock = attempt_clock
-            for due_page in retry_pages:
-                probe_index = len(due_page["observations"])
+        attempts = state.get("navigation_attempts", [])
+        if not attempts:
+            raise AssertionError("navigation batch made no durable progress")
+        final = attempts[-1]
+        if final["outcome"] == "terminal-policy-rejection":
+            reason = final["reason"]
+        elif len(attempts) == MAX_PROBE_ATTEMPTS and final["outcome"] in {
+            "interrupted",
+            "recoverable-failure",
+        }:
+            reason = (
+                f"recoverable navigation failures exhausted {MAX_PROBE_ATTEMPTS} "
+                f"attempts: {final['reason']}"
+            )
+        else:
+            raise AssertionError("navigation batch stopped before a terminal outcome")
+        _terminalise(
+            runner,
+            state,
+            candidate.candidate_id,
+            "pre-probe-rejection",
+            reason,
+            provenance_path,
+            terminalised_at=_timestamp(final["completed_at"]),
+            baseline_batch=None,
+        )
+    save_checkpoint()
+
+
+def _run_probe_batch(
+    candidates: Sequence[Any],
+    *,
+    initial_pages: Mapping[str, Sequence[dict[str, Any]]],
+    runner: Path,
+    provenance_path: Path,
+    provenance_payload: Mapping[str, Any],
+    candidate_catalogue_path: Path,
+    stability_root: Path,
+    workload_root: Path,
+    backend: AcquisitionBackend,
+    states: Mapping[str, dict[str, Any]],
+    baseline_batches: Sequence[Mapping[str, Any]],
+    read_clock: Callable[[], datetime],
+    publish: Callable[[Mapping[str, Any]], None],
+    clear: Callable[[], None],
+    save_checkpoint: Callable[[], None],
+    missed_reason: str,
+) -> None:
+    """Run a deterministic, globally capped page batch and merge its results."""
+
+    retries = {
+        candidate.candidate_id: list(initial_pages[candidate.candidate_id])
+        for candidate in candidates
+    }
+    missed: set[str] = set()
+    missed_before_launch: set[str] = set()
+    terminal_clocks = {candidate.candidate_id: read_clock() for candidate in candidates}
+    while any(retries.values()):
+        published_at = read_clock()
+        jobs: list[dict[str, Any]] = []
+        for candidate in candidates:
+            candidate_id = candidate.candidate_id
+            state = states[candidate_id]
+            if not retries[candidate_id]:
+                continue
+            try:
+                actual_due_pages = _due_pages(
+                    state,
+                    published_at,
+                    candidate_id=candidate_id,
+                )
+            except MissedProbeWindow:
+                missed.add(candidate_id)
+                missed_before_launch.add(candidate_id)
+                terminal_clocks[candidate_id] = max(
+                    terminal_clocks[candidate_id],
+                    published_at,
+                )
+                retries[candidate_id] = []
+                continue
+            expected_ordinals = [page["page"]["ordinal"] for page in retries[candidate_id]]
+            actual_ordinals = [page["page"]["ordinal"] for page in actual_due_pages]
+            if actual_ordinals != expected_ordinals:
+                raise ValueError("probe due set changed before active-batch publication")
+            for page_state in retries[candidate_id]:
+                probe_index = len(page_state["observations"])
                 probe_id = STABILITY_PROBE_WINDOWS[probe_index].probe_id
-                attempts = due_page.setdefault("probe_attempts", [])
-                pending_probe = due_page.get("pending_probe")
-                if pending_probe is None:
-                    attempt = 1 + max(
-                        (
-                            item["attempt"]
-                            for item in attempts
-                            if item.get("probe_id") == probe_id
-                        ),
-                        default=0,
-                    )
-                else:
-                    attempt, _original_start = _validate_pending_probe(
-                        pending_probe,
-                        candidate_id=candidate.candidate_id,
-                        page_ordinal=due_page["page"]["ordinal"],
-                        probe_id=probe_id,
-                    )
-                    attempts.append(
-                        {
-                            **pending_probe,
-                            "completed_at": _format_time(attempt_clock),
-                            "outcome": "interrupted",
-                            "reason": "prior invocation ended before recording an outcome",
-                        }
-                    )
-                    due_page.pop("pending_probe", None)
-                    attempt += 1
+                attempts = [
+                    item
+                    for item in page_state.setdefault("probe_attempts", [])
+                    if item.get("probe_id") == probe_id
+                ]
+                attempt = len(attempts) + 1
                 if attempt > MAX_PROBE_ATTEMPTS:
-                    due_page["rejection"] = {
+                    page_state["rejection"] = {
                         "kind": "probe-retry-exhausted",
                         "reason": (
                             f"recoverable acquisition failures exhausted "
@@ -1496,326 +1792,416 @@ def run_due_acquisition(
                         ),
                     }
                     continue
-                # Every retry gets a new create-only preparation identity and
-                # its real start is checkpointed before any network work.
-                due_page["pending_probe"] = {
+                observed_at = _format_time(published_at)
+                workload_id = _probe_attempt_workload_id(
+                    candidate_id,
+                    page_state["page"]["ordinal"],
+                    probe_id,
+                    attempt,
+                )
+                page_state["pending_probe"] = {
                     "probe_id": probe_id,
-                    "workload_id": _probe_attempt_workload_id(
-                        candidate.candidate_id,
-                        due_page["page"]["ordinal"],
-                        probe_id,
-                        attempt,
-                    ),
+                    "workload_id": workload_id,
                     "attempt": attempt,
-                    "observed_at": _format_time(attempt_clock),
+                    "observed_at": observed_at,
                 }
-                runnable_pages.append(due_page)
-            _save_acquisition_checkpoint(
-                checkpoint_path,
-                provenance_path=provenance_path,
-                catalogue_path=candidate_catalogue_path,
-                candidates=states,
+                jobs.append(
+                    {
+                        "candidate_id": candidate_id,
+                        "page_ordinal": page_state["page"]["ordinal"],
+                        "probe_id": probe_id,
+                        "workload_id": workload_id,
+                        "attempt": attempt,
+                        "started_at": observed_at,
+                        "page": dict(page_state["page"]),
+                        "navigation_observed_origins": tuple(
+                            page_state["navigation_observed_origins"]
+                        ),
+                        "baseline_started_at": state["baseline_started_at"],
+                    }
+                )
+        if not jobs:
+            break
+        if len(jobs) > GLOBAL_LIVE_PAGE_CAP:
+            raise AssertionError("acquisition page batch exceeds its global cap")
+        if len({job["probe_id"] for job in jobs}) != 1:
+            raise AssertionError("acquisition page batch mixes probe windows")
+        publish(
+            _new_active_batch(
+                "probe",
+                published_at=published_at,
+                attempts=[
+                    {
+                        key: job[key]
+                        for key in (
+                            "candidate_id",
+                            "page_ordinal",
+                            "probe_id",
+                            "workload_id",
+                            "attempt",
+                            "started_at",
+                        )
+                    }
+                    for job in jobs
+                ],
             )
-            if not runnable_pages:
-                break
+        )
 
-            def acquire_page(
-                due_page: dict[str, Any],
-                *,
-                candidate_id: str = candidate.candidate_id,
-                baseline_started_at: str = state["baseline_started_at"],
-            ) -> tuple[dict[str, Any], Any]:
-                page = PageCandidate(**due_page["page"])
-                probe_index = len(due_page["observations"])
-                pending_probe = due_page["pending_probe"]
-                probe_started = _timestamp(pending_probe["observed_at"])
-                try:
-                    approved, discovery = _converge_origins(
-                        backend,
-                        page.url,
-                        seed_origins=tuple(due_page["navigation_observed_origins"]),
-                    )
-                    probe_id = STABILITY_PROBE_WINDOWS[probe_index].probe_id
-                    prepared = backend.prepare(
-                        pending_probe["workload_id"],
-                        page.url,
-                        approved,
-                        runner / "prepared-probes",
-                        origin_ip_pins=discovery.origin_ip_pins,
-                    )
-                    started_at = _format_time(probe_started)
-                    elapsed = round(
-                        (probe_started - _timestamp(baseline_started_at)).total_seconds()
-                        * 1000
-                    )
-                    document_response_receipt = _create_document_response_receipt(
-                        runner,
-                        workload_id=pending_probe["workload_id"],
-                        requested_url=page.url,
-                        approved_origins=approved,
-                        origin_ip_pins=discovery.origin_ip_pins,
-                        probe_started_at=started_at,
-                        prepared=prepared,
-                        runner_provenance_sha256=sha256_file(provenance_path),
-                        runner_provenance=provenance_payload,
-                    )
-                    observation = StabilityObservation(
-                        probe_id=probe_id,
-                        observed_at=started_at,
-                        elapsed_ms=elapsed,
-                        final_url=prepared.final_url,
-                        status=prepared.status,
-                        content_type=prepared.content_type,
-                        body_bytes=prepared.body_bytes,
-                        body_sha256=prepared.body_sha256,
-                        resource_graph_sha256=prepared.resource_graph_sha256,
-                        prepared_workload_sha256=prepared.prepared.sha256,
-                        passive_render_contract_sha256=(
-                            prepared.passive_render_contract_sha256
-                        ),
-                        render_observation_sha256=prepared.render_observation_sha256,
-                        discovery_event_audit_sha256=(
-                            prepared.discovery_event_audit_sha256
-                        ),
-                        document_response_receipt_path=(
-                            document_response_receipt["path"]
-                        ),
-                        document_response_receipt_sha256=(
-                            document_response_receipt["sha256"]
-                        ),
-                    )
-                    return due_page, {
-                        "approved_origins": approved,
-                        "completed_at": prepared.observed_at,
-                        "observation": {
-                            **observation.as_dict(),
-                            "runner_provenance_sha256": sha256_file(provenance_path),
-                            "approved_origins": approved,
-                            "discovery_observed_origins": discovery.observed_origins,
-                            "discovery_expandable_origins": discovery.expandable_origins,
-                            "discovery_origin_ip_pins": discovery.origin_ip_pins,
-                            "preparation_origin_ip_pins": dict(
-                                prepared.preparation_origin_ip_pins
-                                or discovery.origin_ip_pins
-                            ),
-                            "discovery_instrumentation_policy": (
-                                discovery.instrumentation_policy
-                            ),
-                            "passive_render_contract_sha256": (
-                                prepared.passive_render_contract_sha256
-                            ),
-                            "render_observation": dict(prepared.render_observation or {}),
-                            "render_observation_sha256": (
-                                prepared.render_observation_sha256
-                            ),
-                            "discovery_event_audit_sha256": (
-                                prepared.discovery_event_audit_sha256
-                            ),
-                            "chromium_version": prepared.chromium_version,
-                            "neqo_provenance": dict(prepared.neqo_provenance),
-                            "prepared_path": str(prepared.prepared.path.resolve()),
-                            "probe_completed_at": prepared.observed_at,
-                        },
-                    }
-                except TerminalAcquisitionPolicyError as error:
-                    return due_page, {
-                        "terminal_policy_error": str(error),
-                        "terminal_policy_evidence": error.evidence,
-                    }
-                except RecoverableAcquisitionError as error:
-                    return due_page, {"recoverable_error": str(error)}
-                except Exception as error:  # noqa: BLE001 - returned for durable checkpointing
-                    return due_page, {
-                        "internal_error": _exception_reason(error),
-                        "internal_exception": error,
-                    }
-
-            with ThreadPoolExecutor(max_workers=min(5, len(runnable_pages))) as executor:
-                outcomes = tuple(executor.map(acquire_page, runnable_pages))
-            retry_pages = []
-            completion_clock = read_clock()
-            terminal_clock = completion_clock
-            internal_failures: list[tuple[dict[str, Any], BaseException]] = []
-            for due_page, outcome in outcomes:
-                pending_probe = due_page.pop("pending_probe")
-                attempt_record = {
-                    **pending_probe,
-                    "completed_at": outcome.get(
-                        "completed_at", _format_time(completion_clock)
-                    ),
+        def acquire(job: Mapping[str, Any]) -> dict[str, Any]:
+            page = PageCandidate(**job["page"])
+            probe_started = _timestamp(job["started_at"])
+            try:
+                approved, discovery = _converge_origins(
+                    backend,
+                    page.url,
+                    seed_origins=job["navigation_observed_origins"],
+                )
+                prepared = backend.prepare(
+                    job["workload_id"],
+                    page.url,
+                    approved,
+                    runner / "prepared-probes",
+                    origin_ip_pins=discovery.origin_ip_pins,
+                )
+                elapsed = round(
+                    (probe_started - _timestamp(job["baseline_started_at"])).total_seconds() * 1000
+                )
+                document_response_receipt = _create_document_response_receipt(
+                    runner,
+                    workload_id=job["workload_id"],
+                    requested_url=page.url,
+                    approved_origins=approved,
+                    origin_ip_pins=discovery.origin_ip_pins,
+                    probe_started_at=job["started_at"],
+                    prepared=prepared,
+                    runner_provenance_sha256=sha256_file(provenance_path),
+                    runner_provenance=provenance_payload,
+                )
+                observation = StabilityObservation(
+                    probe_id=job["probe_id"],
+                    observed_at=job["started_at"],
+                    elapsed_ms=elapsed,
+                    final_url=prepared.final_url,
+                    status=prepared.status,
+                    content_type=prepared.content_type,
+                    body_bytes=prepared.body_bytes,
+                    body_sha256=prepared.body_sha256,
+                    resource_graph_sha256=prepared.resource_graph_sha256,
+                    prepared_workload_sha256=prepared.prepared.sha256,
+                    passive_render_contract_sha256=(prepared.passive_render_contract_sha256),
+                    render_observation_sha256=prepared.render_observation_sha256,
+                    discovery_event_audit_sha256=(prepared.discovery_event_audit_sha256),
+                    document_response_receipt_path=document_response_receipt["path"],
+                    document_response_receipt_sha256=document_response_receipt["sha256"],
+                )
+                result: dict[str, Any] = {
                     "outcome": "completed",
                     "reason": None,
                     "policy_evidence": None,
+                    "approved_origins": approved,
+                    "observation": {
+                        **observation.as_dict(),
+                        "runner_provenance_sha256": sha256_file(provenance_path),
+                        "approved_origins": approved,
+                        "discovery_observed_origins": discovery.observed_origins,
+                        "discovery_expandable_origins": discovery.expandable_origins,
+                        "discovery_origin_ip_pins": discovery.origin_ip_pins,
+                        "preparation_origin_ip_pins": dict(
+                            prepared.preparation_origin_ip_pins or discovery.origin_ip_pins
+                        ),
+                        "discovery_instrumentation_policy": (discovery.instrumentation_policy),
+                        "passive_render_contract_sha256": (prepared.passive_render_contract_sha256),
+                        "render_observation": dict(prepared.render_observation or {}),
+                        "render_observation_sha256": (prepared.render_observation_sha256),
+                        "discovery_event_audit_sha256": (prepared.discovery_event_audit_sha256),
+                        "chromium_version": prepared.chromium_version,
+                        "neqo_provenance": dict(prepared.neqo_provenance),
+                        "prepared_path": str(prepared.prepared.path.resolve()),
+                        "probe_completed_at": prepared.observed_at,
+                    },
                 }
-                if "terminal_policy_error" in outcome:
-                    attempt_record.update(
-                        outcome="terminal-policy-rejection",
-                        reason=outcome["terminal_policy_error"],
-                        policy_evidence=outcome.get("terminal_policy_evidence"),
-                    )
-                    due_page["rejection"] = {
-                        "kind": "probe-policy-rejection",
-                        "reason": outcome["terminal_policy_error"],
-                    }
-                elif "recoverable_error" in outcome:
-                    attempt_record.update(
-                        outcome="recoverable-failure",
-                        reason=outcome["recoverable_error"],
-                    )
-                    if pending_probe["attempt"] >= MAX_PROBE_ATTEMPTS:
-                        due_page["rejection"] = {
-                            "kind": "probe-retry-exhausted",
-                            "reason": (
-                                f"recoverable acquisition failures exhausted "
-                                f"{MAX_PROBE_ATTEMPTS} attempts: "
-                                f"{outcome['recoverable_error']}"
-                            ),
-                        }
-                    else:
-                        retry_pages.append(due_page)
-                elif "internal_error" in outcome:
-                    error = outcome.get("internal_exception")
-                    if not isinstance(error, BaseException):
-                        raise AssertionError("internal acquisition result lost its exception")
-                    attempt_record.update(
-                        outcome="internal-acquisition-error",
-                        reason=outcome["internal_error"],
-                    )
-                    internal_failures.append((due_page, error))
-                else:
-                    due_page["approved_origins"] = outcome["approved_origins"]
-                    due_page["observations"].append(outcome["observation"])
-                due_page.setdefault("probe_attempts", []).append(attempt_record)
-            if internal_failures:
-                failed_page, failed_error = internal_failures[0]
-                failed_attempt = next(
-                    record
-                    for record in reversed(failed_page["probe_attempts"])
-                    if record["outcome"] == "internal-acquisition-error"
-                )
-                state["internal_acquisition_error"] = _internal_error_record(
-                    stage="probe",
-                    attempt=failed_attempt["attempt"],
-                    recorded_at=_timestamp(failed_attempt["completed_at"]),
-                    error=failed_error,
-                    reason=failed_attempt["reason"],
-                    page_ordinal=failed_page["page"]["ordinal"],
-                    probe_id=failed_attempt["probe_id"],
-                )
-            _save_acquisition_checkpoint(
-                checkpoint_path,
-                provenance_path=provenance_path,
-                catalogue_path=candidate_catalogue_path,
-                candidates=states,
+            except TerminalAcquisitionPolicyError as error:
+                result = {
+                    "outcome": "terminal-policy-rejection",
+                    "reason": str(error),
+                    "policy_evidence": error.evidence,
+                }
+            except RecoverableAcquisitionError as error:
+                result = {
+                    "outcome": "recoverable-failure",
+                    "reason": str(error),
+                    "policy_evidence": None,
+                }
+            except Exception as error:  # noqa: BLE001 - coordinator records every result
+                result = {
+                    "outcome": "internal-acquisition-error",
+                    "reason": _exception_reason(error),
+                    "policy_evidence": None,
+                    "internal_exception": error,
+                }
+            result["completed_at"] = _format_time(read_clock())
+            return result
+
+        with ThreadPoolExecutor(max_workers=len(jobs)) as executor:
+            outcomes = tuple(executor.map(acquire, jobs))
+
+        next_retries = {candidate.candidate_id: [] for candidate in candidates}
+        internal_failures: list[tuple[Any, dict[str, Any], BaseException]] = []
+        candidate_by_id = {candidate.candidate_id: candidate for candidate in candidates}
+        for job, outcome in zip(jobs, outcomes, strict=True):
+            candidate_id = job["candidate_id"]
+            state = states[candidate_id]
+            page_state = next(
+                page for page in state["pages"] if page["page"]["ordinal"] == job["page_ordinal"]
             )
-            if internal_failures:
-                raise InternalAcquisitionError(
-                    "acquisition stopped after durable internal probe failure: "
-                    + _exception_reason(internal_failures[0][1])
-                ) from internal_failures[0][1]
-            if retry_pages:
-                retry_clock = read_clock()
-                terminal_clock = retry_clock
-                try:
-                    _due_pages(state, retry_clock, candidate_id=candidate.candidate_id)
-                except MissedProbeWindow:
-                    window_missed = True
-                    break
-        if window_missed:
-            _record_pending_probe_interruptions(state, recovered_at=terminal_clock)
+            pending_attempt = page_state.pop("pending_probe")
+            if (
+                pending_attempt["workload_id"] != job["workload_id"]
+                or pending_attempt["attempt"] != job["attempt"]
+            ):
+                raise AssertionError("probe worker identity changed before merge")
+            attempt_record = {
+                **pending_attempt,
+                "completed_at": outcome["completed_at"],
+                "outcome": outcome["outcome"],
+                "reason": outcome["reason"],
+                "policy_evidence": outcome.get("policy_evidence"),
+            }
+            if outcome["outcome"] == "completed":
+                page_state["approved_origins"] = outcome["approved_origins"]
+                page_state["observations"].append(outcome["observation"])
+            elif outcome["outcome"] == "terminal-policy-rejection":
+                page_state["rejection"] = {
+                    "kind": "probe-policy-rejection",
+                    "reason": outcome["reason"],
+                }
+            elif outcome["outcome"] == "recoverable-failure":
+                if pending_attempt["attempt"] >= MAX_PROBE_ATTEMPTS:
+                    page_state["rejection"] = {
+                        "kind": "probe-retry-exhausted",
+                        "reason": (
+                            f"recoverable acquisition failures exhausted "
+                            f"{MAX_PROBE_ATTEMPTS} attempts: {outcome['reason']}"
+                        ),
+                    }
+                else:
+                    next_retries[candidate_id].append(page_state)
+            elif outcome["outcome"] == "internal-acquisition-error":
+                error = outcome.get("internal_exception")
+                if not isinstance(error, BaseException):
+                    raise AssertionError("internal acquisition result lost its exception")
+                internal_failures.append((candidate_by_id[candidate_id], page_state, error))
+            page_state["probe_attempts"].append(attempt_record)
+            terminal_clocks[candidate_id] = max(
+                terminal_clocks[candidate_id],
+                _timestamp(outcome["completed_at"]),
+            )
+
+        for candidate in candidates:
+            candidate_failures = [value for value in internal_failures if value[0] is candidate]
+            if not candidate_failures:
+                continue
+            _failed_candidate, failed_page, failed_error = candidate_failures[0]
+            failed_attempt = failed_page["probe_attempts"][-1]
+            states[candidate.candidate_id]["internal_acquisition_error"] = _internal_error_record(
+                stage="probe",
+                attempt=failed_attempt["attempt"],
+                recorded_at=_timestamp(failed_attempt["completed_at"]),
+                error=failed_error,
+                reason=failed_attempt["reason"],
+                page_ordinal=failed_page["page"]["ordinal"],
+                probe_id=failed_attempt["probe_id"],
+            )
+        clear()
+        save_checkpoint()
+        if internal_failures:
+            first_candidate, _first_page, first_error = internal_failures[0]
+            raise InternalAcquisitionError(
+                "acquisition stopped after durable internal probe failure for "
+                f"{first_candidate.candidate_id}: {_exception_reason(first_error)}"
+            ) from first_error
+
+        retry_clock = read_clock()
+        for candidate in candidates:
+            candidate_id = candidate.candidate_id
+            if not next_retries[candidate_id]:
+                continue
+            terminal_clocks[candidate_id] = max(terminal_clocks[candidate_id], retry_clock)
+            try:
+                _due_pages(states[candidate_id], retry_clock, candidate_id=candidate_id)
+            except MissedProbeWindow:
+                missed.add(candidate_id)
+                next_retries[candidate_id] = []
+        retries = next_retries
+
+    # Rejection fields created without a worker are durable before terminals.
+    save_checkpoint()
+    for candidate in candidates:
+        candidate_id = candidate.candidate_id
+        state = states[candidate_id]
+        baseline_batch = _baseline_batch_for_candidate(baseline_batches, candidate_id=candidate_id)
+        if candidate_id in missed:
             _terminalise(
                 runner,
                 state,
-                candidate.candidate_id,
+                candidate_id,
                 "probe-window-missed",
-                "recoverable probe retries exceeded the latest admissible window",
+                (
+                    "bounded action passed the latest admissible probe window"
+                    if candidate_id in missed_before_launch
+                    else missed_reason
+                ),
                 provenance_path,
-                terminalised_at=terminal_clock,
+                terminalised_at=terminal_clocks[candidate_id],
+                baseline_batch=baseline_batch,
             )
-        if all(
-            page.get("rejection") is not None
-            or len(page["observations"]) == len(STABILITY_PROBE_WINDOWS)
-            for page in state["pages"]
-        ):
-            stable_receipts: list[Path] = []
-            for page_state in state["pages"]:
-                if page_state.get("rejection") is not None:
-                    continue
-                page = PageCandidate(**page_state["page"])
-                observations = tuple(
-                    StabilityObservation(
-                        **{
-                            key: item.get(key)
-                            for key in StabilityObservation.__dataclass_fields__
-                        }
-                    )
-                    for item in page_state["observations"]
-                )
-                from .class_pipeline import admit_stability_observations
+        else:
+            _terminalise_completed_probe_candidate(
+                candidate,
+                state,
+                runner=runner,
+                provenance_path=provenance_path,
+                candidate_catalogue_path=candidate_catalogue_path,
+                stability_root=stability_root,
+                workload_root=workload_root,
+                terminalised_at=terminal_clocks[candidate_id],
+                baseline_batch=baseline_batch,
+            )
+    save_checkpoint()
 
-                receipt = admit_stability_observations(
-                    candidate_catalogue_path,
-                    stability_root,
-                    candidate_id=candidate.candidate_id,
-                    page=page,
-                    baseline_started_at=state["baseline_started_at"],
-                    observations=observations,
-                )
-                from .class_catalogue import load_stability_receipt
 
-                _value, decision = load_stability_receipt(receipt)
-                if decision.eligible:
-                    stable_receipts.append(receipt)
-            if stable_receipts:
-                selected = stable_receipts[0]
-                selected_ordinal = int(selected.stem.removeprefix("page-"))
-                selected_page = next(
-                    page for page in state["pages"] if page["page"]["ordinal"] == selected_ordinal
-                )
-                _publish_admitted_workload(
-                    Path(selected_page["observations"][0]["prepared_path"]),
-                    workload_root / f"{candidate.candidate_id}.json",
-                    selected_page["observations"][0]["prepared_workload_sha256"],
-                )
-                _terminalise(
-                    runner,
-                    state,
-                    candidate.candidate_id,
-                    "eligible",
-                    None,
-                    provenance_path,
-                    terminalised_at=terminal_clock,
-                    stability_receipt=selected,
-                    admitted_workload=workload_root / f"{candidate.candidate_id}.json",
-                )
-            else:
-                _terminalise(
-                    runner,
-                    state,
-                    candidate.candidate_id,
-                    "stable-page-unavailable",
-                    "no page passed all stability gates",
-                    provenance_path,
-                    terminalised_at=terminal_clock,
-                )
-        processed += 1
-        _save_acquisition_checkpoint(
-            checkpoint_path,
-            provenance_path=provenance_path,
-            catalogue_path=candidate_catalogue_path,
-            candidates=states,
-        )
-    _save_acquisition_checkpoint(
-        checkpoint_path,
-        provenance_path=provenance_path,
-        catalogue_path=candidate_catalogue_path,
-        candidates=states,
-    )
-    return acquisition_status(
+def _terminalise_completed_probe_candidate(
+    candidate: Any,
+    state: dict[str, Any],
+    *,
+    runner: Path,
+    provenance_path: Path,
+    candidate_catalogue_path: Path,
+    stability_root: Path,
+    workload_root: Path,
+    terminalised_at: datetime,
+    baseline_batch: Mapping[str, Any],
+) -> None:
+    if not all(
+        page.get("rejection") is not None
+        or len(page["observations"]) == len(STABILITY_PROBE_WINDOWS)
+        for page in state["pages"]
+    ):
+        return
+    _validate_candidate_observation_provenance(
         runner,
-        candidate_catalogue_path=candidate_catalogue_path,
-        now=read_clock(),
+        provenance_path=provenance_path,
+        candidate_id=candidate.candidate_id,
+        state=state,
     )
+    stable_receipts: list[Path] = []
+    for page_state in state["pages"]:
+        if page_state.get("rejection") is not None:
+            continue
+        page = PageCandidate(**page_state["page"])
+        observations = tuple(
+            StabilityObservation(
+                **{key: item.get(key) for key in StabilityObservation.__dataclass_fields__}
+            )
+            for item in page_state["observations"]
+        )
+        from .class_pipeline import admit_stability_observations
+
+        stability_destination = (
+            stability_root / candidate.candidate_id / f"page-{page.ordinal:02d}.json"
+        )
+        _discard_owned_publication_temps(
+            stability_destination,
+            style="create-only-json",
+        )
+        receipt = admit_stability_observations(
+            candidate_catalogue_path,
+            stability_root,
+            candidate_id=candidate.candidate_id,
+            page=page,
+            baseline_started_at=state["baseline_started_at"],
+            observations=observations,
+        )
+        from .class_catalogue import load_stability_receipt
+
+        _value, decision = load_stability_receipt(receipt)
+        if decision.eligible:
+            stable_receipts.append(receipt)
+    if stable_receipts:
+        selected = stable_receipts[0]
+        selected_ordinal = int(selected.stem.removeprefix("page-"))
+        selected_page = next(
+            page for page in state["pages"] if page["page"]["ordinal"] == selected_ordinal
+        )
+        admitted_workload = workload_root / f"{candidate.candidate_id}.json"
+        _publish_admitted_workload(
+            Path(selected_page["observations"][0]["prepared_path"]),
+            admitted_workload,
+            selected_page["observations"][0]["prepared_workload_sha256"],
+        )
+        _terminalise(
+            runner,
+            state,
+            candidate.candidate_id,
+            "eligible",
+            None,
+            provenance_path,
+            terminalised_at=terminalised_at,
+            stability_receipt=selected,
+            admitted_workload=admitted_workload,
+            baseline_batch=baseline_batch,
+        )
+    else:
+        _terminalise(
+            runner,
+            state,
+            candidate.candidate_id,
+            "stable-page-unavailable",
+            "no page passed all stability gates",
+            provenance_path,
+            terminalised_at=terminalised_at,
+            baseline_batch=baseline_batch,
+        )
+
+
+def _probe_candidate_is_finalisable(state: Mapping[str, Any]) -> bool:
+    """Whether a probing checkpoint needs only deterministic publication."""
+
+    pages = state.get("pages")
+    return bool(
+        state.get("state") == "probing"
+        and state.get("terminal") is None
+        and isinstance(pages, list)
+        and pages
+        and all(
+            isinstance(page, Mapping)
+            and "pending_probe" not in page
+            and (
+                page.get("rejection") is not None
+                or (
+                    isinstance(page.get("observations"), list)
+                    and len(page["observations"]) == len(STABILITY_PROBE_WINDOWS)
+                )
+            )
+            for page in pages
+        )
+    )
+
+
+def _finalisable_probe_terminal_time(state: Mapping[str, Any]) -> datetime:
+    """Recover the original final worker completion, never the resume time."""
+
+    if not _probe_candidate_is_finalisable(state):
+        raise ValueError("probe candidate is not ready for deterministic finalisation")
+    completed = [
+        _timestamp(attempt["completed_at"])
+        for page in state["pages"]
+        for attempt in page.get("probe_attempts", [])
+        if isinstance(attempt, Mapping) and isinstance(attempt.get("completed_at"), str)
+    ]
+    if not completed:
+        raise ValueError("finalisable probe candidate has no completed probe attempt")
+    return max(completed)
 
 
 def acquisition_status(
@@ -1828,17 +2214,41 @@ def acquisition_status(
     if current.tzinfo is None:
         raise ValueError("status time must be timezone-aware")
     current = current.astimezone(UTC)
-    checkpoint, recovery_required = _load_checkpoint_state(
+    checkpoint, recovery_required, _orphan_candidate_ids = _load_checkpoint_state(
         Path(root) / "checkpoint.json",
         Path(root) / "provenance.json",
         candidate_catalogue_path,
         persist_recoveries=False,
     )
-    states = checkpoint["payload"]["candidates"]
+    payload = checkpoint["payload"]
+    states = payload["candidates"]
+    provenance = validate_hash_bound_receipt(
+        load_json(Path(root) / "provenance.json"), expected_type=PROVENANCE_TYPE
+    )
+    acquisition_schema_version = provenance["acquisition_schema_version"]
+    baseline_starts = (
+        _baseline_batch_starts(payload["baseline_batches"])
+        if acquisition_schema_version == SCHEMA_VERSION
+        else _checkpoint_baselines(states)
+    )
+    active = payload.get("active_batch")
+    active_summary = (
+        {
+            "batch_id": active["batch_id"],
+            "stage": active["stage"],
+            "published_at": active["published_at"],
+            "candidate_ids": list(active["candidate_ids"]),
+            "live_page_count": active["live_page_count"],
+            "attempt_count": len(active["attempts"]),
+        }
+        if isinstance(active, Mapping)
+        else None
+    )
     next_due: datetime | None = None
     pending = 0
     probing = 0
     due_now = 0
+    finalisable = 0
     missed = 0
     for candidate_id, state in states.items():
         if state["terminal"] is None and state["state"] in {
@@ -1848,6 +2258,11 @@ def acquisition_status(
             pending += 1
         if state["terminal"] is None and state["state"] == "probing":
             probing += 1
+            if acquisition_schema_version == SCHEMA_VERSION and _probe_candidate_is_finalisable(
+                state
+            ):
+                finalisable += 1
+                continue
             try:
                 if _due_pages(state, current, candidate_id=candidate_id):
                     due_now += 1
@@ -1864,28 +2279,42 @@ def acquisition_status(
                     )
                     if due > current:
                         next_due = due if next_due is None or due < next_due else next_due
-    pending_due = _next_pending_start(states, current)
+    pending_due = _next_pending_start(
+        states,
+        current,
+        baseline_starts=baseline_starts,
+    )
     if pending_due is not None:
-        next_due = (
-            pending_due
-            if next_due is None or pending_due < next_due
-            else next_due
-        )
+        next_due = pending_due if next_due is None or pending_due < next_due else next_due
     terminal = sum(state["terminal"] is not None for state in states.values())
-    pending_blocked = bool(pending) and _pending_baseline_blocked(states, current)
+    pending_blocked = bool(pending) and _pending_baseline_blocked(
+        states,
+        current,
+        baseline_starts=baseline_starts,
+    )
     return {
+        "acquisition_schema_version": acquisition_schema_version,
+        "checkpoint_schema_version": payload.get("checkpoint_schema_version"),
+        "maximum_candidates_per_action": MAX_CANDIDATES_PER_ACTION,
+        "global_live_page_cap": GLOBAL_LIVE_PAGE_CAP,
+        "active_batch": active_summary,
         "candidate_count": len(states),
         "terminal_count": terminal,
         "pending_count": pending,
         "probing_count": probing,
         "due_now_count": due_now,
+        "finalisable_count": finalisable,
         "missed_window_count": missed,
         "recovery_required_count": recovery_required,
         "pending_start_blocked": pending_blocked,
         "work_due_now": bool(
-            recovery_required or due_now or missed or (pending and not pending_blocked)
+            recovery_required
+            or due_now
+            or finalisable
+            or missed
+            or (pending and not pending_blocked)
         ),
-        "complete": terminal == len(states) and recovery_required == 0,
+        "complete": (terminal == len(states) and recovery_required == 0 and active is None),
         "next_due": _format_time(next_due) if next_due else None,
     }
 
@@ -1901,10 +2330,15 @@ def write_acquisition_completion(root: Path, *, candidate_catalogue_path: Path) 
     if not status["complete"]:
         raise ValueError("acquisition completion requires terminal evidence for all candidates")
     runner = Path(root)
-    checkpoint = _load_checkpoint(
+    checkpoint, persisted_terminal_recoveries = _load_checkpoint(
         runner / "checkpoint.json", runner / "provenance.json", candidate_catalogue_path
     )
+    if persisted_terminal_recoveries:
+        raise ValueError("acquisition completion checkpoint required terminal recovery")
+    if checkpoint["payload"]["active_batch"] is not None:
+        raise ValueError("acquisition completion cannot bind an active batch")
     terminals = checkpoint["payload"]["candidates"]
+    baseline_batches = checkpoint["payload"]["baseline_batches"]
     provenance = validate_hash_bound_receipt(
         load_json(runner / "provenance.json"), expected_type=PROVENANCE_TYPE
     )
@@ -1918,9 +2352,13 @@ def write_acquisition_completion(root: Path, *, candidate_catalogue_path: Path) 
         {
             "study_id": "classifier-multiorigin100-v1",
             "acquisition_schema_version": SCHEMA_VERSION,
+            "completion_schema_version": COMPLETION_SCHEMA_VERSION,
+            "checkpoint_schema_version": CHECKPOINT_SCHEMA_VERSION,
             "candidate_catalogue_sha256": sha256_file(candidate_catalogue_path),
             "provenance_sha256": sha256_file(runner / "provenance.json"),
             "checkpoint_payload_sha256": checkpoint["payload_sha256"],
+            "baseline_batches": baseline_batches,
+            "baseline_batches_sha256": evidence_sha256(baseline_batches),
             "observed_toolchain": observed_toolchain,
             "terminal_receipts": {
                 candidate_id: state["terminal"] for candidate_id, state in terminals.items()
@@ -1929,7 +2367,26 @@ def write_acquisition_completion(root: Path, *, candidate_catalogue_path: Path) 
         receipt_type=COMPLETION_TYPE,
     )
     destination = runner / "completion.json"
-    _create_json(destination, receipt)
+    encoded = canonical_json_bytes(receipt)
+    _discard_owned_publication_temps(destination, style="durable-create")
+
+    def validate_existing() -> bool:
+        if not destination.exists() and not destination.is_symlink():
+            return False
+        if (
+            destination.is_symlink()
+            or not destination.is_file()
+            or destination.read_bytes() != encoded
+        ):
+            raise FileExistsError("immutable acquisition completion already differs")
+        return True
+
+    if not validate_existing():
+        try:
+            durable_create(destination, encoded)
+        except FileExistsError:
+            if not validate_existing():  # pragma: no cover - link collision guarantees presence
+                raise
     return destination
 
 
@@ -1938,13 +2395,62 @@ def validate_acquisition_completion(
 ) -> Mapping[str, Any]:
     payload = validate_hash_bound_receipt(value, expected_type=COMPLETION_TYPE)
     _catalogue, candidates = load_candidate_catalogue_receipt(candidate_catalogue_path)
-    if payload["candidate_catalogue_sha256"] != sha256_file(candidate_catalogue_path):
+    provenance = validate_hash_bound_receipt(
+        load_json(runner_root / "provenance.json"), expected_type=PROVENANCE_TYPE
+    )
+    acquisition_schema_version = provenance.get("acquisition_schema_version")
+    legacy_fields = {
+        "study_id",
+        "acquisition_schema_version",
+        "candidate_catalogue_sha256",
+        "provenance_sha256",
+        "checkpoint_payload_sha256",
+        "observed_toolchain",
+        "terminal_receipts",
+    }
+    current_fields = legacy_fields | {
+        "completion_schema_version",
+        "checkpoint_schema_version",
+        "baseline_batches",
+        "baseline_batches_sha256",
+    }
+    if acquisition_schema_version == SCHEMA_VERSION:
+        if (
+            set(payload) != current_fields
+            or type(payload["completion_schema_version"]) is not int
+            or payload["completion_schema_version"] != COMPLETION_SCHEMA_VERSION
+            or type(payload["checkpoint_schema_version"]) is not int
+            or payload["checkpoint_schema_version"] != CHECKPOINT_SCHEMA_VERSION
+        ):
+            raise ValueError("acquisition completion schema is invalid")
+    elif acquisition_schema_version in {1, 2, 3}:
+        if set(payload) != legacy_fields:
+            raise ValueError("historical acquisition completion shape is invalid")
+    else:
+        raise ValueError("acquisition completion uses an unsupported schema")
+    if (
+        payload["study_id"] != "classifier-multiorigin100-v1"
+        or type(payload["acquisition_schema_version"]) is not int
+        or payload["candidate_catalogue_sha256"] != sha256_file(candidate_catalogue_path)
+        or payload["provenance_sha256"] != sha256_file(runner_root / "provenance.json")
+        or payload["acquisition_schema_version"] != acquisition_schema_version
+    ):
         raise ValueError("completion is bound to another catalogue")
-    checkpoint = _load_checkpoint(
+    checkpoint, checkpoint_recoveries, _orphan_candidate_ids = _load_checkpoint_state(
         runner_root / "checkpoint.json",
         runner_root / "provenance.json",
         candidate_catalogue_path,
+        persist_recoveries=False,
     )
+    if checkpoint_recoveries:
+        raise ValueError("completion binds a checkpoint requiring recovery")
+    if acquisition_schema_version == SCHEMA_VERSION and (
+        checkpoint["payload"]["active_batch"] is not None
+        or payload["baseline_batches"] != checkpoint["payload"]["baseline_batches"]
+        or payload["baseline_batches_sha256"]
+        != evidence_sha256(checkpoint["payload"]["baseline_batches"])
+    ):
+        raise ValueError("completion baseline-batch ledger does not verify")
     expected = {candidate.candidate_id for candidate in candidates}
     checkpoint_terminals = {
         candidate_id: state["terminal"]
@@ -1956,9 +2462,6 @@ def validate_acquisition_completion(
         or payload["checkpoint_payload_sha256"] != checkpoint["payload_sha256"]
     ):
         raise ValueError("completion does not bind the complete current checkpoint")
-    provenance = validate_hash_bound_receipt(
-        load_json(runner_root / "provenance.json"), expected_type=PROVENANCE_TYPE
-    )
     observed_toolchain = _validate_observation_provenance(
         checkpoint["payload"]["candidates"],
         provenance_sha256=payload["provenance_sha256"],
@@ -1979,6 +2482,7 @@ def validate_acquisition_completion(
             provenance_sha256=payload["provenance_sha256"],
             candidate_state=checkpoint["payload"]["candidates"][candidate_id],
             acquisition_schema_version=provenance["acquisition_schema_version"],
+            baseline_batches=checkpoint["payload"].get("baseline_batches", ()),
         )
         if dict(binding) != verified:
             raise ValueError("terminal evidence SHA-256 mismatch")
@@ -2048,9 +2552,7 @@ def _converge_origins(
         if expanded == approved:
             return sorted(approved), result
         approved = expanded
-    raise TerminalProbePolicyError(
-        "approved-origin discovery did not converge within its pass cap"
-    )
+    raise TerminalProbePolicyError("approved-origin discovery did not converge within its pass cap")
 
 
 def browser_document_content_type(
@@ -2069,9 +2571,7 @@ def browser_document_content_type(
     canonical_approved = tuple(sorted(value for value in approved if value is not None))
     pins = _validated_frozen_origin_ip_pins(
         canonical_approved,
-        origin_ip_pins
-        if origin_ip_pins is not None
-        else public_origin_ip_pins(canonical_approved),
+        origin_ip_pins if origin_ip_pins is not None else public_origin_ip_pins(canonical_approved),
     )
     try:
         from playwright.sync_api import Error as PlaywrightError
@@ -2110,9 +2610,7 @@ def browser_document_content_type(
                     )
                 if challenge := browser_challenge_reason(page):
                     raise TerminalProbePolicyError(challenge)
-                media_type = _normalise_content_type(
-                    str(response.headers.get("content-type", ""))
-                )
+                media_type = _normalise_content_type(str(response.headers.get("content-type", "")))
                 final_url = page.url
                 status = response.status
                 page.close()
@@ -2208,9 +2706,7 @@ def public_origin_ip_pins(origins: Sequence[str]) -> dict[str, str]:
     for value in sorted(set(origins)):
         approved = origin(value)
         if approved is None:
-            raise TerminalProbePolicyError(
-                "public-origin policy requires absolute HTTPS origins"
-            )
+            raise TerminalProbePolicyError("public-origin policy requires absolute HTTPS origins")
         hostname = urlsplit(approved).hostname
         if hostname is None:
             raise TerminalProbePolicyError(
@@ -2222,9 +2718,7 @@ def public_origin_ip_pins(origins: Sequence[str]) -> dict[str, str]:
         except ValueError:
             pass
         else:
-            raise TerminalProbePolicyError(
-                "public-origin policy rejects IP-literal origins"
-            )
+            raise TerminalProbePolicyError("public-origin policy rejects IP-literal origins")
         if canonical == "localhost" or canonical.endswith(
             (".localhost", ".local", ".internal", ".home", ".lan")
         ):
@@ -2286,9 +2780,7 @@ def _validated_frozen_origin_ip_pins(
             raise TerminalProbePolicyError("frozen origin-IP pin key is not canonical")
         previous = pins_by_hostname.setdefault(hostname, raw_address)
         if previous != raw_address:
-            raise TerminalProbePolicyError(
-                "frozen origin-IP pins conflict for a shared hostname"
-            )
+            raise TerminalProbePolicyError("frozen origin-IP pins conflict for a shared hostname")
         result[approved_origin] = raw_address
     return result
 
@@ -2467,9 +2959,7 @@ def _terminal_source_state(kind: str) -> str:
     raise ValueError("terminal evidence has an unsupported outcome kind")
 
 
-def _normalised_terminal_state_sha256(
-    state: Mapping[str, Any], *, kind: str
-) -> str:
+def _normalised_terminal_state_sha256(state: Mapping[str, Any], *, kind: str) -> str:
     """Hash the exact state that existed immediately before terminalisation."""
 
     source_state = _terminal_source_state(kind)
@@ -2500,10 +2990,7 @@ def _checkpoint_stability_observations(
         if not isinstance(raw, Mapping) or set(raw) != CURRENT_OBSERVATION_FIELDS:
             raise ValueError("terminal checkpoint observation is malformed")
         observation = StabilityObservation(
-            **{
-                key: raw.get(key)
-                for key in StabilityObservation.__dataclass_fields__
-            }
+            **{key: raw.get(key) for key in StabilityObservation.__dataclass_fields__}
         )
         expected = observation.as_dict()
         if any(key not in raw or raw[key] != value for key, value in expected.items()):
@@ -2524,11 +3011,7 @@ def _validate_terminal_page_rejection(page_state: Mapping[str, Any]) -> None:
     if observation_count >= len(STABILITY_PROBE_WINDOWS):
         raise ValueError("completed terminal page cannot also be rejected")
     probe_id = STABILITY_PROBE_WINDOWS[observation_count].probe_id
-    attempts = [
-        item
-        for item in page_state["probe_attempts"]
-        if item.get("probe_id") == probe_id
-    ]
+    attempts = [item for item in page_state["probe_attempts"] if item.get("probe_id") == probe_id]
     if not attempts:
         raise ValueError("terminal page rejection has no matching probe attempt")
     final = attempts[-1]
@@ -2546,9 +3029,7 @@ def _validate_terminal_page_rejection(page_state: Mapping[str, Any]) -> None:
         "recoverable-failure",
     }:
         raise ValueError("probe exhaustion is not supported by its attempt ledger")
-    generic_reason = (
-        f"recoverable acquisition failures exhausted {MAX_PROBE_ATTEMPTS} attempts"
-    )
+    generic_reason = f"recoverable acquisition failures exhausted {MAX_PROBE_ATTEMPTS} attempts"
     detailed_reason = f"{generic_reason}: {final['reason']}"
     if rejection["reason"] not in {generic_reason, detailed_reason}:
         raise ValueError("probe exhaustion reason differs from its attempt ledger")
@@ -2599,9 +3080,7 @@ def _validate_probing_terminal_state(
         state["navigation_observed_origins"],
         label="terminal global navigation origin ledger",
     )
-    _validate_navigation_rejections(
-        state["navigation_rejections"], boundary=candidate.domain
-    )
+    _validate_navigation_rejections(state["navigation_rejections"], boundary=candidate.domain)
     raw_pages = state["pages"]
     if not isinstance(raw_pages, list) or not 1 <= len(raw_pages) <= 5:
         raise ValueError("terminal checkpoint page sequence is invalid")
@@ -2622,15 +3101,11 @@ def _validate_probing_terminal_state(
             "approved_origins",
             "navigation_observed_origins",
         }
-        if (
-            not isinstance(page_state, Mapping)
-            or set(page_state)
-            not in {
-                frozenset(base_fields),
-                frozenset(base_fields | {"pending_probe"}),
-                frozenset(base_fields | {"rejection"}),
-            }
-        ):
+        if not isinstance(page_state, Mapping) or set(page_state) not in {
+            frozenset(base_fields),
+            frozenset(base_fields | {"pending_probe"}),
+            frozenset(base_fields | {"rejection"}),
+        }:
             raise ValueError("terminal checkpoint page fields differ from the contract")
         raw_page = page_state["page"]
         page_fields = set(PageCandidate.__dataclass_fields__)
@@ -2689,6 +3164,63 @@ def _validate_probing_terminal_state(
     return tuple(page_records)
 
 
+def _validate_live_probing_state(
+    state: Mapping[str, Any],
+    *,
+    candidate: Any,
+) -> None:
+    """Validate mutable probing evidence structurally without replaying history."""
+
+    expected_fields = {
+        "state",
+        "pages",
+        "terminal",
+        "navigation_attempts",
+        "baseline_started_at",
+        "navigation_observed_origins",
+        "navigation_rejections",
+    }
+    actual_fields = set(state)
+    if actual_fields not in {
+        frozenset(expected_fields),
+        frozenset(expected_fields | {"internal_acquisition_error"}),
+    }:
+        raise ValueError("live probing checkpoint fields differ from the contract")
+    if state.get("state") != "probing" or state.get("terminal") is not None:
+        raise ValueError("live probing checkpoint state is invalid")
+    structural_state = dict(state)
+    structural_state.pop("internal_acquisition_error", None)
+    _validate_probing_terminal_state(
+        structural_state,
+        candidate=candidate,
+        terminalised_at=datetime.max.replace(tzinfo=UTC),
+        enforce_duration_limit=True,
+    )
+
+
+def _validate_current_pending_state(state: Mapping[str, Any]) -> None:
+    """Enforce the exact schema-4 pending candidate variants."""
+
+    base_fields = {"state", "pages", "terminal"}
+    attempted_fields = base_fields | {"navigation_attempts"}
+    actual_fields = set(state)
+    if actual_fields not in {
+        frozenset(base_fields),
+        frozenset(attempted_fields),
+        frozenset(attempted_fields | {"pending_navigation"}),
+        frozenset(attempted_fields | {"internal_acquisition_error"}),
+    }:
+        raise ValueError("pending checkpoint fields differ from the current contract")
+    if (
+        state.get("state") != "pending"
+        or state.get("pages") != []
+        or state.get("terminal") is not None
+    ):
+        raise ValueError("pending checkpoint state differs from the current contract")
+    if "navigation_attempts" not in state and actual_fields != base_fields:
+        raise ValueError("pending checkpoint attempt state is incomplete")
+
+
 def _validate_current_terminal_state(
     state: Mapping[str, Any],
     *,
@@ -2709,10 +3241,10 @@ def _validate_current_terminal_state(
             raise ValueError("terminal timestamp predates navigation completion")
         if final["outcome"] == "terminal-policy-rejection":
             expected_reason = final["reason"]
-        elif (
-            len(attempts) == MAX_PROBE_ATTEMPTS
-            and final["outcome"] in {"interrupted", "recoverable-failure"}
-        ):
+        elif len(attempts) == MAX_PROBE_ATTEMPTS and final["outcome"] in {
+            "interrupted",
+            "recoverable-failure",
+        }:
             expected_reason = (
                 f"recoverable navigation failures exhausted {MAX_PROBE_ATTEMPTS} "
                 f"attempts: {final['reason']}"
@@ -2732,8 +3264,7 @@ def _validate_current_terminal_state(
     incomplete = tuple(
         record
         for record in pages
-        if "rejection" not in record[0]
-        and len(record[2]) < len(STABILITY_PROBE_WINDOWS)
+        if "rejection" not in record[0] and len(record[2]) < len(STABILITY_PROBE_WINDOWS)
     )
     if kind == "probe-window-missed":
         if not incomplete:
@@ -2755,8 +3286,7 @@ def _validate_current_terminal_state(
                     if item.get("probe_id") == probe_id
                 ]
                 retry_supported |= bool(
-                    current_attempts
-                    and current_attempts[-1]["outcome"] == "recoverable-failure"
+                    current_attempts and current_attempts[-1]["outcome"] == "recoverable-failure"
                 )
             if not retry_supported:
                 raise ValueError("retry-missed terminal lacks a recoverable probe attempt")
@@ -2787,6 +3317,7 @@ def _validated_terminal_binding(
     provenance_sha256: str,
     candidate_state: Mapping[str, Any],
     acquisition_schema_version: int,
+    baseline_batches: Sequence[Mapping[str, Any]],
 ) -> dict[str, str]:
     """Validate an immutable terminal deeply enough to recover its checkpoint."""
 
@@ -2804,22 +3335,39 @@ def _validated_terminal_binding(
         "stability_receipt",
         "admitted_workload",
     }
-    current_fields = legacy_fields | {
+    terminal_v2_fields = legacy_fields | {
         "terminal_schema_version",
         "terminalised_at",
         "checkpoint_state_sha256",
     }
+    terminal_v3_fields = terminal_v2_fields | {
+        "checkpoint_schema_version",
+        "baseline_batch",
+    }
     if acquisition_schema_version == 1:
         if set(payload) != legacy_fields:
             raise ValueError("legacy terminal evidence fields differ from the contract")
-    elif acquisition_schema_version in {2, SCHEMA_VERSION}:
-        if set(payload) != current_fields:
+    elif acquisition_schema_version in {2, 3}:
+        if set(payload) != terminal_v2_fields:
             raise ValueError("terminal evidence fields differ from the contract")
-        if payload["terminal_schema_version"] != TERMINAL_SCHEMA_VERSION:
+        if (
+            type(payload["terminal_schema_version"]) is not int
+            or payload["terminal_schema_version"] != 2
+        ):
+            raise ValueError("terminal evidence schema differs from the current contract")
+    elif acquisition_schema_version == SCHEMA_VERSION:
+        if set(payload) != terminal_v3_fields:
+            raise ValueError("terminal evidence fields differ from the contract")
+        if (
+            type(payload["terminal_schema_version"]) is not int
+            or payload["terminal_schema_version"] != TERMINAL_SCHEMA_VERSION
+            or type(payload["checkpoint_schema_version"]) is not int
+            or payload["checkpoint_schema_version"] != CHECKPOINT_SCHEMA_VERSION
+        ):
             raise ValueError("terminal evidence schema differs from the current contract")
     else:
         raise ValueError("terminal evidence belongs to an unsupported acquisition schema")
-    if acquisition_schema_version in {2, SCHEMA_VERSION} and not isinstance(
+    if acquisition_schema_version in {2, 3, SCHEMA_VERSION} and not isinstance(
         candidate_state, Mapping
     ):
         raise ValueError("terminal evidence fields differ from the contract")
@@ -2836,8 +3384,18 @@ def _validated_terminal_binding(
         kind != "eligible" and (not isinstance(reason, str) or not reason)
     ):
         raise ValueError("terminal evidence reason differs from its outcome kind")
+    if acquisition_schema_version == SCHEMA_VERSION:
+        expected_baseline_batch = (
+            None
+            if kind == "pre-probe-rejection"
+            else _baseline_batch_for_candidate(
+                baseline_batches, candidate_id=candidate.candidate_id
+            )
+        )
+        if payload["baseline_batch"] != expected_baseline_batch:
+            raise ValueError("terminal evidence baseline-batch binding differs")
     selected_checkpoint = None
-    if acquisition_schema_version in {2, SCHEMA_VERSION}:
+    if acquisition_schema_version in {2, 3, SCHEMA_VERSION}:
         terminalised_raw = payload["terminalised_at"]
         if (
             not isinstance(terminalised_raw, str)
@@ -2854,7 +3412,7 @@ def _validated_terminal_binding(
             kind=kind,
             reason=reason,
             terminalised_at=_timestamp(terminalised_raw),
-            enforce_duration_limit=(acquisition_schema_version == SCHEMA_VERSION),
+            enforce_duration_limit=(acquisition_schema_version in {3, SCHEMA_VERSION}),
         )
     stability_binding = payload["stability_receipt"]
     workload_binding = payload["admitted_workload"]
@@ -2877,7 +3435,7 @@ def _validated_terminal_binding(
             != sha256_file(workload_path)
         ):
             raise ValueError("eligible terminal stability/workload binding is invalid")
-        if acquisition_schema_version in {2, SCHEMA_VERSION}:
+        if acquisition_schema_version in {2, 3, SCHEMA_VERSION}:
             if selected_checkpoint is None:
                 raise ValueError("eligible terminal has no selected checkpoint page")
             page_state, page, observations = selected_checkpoint
@@ -2897,7 +3455,8 @@ def _validated_terminal_binding(
                 != candidate_state["baseline_started_at"]
                 or stability_payload["observations"]
                 != [observation.as_dict() for observation in observations]
-                or stability_payload["decision"] != derive_stability_decision(
+                or stability_payload["decision"]
+                != derive_stability_decision(
                     page,
                     baseline_started_at=candidate_state["baseline_started_at"],
                     observations=observations,
@@ -2905,9 +3464,7 @@ def _validated_terminal_binding(
                 or page_state["observations"][0]["prepared_workload_sha256"]
                 != sha256_file(workload_path)
             ):
-                raise ValueError(
-                    "eligible terminal does not match its exact checkpoint selection"
-                )
+                raise ValueError("eligible terminal does not match its exact checkpoint selection")
     elif stability_binding is not None or workload_binding is not None:
         raise ValueError("ineligible terminal unexpectedly binds admitted evidence")
     return {
@@ -2945,24 +3502,20 @@ def _validate_runner_runtime(provenance: Mapping[str, Any]) -> None:
     current_source = source_metadata()
     schema_version = provenance.get("acquisition_schema_version")
     current_contract_invalid = schema_version == SCHEMA_VERSION and (
-        provenance.get("cdp_target_instrumentation_policy")
-        != CDP_TARGET_INSTRUMENTATION_POLICY
+        provenance.get("cdp_target_instrumentation_policy") != CDP_TARGET_INSTRUMENTATION_POLICY
         or provenance.get("passive_render_contract") != PASSIVE_RENDER_CONTRACT
-        or provenance.get("passive_render_contract_sha256")
-        != PASSIVE_RENDER_CONTRACT_SHA256
-        or provenance.get("browser_navigation_timeout_ms")
-        != MAX_ACQUISITION_BACKEND_TIMEOUT_MS
+        or provenance.get("passive_render_contract_sha256") != PASSIVE_RENDER_CONTRACT_SHA256
+        or provenance.get("browser_navigation_timeout_ms") != MAX_ACQUISITION_BACKEND_TIMEOUT_MS
         or provenance.get("passive_render_hard_cap_after_load_ms")
         != MAX_PASSIVE_RENDER_AFTER_LOAD_MS
-        or provenance.get("acquisition_action_timing_contract")
-        != ACTION_TIMING_CONTRACT
-        or provenance.get("baseline_scheduling_contract")
-        != BASELINE_SCHEDULING_CONTRACT
+        or provenance.get("acquisition_action_timing_contract") != ACTION_TIMING_CONTRACT
+        or provenance.get("baseline_scheduling_contract") != BASELINE_SCHEDULING_CONTRACT
     )
     if (
         provenance.get("image_digest") != current_image
         or provenance.get("source") != current_source
-        or schema_version not in {1, 2, SCHEMA_VERSION}
+        or type(schema_version) is not int
+        or schema_version not in {1, 2, 3, SCHEMA_VERSION}
         or current_contract_invalid
     ):
         raise ValueError("class acquisition runtime differs from its frozen source/prepare image")
@@ -2984,9 +3537,7 @@ def _validate_document_response_receipt(
     workload_id = prepared_path.stem
     runner = Path(os.path.abspath(runner_root))
     prepared_root = runner / "prepared-probes"
-    expected_prepared = (prepared_root / f"{workload_id}.json").resolve(
-        strict=False
-    )
+    expected_prepared = (prepared_root / f"{workload_id}.json").resolve(strict=False)
     if (
         prepared_root.is_symlink()
         or not prepared_root.is_dir()
@@ -3004,13 +3555,9 @@ def _validate_document_response_receipt(
         raise ValueError("checkpoint document-response receipt is not canonical JSON")
     if sha256_file(receipt_path) != observation.get("document_response_receipt_sha256"):
         raise ValueError("checkpoint document-response receipt SHA-256 does not verify")
-    payload = validate_hash_bound_receipt(
-        receipt, expected_type=DOCUMENT_RESPONSE_RECEIPT_TYPE
-    )
+    payload = validate_hash_bound_receipt(receipt, expected_type=DOCUMENT_RESPONSE_RECEIPT_TYPE)
     page_identity = page.get("page")
-    requested_url = (
-        page_identity.get("url") if isinstance(page_identity, Mapping) else None
-    )
+    requested_url = page_identity.get("url") if isinstance(page_identity, Mapping) else None
     content_type = _normalise_content_type(str(observation.get("content_type", "")))
     if observation.get("content_type") != content_type:
         raise ValueError("checkpoint document response content type is not normalised")
@@ -3040,9 +3587,7 @@ def _validate_document_response_receipt(
         "source": runner_provenance["source"],
     }
     if payload != expected_payload:
-        raise ValueError(
-            "checkpoint document-response receipt differs from its observation"
-        )
+        raise ValueError("checkpoint document-response receipt differs from its observation")
 
 
 def _validate_observation_provenance(
@@ -3051,34 +3596,50 @@ def _validate_observation_provenance(
     provenance_sha256: str,
     runner_provenance: Mapping[str, Any],
     runner_root: Path | None = None,
+    include_nonterminal: bool = False,
 ) -> dict[str, Any] | None:
     identities: dict[str, dict[str, Any]] = {}
-    require_current_evidence = (
-        runner_provenance.get("acquisition_schema_version") == SCHEMA_VERSION
-    )
+    acquisition_schema_version = runner_provenance.get("acquisition_schema_version")
+    require_instrumentation_evidence = acquisition_schema_version in {
+        2,
+        3,
+        SCHEMA_VERSION,
+    }
+    require_current_evidence = acquisition_schema_version in {
+        3,
+        SCHEMA_VERSION,
+    }
     prepared_root: Path | None = None
     if require_current_evidence:
         if runner_root is None:
             raise ValueError("current checkpoint validation requires its runner root")
         prepared_root = Path(os.path.abspath(runner_root)) / "prepared-probes"
         if prepared_root.is_symlink() or not prepared_root.is_dir():
-            raise ValueError(
-                "acquisition prepared-probe root is not a regular directory"
-            )
+            raise ValueError("acquisition prepared-probe root is not a regular directory")
     for state in states.values():
-        if state.get("terminal") is None:
+        if state.get("terminal") is None and not include_nonterminal:
             continue
         for page in state.get("pages", []):
             approved = page.get("approved_origins", [])
             if not isinstance(approved, list) or len(approved) > MAX_APPROVED_ORIGINS:
                 raise ValueError("checkpoint approved-origin evidence is invalid")
             for observation in page.get("observations", []):
-                if require_current_evidence and (
-                    not isinstance(observation, Mapping)
-                    or set(observation) != CURRENT_OBSERVATION_FIELDS
+                if not isinstance(observation, Mapping):
+                    raise ValueError("checkpoint observation is not an object")
+                if acquisition_schema_version == 1 and set(observation) != (
+                    SCHEMA_ONE_OBSERVATION_FIELDS
                 ):
                     raise ValueError(
-                        "current checkpoint observation fields differ from the contract"
+                        "schema-one checkpoint observation fields differ from the contract"
+                    )
+                # No schema-two producer or artifact exists in repository history.
+                # Preserve bbc0be9's declared verifier contract for that version:
+                # instrumentation is required below, but its observation set was
+                # intentionally non-exact.  Schemas three and four bind the full
+                # render/preparation shape and therefore require the exact set.
+                if require_current_evidence and set(observation) != CURRENT_OBSERVATION_FIELDS:
+                    raise ValueError(
+                        "checkpoint observation fields differ from the versioned contract"
                     )
                 observation_approved = observation.get("approved_origins")
                 discovered = observation.get("discovery_observed_origins")
@@ -3087,17 +3648,11 @@ def _validate_observation_provenance(
                 neqo = observation.get("neqo_provenance")
                 chromium = observation.get("chromium_version")
                 render_observation = observation.get("render_observation")
-                render_observation_sha256 = observation.get(
-                    "render_observation_sha256"
-                )
-                discovery_event_audit_sha256 = observation.get(
-                    "discovery_event_audit_sha256"
-                )
+                render_observation_sha256 = observation.get("render_observation_sha256")
+                discovery_event_audit_sha256 = observation.get("discovery_event_audit_sha256")
                 prepared_path_value = observation.get("prepared_path")
                 prepared_path = (
-                    Path(prepared_path_value)
-                    if isinstance(prepared_path_value, str)
-                    else None
+                    Path(prepared_path_value) if isinstance(prepared_path_value, str) else None
                 )
                 approved_ledger_valid = _is_canonical_origin_ledger(
                     observation_approved,
@@ -3119,8 +3674,7 @@ def _validate_observation_provenance(
                     != PASSIVE_RENDER_CONTRACT_SHA256
                     or not isinstance(render_observation, Mapping)
                     or not isinstance(render_observation_sha256, str)
-                    or evidence_sha256(render_observation)
-                    != render_observation_sha256
+                    or evidence_sha256(render_observation) != render_observation_sha256
                     or not isinstance(discovery_event_audit_sha256, str)
                     or len(discovery_event_audit_sha256) != 64
                     or any(
@@ -3134,13 +3688,15 @@ def _validate_observation_provenance(
                     != str((prepared_root / prepared_path.name).resolve(strict=False))
                     or prepared_path.is_symlink()
                     or not prepared_path.is_file()
-                    or sha256_file(prepared_path)
-                    != observation.get("prepared_workload_sha256")
+                    or sha256_file(prepared_path) != observation.get("prepared_workload_sha256")
                 )
                 if (
                     observation.get("runner_provenance_sha256") != provenance_sha256
-                    or observation.get("discovery_instrumentation_policy")
-                    != CDP_TARGET_INSTRUMENTATION_POLICY
+                    or (
+                        require_instrumentation_evidence
+                        and observation.get("discovery_instrumentation_policy")
+                        != CDP_TARGET_INSTRUMENTATION_POLICY
+                    )
                     or not approved_ledger_valid
                     or not _is_canonical_origin_ledger(
                         discovered,
@@ -3190,9 +3746,7 @@ def _validate_observation_provenance(
                         )
                     }
                     preparation_pins = prepared_evidence.get("origin_ip_pins")
-                    expected_runner_source = dict(
-                        runner_provenance.get("source", {})
-                    )
+                    expected_runner_source = dict(runner_provenance.get("source", {}))
                     if (
                         runner_provenance.get("image_digest") == "native"
                         and expected_runner_source.get("image_digest") is None
@@ -3206,25 +3760,20 @@ def _validate_observation_provenance(
                         or prepared_evidence["render_observation"] != render_observation
                         or prepared_evidence["discovery_event_audit_sha256"]
                         != discovery_event_audit_sha256
-                        or observation.get("final_url")
-                        != prepared_evidence["final_url"]
+                        or observation.get("final_url") != prepared_evidence["final_url"]
                         or observation.get("status") != expected["status"]
                         or observation.get("body_bytes") != expected["bytes"]
-                        or observation.get("body_sha256")
-                        != expected["body_sha256"]
+                        or observation.get("body_sha256") != expected["body_sha256"]
                         or observation.get("resource_graph_sha256")
                         != _prepared_replay_identity_sha256(prepared_manifest)
-                        or observation_approved
-                        != prepared_evidence["approved_origins"]
-                        or observation.get("preparation_origin_ip_pins")
-                        != preparation_pins
+                        or observation_approved != prepared_evidence["approved_origins"]
+                        or observation.get("preparation_origin_ip_pins") != preparation_pins
                         or pins != preparation_pins
                         or chromium != prepared_evidence["chromium_version"]
                         or neqo != expected_neqo
                         or prepared_evidence.get("prepare_image_digest")
                         != runner_provenance.get("image_digest")
-                        or prepared_evidence.get("lab_source")
-                        != expected_runner_source
+                        or prepared_evidence.get("lab_source") != expected_runner_source
                     ):
                         raise ValueError(
                             "checkpoint observation differs from its prepared discovery evidence"
@@ -3329,7 +3878,10 @@ def _validate_pending_navigation(pending: object) -> tuple[int, datetime]:
 
 
 def _validate_navigation_attempts(
-    state: Mapping[str, Any], *, enforce_duration_limit: bool = False
+    state: Mapping[str, Any],
+    *,
+    enforce_duration_limit: bool = False,
+    require_canonical_timestamps: bool = False,
 ) -> None:
     attempts = state.get("navigation_attempts", [])
     if not isinstance(attempts, list) or len(attempts) > MAX_PROBE_ATTEMPTS:
@@ -3347,17 +3899,14 @@ def _validate_navigation_attempts(
         }:
             raise ValueError("acquisition navigation-attempt ledger is malformed")
         started_at = (
-            _timestamp(item["started_at"])
-            if isinstance(item.get("started_at"), str)
-            else None
+            _timestamp(item["started_at"]) if isinstance(item.get("started_at"), str) else None
         )
         completed_at = (
-            _timestamp(item["completed_at"])
-            if isinstance(item.get("completed_at"), str)
-            else None
+            _timestamp(item["completed_at"]) if isinstance(item.get("completed_at"), str) else None
         )
         if (
-            item["attempt"] != expected_attempt
+            type(item["attempt"]) is not int
+            or item["attempt"] != expected_attempt
             or finalised
             or item["outcome"]
             not in {
@@ -3371,14 +3920,19 @@ def _validate_navigation_attempts(
             or not isinstance(item["completed_at"], str)
             or started_at is None
             or completed_at is None
+            or (
+                require_canonical_timestamps
+                and (
+                    _format_time(started_at) != item["started_at"]
+                    or _format_time(completed_at) != item["completed_at"]
+                )
+            )
             or completed_at < started_at
             or (
                 enforce_duration_limit
                 and item["outcome"] == "completed"
                 and (completed_at - started_at).total_seconds() * 1_000
-                > ACTION_TIMING_CONTRACT[
-                    "successful_ledger_attempt_duration_limit_ms"
-                ]
+                > ACTION_TIMING_CONTRACT["successful_ledger_attempt_duration_limit_ms"]
             )
             or (item["outcome"] == "completed" and item["reason"] is not None)
             or (
@@ -3411,12 +3965,15 @@ def _validate_probe_attempts(
     candidate_id: str,
     baseline_started_at: str | None = None,
     enforce_duration_limit: bool = False,
+    require_canonical_timestamps: bool = False,
+    require_observation_attempt_bindings: bool = False,
 ) -> None:
     attempts = page.get("probe_attempts", [])
     if not isinstance(attempts, list):
         raise ValueError("acquisition probe-attempt ledger is malformed")
     seen: set[tuple[str, int]] = set()
     successful: set[str] = set()
+    completed_attempts: dict[str, Mapping[str, Any]] = {}
     finalised: set[str] = set()
     probe_ids = tuple(window.probe_id for window in STABILITY_PROBE_WINDOWS)
     expected_attempts = {probe_id: 1 for probe_id in probe_ids}
@@ -3449,24 +4006,19 @@ def _validate_probe_attempts(
             }
             if (
                 set(policy_evidence) != expected_policy_fields
-                or policy_evidence["passive_render_contract"]
-                != PASSIVE_RENDER_CONTRACT
+                or policy_evidence["passive_render_contract"] != PASSIVE_RENDER_CONTRACT
                 or policy_evidence["passive_render_contract_sha256"]
                 != PASSIVE_RENDER_CONTRACT_SHA256
                 or evidence_sha256(policy_evidence["render_observation"])
                 != policy_evidence["render_observation_sha256"]
             ):
                 raise ValueError("acquisition probe policy evidence does not verify")
-            validate_render_observation(
-                policy_evidence["render_observation"], allow_failure=True
-            )
+            validate_render_observation(policy_evidence["render_observation"], allow_failure=True)
         probe_id = item["probe_id"]
         attempt = item["attempt"]
         probe_index = probe_ids.index(probe_id) if probe_id in probe_ids else -1
         observed_at = (
-            _timestamp(item["observed_at"])
-            if isinstance(item.get("observed_at"), str)
-            else None
+            _timestamp(item["observed_at"]) if isinstance(item.get("observed_at"), str) else None
         )
         start_in_window = True
         if observed_at is not None and baseline_started_at is not None and probe_index >= 0:
@@ -3478,9 +4030,7 @@ def _validate_probe_attempts(
                 <= timedelta(milliseconds=window.latest_ms)
             )
         completed_at = (
-            _timestamp(item["completed_at"])
-            if isinstance(item.get("completed_at"), str)
-            else None
+            _timestamp(item["completed_at"]) if isinstance(item.get("completed_at"), str) else None
         )
         if (
             probe_index < 0
@@ -3510,19 +4060,21 @@ def _validate_probe_attempts(
             or not isinstance(item["completed_at"], str)
             or completed_at is None
             or observed_at is None
+            or (
+                require_canonical_timestamps
+                and (
+                    _format_time(observed_at) != item["observed_at"]
+                    or _format_time(completed_at) != item["completed_at"]
+                )
+            )
             or completed_at < observed_at
             or (
                 enforce_duration_limit
                 and item["outcome"] == "completed"
                 and (completed_at - observed_at).total_seconds() * 1_000
-                > ACTION_TIMING_CONTRACT[
-                    "successful_ledger_attempt_duration_limit_ms"
-                ]
+                > ACTION_TIMING_CONTRACT["successful_ledger_attempt_duration_limit_ms"]
             )
-            or (
-                item["outcome"] == "completed"
-                and item["reason"] is not None
-            )
+            or (item["outcome"] == "completed" and item["reason"] is not None)
             or (
                 item["outcome"] != "completed"
                 and (not isinstance(item["reason"], str) or not item["reason"])
@@ -3535,6 +4087,7 @@ def _validate_probe_attempts(
             if probe_id in successful:
                 raise ValueError("acquisition probe-attempt ledger duplicates success")
             successful.add(probe_id)
+            completed_attempts[probe_id] = item
             finalised.add(probe_id)
         elif item["outcome"] == "terminal-policy-rejection":
             finalised.add(probe_id)
@@ -3553,6 +4106,26 @@ def _validate_probe_attempts(
     observation_ids = set(observation_sequence)
     if successful != observation_ids:
         raise ValueError("acquisition probe-attempt success ledger is inconsistent")
+    if require_observation_attempt_bindings:
+        for observation in observations:
+            probe_id = observation.get("probe_id")
+            completed_attempt = completed_attempts.get(probe_id)
+            prepared_path = observation.get("prepared_path")
+            receipt_path = observation.get("document_response_receipt_path")
+            probe_completed_at = observation.get("probe_completed_at")
+            if (
+                completed_attempt is None
+                or observation.get("observed_at") != completed_attempt.get("observed_at")
+                or not isinstance(prepared_path, str)
+                or Path(prepared_path).stem != completed_attempt.get("workload_id")
+                or receipt_path
+                != f"document-response-receipts/{completed_attempt.get('workload_id')}.json"
+                or not isinstance(probe_completed_at, str)
+                or _format_time(_timestamp(probe_completed_at)) != probe_completed_at
+                or _timestamp(probe_completed_at) < _timestamp(completed_attempt["observed_at"])
+                or _timestamp(probe_completed_at) > _timestamp(completed_attempt["completed_at"])
+            ):
+                raise ValueError("acquisition observation differs from its completed attempt")
     pending = page.get("pending_probe")
     if pending is not None:
         observation_count = len(page.get("observations", []))
@@ -3569,9 +4142,7 @@ def _validate_probe_attempts(
             raise ValueError("pending acquisition probe attempt is not sequential")
 
 
-def _validate_baseline_ready_state(
-    state: Mapping[str, Any], *, candidate: Any
-) -> None:
+def _validate_baseline_ready_state(state: Mapping[str, Any], *, candidate: Any) -> None:
     expected_fields = {
         "state",
         "pages",
@@ -3596,9 +4167,7 @@ def _validate_baseline_ready_state(
             label="baseline-ready global navigation origin ledger",
         )
     )
-    _validate_navigation_rejections(
-        state["navigation_rejections"], boundary=candidate.domain
-    )
+    _validate_navigation_rejections(state["navigation_rejections"], boundary=candidate.domain)
     pages = state["pages"]
     if not isinstance(pages, list) or not 1 <= len(pages) <= 5:
         raise ValueError("baseline-ready checkpoint page sequence is invalid")
@@ -3635,9 +4204,7 @@ def _validate_baseline_ready_state(
             )
         )
         if not page_origins.issubset(global_origins):
-            raise ValueError(
-                "baseline-ready per-page navigation origins exceed the global ledger"
-            )
+            raise ValueError("baseline-ready per-page navigation origins exceed the global ledger")
         if (
             page_state["observations"] != []
             or page_state["probe_attempts"] != []
@@ -3759,9 +4326,7 @@ def _due_pages(
     return result
 
 
-def _record_pending_probe_interruptions(
-    state: dict[str, Any], *, recovered_at: datetime
-) -> None:
+def _record_pending_probe_interruptions(state: dict[str, Any], *, recovered_at: datetime) -> None:
     """Resolve durable probe starts without inventing a network completion."""
 
     recovery = recovered_at.astimezone(UTC)
@@ -3783,14 +4348,77 @@ def _record_pending_probe_interruptions(
         page.pop("pending_probe")
 
 
+def _baseline_batch_starts(
+    baseline_batches: Sequence[Mapping[str, Any]],
+) -> tuple[datetime, ...]:
+    return tuple(_timestamp(batch["baseline_started_at"]) for batch in baseline_batches)
+
+
+def _baseline_batch_for_candidate(
+    baseline_batches: Sequence[Mapping[str, Any]], *, candidate_id: str
+) -> Mapping[str, Any]:
+    if not isinstance(candidate_id, str) or not isinstance(baseline_batches, (list, tuple)):
+        raise ValueError("acquisition baseline-batch ledger is malformed")
+    if any(
+        not isinstance(batch, Mapping)
+        or not isinstance(batch.get("candidate_ids"), list)
+        or any(not isinstance(member, str) for member in batch["candidate_ids"])
+        for batch in baseline_batches
+    ):
+        raise ValueError("acquisition baseline-batch ledger is malformed")
+    matches = [batch for batch in baseline_batches if candidate_id in batch["candidate_ids"]]
+    if len(matches) != 1:
+        raise ValueError("candidate does not belong to exactly one baseline batch")
+    return matches[0]
+
+
+def _recover_active_batch(
+    states: Mapping[str, dict[str, Any]],
+    active_batch: Mapping[str, Any],
+    *,
+    recovered_at: datetime,
+) -> None:
+    """Resolve every prepublished attempt without inventing a completion."""
+
+    recovery = recovered_at.astimezone(UTC)
+    for attempt in active_batch["attempts"]:
+        candidate_id = attempt["candidate_id"]
+        state = states[candidate_id]
+        started = _timestamp(attempt["started_at"])
+        if recovery < started:
+            raise ValueError("active acquisition recovery predates its publication")
+        if active_batch["stage"] == "navigation":
+            pending = state.pop("pending_navigation")
+            state.setdefault("navigation_attempts", []).append(
+                {
+                    **pending,
+                    "completed_at": _format_time(recovery),
+                    "outcome": "interrupted",
+                    "reason": "prior invocation ended before recording an outcome",
+                }
+            )
+            continue
+        page_state = next(
+            page for page in state["pages"] if page["page"]["ordinal"] == attempt["page_ordinal"]
+        )
+        pending = page_state.pop("pending_probe")
+        page_state.setdefault("probe_attempts", []).append(
+            {
+                **pending,
+                "completed_at": _format_time(recovery),
+                "outcome": "interrupted",
+                "reason": "prior invocation ended before recording an outcome",
+            }
+        )
+
+
 def _checkpoint_baselines(states: Mapping[str, Any]) -> tuple[datetime, ...]:
     """Return every already-armed baseline, including terminal candidates."""
 
     return tuple(
         _timestamp(state["baseline_started_at"])
         for state in states.values()
-        if isinstance(state, Mapping)
-        and isinstance(state.get("baseline_started_at"), str)
+        if isinstance(state, Mapping) and isinstance(state.get("baseline_started_at"), str)
     )
 
 
@@ -3817,33 +4445,38 @@ def _pending_navigation_blocked(states: Mapping[str, Any], now: datetime) -> boo
     """Protect the next watcher-launched probe from a long navigation action."""
 
     reservation = timedelta(milliseconds=PENDING_BASELINE_GUARD_MS)
-    return any(
-        now < start < now + reservation
-        for start in _incomplete_probe_starts(states)
-    )
+    return any(now < start < now + reservation for start in _incomplete_probe_starts(states))
 
 
 def _next_pending_start(
-    states: Mapping[str, Any], now: datetime
+    states: Mapping[str, Any],
+    now: datetime,
+    *,
+    baseline_starts: Sequence[datetime],
 ) -> datetime | None:
     candidates: list[datetime] = []
     if any(
         state.get("terminal") is None and state.get("state") == "baseline-ready"
         for state in states.values()
     ):
-        safe = earliest_safe_baseline(now, _checkpoint_baselines(states))
+        safe = earliest_safe_baseline(now, baseline_starts)
         if safe > now:
             candidates.append(safe)
     candidates.extend(start for start in _incomplete_probe_starts(states) if start > now)
     return min(candidates) if candidates else None
 
 
-def _pending_baseline_blocked(states: Mapping[str, Any], now: datetime) -> bool:
+def _pending_baseline_blocked(
+    states: Mapping[str, Any],
+    now: datetime,
+    *,
+    baseline_starts: Sequence[datetime],
+) -> bool:
     ready = any(
         state.get("terminal") is None and state.get("state") == "baseline-ready"
         for state in states.values()
     )
-    if ready and baseline_is_safe(now, _checkpoint_baselines(states)):
+    if ready and baseline_is_safe(now, baseline_starts):
         return False
     pending_navigation = any(
         state.get("terminal") is None and state.get("state") == "pending"
@@ -3865,7 +4498,22 @@ def _terminalise(
     terminalised_at: datetime,
     stability_receipt: Path | None = None,
     admitted_workload: Path | None = None,
+    baseline_batch: Mapping[str, Any] | None,
 ) -> None:
+    if (kind == "pre-probe-rejection") != (baseline_batch is None):
+        raise ValueError("terminal baseline-batch binding differs from its outcome")
+    if baseline_batch is not None and (
+        candidate_id not in baseline_batch.get("candidate_ids", [])
+        or state.get("baseline_started_at") != baseline_batch.get("baseline_started_at")
+    ):
+        raise ValueError("terminal baseline-batch binding differs from candidate state")
+    provenance_sha256 = sha256_file(provenance_path)
+    _validate_candidate_observation_provenance(
+        root,
+        provenance_path=provenance_path,
+        candidate_id=candidate_id,
+        state=state,
+    )
     source_state_sha256 = _normalised_terminal_state_sha256(state, kind=kind)
     recorded_at = terminalised_at.astimezone(UTC)
     recorded_timestamps = [
@@ -3885,12 +4533,14 @@ def _terminalise(
         recorded_at = max(recorded_at, *recorded_timestamps)
     payload = {
         "terminal_schema_version": TERMINAL_SCHEMA_VERSION,
+        "checkpoint_schema_version": CHECKPOINT_SCHEMA_VERSION,
         "candidate_id": candidate_id,
         "kind": kind,
         "reason": reason,
         "terminalised_at": _format_time(recorded_at),
         "checkpoint_state_sha256": source_state_sha256,
-        "provenance_sha256": sha256_file(provenance_path),
+        "provenance_sha256": provenance_sha256,
+        "baseline_batch": dict(baseline_batch) if baseline_batch is not None else None,
         "stability_receipt": (
             {
                 "path": str(stability_receipt.resolve()),
@@ -3925,33 +4575,107 @@ def _terminalise(
     state["state"] = "terminal"
 
 
+def _validate_candidate_observation_provenance(
+    runner: Path,
+    *,
+    provenance_path: Path,
+    candidate_id: str,
+    state: Mapping[str, Any],
+) -> None:
+    """Replay one candidate's transitive evidence before immutable publication."""
+
+    runner_provenance = validate_hash_bound_receipt(
+        load_json(provenance_path),
+        expected_type=PROVENANCE_TYPE,
+    )
+    if runner_provenance.get("acquisition_schema_version") != SCHEMA_VERSION:
+        return
+    _validate_observation_provenance(
+        {candidate_id: state},
+        provenance_sha256=sha256_file(provenance_path),
+        runner_provenance=runner_provenance,
+        runner_root=runner,
+        include_nonterminal=True,
+    )
+
+
 def _publish_admitted_workload(source: Path, destination: Path, expected_sha256: str) -> None:
-    if source.is_symlink() or not source.is_file() or sha256_file(source) != expected_sha256:
+    if source.is_symlink() or not source.is_file():
+        raise ValueError("selected prepared workload does not match its observation")
+    encoded = source.read_bytes()
+    if sha256_bytes(encoded) != expected_sha256:
         raise ValueError("selected prepared workload does not match its observation")
     validate_class_study_preparation(load_json(source), workload_id=destination.stem)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    if destination.exists() or destination.is_symlink():
+    _discard_owned_publication_temps(destination, style="durable-create")
+
+    def validate_existing() -> bool:
+        if not destination.exists() and not destination.is_symlink():
+            return False
         if (
             destination.is_symlink()
             or not destination.is_file()
-            or sha256_file(destination) != expected_sha256
+            or destination.read_bytes() != encoded
         ):
             raise FileExistsError("immutable admitted workload already differs")
+        return True
+
+    if validate_existing():
         return
-    with destination.open("xb") as output, source.open("rb") as input_file:
-        shutil.copyfileobj(input_file, output)
-        output.flush()
-        os.fsync(output.fileno())
-    fsync_directory(destination.parent)
+    try:
+        durable_create(destination, encoded)
+    except FileExistsError:
+        if not validate_existing():  # pragma: no cover - link collision guarantees presence
+            raise
+
+
+def _discard_owned_publication_temps(destination: Path, *, style: str) -> None:
+    """Discard only exact, uncommitted siblings created for ``destination``."""
+
+    parent = Path(os.path.abspath(destination.parent))
+    if not parent.exists() and not parent.is_symlink():
+        return
+    if parent.is_symlink() or not parent.is_dir():
+        raise ValueError("immutable publication parent is not a regular directory")
+    pattern = _owned_publication_temp_pattern(destination, style=style)
+    removed = False
+    for entry in parent.iterdir():
+        if pattern.fullmatch(entry.name) is None:
+            continue
+        if entry.is_symlink() or not entry.is_file():
+            raise ValueError(f"immutable publication temporary path is unsafe: {entry}")
+        entry.unlink()
+        removed = True
+    if removed:
+        fsync_directory(parent)
+
+
+def _owned_publication_temp_pattern(destination: Path, *, style: str) -> re.Pattern[str]:
+    """Return the closed filename grammar used by one create-only publisher."""
+
+    escaped = re.escape(destination.name)
+    if style == "create-only-json":
+        return re.compile(rf"\.{escaped}\.[A-Za-z0-9_-]+\.qcsd-tmp\Z")
+    if style == "durable-create":
+        return re.compile(rf"\.{escaped}{re.escape(ATOMIC_TEMP_MARKER)}[A-Za-z0-9_-]+\Z")
+    raise ValueError("unknown immutable publication temporary style")
 
 
 def _checkpoint(
-    *, provenance_sha256: str, catalogue_sha256: str, candidates: Mapping[str, Any]
+    *,
+    provenance_sha256: str,
+    catalogue_sha256: str,
+    baseline_batches: Sequence[Mapping[str, Any]],
+    active_batch: Mapping[str, Any] | None,
+    candidates: Mapping[str, Any],
 ) -> dict[str, Any]:
     return bind_receipt(
         {
+            "checkpoint_schema_version": CHECKPOINT_SCHEMA_VERSION,
             "provenance_sha256": provenance_sha256,
             "candidate_catalogue_sha256": catalogue_sha256,
+            "baseline_batches": list(baseline_batches),
+            "active_batch": dict(active_batch) if active_batch is not None else None,
             "candidates": candidates,
         },
         receipt_type=CHECKPOINT_TYPE,
@@ -3963,6 +4687,8 @@ def _save_acquisition_checkpoint(
     *,
     provenance_path: Path,
     catalogue_path: Path,
+    baseline_batches: Sequence[Mapping[str, Any]],
+    active_batch: Mapping[str, Any] | None,
     candidates: Mapping[str, Any],
 ) -> None:
     atomic_json(
@@ -3970,19 +4696,263 @@ def _save_acquisition_checkpoint(
         _checkpoint(
             provenance_sha256=sha256_file(provenance_path),
             catalogue_sha256=sha256_file(catalogue_path),
+            baseline_batches=baseline_batches,
+            active_batch=active_batch,
             candidates=candidates,
         ),
     )
 
 
-def _load_checkpoint(path: Path, provenance_path: Path, catalogue_path: Path) -> dict[str, Any]:
-    value, _recoveries = _load_checkpoint_state(
+def _load_checkpoint(
+    path: Path,
+    provenance_path: Path,
+    catalogue_path: Path,
+    *,
+    maximum_recovery_candidates: int = MAX_CANDIDATES_PER_ACTION,
+) -> tuple[dict[str, Any], int]:
+    value, _recoveries, persisted_terminal_recoveries = _load_checkpoint_state(
         path,
         provenance_path,
         catalogue_path,
         persist_recoveries=True,
+        maximum_recovery_candidates=maximum_recovery_candidates,
     )
-    return value
+    return value, len(persisted_terminal_recoveries)
+
+
+def _validate_baseline_batches(
+    value: object,
+    *,
+    states: Mapping[str, Any],
+    candidate_order: Sequence[str],
+) -> tuple[Mapping[str, Any], ...]:
+    if not isinstance(value, list):
+        raise ValueError("acquisition baseline-batch ledger is malformed")
+    order = {candidate_id: index for index, candidate_id in enumerate(candidate_order)}
+    flattened: list[str] = []
+    seen_ids: set[str] = set()
+    seen_batch_ids: set[str] = set()
+    validated: list[Mapping[str, Any]] = []
+    for batch in value:
+        if not isinstance(batch, Mapping) or set(batch) != {
+            "batch_id",
+            "baseline_started_at",
+            "candidate_ids",
+            "live_page_count",
+        }:
+            raise ValueError("acquisition baseline-batch ledger is malformed")
+        candidate_ids = batch["candidate_ids"]
+        if (
+            not isinstance(candidate_ids, list)
+            or not 1 <= len(candidate_ids) <= MAX_CANDIDATES_PER_ACTION
+            or any(not isinstance(candidate_id, str) for candidate_id in candidate_ids)
+            or any(candidate_id not in order for candidate_id in candidate_ids)
+            or candidate_ids != sorted(set(candidate_ids), key=order.__getitem__)
+            or seen_ids.intersection(candidate_ids)
+            or not isinstance(batch["baseline_started_at"], str)
+            or _format_time(_timestamp(batch["baseline_started_at"]))
+            != batch["baseline_started_at"]
+            or not isinstance(batch["batch_id"], str)
+        ):
+            raise ValueError("acquisition baseline-batch ledger is malformed")
+        body = {
+            "baseline_started_at": batch["baseline_started_at"],
+            "candidate_ids": candidate_ids,
+            "live_page_count": batch["live_page_count"],
+        }
+        page_ledgers = [states[candidate_id].get("pages") for candidate_id in candidate_ids]
+        if any(not isinstance(pages, list) for pages in page_ledgers):
+            raise ValueError("acquisition baseline-batch ledger is malformed")
+        live_page_count = sum(len(pages) for pages in page_ledgers)
+        if (
+            type(batch["live_page_count"]) is not int
+            or batch["live_page_count"] != live_page_count
+            or not 1 <= live_page_count <= GLOBAL_LIVE_PAGE_CAP
+            or batch["batch_id"] != _batch_identifier("baseline", body)
+            or batch["batch_id"] in seen_batch_ids
+            or any(
+                states[candidate_id].get("baseline_started_at") != batch["baseline_started_at"]
+                for candidate_id in candidate_ids
+            )
+        ):
+            raise ValueError("acquisition baseline-batch ledger is malformed")
+        flattened.extend(candidate_ids)
+        seen_ids.update(candidate_ids)
+        seen_batch_ids.add(batch["batch_id"])
+        validated.append(batch)
+    expected = {
+        candidate_id
+        for candidate_id in candidate_order
+        if isinstance(states[candidate_id].get("baseline_started_at"), str)
+    }
+    if set(flattened) != expected or len(flattened) != len(expected):
+        raise ValueError("baseline batches do not exactly cover armed candidates")
+    starts = _baseline_batch_starts(validated)
+    if tuple(sorted(starts)) != starts:
+        raise ValueError("baseline batches are not append-ordered by start")
+    validate_baseline_schedule(starts)
+    return tuple(validated)
+
+
+def _validate_active_batch(
+    value: object,
+    *,
+    states: Mapping[str, Any],
+    candidate_order: Sequence[str],
+    baseline_batches: Sequence[Mapping[str, Any]],
+) -> int:
+    order = {candidate_id: index for index, candidate_id in enumerate(candidate_order)}
+    pending_navigation = {
+        candidate_id
+        for candidate_id, state in states.items()
+        if state.get("pending_navigation") is not None
+    }
+    pending_probes = {
+        (candidate_id, page["page"]["ordinal"])
+        for candidate_id, state in states.items()
+        for page in state.get("pages", [])
+        if page.get("pending_probe") is not None
+    }
+    if value is None:
+        if pending_navigation or pending_probes:
+            raise ValueError("pending attempts lack an active acquisition batch")
+        return 0
+    expected_fields = {
+        "active_batch_schema_version",
+        "batch_id",
+        "stage",
+        "published_at",
+        "candidate_ids",
+        "live_page_count",
+        "attempts",
+    }
+    if not isinstance(value, Mapping) or set(value) != expected_fields:
+        raise ValueError("active acquisition batch is malformed")
+    candidate_ids = value["candidate_ids"]
+    attempts = value["attempts"]
+    if (
+        type(value["active_batch_schema_version"]) is not int
+        or value["active_batch_schema_version"] != ACTIVE_BATCH_SCHEMA_VERSION
+        or not isinstance(value["batch_id"], str)
+        or not isinstance(value["stage"], str)
+        or value["stage"] not in {"navigation", "probe"}
+        or not isinstance(value["published_at"], str)
+        or _format_time(_timestamp(value["published_at"])) != value["published_at"]
+        or not isinstance(candidate_ids, list)
+        or not 1 <= len(candidate_ids) <= MAX_CANDIDATES_PER_ACTION
+        or any(not isinstance(candidate_id, str) for candidate_id in candidate_ids)
+        or any(candidate_id not in order for candidate_id in candidate_ids)
+        or candidate_ids != sorted(set(candidate_ids), key=order.__getitem__)
+        or not isinstance(attempts, list)
+        or not 1 <= len(attempts) <= GLOBAL_LIVE_PAGE_CAP
+        or type(value["live_page_count"]) is not int
+        or value["live_page_count"] != len(attempts)
+    ):
+        raise ValueError("active acquisition batch is malformed")
+    body = {key: value[key] for key in expected_fields if key != "batch_id"}
+    if value["batch_id"] != _batch_identifier("active", body):
+        raise ValueError("active acquisition batch identifier is invalid")
+    attempt_fields = {
+        "candidate_id",
+        "page_ordinal",
+        "probe_id",
+        "workload_id",
+        "attempt",
+        "started_at",
+    }
+    for attempt in attempts:
+        if (
+            not isinstance(attempt, Mapping)
+            or set(attempt) != attempt_fields
+            or not isinstance(attempt["candidate_id"], str)
+            or attempt["candidate_id"] not in candidate_ids
+            or type(attempt["attempt"]) is not int
+            or not 1 <= attempt["attempt"] <= MAX_PROBE_ATTEMPTS
+            or attempt["started_at"] != value["published_at"]
+        ):
+            raise ValueError("active acquisition attempt is malformed")
+    observed_candidate_ids = list(dict.fromkeys(attempt["candidate_id"] for attempt in attempts))
+    if observed_candidate_ids != candidate_ids:
+        raise ValueError("active acquisition candidate ordering is invalid")
+    if value["stage"] == "navigation":
+        if (
+            len(attempts) != len(candidate_ids)
+            or pending_probes
+            or pending_navigation != set(candidate_ids)
+            or any(
+                states[attempt["candidate_id"]].get("state") != "pending"
+                or attempt["page_ordinal"] is not None
+                or attempt["probe_id"] is not None
+                or attempt["workload_id"] is not None
+                or states[attempt["candidate_id"]].get("pending_navigation")
+                != {
+                    "attempt": attempt["attempt"],
+                    "started_at": attempt["started_at"],
+                }
+                for attempt in attempts
+            )
+        ):
+            raise ValueError("active navigation batch is inconsistent")
+        return len(attempts)
+    if pending_navigation or set(candidate_ids) != {
+        candidate_id for candidate_id, _ordinal in pending_probes
+    }:
+        raise ValueError("active probe batch is inconsistent")
+    if any(
+        type(attempt["page_ordinal"]) is not int
+        or not isinstance(attempt["probe_id"], str)
+        or not isinstance(attempt["workload_id"], str)
+        for attempt in attempts
+    ):
+        raise ValueError("active probe attempt identity is malformed")
+    active_probe_identities = [
+        (attempt["candidate_id"], attempt["page_ordinal"]) for attempt in attempts
+    ]
+    if (
+        len(active_probe_identities) != len(set(active_probe_identities))
+        or set(active_probe_identities) != pending_probes
+    ):
+        raise ValueError("active probe attempt identity set is inconsistent")
+    probe_ids = {attempt["probe_id"] for attempt in attempts}
+    if len(probe_ids) != 1:
+        raise ValueError("active probe batch mixes probe windows")
+    expected_order = sorted(
+        attempts,
+        key=lambda attempt: (order[attempt["candidate_id"]], attempt["page_ordinal"]),
+    )
+    if attempts != expected_order:
+        raise ValueError("active probe attempts are not deterministically ordered")
+    for attempt in attempts:
+        candidate_id = attempt["candidate_id"]
+        page_ordinal = attempt["page_ordinal"]
+        baseline_batch = _baseline_batch_for_candidate(baseline_batches, candidate_id=candidate_id)
+        if (
+            states[candidate_id].get("state") != "probing"
+            or states[candidate_id].get("baseline_started_at")
+            != baseline_batch.get("baseline_started_at")
+            or type(page_ordinal) is not int
+            or (candidate_id, page_ordinal) not in pending_probes
+        ):
+            raise ValueError("active probe attempt page is invalid")
+        page = next(
+            page
+            for page in states[candidate_id]["pages"]
+            if page["page"]["ordinal"] == page_ordinal
+        )
+        pending = page["pending_probe"]
+        if (
+            not isinstance(attempt["probe_id"], str)
+            or not isinstance(attempt["workload_id"], str)
+            or pending
+            != {
+                "probe_id": attempt["probe_id"],
+                "workload_id": attempt["workload_id"],
+                "attempt": attempt["attempt"],
+                "observed_at": attempt["started_at"],
+            }
+        ):
+            raise ValueError("active probe attempt is inconsistent")
+    return len(attempts)
 
 
 def _load_checkpoint_state(
@@ -3991,12 +4961,51 @@ def _load_checkpoint_state(
     catalogue_path: Path,
     *,
     persist_recoveries: bool,
-) -> tuple[dict[str, Any], int]:
+    maximum_recovery_candidates: int = MAX_CANDIDATES_PER_ACTION,
+) -> tuple[dict[str, Any], int, tuple[str, ...]]:
+    if (
+        type(maximum_recovery_candidates) is not int
+        or not 1 <= maximum_recovery_candidates <= MAX_CANDIDATES_PER_ACTION
+    ):
+        raise ValueError("checkpoint recovery candidate bound is invalid")
     value = load_json(path)
     payload = validate_hash_bound_receipt(value, expected_type=CHECKPOINT_TYPE)
     provenance_payload = validate_hash_bound_receipt(
         load_json(provenance_path), expected_type=PROVENANCE_TYPE
     )
+    acquisition_schema_version = provenance_payload.get("acquisition_schema_version")
+    if type(acquisition_schema_version) is not int or acquisition_schema_version not in {
+        1,
+        2,
+        3,
+        SCHEMA_VERSION,
+    }:
+        raise ValueError("acquisition checkpoint uses an unsupported schema")
+    current_schema = acquisition_schema_version == SCHEMA_VERSION
+    legacy_fields = {
+        "provenance_sha256",
+        "candidate_catalogue_sha256",
+        "candidates",
+    }
+    current_fields = legacy_fields | {
+        "checkpoint_schema_version",
+        "baseline_batches",
+        "active_batch",
+    }
+    if current_schema:
+        if (
+            set(payload) != current_fields
+            or type(payload.get("checkpoint_schema_version")) is not int
+            or payload.get("checkpoint_schema_version") != CHECKPOINT_SCHEMA_VERSION
+        ):
+            raise ValueError("current acquisition checkpoint shape is invalid")
+        baseline_batches = payload["baseline_batches"]
+        active_batch = payload["active_batch"]
+    else:
+        if set(payload) != legacy_fields:
+            raise ValueError("historical acquisition checkpoint shape is invalid")
+        baseline_batches = []
+        active_batch = None
     if payload["provenance_sha256"] != sha256_file(provenance_path) or payload[
         "candidate_catalogue_sha256"
     ] != sha256_file(catalogue_path):
@@ -4016,29 +5025,37 @@ def _load_checkpoint_state(
     else:
         raise ValueError("acquisition terminal root does not exist")
     expected_names = {f"{candidate_id}.json" for candidate_id in expected_ids}
+    terminal_temp_pattern = re.compile(
+        rf"\.(?P<destination>.+\.json){re.escape(ATOMIC_TEMP_MARKER)}"
+        rf"[A-Za-z0-9_-]+\Z"
+    )
+    terminal_temps: list[Path] = []
     for entry in terminals.iterdir():
-        if ATOMIC_TEMP_MARKER in entry.name:
+        temporary_match = terminal_temp_pattern.fullmatch(entry.name)
+        if temporary_match is not None and temporary_match.group("destination") in expected_names:
             if entry.is_symlink() or not entry.is_file():
                 raise ValueError("acquisition terminal temporary path is unsafe")
+            terminal_temps.append(entry)
             continue
         if entry.name not in expected_names:
             raise ValueError(f"unexpected acquisition terminal path: {entry}")
 
     provenance_sha256 = sha256_file(provenance_path)
-    acquisition_schema_version = provenance_payload.get("acquisition_schema_version")
-    current_schema = acquisition_schema_version == SCHEMA_VERSION
-    recoveries: list[tuple[dict[str, Any], dict[str, str]]] = []
+    recoveries: list[tuple[str, dict[str, Any], dict[str, str]]] = []
     internal_failures: list[str] = []
     for candidate in candidates:
         state = states[candidate.candidate_id]
         permitted_states = {"pending", "probing", "terminal"}
-        if current_schema:
+        if acquisition_schema_version in {3, SCHEMA_VERSION}:
             permitted_states.add("baseline-ready")
         if not isinstance(state, dict) or state.get("state") not in permitted_states:
             raise ValueError("acquisition checkpoint candidate state is invalid")
+        if current_schema and "pending_navigation" in state and state["pending_navigation"] is None:
+            raise ValueError("current acquisition pending navigation is null")
         _validate_navigation_attempts(
             state,
-            enforce_duration_limit=current_schema,
+            enforce_duration_limit=(acquisition_schema_version in {3, SCHEMA_VERSION}),
+            require_canonical_timestamps=current_schema,
         )
         if "navigation_rejections" in state:
             _validate_navigation_rejections(
@@ -4055,11 +5072,19 @@ def _load_checkpoint_state(
             for page_state in pages:
                 if not isinstance(page_state, Mapping):
                     raise TypeError("checkpoint page ledger contains a non-object")
+                if (
+                    current_schema
+                    and "pending_probe" in page_state
+                    and page_state["pending_probe"] is None
+                ):
+                    raise ValueError("current acquisition pending probe is null")
                 _validate_probe_attempts(
                     page_state,
                     candidate_id=candidate.candidate_id,
                     baseline_started_at=state.get("baseline_started_at"),
-                    enforce_duration_limit=current_schema,
+                    enforce_duration_limit=(acquisition_schema_version in {3, SCHEMA_VERSION}),
+                    require_canonical_timestamps=current_schema,
+                    require_observation_attempt_bindings=current_schema,
                 )
                 page_origins = _canonical_navigation_origins(
                     page_state.get("navigation_observed_origins"),
@@ -4071,6 +5096,10 @@ def _load_checkpoint_state(
                     )
         elif state["state"] in {"baseline-ready", "probing"} or state.get("pages"):
             raise ValueError("checkpoint lacks its navigation origin ledger")
+        if current_schema and state["state"] == "pending":
+            _validate_current_pending_state(state)
+        if current_schema and state["state"] == "probing":
+            _validate_live_probing_state(state, candidate=candidate)
         if state["state"] == "baseline-ready":
             _validate_baseline_ready_state(state, candidate=candidate)
         if _validate_internal_acquisition_error(state) is not None:
@@ -4084,46 +5113,74 @@ def _load_checkpoint_state(
                 provenance_sha256=provenance_sha256,
                 candidate_state=state,
                 acquisition_schema_version=acquisition_schema_version,
+                baseline_batches=baseline_batches,
             )
             if binding is None:
-                recoveries.append((state, verified))
+                recoveries.append((candidate.candidate_id, state, verified))
             elif state["state"] != "terminal" or binding != verified:
                 raise ValueError("checkpoint terminal binding is inconsistent")
         elif binding is not None or state["state"] == "terminal":
             raise ValueError("checkpoint references missing terminal evidence")
+    candidate_order = [candidate.candidate_id for candidate in candidates]
     if current_schema:
-        validate_baseline_schedule(_checkpoint_baselines(states))
+        validated_baseline_batches = _validate_baseline_batches(
+            baseline_batches,
+            states=states,
+            candidate_order=candidate_order,
+        )
+        active_recoveries = _validate_active_batch(
+            active_batch,
+            states=states,
+            candidate_order=candidate_order,
+            baseline_batches=validated_baseline_batches,
+        )
+    else:
+        if acquisition_schema_version == 3:
+            validate_baseline_schedule(_checkpoint_baselines(states))
+        validated_baseline_batches = ()
+        active_recoveries = 0
+    orphan_candidate_ids = tuple(candidate_id for candidate_id, _state, _binding in recoveries)
+    active_candidate_ids = (
+        tuple(active_batch["candidate_ids"]) if isinstance(active_batch, Mapping) else ()
+    )
+    if recoveries and active_candidate_ids:
+        raise ValueError("acquisition checkpoint combines incompatible recovery actions")
+    if len(set(orphan_candidate_ids) | set(active_candidate_ids)) > maximum_recovery_candidates:
+        raise ValueError("acquisition checkpoint recovery exceeds the candidate action bound")
+    if current_schema and persist_recoveries:
+        for temporary in terminal_temps:
+            temporary.unlink()
+        if terminal_temps:
+            fsync_directory(terminals)
     _validate_document_response_receipt_namespace(
         path.parent,
         states,
-        required=(
-            acquisition_schema_version in {2, SCHEMA_VERSION}
-        ),
+        required=(acquisition_schema_version in {2, 3, SCHEMA_VERSION}),
     )
     _validate_prepared_probe_namespace(
         path.parent,
         states,
-        required=(
-            acquisition_schema_version in {2, SCHEMA_VERSION}
-        ),
+        required=(acquisition_schema_version in {2, 3, SCHEMA_VERSION}),
     )
     if internal_failures:
         raise InternalAcquisitionError(
             "acquisition checkpoint contains durable internal failures for: "
             + ", ".join(internal_failures)
         )
-    if recoveries and persist_recoveries:
-        for state, binding in recoveries:
+    if recoveries and persist_recoveries and current_schema:
+        for _candidate_id, state, binding in recoveries:
             state["state"] = "terminal"
             state["terminal"] = binding
         _save_acquisition_checkpoint(
             path,
             provenance_path=provenance_path,
             catalogue_path=catalogue_path,
+            baseline_batches=validated_baseline_batches,
+            active_batch=active_batch,
             candidates=states,
         )
         value = load_json(path)
-    return value, len(recoveries)
+    return value, len(recoveries) + active_recoveries, orphan_candidate_ids
 
 
 def _validate_document_response_receipt_namespace(
@@ -4140,10 +5197,33 @@ def _validate_document_response_receipt_namespace(
             raise ValueError("acquisition document-response receipt root does not exist")
         return
     if receipt_root.is_symlink() or not receipt_root.is_dir():
-        raise ValueError(
-            "acquisition document-response receipt root is not a regular directory"
-        )
-    expected_names: set[str] = set()
+        raise ValueError("acquisition document-response receipt root is not a regular directory")
+    expected_workload_ids = _expected_probe_workload_ids(states)
+    temporary_pattern = re.compile(
+        rf"\.(?P<workload_id>.+)\.json{re.escape(ATOMIC_TEMP_MARKER)}"
+        rf"[A-Za-z0-9_-]+\Z"
+    )
+    for entry in receipt_root.iterdir():
+        if entry.is_symlink() or not entry.is_file():
+            raise ValueError("acquisition document-response receipt namespace is unsafe")
+        if (
+            entry.name.endswith(".json")
+            and entry.name.removesuffix(".json") in expected_workload_ids
+        ):
+            continue
+        temporary_match = temporary_pattern.fullmatch(entry.name)
+        if (
+            temporary_match is not None
+            and temporary_match.group("workload_id") in expected_workload_ids
+        ):
+            continue
+        raise ValueError(f"unexpected acquisition document-response receipt path: {entry}")
+
+
+def _expected_probe_workload_ids(states: Mapping[str, Any]) -> set[str]:
+    """Collect the exact attempt namespace once for O(1) entry checks."""
+
+    expected: set[str] = set()
     for state in states.values():
         if not isinstance(state, Mapping):
             continue
@@ -4152,28 +5232,12 @@ def _validate_document_response_receipt_namespace(
                 continue
             attempts = page.get("probe_attempts", [])
             for attempt in attempts if isinstance(attempts, list) else ():
-                if isinstance(attempt, Mapping) and isinstance(
-                    attempt.get("workload_id"), str
-                ):
-                    expected_names.add(f"{attempt['workload_id']}.json")
+                if isinstance(attempt, Mapping) and isinstance(attempt.get("workload_id"), str):
+                    expected.add(attempt["workload_id"])
             pending = page.get("pending_probe")
-            if isinstance(pending, Mapping) and isinstance(
-                pending.get("workload_id"), str
-            ):
-                expected_names.add(f"{pending['workload_id']}.json")
-    temporary_prefixes = {f".{name}{ATOMIC_TEMP_MARKER}" for name in expected_names}
-    for entry in receipt_root.iterdir():
-        if entry.is_symlink() or not entry.is_file():
-            raise ValueError(
-                "acquisition document-response receipt namespace is unsafe"
-            )
-        if entry.name in expected_names or any(
-            entry.name.startswith(prefix) for prefix in temporary_prefixes
-        ):
-            continue
-        raise ValueError(
-            f"unexpected acquisition document-response receipt path: {entry}"
-        )
+            if isinstance(pending, Mapping) and isinstance(pending.get("workload_id"), str):
+                expected.add(pending["workload_id"])
+    return expected
 
 
 def _validate_prepared_probe_namespace(
@@ -4190,44 +5254,34 @@ def _validate_prepared_probe_namespace(
             raise ValueError("acquisition prepared-probe root does not exist")
         return
     if prepared_root.is_symlink() or not prepared_root.is_dir():
-        raise ValueError(
-            "acquisition prepared-probe root is not a regular directory"
-        )
-    expected_names: set[str] = set()
-    for state in states.values():
-        if not isinstance(state, Mapping):
-            continue
-        for page in state.get("pages", []):
-            if not isinstance(page, Mapping):
-                continue
-            attempts = page.get("probe_attempts", [])
-            for attempt in attempts if isinstance(attempts, list) else ():
-                if isinstance(attempt, Mapping) and isinstance(
-                    attempt.get("workload_id"), str
-                ):
-                    expected_names.add(f"{attempt['workload_id']}.json")
-            pending = page.get("pending_probe")
-            if isinstance(pending, Mapping) and isinstance(
-                pending.get("workload_id"), str
-            ):
-                expected_names.add(f"{pending['workload_id']}.json")
-    temporary_file_prefixes = {
-        f".{name}{ATOMIC_TEMP_MARKER}" for name in expected_names
-    }
-    temporary_directory_prefixes = {
-        f".{name.removesuffix('.json')}-prepare-" for name in expected_names
-    }
+        raise ValueError("acquisition prepared-probe root is not a regular directory")
+    expected_workload_ids = _expected_probe_workload_ids(states)
+    temporary_file_pattern = re.compile(
+        rf"\.(?P<workload_id>.+)\.json{re.escape(ATOMIC_TEMP_MARKER)}"
+        rf"[A-Za-z0-9_-]+\Z"
+    )
+    temporary_directory_pattern = re.compile(r"\.(?P<workload_id>.+)-prepare-[A-Za-z0-9_-]+\Z")
     for entry in prepared_root.iterdir():
         if entry.is_symlink():
             raise ValueError("acquisition prepared-probe namespace is unsafe")
-        if entry.name in expected_names and entry.is_file():
-            continue
-        if entry.is_file() and any(
-            entry.name.startswith(prefix) for prefix in temporary_file_prefixes
+        if (
+            entry.is_file()
+            and entry.name.endswith(".json")
+            and entry.name.removesuffix(".json") in expected_workload_ids
         ):
             continue
-        if entry.is_dir() and any(
-            entry.name.startswith(prefix) for prefix in temporary_directory_prefixes
+        temporary_file_match = temporary_file_pattern.fullmatch(entry.name)
+        if (
+            entry.is_file()
+            and temporary_file_match is not None
+            and temporary_file_match.group("workload_id") in expected_workload_ids
+        ):
+            continue
+        temporary_directory_match = temporary_directory_pattern.fullmatch(entry.name)
+        if (
+            entry.is_dir()
+            and temporary_directory_match is not None
+            and temporary_directory_match.group("workload_id") in expected_workload_ids
         ):
             continue
         raise ValueError(f"unexpected acquisition prepared-probe path: {entry}")
