@@ -2369,6 +2369,7 @@ def run_class_study_action(
             reviewer=reviewer,
             reviewed_at=reviewed_at,
             reviews=review_input["reviews"],
+            _post_write_validate=False,
         )
         details = validate_class_comparison_review(output)
         return ClassStudyActionResult(action, "complete", details)
@@ -2391,6 +2392,7 @@ def run_class_study_action(
             )
         output = create_class_validation_attestation(
             _required(destination, "--destination"),
+            _post_write_validate=False,
             readiness_attestation=attest_readiness,
             canary_result_roots=canary_result_roots,
             formal_result_roots=formal_result_roots,
@@ -2735,7 +2737,10 @@ def run_class_study_action(
         output = write_class_evaluation_receipt(
             _required(destination, "--destination"),
             handoff_root=source,
-            dlsvm_cache_directory=dlsvm_cache_directory,
+            dlsvm_cache_directory=_required(
+                dlsvm_cache_directory,
+                "--dlsvm-cache-directory",
+            ),
             deep_verify_handoff=deep,
         )
         verified = verify_class_evaluation_receipt(

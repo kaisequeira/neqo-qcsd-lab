@@ -56,9 +56,7 @@ def _runtime_inputs(
         else:
             result[mode] = {
                 "identity_type": (
-                    "source-bound-no-defense"
-                    if mode == "undefended"
-                    else "source-bound-built-in"
+                    "source-bound-no-defense" if mode == "undefended" else "source-bound-built-in"
                 ),
                 "runtime_kind": runtime_kinds[mode],
             }
@@ -124,9 +122,7 @@ def test_qualification_authority_derives_prepare_identity_from_exact_foundation_
     monkeypatch.setattr(attestation, "validate_class_foundation_attestation", validate_foundation)
     monkeypatch.setattr(attestation, "validate_build_execution_receipt", lambda *_a, **_k: build)
 
-    authority = attestation.class_qualification_authority(
-        foundation_path, runtime_role="prepare"
-    )
+    authority = attestation.class_qualification_authority(foundation_path, runtime_role="prepare")
 
     assert observed["runtime_role"] == "prepare"
     assert authority["foundation_attestation"]["sha256"] == foundation["sha256"]
@@ -197,9 +193,56 @@ def _study_environment(image_id: str) -> dict[str, Any]:
 
 
 def _evaluation(*, full_replay: bool = True) -> dict[str, Any]:
+    classes = [f"class-{index:03d}" for index in range(attestation.FINAL_CLASS_COUNT)]
+    candidate_modes = ("buflo", "cs-buflo")
+    blocks = range(1, attestation.FORMAL_BLOCK_COUNT + 1)
+    directions = ("outgoing", "incoming")
+    directional = [
+        {
+            "defense": mode,
+            "workload_id": class_label,
+            "acquisition_block_index": block,
+            "direction": direction,
+            "samples": attestation.FORMAL_VISITS_PER_BLOCK,
+            "target_size_histogram": {},
+            "desired_udp_bytes": 0,
+            "observed_udp_bytes": 0,
+            "target_realization_ratio": None,
+            "satisfaction_counts": {},
+            "congestion_reason_counts": {},
+            "traffic_composition_bytes": {},
+            "inter_target_delta_us": {},
+            "estimated_jitter_us": {},
+            "scheduling_lateness_us": {},
+            "receive_credit_advertisement": {},
+            "receive_credit_consumption": {},
+            "inferred_rate_transition_count": 0,
+            "inferred_rate_transition_histogram": {},
+            "cs_buflo": {} if mode == "cs-buflo" else None,
+        }
+        for mode in candidate_modes
+        for class_label in classes
+        for block in blocks
+        for direction in directions
+    ]
+
+    def grouped(mode: str) -> list[dict[str, Any]]:
+        return [
+            {
+                "defense": mode,
+                "workload_id": class_label,
+                "acquisition_block_index": block,
+                "samples": attestation.FORMAL_VISITS_PER_BLOCK,
+            }
+            for class_label in classes
+            for block in blocks
+        ]
+
+    classes_sha256 = _digest("6")
     return {
         "sample_count": attestation.FORMAL_SAMPLE_COUNT,
         "class_count": attestation.FINAL_CLASS_COUNT,
+        "classes": classes,
         "modes": list(attestation.FORMAL_MODES),
         "result_count": 72,
         "correctness": {
@@ -209,11 +252,9 @@ def _evaluation(*, full_replay: bool = True) -> dict[str, Any]:
             "passed_samples": attestation.FORMAL_SAMPLE_COUNT,
             "coverage": {
                 "class_count": attestation.FINAL_CLASS_COUNT,
-                "classes_sha256": _digest("6"),
+                "classes_sha256": classes_sha256,
                 "modes": list(attestation.FORMAL_MODES),
-                "acquisition_blocks": list(
-                    range(1, attestation.FORMAL_BLOCK_COUNT + 1)
-                ),
+                "acquisition_blocks": list(range(1, attestation.FORMAL_BLOCK_COUNT + 1)),
                 "visits_per_class_mode_block": 2,
             },
             "checks": {
@@ -230,9 +271,7 @@ def _evaluation(*, full_replay: bool = True) -> dict[str, Any]:
             "coverage": {
                 "class_count": attestation.FINAL_CLASS_COUNT,
                 "modes": list(attestation.FORMAL_MODES),
-                "acquisition_blocks": list(
-                    range(1, attestation.FORMAL_BLOCK_COUNT + 1)
-                ),
+                "acquisition_blocks": list(range(1, attestation.FORMAL_BLOCK_COUNT + 1)),
                 "paired_visits": 2_000,
                 "defended_baseline_pairs": 14_000,
             },
@@ -275,6 +314,51 @@ def _evaluation(*, full_replay: bool = True) -> dict[str, Any]:
             },
             "breakdowns": {"directional": {"all": {}}, "client": {"all": {}}},
         },
+        "candidate_algorithm": {
+            "schema_version": 1,
+            "passed": True,
+            "sample_count": 4_000,
+            "coverage": {
+                "class_count": attestation.FINAL_CLASS_COUNT,
+                "classes_sha256": classes_sha256,
+                "modes": list(candidate_modes),
+                "acquisition_blocks": list(blocks),
+                "visits_per_class_mode_block": attestation.FORMAL_VISITS_PER_BLOCK,
+                "directions": list(directions),
+                "diagnostic_schema_versions": [4],
+            },
+            "checks": {
+                "run_schedule_events_packets_rederived": True,
+                "classifier_input": False,
+                "current_schema_required": True,
+            },
+            "breakdowns": {
+                "available": True,
+                "classifier_input": False,
+                "schema_version": 3,
+                "strata": directional,
+                "buflo_terminal_tail_strata": grouped("buflo"),
+                "buflo_schedule_stop_strata": grouped("buflo"),
+                "cs_buflo_local_termination_strata": grouped("cs-buflo"),
+            },
+        },
+        "dlsvm_capacity_preflight": {
+            "schema_version": 2,
+            "artifact_type": "qcsd-dlsvm-native-capacity-preflight",
+            "path": "/artifacts/evaluation.dlsvm-preflight.json",
+            "sha256": _digest("a"),
+            "workload_sha256": _digest("b"),
+            "projection_sha256": _digest("c"),
+            "execution_model": dict(attestation.class_evaluation.CLASS_DLSVM_EXECUTION_MODEL),
+            "execution_model_sha256": (
+                attestation.class_evaluation.CLASS_DLSVM_EXECUTION_MODEL_SHA256
+            ),
+            "admission": {
+                "wall_time_available": True,
+                "memory_available": True,
+                "cache_storage_available": True,
+            },
+        },
         "verification_strength": {
             "level": "full-replay" if full_replay else "reduced",
             "deep_handoff": full_replay,
@@ -283,6 +367,12 @@ def _evaluation(*, full_replay: bool = True) -> dict[str, Any]:
             "performance_summary_recomputed": True,
             "performance_raw_evidence_recomputed": full_replay,
             "dlsvm_all_matrix_cells_recomputed": True,
+            "dlsvm_capacity_preflight_revalidated": True,
+            "dlsvm_current_capacity_admitted": True,
+            "dlsvm_execution_model_sha256": (
+                attestation.class_evaluation.CLASS_DLSVM_EXECUTION_MODEL_SHA256
+            ),
+            "candidate_algorithm_diagnostics_rederived": True,
             "classifier_attacks_replayed": full_replay,
             "limitations": [] if full_replay else ["not replayed"],
             "authorizes_final_attestation": False,
@@ -351,16 +441,12 @@ def test_class_result_materializes_and_revalidates_real_study_environment(
     path = inputs / "study-environment.json"
     verified = VerifiedResult(
         root=root,
-        experiment={
-            "configuration": {"study_environment_sha256": sha256_file(path)}
-        },
+        experiment={"configuration": {"study_environment_sha256": sha256_file(path)}},
         checksums={},
         accepted_samples={},
     )
 
-    validated = attestation._validate_result_environment(
-        verified, {"image_digest": image_id}
-    )
+    validated = attestation._validate_result_environment(verified, {"image_digest": image_id})
     assert validated["image_id"] == image_id
     assert validated["capture_scheduler"]["client_affinity_cpus"] == [10]
 
@@ -382,9 +468,7 @@ def test_acquisition_toolchain_must_match_current_image_and_neqo_source() -> Non
         "source": acquisition_source,
     }
     assert (
-        attestation._require_acquisition_toolchain(
-            observed, source=source, build_receipt=build
-        )
+        attestation._require_acquisition_toolchain(observed, source=source, build_receipt=build)
         == observed
     )
     substituted = {
@@ -395,9 +479,7 @@ def test_acquisition_toolchain_must_match_current_image_and_neqo_source() -> Non
         },
     }
     with pytest.raises(ValueError, match="current source/build"):
-        attestation._require_acquisition_toolchain(
-            substituted, source=source, build_receipt=build
-        )
+        attestation._require_acquisition_toolchain(substituted, source=source, build_receipt=build)
 
 
 def test_foundation_runtime_accepts_only_bound_collection_or_prepare_image(
@@ -477,15 +559,9 @@ def test_formal_evidence_retains_and_rejects_mixed_capture_authority(
         experiment={
             "configuration": {
                 "evidence_role": "formal",
-                "class_study_launch_sha256": digests[
-                    "inputs/class-study-launch.json"
-                ],
-                "class_study_foundation_sha256": digests[
-                    "inputs/class-study-foundation.json"
-                ],
-                "class_study_readiness_sha256": digests[
-                    "inputs/class-study-readiness.json"
-                ],
+                "class_study_launch_sha256": digests["inputs/class-study-launch.json"],
+                "class_study_foundation_sha256": digests["inputs/class-study-foundation.json"],
+                "class_study_readiness_sha256": digests["inputs/class-study-readiness.json"],
                 "class_study_historical_pre_snapshot_sha256": digests[
                     "inputs/class-study-historical-pre-snapshot.json"
                 ],
@@ -497,19 +573,14 @@ def test_formal_evidence_retains_and_rejects_mixed_capture_authority(
     monkeypatch.setattr(attestation, "verify_result", lambda _path: verified)
 
     binding = attestation._class_result_binding(root)
-    assert binding["class_study_readiness_sha256"] == digests[
-        "inputs/class-study-readiness.json"
-    ]
-    assert binding["class_study_historical_pre_snapshot_sha256"] == digests[
-        "inputs/class-study-historical-pre-snapshot.json"
-    ]
+    assert binding["class_study_readiness_sha256"] == digests["inputs/class-study-readiness.json"]
+    assert (
+        binding["class_study_historical_pre_snapshot_sha256"]
+        == digests["inputs/class-study-historical-pre-snapshot.json"]
+    )
     record = {
-        "class_study_foundation_sha256": binding[
-            "class_study_foundation_sha256"
-        ],
-        "class_study_readiness_sha256": binding[
-            "class_study_readiness_sha256"
-        ],
+        "class_study_foundation_sha256": binding["class_study_foundation_sha256"],
+        "class_study_readiness_sha256": binding["class_study_readiness_sha256"],
         "class_study_historical_pre_snapshot_sha256": binding[
             "class_study_historical_pre_snapshot_sha256"
         ],
@@ -519,22 +590,16 @@ def test_formal_evidence_retains_and_rejects_mixed_capture_authority(
         dict(record),
         foundation_sha256=record["class_study_foundation_sha256"],
         readiness_sha256=record["class_study_readiness_sha256"],
-        historical_pre_sha256=record[
-            "class_study_historical_pre_snapshot_sha256"
-        ],
+        historical_pre_sha256=record["class_study_historical_pre_snapshot_sha256"],
     )
     mixed = {**record, "class_study_readiness_sha256": _digest("f")}
-    with pytest.raises(
-        ValueError, match="different foundation/readiness/pre-formal authority"
-    ):
+    with pytest.raises(ValueError, match="different foundation/readiness/pre-formal authority"):
         attestation._require_formal_authority_bindings(
             record,
             mixed,
             foundation_sha256=record["class_study_foundation_sha256"],
             readiness_sha256=record["class_study_readiness_sha256"],
-            historical_pre_sha256=record[
-                "class_study_historical_pre_snapshot_sha256"
-            ],
+            historical_pre_sha256=record["class_study_historical_pre_snapshot_sha256"],
         )
 
 
@@ -576,9 +641,7 @@ def test_every_class_result_role_requires_sealed_foundation_binding(
     }
     if role in {"canary", "formal"}:
         configuration.update(
-            class_study_readiness_sha256=digests[
-                attestation._CLASS_STUDY_READINESS_INPUT
-            ],
+            class_study_readiness_sha256=digests[attestation._CLASS_STUDY_READINESS_INPUT],
             class_study_historical_pre_snapshot_sha256=digests[
                 attestation._CLASS_STUDY_HISTORICAL_PRE_INPUT
             ],
@@ -629,9 +692,7 @@ def test_preformal_class_result_forbids_readiness_and_history_authority(
         experiment={
             "configuration": {
                 "evidence_role": "certification",
-                "class_study_launch_sha256": checksums[
-                    attestation.CLASS_STUDY_LAUNCH_INPUT
-                ],
+                "class_study_launch_sha256": checksums[attestation.CLASS_STUDY_LAUNCH_INPUT],
                 "class_study_foundation_sha256": checksums[
                     attestation._CLASS_STUDY_FOUNDATION_INPUT
                 ],
@@ -660,9 +721,7 @@ def test_final_runtime_binding_rejects_parameter_and_manifest_drift() -> None:
         "chaff_qualification_set_manifest_sha256": None,
     }
     formal = {
-        "defense_runtime_inputs": {
-            mode: certification[mode] for mode in attestation.FORMAL_MODES
-        },
+        "defense_runtime_inputs": {mode: certification[mode] for mode in attestation.FORMAL_MODES},
         "chaff_qualification_set_manifest_sha256": manifest_sha256,
     }
     attestation._require_final_runtime_bindings(
@@ -674,9 +733,7 @@ def test_final_runtime_binding_rejects_parameter_and_manifest_drift() -> None:
     )
 
     drifted = json.loads(json.dumps(formal))
-    drifted["defense_runtime_inputs"]["traffic-morphing"][
-        "parameters_sha256"
-    ] = _digest("f")
+    drifted["defense_runtime_inputs"]["traffic-morphing"]["parameters_sha256"] = _digest("f")
     with pytest.raises(ValueError, match="different runtime inputs"):
         attestation._require_final_runtime_bindings(
             canary,
@@ -703,9 +760,7 @@ def test_formal_capture_requires_strictly_later_canary_completion() -> None:
         canary, {"started_at": "2026-08-29T10:00:00.000001+10:00"}
     )
     with pytest.raises(ValueError, match="did not follow"):
-        attestation._require_canary_before_formal(
-            canary, {"started_at": canary["completed_at"]}
-        )
+        attestation._require_canary_before_formal(canary, {"started_at": canary["completed_at"]})
 
 
 def test_final_gate_requires_correctness_performance_and_full_replay() -> None:
@@ -713,6 +768,12 @@ def test_final_gate_requires_correctness_performance_and_full_replay() -> None:
     result = attestation._require_evaluation_completion(complete, require_full_replay=True)
     assert result["correctness"]["passed"] is True
     assert result["performance"]["bootstrap"]["draws"] == 10_000
+    assert result["candidate_algorithm"]["sample_count"] == 4_000
+    assert result["dlsvm_preflight"]["admission"]["wall_time_available"] is True
+    assert (
+        result["dlsvm_execution_model_sha256"]
+        == attestation.class_evaluation.CLASS_DLSVM_EXECUTION_MODEL_SHA256
+    )
 
     attack_only = dict(complete)
     attack_only.pop("correctness")
@@ -721,6 +782,37 @@ def test_final_gate_requires_correctness_performance_and_full_replay() -> None:
     with pytest.raises(ValueError, match="fully and deeply replayed"):
         attestation._require_evaluation_completion(
             _evaluation(full_replay=False), require_full_replay=True
+        )
+    missing_preflight = _evaluation()
+    missing_preflight.pop("dlsvm_capacity_preflight")
+    with pytest.raises(ValueError, match="DLSVM capacity preflight"):
+        attestation._require_evaluation_completion(
+            missing_preflight,
+            require_full_replay=True,
+        )
+    wrong_execution_model = _evaluation()
+    wrong_execution_model["dlsvm_capacity_preflight"]["execution_model"] = {
+        **attestation.class_evaluation.CLASS_DLSVM_EXECUTION_MODEL,
+        "total_full_matrix_passes": 1,
+    }
+    with pytest.raises(ValueError, match="DLSVM capacity preflight"):
+        attestation._require_evaluation_completion(
+            wrong_execution_model,
+            require_full_replay=True,
+        )
+    stale_capacity = _evaluation()
+    stale_capacity["verification_strength"]["dlsvm_current_capacity_admitted"] = False
+    with pytest.raises(ValueError, match="fully and deeply replayed"):
+        attestation._require_evaluation_completion(
+            stale_capacity,
+            require_full_replay=True,
+        )
+    incomplete_algorithm = _evaluation()
+    incomplete_algorithm["candidate_algorithm"]["breakdowns"]["strata"].pop()
+    with pytest.raises(ValueError, match="directional coverage"):
+        attestation._require_evaluation_completion(
+            incomplete_algorithm,
+            require_full_replay=True,
         )
 
 
@@ -753,16 +845,13 @@ def test_successor_full_final_lineage_reconstructs_positive_promotion(
 
     certification_root = tmp_path / "certification"
     certification_root.mkdir()
-    (certification_root / "evidence.sha256").write_text(
-        "certification seal\n", encoding="utf-8"
-    )
+    (certification_root / "evidence.sha256").write_text("certification seal\n", encoding="utf-8")
     certification_binding = {
         "root": str(certification_root.resolve()),
         "evidence_sha256": sha256_file(certification_root / "evidence.sha256"),
     }
     parameters = {
-        mode: hashlib.sha256(mode.encode()).hexdigest()
-        for mode in attestation._PARAMETER_MODES
+        mode: hashlib.sha256(mode.encode()).hexdigest() for mode in attestation._PARAMETER_MODES
     }
     runtime_inputs = _runtime_inputs(attestation.COMPATIBILITY_MODES, parameters)
     qualification_sha256 = _digest("7")
@@ -810,13 +899,9 @@ def test_successor_full_final_lineage_reconstructs_positive_promotion(
         for role in ("canary", "formal"):
             root = tmp_path / f"{role}-{block:02d}"
             root.mkdir()
-            (root / "evidence.sha256").write_text(
-                f"{role} {block} seal\n", encoding="utf-8"
-            )
+            (root / "evidence.sha256").write_text(f"{role} {block} seal\n", encoding="utf-8")
             evidence_sha256 = sha256_file(root / "evidence.sha256")
-            launch_sha256 = hashlib.sha256(
-                f"{role}-{block}-launch".encode()
-            ).hexdigest()
+            launch_sha256 = hashlib.sha256(f"{role}-{block}-launch".encode()).hexdigest()
             binding = {
                 "root": str(root.resolve()),
                 "evidence_sha256": evidence_sha256,
@@ -831,20 +916,13 @@ def test_successor_full_final_lineage_reconstructs_positive_promotion(
                 **binding,
                 "evidence_role": role,
                 "block": block,
-                "samples": (
-                    attestation.FINAL_CLASS_COUNT if role == "canary" else 1_600
-                ),
+                "samples": (attestation.FINAL_CLASS_COUNT if role == "canary" else 1_600),
                 "defense_runtime_inputs": (
                     {"undefended": runtime_inputs["undefended"]}
                     if role == "canary"
-                    else {
-                        mode: runtime_inputs[mode]
-                        for mode in attestation.FORMAL_MODES
-                    }
+                    else {mode: runtime_inputs[mode] for mode in attestation.FORMAL_MODES}
                 ),
-                "defense_parameter_sha256": (
-                    {} if role == "canary" else parameters
-                ),
+                "defense_parameter_sha256": ({} if role == "canary" else parameters),
                 "chaff_qualification_set_manifest_sha256": (
                     None if role == "canary" else qualification_sha256
                 ),
@@ -871,6 +949,7 @@ def test_successor_full_final_lineage_reconstructs_positive_promotion(
         checksums={},
         accepted_samples={},
     )
+
     def verify_class_result(
         path: Path,
         *,
@@ -1025,11 +1104,7 @@ def test_successor_full_final_lineage_reconstructs_positive_promotion(
         **_evaluation(),
         "study_id": study_id,
         "class_study_launches": launches,
-        "handoff": {
-            "class_study_launches_sha256": attestation.canonical_json_sha256(
-                launches
-            )
-        },
+        "handoff": {"class_study_launches_sha256": attestation.canonical_json_sha256(launches)},
     }
     monkeypatch.setattr(
         attestation.class_evaluation,
@@ -1166,6 +1241,100 @@ def test_comparison_review_is_exhaustive_hash_bound_and_create_only(
             reviewer="Thesis researcher",
             reviewed_at="2026-08-28T20:00:00+10:00",
             reviews=incomplete,
+        )
+
+
+def test_create_comparison_review_post_write_validation_is_default_and_optional(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls: list[Path] = []
+    monkeypatch.setattr(
+        attestation,
+        "_comparison_review_value",
+        lambda **_kwargs: {"fixture": True},
+    )
+    monkeypatch.setattr(
+        attestation,
+        "write_create_only_json",
+        lambda destination, _value: Path(destination),
+    )
+    monkeypatch.setattr(
+        attestation,
+        "validate_class_comparison_review",
+        lambda path, **_kwargs: calls.append(Path(path)),
+    )
+
+    inputs = {
+        "handoff": tmp_path / "handoff",
+        "evaluation_receipt": tmp_path / "evaluation.json",
+        "reviewer": "Researcher",
+        "reviewed_at": "2026-09-05T00:00:00+10:00",
+        "reviews": (),
+    }
+    first = tmp_path / "comparison-default.json"
+    assert attestation.create_class_comparison_review(first, **inputs) == first
+    assert calls == [first]
+
+    second = tmp_path / "comparison-pipeline.json"
+    assert (
+        attestation.create_class_comparison_review(
+            second,
+            **inputs,
+            _post_write_validate=False,
+        )
+        == second
+    )
+    assert calls == [first]
+    with pytest.raises(ValueError, match="post-write validation flag"):
+        attestation.create_class_comparison_review(
+            tmp_path / "comparison-invalid.json",
+            **inputs,
+            _post_write_validate=1,  # type: ignore[arg-type]
+        )
+
+
+def test_create_validation_attestation_post_write_validation_is_default_and_optional(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls: list[tuple[Path, bool]] = []
+    monkeypatch.setattr(
+        attestation,
+        "_protected_final_inputs",
+        lambda _inputs: (),
+    )
+    monkeypatch.setattr(
+        attestation,
+        "_validation_value",
+        lambda **_kwargs: {"fixture": True},
+    )
+    monkeypatch.setattr(
+        attestation,
+        "write_create_only_json",
+        lambda destination, _value: Path(destination),
+    )
+    monkeypatch.setattr(
+        attestation,
+        "validate_class_validation_attestation",
+        lambda path, *, deep_code_gate=True: calls.append((Path(path), deep_code_gate)),
+    )
+
+    first = tmp_path / "attestation-default.json"
+    assert attestation.create_class_validation_attestation(first) == first
+    assert calls == [(first, False)]
+
+    second = tmp_path / "attestation-pipeline.json"
+    assert (
+        attestation.create_class_validation_attestation(
+            second,
+            _post_write_validate=False,
+        )
+        == second
+    )
+    assert calls == [(first, False)]
+    with pytest.raises(ValueError, match="post-write validation flag"):
+        attestation.create_class_validation_attestation(
+            tmp_path / "attestation-invalid.json",
+            _post_write_validate="false",  # type: ignore[arg-type]
         )
 
 
@@ -1334,9 +1503,7 @@ def test_readiness_derivation_rechecks_every_prerequisite_and_fitted_parameters(
         (root / attestation.CLASS_STUDY_LAUNCH_INPUT).write_text(
             f"{role} launch\n", encoding="utf-8"
         )
-        (root / attestation._CLASS_STUDY_FOUNDATION_INPUT).write_bytes(
-            foundation_file.read_bytes()
-        )
+        (root / attestation._CLASS_STUDY_FOUNDATION_INPUT).write_bytes(foundation_file.read_bytes())
         result_roots[role] = root
     pilot_bundle = tmp_path / "pilot-bundle"
     final_bundle = tmp_path / "final-bundle"
@@ -1415,9 +1582,7 @@ def test_readiness_derivation_rechecks_every_prerequisite_and_fitted_parameters(
             "reference": attestation._file_binding(ordinary_file),
             "code_gate": attestation._file_binding(ordinary_file),
             "controlled_qualification": attestation._file_binding(ordinary_file),
-            "regression_results": [
-                attestation._result_binding(result_roots["pilot-fitting"])
-            ],
+            "regression_results": [attestation._result_binding(result_roots["pilot-fitting"])],
             "controlled_results": [
                 attestation._result_binding(result_roots["pilot-compatibility"])
             ],
@@ -1527,9 +1692,9 @@ def test_readiness_derivation_rechecks_every_prerequisite_and_fitted_parameters(
             ),
         },
     }
-    role_records["pilot-compatibility"]["class_study_foundation_sha256"] = (
-        foundation_binding["sha256"]
-    )
+    role_records["pilot-compatibility"]["class_study_foundation_sha256"] = foundation_binding[
+        "sha256"
+    ]
     monkeypatch.setattr(
         pipeline,
         "verify_class_study_result",
@@ -1570,12 +1735,11 @@ def test_readiness_derivation_rechecks_every_prerequisite_and_fitted_parameters(
         },
     )
     monkeypatch.setattr(attestation, "verify_class_fitting_bundle", lambda *_a, **_k: fitting)
+
     def verified_result(root: Path) -> SimpleNamespace:
         root = Path(root)
         launch_sha256 = sha256_file(root / attestation.CLASS_STUDY_LAUNCH_INPUT)
-        foundation_sha256 = sha256_file(
-            root / attestation._CLASS_STUDY_FOUNDATION_INPUT
-        )
+        foundation_sha256 = sha256_file(root / attestation._CLASS_STUDY_FOUNDATION_INPUT)
         return SimpleNamespace(
             root=root,
             experiment={
@@ -1637,24 +1801,18 @@ def test_readiness_derivation_rechecks_every_prerequisite_and_fitted_parameters(
     with pytest.raises(ValueError, match="different fitted parameters"):
         attestation._readiness_value(**kwargs)
     role_records["certification"]["defense_parameter_sha256"]["wtf-pad"] = _digest("b")
-    role_records["certification"]["defense_runtime_inputs"]["front"][
-        "runtime_kind"
-    ] = "tamaraw"
+    role_records["certification"]["defense_runtime_inputs"]["front"]["runtime_kind"] = "tamaraw"
     with pytest.raises(ValueError, match="front runtime kind"):
         attestation._readiness_value(**kwargs)
     role_records["certification"]["defense_runtime_inputs"] = _runtime_inputs(
         attestation.COMPATIBILITY_MODES, certification_parameters
     )
-    role_records["pilot-compatibility"]["class_study_foundation_sha256"] = _digest(
-        "f"
-    )
+    role_records["pilot-compatibility"]["class_study_foundation_sha256"] = _digest("f")
     with pytest.raises(ValueError, match="do not share the exact foundation"):
         attestation._readiness_value(**kwargs)
-    role_records["pilot-compatibility"]["class_study_foundation_sha256"] = (
-        foundation_binding["sha256"]
-    )
-    role_records["certification"][
-        "chaff_qualification_set_manifest_sha256"
-    ] = _digest("f")
+    role_records["pilot-compatibility"]["class_study_foundation_sha256"] = foundation_binding[
+        "sha256"
+    ]
+    role_records["certification"]["chaff_qualification_set_manifest_sha256"] = _digest("f")
     with pytest.raises(ValueError, match="different qualification manifest"):
         attestation._readiness_value(**kwargs)

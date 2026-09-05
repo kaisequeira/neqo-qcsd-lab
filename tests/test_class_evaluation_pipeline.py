@@ -24,13 +24,17 @@ from qcsd_lab.class_evaluation import (
     ClassStudySample,
     _backend_sample,
     _build_evaluation_envelope,
+    _candidate_algorithm_evidence,
     _compact_json_sha256,
     _correctness_evidence,
+    _dlsvm_preflight_binding,
+    _dlsvm_preflight_samples,
     _performance_evidence,
     _validate_classifier_provenance,
     _validate_dlsvm_cache_binding,
     _validate_evaluation_envelope,
     run_class_attacks,
+    write_class_evaluation_receipt,
 )
 from qcsd_lab.class_handoff import _CORRECTNESS_RECEIPT
 from qcsd_lab.class_study import bind_receipt, write_create_only_json
@@ -205,6 +209,7 @@ def test_correctness_and_performance_receipts_are_complete_and_trace_separated(
         "unavailable_reasons": ["fixture platform has no RAPL"],
     }
     assert _backend_sample(dataset.samples[0]).performance is None
+    assert _backend_sample(dataset.samples[0]).algorithm_diagnostics is None
 
     missing = replace(
         dataset,
@@ -212,6 +217,339 @@ def test_correctness_and_performance_receipts_are_complete_and_trace_separated(
     )
     with pytest.raises(ValueError, match="performance evidence is incomplete"):
         _performance_evidence(missing, formal=True)
+
+
+def test_dlsvm_capacity_projection_maps_class_blocks_to_shared_protocol(
+    tmp_path: Path,
+) -> None:
+    dataset = _dataset(tmp_path)
+
+    projected = _dlsvm_preflight_samples(dataset)
+
+    assert {sample.acquisition_block_index for sample in projected} == set(range(10))
+    assert {sample.sample_id: sample.acquisition_block_index for sample in projected} == {
+        sample.sample_id: sample.acquisition_block - 1 for sample in dataset.samples
+    }
+    assert all(sample.performance is None for sample in projected)
+    assert all(sample.algorithm_diagnostics is None for sample in projected)
+
+
+def test_candidate_algorithm_reporting_is_rederived_but_classifier_isolated(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _dataset(tmp_path)
+    samples = (
+        replace(
+            source.samples[0],
+            mode="buflo",
+            algorithm_diagnostics={"schema_version": 4},
+        ),
+        replace(
+            source.samples[1],
+            mode="cs-buflo",
+            algorithm_diagnostics={"schema_version": 4},
+        ),
+    )
+    dataset = replace(source, modes=("buflo", "cs-buflo"), samples=samples)
+    observed: list[evaluation.StudySample] = []
+
+    def aggregate(selected):
+        observed.extend(selected)
+        return {"available": True, "classifier_input": False, "schema_version": 3}
+
+    monkeypatch.setattr(class_evaluation, "algorithm_breakdowns", aggregate)
+
+    evidence = _candidate_algorithm_evidence(dataset, formal=False)
+
+    assert evidence["passed"] is True
+    assert evidence["coverage"]["diagnostic_schema_versions"] == [4]
+    assert {sample.defense for sample in observed} == {"buflo", "cs-buflo"}
+    assert all(sample.algorithm_diagnostics == {"schema_version": 4} for sample in observed)
+    assert all(_backend_sample(sample).algorithm_diagnostics is None for sample in samples)
+
+
+def test_dlsvm_preflight_binding_hashes_validated_capacity_receipt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset = _dataset(tmp_path)
+    path = tmp_path / "preflight.json"
+    path.write_text('{"fixture":true}\n', encoding="utf-8")
+    receipt = {
+        "schema_version": 2,
+        "artifact_type": "qcsd-dlsvm-native-capacity-preflight",
+        "workload": {"cells": 123},
+        "projection": {"projected_wall_seconds": 456.0},
+        "execution_model": dict(class_evaluation.CLASS_DLSVM_EXECUTION_MODEL),
+        "admission": {
+            "wall_time_available": True,
+            "memory_available": True,
+            "cache_storage_available": True,
+        },
+    }
+    calls = []
+
+    def validate(source, *, samples, handoff_root, formal, expected_execution_model):
+        calls.append((source, samples, handoff_root, formal, expected_execution_model))
+        return receipt
+
+    monkeypatch.setattr(class_evaluation, "validate_dlsvm_preflight", validate)
+
+    binding = _dlsvm_preflight_binding(path, dataset=dataset, formal=True)
+
+    assert binding["schema_version"] == 2
+    assert binding["sha256"] == sha256_file(path)
+    assert binding["admission"] == receipt["admission"]
+    assert binding["execution_model"] == class_evaluation.CLASS_DLSVM_EXECUTION_MODEL
+    assert binding["execution_model_sha256"] == class_evaluation.CLASS_DLSVM_EXECUTION_MODEL_SHA256
+    assert calls[0][2:] == (
+        dataset.root,
+        True,
+        class_evaluation.CLASS_DLSVM_EXECUTION_MODEL,
+    )
+    assert {sample.acquisition_block_index for sample in calls[0][1]} == set(range(10))
+
+
+def test_class_dlsvm_preflight_binding_is_explicitly_formal_only(
+    tmp_path: Path,
+) -> None:
+    dataset = _dataset(tmp_path)
+
+    with pytest.raises(ValueError, match="formal-only"):
+        _dlsvm_preflight_binding(
+            tmp_path / "unused-schema-one-preflight.json",
+            dataset=dataset,
+            formal=False,
+        )
+
+
+def test_class_dlsvm_execution_model_covers_top_level_action_amplification() -> None:
+    model = class_evaluation.CLASS_DLSVM_EXECUTION_MODEL
+    pass_equivalents = model["total_full_matrix_passes"] * model["contingency_multiplier"]
+    maximum_full_matrix_passes = {
+        "evaluate": 2,
+        "successor-comparison-review": 3,
+        "attest": 4,
+        "verify-existing-attestation": 2,
+    }
+
+    assert pass_equivalents == 4
+    assert max(maximum_full_matrix_passes.values()) <= pass_equivalents
+
+
+def test_formal_evaluation_requires_explicit_resumable_dlsvm_cache(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ValueError, match="--dlsvm-cache-directory"):
+        write_class_evaluation_receipt(
+            tmp_path / "evaluation.json",
+            handoff_root=tmp_path / "handoff",
+        )
+
+
+@pytest.mark.parametrize("environment", evaluation._FORMAL_RUNTIME_OVERRIDE_ENV)
+def test_formal_class_evaluation_rejects_runtime_overrides_before_any_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    environment: str,
+) -> None:
+    destination = tmp_path / "evaluation.json"
+    cache = tmp_path / "dlsvm-cache"
+    handoff = tmp_path / "handoff"
+    handoff.mkdir()
+    monkeypatch.setenv(environment, "/tmp/qcsd-forged-runtime")
+
+    with pytest.raises(RuntimeError, match="forbids runtime path overrides"):
+        write_class_evaluation_receipt(
+            destination,
+            handoff_root=handoff,
+            dlsvm_cache_directory=cache,
+        )
+    assert not destination.exists()
+    assert not destination.with_name(destination.name + ".dlsvm-preflight.json").exists()
+    assert not cache.exists()
+
+
+def test_rejected_dlsvm_preflight_stops_before_classifier_execution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset = _dataset(tmp_path)
+    classifier_started = False
+
+    monkeypatch.setattr(
+        class_evaluation,
+        "_formal_classifier_runtime_receipts",
+        lambda: {"fixture": True},
+    )
+    monkeypatch.setattr(
+        class_evaluation,
+        "load_class_handoff",
+        lambda *_args, **_kwargs: dataset,
+    )
+    monkeypatch.setattr(
+        class_evaluation,
+        "_evaluator_source_binding",
+        lambda *_args, **_kwargs: {"fixture": True},
+    )
+
+    def reject_preflight(*_args, **_kwargs):
+        raise ValueError("formal DLSVM capacity preflight rejected")
+
+    def start_classifier(*_args, **_kwargs):
+        nonlocal classifier_started
+        classifier_started = True
+        raise AssertionError("classifier must not run after rejected preflight")
+
+    monkeypatch.setattr(class_evaluation, "write_dlsvm_preflight", reject_preflight)
+    monkeypatch.setattr(class_evaluation, "run_class_attacks", start_classifier)
+
+    with pytest.raises(ValueError, match="capacity preflight rejected"):
+        write_class_evaluation_receipt(
+            tmp_path / "evaluation.json",
+            handoff_root=dataset.root,
+            dlsvm_cache_directory=tmp_path / "dlsvm-cache",
+        )
+
+    assert classifier_started is False
+    assert not (tmp_path / "evaluation.json").exists()
+
+
+def test_reused_preflight_is_currently_readmitted_before_classifier_execution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset = _dataset(tmp_path)
+    destination = tmp_path / "evaluation.json"
+    preflight = destination.with_name(destination.name + ".dlsvm-preflight.json")
+    preflight.write_text('{"immutable":true}\n', encoding="utf-8")
+    events: list[str] = []
+
+    monkeypatch.setattr(
+        class_evaluation,
+        "_formal_classifier_runtime_receipts",
+        lambda: {"fixture": True},
+    )
+    monkeypatch.setattr(
+        class_evaluation,
+        "load_class_handoff",
+        lambda *_args, **_kwargs: dataset,
+    )
+    monkeypatch.setattr(
+        class_evaluation,
+        "_evaluator_source_binding",
+        lambda *_args, **_kwargs: {"fixture": True},
+    )
+
+    def validate(*_args, **kwargs):
+        events.append("validate-existing")
+        assert kwargs["expected_execution_model"] == (class_evaluation.CLASS_DLSVM_EXECUTION_MODEL)
+        return {"schema_version": 2}
+
+    def bind(*_args, **_kwargs):
+        events.append("bind")
+        return {"schema_version": 2}
+
+    def reject_current_capacity(*_args, **kwargs):
+        events.append("readmit-current-capacity")
+        assert kwargs["expected_execution_model"] == (class_evaluation.CLASS_DLSVM_EXECUTION_MODEL)
+        raise ValueError("current-capacity admission failed")
+
+    def start_classifier(*_args, **_kwargs):
+        events.append("classifier")
+        raise AssertionError("classifier must not run after current-capacity rejection")
+
+    monkeypatch.setattr(class_evaluation, "validate_dlsvm_preflight", validate)
+    monkeypatch.setattr(class_evaluation, "_dlsvm_preflight_binding", bind)
+    monkeypatch.setattr(
+        class_evaluation,
+        "admit_dlsvm_preflight_capacity",
+        reject_current_capacity,
+    )
+    monkeypatch.setattr(class_evaluation, "run_class_attacks", start_classifier)
+
+    with pytest.raises(ValueError, match="current-capacity admission failed"):
+        write_class_evaluation_receipt(
+            destination,
+            handoff_root=dataset.root,
+            dlsvm_cache_directory=tmp_path / "dlsvm-cache",
+        )
+
+    assert events == ["validate-existing", "bind", "readmit-current-capacity"]
+    assert not destination.exists()
+
+
+@pytest.mark.parametrize("replay_attacks", [False, True])
+def test_evaluation_replay_readmits_capacity_before_matrix_work(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    replay_attacks: bool,
+) -> None:
+    dataset = _dataset(tmp_path)
+    receipt = tmp_path / "evaluation.json"
+    receipt_value = {"fixture": True}
+    receipt.write_bytes(class_evaluation.canonical_json_bytes(receipt_value))
+    preflight = tmp_path / "preflight.json"
+    preflight.write_text('{"immutable":true}\n', encoding="utf-8")
+    events: list[str] = []
+    payload = {
+        "dlsvm_capacity_preflight": {"path": str(preflight.resolve())},
+        "dlsvm_cache": {"path": str((tmp_path / "cache").resolve())},
+    }
+
+    monkeypatch.setattr(
+        class_evaluation,
+        "_formal_classifier_runtime_receipts",
+        lambda: {"fixture": True},
+    )
+    monkeypatch.setattr(
+        class_evaluation,
+        "load_class_handoff",
+        lambda *_args, **_kwargs: dataset,
+    )
+    monkeypatch.setattr(
+        class_evaluation,
+        "_evaluator_source_binding",
+        lambda *_args, **_kwargs: {"fixture": "source"},
+    )
+    monkeypatch.setattr(
+        class_evaluation,
+        "_classifier_provenance",
+        lambda *_args, **_kwargs: {"fixture": "classifiers"},
+    )
+    monkeypatch.setattr(
+        class_evaluation,
+        "_validate_evaluation_envelope",
+        lambda *_args, **_kwargs: payload,
+    )
+
+    def reject_current_capacity(*_args, **kwargs):
+        events.append("readmit-current-capacity")
+        assert kwargs["expected_execution_model"] == (class_evaluation.CLASS_DLSVM_EXECUTION_MODEL)
+        raise ValueError("current-capacity replay admission failed")
+
+    def matrix_work(*_args, **_kwargs):
+        events.append("matrix-work")
+        raise AssertionError("matrix work must follow current-capacity admission")
+
+    monkeypatch.setattr(
+        class_evaluation,
+        "admit_dlsvm_preflight_capacity",
+        reject_current_capacity,
+    )
+    monkeypatch.setattr(class_evaluation, "run_class_attacks", matrix_work)
+    monkeypatch.setattr(class_evaluation, "_validate_dlsvm_cache_binding", matrix_work)
+
+    with pytest.raises(ValueError, match="current-capacity replay admission failed"):
+        class_evaluation.verify_class_evaluation_receipt(
+            receipt,
+            handoff_root=dataset.root,
+            deep_verify_handoff=False,
+            replay_attacks=replay_attacks,
+        )
+
+    assert events == ["readmit-current-capacity"]
 
 
 def test_dlsvm_executes_clean_room_backend_and_seals_persistent_matrices(
@@ -353,7 +691,7 @@ def test_hash_bound_receipt_recomputes_membership_predictions_metrics_and_bootst
 
 def test_formal_provenance_requires_pinned_weka_and_native_dlsvm() -> None:
     valid = {
-        "schema_version": 1,
+        "schema_version": class_evaluation.EVALUATION_SCHEMA_VERSION,
         "classifier_input_fields": [
             "relative_time_ns",
             "direction",
@@ -641,6 +979,30 @@ def test_dlsvm_cache_binding_is_closed_hash_bound_and_shape_checked(tmp_path: Pa
         output.write(b"tamper")
     with pytest.raises(ValueError, match="artifact digest"):
         _validate_dlsvm_cache_binding(binding, dataset=dataset)
+
+
+def test_attack_spec_failure_occurs_before_dlsvm_cache_lock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset = _dataset(tmp_path)
+    cache = tmp_path / "cache"
+
+    def fail_specs(*_args: object, **_kwargs: object) -> object:
+        raise RuntimeError("invalid attack specification")
+
+    monkeypatch.setattr(class_evaluation, "_attack_specs", fail_specs)
+    with pytest.raises(RuntimeError, match="invalid attack specification"):
+        run_class_attacks(
+            dataset,
+            attacks=("dlsvm",),
+            include_secondary=False,
+            dlsvm_cache_directory=cache,
+            formal=False,
+        )
+
+    second = evaluation.DlsvmKernelStore((), cache_directory=cache)
+    second.close()
 
 
 def test_dlsvm_cache_rejects_coherent_matrix_and_seal_substitution(

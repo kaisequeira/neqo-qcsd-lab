@@ -46,14 +46,10 @@ def _lock_function_source() -> str:
     source = LAUNCHER.read_text(encoding="utf-8")
 
     def function(name: str) -> str:
-        body = source.split(f"{name}() {{", maxsplit=1)[1].split(
-            "\n}\n", maxsplit=1
-        )[0]
+        body = source.split(f"{name}() {{", maxsplit=1)[1].split("\n}\n", maxsplit=1)[0]
         return f"{name}() {{{body}\n}}\n"
 
-    return function("class_require_directory") + function(
-        "class_acquire_acquisition_lock"
-    )
+    return function("class_require_directory") + function("class_acquire_acquisition_lock")
 
 
 @pytest.mark.parametrize(
@@ -179,13 +175,16 @@ def test_acquisition_lock_accepts_the_exact_inherited_locked_descriptor(
     tmp_path: Path,
 ) -> None:
     (tmp_path / ".class-study-acquisition.lock").write_bytes(b"")
-    script = _lock_function_source() + r'''
+    script = (
+        _lock_function_source()
+        + r"""
 exec {held_fd}<>"$1/.class-study-acquisition.lock"
 flock -n "$held_fd"
 QCSD_CLASS_ACQUISITION_LOCK_FD="$held_fd"
 class_acquire_acquisition_lock "$1"
 printf '%s\n' "$class_acquisition_lock_fd"
-'''
+"""
+    )
     result = subprocess.run(
         ["bash", "-euo", "pipefail", "-c", script, "lock-test", str(tmp_path)],
         check=False,
@@ -212,12 +211,12 @@ def test_acquisition_lock_rejects_wrong_inode_symlink_and_contention(
             "pipefail",
             "-c",
             function_source
-            + r'''
+            + r"""
 exec {wrong_fd}<>"$1/other.lock"
 flock -n "$wrong_fd"
 QCSD_CLASS_ACQUISITION_LOCK_FD="$wrong_fd"
 class_acquire_acquisition_lock "$1"
-''',
+""",
             "lock-test",
             str(tmp_path),
         ],
@@ -256,12 +255,12 @@ class_acquire_acquisition_lock "$1"
             "pipefail",
             "-c",
             function_source
-            + r'''
+            + r"""
 exec {held_fd}<>"$1/.class-study-acquisition.lock"
 flock -n "$held_fd"
 unset QCSD_CLASS_ACQUISITION_LOCK_FD
 class_acquire_acquisition_lock "$1"
-''',
+""",
             "lock-test",
             str(tmp_path),
         ],
@@ -325,9 +324,7 @@ def test_acquisition_watch_help_is_host_only_and_bypasses_docker() -> None:
     )
 
     assert result.returncode == 0, result.stderr
-    assert "Supervise the canonical classifier-multiorigin100-v1 acquisition" in (
-        result.stdout
-    )
+    assert "Supervise the canonical classifier-multiorigin100-v1 acquisition" in (result.stdout)
     assert "--heartbeat-seconds" in result.stdout
     assert "Missing image" not in result.stderr
     assert "Docker" not in result.stderr
@@ -379,18 +376,16 @@ def test_wrapper_derives_layout_from_python_and_exempts_frozen_actions() -> None
     assert '"pilot_numeric_root",' in source
     assert '"authoritative_final_root",' in source
     assert '"pilot_qualification_set_root",' in source
-    fresh_roles = source.split("class_fresh_layout=0", maxsplit=1)[1].split(
-        "if (( class_fresh_layout ))", maxsplit=1
-    )[0]
+    fresh_roles = source.split("class_fresh_layout=0", maxsplit=1)[1].split("esac", maxsplit=1)[0]
     assert "resume" not in fresh_roles
     assert "verify" not in fresh_roles
 
 
 def test_prospective_contract_paths_match_the_canonical_layout() -> None:
     layout = class_study_layout()
-    contract = json.loads(
-        (ROOT / "config/class-study/v1/study.json").read_text(encoding="utf-8")
-    )["canonical_workspace_layout"]
+    contract = json.loads((ROOT / "config/class-study/v1/study.json").read_text(encoding="utf-8"))[
+        "canonical_workspace_layout"
+    ]
     fields = {
         "config_root": layout.config_root,
         "campaign_root": layout.campaign_root,
@@ -424,8 +419,7 @@ def test_prospective_contract_paths_match_the_canonical_layout() -> None:
         "config/class-study/v1/" + class_layout.AUTHORITATIVE_COHORT_FILENAME
     )
     assert contract["authoritative_cohort_assembly"] == (
-        "config/class-study/v1/"
-        + class_layout.AUTHORITATIVE_COHORT_ASSEMBLY_FILENAME
+        "config/class-study/v1/" + class_layout.AUTHORITATIVE_COHORT_ASSEMBLY_FILENAME
     )
     assert contract["final_selection"] == (
         "config/class-study/v1/" + class_layout.FINAL_SELECTION_FILENAME
@@ -481,21 +475,143 @@ def test_wrapper_rejects_noncanonical_receipt_filenames(
     assert "Missing image" not in result.stderr
 
 
+def test_wrapper_requires_explicit_resumable_dlsvm_cache_before_docker() -> None:
+    result = _run(
+        "evaluate",
+        "--handoff",
+        "handoffs/classifier-multiorigin100-v1",
+        "--destination",
+        "artifacts/classifier-multiorigin100-v1-evaluation.json",
+    )
+
+    assert result.returncode == 2
+    assert "requires --dlsvm-cache-directory" in result.stderr
+    assert "Missing image" not in result.stderr
+
+
+@pytest.mark.parametrize("action", ("evaluate", "comparison-review", "attest"))
+def test_wrapper_requires_explicit_dlsvm_wall_budget_before_docker(
+    monkeypatch: pytest.MonkeyPatch,
+    action: str,
+) -> None:
+    monkeypatch.delenv("QCSD_DLSVM_AVAILABLE_WALL_SECONDS", raising=False)
+    result = _run(
+        action,
+        "--handoff",
+        "handoffs/classifier-multiorigin100-v1",
+        "--destination",
+        "artifacts/classifier-multiorigin100-v1-evaluation.json",
+        "--dlsvm-cache-directory",
+        "artifacts/classifier-multiorigin100-v1-dlsvm-cache",
+    )
+
+    assert result.returncode == 2
+    assert f"class-study {action} requires QCSD_DLSVM_AVAILABLE_WALL_SECONDS" in result.stderr
+    assert "Missing image" not in result.stderr
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    (
+        (
+            "verify",
+            "--target",
+            "artifacts/classifier-multiorigin100-v1-evaluation.json",
+            "--handoff",
+            "handoffs/classifier-multiorigin100-v1",
+        ),
+        (
+            "status",
+            "--evaluation-receipt",
+            "artifacts/classifier-multiorigin100-v1-evaluation.json",
+        ),
+        (
+            "status",
+            "--comparison-review",
+            "artifacts/classifier-multiorigin100-v1-comparison-review.json",
+        ),
+        (
+            "status",
+            "--validation-attestation",
+            "artifacts/classifier-multiorigin100-v1-validation-attestation.json",
+        ),
+        (
+            "verify",
+            "--target",
+            "artifacts/classifier-multiorigin100-v1-comparison-review.json",
+        ),
+        (
+            "verify",
+            "--target",
+            "artifacts/classifier-multiorigin100-v1-validation-attestation.json",
+        ),
+    ),
+)
+def test_wrapper_requires_dlsvm_wall_budget_for_deep_replay_paths(
+    monkeypatch: pytest.MonkeyPatch,
+    arguments: tuple[str, ...],
+) -> None:
+    monkeypatch.delenv("QCSD_DLSVM_AVAILABLE_WALL_SECONDS", raising=False)
+    result = _run(*arguments)
+
+    assert result.returncode == 2
+    assert "requires QCSD_DLSVM_AVAILABLE_WALL_SECONDS" in result.stderr
+    assert "Missing image" not in result.stderr
+
+
+@pytest.mark.parametrize("action", ("evaluate", "verify"))
+def test_focused_wrapper_requires_dlsvm_wall_budget_before_docker(
+    monkeypatch: pytest.MonkeyPatch,
+    action: str,
+) -> None:
+    monkeypatch.delenv("QCSD_DLSVM_AVAILABLE_WALL_SECONDS", raising=False)
+    result = subprocess.run(
+        [str(LAUNCHER), "buflo-study", action],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert f"buflo-study {action} requires --dlsvm-wall-seconds" in result.stderr
+    assert "Missing image" not in result.stderr
+
+
+def test_analyze_attestation_requires_dlsvm_wall_budget_before_docker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("QCSD_DLSVM_AVAILABLE_WALL_SECONDS", raising=False)
+    result = subprocess.run(
+        [
+            str(LAUNCHER),
+            "analyze",
+            "results/formal",
+            "--validation-attestation",
+            "artifacts/validation-attestation.json",
+        ],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert "analyze --validation-attestation requires" in result.stderr
+    assert "Missing image" not in result.stderr
+
+
 def test_only_exact_generated_v1_config_evidence_is_ignored() -> None:
     expected_patterns = {
         "config/classifier-multiorigin100-v1-campaigns/",
-        "config/chaff-qualification-store/sets/"
-        "classifier-multiorigin100-v1-pilot120-full-v1/",
-        "config/chaff-qualification-store/sets/"
-        "classifier-multiorigin100-v1-final100-full-v1/",
+        "config/chaff-qualification-store/sets/classifier-multiorigin100-v1-pilot120-full-v1/",
+        "config/chaff-qualification-store/sets/classifier-multiorigin100-v1-final100-full-v1/",
         "config/class-study/v1/classifier-multiorigin100-v1-pilot-cohort.json",
-        "config/class-study/v1/"
-        "classifier-multiorigin100-v1-pilot-cohort-assembly.json",
+        "config/class-study/v1/classifier-multiorigin100-v1-pilot-cohort-assembly.json",
         "config/class-study/v1/classifier-multiorigin100-v1-cohort.json",
         "config/class-study/v1/classifier-multiorigin100-v1-cohort-assembly.json",
         "config/class-study/v1/classifier-multiorigin100-v1-final-selection.json",
-        "config/workloads/tranco-"
-        "[0-9][0-9][0-9][0-9][0-9][0-9][0-9].json",
+        "config/workloads/tranco-[0-9][0-9][0-9][0-9][0-9][0-9][0-9].json",
     }
     for ignore_file in (ROOT / ".gitignore", ROOT / ".dockerignore"):
         patterns = {

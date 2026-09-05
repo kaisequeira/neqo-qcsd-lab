@@ -413,6 +413,86 @@ def test_export_cannot_bypass_historical_post_snapshot(
         )
 
 
+def test_final_review_and_attestation_actions_validate_once_after_publication(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import qcsd_lab.class_attestation as attestation
+
+    comparison_destination = tmp_path / "comparison.json"
+    validation_destination = tmp_path / "validation.json"
+    comparison_input = tmp_path / "comparison-input.json"
+    comparison_input.write_text('{"reviews":[]}\n', encoding="utf-8")
+    create_calls: list[tuple[str, bool]] = []
+    validation_calls: list[tuple[str, Path, object]] = []
+
+    def create_comparison(destination: Path, **kwargs: object) -> Path:
+        create_calls.append(("comparison", kwargs.pop("_post_write_validate")))
+        return Path(destination)
+
+    def validate_comparison(path: Path, **_kwargs: object) -> dict[str, object]:
+        validation_calls.append(("comparison", Path(path), None))
+        return {"valid": True, "kind": "comparison"}
+
+    def create_validation(destination: Path, **kwargs: object) -> Path:
+        create_calls.append(("attestation", kwargs.pop("_post_write_validate")))
+        return Path(destination)
+
+    def validate_validation(
+        path: Path, *, deep_code_gate: bool = True
+    ) -> dict[str, object]:
+        validation_calls.append(("attestation", Path(path), deep_code_gate))
+        return {"valid": True, "kind": "attestation"}
+
+    monkeypatch.setattr(attestation, "create_class_comparison_review", create_comparison)
+    monkeypatch.setattr(attestation, "validate_class_comparison_review", validate_comparison)
+    monkeypatch.setattr(
+        attestation,
+        "create_class_validation_attestation",
+        create_validation,
+    )
+    monkeypatch.setattr(
+        attestation,
+        "validate_class_validation_attestation",
+        validate_validation,
+    )
+    monkeypatch.setattr(pipeline, "_validate_fresh_layout_arguments", lambda **_kwargs: None)
+
+    comparison = pipeline.run_class_study_action(
+        "comparison-review",
+        handoff=tmp_path / "handoff",
+        evaluation_receipt=tmp_path / "evaluation.json",
+        comparison_review_input=comparison_input,
+        reviewer="Researcher",
+        reviewed_at="2026-09-05T00:00:00+10:00",
+        destination=comparison_destination,
+    )
+    assert comparison.details == {"valid": True, "kind": "comparison"}
+    assert create_calls == [("comparison", False)]
+    assert validation_calls == [("comparison", comparison_destination, None)]
+
+    attested = pipeline.run_class_study_action(
+        "attest",
+        readiness_attestation=tmp_path / "readiness.json",
+        canary_result_roots=tuple(tmp_path / f"canary-{index}" for index in range(10)),
+        formal_result_roots=tuple(tmp_path / f"formal-{index}" for index in range(10)),
+        historical_pre_snapshot=tmp_path / "historical-pre.json",
+        historical_post_snapshot=tmp_path / "historical-post.json",
+        handoff=tmp_path / "handoff",
+        evaluation_receipt=tmp_path / "evaluation.json",
+        comparison_review=comparison_destination,
+        destination=validation_destination,
+    )
+    assert attested.details == {"valid": True, "kind": "attestation"}
+    assert create_calls == [
+        ("comparison", False),
+        ("attestation", False),
+    ]
+    assert validation_calls == [
+        ("comparison", comparison_destination, None),
+        ("attestation", validation_destination, False),
+    ]
+
+
 def _qualification_authority() -> dict[str, object]:
     source = {
         "image_digest": "sha256:" + "1" * 64,
@@ -3347,6 +3427,22 @@ def test_authoritative_selection_uses_pilot_numeric_canonical_lineage(
             "cohort",
             stage="authoritative",
             numeric_bundle_root=layout.authoritative_numeric_root,
+        )
+
+
+def test_evaluate_requires_explicit_resumable_dlsvm_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    handoff = tmp_path / "handoff"
+    handoff.mkdir()
+    monkeypatch.setattr(pipeline, "verify_class_handoff", lambda path, **_kwargs: path)
+
+    with pytest.raises(ValueError, match="--dlsvm-cache-directory"):
+        pipeline.run_class_study_action(
+            "evaluate",
+            handoff=handoff,
+            destination=tmp_path / "evaluation.json",
         )
 
 

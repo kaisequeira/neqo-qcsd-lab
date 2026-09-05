@@ -65,6 +65,7 @@ from .class_study import (
     FINAL_CLASS_COUNT,
     FORMAL_BLOCK_COUNT,
     FORMAL_MODES,
+    FORMAL_VISITS_PER_BLOCK,
     STUDY_ID,
     bind_receipt,
     canonical_json_bytes,
@@ -85,9 +86,7 @@ COMPARISON_REVIEW_RECEIPT_TYPE = "qcsd-class-study-comparison-review"
 QUALIFICATION_AUTHORITY_TYPE = "qcsd-class-study-qualification-authority"
 _CLASS_STUDY_FOUNDATION_INPUT = "inputs/class-study-foundation.json"
 _CLASS_STUDY_READINESS_INPUT = "inputs/class-study-readiness.json"
-_CLASS_STUDY_HISTORICAL_PRE_INPUT = (
-    "inputs/class-study-historical-pre-snapshot.json"
-)
+_CLASS_STUDY_HISTORICAL_PRE_INPUT = "inputs/class-study-historical-pre-snapshot.json"
 
 READINESS_SAMPLE_COUNT = 900
 FORMAL_SAMPLE_COUNT = 16_000
@@ -145,6 +144,8 @@ _FINAL_GATES = (
     "closed-deep-verified-handoff",
     "client-correctness",
     "performance-and-overhead-reporting",
+    "candidate-algorithm-and-transport-reporting",
+    "dlsvm-capacity-preflight",
     "classifier-security-evaluation",
     "original-study-comparison-review",
     "historical-corpus-before-after-identity",
@@ -182,9 +183,7 @@ def validate_class_foundation_attestation(
 ) -> dict[str, Any]:
     """Reconstruct the five prerequisite gates from immutable evidence."""
 
-    receipt_path, value, payload = _load_bound_receipt(
-        path, expected_type=FOUNDATION_RECEIPT_TYPE
-    )
+    receipt_path, value, payload = _load_bound_receipt(path, expected_type=FOUNDATION_RECEIPT_TYPE)
     _validate_foundation_envelope(payload)
     evidence = payload.get("evidence")
     if not isinstance(evidence, Mapping):
@@ -194,22 +193,14 @@ def validate_class_foundation_attestation(
         build_execution_receipt=_path_from_binding(
             evidence.get("build_execution"), label="build execution"
         ),
-        reference_receipt=_path_from_binding(
-            evidence.get("reference"), label="reference"
-        ),
-        code_gate_receipt=_path_from_binding(
-            evidence.get("code_gate"), label="code gate"
-        ),
+        reference_receipt=_path_from_binding(evidence.get("reference"), label="reference"),
+        code_gate_receipt=_path_from_binding(evidence.get("code_gate"), label="code gate"),
         controlled_qualification_receipt=_path_from_binding(
             evidence.get("controlled_qualification"),
             label="controlled qualification",
         ),
-        regression_result_roots=_roots_from_bindings(
-            evidence.get("regression_results")
-        ),
-        controlled_result_roots=_roots_from_bindings(
-            evidence.get("controlled_results")
-        ),
+        regression_result_roots=_roots_from_bindings(evidence.get("regression_results")),
+        controlled_result_roots=_roots_from_bindings(evidence.get("controlled_results")),
         recorded_at=payload.get("recorded_at"),
         deep_code_gate=deep_code_gate,
         evidence_source=payload.get("source"),
@@ -252,9 +243,7 @@ def class_qualification_authority(
     evidence = foundation.get("evidence")
     if not isinstance(evidence, Mapping):  # pragma: no cover - foundation validation guards this
         raise TypeError("class foundation typed evidence is missing")
-    build_path = _path_from_binding(
-        evidence.get("build_execution"), label="build execution"
-    )
+    build_path = _path_from_binding(evidence.get("build_execution"), label="build execution")
     collection_source = foundation.get("source")
     if not isinstance(collection_source, Mapping):  # pragma: no cover - guarded above
         raise TypeError("class foundation has no bound source")
@@ -362,9 +351,7 @@ def validate_class_readiness_attestation(
     """Independently reconstruct one readiness receipt from its evidence."""
 
     receipt_path, value, payload = _load_bound_receipt(path, expected_type=READINESS_RECEIPT_TYPE)
-    if str(payload.get("study_id", "")).startswith(
-        "classifier-multiorigin100-v2-"
-    ):
+    if str(payload.get("study_id", "")).startswith("classifier-multiorigin100-v2-"):
         from .class_successor import validate_successor_readiness
 
         return validate_successor_readiness(
@@ -467,6 +454,7 @@ def create_class_comparison_review(
     reviewer: str,
     reviewed_at: str,
     reviews: Sequence[Mapping[str, Any]],
+    _post_write_validate: bool = True,
 ) -> Path:
     """Publish a human review covering every published anchor metric.
 
@@ -475,6 +463,8 @@ def create_class_comparison_review(
     substantive disposition for every checked-in historical metric.
     """
 
+    if type(_post_write_validate) is not bool:
+        raise ValueError("class comparison post-write validation flag must be a boolean")
     destination = require_disjoint_path(
         destination,
         (handoff, evaluation_receipt),
@@ -491,7 +481,8 @@ def create_class_comparison_review(
         destination,
         bind_receipt(payload, receipt_type=COMPARISON_REVIEW_RECEIPT_TYPE),
     )
-    validate_class_comparison_review(output)
+    if _post_write_validate:
+        validate_class_comparison_review(output)
     return output
 
 
@@ -573,9 +564,16 @@ def validate_class_comparison_review(
     }
 
 
-def create_class_validation_attestation(destination: Path, **inputs: Any) -> Path:
+def create_class_validation_attestation(
+    destination: Path,
+    *,
+    _post_write_validate: bool = True,
+    **inputs: Any,
+) -> Path:
     """Create the sole promotion authority after every final gate re-runs."""
 
+    if type(_post_write_validate) is not bool:
+        raise ValueError("class validation post-write validation flag must be a boolean")
     destination = require_disjoint_path(
         destination,
         _protected_final_inputs(inputs),
@@ -586,7 +584,8 @@ def create_class_validation_attestation(destination: Path, **inputs: Any) -> Pat
         destination,
         bind_receipt(payload, receipt_type=VALIDATION_RECEIPT_TYPE),
     )
-    validate_class_validation_attestation(output, deep_code_gate=False)
+    if _post_write_validate:
+        validate_class_validation_attestation(output, deep_code_gate=False)
     return output
 
 
@@ -778,14 +777,9 @@ def _validated_runtime_inputs(
                 raise ValueError(f"{label} static schedule identity is malformed")
         else:
             expected_type = (
-                "source-bound-no-defense"
-                if mode == "undefended"
-                else "source-bound-built-in"
+                "source-bound-no-defense" if mode == "undefended" else "source-bound-built-in"
             )
-            if (
-                set(identity) != {"identity_type", "runtime_kind"}
-                or identity_type != expected_type
-            ):
+            if set(identity) != {"identity_type", "runtime_kind"} or identity_type != expected_type:
                 raise ValueError(f"{label} {mode} built-in identity is malformed")
         result[mode] = identity
     return result
@@ -913,9 +907,7 @@ def _readiness_value(
     )
     completion = validate_acquisition_completion(
         completion_value,
-        candidate_catalogue_path=_regular_file(
-            candidate_catalogue, "candidate catalogue"
-        ),
+        candidate_catalogue_path=_regular_file(candidate_catalogue, "candidate catalogue"),
         runner_root=completion_path.parent,
     )
     observed_toolchain = _require_acquisition_toolchain(
@@ -936,9 +928,7 @@ def _readiness_value(
         raise ValueError("class acquisition provenance is not foundation-bound")
     if _aware_timestamp(
         foundation.get("recorded_at"), label="foundation attestation"
-    ) > _aware_timestamp(
-        provenance.get("started_at"), label="acquisition start"
-    ):
+    ) > _aware_timestamp(provenance.get("started_at"), label="acquisition start"):
         raise ValueError("class acquisition predates its foundation attestation")
 
     from .class_pipeline import (
@@ -1077,25 +1067,20 @@ def _readiness_value(
         label="class readiness certification",
     )
     if any(
-        certification_runtime_inputs[mode]["parameters_sha256"]
-        != certification_parameters[mode]
+        certification_runtime_inputs[mode]["parameters_sha256"] != certification_parameters[mode]
         for mode in _PARAMETER_MODES
     ):
-        raise ValueError(
-            "class readiness certification parameter and runtime-input maps differ"
-        )
-    final_qualification_manifest_sha256 = fitting.provenance[
-        "qualification_inputs"
-    ].get("qualification_manifest_sha256")
+        raise ValueError("class readiness certification parameter and runtime-input maps differ")
+    final_qualification_manifest_sha256 = fitting.provenance["qualification_inputs"].get(
+        "qualification_manifest_sha256"
+    )
     if (
         not isinstance(final_qualification_manifest_sha256, str)
         or _DIGEST.fullmatch(final_qualification_manifest_sha256) is None
         or certification.get("chaff_qualification_set_manifest_sha256")
         != final_qualification_manifest_sha256
     ):
-        raise ValueError(
-            "class readiness certification used a different qualification manifest"
-        )
+        raise ValueError("class readiness certification used a different qualification manifest")
 
     prerequisite_result_records = (
         pilot_fit,
@@ -1104,8 +1089,7 @@ def _readiness_value(
         certification,
     )
     if any(
-        record.get("class_study_foundation_sha256")
-        != foundation_binding["sha256"]
+        record.get("class_study_foundation_sha256") != foundation_binding["sha256"]
         for record in prerequisite_result_records
     ):
         raise ValueError("class readiness results do not share the exact foundation")
@@ -1149,15 +1133,11 @@ def _readiness_value(
             provenance_name=NUMERIC_PROVENANCE_FILE,
             artifact_hashes=pilot_numeric.artifact_hashes,
         ),
-        "pilot_compatibility_result": _class_result_binding(
-            pilot_compatibility_result_root
-        ),
+        "pilot_compatibility_result": _class_result_binding(pilot_compatibility_result_root),
         "final_selection": _file_binding(final_selection_receipt),
         "final_cohort": _file_binding(final_cohort_receipt),
         "final_cohort_assembly": _file_binding(final_cohort_assembly),
-        "authoritative_fitting_result": _class_result_binding(
-            authoritative_fitting_result_root
-        ),
+        "authoritative_fitting_result": _class_result_binding(authoritative_fitting_result_root),
         "authoritative_fitting_bundle": _fitting_bundle_binding(
             fitting.root,
             provenance_name=PROVENANCE_FILE,
@@ -1230,9 +1210,7 @@ def _readiness_value(
             "controlled_samples": CONTROLLED_SAMPLE_COUNT,
             "pilot_fitting_samples": pilot_fit["samples"],
             "pilot_compatibility_samples": pilot_compatibility["samples"],
-            "acquisition_observed_toolchain_sha256": canonical_json_sha256(
-                observed_toolchain
-            ),
+            "acquisition_observed_toolchain_sha256": canonical_json_sha256(observed_toolchain),
             "final_classes": len(selection.final),
             "reserve_classes": len(selection.reserves),
             "authoritative_fitting_samples": fitting_result["samples"],
@@ -1242,13 +1220,9 @@ def _readiness_value(
                 "first_launch_unique_class_mode_pairs"
             ],
             "fitted_parameter_sha256": expected_fitted_parameters,
-            "certification_defense_parameter_sha256": dict(
-                certification_parameters
-            ),
+            "certification_defense_parameter_sha256": dict(certification_parameters),
             "certification_defense_runtime_inputs": certification_runtime_inputs,
-            "final_qualification_set_manifest_sha256": (
-                final_qualification_manifest_sha256
-            ),
+            "final_qualification_set_manifest_sha256": (final_qualification_manifest_sha256),
         },
         "hard_gates": _hard_gate_records(_READINESS_GATES, gate_evidence),
         "all_readiness_gates_passed": True,
@@ -1302,14 +1276,10 @@ def _validation_value(
     )
     readiness_evidence = readiness.get("evidence")
     readiness_foundation = (
-        readiness_evidence.get("foundation")
-        if isinstance(readiness_evidence, Mapping)
-        else None
+        readiness_evidence.get("foundation") if isinstance(readiness_evidence, Mapping) else None
     )
     foundation_sha256 = (
-        readiness_foundation.get("sha256")
-        if isinstance(readiness_foundation, Mapping)
-        else None
+        readiness_foundation.get("sha256") if isinstance(readiness_foundation, Mapping) else None
     )
     if not isinstance(foundation_sha256, str) or _DIGEST.fullmatch(foundation_sha256) is None:
         raise ValueError("class validation readiness has no exact foundation identity")
@@ -1319,16 +1289,11 @@ def _validation_value(
         else None
     )
     successor_sha256 = (
-        readiness_successor.get("sha256")
-        if isinstance(readiness_successor, Mapping)
-        else None
+        readiness_successor.get("sha256") if isinstance(readiness_successor, Mapping) else None
     )
-    successor_study = str(readiness.get("study_id", "")).startswith(
-        "classifier-multiorigin100-v2-"
-    )
+    successor_study = str(readiness.get("study_id", "")).startswith("classifier-multiorigin100-v2-")
     if successor_study != (
-        isinstance(successor_sha256, str)
-        and _DIGEST.fullmatch(successor_sha256) is not None
+        isinstance(successor_sha256, str) and _DIGEST.fullmatch(successor_sha256) is not None
     ):
         raise ValueError("class validation readiness successor identity is incomplete")
     certification_runtime_inputs = _validated_runtime_inputs(
@@ -1343,9 +1308,7 @@ def _validation_value(
         not isinstance(final_qualification_manifest_sha256, str)
         or _DIGEST.fullmatch(final_qualification_manifest_sha256) is None
     ):
-        raise ValueError(
-            "class validation readiness has no final qualification manifest identity"
-        )
+        raise ValueError("class validation readiness has no final qualification manifest identity")
     for block, (canary_root, formal_root) in enumerate(
         zip(canary_result_roots, formal_result_roots, strict=True), start=1
     ):
@@ -1375,9 +1338,7 @@ def _validation_value(
             or record.get("class_study_successor_sha256") != successor_sha256
             for record in (canary, formal)
         ):
-            raise ValueError(
-                "class validation block is bound to another study/successor authority"
-            )
+            raise ValueError("class validation block is bound to another study/successor authority")
         certification_parameters = readiness["summary"].get(
             "certification_defense_parameter_sha256"
         )
@@ -1392,17 +1353,13 @@ def _validation_value(
             else None
         )
         if formal.get("defense_parameter_sha256") != expected_formal_parameters:
-            raise ValueError(
-                "class validation formal block used a different parameter map"
-            )
+            raise ValueError("class validation formal block used a different parameter map")
         _require_final_runtime_bindings(
             canary,
             formal,
             block=block,
             certification_runtime_inputs=certification_runtime_inputs,
-            final_qualification_manifest_sha256=(
-                final_qualification_manifest_sha256
-            ),
+            final_qualification_manifest_sha256=(final_qualification_manifest_sha256),
         )
         canary_verified = verify_result(Path(canary_root))
         formal_verified = verify_result(Path(formal_root))
@@ -1438,8 +1395,7 @@ def _validation_value(
         or pre["readiness"] != _file_binding(readiness_attestation)
         or post["readiness"] != _file_binding(readiness_attestation)
         or post["pre_formal_snapshot"] != _file_binding(historical_pre_snapshot)
-        or post["formal_results"]
-        != [_class_result_binding(path) for path in formal_result_roots]
+        or post["formal_results"] != [_class_result_binding(path) for path in formal_result_roots]
         or pre["historical_corpus_guard_sha256"] != post["historical_corpus_guard_sha256"]
     ):
         raise ValueError("class validation historical before/after evidence differs")
@@ -1565,6 +1521,13 @@ def _validation_value(
         "closed-deep-verified-handoff": [evidence["handoff"]["sha256sums_sha256"]],
         "client-correctness": [evaluation_completion["correctness_sha256"]],
         "performance-and-overhead-reporting": [evaluation_completion["performance_sha256"]],
+        "candidate-algorithm-and-transport-reporting": [
+            evaluation_completion["candidate_algorithm_sha256"]
+        ],
+        "dlsvm-capacity-preflight": [
+            evaluation_completion["dlsvm_preflight_sha256"],
+            evaluation_completion["dlsvm_execution_model_sha256"],
+        ],
         "classifier-security-evaluation": [evidence["evaluation"]["sha256"]],
         "original-study-comparison-review": [evidence["comparison_review"]["sha256"]],
         "historical-corpus-before-after-identity": [
@@ -1575,11 +1538,7 @@ def _validation_value(
         "current-source-and-no-waiver-promotion": [
             canonical_json_sha256(current_source),
             evidence["readiness"]["sha256"],
-            *(
-                [evidence["successor_restart"]["sha256"]]
-                if successor_study
-                else []
-            ),
+            *([evidence["successor_restart"]["sha256"]] if successor_study else []),
         ],
     }
     return {
@@ -1603,13 +1562,16 @@ def _validation_value(
             "formal_blocks": FORMAL_BLOCK_COUNT,
             "client_correctness": evaluation_completion["correctness"],
             "performance": evaluation_completion["performance"],
+            "candidate_algorithm": {
+                "sample_count": evaluation_completion["candidate_algorithm"]["sample_count"],
+                "sha256": evaluation_completion["candidate_algorithm_sha256"],
+            },
+            "dlsvm_capacity_preflight": evaluation_completion["dlsvm_preflight"],
             "classifier_result_count": evaluation["result_count"],
             "comparison_reviewed_metrics": comparison["reviewed_metric_count"],
             "historical_corpus_guard_sha256": post["historical_corpus_guard_sha256"],
             "certification_defense_runtime_inputs": certification_runtime_inputs,
-            "final_qualification_set_manifest_sha256": (
-                final_qualification_manifest_sha256
-            ),
+            "final_qualification_set_manifest_sha256": (final_qualification_manifest_sha256),
         },
         "hard_gates": _hard_gate_records(_FINAL_GATES, gate_evidence),
         "all_validation_gates_passed": True,
@@ -1700,12 +1662,8 @@ def _validate_post_snapshot_formal_results(
     foundation_sha256 = foundation.get("sha256") if isinstance(foundation, Mapping) else None
     if not isinstance(foundation_sha256, str) or _DIGEST.fullmatch(foundation_sha256) is None:
         raise ValueError("post-formal snapshot readiness has no foundation identity")
-    certification = (
-        evidence.get("certification_result") if isinstance(evidence, Mapping) else None
-    )
-    certification_root = _root_from_result_binding(
-        certification, label="certification result"
-    )
+    certification = evidence.get("certification_result") if isinstance(evidence, Mapping) else None
+    certification_root = _root_from_result_binding(certification, label="certification result")
     certification_time = _aware_timestamp(
         verify_result(certification_root).experiment.get("completed_at"),
         label="certification completion",
@@ -1719,9 +1677,7 @@ def _validate_post_snapshot_formal_results(
     qualification_sha256 = readiness.get("summary", {}).get(
         "final_qualification_set_manifest_sha256"
     )
-    parameters = readiness.get("summary", {}).get(
-        "certification_defense_parameter_sha256"
-    )
+    parameters = readiness.get("summary", {}).get("certification_defense_parameter_sha256")
     if (
         not isinstance(qualification_sha256, str)
         or _DIGEST.fullmatch(qualification_sha256) is None
@@ -1736,16 +1692,11 @@ def _validate_post_snapshot_formal_results(
         evidence.get("successor_restart") if isinstance(evidence, Mapping) else None
     )
     successor_sha256 = (
-        readiness_successor.get("sha256")
-        if isinstance(readiness_successor, Mapping)
-        else None
+        readiness_successor.get("sha256") if isinstance(readiness_successor, Mapping) else None
     )
-    successor_study = str(readiness.get("study_id", "")).startswith(
-        "classifier-multiorigin100-v2-"
-    )
+    successor_study = str(readiness.get("study_id", "")).startswith("classifier-multiorigin100-v2-")
     if successor_study != (
-        isinstance(successor_sha256, str)
-        and _DIGEST.fullmatch(successor_sha256) is not None
+        isinstance(successor_sha256, str) and _DIGEST.fullmatch(successor_sha256) is not None
     ):
         raise ValueError("post-formal snapshot successor identity is incomplete")
 
@@ -1779,8 +1730,7 @@ def _validate_post_snapshot_formal_results(
             )
             != {mode: runtime_inputs[mode] for mode in FORMAL_MODES}
             or record.get("defense_parameter_sha256") != expected_parameters
-            or record.get("chaff_qualification_set_manifest_sha256")
-            != qualification_sha256
+            or record.get("chaff_qualification_set_manifest_sha256") != qualification_sha256
         ):
             raise ValueError("post-formal block differs from readiness runtime identity")
         verified = verify_result(Path(root))
@@ -1802,12 +1752,9 @@ def _validate_post_snapshot_formal_results(
         bindings.append(_class_result_binding(Path(root)))
 
     environments = [
-        _validate_result_environment(verified, readiness["source"])
-        for verified in verified_results
+        _validate_result_environment(verified, readiness["source"]) for verified in verified_results
     ]
-    if _one_build_execution_identity(environments) != readiness.get(
-        "build_execution_identity"
-    ):
+    if _one_build_execution_identity(environments) != readiness.get("build_execution_identity"):
         raise ValueError("post-formal blocks use a different no-cache build")
     if not certification_time <= pre_time <= min(starts):
         raise ValueError("pre-formal snapshot does not precede the exact formal blocks")
@@ -1846,9 +1793,7 @@ def _comparison_review_value(
     historical_rows = list(original_study_comparison_rows())
     inventory = list(historical_anchor_metric_inventory(historical_rows))
     pairs = _comparison_pairs(historical_rows, inventory, evaluation)
-    expected = {
-        (pair["defense"], pair["anchor_id"], pair["metric"]): pair for pair in pairs
-    }
+    expected = {(pair["defense"], pair["anchor_id"], pair["metric"]): pair for pair in pairs}
     if not isinstance(reviews, Sequence) or isinstance(reviews, (str, bytes)):
         raise TypeError("class comparison reviews must be a sequence")
     normalised: list[dict[str, Any]] = []
@@ -1898,15 +1843,11 @@ def _comparison_review_value(
             or any(token not in explanation_lower for token in required_tokens)
             or not isinstance(context_differences, list)
             or context_differences != pair["context_differences"]
-            or (
-                qcsd_value is None
-                and "unavailable" not in explanation_lower
-            )
+            or (qcsd_value is None and "unavailable" not in explanation_lower)
             or (
                 qcsd_value is not None
                 and (
-                    _comparison_number_token(pair["published_value"])
-                    not in explanation_lower
+                    _comparison_number_token(pair["published_value"]) not in explanation_lower
                     or _comparison_number_token(qcsd_value) not in explanation_lower
                 )
             )
@@ -1927,9 +1868,7 @@ def _comparison_review_value(
     if observed != set(expected):
         raise ValueError("class comparison review omits published anchor metrics")
     normalised.sort(key=lambda row: (row["defense"], row["anchor_id"], row["metric"]))
-    comparison_rows.sort(
-        key=lambda row: (row["defense"], row["anchor_id"], row["metric"])
-    )
+    comparison_rows.sort(key=lambda row: (row["defense"], row["anchor_id"], row["metric"]))
     discrepancy_count = sum(
         row["absolute_discrepancy"] not in {None, 0.0} for row in comparison_rows
     )
@@ -1997,18 +1936,14 @@ def _comparison_pairs(
                 metric=str(metric),
             )
             qcsd_value = qcsd["value"]
-            difference = (
-                None if qcsd_value is None else float(qcsd_value) - float(published)
-            )
+            difference = None if qcsd_value is None else float(qcsd_value) - float(published)
             absolute = None if difference is None else abs(difference)
             relative = (
                 None
                 if absolute is None or float(published) == 0
                 else 100.0 * absolute / abs(float(published))
             )
-            published_context = {
-                field: historical[field] for field in _COMPARISON_CONTEXT_FIELDS
-            }
+            published_context = {field: historical[field] for field in _COMPARISON_CONTEXT_FIELDS}
             qcsd_context = _qcsd_comparison_context(
                 defense,
                 study_id=str(evaluation.get("study_id", STUDY_ID)),
@@ -2029,9 +1964,7 @@ def _comparison_pairs(
                 "published_value": published,
                 "qcsd_value": qcsd_value,
                 "unit": _comparison_metric_unit(str(metric)),
-                "published_formula": _published_metric_formula(
-                    historical, str(metric)
-                ),
+                "published_formula": _published_metric_formula(historical, str(metric)),
                 "qcsd_formula": qcsd["formula"],
                 "qcsd_metric_source": qcsd["source"],
                 "qcsd_unavailable_reason": qcsd["unavailable_reason"],
@@ -2120,11 +2053,7 @@ def _qcsd_comparison_metric(
         result = _primary_adaptive_attack_result(evaluation, defense=defense, attack=attack)
         if metric.endswith("plus_minus_percent"):
             bootstrap = result.get("block_workload_bootstrap_95")
-            intervals = (
-                bootstrap.get("bootstrap_95")
-                if isinstance(bootstrap, Mapping)
-                else None
-            )
+            intervals = bootstrap.get("bootstrap_95") if isinstance(bootstrap, Mapping) else None
             accuracy = intervals.get("accuracy") if isinstance(intervals, Mapping) else None
             low = accuracy.get("low") if isinstance(accuracy, Mapping) else None
             high = accuracy.get("high") if isinstance(accuracy, Mapping) else None
@@ -2213,19 +2142,15 @@ def _qcsd_comparison_context(defense: str, *, study_id: str = STUDY_ID) -> dict[
     return {
         "transport": "client-only QUIC/HTTP/3 QCSD adaptation over UDP",
         "endpoint_cooperation": (
-            "ordinary unmodified HTTP/3 servers; client-only shaping and standard "
-            "QUIC chaff/credit"
+            "ordinary unmodified HTTP/3 servers; client-only shaping and standard QUIC chaff/credit"
         ),
-        "dataset_size": (
-            f"closed-world 100-class {study_id} formal corpus with 16,000 samples"
-        ),
+        "dataset_size": (f"closed-world 100-class {study_id} formal corpus with 16,000 samples"),
         "visits": "two paired visits per class and mode in each of ten acquisition blocks",
         "observation_layer": (
             "capture-interface Ethernet observer-frame timestamp, direction, and length"
         ),
         "header_accounting": (
-            "captured observer-frame wire bytes; separate UDP-payload accounting "
-            "is reported"
+            "captured observer-frame wire bytes; separate UDP-payload accounting is reported"
         ),
         "padding_variant": (
             "canonical live BuFLO rho=20ms,tau=10s,1200-byte UDP-payload adaptation"
@@ -2256,6 +2181,129 @@ def _comparison_number_token(value: int | float) -> str:
     return format(float(value), ".12g").casefold()
 
 
+def _require_candidate_algorithm_completion(
+    value: Any,
+    *,
+    classes: Sequence[str],
+    classes_sha256: str,
+) -> dict[str, Any]:
+    """Require complete candidate diagnostics over every formal class stratum."""
+
+    candidate_modes = ("buflo", "cs-buflo")
+    expected_blocks = tuple(range(1, FORMAL_BLOCK_COUNT + 1))
+    expected_directions = ("outgoing", "incoming")
+    coverage = value.get("coverage") if isinstance(value, Mapping) else None
+    checks = value.get("checks") if isinstance(value, Mapping) else None
+    breakdowns = value.get("breakdowns") if isinstance(value, Mapping) else None
+    if (
+        not isinstance(value, Mapping)
+        or value.get("schema_version") != 1
+        or value.get("passed") is not True
+        or value.get("sample_count") != 4_000
+        or not isinstance(coverage, Mapping)
+        or coverage.get("class_count") != FINAL_CLASS_COUNT
+        or coverage.get("classes_sha256") != classes_sha256
+        or coverage.get("modes") != list(candidate_modes)
+        or coverage.get("acquisition_blocks") != list(expected_blocks)
+        or coverage.get("visits_per_class_mode_block") != FORMAL_VISITS_PER_BLOCK
+        or coverage.get("directions") != list(expected_directions)
+        or coverage.get("diagnostic_schema_versions") != [4]
+        or checks
+        != {
+            "run_schedule_events_packets_rederived": True,
+            "classifier_input": False,
+            "current_schema_required": True,
+        }
+        or not isinstance(breakdowns, Mapping)
+        or breakdowns.get("available") is not True
+        or breakdowns.get("classifier_input") is not False
+        or breakdowns.get("schema_version") != 3
+    ):
+        raise ValueError("class evaluation lacks complete candidate algorithm/transport evidence")
+
+    strata = breakdowns.get("strata")
+    expected_strata = {
+        (mode, class_label, block, direction)
+        for mode in candidate_modes
+        for class_label in classes
+        for block in expected_blocks
+        for direction in expected_directions
+    }
+    required_directional = {
+        "target_size_histogram",
+        "desired_udp_bytes",
+        "observed_udp_bytes",
+        "target_realization_ratio",
+        "satisfaction_counts",
+        "congestion_reason_counts",
+        "traffic_composition_bytes",
+        "inter_target_delta_us",
+        "estimated_jitter_us",
+        "scheduling_lateness_us",
+        "receive_credit_advertisement",
+        "receive_credit_consumption",
+        "inferred_rate_transition_count",
+        "inferred_rate_transition_histogram",
+        "cs_buflo",
+    }
+    if not isinstance(strata, list) or len(strata) != len(expected_strata):
+        raise ValueError("class evaluation candidate directional coverage is incomplete")
+    actual_strata: set[tuple[Any, ...]] = set()
+    for row in strata:
+        if (
+            not isinstance(row, Mapping)
+            or row.get("samples") != FORMAL_VISITS_PER_BLOCK
+            or not required_directional <= set(row)
+            or not isinstance(row.get("target_size_histogram"), Mapping)
+            or not isinstance(row.get("satisfaction_counts"), Mapping)
+            or not isinstance(row.get("congestion_reason_counts"), Mapping)
+            or not isinstance(row.get("traffic_composition_bytes"), Mapping)
+            or not isinstance(row.get("receive_credit_advertisement"), Mapping)
+            or not isinstance(row.get("receive_credit_consumption"), Mapping)
+        ):
+            raise ValueError("class evaluation candidate directional row is invalid")
+        identity = (
+            row.get("defense"),
+            row.get("workload_id"),
+            row.get("acquisition_block_index"),
+            row.get("direction"),
+        )
+        actual_strata.add(identity)
+        if (row.get("defense") == "cs-buflo" and not isinstance(row.get("cs_buflo"), Mapping)) or (
+            row.get("defense") == "buflo" and row.get("cs_buflo") is not None
+        ):
+            raise ValueError("class evaluation CS-BuFLO diagnostic coverage is invalid")
+    if actual_strata != expected_strata:
+        raise ValueError("class evaluation candidate directional identities are incomplete")
+
+    grouped_expectations = (
+        ("buflo_terminal_tail_strata", "buflo"),
+        ("buflo_schedule_stop_strata", "buflo"),
+        ("cs_buflo_local_termination_strata", "cs-buflo"),
+    )
+    for field, mode in grouped_expectations:
+        rows = breakdowns.get(field)
+        expected = {
+            (mode, class_label, block) for class_label in classes for block in expected_blocks
+        }
+        if (
+            not isinstance(rows, list)
+            or len(rows) != len(expected)
+            or {
+                (
+                    row.get("defense"),
+                    row.get("workload_id"),
+                    row.get("acquisition_block_index"),
+                )
+                for row in rows
+                if isinstance(row, Mapping) and row.get("samples") == FORMAL_VISITS_PER_BLOCK
+            }
+            != expected
+        ):
+            raise ValueError(f"class evaluation {field} coverage is incomplete")
+    return dict(value)
+
+
 def _require_evaluation_completion(
     value: Mapping[str, Any], *, require_full_replay: bool
 ) -> dict[str, Any]:
@@ -2265,12 +2313,16 @@ def _require_evaluation_completion(
         raise TypeError("class evaluation verification did not return an object")
     correctness = value.get("correctness")
     performance = value.get("performance")
-    correctness_coverage = (
-        correctness.get("coverage") if isinstance(correctness, Mapping) else None
-    )
-    correctness_checks = (
-        correctness.get("checks") if isinstance(correctness, Mapping) else None
-    )
+    classes = value.get("classes")
+    if (
+        not isinstance(classes, list)
+        or len(classes) != FINAL_CLASS_COUNT
+        or len(set(classes)) != FINAL_CLASS_COUNT
+        or any(not isinstance(item, str) or not item for item in classes)
+    ):
+        raise ValueError("class evaluation class inventory is incomplete")
+    correctness_coverage = correctness.get("coverage") if isinstance(correctness, Mapping) else None
+    correctness_checks = correctness.get("checks") if isinstance(correctness, Mapping) else None
     expected_blocks = list(range(1, FORMAL_BLOCK_COUNT + 1))
     if (
         not isinstance(correctness, Mapping)
@@ -2302,18 +2354,14 @@ def _require_evaluation_completion(
         "nullable RAPL energy",
         "direction/workload/acquisition-block breakdowns",
     ]
-    performance_coverage = (
-        performance.get("coverage") if isinstance(performance, Mapping) else None
-    )
+    performance_coverage = performance.get("coverage") if isinstance(performance, Mapping) else None
     bootstrap = performance.get("bootstrap") if isinstance(performance, Mapping) else None
     rapl = performance.get("rapl") if isinstance(performance, Mapping) else None
     paired = performance.get("paired_by_mode") if isinstance(performance, Mapping) else None
     breakdowns = performance.get("breakdowns") if isinstance(performance, Mapping) else None
     defended_modes = set(FORMAL_MODES) - {"undefended"}
     rapl_available = rapl.get("available_samples") if isinstance(rapl, Mapping) else None
-    rapl_unavailable = (
-        rapl.get("unavailable_samples") if isinstance(rapl, Mapping) else None
-    )
+    rapl_unavailable = rapl.get("unavailable_samples") if isinstance(rapl, Mapping) else None
     if (
         not isinstance(performance, Mapping)
         or performance.get("schema_version") != 1
@@ -2354,6 +2402,43 @@ def _require_evaluation_completion(
         or not breakdowns["client"]
     ):
         raise ValueError("class evaluation lacks complete performance/overhead evidence")
+    candidate_algorithm = _require_candidate_algorithm_completion(
+        value.get("candidate_algorithm"),
+        classes=classes,
+        classes_sha256=str(correctness_coverage["classes_sha256"]),
+    )
+    preflight = value.get("dlsvm_capacity_preflight")
+    if (
+        not isinstance(preflight, Mapping)
+        or set(preflight)
+        != {
+            "schema_version",
+            "artifact_type",
+            "path",
+            "sha256",
+            "workload_sha256",
+            "projection_sha256",
+            "execution_model",
+            "execution_model_sha256",
+            "admission",
+        }
+        or preflight.get("schema_version") != 2
+        or preflight.get("artifact_type") != "qcsd-dlsvm-native-capacity-preflight"
+        or not isinstance(preflight.get("path"), str)
+        or _DIGEST.fullmatch(str(preflight.get("sha256"))) is None
+        or _DIGEST.fullmatch(str(preflight.get("workload_sha256"))) is None
+        or _DIGEST.fullmatch(str(preflight.get("projection_sha256"))) is None
+        or preflight.get("execution_model") != class_evaluation.CLASS_DLSVM_EXECUTION_MODEL
+        or preflight.get("execution_model_sha256")
+        != class_evaluation.CLASS_DLSVM_EXECUTION_MODEL_SHA256
+        or preflight.get("admission")
+        != {
+            "wall_time_available": True,
+            "memory_available": True,
+            "cache_storage_available": True,
+        }
+    ):
+        raise ValueError("class evaluation lacks an admitted DLSVM capacity preflight")
     if (
         value.get("sample_count") != FORMAL_SAMPLE_COUNT
         or value.get("class_count") != FINAL_CLASS_COUNT
@@ -2372,6 +2457,11 @@ def _require_evaluation_completion(
         or strength.get("performance_summary_recomputed") is not True
         or strength.get("performance_raw_evidence_recomputed") is not True
         or strength.get("dlsvm_all_matrix_cells_recomputed") is not True
+        or strength.get("dlsvm_capacity_preflight_revalidated") is not True
+        or strength.get("dlsvm_current_capacity_admitted") is not True
+        or strength.get("dlsvm_execution_model_sha256")
+        != class_evaluation.CLASS_DLSVM_EXECUTION_MODEL_SHA256
+        or strength.get("candidate_algorithm_diagnostics_rederived") is not True
         or strength.get("classifier_attacks_replayed") is not True
         or strength.get("limitations") != []
         or strength.get("authorizes_final_attestation") is not False
@@ -2380,8 +2470,13 @@ def _require_evaluation_completion(
     return {
         "correctness": dict(correctness),
         "performance": dict(performance),
+        "candidate_algorithm": candidate_algorithm,
+        "dlsvm_preflight": dict(preflight),
         "correctness_sha256": canonical_json_sha256(correctness),
         "performance_sha256": canonical_json_sha256(performance),
+        "candidate_algorithm_sha256": canonical_json_sha256(candidate_algorithm),
+        "dlsvm_preflight_sha256": str(preflight["sha256"]),
+        "dlsvm_execution_model_sha256": str(preflight["execution_model_sha256"]),
     }
 
 
@@ -2498,15 +2593,9 @@ def _admission_from_readiness(readiness: Mapping[str, Any]) -> Any:
     )
 
     study_id = readiness.get("study_id")
-    if isinstance(study_id, str) and study_id.startswith(
-        "classifier-multiorigin100-v2-"
-    ):
+    if isinstance(study_id, str) and study_id.startswith("classifier-multiorigin100-v2-"):
         evidence = readiness.get("evidence")
-        restart = (
-            evidence.get("successor_restart")
-            if isinstance(evidence, Mapping)
-            else None
-        )
+        restart = evidence.get("successor_restart") if isinstance(evidence, Mapping) else None
         return verify_successor_cohort_admission(
             _path_from_binding(restart, label="successor restart")
         )
@@ -2544,8 +2633,7 @@ def _validate_foundation_envelope(payload: Mapping[str, Any]) -> None:
         payload.get("attestation_schema_version") != SCHEMA_VERSION
         or payload.get("artifact_type") != FOUNDATION_RECEIPT_TYPE
         or payload.get("study_id") != STUDY_ID
-        or payload.get("implementation_status")
-        != "foundation-ready-for-class-acquisition"
+        or payload.get("implementation_status") != "foundation-ready-for-class-acquisition"
         or payload.get("promotion_authority") is not False
         or payload.get("implementation_scope") != IMPLEMENTATION_SCOPE
         or payload.get("paper_equivalent") is not False
@@ -2565,8 +2653,7 @@ def _validate_validation_envelope(payload: Mapping[str, Any]) -> None:
         or (
             study_id != STUDY_ID
             and not (
-                isinstance(study_id, str)
-                and study_id.startswith("classifier-multiorigin100-v2-")
+                isinstance(study_id, str) and study_id.startswith("classifier-multiorigin100-v2-")
             )
         )
         or payload.get("implementation_status") != VALIDATED_STATUS
@@ -2680,9 +2767,7 @@ def _validate_foundation_runtime(
     if runtime_role == "prepare":
         expected["image_digest"] = build["images"]["prepare"]["id"]
     if runtime_source != expected:
-        raise ValueError(
-            f"class foundation {runtime_role} runtime differs from its no-cache build"
-        )
+        raise ValueError(f"class foundation {runtime_role} runtime differs from its no-cache build")
 
 
 def _require_acquisition_toolchain(
@@ -2722,8 +2807,7 @@ def _require_acquisition_toolchain(
         or not isinstance(neqo.get("neqo_version"), str)
         or not str(neqo["neqo_version"]).strip()
         or any(
-            not isinstance(neqo.get(key), str)
-            or _COMMIT.fullmatch(str(neqo[key])) is None
+            not isinstance(neqo.get(key), str) or _COMMIT.fullmatch(str(neqo[key])) is None
             for key in (
                 "neqo_base_commit",
                 "published_qcsd_commit",
@@ -2733,9 +2817,7 @@ def _require_acquisition_toolchain(
         or neqo.get("migration_commit") != source.get("neqo_commit")
         or source.get("neqo_commit") != source.get("neqo_pinned_commit")
     ):
-        raise ValueError(
-            "class acquisition observed toolchain differs from current source/build"
-        )
+        raise ValueError("class acquisition observed toolchain differs from current source/build")
     return dict(value)
 
 
@@ -2763,9 +2845,7 @@ def _require_formal_authority_bindings(
         "class_study_historical_pre_snapshot_sha256": historical_pre_sha256,
     }
     if any(
-        record.get(key) != digest
-        for record in (canary, formal)
-        for key, digest in expected.items()
+        record.get(key) != digest for record in (canary, formal) for key, digest in expected.items()
     ):
         raise ValueError(
             "class validation block is bound to different foundation/readiness/pre-formal authority"
@@ -2803,9 +2883,7 @@ def _require_final_runtime_bindings(
         or formal.get("chaff_qualification_set_manifest_sha256")
         != final_qualification_manifest_sha256
     ):
-        raise ValueError(
-            "class validation block used a different qualification manifest"
-        )
+        raise ValueError("class validation block used a different qualification manifest")
 
 
 def _require_canary_before_formal(canary: Mapping[str, Any], formal: Mapping[str, Any]) -> None:
@@ -2814,11 +2892,7 @@ def _require_canary_before_formal(canary: Mapping[str, Any], formal: Mapping[str
         formal_start = datetime.fromisoformat(str(formal["started_at"]))
     except (KeyError, ValueError) as error:
         raise ValueError("class canary/formal timestamps are invalid") from error
-    if (
-        canary_end.tzinfo is None
-        or formal_start.tzinfo is None
-        or canary_end >= formal_start
-    ):
+    if canary_end.tzinfo is None or formal_start.tzinfo is None or canary_end >= formal_start:
         raise ValueError("class formal block did not follow its completed canary")
 
 
@@ -2920,9 +2994,7 @@ def _class_result_binding(path: Path) -> dict[str, str]:
         verified.checksums.get(relative) != launch_sha256
         or configuration.get("class_study_launch_sha256") != launch_sha256
     ):
-        raise ValueError(
-            "class-study result first-launch claim is not seal/configuration bound"
-        )
+        raise ValueError("class-study result first-launch claim is not seal/configuration bound")
     binding = {
         **_result_binding(root),
         "class_study_launch_sha256": launch_sha256,
@@ -2934,35 +3006,23 @@ def _class_result_binding(path: Path) -> dict[str, str]:
         required.update(
             {
                 _CLASS_STUDY_READINESS_INPUT: "class_study_readiness_sha256",
-                _CLASS_STUDY_HISTORICAL_PRE_INPUT: (
-                    "class_study_historical_pre_snapshot_sha256"
-                ),
+                _CLASS_STUDY_HISTORICAL_PRE_INPUT: ("class_study_historical_pre_snapshot_sha256"),
             }
         )
     all_authorities = {
         _CLASS_STUDY_FOUNDATION_INPUT: "class_study_foundation_sha256",
         _CLASS_STUDY_READINESS_INPUT: "class_study_readiness_sha256",
-        _CLASS_STUDY_HISTORICAL_PRE_INPUT: (
-            "class_study_historical_pre_snapshot_sha256"
-        ),
+        _CLASS_STUDY_HISTORICAL_PRE_INPUT: ("class_study_historical_pre_snapshot_sha256"),
     }
     for relative, configuration_key in all_authorities.items():
         if relative not in required:
             authority = root / relative
-            if (
-                configuration_key in configuration
-                or authority.exists()
-                or authority.is_symlink()
-            ):
-                raise ValueError(
-                    f"class-study {role} result has unexpected {configuration_key}"
-                )
+            if configuration_key in configuration or authority.exists() or authority.is_symlink():
+                raise ValueError(f"class-study {role} result has unexpected {configuration_key}")
             continue
         configured = configuration.get(configuration_key)
         if not isinstance(configured, str) or _DIGEST.fullmatch(configured) is None:
-            raise ValueError(
-                f"class-study result lacks required {configuration_key}"
-            )
+            raise ValueError(f"class-study result lacks required {configuration_key}")
         authority = _regular_file(root / relative, f"class-study {configuration_key}")
         digest = sha256_file(authority)
         if verified.checksums.get(relative) != digest or configured != digest:
@@ -2986,14 +3046,10 @@ def _class_result_binding(path: Path) -> dict[str, str]:
             or _DIGEST.fullmatch(successor_digest) is None
         ):
             raise ValueError("class-study result successor identity is invalid")
-        successor_file = _regular_file(
-            successor_input, "class-study successor restart"
-        )
+        successor_file = _regular_file(successor_input, "class-study successor restart")
         digest = sha256_file(successor_file)
         if verified.checksums.get(successor_relative) != digest or digest != successor_digest:
-            raise ValueError(
-                "class-study result successor restart is not seal/configuration bound"
-            )
+            raise ValueError("class-study result successor restart is not seal/configuration bound")
         binding["class_study_id"] = study_id
         binding[successor_key] = digest
     return binding

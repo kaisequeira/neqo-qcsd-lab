@@ -4830,6 +4830,151 @@ def test_validation_attestation_promotion_is_fail_closed(tmp_path: Path) -> None
         validate_validation_attestation(attestation)
 
 
+def test_public_comparison_validation_threads_wall_override_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    handoff = tmp_path / "handoff"
+    handoff.mkdir()
+    evaluation_receipt = tmp_path / "evaluation.json"
+    evaluation_receipt.write_text("{}\n", encoding="utf-8")
+    review = tmp_path / "review.json"
+    review.write_text("{}\n", encoding="utf-8")
+    evaluation = {"validated": True}
+    observed: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        buflo_handoff,
+        "validate_study_handoff",
+        lambda *_args, **_kwargs: handoff.resolve(),
+    )
+
+    def validate_evaluation(*_args: object, **kwargs: object) -> dict[str, object]:
+        observed.append(dict(kwargs))
+        return evaluation
+
+    monkeypatch.setattr(buflo_evaluation, "validate_evaluation_receipt", validate_evaluation)
+    monkeypatch.setattr(
+        buflo_study,
+        "_validate_comparison_review_value",
+        lambda *_args, **kwargs: {
+            "evaluation_reused": kwargs["evaluation"] is evaluation,
+            "passed": True,
+        },
+    )
+
+    result = buflo_study.validate_comparison_review(
+        review,
+        evaluation_receipt=evaluation_receipt,
+        handoff=handoff,
+        formal=True,
+        dlsvm_available_wall_seconds=654.0,
+    )
+
+    assert result == {"evaluation_reused": True, "passed": True}
+    assert len(observed) == 1
+    assert observed[0]["deep"] is True
+    assert observed[0]["dlsvm_available_wall_seconds"] == 654.0
+
+
+def test_attestation_create_publishes_validated_value_without_rederivation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    destination = tmp_path / "validation-attestation.json"
+    value = {
+        "schema_version": 2,
+        "artifact_type": buflo_study.ATTESTATION_ARTIFACT_TYPE,
+        "all_hard_gates_passed": True,
+    }
+    derivations: list[dict[str, object]] = []
+
+    def derive(**kwargs: object) -> dict[str, object]:
+        derivations.append(dict(kwargs))
+        return value
+
+    monkeypatch.setattr(buflo_study, "_validation_attestation_value", derive)
+    monkeypatch.setattr(
+        buflo_study,
+        "validate_validation_attestation",
+        lambda *_args, **_kwargs: pytest.fail("create must not rederive the attestation"),
+    )
+
+    output = buflo_study.create_validation_attestation(
+        destination,
+        dlsvm_available_wall_seconds=987.0,
+    )
+
+    assert output == destination
+    assert buflo_study.load_json(output) == value
+    assert output.read_bytes() == (
+        json.dumps(value, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    assert len(derivations) == 1
+    assert derivations[0]["deep_code_gate"] is True
+    assert derivations[0]["dlsvm_available_wall_seconds"] == 987.0
+    assert buflo_study._created_validation_attestation_result(output) == {
+        "path": str(output),
+        "sha256": hashlib.sha256(output.read_bytes()).hexdigest(),
+        **value,
+    }
+
+
+def test_existing_attestation_verification_deep_derives_once_and_threads_wall_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    evidence = {
+        "reference_receipt": {"path": "reference.json"},
+        "code_gate_receipt": {"path": "code.json"},
+        "qualification_receipt": {"path": "qualification.json"},
+        "regression_results": [{"root": "regression"}],
+        "controlled_results": [{"root": "controlled"}],
+        "smoke_result": {"root": "smoke"},
+        "rehearsal_result": {"root": "rehearsal"},
+        "formal_results": [{"root": f"formal-{index}"} for index in range(10)],
+        "capture_admission": {"path": "admission.json"},
+        "formal_cohort": {"path": "cohort.json"},
+        "handoff": {"root": "handoff"},
+        "evaluation_receipt": {"path": "evaluation.json"},
+        "comparison_review": {"path": "comparison.json"},
+        "historical_pre_snapshot": {"path": "pre.json"},
+        "historical_post_snapshot": {"path": "post.json"},
+    }
+    value = {
+        "schema_version": 2,
+        "artifact_type": buflo_study.ATTESTATION_ARTIFACT_TYPE,
+        "study_id": buflo_study.BUFLO_STUDY_ID,
+        "cohort_version": 15,
+        "implementation_status": buflo_study.VALIDATED_STATUS,
+        "implementation_status_description": buflo_study.VALIDATED_STATUS_DESCRIPTION,
+        "implementation_scope": "client_only_quic",
+        "paper_equivalent": False,
+        "no_waivers": True,
+        "evidence": evidence,
+        "hard_gates": buflo_study._hard_gate_records(["a" * 64], schema_version=2),
+        "all_hard_gates_passed": True,
+    }
+    path = tmp_path / "existing-attestation.json"
+    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    calls: list[dict[str, object]] = []
+
+    def derive(**kwargs: object) -> dict[str, object]:
+        calls.append(dict(kwargs))
+        return value
+
+    monkeypatch.setattr(buflo_study, "_validation_attestation_value", derive)
+
+    verified = buflo_study.validate_validation_attestation(
+        path,
+        expected_cohort_version=15,
+        deep_code_gate=True,
+        dlsvm_available_wall_seconds=4321.0,
+    )
+
+    assert verified["all_hard_gates_passed"] is True
+    assert len(calls) == 1
+    assert calls[0]["deep_code_gate"] is True
+    assert calls[0]["dlsvm_available_wall_seconds"] == 4321.0
+
+
 def test_new_formal_artifacts_cannot_bypass_v15_contract(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="formal cohort creation requires cohort version 15"):
         buflo_study.create_formal_cohort_manifest(

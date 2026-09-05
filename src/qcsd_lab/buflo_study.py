@@ -9491,20 +9491,41 @@ def validate_comparison_review(
     evaluation_receipt: Path,
     handoff: Path,
     formal: bool = True,
+    dlsvm_available_wall_seconds: float | None = None,
 ) -> dict[str, Any]:
     """Validate a human-authored review without mutating evaluation evidence."""
 
     from .buflo_evaluation import validate_evaluation_receipt
     from .buflo_handoff import validate_study_handoff
 
-    binding = _file_binding(path)
     handoff_root = validate_study_handoff(handoff, formal=formal, deep=True)
     evaluation = validate_evaluation_receipt(
         evaluation_receipt,
         handoff_root=handoff_root,
         formal=formal,
         deep=True,
+        dlsvm_available_wall_seconds=dlsvm_available_wall_seconds,
     )
+    return _validate_comparison_review_value(
+        path,
+        evaluation_receipt=evaluation_receipt,
+        handoff_root=handoff_root,
+        evaluation=evaluation,
+        formal=formal,
+    )
+
+
+def _validate_comparison_review_value(
+    path: Path,
+    *,
+    evaluation_receipt: Path,
+    handoff_root: Path,
+    evaluation: Mapping[str, Any],
+    formal: bool,
+) -> dict[str, Any]:
+    """Validate review contents against dependencies already verified by the caller."""
+
+    binding = _file_binding(path)
     value = load_json(Path(binding["path"]))
     required = {
         "schema_version",
@@ -12578,6 +12599,7 @@ def run_study_action(
             verified_attestation = validate_validation_attestation(
                 attestation,
                 expected_cohort_version=version,
+                dlsvm_available_wall_seconds=dlsvm_available_wall_seconds,
             )
             details["validation_attestation"] = verified_attestation
             return StudyActionResult(
@@ -12641,12 +12663,9 @@ def run_study_action(
             comparison_review=comparison_review,
             historical_pre_snapshot=historical_pre_snapshot,
             historical_post_snapshot=historical_post_snapshot,
+            dlsvm_available_wall_seconds=dlsvm_available_wall_seconds,
         )
-        details["validation_attestation"] = validate_validation_attestation(
-            output,
-            expected_cohort_version=version,
-            deep_code_gate=False,
-        )
+        details["validation_attestation"] = _created_validation_attestation_result(output)
         return StudyActionResult(action, "created", VALIDATED_STATUS, details)
     if handoff is not None:
         from .buflo_handoff import validate_study_handoff
@@ -13280,6 +13299,7 @@ def _validation_attestation_value(
     historical_pre_snapshot: Path,
     historical_post_snapshot: Path,
     deep_code_gate: bool,
+    dlsvm_available_wall_seconds: float | None = None,
 ) -> dict[str, Any]:
     from .buflo_evaluation import validate_evaluation_receipt
     from .buflo_handoff import _validate_source_results, validate_study_handoff
@@ -13347,6 +13367,7 @@ def _validation_attestation_value(
         handoff_root=handoff_root,
         formal=True,
         deep=True,
+        dlsvm_available_wall_seconds=dlsvm_available_wall_seconds,
     )
     if cohort_version >= FORMAL_FAIL_CLOSED_COHORT_VERSION and (
         cohort.get("formal_evaluation") != FORMAL_BOOTSTRAP_CONTRACT
@@ -13356,10 +13377,11 @@ def _validation_attestation_value(
             "validation attestation formal evaluation differs from the prospective bootstrap contract"
         )
     performance = _validate_formal_performance_evidence(evaluation)
-    comparison = validate_comparison_review(
+    comparison = _validate_comparison_review_value(
         comparison_review,
         evaluation_receipt=evaluation_receipt,
-        handoff=handoff_root,
+        handoff_root=handoff_root,
+        evaluation=evaluation,
         formal=True,
     )
     historical_pre = validate_historical_guard_snapshot(
@@ -13550,8 +13572,20 @@ def create_validation_attestation(
     )
     value = _validation_attestation_value(**inputs, deep_code_gate=True)
     output = _create_only_json(destination, value)
-    validate_validation_attestation(output, deep_code_gate=False)
+    expected_bytes = (json.dumps(value, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    if output.read_bytes() != expected_bytes or load_json(output) != value:
+        raise RuntimeError("created validation attestation differs from its validated value")
     return output
+
+
+def _created_validation_attestation_result(path: Path) -> dict[str, Any]:
+    """Return a freshly created attestation without rerunning its expensive hard gates."""
+
+    binding = _file_binding(path)
+    value = load_json(Path(binding["path"]))
+    if not isinstance(value, Mapping):
+        raise RuntimeError("created validation attestation is not an object")
+    return {"path": binding["path"], "sha256": binding["sha256"], **value}
 
 
 def validate_validation_attestation(
@@ -13559,6 +13593,7 @@ def validate_validation_attestation(
     *,
     expected_cohort_version: int | None = None,
     deep_code_gate: bool = True,
+    dlsvm_available_wall_seconds: float | None = None,
 ) -> dict[str, Any]:
     """Independently reconstruct a typed all-pass promotion attestation."""
 
@@ -13630,6 +13665,7 @@ def validate_validation_attestation(
         historical_pre_snapshot=file_path("historical_pre_snapshot"),
         historical_post_snapshot=file_path("historical_post_snapshot"),
         deep_code_gate=deep_code_gate,
+        dlsvm_available_wall_seconds=dlsvm_available_wall_seconds,
     )
     if value != expected:
         raise ValueError("validation attestation differs from independently derived hard gates")

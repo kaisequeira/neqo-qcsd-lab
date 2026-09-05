@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import qcsd_lab.buflo_handoff as buflo_handoff
 from qcsd_lab.class_evaluation import (
     ADAPTIVE_PROTOCOL,
     CLASSIFIER_INPUT_FIELDS,
@@ -56,6 +57,71 @@ def test_formal_sample_accepts_preserved_retry_success(tmp_path: Path) -> None:
     sample = _load_sample(root, row, dimensions=_DIMENSIONS, classes=_CLASSES)
 
     assert sample.sample_id == row["sample_id"]
+
+
+def test_candidate_sample_rederives_algorithm_diagnostics_from_bound_raw_products(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "handoff"
+    root.mkdir()
+    trace = root / "trace.csv"
+    trace.write_text(
+        ",".join(CLASSIFIER_INPUT_FIELDS) + "\n0,outgoing,1200\n",
+        encoding="utf-8",
+    )
+    products = {
+        "trace_csv": {"path": "trace.csv", "sha256": _sha256(trace)},
+    }
+    for label, name, content in (
+        ("run", "run.json", "{}\n"),
+        ("schedule", "schedule.csv", "fixture\n"),
+        ("events", "events.csv", "fixture\n"),
+        ("packets", "packets.csv", "fixture\n"),
+    ):
+        path = root / name
+        path.write_text(content, encoding="utf-8")
+        products[label] = {"path": name, "sha256": _sha256(path)}
+    observed = {}
+
+    def diagnostics(run, **kwargs):
+        observed.update(kwargs)
+        assert run == {}
+        return {"schema_version": 4}
+
+    monkeypatch.setattr(buflo_handoff, "_algorithm_diagnostics", diagnostics)
+    dimensions = _Dimensions(
+        study_id="classifier-candidate-tiny-v1",
+        classes=1,
+        modes=("buflo",),
+        blocks=10,
+        visits_per_block=2,
+    )
+    row = {
+        "sample_id": "candidate-sample",
+        "class_label": "class-a",
+        "workload_id": "class-a",
+        "mode": "buflo",
+        "runtime_kind": "buflo",
+        "baseline": False,
+        "visit": 0,
+        "attempts": 1,
+        "evidence_role": "formal",
+        "acquisition_block": 1,
+        "split": "train",
+        "paired_class_visit_id": "block-01/class-a/visit-00",
+        "products": products,
+        "classifier_feature_fields": list(CLASSIFIER_INPUT_FIELDS),
+        "correctness": None,
+        "performance": None,
+    }
+
+    sample = _load_sample(root, row, dimensions=dimensions, classes=("class-a",))
+
+    assert sample.algorithm_diagnostics == {"schema_version": 4}
+    assert observed["require_current"] is True
+    assert observed["require_latest_cs"] is True
+    assert observed["schedule_path"] == root / "schedule.csv"
 
 
 _PAYLOAD_SHA256 = "f" * 64

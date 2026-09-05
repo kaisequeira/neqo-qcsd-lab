@@ -27,19 +27,30 @@ from .buflo_evaluation import (
     DlsvmKernelStore,
     ShapePacket,
     StudySample,
+    _DLSVM_CACHE_LOCK_NAME,
+    _DLSVM_CACHE_LOCK_POLICY,
+    _DLSVM_CACHE_RESUMPTION_GRANULARITY,
+    _DLSVM_WORKER_CAPACITY_POLICY,
+    _acquire_dlsvm_cache_lock,
     _fit_predict_attack,
     _load_osad_library,
     _load_performance,
     _load_weka_backend,
     _performance_is_complete,
+    _formal_classifier_runtime_receipts,
+    _release_dlsvm_cache_lock,
     _validate_dlsvm_matrix_semantics,
+    admit_dlsvm_preflight_capacity,
+    algorithm_breakdowns,
     classifier_reference_receipt,
     dlsvm_backend_receipt,
     dlsvm_sequence,
     paired_overheads,
     performance_breakdowns,
     summarize_paired_overheads,
+    validate_dlsvm_preflight,
     vngpp_backend_receipt,
+    write_dlsvm_preflight,
 )
 from .class_cohort import validate_cohort_assembly_receipt
 from .class_handoff import (
@@ -49,6 +60,7 @@ from .class_handoff import (
     CLASSIFIER_FIELDS,
     COHORT_ASSEMBLY_INPUT,
     FORBIDDEN_CLASSIFIER_FIELDS,
+    RUNTIME_KINDS,
     SCHEMA_VERSION as HANDOFF_SCHEMA_VERSION,
     verify_class_handoff,
 )
@@ -81,7 +93,43 @@ CLASSIFIER_INPUT_FIELDS = CLASSIFIER_FIELDS
 CLASSIFIER_ATTACKS = ("panchenko", "vngpp", "dlsvm")
 EVALUATION_RECEIPT_TYPE = "qcsd-class-study-evaluation"
 EVALUATION_ARTIFACT_TYPE = "qcsd-classifier-multiorigin100-evaluation"
-EVALUATION_SCHEMA_VERSION = 1
+EVALUATION_SCHEMA_VERSION = 2
+CLASS_DLSVM_EXECUTION_MODEL = {
+    "schema_version": 2,
+    "name": "class-study-evaluate-fresh-build-plus-mandatory-full-replay-v2",
+    "fresh_matrix_construction_passes": 1,
+    "complete_cache_recomputation_passes": 1,
+    "total_full_matrix_passes": 2,
+    "passes_are_sequential": True,
+    "worker_efficiency": 0.65,
+    "contingency_multiplier": 2.0,
+    "contingency_basis": (
+        "twofold wall-time reserve over the minimum measured native cells-per-second "
+        "after the declared worker-efficiency discount"
+    ),
+    "memory_model": (
+        "resident-matrix-union-plus-largest-recomputed-matrix-plus-retained-"
+        "sequence-native-arrays-and-bounded-worker-state"
+    ),
+    # One retained Python tuple reference (8), conservatively one Python int
+    # (28), and the native signed-int element (4) per trace symbol.
+    "retained_sequence_symbol_bytes": 40,
+    # Conservative tuple header, ctypes-array object, and cache-entry overhead.
+    "retained_sequence_object_bytes": 256,
+    "kernel_row_element_bytes": 8,
+    "memory_headroom_multiplier": 1.5,
+    "worker_capacity_policy": _DLSVM_WORKER_CAPACITY_POLICY,
+    "cache_lifecycle_lock_policy": _DLSVM_CACHE_LOCK_POLICY,
+    "cache_resumption_granularity": _DLSVM_CACHE_RESUMPTION_GRANULARITY,
+}
+CLASS_DLSVM_EXECUTION_MODEL_SHA256 = hashlib.sha256(
+    json.dumps(
+        CLASS_DLSVM_EXECUTION_MODEL,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+).hexdigest()
 
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 _FORBIDDEN_TOKENS = frozenset(
@@ -176,6 +224,7 @@ class ClassStudySample:
     trace: tuple[ShapePacket, ...]
     correctness: Mapping[str, Any] | None = None
     performance: Mapping[str, Any] | None = None
+    algorithm_diagnostics: Mapping[str, Any] | None = None
 
     @property
     def classifier_input(self) -> tuple[ShapePacket, ...]:
@@ -331,6 +380,7 @@ def run_class_attacks(
     attacks: Sequence[str] = CLASSIFIER_ATTACKS,
     include_secondary: bool = True,
     dlsvm_cache_directory: Path | None = None,
+    dlsvm_cache_read_only: bool = False,
     formal: bool = False,
 ) -> ClassAttackRun:
     """Execute the temporal and secondary classifier matrix.
@@ -346,6 +396,7 @@ def run_class_attacks(
         attacks=attacks,
         include_secondary=include_secondary,
         dlsvm_cache_directory=dlsvm_cache_directory,
+        dlsvm_cache_read_only=dlsvm_cache_read_only,
         formal=formal,
         attack_executor=_execute_attack,
         classifier_provenance_builder=_classifier_provenance,
@@ -363,6 +414,11 @@ def write_class_evaluation_receipt(
 
     if deep_verify_handoff is not True:
         raise ValueError("formal class evaluation requires deep handoff verification")
+    if dlsvm_cache_directory is None:
+        raise ValueError(
+            "formal class evaluation requires --dlsvm-cache-directory for resumable "
+            "persistent storage"
+        )
     destination = Path(os.path.abspath(path))
     if destination.exists() or destination.is_symlink():
         raise FileExistsError(f"class evaluation receipt already exists: {destination}")
@@ -372,20 +428,60 @@ def write_class_evaluation_receipt(
         (handoff,),
         label="class evaluation receipt",
     )
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    cache = (
-        Path(dlsvm_cache_directory)
-        if dlsvm_cache_directory is not None
-        else destination.with_name(f"{destination.stem}.dlsvm-cache")
-    )
+    cache_candidate = Path(os.path.abspath(dlsvm_cache_directory))
+    if cache_candidate.is_symlink():
+        raise ValueError("class evaluation DLSVM cache cannot be a symbolic link")
+    cache = cache_candidate
     cache = require_disjoint_path(
         cache,
         (handoff, destination),
         label="class evaluation DLSVM cache",
     )
+    preflight_candidate = destination.with_name(destination.name + ".dlsvm-preflight.json")
+    if preflight_candidate.is_symlink():
+        raise ValueError("class evaluation DLSVM preflight cannot be a symbolic link")
+    preflight_path = require_disjoint_path(
+        preflight_candidate,
+        (handoff, destination, cache),
+        label="class evaluation DLSVM preflight",
+    )
+    _formal_classifier_runtime_receipts()
+    destination.parent.mkdir(parents=True, exist_ok=True)
     dataset = load_class_handoff(handoff, deep_verify=deep_verify_handoff)
     handoff_binding = _handoff_binding(dataset)
     evaluator_source = _evaluator_source_binding(dataset, formal=True)
+    preflight_samples = _dlsvm_preflight_samples(dataset)
+    if preflight_path.exists() or preflight_path.is_symlink():
+        validate_dlsvm_preflight(
+            preflight_path,
+            samples=preflight_samples,
+            handoff_root=handoff,
+            formal=True,
+            expected_execution_model=CLASS_DLSVM_EXECUTION_MODEL,
+        )
+    else:
+        write_dlsvm_preflight(
+            preflight_path,
+            samples=preflight_samples,
+            handoff_root=handoff,
+            cache_directory=cache,
+            formal=True,
+            execution_model=CLASS_DLSVM_EXECUTION_MODEL,
+        )
+    preflight_binding = _dlsvm_preflight_binding(
+        preflight_path,
+        dataset=dataset,
+        formal=True,
+    )
+    admit_dlsvm_preflight_capacity(
+        preflight_path,
+        samples=preflight_samples,
+        handoff_root=handoff,
+        formal=True,
+        expected_execution_model=CLASS_DLSVM_EXECUTION_MODEL,
+        cache_directory=cache,
+        cache_read_only=False,
+    )
     attack_run = run_class_attacks(
         dataset,
         attacks=CLASSIFIER_ATTACKS,
@@ -394,6 +490,8 @@ def write_class_evaluation_receipt(
         formal=True,
     )
     verify_class_handoff(dataset.root, deep=False)
+    if _dlsvm_preflight_binding(preflight_path, dataset=dataset, formal=True) != preflight_binding:
+        raise ValueError("class evaluation DLSVM preflight changed during attack execution")
     if _evaluator_source_binding(dataset, formal=True) != evaluator_source:
         raise ValueError("class evaluator source changed during attack execution")
     if _handoff_binding(dataset) != handoff_binding:
@@ -403,6 +501,7 @@ def write_class_evaluation_receipt(
         attack_run,
         formal=True,
         evaluator_source=evaluator_source,
+        dlsvm_preflight=preflight_binding,
     )
     _validate_evaluation_envelope(
         envelope,
@@ -428,6 +527,7 @@ def verify_class_evaluation_receipt(
     receipt_path = Path(path).resolve()
     if receipt_path.is_symlink() or not receipt_path.is_file():
         raise ValueError("class evaluation receipt is not a regular file")
+    _formal_classifier_runtime_receipts()
     handoff = Path(handoff_root).resolve()
     require_disjoint_path(receipt_path, (handoff,), label="class evaluation receipt")
     dataset = load_class_handoff(handoff, deep_verify=deep_verify_handoff)
@@ -446,9 +546,21 @@ def verify_class_evaluation_receipt(
         expected_classifier_provenance=classifier_provenance,
         formal=True,
     )
+    preflight_value = payload.get("dlsvm_capacity_preflight")
+    if not isinstance(preflight_value, Mapping) or not isinstance(preflight_value.get("path"), str):
+        raise ValueError("formal class evaluation has no replayable DLSVM preflight")
     cache_value = payload.get("dlsvm_cache")
     if not isinstance(cache_value, Mapping) or not isinstance(cache_value.get("path"), str):
         raise ValueError("formal class evaluation has no replayable DLSVM cache")
+    current_capacity_admission = admit_dlsvm_preflight_capacity(
+        Path(preflight_value["path"]),
+        samples=_dlsvm_preflight_samples(dataset),
+        handoff_root=handoff,
+        formal=True,
+        expected_execution_model=CLASS_DLSVM_EXECUTION_MODEL,
+        cache_directory=Path(cache_value["path"]),
+        cache_read_only=True,
+    )
     if not replay_attacks:
         _validate_dlsvm_cache_binding(
             cache_value,
@@ -461,6 +573,7 @@ def verify_class_evaluation_receipt(
             attacks=CLASSIFIER_ATTACKS,
             include_secondary=True,
             dlsvm_cache_directory=Path(cache_value["path"]),
+            dlsvm_cache_read_only=True,
             formal=True,
         )
         if (
@@ -487,6 +600,14 @@ def verify_class_evaluation_receipt(
         "performance_summary_recomputed": True,
         "performance_raw_evidence_recomputed": deep_verify_handoff,
         "dlsvm_all_matrix_cells_recomputed": True,
+        "dlsvm_capacity_preflight_revalidated": True,
+        "dlsvm_current_capacity_admitted": (
+            current_capacity_admission["wall_time_available"] is True
+            and current_capacity_admission["memory_available"] is True
+            and current_capacity_admission["cache_storage_available"] is True
+        ),
+        "dlsvm_execution_model_sha256": _compact_json_sha256(CLASS_DLSVM_EXECUTION_MODEL),
+        "candidate_algorithm_diagnostics_rederived": True,
         "classifier_attacks_replayed": replay_attacks,
         "limitations": limitations,
         "authorizes_final_attestation": False,
@@ -604,10 +725,13 @@ def _run_class_attacks(
     attacks: Sequence[str],
     include_secondary: bool,
     dlsvm_cache_directory: Path | None,
+    dlsvm_cache_read_only: bool,
     formal: bool,
     attack_executor: AttackExecutor,
     classifier_provenance_builder: Callable[[Sequence[str], bool], Mapping[str, Any]],
 ) -> ClassAttackRun:
+    if type(dlsvm_cache_read_only) is not bool:
+        raise ValueError("class evaluation DLSVM cache read-only flag must be a boolean")
     attack_order = _validate_attack_configuration(
         dataset,
         attacks=attacks,
@@ -627,49 +751,58 @@ def _run_class_attacks(
             )
         elif formal:
             raise ValueError("formal class DLSVM evaluation requires a persistent cache")
-    backend_samples = tuple(_backend_sample(sample) for sample in dataset.samples)
-    backend_by_id = {sample.sample_id: sample for sample in backend_samples}
-    dlsvm_store = (
-        DlsvmKernelStore(backend_samples, cache_directory=cache)
-        if "dlsvm" in attack_order
-        else None
-    )
-
-    results: list[AttackResult] = []
     specs = _attack_specs(
         dataset,
         attacks=attack_order,
         include_secondary=include_secondary,
     )
-    for spec in specs:
-        if spec.folds is None:
-            results.append(
+    backend_samples = tuple(_backend_sample(sample) for sample in dataset.samples)
+    backend_by_id = {sample.sample_id: sample for sample in backend_samples}
+    results: list[AttackResult] = []
+    dlsvm_store = (
+        DlsvmKernelStore(
+            backend_samples,
+            cache_directory=cache,
+            cache_read_only=dlsvm_cache_read_only,
+        )
+        if "dlsvm" in attack_order
+        else None
+    )
+
+    try:
+        for spec in specs:
+            if spec.folds is None:
+                results.append(
+                    attack_executor(
+                        spec.attack,
+                        [backend_by_id[sample.sample_id] for sample in spec.training],
+                        [backend_by_id[sample.sample_id] for sample in spec.testing],
+                        training_defense=spec.training_mode,
+                        testing_defense=spec.testing_mode,
+                        protocol=spec.protocol,
+                        dlsvm_store=dlsvm_store,
+                    )
+                )
+                continue
+            fold_results = tuple(
                 attack_executor(
                     spec.attack,
-                    [backend_by_id[sample.sample_id] for sample in spec.training],
-                    [backend_by_id[sample.sample_id] for sample in spec.testing],
+                    [backend_by_id[sample.sample_id] for sample in fold.train],
+                    [backend_by_id[sample.sample_id] for sample in fold.test],
                     training_defense=spec.training_mode,
                     testing_defense=spec.testing_mode,
                     protocol=spec.protocol,
                     dlsvm_store=dlsvm_store,
                 )
+                for fold in spec.folds
             )
-            continue
-        fold_results = tuple(
-            attack_executor(
-                spec.attack,
-                [backend_by_id[sample.sample_id] for sample in fold.train],
-                [backend_by_id[sample.sample_id] for sample in fold.test],
-                training_defense=spec.training_mode,
-                testing_defense=spec.testing_mode,
-                protocol=spec.protocol,
-                dlsvm_store=dlsvm_store,
-            )
-            for fold in spec.folds
-        )
-        results.append(_aggregate_secondary_results(spec, fold_results))
+            results.append(_aggregate_secondary_results(spec, fold_results))
 
-    cache_receipt = dlsvm_store.receipt() if dlsvm_store is not None else None
+        cache_receipt = dlsvm_store.receipt() if dlsvm_store is not None else None
+    except BaseException:
+        if dlsvm_store is not None:
+            dlsvm_store.close()
+        raise
     result = ClassAttackRun(
         attacks=attack_order,
         include_secondary=include_secondary,
@@ -822,6 +955,45 @@ def _performance_sample(sample: ClassStudySample) -> StudySample:
         paired_visit_id=sample.paired_class_visit_id,
         trace=sample.trace,
         performance=sample.performance,
+    )
+
+
+def _algorithm_sample(sample: ClassStudySample) -> StudySample:
+    """Project candidate diagnostics to the reporting backend only."""
+
+    return StudySample(
+        sample_id=sample.sample_id,
+        class_label=sample.class_label,
+        workload_id=sample.workload_id,
+        defense=sample.mode,
+        acquisition_block_index=sample.acquisition_block,
+        paired_visit_id=sample.paired_class_visit_id,
+        trace=sample.trace,
+        algorithm_diagnostics=sample.algorithm_diagnostics,
+    )
+
+
+def _dlsvm_preflight_samples(dataset: ClassStudyDataset) -> tuple[StudySample, ...]:
+    """Project one-based class blocks onto the evaluator's zero-based protocol.
+
+    The shared DLSVM capacity census models blocks 0--7 as training, block 8 as
+    validation, and block 9 as held-out test.  Class-study evidence deliberately
+    numbers those same blocks 1--10, so only this capacity-only projection is
+    shifted.  Classifier inputs and attack membership retain their original
+    sample identities and one-based acquisition blocks.
+    """
+
+    return tuple(
+        StudySample(
+            sample_id=sample.sample_id,
+            class_label=sample.class_label,
+            workload_id=sample.workload_id,
+            defense=sample.mode,
+            acquisition_block_index=sample.acquisition_block - 1,
+            paired_visit_id=sample.paired_class_visit_id,
+            trace=sample.trace,
+        )
+        for sample in dataset.samples
     )
 
 
@@ -1460,12 +1632,88 @@ def _performance_evidence(
     }
 
 
+def _candidate_algorithm_evidence(
+    dataset: ClassStudyDataset,
+    *,
+    formal: bool,
+) -> dict[str, Any]:
+    """Aggregate independently re-derived BuFLO/CS-BuFLO transport evidence."""
+
+    candidate_modes = tuple(mode for mode in dataset.modes if mode in {"buflo", "cs-buflo"})
+    selected = tuple(
+        _algorithm_sample(sample) for sample in dataset.samples if sample.mode in candidate_modes
+    )
+    complete = bool(selected) and all(
+        sample.algorithm_diagnostics is not None for sample in selected
+    )
+    blocks = sorted({sample.acquisition_block_index for sample in selected})
+    classes = tuple(dataset.classes)
+    observed_classes = {sample.class_label for sample in selected}
+    denominator = len(classes) * len(candidate_modes) * len(blocks)
+    visits = (
+        len(selected) // denominator if denominator and len(selected) % denominator == 0 else None
+    )
+    versions = sorted(
+        {
+            int(sample.algorithm_diagnostics["schema_version"])
+            for sample in selected
+            if sample.algorithm_diagnostics is not None
+        }
+    )
+    expected_count = (
+        len(dataset.classes)
+        * len(candidate_modes)
+        * len({sample.acquisition_block for sample in dataset.samples})
+        * FORMAL_VISITS_PER_BLOCK
+    )
+    if formal and (
+        candidate_modes != ("buflo", "cs-buflo")
+        or len(selected) != expected_count
+        or len(classes) != FINAL_CLASS_COUNT
+        or observed_classes != set(classes)
+        or blocks != list(range(1, FORMAL_BLOCK_COUNT + 1))
+        or visits != FORMAL_VISITS_PER_BLOCK
+        or versions != [4]
+        or not complete
+    ):
+        raise ValueError("formal class evaluation candidate algorithm evidence is incomplete")
+    breakdowns = algorithm_breakdowns(selected)
+    passed = complete and breakdowns.get("available") is True
+    if formal and (
+        not passed
+        or breakdowns.get("classifier_input") is not False
+        or breakdowns.get("schema_version") != 3
+    ):
+        raise ValueError("formal class evaluation candidate algorithm breakdown is incomplete")
+    return {
+        "schema_version": 1,
+        "passed": passed,
+        "sample_count": len(selected),
+        "coverage": {
+            "class_count": len(classes),
+            "classes_sha256": _compact_json_sha256(list(classes)),
+            "modes": list(candidate_modes),
+            "acquisition_blocks": blocks,
+            "visits_per_class_mode_block": visits,
+            "directions": ["outgoing", "incoming"],
+            "diagnostic_schema_versions": versions,
+        },
+        "checks": {
+            "run_schedule_events_packets_rederived": complete,
+            "classifier_input": False,
+            "current_schema_required": formal,
+        },
+        "breakdowns": breakdowns,
+    }
+
+
 def _build_evaluation_envelope(
     dataset: ClassStudyDataset,
     run: ClassAttackRun,
     *,
     formal: bool,
     evaluator_source: Mapping[str, Any],
+    dlsvm_preflight: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     _validate_attack_run(run, dataset=dataset, formal=formal)
     records = _result_records(run.results, dataset.classes)
@@ -1493,6 +1741,7 @@ def _build_evaluation_envelope(
         },
         "correctness": _correctness_evidence(dataset, formal=formal),
         "performance": _performance_evidence(dataset, formal=formal),
+        "candidate_algorithm": _candidate_algorithm_evidence(dataset, formal=formal),
         "protocols": _evaluation_protocol_receipt(dataset),
         "handoff_verification": _handoff_verification_receipt(formal),
         "handoff": _handoff_binding(dataset),
@@ -1509,6 +1758,9 @@ def _build_evaluation_envelope(
         "class_study_launches": _class_study_launch_binding(dataset),
         "evaluator_source": dict(evaluator_source),
         "classifier_provenance": dict(run.classifier_provenance),
+        "dlsvm_capacity_preflight": (
+            dict(dlsvm_preflight) if dlsvm_preflight is not None else None
+        ),
         "dlsvm_cache": dict(run.dlsvm_cache) if run.dlsvm_cache is not None else None,
         "result_count": len(records),
         "results_sha256": _compact_json_sha256(records),
@@ -1540,6 +1792,7 @@ def _validate_evaluation_envelope(
         "observation",
         "correctness",
         "performance",
+        "candidate_algorithm",
         "protocols",
         "handoff_verification",
         "handoff",
@@ -1548,6 +1801,7 @@ def _validate_evaluation_envelope(
         "class_study_launches",
         "evaluator_source",
         "classifier_provenance",
+        "dlsvm_capacity_preflight",
         "dlsvm_cache",
         "result_count",
         "results_sha256",
@@ -1592,6 +1846,8 @@ def _validate_evaluation_envelope(
         }
         or payload.get("correctness") != _correctness_evidence(dataset, formal=formal)
         or payload.get("performance") != _performance_evidence(dataset, formal=formal)
+        or payload.get("candidate_algorithm")
+        != _candidate_algorithm_evidence(dataset, formal=formal)
         or payload.get("protocols") != _evaluation_protocol_receipt(dataset)
         or payload.get("handoff_verification") != _handoff_verification_receipt(formal)
         or payload.get("handoff") != _handoff_binding(dataset)
@@ -1618,7 +1874,16 @@ def _validate_evaluation_envelope(
         formal=formal,
     )
     cache = payload.get("dlsvm_cache")
+    preflight = payload.get("dlsvm_capacity_preflight")
     if "dlsvm" in attack_order:
+        if formal:
+            _validate_dlsvm_preflight_binding(
+                preflight,
+                dataset=dataset,
+                formal=True,
+            )
+        elif preflight is not None:
+            raise ValueError("non-formal class evaluation unexpectedly binds a DLSVM preflight")
         if formal and not isinstance(cache, Mapping):
             raise ValueError("formal class evaluation receipt has no DLSVM cache")
         if cache is not None:
@@ -1627,8 +1892,8 @@ def _validate_evaluation_envelope(
                 dataset=dataset,
                 recompute_values=False,
             )
-    elif cache is not None:
-        raise ValueError("class evaluation receipt has an unexpected DLSVM cache")
+    elif cache is not None or preflight is not None:
+        raise ValueError("class evaluation receipt has unexpected DLSVM evidence")
     records = payload.get("results")
     if not isinstance(records, list):
         raise ValueError("class evaluation receipt results are invalid")
@@ -1806,6 +2071,73 @@ def _handoff_binding(dataset: ClassStudyDataset) -> dict[str, str]:
     return result
 
 
+def _dlsvm_preflight_binding(
+    path: Path,
+    *,
+    dataset: ClassStudyDataset,
+    formal: bool,
+) -> dict[str, Any]:
+    """Validate and bind the measured DLSVM capacity authority."""
+
+    if formal is not True:
+        raise ValueError("class evaluation DLSVM preflight binding is formal-only")
+    candidate = Path(path)
+    if candidate.is_symlink():
+        raise ValueError("class evaluation DLSVM preflight cannot be a symbolic link")
+    source = candidate.resolve()
+    value = validate_dlsvm_preflight(
+        source,
+        samples=_dlsvm_preflight_samples(dataset),
+        handoff_root=dataset.root,
+        formal=True,
+        expected_execution_model=CLASS_DLSVM_EXECUTION_MODEL,
+    )
+    return {
+        "schema_version": int(value["schema_version"]),
+        "artifact_type": str(value["artifact_type"]),
+        "path": str(source),
+        "sha256": sha256_file(source),
+        "workload_sha256": _compact_json_sha256(value["workload"]),
+        "projection_sha256": _compact_json_sha256(value["projection"]),
+        "execution_model": dict(value["execution_model"]),
+        "execution_model_sha256": CLASS_DLSVM_EXECUTION_MODEL_SHA256,
+        "admission": dict(value["admission"]),
+    }
+
+
+def _validate_dlsvm_preflight_binding(
+    value: Any,
+    *,
+    dataset: ClassStudyDataset,
+    formal: bool,
+) -> dict[str, Any]:
+    if (
+        not isinstance(value, Mapping)
+        or set(value)
+        != {
+            "schema_version",
+            "artifact_type",
+            "path",
+            "sha256",
+            "workload_sha256",
+            "projection_sha256",
+            "execution_model",
+            "execution_model_sha256",
+            "admission",
+        }
+        or not isinstance(value.get("path"), str)
+    ):
+        raise ValueError("class evaluation DLSVM preflight binding is invalid")
+    expected = _dlsvm_preflight_binding(
+        Path(value["path"]),
+        dataset=dataset,
+        formal=formal,
+    )
+    if dict(value) != expected:
+        raise ValueError("class evaluation DLSVM preflight binding does not verify")
+    return expected
+
+
 def _class_study_launch_binding(dataset: ClassStudyDataset) -> dict[str, Any]:
     blocks = [
         {
@@ -1923,6 +2255,36 @@ def _validate_dlsvm_cache_binding(
 
     if type(recompute_values) is not bool:
         raise ValueError("class evaluation DLSVM replay flag must be a boolean")
+    directory_value = value.get("path") if isinstance(value, Mapping) else None
+    if not isinstance(directory_value, str):
+        raise ValueError("class evaluation DLSVM cache receipt is invalid")
+    directory_candidate = Path(directory_value)
+    directory = directory_candidate.resolve()
+    if (
+        str(directory) != directory_value
+        or directory_candidate.is_symlink()
+        or not directory.is_dir()
+    ):
+        raise ValueError("class evaluation DLSVM cache path is invalid")
+    descriptor = _acquire_dlsvm_cache_lock(directory, writable=False)
+    try:
+        _validate_dlsvm_cache_binding_locked(
+            value,
+            dataset=dataset,
+            recompute_values=recompute_values,
+        )
+    finally:
+        _release_dlsvm_cache_lock(descriptor)
+
+
+def _validate_dlsvm_cache_binding_locked(
+    value: Mapping[str, Any],
+    *,
+    dataset: ClassStudyDataset,
+    recompute_values: bool,
+) -> None:
+    """Validate a cache while its process-wide lifecycle lock is held."""
+
     artifacts = value.get("artifacts")
     directory_value = value.get("path")
     if (
@@ -1933,8 +2295,13 @@ def _validate_dlsvm_cache_binding(
         or not artifacts
     ):
         raise ValueError("class evaluation DLSVM cache receipt is invalid")
-    directory = Path(directory_value).resolve()
-    if str(directory) != directory_value or directory.is_symlink() or not directory.is_dir():
+    directory_candidate = Path(directory_value)
+    directory = directory_candidate.resolve()
+    if (
+        str(directory) != directory_value
+        or directory_candidate.is_symlink()
+        or not directory.is_dir()
+    ):
         raise ValueError("class evaluation DLSVM cache path is invalid")
     by_id = {sample.sample_id: sample for sample in dataset.samples}
     if len(by_id) != len(dataset.samples):
@@ -2061,6 +2428,10 @@ def _validate_dlsvm_cache_binding(
         expected_files.update({name, receipt_name})
     actual_files = set()
     for path in directory.iterdir():
+        if path.name == _DLSVM_CACHE_LOCK_NAME:
+            if path.is_symlink() or not path.is_file():
+                raise ValueError("class evaluation DLSVM cache lock is unsafe")
+            continue
         if path.is_symlink() or not path.is_file():
             raise ValueError("class evaluation DLSVM cache inventory is unsafe")
         actual_files.add(path.name)
@@ -2325,6 +2696,40 @@ def _load_sample(
     else:
         correctness = dict(_CORRECTNESS_RECEIPT)
     performance = _load_performance(performance_value, trace)
+    algorithm_diagnostics = None
+    if mode in {"buflo", "cs-buflo"}:
+        runtime_kind = row.get("runtime_kind")
+        if runtime_kind != RUNTIME_KINDS[mode]:
+            raise ValueError("formal class evaluation candidate runtime kind is invalid")
+        if not isinstance(products, Mapping):
+            raise ValueError("formal class evaluation candidate products are invalid")
+        product_paths = {
+            label: _bound_product_file(root, products, label)
+            for label in ("run", "schedule", "events", "packets")
+        }
+        run = _load_json_object(
+            product_paths["run"],
+            "formal class candidate run receipt",
+        )
+        from .buflo_handoff import _algorithm_diagnostics
+
+        try:
+            algorithm_diagnostics = _algorithm_diagnostics(
+                run,
+                defense=mode,
+                runtime_kind=str(runtime_kind),
+                schedule_path=product_paths["schedule"],
+                events_path=product_paths["events"],
+                packets_path=product_paths["packets"],
+                require_current=True,
+                require_latest_cs=True,
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(
+                "formal class evaluation candidate algorithm evidence is invalid"
+            ) from error
+        if algorithm_diagnostics.get("schema_version") != 4:
+            raise ValueError("formal class evaluation candidate algorithm evidence is not current")
     result = ClassStudySample(
         sample_id=sample_id,
         class_label=class_label,
@@ -2337,6 +2742,7 @@ def _load_sample(
         trace=trace,
         correctness=correctness,
         performance=performance,
+        algorithm_diagnostics=algorithm_diagnostics,
     )
     if formal_sample and (
         result.correctness is None or not _performance_is_complete(_performance_sample(result))
@@ -2519,6 +2925,24 @@ def _safe_file(root: Path, relative: Any) -> Path:
     if not candidate.is_relative_to(root) or candidate.is_symlink() or not candidate.is_file():
         raise ValueError("formal class evaluation trace is not a regular handoff file")
     return candidate
+
+
+def _bound_product_file(
+    root: Path,
+    products: Mapping[str, Any],
+    label: str,
+) -> Path:
+    binding = products.get(label)
+    if (
+        not isinstance(binding, Mapping)
+        or set(binding) != {"path", "sha256"}
+        or not _is_digest(binding.get("sha256"))
+    ):
+        raise ValueError(f"formal class evaluation {label} binding is invalid")
+    path = _safe_file(root, binding.get("path"))
+    if sha256_file(path) != binding["sha256"]:
+        raise ValueError(f"formal class evaluation {label} digest does not verify")
+    return path
 
 
 def _load_json_object(path: Path, label: str) -> dict[str, Any]:

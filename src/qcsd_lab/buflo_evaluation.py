@@ -13,13 +13,16 @@ from __future__ import annotations
 
 import csv
 import ctypes
+import fcntl
 import hashlib
 import importlib.metadata
 import io
 import json
 import math
 import os
+import re
 import shutil
+import stat
 import subprocess
 import tempfile
 import time
@@ -47,7 +50,16 @@ from .fidelity import (
     CS_BUFLO_TERMINATION_STOP_REASONS,
     buflo_terminal_state_valid,
 )
-from .util import LAB_ROOT, load_json, require_disjoint_path, sha256_file, source_metadata
+from .util import (
+    ATOMIC_TEMP_MARKER,
+    LAB_ROOT,
+    durable_create,
+    fsync_directory,
+    load_json,
+    require_disjoint_path,
+    sha256_file,
+    source_metadata,
+)
 
 SCHEMA_VERSION = 1
 STUDY_HANDOFF_SCHEMA_VERSIONS = frozenset({1, 2})
@@ -92,6 +104,29 @@ _FORMAL_RUNTIME_OVERRIDE_ENV = (
     "QCSD_JAVA",
     "QCSD_OSAD_LIBRARY",
     "QCSD_WEKA_DIRECTORY",
+)
+_DLSVM_CACHE_LOCK_NAME = ".qcsd-dlsvm-cache.lock"
+_DLSVM_CACHE_LOCK_POLICY = (
+    "exclusive-nonblocking-flock-from-store-initialization-through-closed-inventory-"
+    "receipt-with-existing-read-only-lock-for-validation"
+)
+_DLSVM_CACHE_RESUMPTION_GRANULARITY = "completed-sealed-whole-matrix"
+_DLSVM_WORKER_CAPACITY_POLICY = (
+    "configured-workers-not-greater-than-minimum-of-sched-affinity-and-"
+    "floor-of-each-finite-cgroup-v1-or-v2-cpu-quota"
+)
+_DLSVM_MEMORY_CAPACITY_POLICY = (
+    "minimum-of-host-memavailable-and-each-finite-cgroup-v1-or-v2-memory-limit-minus-current-usage"
+)
+_CGROUP_V1_MEMORY_UNLIMITED_MIN = 1 << 60
+_DLSVM_CACHE_STORAGE_POLICY = (
+    "full-persisted-matrix-union-plus-largest-uncommitted-matrix-plus-"
+    "five-percent-and-64mib-metadata-margin"
+)
+_DLSVM_CACHE_STORAGE_FIXED_MARGIN_BYTES = 64 * 1_024 * 1_024
+_DLSVM_CACHE_TEMP = re.compile(
+    rf"^\.(?:within|cross)-[0-9a-f]{{64}}\.npy(?:\.receipt\.json)?"
+    rf"{re.escape(ATOMIC_TEMP_MARKER)}[A-Za-z0-9_-]+$"
 )
 _DLSVM_REFERENCE = LAB_ROOT / "config/reference/buflo-csbuflo/dlsvm-ccs-2012-v1.json"
 _DLSVM_REFERENCE_RECEIPT = _DLSVM_REFERENCE.with_suffix(".receipt.json")
@@ -193,6 +228,31 @@ _EVALUATION_RECEIPT_KEYS = frozenset(
         "limitations",
     }
 )
+FOCUSED_DLSVM_EXECUTION_MODEL = {
+    "schema_version": 2,
+    "name": "focused-study-evaluate-plus-two-deep-replay-passes-v2",
+    "fresh_matrix_construction_passes": 1,
+    "complete_cache_recomputation_passes": 2,
+    "total_full_matrix_passes": 3,
+    "passes_are_sequential": True,
+    "worker_efficiency": 0.65,
+    "contingency_multiplier": 2.0,
+    "contingency_basis": (
+        "twofold wall-time reserve over the minimum measured native cells-per-second "
+        "after the declared worker-efficiency discount"
+    ),
+    "memory_model": (
+        "resident-matrix-union-plus-largest-recomputed-matrix-plus-retained-"
+        "sequence-native-arrays-and-bounded-worker-state"
+    ),
+    "retained_sequence_symbol_bytes": 40,
+    "retained_sequence_object_bytes": 256,
+    "kernel_row_element_bytes": 8,
+    "memory_headroom_multiplier": 1.5,
+    "worker_capacity_policy": _DLSVM_WORKER_CAPACITY_POLICY,
+    "cache_lifecycle_lock_policy": _DLSVM_CACHE_LOCK_POLICY,
+    "cache_resumption_granularity": _DLSVM_CACHE_RESUMPTION_GRANULARITY,
+}
 
 
 def _evaluation_temporal_protocol() -> dict[str, Any]:
@@ -292,15 +352,63 @@ _PRODUCTION_CLASSIFIER_RUNTIME = TrustedClassifierRuntime(
 )
 
 
+def _dlsvm_matrix_identity(
+    *,
+    kind: str,
+    row_samples: Sequence[StudySample],
+    column_samples: Sequence[StudySample],
+    backend: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build the immutable identity shared by cache production and admission."""
+
+    return {
+        "schema_version": 1,
+        "kind": kind,
+        "rows": [
+            {
+                "sample_id": sample.sample_id,
+                "sequence_sha256": hashlib.sha256(
+                    np.asarray(dlsvm_sequence(sample.trace), dtype="<i4").tobytes()
+                ).hexdigest(),
+            }
+            for sample in row_samples
+        ],
+        "columns": [
+            {
+                "sample_id": sample.sample_id,
+                "sequence_sha256": hashlib.sha256(
+                    np.asarray(dlsvm_sequence(sample.trace), dtype="<i4").tobytes()
+                ).hexdigest(),
+            }
+            for sample in column_samples
+        ],
+        "backend": dict(backend) if backend is not None else dlsvm_backend_receipt(),
+    }
+
+
 class DlsvmKernelStore:
-    """Compute each required OSAD matrix cell once and slice it across protocols."""
+    """Compute each required OSAD matrix cell once and slice it across protocols.
+
+    A persistent store holds one non-blocking process lock until ``receipt()``
+    closes its evidence inventory (or ``close()`` abandons the lifecycle).  A
+    crash can therefore resume at the last completed, sealed *whole matrix*;
+    rows within an uncommitted matrix are deliberately not checkpointed.
+    """
 
     def __init__(
         self,
         samples: Sequence[StudySample],
         *,
         cache_directory: Path | None = None,
+        cache_read_only: bool = False,
     ) -> None:
+        if type(cache_read_only) is not bool:
+            raise ValueError("DLSVM cache read-only flag must be a boolean")
+        if cache_read_only and cache_directory is None:
+            raise ValueError("read-only DLSVM replay requires a persistent cache")
+        self._lock_descriptor: int | None = None
+        self._closed = False
+        self._cache_read_only = cache_read_only
         self._by_defense: dict[str, tuple[StudySample, ...]] = {}
         seen: set[str] = set()
         grouped: dict[str, list[StudySample]] = defaultdict(list)
@@ -315,20 +423,67 @@ class DlsvmKernelStore:
         }
         self._within: dict[str, tuple[dict[str, int], np.ndarray]] = {}
         self._cross: dict[tuple[tuple[str, ...], tuple[str, ...]], np.ndarray] = {}
-        self._cache_directory = cache_directory.resolve() if cache_directory is not None else None
+        cache_candidate = Path(cache_directory) if cache_directory is not None else None
+        if cache_candidate is not None and cache_candidate.is_symlink():
+            raise ValueError("DLSVM cache cannot be a symbolic link")
+        self._cache_directory = cache_candidate.resolve() if cache_candidate is not None else None
         self._cache_artifacts: dict[str, dict[str, Any]] = {}
         if self._cache_directory is not None:
             if self._cache_directory.exists():
                 if self._cache_directory.is_symlink() or not self._cache_directory.is_dir():
                     raise ValueError("DLSVM cache is not a regular directory")
             else:
+                if self._cache_read_only:
+                    raise ValueError("read-only DLSVM cache does not exist")
                 self._cache_directory.mkdir(mode=0o700)
+                fsync_directory(self._cache_directory.parent)
+            self._lock_descriptor = _acquire_dlsvm_cache_lock(
+                self._cache_directory,
+                writable=not self._cache_read_only,
+            )
+            try:
+                if self._cache_read_only:
+                    _validate_dlsvm_cache_read_only_inventory_safety(self._cache_directory)
+                else:
+                    _discard_dlsvm_cache_temps(self._cache_directory)
+            except BaseException:
+                self.close()
+                raise
+
+    def close(self) -> None:
+        """Release the process-held cache lifecycle lock, if any."""
+
+        descriptor = self._lock_descriptor
+        self._lock_descriptor = None
+        self._closed = True
+        if descriptor is not None:
+            _release_dlsvm_cache_lock(descriptor)
+
+    def __enter__(self) -> DlsvmKernelStore:
+        self._ensure_open()
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        self.close()
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except BaseException:
+            # Destructors must never mask the active exception or interpreter
+            # shutdown; normal code closes explicitly through ``receipt()``.
+            pass
+
+    def _ensure_open(self) -> None:
+        if self._closed:
+            raise RuntimeError("DLSVM kernel store lifecycle is already closed")
 
     def kernels(
         self,
         training: Sequence[StudySample],
         testing: Sequence[StudySample],
     ) -> tuple[np.ndarray, np.ndarray]:
+        self._ensure_open()
         if not training or not testing:
             raise ValueError("DLSVM kernel store requires non-empty sample sets")
         training_defenses = {sample.defense for sample in training}
@@ -349,18 +504,20 @@ class DlsvmKernelStore:
                 matrix[np.ix_(test_indexes, train_indexes)],
             )
 
-        training_ids = tuple(sample.sample_id for sample in training)
-        testing_ids = tuple(sample.sample_id for sample in testing)
+        canonical_training = tuple(sorted(training, key=lambda item: item.sample_id))
+        canonical_testing = tuple(sorted(testing, key=lambda item: item.sample_id))
+        training_ids = tuple(sample.sample_id for sample in canonical_training)
+        testing_ids = tuple(sample.sample_id for sample in canonical_testing)
         key = (testing_ids, training_ids)
         matrix = self._cross.get(key)
         if matrix is None:
-            testing_sequences = [dlsvm_sequence(sample.trace) for sample in testing]
-            training_sequences = [dlsvm_sequence(sample.trace) for sample in training]
+            testing_sequences = [dlsvm_sequence(sample.trace) for sample in canonical_testing]
+            training_sequences = [dlsvm_sequence(sample.trace) for sample in canonical_training]
             matrix = self._cached_matrix(
                 kind="cross",
-                row_samples=testing,
-                column_samples=training,
-                shape=(len(testing), len(training)),
+                row_samples=canonical_testing,
+                column_samples=canonical_training,
+                shape=(len(canonical_testing), len(canonical_training)),
                 compute=lambda: _dlsvm_kernel(
                     testing_sequences,
                     training_sequences,
@@ -368,6 +525,18 @@ class DlsvmKernelStore:
                 ),
             )
             self._cross[key] = matrix
+        canonical_training_indexes = {
+            sample.sample_id: index for index, sample in enumerate(canonical_training)
+        }
+        canonical_testing_indexes = {
+            sample.sample_id: index for index, sample in enumerate(canonical_testing)
+        }
+        matrix = matrix[
+            np.ix_(
+                [canonical_testing_indexes[sample.sample_id] for sample in testing],
+                [canonical_training_indexes[sample.sample_id] for sample in training],
+            )
+        ]
         training_indexes, training_matrix = self._within_matrix(training_defense)
         try:
             selected_indexes = [training_indexes[sample.sample_id] for sample in training]
@@ -405,39 +574,26 @@ class DlsvmKernelStore:
         shape: tuple[int, int],
         compute: Any,
     ) -> np.ndarray:
+        self._ensure_open()
         if self._cache_directory is None:
             return compute()
-        identity = {
-            "schema_version": 1,
-            "kind": kind,
-            "rows": [
-                {
-                    "sample_id": sample.sample_id,
-                    "sequence_sha256": hashlib.sha256(
-                        np.asarray(dlsvm_sequence(sample.trace), dtype="<i4").tobytes()
-                    ).hexdigest(),
-                }
-                for sample in row_samples
-            ],
-            "columns": [
-                {
-                    "sample_id": sample.sample_id,
-                    "sequence_sha256": hashlib.sha256(
-                        np.asarray(dlsvm_sequence(sample.trace), dtype="<i4").tobytes()
-                    ).hexdigest(),
-                }
-                for sample in column_samples
-            ],
-            "backend": dlsvm_backend_receipt(),
-        }
+        identity = _dlsvm_matrix_identity(
+            kind=kind,
+            row_samples=row_samples,
+            column_samples=column_samples,
+        )
         key = hashlib.sha256(
             json.dumps(identity, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
         name = f"{kind}-{key}.npy"
         path = self._cache_directory / name
         seal_path = self._cache_directory / f"{name}.receipt.json"
-        replayed_from_cache = path.exists()
-        if replayed_from_cache:
+        matrix_present = path.exists() or path.is_symlink()
+        seal_present = seal_path.exists() or seal_path.is_symlink()
+        if self._cache_read_only and not (matrix_present and seal_present):
+            raise ValueError("read-only DLSVM replay requires a complete sealed matrix cache")
+        recompute_at_end = False
+        if matrix_present and seal_present:
             _validate_dlsvm_matrix_seal(
                 path,
                 seal_path,
@@ -446,9 +602,41 @@ class DlsvmKernelStore:
                 shape=shape,
             )
             matrix = np.load(path, allow_pickle=False)
-        else:
-            if seal_path.exists() or seal_path.is_symlink():
-                raise ValueError("DLSVM matrix receipt exists without its matrix")
+            recompute_at_end = True
+        elif matrix_present:
+            # Publication orders the fully flushed matrix before its seal.  A
+            # lone matrix is therefore an uncommitted crash state, but it is
+            # accepted only after complete deterministic recomputation.  An
+            # invalid lone matrix remains untouched and fails closed.
+            if path.is_symlink() or not path.is_file():
+                raise ValueError("DLSVM uncommitted matrix is not a regular file")
+            matrix = np.load(path, allow_pickle=False)
+            _validate_dlsvm_matrix_semantics(
+                matrix,
+                kind=kind,
+                row_samples=row_samples,
+                column_samples=column_samples,
+                identity_sha256=key,
+                recompute_values=True,
+            )
+            _write_dlsvm_matrix_seal(
+                seal_path,
+                matrix_path=path,
+                identity=identity,
+                identity_sha256=key,
+                shape=shape,
+            )
+        elif seal_present:
+            # A seal normally follows its matrix and cannot prove values by
+            # itself.  Recover only when its immutable identity is exact and a
+            # fresh deterministic matrix has the recorded byte digest.
+            expected_seal = _load_uncommitted_dlsvm_matrix_seal(
+                seal_path,
+                matrix_path=path,
+                identity=identity,
+                identity_sha256=key,
+                shape=shape,
+            )
             matrix = np.asarray(compute(), dtype=np.float64)
             _validate_dlsvm_matrix_semantics(
                 matrix,
@@ -458,41 +646,61 @@ class DlsvmKernelStore:
                 identity_sha256=key,
                 recompute_values=False,
             )
-            temporary = self._cache_directory / f".{name}.{os.getpid()}.tmp"
+            temporary = _write_dlsvm_matrix_temporary(
+                self._cache_directory,
+                name=name,
+                matrix=matrix,
+            )
             try:
-                with temporary.open("xb") as output:
-                    np.save(output, matrix, allow_pickle=False)
-                    output.flush()
-                    os.fsync(output.fileno())
-                try:
-                    os.link(temporary, path)
-                except FileExistsError:
-                    replayed_from_cache = True
-                    _validate_dlsvm_matrix_seal(
-                        path,
-                        seal_path,
-                        identity=identity,
-                        identity_sha256=key,
-                        shape=shape,
+                if _sha256_file(temporary) != expected_seal["matrix_sha256"]:
+                    raise ValueError(
+                        "DLSVM orphan receipt does not match deterministic matrix bytes"
                     )
-                    matrix = np.load(path, allow_pickle=False)
-                else:
-                    _write_dlsvm_matrix_seal(
-                        seal_path,
-                        matrix_path=path,
-                        identity=identity,
-                        identity_sha256=key,
-                        shape=shape,
-                    )
+                os.link(temporary, path)
+                fsync_directory(self._cache_directory)
             finally:
                 temporary.unlink(missing_ok=True)
+            _validate_dlsvm_matrix_seal(
+                path,
+                seal_path,
+                identity=identity,
+                identity_sha256=key,
+                shape=shape,
+            )
+        else:
+            matrix = np.asarray(compute(), dtype=np.float64)
+            _validate_dlsvm_matrix_semantics(
+                matrix,
+                kind=kind,
+                row_samples=row_samples,
+                column_samples=column_samples,
+                identity_sha256=key,
+                recompute_values=False,
+            )
+            temporary = _write_dlsvm_matrix_temporary(
+                self._cache_directory,
+                name=name,
+                matrix=matrix,
+            )
+            try:
+                os.link(temporary, path)
+                fsync_directory(self._cache_directory)
+            finally:
+                temporary.unlink(missing_ok=True)
+            _write_dlsvm_matrix_seal(
+                seal_path,
+                matrix_path=path,
+                identity=identity,
+                identity_sha256=key,
+                shape=shape,
+            )
         _validate_dlsvm_matrix_semantics(
             matrix,
             kind=kind,
             row_samples=row_samples,
             column_samples=column_samples,
             identity_sha256=key,
-            recompute_values=replayed_from_cache,
+            recompute_values=recompute_at_end,
         )
         matrix_sha256 = _sha256_file(path)
         seal_sha256 = _sha256_file(seal_path)
@@ -508,24 +716,166 @@ class DlsvmKernelStore:
         return matrix
 
     def receipt(self) -> dict[str, Any] | None:
-        if self._cache_directory is None:
-            return None
-        items = tuple(self._cache_directory.iterdir())
-        if any(item.is_symlink() or not item.is_file() for item in items):
-            raise ValueError("DLSVM persistent cache contains a non-regular artifact")
-        expected = set(self._cache_artifacts) | {
-            str(value["receipt"]) for value in self._cache_artifacts.values()
-        }
-        actual = {item.name for item in items}
-        if actual != expected:
-            raise ValueError("DLSVM persistent cache inventory is not closed")
-        return {
-            "schema_version": 1,
-            "path": str(self._cache_directory),
-            "artifacts": {
-                name: self._cache_artifacts[name] for name in sorted(self._cache_artifacts)
-            },
-        }
+        self._ensure_open()
+        try:
+            if self._cache_directory is None:
+                return None
+            items = tuple(self._cache_directory.iterdir())
+            if any(item.is_symlink() or not item.is_file() for item in items):
+                raise ValueError("DLSVM persistent cache contains a non-regular artifact")
+            expected = set(self._cache_artifacts) | {
+                str(value["receipt"]) for value in self._cache_artifacts.values()
+            }
+            actual = {item.name for item in items if item.name != _DLSVM_CACHE_LOCK_NAME}
+            if actual != expected:
+                raise ValueError("DLSVM persistent cache inventory is not closed")
+            return {
+                "schema_version": 1,
+                "path": str(self._cache_directory),
+                "artifacts": {
+                    name: self._cache_artifacts[name] for name in sorted(self._cache_artifacts)
+                },
+            }
+        finally:
+            self.close()
+
+
+def _acquire_dlsvm_cache_lock(directory: Path, *, writable: bool = True) -> int:
+    """Acquire the one non-blocking lifecycle lock for a persistent cache."""
+
+    if type(writable) is not bool:
+        raise ValueError("DLSVM cache lock mode must be a boolean")
+    path = directory / _DLSVM_CACHE_LOCK_NAME
+    if path.is_symlink():
+        raise ValueError("DLSVM cache lifecycle lock cannot be a symbolic link")
+    existed = path.exists()
+    if not writable and not existed:
+        raise ValueError("read-only DLSVM validation requires an existing cache lock")
+    flags = os.O_RDWR | os.O_CREAT if writable else os.O_RDONLY
+    flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags, 0o600)
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ValueError("DLSVM cache lifecycle lock is not a regular file")
+        if writable and not existed:
+            fsync_directory(directory)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise RuntimeError(
+                "another DLSVM evaluator holds the persistent-cache lifecycle lock"
+            ) from error
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _release_dlsvm_cache_lock(descriptor: int) -> None:
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+    finally:
+        os.close(descriptor)
+
+
+def _discard_dlsvm_cache_temps(directory: Path) -> None:
+    """Discard only random-name temporaries recognised as uncommitted writes."""
+
+    discarded = False
+    for item in directory.iterdir():
+        if _DLSVM_CACHE_TEMP.fullmatch(item.name) is None:
+            continue
+        if item.is_symlink() or not item.is_file():
+            raise ValueError("DLSVM cache contains an unsafe recognised temporary")
+        item.unlink()
+        discarded = True
+    if discarded:
+        fsync_directory(directory)
+
+
+def _validate_dlsvm_cache_read_only_inventory_safety(directory: Path) -> None:
+    """Reject unsafe or incomplete write artefacts without mutating evidence."""
+
+    for item in directory.iterdir():
+        if item.is_symlink() or not item.is_file():
+            raise ValueError("read-only DLSVM cache contains a non-regular artifact")
+        if _DLSVM_CACHE_TEMP.fullmatch(item.name) is not None:
+            raise ValueError("read-only DLSVM cache contains an uncommitted temporary")
+
+
+def _write_dlsvm_matrix_temporary(
+    directory: Path,
+    *,
+    name: str,
+    matrix: np.ndarray,
+) -> Path:
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "xb",
+            dir=directory,
+            prefix=f".{name}{ATOMIC_TEMP_MARKER}",
+            delete=False,
+        ) as output:
+            temporary = Path(output.name)
+            np.save(output, matrix, allow_pickle=False)
+            output.flush()
+            os.fsync(output.fileno())
+        return temporary
+    except BaseException:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+        raise
+
+
+def _expected_dlsvm_matrix_seal(
+    *,
+    matrix_file: str,
+    matrix_sha256: str,
+    identity: Mapping[str, Any],
+    identity_sha256: str,
+    shape: tuple[int, int],
+) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "artifact_type": "qcsd-dlsvm-persisted-kernel-matrix",
+        "matrix_file": matrix_file,
+        "matrix_sha256": matrix_sha256,
+        "identity": dict(identity),
+        "identity_sha256": identity_sha256,
+        "shape": list(shape),
+        "dtype": "float64",
+    }
+
+
+def _load_uncommitted_dlsvm_matrix_seal(
+    path: Path,
+    *,
+    matrix_path: Path,
+    identity: Mapping[str, Any],
+    identity_sha256: str,
+    shape: tuple[int, int],
+) -> dict[str, Any]:
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("DLSVM orphan matrix receipt is not a regular file")
+    try:
+        value = load_json(path)
+    except (OSError, ValueError) as error:
+        raise ValueError("DLSVM orphan matrix receipt cannot be loaded") from error
+    digest = value.get("matrix_sha256") if isinstance(value, Mapping) else None
+    if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+        raise ValueError("DLSVM orphan matrix receipt digest is invalid")
+    expected = _expected_dlsvm_matrix_seal(
+        matrix_file=matrix_path.name,
+        matrix_sha256=digest,
+        identity=identity,
+        identity_sha256=identity_sha256,
+        shape=shape,
+    )
+    if value != expected:
+        raise ValueError("DLSVM orphan matrix receipt identity is invalid")
+    return expected
 
 
 def _write_dlsvm_matrix_seal(
@@ -536,28 +886,18 @@ def _write_dlsvm_matrix_seal(
     identity_sha256: str,
     shape: tuple[int, int],
 ) -> None:
-    value = {
-        "schema_version": 1,
-        "artifact_type": "qcsd-dlsvm-persisted-kernel-matrix",
-        "matrix_file": matrix_path.name,
-        "matrix_sha256": _sha256_file(matrix_path),
-        "identity": dict(identity),
-        "identity_sha256": identity_sha256,
-        "shape": list(shape),
-        "dtype": "float64",
-    }
+    value = _expected_dlsvm_matrix_seal(
+        matrix_file=matrix_path.name,
+        matrix_sha256=_sha256_file(matrix_path),
+        identity=identity,
+        identity_sha256=identity_sha256,
+        shape=shape,
+    )
     encoded = (json.dumps(value, indent=2, sort_keys=True) + "\n").encode("utf-8")
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     try:
-        with temporary.open("xb") as output:
-            output.write(encoded)
-            output.flush()
-            os.fsync(output.fileno())
-        os.link(temporary, path)
+        durable_create(path, encoded)
     except FileExistsError as error:
         raise ValueError("DLSVM matrix receipt unexpectedly already exists") from error
-    finally:
-        temporary.unlink(missing_ok=True)
 
 
 def _validate_dlsvm_matrix_seal(
@@ -579,16 +919,13 @@ def _validate_dlsvm_matrix_seal(
         value = load_json(seal_path)
     except (OSError, ValueError) as error:
         raise ValueError("DLSVM cached matrix receipt cannot be loaded") from error
-    expected = {
-        "schema_version": 1,
-        "artifact_type": "qcsd-dlsvm-persisted-kernel-matrix",
-        "matrix_file": matrix_path.name,
-        "matrix_sha256": _sha256_file(matrix_path),
-        "identity": dict(identity),
-        "identity_sha256": identity_sha256,
-        "shape": list(shape),
-        "dtype": "float64",
-    }
+    expected = _expected_dlsvm_matrix_seal(
+        matrix_file=matrix_path.name,
+        matrix_sha256=_sha256_file(matrix_path),
+        identity=identity,
+        identity_sha256=identity_sha256,
+        shape=shape,
+    )
     if value != expected:
         raise ValueError("DLSVM cached matrix receipt or identity is invalid")
 
@@ -832,9 +1169,7 @@ def _load_algorithm_diagnostics(value: Any, *, defense: str) -> Mapping[str, Any
         buflo_state = value.get("buflo_state")
         cs_state = value.get("cs_buflo_state")
         if value["schema_version"] == 4 and runtime_kind not in {"buflo", "cs_buflo"}:
-            raise ValueError(
-                "algorithm diagnostic schema 4 requires BuFLO or CS-BuFLO state"
-            )
+            raise ValueError("algorithm diagnostic schema 4 requires BuFLO or CS-BuFLO state")
         if runtime_kind == "buflo":
             expected_state_schema = {1: 1, 2: 1, 3: 2, 4: 3}[value["schema_version"]]
             observed_state_schema = (
@@ -966,8 +1301,7 @@ def _current_buflo_schedule_stop_state_valid(
     incoming = directions["incoming"]
     return bool(
         outgoing["scheduled_cells_at_stop"] == incoming["scheduled_cells_at_stop"]
-        and outgoing["last_scheduled_target_us"]
-        == incoming["last_scheduled_target_us"]
+        and outgoing["last_scheduled_target_us"] == incoming["last_scheduled_target_us"]
     )
 
 
@@ -2221,8 +2555,7 @@ def algorithm_breakdowns(samples: Sequence[StudySample]) -> dict[str, Any]:
             }
         available = [int(item["available_bytes"]) for item in group]
         incoming_drains = [
-            int(item["directions"]["incoming"]["drained_cells_after_stop"])
-            for item in group
+            int(item["directions"]["incoming"]["drained_cells_after_stop"]) for item in group
         ]
         schedule_stop_rows.append(
             {
@@ -2235,9 +2568,7 @@ def algorithm_breakdowns(samples: Sequence[StudySample]) -> dict[str, Any]:
                     {str(item["terminal_time_semantics"]) for item in group}
                 ),
                 "latched_samples": sum(item["latched"] is True for item in group),
-                "latched_at_us": ranged_quantiles(
-                    [int(item["latched_at_us"]) for item in group]
-                ),
+                "latched_at_us": ranged_quantiles([int(item["latched_at_us"]) for item in group]),
                 "available_bytes": {
                     "total": sum(available),
                     **ranged_quantiles(available),
@@ -2533,6 +2864,12 @@ def _dlsvm_value_tuple(value: Sequence[int]) -> tuple[int, ...]:
 
 @cache
 def _cached_normalized_dlsvm_distance(left: tuple[int, ...], right: tuple[int, ...]) -> float:
+    return _normalized_dlsvm_distance_uncached(left, right)
+
+
+def _normalized_dlsvm_distance_uncached(left: tuple[int, ...], right: tuple[int, ...]) -> float:
+    """Compute one normalized distance without retaining a pair-result entry."""
+
     if not left and not right:
         return 0.0
     denominator = min(len(left), len(right))
@@ -2994,6 +3331,74 @@ def vngpp_backend_receipt(
     return result
 
 
+def _validate_actual_classifier_runtime(
+    receipts: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Require cached executable backends to equal the approved formal bytes."""
+
+    if set(receipts) != {"vngpp", "dlsvm"}:
+        raise RuntimeError("formal classifier runtime receipt set is incomplete")
+    vngpp = receipts["vngpp"]
+    dlsvm = receipts["dlsvm"]
+    if not isinstance(vngpp, Mapping) or not isinstance(dlsvm, Mapping):
+        raise RuntimeError("formal classifier runtime receipts are invalid")
+    weka = _load_weka_backend()
+    loaded_osad = _load_osad_library()
+    actual_weka_binding = (
+        {
+            "java_path": str(weka.java),
+            "java_sha256": sha256_file(weka.java),
+            "artifacts": [
+                {"path": str(path), "sha256": sha256_file(path)} for path in weka.artifacts
+            ],
+        }
+        if weka is not None
+        else None
+    )
+    approved_weka_runtime = vngpp.get("runtime")
+    approved_weka_binding = (
+        {
+            "java_path": approved_weka_runtime.get("java_path"),
+            "java_sha256": approved_weka_runtime.get("java_sha256"),
+            "artifacts": approved_weka_runtime.get("artifacts"),
+        }
+        if isinstance(approved_weka_runtime, Mapping)
+        else None
+    )
+    actual_osad = (
+        {
+            "path": str(loaded_osad[1]),
+            "sha256": sha256_file(loaded_osad[1]),
+        }
+        if loaded_osad is not None
+        else None
+    )
+    if (
+        vngpp.get("backend") != "pinned-weka-3.7.5"
+        or approved_weka_binding != actual_weka_binding
+        or dlsvm.get("engine") != "clean-room-native-c"
+        or dlsvm.get("native_library") != actual_osad
+        or not isinstance(vngpp.get("approved_runtime"), Mapping)
+        or vngpp.get("approved_runtime") != dlsvm.get("approved_runtime")
+    ):
+        raise RuntimeError(
+            "loaded classifier runtime differs from the approved formal runtime receipt"
+        )
+    return {"vngpp": dict(vngpp), "dlsvm": dict(dlsvm)}
+
+
+def _formal_classifier_runtime_receipts() -> dict[str, Any]:
+    """Resolve approved receipts and reject an alternate already-cached backend."""
+
+    _reject_formal_runtime_overrides()
+    return _validate_actual_classifier_runtime(
+        {
+            "vngpp": vngpp_backend_receipt(formal=True),
+            "dlsvm": dlsvm_backend_receipt(formal=True),
+        }
+    )
+
+
 def classifier_reference_receipt() -> dict[str, str]:
     """Fail closed unless the pinned Panchenko/VNG++ receipt is byte-exact."""
 
@@ -3186,16 +3591,359 @@ def dlsvm_workload_census(samples: Sequence[StudySample]) -> dict[str, Any]:
     }
 
 
-def _available_memory_bytes() -> int | None:
-    path = Path("/proc/meminfo")
-    if not path.is_file() or path.is_symlink():
+def _host_memory_available_bytes(path: Path) -> int | None:
+    """Read Linux MemAvailable without following an evidence-path symlink."""
+
+    if path.is_symlink():
+        raise ValueError("DLSVM host memory source cannot be a symbolic link")
+    if not path.is_file():
         return None
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if line.startswith("MemAvailable:"):
-            fields = line.split()
-            if len(fields) == 3 and fields[1].isdecimal() and fields[2] == "kB":
-                return int(fields[1]) * 1_024
+    for line in path.read_text(encoding="ascii").splitlines():
+        if not line.startswith("MemAvailable:"):
+            continue
+        fields = line.split()
+        if len(fields) != 3 or not fields[1].isdecimal() or fields[2] != "kB":
+            raise ValueError("DLSVM host MemAvailable value is malformed")
+        return int(fields[1]) * 1_024
     return None
+
+
+def _safe_cgroup_membership_directory(
+    controller_root: Path,
+    membership: str,
+    *,
+    label: str,
+) -> tuple[Path, Path]:
+    """Resolve one cgroup membership beneath a trusted, non-symlink root."""
+
+    if controller_root.is_symlink() or not controller_root.is_dir():
+        raise ValueError(f"DLSVM {label} controller root is unavailable or unsafe")
+    if not membership.startswith("/"):
+        raise ValueError(f"DLSVM {label} membership is malformed")
+    components = tuple(part for part in membership.split("/") if part)
+    if any(part in {".", ".."} for part in components):
+        raise ValueError(f"DLSVM {label} membership is unsafe")
+    root = controller_root.resolve()
+    candidate = root
+    for component in components:
+        candidate = candidate / component
+        if candidate.is_symlink():
+            raise ValueError(f"DLSVM {label} membership traverses a symbolic link")
+    current = candidate.resolve()
+    if not current.is_relative_to(root) or not current.is_dir():
+        raise ValueError(f"DLSVM {label} membership escapes its controller root")
+    return root, current
+
+
+def _cgroup_memory_constraint(
+    directory: Path,
+    *,
+    controller_version: int,
+) -> dict[str, Any] | None:
+    """Read one ancestor's paired memory limit/current values fail-closed."""
+
+    if controller_version == 2:
+        limit_path = directory / "memory.max"
+        current_path = directory / "memory.current"
+    elif controller_version == 1:
+        limit_path = directory / "memory.limit_in_bytes"
+        current_path = directory / "memory.usage_in_bytes"
+    else:
+        raise ValueError("DLSVM cgroup memory controller version is invalid")
+    limit_present = limit_path.exists() or limit_path.is_symlink()
+    current_present = current_path.exists() or current_path.is_symlink()
+    if not limit_present and not current_present:
+        return None
+    if (
+        limit_path.is_symlink()
+        or current_path.is_symlink()
+        or not limit_path.is_file()
+        or not current_path.is_file()
+    ):
+        raise ValueError("DLSVM cgroup memory limit/current pair is missing or unsafe")
+    limit_text = limit_path.read_text(encoding="ascii").strip()
+    current_text = current_path.read_text(encoding="ascii").strip()
+    if not current_text.isdecimal():
+        raise ValueError("DLSVM cgroup memory current usage is malformed")
+    current_bytes = int(current_text)
+    if controller_version == 2:
+        if limit_text == "max":
+            limit_bytes = None
+        elif limit_text.isdecimal():
+            limit_bytes = int(limit_text)
+        else:
+            raise ValueError("DLSVM cgroup-v2 memory limit is malformed")
+    else:
+        if not limit_text.isdecimal():
+            raise ValueError("DLSVM cgroup-v1 memory limit is malformed")
+        parsed_limit = int(limit_text)
+        limit_bytes = None if parsed_limit >= _CGROUP_V1_MEMORY_UNLIMITED_MIN else parsed_limit
+    remaining_bytes = None if limit_bytes is None else max(0, limit_bytes - current_bytes)
+    return {
+        "path": str(directory),
+        "limit_path": str(limit_path),
+        "current_path": str(current_path),
+        "limit_bytes": limit_bytes,
+        "current_bytes": current_bytes,
+        "remaining_bytes": remaining_bytes,
+    }
+
+
+def _cgroup_memory_constraints(
+    root: Path,
+    current: Path,
+    *,
+    controller_version: int,
+) -> list[dict[str, Any]]:
+    """Collect every exposed constraint from membership through controller root."""
+
+    constraints: list[dict[str, Any]] = []
+    while True:
+        constraint = _cgroup_memory_constraint(
+            current,
+            controller_version=controller_version,
+        )
+        if constraint is not None:
+            constraints.append(constraint)
+        if current == root:
+            break
+        current = current.parent
+    return constraints
+
+
+def _memory_capacity_runtime(
+    *,
+    meminfo_path: Path = Path("/proc/meminfo"),
+    proc_cgroup_path: Path = Path("/proc/self/cgroup"),
+    cgroup_root: Path = Path("/sys/fs/cgroup"),
+) -> dict[str, Any]:
+    """Resolve effective memory from host availability and all cgroup ancestors."""
+
+    host_available = _host_memory_available_bytes(meminfo_path)
+    if proc_cgroup_path.is_symlink():
+        raise ValueError("DLSVM cgroup membership source cannot be a symbolic link")
+    if proc_cgroup_path.is_file():
+        lines = proc_cgroup_path.read_text(encoding="ascii").splitlines()
+        parsed_lines: list[tuple[str, str, str]] = []
+        for line in lines:
+            fields = line.split(":", 2)
+            if len(fields) != 3:
+                raise ValueError("DLSVM cgroup membership is malformed")
+            parsed_lines.append((fields[0], fields[1], fields[2]))
+    else:
+        parsed_lines = []
+
+    unified = [
+        membership
+        for hierarchy, controllers, membership in parsed_lines
+        if hierarchy == "0" and controllers == ""
+    ]
+    memory_v1 = [
+        membership
+        for _hierarchy, controllers, membership in parsed_lines
+        if "memory" in controllers.split(",")
+    ]
+    if len(unified) > 1 or len(memory_v1) > 1:
+        raise ValueError("DLSVM cgroup memory membership is ambiguous")
+
+    controller_version: int | None = None
+    membership: str | None = None
+    constraints: list[dict[str, Any]] = []
+    if unified:
+        unified_membership = unified[0]
+        root, current = _safe_cgroup_membership_directory(
+            cgroup_root,
+            unified_membership,
+            label="cgroup-v2 memory",
+        )
+        constraints = _cgroup_memory_constraints(
+            root,
+            current,
+            controller_version=2,
+        )
+        if constraints:
+            controller_version = 2
+            membership = unified_membership
+    if not constraints and memory_v1:
+        controller_version = 1
+        membership = memory_v1[0]
+        candidates = (cgroup_root / "memory", cgroup_root)
+        controller_root = next(
+            (
+                candidate
+                for candidate in candidates
+                if candidate.is_dir()
+                and not candidate.is_symlink()
+                and (
+                    (candidate / "memory.limit_in_bytes").is_file()
+                    or (candidate / membership.lstrip("/") / "memory.limit_in_bytes").is_file()
+                )
+            ),
+            None,
+        )
+        if controller_root is None:
+            raise ValueError("DLSVM cgroup-v1 memory controller root is unavailable")
+        root, current = _safe_cgroup_membership_directory(
+            controller_root,
+            membership,
+            label="cgroup-v1 memory",
+        )
+        constraints = _cgroup_memory_constraints(
+            root,
+            current,
+            controller_version=1,
+        )
+    if (unified or memory_v1) and not constraints:
+        raise ValueError("DLSVM cgroup memory controller has no readable constraints")
+
+    finite_remaining = [
+        int(item["remaining_bytes"]) for item in constraints if item["remaining_bytes"] is not None
+    ]
+    cgroup_remaining = min(finite_remaining) if finite_remaining else None
+    capacity_values = [value for value in (host_available, cgroup_remaining) if value is not None]
+    effective = min(capacity_values) if capacity_values else None
+    if host_available is not None and cgroup_remaining is not None:
+        availability_source = "minimum-of-host-and-finite-cgroup-remaining"
+    elif host_available is not None:
+        availability_source = "host-memavailable"
+    elif cgroup_remaining is not None:
+        availability_source = "finite-cgroup-remaining"
+    else:
+        availability_source = "unavailable"
+    return {
+        "schema_version": 1,
+        "policy": _DLSVM_MEMORY_CAPACITY_POLICY,
+        "host_meminfo_path": str(meminfo_path),
+        "host_mem_available_bytes": host_available,
+        "controller_version": controller_version,
+        "membership": membership,
+        "constraints": constraints,
+        "finite_cgroup_remaining_bytes": cgroup_remaining,
+        "effective_available_bytes": effective,
+        "availability_source": availability_source,
+        "unavailable_reason": (
+            None
+            if effective is not None
+            else "neither host MemAvailable nor a finite cgroup memory limit is readable"
+        ),
+    }
+
+
+def _validated_memory_capacity_runtime(value: Any) -> dict[str, Any]:
+    """Validate the self-contained memory-capacity evidence structure."""
+
+    required = {
+        "schema_version",
+        "policy",
+        "host_meminfo_path",
+        "host_mem_available_bytes",
+        "controller_version",
+        "membership",
+        "constraints",
+        "finite_cgroup_remaining_bytes",
+        "effective_available_bytes",
+        "availability_source",
+        "unavailable_reason",
+    }
+    if not isinstance(value, Mapping) or set(value) != required:
+        raise ValueError("DLSVM memory-capacity evidence is invalid")
+    host = value.get("host_mem_available_bytes")
+    controller_version = value.get("controller_version")
+    membership = value.get("membership")
+    constraints = value.get("constraints")
+    if (
+        value.get("schema_version") != 1
+        or value.get("policy") != _DLSVM_MEMORY_CAPACITY_POLICY
+        or not isinstance(value.get("host_meminfo_path"), str)
+        or not Path(str(value.get("host_meminfo_path"))).is_absolute()
+        or (host is not None and (type(host) is not int or host < 0))
+        or controller_version not in {None, 1, 2}
+        or not isinstance(constraints, list)
+        or (controller_version is None and (membership is not None or constraints))
+        or (
+            controller_version is not None
+            and (
+                not isinstance(membership, str)
+                or not membership.startswith("/")
+                or not constraints
+                or any(part in {".", ".."} for part in membership.split("/"))
+            )
+        )
+    ):
+        raise ValueError("DLSVM memory-capacity evidence is invalid")
+    finite: list[int] = []
+    constraint_paths: list[Path] = []
+    for constraint in constraints:
+        if not isinstance(constraint, Mapping) or set(constraint) != {
+            "path",
+            "limit_path",
+            "current_path",
+            "limit_bytes",
+            "current_bytes",
+            "remaining_bytes",
+        }:
+            raise ValueError("DLSVM memory-capacity constraint is invalid")
+        limit = constraint.get("limit_bytes")
+        current = constraint.get("current_bytes")
+        remaining = constraint.get("remaining_bytes")
+        constraint_path = Path(str(constraint.get("path")))
+        expected_limit_name = "memory.max" if controller_version == 2 else "memory.limit_in_bytes"
+        expected_current_name = (
+            "memory.current" if controller_version == 2 else "memory.usage_in_bytes"
+        )
+        if (
+            any(
+                not isinstance(constraint.get(key), str)
+                or not Path(str(constraint[key])).is_absolute()
+                for key in ("path", "limit_path", "current_path")
+            )
+            or Path(str(constraint.get("limit_path"))) != constraint_path / expected_limit_name
+            or Path(str(constraint.get("current_path"))) != constraint_path / expected_current_name
+            or (limit is not None and (type(limit) is not int or limit < 0))
+            or type(current) is not int
+            or current < 0
+            or remaining != (None if limit is None else max(0, int(limit) - current))
+        ):
+            raise ValueError("DLSVM memory-capacity constraint is invalid")
+        constraint_paths.append(constraint_path)
+        if remaining is not None:
+            finite.append(int(remaining))
+    if len(set(constraint_paths)) != len(constraint_paths) or any(
+        child == ancestor or not child.is_relative_to(ancestor)
+        for child, ancestor in zip(constraint_paths, constraint_paths[1:])
+    ):
+        raise ValueError("DLSVM memory-capacity constraint ancestry is invalid")
+    cgroup_remaining = min(finite) if finite else None
+    candidates = [item for item in (host, cgroup_remaining) if item is not None]
+    effective = min(candidates) if candidates else None
+    expected_source = (
+        "minimum-of-host-and-finite-cgroup-remaining"
+        if host is not None and cgroup_remaining is not None
+        else "host-memavailable"
+        if host is not None
+        else "finite-cgroup-remaining"
+        if cgroup_remaining is not None
+        else "unavailable"
+    )
+    if (
+        value.get("finite_cgroup_remaining_bytes") != cgroup_remaining
+        or value.get("effective_available_bytes") != effective
+        or value.get("availability_source") != expected_source
+        or value.get("unavailable_reason")
+        != (
+            None
+            if effective is not None
+            else "neither host MemAvailable nor a finite cgroup memory limit is readable"
+        )
+    ):
+        raise ValueError("DLSVM memory-capacity derivation is invalid")
+    return dict(value)
+
+
+def _available_memory_bytes() -> int | None:
+    """Return current effective host/cgroup memory availability."""
+
+    return _memory_capacity_runtime()["effective_available_bytes"]
 
 
 def _configured_dlsvm_wall_seconds(override: float | None = None) -> float | None:
@@ -3213,11 +3961,710 @@ def _configured_dlsvm_wall_seconds(override: float | None = None) -> float | Non
     return parsed
 
 
+def _cgroup_v2_cpu_constraints(root: Path, current: Path) -> list[dict[str, Any]]:
+    constraints: list[dict[str, Any]] = []
+    while True:
+        path = current / "cpu.max"
+        present = path.exists() or path.is_symlink()
+        if present:
+            if path.is_symlink() or not path.is_file():
+                raise ValueError("DLSVM cgroup-v2 CPU quota is unavailable or unsafe")
+            fields = path.read_text(encoding="ascii").split()
+            if len(fields) != 2 or not fields[1].isdecimal() or int(fields[1]) <= 0:
+                raise ValueError("DLSVM cgroup-v2 CPU quota is malformed")
+            period = int(fields[1])
+            if fields[0] == "max":
+                quota = None
+                worker_limit = None
+            elif fields[0].isdecimal() and int(fields[0]) > 0:
+                quota = int(fields[0])
+                worker_limit = max(1, quota // period)
+            else:
+                raise ValueError("DLSVM cgroup-v2 CPU quota is malformed")
+            constraints.append(
+                {
+                    "path": str(path),
+                    "quota_us": quota,
+                    "period_us": period,
+                    "worker_limit_floor": worker_limit,
+                }
+            )
+        if current == root:
+            break
+        current = current.parent
+    return constraints
+
+
+def _cgroup_v1_cpu_constraints(root: Path, current: Path) -> list[dict[str, Any]]:
+    constraints: list[dict[str, Any]] = []
+    while True:
+        quota_path = current / "cpu.cfs_quota_us"
+        period_path = current / "cpu.cfs_period_us"
+        quota_present = quota_path.exists() or quota_path.is_symlink()
+        period_present = period_path.exists() or period_path.is_symlink()
+        if quota_present or period_present:
+            if (
+                quota_path.is_symlink()
+                or period_path.is_symlink()
+                or not quota_path.is_file()
+                or not period_path.is_file()
+            ):
+                raise ValueError("DLSVM cgroup-v1 CPU quota pair is missing or unsafe")
+            try:
+                quota_raw = int(quota_path.read_text(encoding="ascii").strip())
+                period = int(period_path.read_text(encoding="ascii").strip())
+            except ValueError as error:
+                raise ValueError("DLSVM cgroup-v1 CPU quota is malformed") from error
+            if period <= 0 or quota_raw == 0 or quota_raw < -1:
+                raise ValueError("DLSVM cgroup-v1 CPU quota is malformed")
+            quota = None if quota_raw == -1 else quota_raw
+            constraints.append(
+                {
+                    "path": str(quota_path),
+                    "quota_us": quota,
+                    "period_us": period,
+                    "worker_limit_floor": (None if quota is None else max(1, quota // period)),
+                }
+            )
+        if current == root:
+            break
+        current = current.parent
+    return constraints
+
+
+def _cgroup_cpu_quota_runtime(
+    *,
+    proc_cgroup_path: Path = Path("/proc/self/cgroup"),
+    cgroup_root: Path = Path("/sys/fs/cgroup"),
+) -> dict[str, Any]:
+    """Return effective v1/v2 CPU quotas, including hybrid hierarchies."""
+
+    if proc_cgroup_path.is_symlink():
+        raise ValueError("DLSVM cgroup CPU membership source cannot be a symbolic link")
+    if proc_cgroup_path.is_file():
+        lines = proc_cgroup_path.read_text(encoding="ascii").splitlines()
+    else:
+        lines = []
+    parsed_lines: list[tuple[str, str, str]] = []
+    for line in lines:
+        fields = line.split(":", 2)
+        if len(fields) != 3:
+            raise ValueError("DLSVM cgroup CPU membership is malformed")
+        parsed_lines.append((fields[0], fields[1], fields[2]))
+    unified = [
+        membership
+        for hierarchy, controllers, membership in parsed_lines
+        if hierarchy == "0" and controllers == ""
+    ]
+    cpu_v1 = [
+        membership
+        for _hierarchy, controllers, membership in parsed_lines
+        if "cpu" in controllers.split(",")
+    ]
+    if len(unified) > 1 or len(cpu_v1) > 1:
+        raise ValueError("DLSVM cgroup CPU membership is ambiguous")
+
+    constraints: list[dict[str, Any]] = []
+    if unified:
+        root, current = _safe_cgroup_membership_directory(
+            cgroup_root,
+            unified[0],
+            label="cgroup-v2 CPU",
+        )
+        constraints.extend(_cgroup_v2_cpu_constraints(root, current))
+    if cpu_v1:
+        membership = cpu_v1[0]
+
+        def exposes_v1_cpu(candidate: Path) -> bool:
+            membership_root = candidate / membership.lstrip("/")
+            return any(
+                path.exists() or path.is_symlink()
+                for base in (candidate, membership_root)
+                for path in (
+                    base / "cpu.cfs_quota_us",
+                    base / "cpu.cfs_period_us",
+                )
+            )
+
+        candidates = tuple(
+            candidate
+            for candidate in (
+                cgroup_root / "cpu",
+                cgroup_root / "cpu,cpuacct",
+                cgroup_root / "cpuacct,cpu",
+                cgroup_root,
+            )
+            if candidate.is_dir() and not candidate.is_symlink() and exposes_v1_cpu(candidate)
+        )
+        if len(candidates) != 1:
+            raise ValueError("DLSVM cgroup-v1 CPU controller root is unavailable or ambiguous")
+        root, current = _safe_cgroup_membership_directory(
+            candidates[0],
+            membership,
+            label="cgroup-v1 CPU",
+        )
+        constraints.extend(_cgroup_v1_cpu_constraints(root, current))
+
+    finite = [
+        int(item["worker_limit_floor"])
+        for item in constraints
+        if item["worker_limit_floor"] is not None
+    ]
+    return {
+        "schema_version": 1,
+        "source": "proc-self-cgroup-plus-cgroupfs-ancestor-cpu-quotas",
+        "constraints": constraints,
+        "finite_worker_limit": min(finite) if finite else None,
+        "unavailable_reason": None if constraints else "no readable cgroup CPU quota controller",
+    }
+
+
+def _osad_worker_capacity() -> dict[str, Any]:
+    """Resolve and enforce the worker count against effective CPU entitlement."""
+
+    try:
+        affinity_cpus: list[int] | None = sorted(os.sched_getaffinity(0))
+    except (AttributeError, OSError):
+        affinity_cpus = None
+    affinity_count = len(affinity_cpus) if affinity_cpus is not None else (os.cpu_count() or 1)
+    if affinity_count < 1:
+        raise ValueError("DLSVM worker affinity contains no CPUs")
+    quota = _cgroup_cpu_quota_runtime()
+    quota_limit = quota["finite_worker_limit"]
+    effective_limit = min(
+        affinity_count,
+        int(quota_limit) if quota_limit is not None else affinity_count,
+    )
+    configured = os.environ.get("QCSD_OSAD_WORKERS")
+    if configured is None:
+        requested = min(12, effective_limit)
+        requested_source = "default-minimum-of-12-and-effective-worker-limit"
+    else:
+        try:
+            requested = int(configured)
+        except ValueError as error:
+            raise ValueError("QCSD_OSAD_WORKERS must be an integer") from error
+        if not 1 <= requested <= 256:
+            raise ValueError("QCSD_OSAD_WORKERS must be between 1 and 256")
+        requested_source = "QCSD_OSAD_WORKERS"
+    if requested > effective_limit:
+        raise ValueError(
+            "QCSD_OSAD_WORKERS exceeds the effective CPU worker limit: "
+            f"requested {requested}, available {effective_limit}"
+        )
+    return {
+        "schema_version": 1,
+        "policy": _DLSVM_WORKER_CAPACITY_POLICY,
+        "affinity_source": (
+            "os.sched_getaffinity(0)" if affinity_cpus is not None else "os.cpu_count-fallback"
+        ),
+        "affinity_cpus": affinity_cpus,
+        "affinity_cpu_count": affinity_count,
+        "cgroup_cpu_quota": quota,
+        "effective_worker_limit": effective_limit,
+        "requested_worker_source": requested_source,
+        "requested_workers": requested,
+        "selected_workers": requested,
+    }
+
+
+def _validated_dlsvm_execution_model(value: Any) -> dict[str, Any]:
+    """Validate the explicit sequential-pass model used by schema-two receipts."""
+
+    required = {
+        "schema_version",
+        "name",
+        "fresh_matrix_construction_passes",
+        "complete_cache_recomputation_passes",
+        "total_full_matrix_passes",
+        "passes_are_sequential",
+        "worker_efficiency",
+        "contingency_multiplier",
+        "contingency_basis",
+        "memory_model",
+        "retained_sequence_symbol_bytes",
+        "retained_sequence_object_bytes",
+        "kernel_row_element_bytes",
+        "memory_headroom_multiplier",
+        "worker_capacity_policy",
+        "cache_lifecycle_lock_policy",
+        "cache_resumption_granularity",
+    }
+    if not isinstance(value, Mapping) or set(value) != required:
+        raise ValueError("DLSVM preflight execution model is invalid")
+    fresh = value.get("fresh_matrix_construction_passes")
+    replay = value.get("complete_cache_recomputation_passes")
+    total = value.get("total_full_matrix_passes")
+    efficiency = value.get("worker_efficiency")
+    contingency = value.get("contingency_multiplier")
+    headroom = value.get("memory_headroom_multiplier")
+    sequence_symbol_bytes = value.get("retained_sequence_symbol_bytes")
+    sequence_object_bytes = value.get("retained_sequence_object_bytes")
+    kernel_row_element_bytes = value.get("kernel_row_element_bytes")
+    if (
+        value.get("schema_version") != 2
+        or not isinstance(value.get("name"), str)
+        or not value["name"]
+        or type(fresh) is not int
+        or fresh < 0
+        or type(replay) is not int
+        or replay < 0
+        or type(total) is not int
+        or total != fresh + replay
+        or total < 1
+        or value.get("passes_are_sequential") is not True
+        or isinstance(efficiency, bool)
+        or not isinstance(efficiency, (int, float))
+        or not 0 < efficiency <= 1
+        or isinstance(contingency, bool)
+        or not isinstance(contingency, (int, float))
+        or contingency < 1
+        or not isinstance(value.get("contingency_basis"), str)
+        or not value["contingency_basis"]
+        or value.get("memory_model")
+        != (
+            "resident-matrix-union-plus-largest-recomputed-matrix-plus-retained-"
+            "sequence-native-arrays-and-bounded-worker-state"
+        )
+        or type(sequence_symbol_bytes) is not int
+        or sequence_symbol_bytes < 40
+        or type(sequence_object_bytes) is not int
+        or sequence_object_bytes < 256
+        or type(kernel_row_element_bytes) is not int
+        or kernel_row_element_bytes < 8
+        or isinstance(headroom, bool)
+        or not isinstance(headroom, (int, float))
+        or headroom < 1
+        or value.get("worker_capacity_policy") != _DLSVM_WORKER_CAPACITY_POLICY
+        or value.get("cache_lifecycle_lock_policy") != _DLSVM_CACHE_LOCK_POLICY
+        or value.get("cache_resumption_granularity") != _DLSVM_CACHE_RESUMPTION_GRANULARITY
+    ):
+        raise ValueError("DLSVM preflight execution model is invalid")
+    return dict(value)
+
+
+def _largest_dlsvm_matrix_bytes(census: Mapping[str, Any]) -> int:
+    elements = [
+        int(row["persisted_dense_matrix_elements"])
+        for field in ("within_defense", "undefended_transfer")
+        for row in census[field]
+    ]
+    return max(elements, default=0) * 8
+
+
+def _largest_dlsvm_matrix_dimension(census: Mapping[str, Any]) -> int:
+    dimensions = [int(row["samples"]) for row in census["within_defense"]]
+    dimensions.extend(
+        int(row[field])
+        for row in census["undefended_transfer"]
+        for field in ("training_samples", "testing_samples")
+    )
+    return max(dimensions, default=0)
+
+
+def _dlsvm_cache_storage_projection(census: Mapping[str, Any]) -> dict[str, Any]:
+    """Conservatively bound create-only cache storage, including one temporary."""
+
+    resident = int(census["persisted_dense_matrix_bytes"])
+    largest_temporary = _largest_dlsvm_matrix_bytes(census)
+    proportional_margin = math.ceil((resident + largest_temporary) * 0.05)
+    required = (
+        resident + largest_temporary + proportional_margin + _DLSVM_CACHE_STORAGE_FIXED_MARGIN_BYTES
+    )
+    return {
+        "schema_version": 1,
+        "policy": _DLSVM_CACHE_STORAGE_POLICY,
+        "expected_matrix_count": len(census["within_defense"]) + len(census["undefended_transfer"]),
+        "persisted_matrix_union_bytes": resident,
+        "largest_uncommitted_matrix_bytes": largest_temporary,
+        "proportional_metadata_margin_bytes": proportional_margin,
+        "fixed_metadata_margin_bytes": _DLSVM_CACHE_STORAGE_FIXED_MARGIN_BYTES,
+        "required_free_bytes": required,
+    }
+
+
+def _validated_dlsvm_cache_storage_projection(
+    value: Any,
+    *,
+    census: Mapping[str, Any],
+) -> dict[str, Any]:
+    expected = _dlsvm_cache_storage_projection(census)
+    if not isinstance(value, Mapping) or dict(value) != expected:
+        raise ValueError("DLSVM cache-storage projection is invalid")
+    return dict(value)
+
+
+def _expected_dlsvm_cache_artifacts(
+    samples: Sequence[StudySample],
+) -> dict[str, tuple[dict[str, Any], tuple[int, int]]]:
+    """Derive every matrix identity that the declared attack protocols can use."""
+
+    backend = dlsvm_backend_receipt()
+    by_defense: dict[str, list[StudySample]] = defaultdict(list)
+    for sample in samples:
+        by_defense[sample.defense].append(sample)
+    expected: dict[str, tuple[dict[str, Any], tuple[int, int]]] = {}
+
+    def add(
+        kind: str,
+        rows: Sequence[StudySample],
+        columns: Sequence[StudySample],
+    ) -> None:
+        identity = _dlsvm_matrix_identity(
+            kind=kind,
+            row_samples=rows,
+            column_samples=columns,
+            backend=backend,
+        )
+        key = _canonical_json_sha256(identity)
+        expected[f"{kind}-{key}.npy"] = (identity, (len(rows), len(columns)))
+
+    for defense in sorted(by_defense):
+        selected = tuple(sorted(by_defense[defense], key=lambda item: item.sample_id))
+        add("within", selected, selected)
+
+    undefended_train = tuple(
+        sorted(
+            (
+                sample
+                for sample in samples
+                if sample.defense == "undefended" and sample.acquisition_block_index in TRAIN_BLOCKS
+            ),
+            key=lambda item: item.sample_id,
+        )
+    )
+    for block in (VALIDATION_BLOCK, TEST_BLOCK):
+        for defense in sorted(set(by_defense) - {"undefended"}):
+            testing = tuple(
+                sorted(
+                    (
+                        sample
+                        for sample in samples
+                        if sample.defense == defense and sample.acquisition_block_index == block
+                    ),
+                    key=lambda item: item.sample_id,
+                )
+            )
+            add("cross", testing, undefended_train)
+    return expected
+
+
+def _dlsvm_cache_resume_credit(
+    cache_directory: Path,
+    *,
+    samples: Sequence[StudySample],
+    cache_read_only: bool = False,
+) -> dict[str, Any]:
+    """Credit exact persisted payloads under the cache lifecycle lock."""
+
+    _filesystem, credit = _dlsvm_cache_capacity_runtime(
+        cache_directory,
+        samples=samples,
+        cache_read_only=cache_read_only,
+    )
+    return credit
+
+
+def _dlsvm_cache_capacity_runtime(
+    cache_directory: Path,
+    *,
+    samples: Sequence[StudySample],
+    cache_read_only: bool = False,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Snapshot filesystem space and reusable payload under one lifecycle lock."""
+
+    if type(cache_read_only) is not bool:
+        raise ValueError("DLSVM cache resume-credit mode must be a boolean")
+    cache = Path(os.path.abspath(cache_directory))
+    if not cache.exists() and not cache.is_symlink():
+        if cache_read_only:
+            raise ValueError("read-only DLSVM cache does not exist")
+        credit = {
+            "schema_version": 1,
+            "policy": (
+                "exact-expected-structurally-valid-persisted-matrix-payload-bytes;"
+                "unsealed-semantics-fail-closed-before-reuse"
+            ),
+            "cache_directory": str(cache),
+            "sealed_matrix_count": 0,
+            "uncommitted_matrix_count": 0,
+            "credited_payload_bytes": 0,
+            "credited_artifacts": [],
+        }
+        return _dlsvm_cache_filesystem_capacity(cache), credit
+    if cache.is_symlink() or not cache.is_dir():
+        raise ValueError("DLSVM cache resume-credit directory is unavailable or unsafe")
+    descriptor = _acquire_dlsvm_cache_lock(cache, writable=not cache_read_only)
+    try:
+        if cache_read_only:
+            _validate_dlsvm_cache_read_only_inventory_safety(cache)
+        else:
+            _discard_dlsvm_cache_temps(cache)
+        credit = _dlsvm_cache_resume_credit_locked(
+            cache,
+            samples=samples,
+            require_closed=cache_read_only,
+        )
+        return _dlsvm_cache_filesystem_capacity(cache), credit
+    finally:
+        _release_dlsvm_cache_lock(descriptor)
+
+
+def _dlsvm_cache_resume_credit_locked(
+    cache: Path,
+    *,
+    samples: Sequence[StudySample],
+    require_closed: bool,
+) -> dict[str, Any]:
+    """Inspect a cache whose exclusive lifecycle lock is already held."""
+
+    expected = _expected_dlsvm_cache_artifacts(samples)
+    entries = {item.name: item for item in cache.iterdir()}
+    allowed = {_DLSVM_CACHE_LOCK_NAME}
+    allowed.update(expected)
+    allowed.update(f"{name}.receipt.json" for name in expected)
+    for name, item in entries.items():
+        if _DLSVM_CACHE_TEMP.fullmatch(name) is not None:
+            raise ValueError("DLSVM cache contains an uncommitted temporary")
+        if name not in allowed:
+            raise ValueError("DLSVM cache contains an unexpected artifact")
+        if item.is_symlink() or not item.is_file():
+            raise ValueError("DLSVM cache contains a non-regular artifact")
+
+    credited = 0
+    sealed = 0
+    uncommitted = 0
+    credited_artifacts: list[dict[str, Any]] = []
+    for name, (identity, shape) in expected.items():
+        matrix_path = entries.get(name)
+        seal_path = entries.get(f"{name}.receipt.json")
+        if matrix_path is None:
+            if require_closed and seal_path is not None:
+                raise ValueError("read-only DLSVM cache contains an orphan receipt")
+            continue
+        try:
+            matrix = np.load(matrix_path, allow_pickle=False, mmap_mode="r")
+        except (OSError, ValueError) as error:
+            raise ValueError("DLSVM cached matrix cannot be inspected") from error
+        try:
+            if matrix.shape != shape or matrix.dtype != np.float64:
+                raise ValueError("DLSVM cached matrix storage shape or dtype is invalid")
+        finally:
+            mmap = getattr(matrix, "_mmap", None)
+            if mmap is not None:
+                mmap.close()
+        if seal_path is None:
+            if require_closed:
+                raise ValueError("read-only DLSVM cache contains an uncommitted matrix")
+            uncommitted += 1
+            state = "uncommitted"
+        else:
+            key = name.removeprefix(identity["kind"] + "-").removesuffix(".npy")
+            _validate_dlsvm_matrix_seal(
+                matrix_path,
+                seal_path,
+                identity=identity,
+                identity_sha256=key,
+                shape=shape,
+            )
+            seal_value = load_json(seal_path)
+            canonical_seal = (json.dumps(seal_value, indent=2, sort_keys=True) + "\n").encode(
+                "utf-8"
+            )
+            if seal_path.read_bytes() != canonical_seal:
+                raise ValueError("DLSVM cached matrix receipt is not canonically encoded")
+            sealed += 1
+            state = "sealed"
+        payload_bytes = shape[0] * shape[1] * 8
+        credited += payload_bytes
+        credited_artifacts.append(
+            {
+                "name": name,
+                "payload_bytes": payload_bytes,
+                "state": state,
+            }
+        )
+    if require_closed and sealed != len(expected):
+        raise ValueError("read-only DLSVM cache inventory is incomplete")
+    credited_artifacts.sort(key=lambda item: str(item["name"]))
+    return {
+        "schema_version": 1,
+        "policy": (
+            "exact-expected-structurally-valid-persisted-matrix-payload-bytes;"
+            "unsealed-semantics-fail-closed-before-reuse"
+        ),
+        "cache_directory": str(cache),
+        "sealed_matrix_count": sealed,
+        "uncommitted_matrix_count": uncommitted,
+        "credited_payload_bytes": credited,
+        "credited_artifacts": credited_artifacts,
+    }
+
+
+def _validated_dlsvm_cache_resume_credit(
+    value: Any,
+    *,
+    expected_cache_directory: Path,
+    expected_artifacts: Mapping[str, tuple[dict[str, Any], tuple[int, int]]],
+) -> dict[str, Any]:
+    required = {
+        "schema_version",
+        "policy",
+        "cache_directory",
+        "sealed_matrix_count",
+        "uncommitted_matrix_count",
+        "credited_payload_bytes",
+        "credited_artifacts",
+    }
+    credited = value.get("credited_payload_bytes") if isinstance(value, Mapping) else None
+    count = value.get("sealed_matrix_count") if isinstance(value, Mapping) else None
+    uncommitted = value.get("uncommitted_matrix_count") if isinstance(value, Mapping) else None
+    artifacts = value.get("credited_artifacts") if isinstance(value, Mapping) else None
+    validated_artifacts: list[dict[str, Any]] = []
+    if isinstance(artifacts, list):
+        for artifact in artifacts:
+            if not isinstance(artifact, Mapping) or set(artifact) != {
+                "name",
+                "payload_bytes",
+                "state",
+            }:
+                raise ValueError("DLSVM cache resume-credit artifact is invalid")
+            name = artifact.get("name")
+            expected = expected_artifacts.get(name) if isinstance(name, str) else None
+            if (
+                expected is None
+                or artifact.get("state") not in {"sealed", "uncommitted"}
+                or artifact.get("payload_bytes") != expected[1][0] * expected[1][1] * 8
+            ):
+                raise ValueError("DLSVM cache resume-credit artifact is invalid")
+            validated_artifacts.append(dict(artifact))
+    artifact_names = [str(artifact["name"]) for artifact in validated_artifacts]
+    if (
+        not isinstance(value, Mapping)
+        or set(value) != required
+        or value.get("schema_version") != 1
+        or value.get("policy")
+        != (
+            "exact-expected-structurally-valid-persisted-matrix-payload-bytes;"
+            "unsealed-semantics-fail-closed-before-reuse"
+        )
+        or value.get("cache_directory") != str(Path(os.path.abspath(expected_cache_directory)))
+        or type(count) is not int
+        or count < 0
+        or type(uncommitted) is not int
+        or uncommitted < 0
+        or not isinstance(artifacts, list)
+        or artifact_names != sorted(artifact_names)
+        or len(set(artifact_names)) != len(artifact_names)
+        or count != sum(artifact["state"] == "sealed" for artifact in validated_artifacts)
+        or uncommitted
+        != sum(artifact["state"] == "uncommitted" for artifact in validated_artifacts)
+        or type(credited) is not int
+        or credited < 0
+        or credited != sum(int(artifact["payload_bytes"]) for artifact in validated_artifacts)
+    ):
+        raise ValueError("DLSVM cache resume-credit evidence is invalid")
+    return dict(value)
+
+
+def _dlsvm_cache_filesystem_capacity(cache_directory: Path) -> dict[str, Any]:
+    """Read available bytes on the filesystem that will hold the cache."""
+
+    candidate = Path(os.path.abspath(cache_directory))
+    cursor = Path(candidate.anchor)
+    for component in candidate.parts[1:]:
+        cursor = cursor / component
+        if cursor.is_symlink():
+            raise ValueError("DLSVM cache filesystem path cannot traverse a symbolic link")
+        if not cursor.exists():
+            break
+        if not cursor.is_dir():
+            raise ValueError("DLSVM cache filesystem path is unavailable or unsafe")
+    probe = candidate
+    missing: list[str] = []
+    while not probe.exists() and not probe.is_symlink():
+        missing.append(probe.name)
+        parent = probe.parent
+        if parent == probe:
+            raise ValueError("DLSVM cache filesystem has no existing ancestor")
+        probe = parent
+    if probe.is_symlink() or not probe.is_dir():
+        raise ValueError("DLSVM cache filesystem ancestor is unavailable or unsafe")
+    # Existing descendants are checked component-by-component so a future
+    # create never inherits a symlink traversal that differs from this probe.
+    rebuilt = probe
+    for component in reversed(missing):
+        rebuilt = rebuilt / component
+        if rebuilt.exists() and (rebuilt.is_symlink() or not rebuilt.is_dir()):
+            raise ValueError("DLSVM cache filesystem path is unavailable or unsafe")
+    stats = os.statvfs(probe)
+    fragment_size = int(stats.f_frsize or stats.f_bsize)
+    available = int(stats.f_bavail) * fragment_size
+    device = int(probe.stat().st_dev)
+    return {
+        "schema_version": 1,
+        "policy": "statvfs-unprivileged-available-fragments-at-nearest-existing-ancestor",
+        "cache_directory": str(candidate),
+        "probe_path": str(probe.resolve()),
+        "device": device,
+        "fragment_size_bytes": fragment_size,
+        "available_bytes": available,
+    }
+
+
+def _validated_dlsvm_cache_filesystem_capacity(
+    value: Any,
+    *,
+    expected_cache_directory: Path | None = None,
+) -> dict[str, Any]:
+    required = {
+        "schema_version",
+        "policy",
+        "cache_directory",
+        "probe_path",
+        "device",
+        "fragment_size_bytes",
+        "available_bytes",
+    }
+    if not isinstance(value, Mapping) or set(value) != required:
+        raise ValueError("DLSVM cache-filesystem capacity evidence is invalid")
+    cache = value.get("cache_directory")
+    probe = value.get("probe_path")
+    cache_path = Path(cache) if isinstance(cache, str) else None
+    probe_path = Path(probe) if isinstance(probe, str) else None
+    if (
+        value.get("schema_version") != 1
+        or value.get("policy")
+        != "statvfs-unprivileged-available-fragments-at-nearest-existing-ancestor"
+        or not isinstance(cache, str)
+        or cache_path is None
+        or not cache_path.is_absolute()
+        or not isinstance(probe, str)
+        or probe_path is None
+        or not probe_path.is_absolute()
+        or not cache_path.is_relative_to(probe_path)
+        or type(value.get("device")) is not int
+        or int(value["device"]) < 0
+        or type(value.get("fragment_size_bytes")) is not int
+        or int(value["fragment_size_bytes"]) <= 0
+        or type(value.get("available_bytes")) is not int
+        or int(value["available_bytes"]) < 0
+        or (
+            expected_cache_directory is not None
+            and Path(cache) != Path(os.path.abspath(expected_cache_directory))
+        )
+    ):
+        raise ValueError("DLSVM cache-filesystem capacity evidence is invalid")
+    return dict(value)
+
+
 def dlsvm_preflight_benchmark(
     samples: Sequence[StudySample],
     *,
     handoff_root: Path,
+    cache_directory: Path | None = None,
     available_wall_seconds: float | None = None,
+    execution_model: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Measure the exact native OSA engine and project the sealed cohort workload."""
 
@@ -3257,17 +4704,20 @@ def dlsvm_preflight_benchmark(
     )
     workers = int(census["workers"])
     worker_efficiency = 0.65
-    safety_factor = 2.0
-    projected_wall_seconds = (
-        float(census["dynamic_programming_cells_upper_bound"])
-        / (conservative_cells_per_second * workers * worker_efficiency)
-        * safety_factor
-    )
     projected_matrix_bytes = int(census["persisted_dense_matrix_bytes"])
     maximum_trace = max(lengths)
     projected_working_bytes = maximum_trace * 3 * 8 * workers
-    projected_memory_bytes = projected_matrix_bytes + projected_working_bytes
-    available_memory = _available_memory_bytes()
+    memory_capacity = _memory_capacity_runtime()
+    available_memory = memory_capacity["effective_available_bytes"]
+    storage_projection = _dlsvm_cache_storage_projection(census)
+    if cache_directory is None:
+        cache_filesystem = None
+        cache_resume_credit = None
+    else:
+        cache_filesystem, cache_resume_credit = _dlsvm_cache_capacity_runtime(
+            cache_directory,
+            samples=samples,
+        )
     available_wall = _configured_dlsvm_wall_seconds(available_wall_seconds)
     handoff_root = handoff_root.resolve()
     binding = {
@@ -3275,7 +4725,7 @@ def dlsvm_preflight_benchmark(
         "dataset_sha256": _sha256_file(handoff_root / "dataset.json"),
         "samples_sha256": _sha256_file(handoff_root / "samples.jsonl"),
     }
-    return {
+    receipt = {
         "schema_version": 1,
         "artifact_type": "qcsd-dlsvm-native-capacity-preflight",
         "handoff": binding,
@@ -3296,7 +4746,17 @@ def dlsvm_preflight_benchmark(
         },
         "measurements": measurements,
         "workload": census,
-        "projection": {
+    }
+    if execution_model is None:
+        safety_factor = 2.0
+        projected_wall_seconds = (
+            float(census["dynamic_programming_cells_upper_bound"])
+            / (conservative_cells_per_second * workers * worker_efficiency)
+            * safety_factor
+        )
+        projected_memory_bytes = projected_matrix_bytes + projected_working_bytes
+        required_memory = math.ceil(projected_memory_bytes * 1.5)
+        receipt["projection"] = {
             "conservative_single_worker_cells_per_second": conservative_cells_per_second,
             "workers": workers,
             "worker_efficiency": worker_efficiency,
@@ -3307,17 +4767,97 @@ def dlsvm_preflight_benchmark(
             "projected_worker_memory_bytes": projected_working_bytes,
             "projected_memory_bytes": projected_memory_bytes,
             "available_memory_bytes": available_memory,
-        },
-        "admission": {
-            "wall_time_available": (
-                available_wall is not None and available_wall >= projected_wall_seconds
-            ),
-            "memory_available": (
-                available_memory is not None
-                and available_memory >= math.ceil(projected_memory_bytes * 1.5)
-            ),
-        },
+        }
+    else:
+        model = _validated_dlsvm_execution_model(execution_model)
+        worker_capacity = _osad_worker_capacity()
+        if int(worker_capacity["selected_workers"]) != workers:
+            raise ValueError("DLSVM workload and worker-capacity census differ")
+        single_pass_seconds = float(census["dynamic_programming_cells_upper_bound"]) / (
+            conservative_cells_per_second * workers * float(model["worker_efficiency"])
+        )
+        modeled_execution_seconds = single_pass_seconds * int(model["total_full_matrix_passes"])
+        projected_wall_seconds = modeled_execution_seconds * float(model["contingency_multiplier"])
+        largest_recomputed_matrix_bytes = (
+            _largest_dlsvm_matrix_bytes(census)
+            if int(model["complete_cache_recomputation_passes"]) > 0
+            else 0
+        )
+        sample_sequence_symbols = sum(lengths)
+        benchmark_sequence_symbols = 2 * sum(executed_lengths)
+        retained_sequence_count = len(lengths) + 2 * len(executed_lengths)
+        retained_sequence_native_array_bytes = (
+            sample_sequence_symbols + benchmark_sequence_symbols
+        ) * int(model["retained_sequence_symbol_bytes"]) + retained_sequence_count * int(
+            model["retained_sequence_object_bytes"]
+        )
+        projected_native_dp_worker_memory_bytes = (maximum_trace + 1) * 3 * 8 * workers
+        largest_kernel_row_elements = _largest_dlsvm_matrix_dimension(census)
+        projected_kernel_row_memory_bytes = (
+            largest_kernel_row_elements * int(model["kernel_row_element_bytes"]) * workers
+        )
+        projected_memory_bytes = (
+            projected_matrix_bytes
+            + largest_recomputed_matrix_bytes
+            + retained_sequence_native_array_bytes
+            + projected_native_dp_worker_memory_bytes
+            + projected_kernel_row_memory_bytes
+        )
+        required_memory = math.ceil(
+            projected_memory_bytes * float(model["memory_headroom_multiplier"])
+        )
+        receipt["schema_version"] = 2
+        receipt["execution_model"] = model
+        if cache_filesystem is None:
+            raise ValueError("schema-two DLSVM preflight requires a cache directory")
+        receipt["projection"] = {
+            "conservative_single_worker_cells_per_second": conservative_cells_per_second,
+            "workers": workers,
+            "worker_capacity": worker_capacity,
+            "worker_efficiency": float(model["worker_efficiency"]),
+            "single_full_matrix_pass_seconds": single_pass_seconds,
+            "full_matrix_passes": int(model["total_full_matrix_passes"]),
+            "modeled_execution_seconds": modeled_execution_seconds,
+            "contingency_multiplier": float(model["contingency_multiplier"]),
+            "projected_wall_seconds": projected_wall_seconds,
+            "available_wall_seconds": available_wall,
+            "resident_matrix_union_bytes": projected_matrix_bytes,
+            "largest_recomputed_matrix_bytes": largest_recomputed_matrix_bytes,
+            "sample_sequence_symbols_upper_bound": sample_sequence_symbols,
+            "benchmark_sequence_symbols_upper_bound": benchmark_sequence_symbols,
+            "retained_sequence_count_upper_bound": retained_sequence_count,
+            "retained_sequence_symbol_bytes": int(model["retained_sequence_symbol_bytes"]),
+            "retained_sequence_object_bytes": int(model["retained_sequence_object_bytes"]),
+            "retained_sequence_native_array_bytes": (retained_sequence_native_array_bytes),
+            "projected_native_dp_worker_memory_bytes": (projected_native_dp_worker_memory_bytes),
+            "largest_kernel_row_elements": largest_kernel_row_elements,
+            "kernel_row_element_bytes": int(model["kernel_row_element_bytes"]),
+            "projected_kernel_row_worker_memory_bytes": (projected_kernel_row_memory_bytes),
+            "projected_memory_bytes": projected_memory_bytes,
+            "memory_headroom_multiplier": float(model["memory_headroom_multiplier"]),
+            "required_memory_bytes": required_memory,
+            "available_memory_bytes": available_memory,
+            "memory_capacity": memory_capacity,
+            "cache_storage": storage_projection,
+            "cache_filesystem": cache_filesystem,
+            "cache_resume_credit": cache_resume_credit,
+        }
+    admission = {
+        "wall_time_available": (
+            available_wall is not None and available_wall >= projected_wall_seconds
+        ),
+        "memory_available": (available_memory is not None and available_memory >= required_memory),
     }
+    if receipt["schema_version"] == 2:
+        admission["cache_storage_available"] = (
+            cache_filesystem is not None
+            and cache_resume_credit is not None
+            and int(cache_filesystem["available_bytes"])
+            + int(cache_resume_credit["credited_payload_bytes"])
+            >= int(storage_projection["required_free_bytes"])
+        )
+    receipt["admission"] = admission
+    return receipt
 
 
 def write_dlsvm_preflight(
@@ -3325,28 +4865,38 @@ def write_dlsvm_preflight(
     *,
     samples: Sequence[StudySample],
     handoff_root: Path,
+    cache_directory: Path | None = None,
     formal: bool,
     available_wall_seconds: float | None = None,
+    execution_model: Mapping[str, Any] | None = None,
 ) -> Path:
+    """Publish a complete immutable preflight without exposing a partial final.
+
+    A SIGKILL can leave only a random same-directory temporary; the next
+    invocation uses a different name and can publish normally.  An existing
+    final path is never repaired or replaced, so a corrupt completed receipt
+    continues to fail closed.
+    """
+
     if path.exists() or path.is_symlink():
         raise FileExistsError(f"DLSVM preflight destination already exists: {path}")
     receipt = dlsvm_preflight_benchmark(
         samples,
         handoff_root=handoff_root,
+        cache_directory=cache_directory,
         available_wall_seconds=available_wall_seconds,
+        execution_model=execution_model,
     )
     _validate_dlsvm_preflight_value(
         receipt,
         samples=samples,
         handoff_root=handoff_root,
         formal=formal,
+        expected_execution_model=execution_model,
     )
     path.parent.mkdir(parents=True, exist_ok=True)
-    encoded = json.dumps(receipt, indent=2, sort_keys=True) + "\n"
-    with path.open("x", encoding="utf-8") as output:
-        output.write(encoded)
-        output.flush()
-        os.fsync(output.fileno())
+    encoded = (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    durable_create(path, encoded)
     return path
 
 
@@ -3356,9 +4906,11 @@ def validate_dlsvm_preflight(
     samples: Sequence[StudySample],
     handoff_root: Path,
     formal: bool,
+    expected_execution_model: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    path = path.resolve()
-    if path.is_symlink() or not path.is_file():
+    candidate = Path(path)
+    path = candidate.resolve()
+    if candidate.is_symlink() or not path.is_file():
         raise ValueError("DLSVM preflight is not a regular file")
     value = load_json(path)
     return _validate_dlsvm_preflight_value(
@@ -3366,7 +4918,109 @@ def validate_dlsvm_preflight(
         samples=samples,
         handoff_root=handoff_root,
         formal=formal,
+        expected_execution_model=expected_execution_model,
     )
+
+
+def admit_dlsvm_preflight_capacity(
+    path: Path,
+    *,
+    samples: Sequence[StudySample],
+    handoff_root: Path,
+    formal: bool,
+    expected_execution_model: Mapping[str, Any] | None = None,
+    available_wall_seconds: float | None = None,
+    cache_directory: Path | None = None,
+    cache_read_only: bool = False,
+) -> dict[str, Any]:
+    """Re-admit an immutable preflight against capacity available right now."""
+
+    if type(cache_read_only) is not bool:
+        raise ValueError("DLSVM cache admission mode must be a boolean")
+
+    value = validate_dlsvm_preflight(
+        path,
+        samples=samples,
+        handoff_root=handoff_root,
+        formal=formal,
+        expected_execution_model=expected_execution_model,
+    )
+    projection = value["projection"]
+    available_wall = _configured_dlsvm_wall_seconds(available_wall_seconds)
+    memory_capacity = _memory_capacity_runtime()
+    available_memory = memory_capacity["effective_available_bytes"]
+    required_wall = float(projection["projected_wall_seconds"])
+    required_memory = (
+        int(projection["required_memory_bytes"])
+        if value["schema_version"] == 2
+        else math.ceil(int(projection["projected_memory_bytes"]) * 1.5)
+    )
+    admission = {
+        "schema_version": 1,
+        "preflight_schema_version": int(value["schema_version"]),
+        "execution_model_sha256": (
+            hashlib.sha256(
+                json.dumps(
+                    value["execution_model"],
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+            if value["schema_version"] == 2
+            else None
+        ),
+        "required_wall_seconds": required_wall,
+        "available_wall_seconds": available_wall,
+        "required_memory_bytes": required_memory,
+        "available_memory_bytes": available_memory,
+        "memory_capacity": memory_capacity,
+        "wall_time_available": (available_wall is not None and available_wall >= required_wall),
+        "memory_available": (available_memory is not None and available_memory >= required_memory),
+    }
+    if value["schema_version"] == 2:
+        recorded_filesystem = _validated_dlsvm_cache_filesystem_capacity(
+            projection["cache_filesystem"]
+        )
+        selected_cache = (
+            Path(cache_directory)
+            if cache_directory is not None
+            else Path(recorded_filesystem["cache_directory"])
+        )
+        if Path(os.path.abspath(selected_cache)) != Path(recorded_filesystem["cache_directory"]):
+            raise ValueError("DLSVM cache directory differs from its preflight binding")
+        current_filesystem, current_resume_credit = _dlsvm_cache_capacity_runtime(
+            selected_cache,
+            samples=samples,
+            cache_read_only=cache_read_only,
+        )
+        storage = _validated_dlsvm_cache_storage_projection(
+            projection["cache_storage"],
+            census=value["workload"],
+        )
+        required_cache = 0 if cache_read_only else int(storage["required_free_bytes"])
+        admission.update(
+            {
+                "cache_read_only": cache_read_only,
+                "required_cache_free_bytes": required_cache,
+                "cache_filesystem": current_filesystem,
+                "cache_resume_credit": current_resume_credit,
+                "cache_storage_available": (
+                    int(current_filesystem["available_bytes"])
+                    + int(current_resume_credit["credited_payload_bytes"])
+                    >= required_cache
+                ),
+            }
+        )
+    if formal and (
+        admission["wall_time_available"] is not True
+        or admission["memory_available"] is not True
+        or (value["schema_version"] == 2 and admission["cache_storage_available"] is not True)
+    ):
+        raise ValueError(
+            "formal DLSVM current-capacity admission failed before matrix computation: "
+            "wall, memory, or cache storage is insufficient"
+        )
+    return admission
 
 
 def _validate_dlsvm_preflight_value(
@@ -3375,6 +5029,7 @@ def _validate_dlsvm_preflight_value(
     samples: Sequence[StudySample],
     handoff_root: Path,
     formal: bool,
+    expected_execution_model: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     census = dlsvm_workload_census(samples)
     expected_handoff = {
@@ -3388,7 +5043,7 @@ def _validate_dlsvm_preflight_value(
     trace_census = value.get("trace_length_census") if isinstance(value, Mapping) else None
     if (
         not isinstance(value, dict)
-        or value.get("schema_version") != 1
+        or value.get("schema_version") not in {1, 2}
         or value.get("artifact_type") != "qcsd-dlsvm-native-capacity-preflight"
         or value.get("handoff") != expected_handoff
         or value.get("workload") != census
@@ -3406,12 +5061,36 @@ def _validate_dlsvm_preflight_value(
         )
     ):
         raise ValueError("DLSVM preflight schema or cohort binding is invalid")
+    schema_version = int(value["schema_version"])
+    if expected_execution_model is not None:
+        expected_model = _validated_dlsvm_execution_model(expected_execution_model)
+        if schema_version != 2 or value.get("execution_model") != expected_model:
+            raise ValueError("DLSVM preflight execution model is invalid")
+    elif schema_version != 1:
+        raise ValueError("schema-two DLSVM preflight requires an execution model")
+    expected_keys = {
+        "schema_version",
+        "artifact_type",
+        "handoff",
+        "engine",
+        "source",
+        "trace_length_census",
+        "measurements",
+        "workload",
+        "projection",
+        "admission",
+    }
+    if schema_version == 2:
+        expected_keys.add("execution_model")
+    if set(value) != expected_keys:
+        raise ValueError("DLSVM preflight schema or cohort binding is invalid")
     engine = value.get("engine")
     loaded = _load_osad_library()
     if (
         loaded is None
         or not isinstance(engine, Mapping)
         or set(engine) != {"path", "sha256", "source_sha256"}
+        or engine.get("path") != str(loaded[1])
         or engine.get("sha256") != _sha256_file(loaded[1])
         or engine.get("source_sha256") != _sha256_file(LAB_ROOT / "tools/qcsd_osad.c")
     ):
@@ -3464,44 +5143,16 @@ def _validate_dlsvm_preflight_value(
             raise ValueError("DLSVM preflight benchmark derivation is invalid")
     conservative_rate = min(float(item["cells_per_second"]) for item in measurements)
     workers = int(census["workers"])
-    expected_wall = (
-        float(census["dynamic_programming_cells_upper_bound"])
-        / (conservative_rate * workers * 0.65)
-        * 2.0
-    )
     expected_matrix = int(census["persisted_dense_matrix_bytes"])
     expected_working = max(lengths) * 3 * 8 * workers
-    expected_memory = expected_matrix + expected_working
     available_wall = projection.get("available_wall_seconds")
     available_memory = projection.get("available_memory_bytes")
-    if (
-        set(projection)
-        != {
-            "conservative_single_worker_cells_per_second",
-            "workers",
-            "worker_efficiency",
-            "safety_factor",
-            "projected_wall_seconds",
-            "available_wall_seconds",
-            "projected_matrix_bytes",
-            "projected_worker_memory_bytes",
-            "projected_memory_bytes",
-            "available_memory_bytes",
-        }
-        or set(admission) != {"wall_time_available", "memory_available"}
-        or isinstance(projected, bool)
+    invalid_capacity = (
+        isinstance(projected, bool)
         or not isinstance(projected, (int, float))
         or projected <= 0
         or type(memory) is not int
         or memory <= 0
-        or projection.get("conservative_single_worker_cells_per_second") != conservative_rate
-        or projection.get("workers") != workers
-        or projection.get("worker_efficiency") != 0.65
-        or projection.get("safety_factor") != 2.0
-        or not math.isclose(float(projected), expected_wall, rel_tol=1e-12)
-        or projection.get("projected_matrix_bytes") != expected_matrix
-        or projection.get("projected_worker_memory_bytes") != expected_working
-        or memory != expected_memory
         or (
             available_wall is not None
             and (
@@ -3512,23 +5163,196 @@ def _validate_dlsvm_preflight_value(
         )
         or (
             available_memory is not None
-            and (type(available_memory) is not int or available_memory <= 0)
+            and (type(available_memory) is not int or available_memory < 0)
         )
+    )
+    if schema_version == 1:
+        expected_wall = (
+            float(census["dynamic_programming_cells_upper_bound"])
+            / (conservative_rate * workers * 0.65)
+            * 2.0
+        )
+        expected_memory = expected_matrix + expected_working
+        required_memory = math.ceil(expected_memory * 1.5)
+        projection_valid = (
+            set(projection)
+            == {
+                "conservative_single_worker_cells_per_second",
+                "workers",
+                "worker_efficiency",
+                "safety_factor",
+                "projected_wall_seconds",
+                "available_wall_seconds",
+                "projected_matrix_bytes",
+                "projected_worker_memory_bytes",
+                "projected_memory_bytes",
+                "available_memory_bytes",
+            }
+            and projection.get("worker_efficiency") == 0.65
+            and projection.get("safety_factor") == 2.0
+            and projection.get("projected_matrix_bytes") == expected_matrix
+            and projection.get("projected_worker_memory_bytes") == expected_working
+        )
+    else:
+        model = _validated_dlsvm_execution_model(value["execution_model"])
+        worker_capacity = _osad_worker_capacity()
+        single_pass = float(census["dynamic_programming_cells_upper_bound"]) / (
+            conservative_rate * workers * float(model["worker_efficiency"])
+        )
+        modeled_execution = single_pass * int(model["total_full_matrix_passes"])
+        expected_wall = modeled_execution * float(model["contingency_multiplier"])
+        largest_recomputed = (
+            _largest_dlsvm_matrix_bytes(census)
+            if int(model["complete_cache_recomputation_passes"]) > 0
+            else 0
+        )
+        sample_sequence_symbols = sum(lengths)
+        benchmark_sequence_symbols = 2 * sum(expected_executed)
+        retained_sequence_count = len(lengths) + 2 * len(expected_executed)
+        retained_sequence_native_array_bytes = (
+            sample_sequence_symbols + benchmark_sequence_symbols
+        ) * int(model["retained_sequence_symbol_bytes"]) + retained_sequence_count * int(
+            model["retained_sequence_object_bytes"]
+        )
+        expected_native_dp_worker_memory = (max(lengths) + 1) * 3 * 8 * workers
+        largest_kernel_row_elements = _largest_dlsvm_matrix_dimension(census)
+        projected_kernel_row_memory_bytes = (
+            largest_kernel_row_elements * int(model["kernel_row_element_bytes"]) * workers
+        )
+        expected_memory = (
+            expected_matrix
+            + largest_recomputed
+            + retained_sequence_native_array_bytes
+            + expected_native_dp_worker_memory
+            + projected_kernel_row_memory_bytes
+        )
+        required_memory = math.ceil(expected_memory * float(model["memory_headroom_multiplier"]))
+        projection_valid = (
+            set(projection)
+            == {
+                "conservative_single_worker_cells_per_second",
+                "workers",
+                "worker_capacity",
+                "worker_efficiency",
+                "single_full_matrix_pass_seconds",
+                "full_matrix_passes",
+                "modeled_execution_seconds",
+                "contingency_multiplier",
+                "projected_wall_seconds",
+                "available_wall_seconds",
+                "resident_matrix_union_bytes",
+                "largest_recomputed_matrix_bytes",
+                "sample_sequence_symbols_upper_bound",
+                "benchmark_sequence_symbols_upper_bound",
+                "retained_sequence_count_upper_bound",
+                "retained_sequence_symbol_bytes",
+                "retained_sequence_object_bytes",
+                "retained_sequence_native_array_bytes",
+                "projected_native_dp_worker_memory_bytes",
+                "largest_kernel_row_elements",
+                "kernel_row_element_bytes",
+                "projected_kernel_row_worker_memory_bytes",
+                "projected_memory_bytes",
+                "memory_headroom_multiplier",
+                "required_memory_bytes",
+                "available_memory_bytes",
+                "memory_capacity",
+                "cache_storage",
+                "cache_filesystem",
+                "cache_resume_credit",
+            }
+            and projection.get("worker_efficiency") == float(model["worker_efficiency"])
+            and projection.get("worker_capacity") == worker_capacity
+            and math.isclose(
+                float(projection.get("single_full_matrix_pass_seconds", 0)),
+                single_pass,
+                rel_tol=1e-12,
+            )
+            and projection.get("full_matrix_passes") == int(model["total_full_matrix_passes"])
+            and math.isclose(
+                float(projection.get("modeled_execution_seconds", 0)),
+                modeled_execution,
+                rel_tol=1e-12,
+            )
+            and projection.get("contingency_multiplier") == float(model["contingency_multiplier"])
+            and projection.get("resident_matrix_union_bytes") == expected_matrix
+            and projection.get("largest_recomputed_matrix_bytes") == largest_recomputed
+            and projection.get("sample_sequence_symbols_upper_bound") == sample_sequence_symbols
+            and projection.get("benchmark_sequence_symbols_upper_bound")
+            == benchmark_sequence_symbols
+            and projection.get("retained_sequence_count_upper_bound") == retained_sequence_count
+            and projection.get("retained_sequence_symbol_bytes")
+            == int(model["retained_sequence_symbol_bytes"])
+            and projection.get("retained_sequence_object_bytes")
+            == int(model["retained_sequence_object_bytes"])
+            and projection.get("retained_sequence_native_array_bytes")
+            == retained_sequence_native_array_bytes
+            and projection.get("projected_native_dp_worker_memory_bytes")
+            == expected_native_dp_worker_memory
+            and projection.get("largest_kernel_row_elements") == largest_kernel_row_elements
+            and projection.get("kernel_row_element_bytes") == int(model["kernel_row_element_bytes"])
+            and projection.get("projected_kernel_row_worker_memory_bytes")
+            == projected_kernel_row_memory_bytes
+            and projection.get("memory_headroom_multiplier")
+            == float(model["memory_headroom_multiplier"])
+            and projection.get("required_memory_bytes") == required_memory
+            and _validated_memory_capacity_runtime(projection.get("memory_capacity"))[
+                "effective_available_bytes"
+            ]
+            == available_memory
+            and _validated_dlsvm_cache_storage_projection(
+                projection.get("cache_storage"),
+                census=census,
+            )["required_free_bytes"]
+            == projection["cache_storage"]["required_free_bytes"]
+            and _validated_dlsvm_cache_filesystem_capacity(projection.get("cache_filesystem"))[
+                "available_bytes"
+            ]
+            == projection["cache_filesystem"]["available_bytes"]
+            and _validated_dlsvm_cache_resume_credit(
+                projection.get("cache_resume_credit"),
+                expected_cache_directory=Path(projection["cache_filesystem"]["cache_directory"]),
+                expected_artifacts=_expected_dlsvm_cache_artifacts(samples),
+            )["credited_payload_bytes"]
+            == projection["cache_resume_credit"]["credited_payload_bytes"]
+        )
+    expected_admission_keys = {"wall_time_available", "memory_available"}
+    if schema_version == 2:
+        expected_admission_keys.add("cache_storage_available")
+    if (
+        invalid_capacity
+        or set(admission) != expected_admission_keys
+        or not projection_valid
+        or projection.get("conservative_single_worker_cells_per_second") != conservative_rate
+        or projection.get("workers") != workers
+        or not math.isclose(float(projected), expected_wall, rel_tol=1e-12)
+        or memory != expected_memory
     ):
         raise ValueError("DLSVM preflight projection is invalid")
     expected_admission = {
         "wall_time_available": (available_wall is not None and available_wall >= expected_wall),
-        "memory_available": (
-            available_memory is not None and available_memory >= math.ceil(expected_memory * 1.5)
-        ),
+        "memory_available": (available_memory is not None and available_memory >= required_memory),
     }
+    if schema_version == 2:
+        expected_admission["cache_storage_available"] = int(
+            projection["cache_filesystem"]["available_bytes"]
+        ) + int(projection["cache_resume_credit"]["credited_payload_bytes"]) >= int(
+            projection["cache_storage"]["required_free_bytes"]
+        )
     if admission != expected_admission:
         raise ValueError("DLSVM preflight admission was not derived from its projection")
     if formal and (
         admission.get("wall_time_available") is not True
         or admission.get("memory_available") is not True
+        or (schema_version == 2 and admission.get("cache_storage_available") is not True)
     ):
-        raise ValueError("formal DLSVM capacity preflight did not pass wall and memory admission")
+        if schema_version == 1:
+            raise ValueError(
+                "formal DLSVM capacity preflight did not pass wall and memory admission"
+            )
+        raise ValueError(
+            "formal DLSVM capacity preflight did not pass wall, memory, and cache-storage admission"
+        )
     return value
 
 
@@ -4013,6 +5837,14 @@ def _qcsd_comparison_rows(
 
 
 def _evaluator_source_binding(handoff_root: Path | None, *, formal: bool) -> dict[str, Any]:
+    runtime_receipts = (
+        _formal_classifier_runtime_receipts()
+        if formal
+        else {
+            "vngpp": vngpp_backend_receipt(),
+            "dlsvm": dlsvm_backend_receipt(),
+        }
+    )
     module_path = Path(__file__).resolve()
     handoff_module = module_path.with_name("buflo_handoff.py")
     native_source = LAB_ROOT / "tools/qcsd_osad.c"
@@ -4060,8 +5892,8 @@ def _evaluator_source_binding(handoff_root: Path | None, *, formal: bool) -> dic
             relative: _sha256_file(path) for relative, path in sorted(required_sources.items())
         },
         "native_library": installed_native,
-        "weka_backend": vngpp_backend_receipt(),
-        "dlsvm_backend": dlsvm_backend_receipt(),
+        "weka_backend": runtime_receipts["vngpp"],
+        "dlsvm_backend": runtime_receipts["dlsvm"],
     }
 
 
@@ -4075,6 +5907,7 @@ def write_evaluation_receipt(
     formal: bool = False,
     dlsvm_preflight: Path | None = None,
     dlsvm_cache: Mapping[str, Any] | None = None,
+    dlsvm_available_wall_seconds: float | None = None,
 ) -> Path:
     """Create one non-overwriting, canonical evaluation receipt."""
 
@@ -4084,6 +5917,8 @@ def write_evaluation_receipt(
         raise ValueError(
             f"formal evaluation requires exactly {FORMAL_BOOTSTRAP_DRAWS} bootstrap draws"
         )
+    if formal:
+        _formal_classifier_runtime_receipts()
     paired = paired_overheads(samples)
     paired_summary = summarize_paired_overheads(paired, bootstrap_draws=bootstrap_draws)
     attacks = []
@@ -4135,8 +5970,8 @@ def write_evaluation_receipt(
         "algorithm_breakdowns": algorithm_breakdowns(samples),
         "classifier_provenance": {
             "panchenko_vngpp": classifier_reference_receipt(),
-            "vngpp": vngpp_backend_receipt(),
-            "dlsvm": dlsvm_backend_receipt(),
+            "vngpp": (vngpp_backend_receipt(formal=True) if formal else vngpp_backend_receipt()),
+            "dlsvm": (dlsvm_backend_receipt(formal=True) if formal else dlsvm_backend_receipt()),
         },
         "classifier_workload": {"dlsvm": dlsvm_workload_census(samples)},
         "attacks": attacks,
@@ -4155,11 +5990,13 @@ def write_evaluation_receipt(
         handoff_root=handoff_root,
         formal=formal,
         deep=True,
+        dlsvm_available_wall_seconds=dlsvm_available_wall_seconds,
     )
     path.parent.mkdir(parents=True, exist_ok=True)
-    encoded = json.dumps(receipt, indent=2, sort_keys=True) + "\n"
-    with path.open("x", encoding="utf-8") as output:
-        output.write(encoded)
+    encoded = (json.dumps(receipt, allow_nan=False, indent=2, sort_keys=True) + "\n").encode(
+        "utf-8"
+    )
+    durable_create(path, encoded)
     return path
 
 
@@ -4169,9 +6006,12 @@ def validate_evaluation_receipt(
     handoff_root: Path,
     formal: bool,
     deep: bool = True,
+    dlsvm_available_wall_seconds: float | None = None,
 ) -> dict[str, Any]:
     """Independently revalidate classifier membership, predictions, and metrics."""
 
+    if formal:
+        _formal_classifier_runtime_receipts()
     from .buflo_handoff import validate_study_handoff
 
     path = path.resolve()
@@ -4186,7 +6026,42 @@ def validate_evaluation_receipt(
         handoff_root=root,
         formal=formal,
         deep=deep,
+        dlsvm_available_wall_seconds=dlsvm_available_wall_seconds,
     )
+
+
+def _validate_focused_dlsvm_evidence(
+    *,
+    preflight_path: Path,
+    cache: Any,
+    samples: Sequence[StudySample],
+    handoff_root: Path,
+    deep: bool,
+    dlsvm_available_wall_seconds: float | None,
+) -> None:
+    """Validate focused cache evidence, admitting before any full recomputation."""
+
+    validate_dlsvm_preflight(
+        preflight_path,
+        samples=samples,
+        handoff_root=handoff_root,
+        formal=True,
+        expected_execution_model=FOCUSED_DLSVM_EXECUTION_MODEL,
+    )
+    if deep:
+        if not isinstance(cache, Mapping) or not isinstance(cache.get("path"), str):
+            raise ValueError("focused DLSVM cache has no replayable path")
+        admit_dlsvm_preflight_capacity(
+            preflight_path,
+            samples=samples,
+            handoff_root=handoff_root,
+            formal=True,
+            expected_execution_model=FOCUSED_DLSVM_EXECUTION_MODEL,
+            available_wall_seconds=dlsvm_available_wall_seconds,
+            cache_directory=Path(cache["path"]),
+            cache_read_only=True,
+        )
+    _validate_dlsvm_cache_receipt(cache, samples=samples, deep=deep)
 
 
 def _validate_evaluation_receipt_value(
@@ -4196,7 +6071,10 @@ def _validate_evaluation_receipt_value(
     handoff_root: Path | None,
     formal: bool,
     deep: bool,
+    dlsvm_available_wall_seconds: float | None = None,
 ) -> dict[str, Any]:
+    if formal:
+        _formal_classifier_runtime_receipts()
     if (
         not isinstance(value, dict)
         or set(value) != _EVALUATION_RECEIPT_KEYS
@@ -4235,8 +6113,8 @@ def _validate_evaluation_receipt_value(
         raise ValueError("evaluation receipt source/backend lineage is invalid")
     expected_classifier_provenance = {
         "panchenko_vngpp": classifier_reference_receipt(),
-        "vngpp": vngpp_backend_receipt(),
-        "dlsvm": dlsvm_backend_receipt(),
+        "vngpp": vngpp_backend_receipt(formal=True) if formal else vngpp_backend_receipt(),
+        "dlsvm": dlsvm_backend_receipt(formal=True) if formal else dlsvm_backend_receipt(),
     }
     if value.get("classifier_provenance") != expected_classifier_provenance:
         raise ValueError("evaluation receipt classifier provenance is invalid")
@@ -4294,13 +6172,14 @@ def _validate_evaluation_receipt_value(
         preflight_path = Path(str(preflight["path"])).resolve()
         if _sha256_file(preflight_path) != preflight.get("sha256"):
             raise ValueError("formal evaluation DLSVM preflight digest is invalid")
-        validate_dlsvm_preflight(
-            preflight_path,
+        _validate_focused_dlsvm_evidence(
+            preflight_path=preflight_path,
+            cache=cache,
             samples=samples,
             handoff_root=handoff_root,
-            formal=True,
+            deep=deep,
+            dlsvm_available_wall_seconds=dlsvm_available_wall_seconds,
         )
-        _validate_dlsvm_cache_receipt(cache, samples=samples, deep=deep)
     elif preflight is not None:
         raise ValueError("non-formal evaluation unexpectedly binds a formal preflight")
     elif cache is not None:
@@ -4481,18 +6360,27 @@ def _validate_attack_replay(
         cache_directory = None
         if isinstance(dlsvm_cache, Mapping) and isinstance(dlsvm_cache.get("path"), str):
             cache_directory = Path(dlsvm_cache["path"])
-        dlsvm_store = DlsvmKernelStore(samples, cache_directory=cache_directory)
+        dlsvm_store = DlsvmKernelStore(
+            samples,
+            cache_directory=cache_directory,
+            cache_read_only=cache_directory is not None,
+        )
 
-    for record, result in zip(records, results, strict=True):
-        replayed = _replay_attack_result(result, samples=samples, dlsvm_store=dlsvm_store)
-        submitted = dict(record)
-        submitted.pop("block_workload_bootstrap_95", None)
-        if submitted != replayed.as_dict():
-            raise ValueError("evaluation attack predictions do not match deterministic replay")
+    try:
+        for record, result in zip(records, results, strict=True):
+            replayed = _replay_attack_result(result, samples=samples, dlsvm_store=dlsvm_store)
+            submitted = dict(record)
+            submitted.pop("block_workload_bootstrap_95", None)
+            if submitted != replayed.as_dict():
+                raise ValueError("evaluation attack predictions do not match deterministic replay")
 
-    if dlsvm_store is not None and dlsvm_cache is not None:
-        if dlsvm_store.receipt() != dlsvm_cache:
-            raise ValueError("evaluation replay did not consume the exact DLSVM cache")
+        if dlsvm_store is not None and dlsvm_cache is not None:
+            if dlsvm_store.receipt() != dlsvm_cache:
+                raise ValueError("evaluation replay did not consume the exact DLSVM cache")
+    except BaseException:
+        if dlsvm_store is not None:
+            dlsvm_store.close()
+        raise
 
 
 def _replay_attack_result(
@@ -4666,6 +6554,26 @@ def _expected_protocol_details(
 def _validate_dlsvm_cache_receipt(
     value: Any, *, samples: Sequence[StudySample], deep: bool
 ) -> None:
+    if not isinstance(value, Mapping) or not isinstance(value.get("path"), str):
+        raise ValueError("formal evaluation DLSVM cache receipt is invalid")
+    root_candidate = Path(value["path"])
+    root = root_candidate.resolve()
+    if str(root) != value["path"] or root_candidate.is_symlink() or not root.is_dir():
+        raise ValueError("formal evaluation DLSVM cache directory is invalid")
+    descriptor = _acquire_dlsvm_cache_lock(root, writable=False)
+    try:
+        _validate_dlsvm_cache_receipt_locked(
+            value,
+            samples=samples,
+            deep=deep,
+        )
+    finally:
+        _release_dlsvm_cache_lock(descriptor)
+
+
+def _validate_dlsvm_cache_receipt_locked(
+    value: Any, *, samples: Sequence[StudySample], deep: bool
+) -> None:
     if (
         not isinstance(value, Mapping)
         or value.get("schema_version") != 1
@@ -4674,18 +6582,34 @@ def _validate_dlsvm_cache_receipt(
         or not value["artifacts"]
     ):
         raise ValueError("formal evaluation DLSVM cache receipt is invalid")
-    root = Path(value["path"]).resolve()
-    if root.is_symlink() or not root.is_dir():
+    root_candidate = Path(value["path"])
+    root = root_candidate.resolve()
+    if str(root) != value["path"] or root_candidate.is_symlink() or not root.is_dir():
         raise ValueError("formal evaluation DLSVM cache directory is invalid")
     artifacts = value["artifacts"]
     expected_files: set[str] = set()
     by_id = {sample.sample_id: sample for sample in samples}
     for name, artifact in artifacts.items():
-        if not isinstance(name, str) or not isinstance(artifact, Mapping):
+        if (
+            not isinstance(name, str)
+            or Path(name).name != name
+            or re.fullmatch(r"(?:within|cross)-[0-9a-f]{64}\.npy", name) is None
+            or not isinstance(artifact, Mapping)
+            or set(artifact)
+            != {
+                "identity",
+                "identity_sha256",
+                "sha256",
+                "receipt",
+                "receipt_sha256",
+                "rows",
+                "columns",
+            }
+        ):
             raise ValueError("formal evaluation DLSVM cache artifact is invalid")
         matrix_path = root / name
         receipt_name = artifact.get("receipt")
-        if not isinstance(receipt_name, str):
+        if receipt_name != f"{name}.receipt.json":
             raise ValueError("formal evaluation DLSVM cache receipt name is invalid")
         seal_path = root / receipt_name
         identity = artifact.get("identity")
@@ -4751,8 +6675,11 @@ def _validate_dlsvm_cache_receipt(
                 identity_sha256=identity_sha256,
             )
         expected_files.update({name, receipt_name})
-    actual_files = {item.name for item in root.iterdir() if item.is_file()}
-    if actual_files != expected_files or any(item.is_symlink() for item in root.iterdir()):
+    items = tuple(root.iterdir())
+    actual_files = {item.name for item in items if item.name != _DLSVM_CACHE_LOCK_NAME}
+    if actual_files != expected_files or any(
+        item.is_symlink() or not item.is_file() for item in items
+    ):
         raise ValueError("formal evaluation DLSVM cache inventory is not closed")
 
 
@@ -4779,6 +6706,10 @@ def evaluate_handoff(
         (handoff, LAB_ROOT / "handoffs/classifier-multiorigin5-v2"),
         label="study evaluation destination",
     )
+    if destination.exists() or destination.is_symlink():
+        raise FileExistsError(f"evaluation receipt already exists: {destination}")
+    if formal:
+        _formal_classifier_runtime_receipts()
     preflight_candidate = destination.with_name(destination.name + ".dlsvm-preflight.json")
     cache_candidate = destination.with_name(destination.name + ".dlsvm-kernels")
     require_disjoint_path(
@@ -4808,19 +6739,37 @@ def evaluate_handoff(
                 samples=samples,
                 handoff_root=root,
                 formal=True,
+                expected_execution_model=FOCUSED_DLSVM_EXECUTION_MODEL,
             )
         else:
             write_dlsvm_preflight(
                 preflight_path,
                 samples=samples,
                 handoff_root=root,
+                cache_directory=cache_candidate,
                 formal=True,
                 available_wall_seconds=dlsvm_available_wall_seconds,
+                execution_model=FOCUSED_DLSVM_EXECUTION_MODEL,
             )
+        admit_dlsvm_preflight_capacity(
+            preflight_path,
+            samples=samples,
+            handoff_root=root,
+            formal=True,
+            expected_execution_model=FOCUSED_DLSVM_EXECUTION_MODEL,
+            available_wall_seconds=dlsvm_available_wall_seconds,
+            cache_directory=cache_candidate,
+            cache_read_only=False,
+        )
     cache_directory = cache_candidate
     dlsvm_store = DlsvmKernelStore(samples, cache_directory=cache_directory)
-    temporal = run_temporal_attacks(samples, dlsvm_store=dlsvm_store)
-    historical = run_historical_attacks(samples, dlsvm_store=dlsvm_store)
+    try:
+        temporal = run_temporal_attacks(samples, dlsvm_store=dlsvm_store)
+        historical = run_historical_attacks(samples, dlsvm_store=dlsvm_store)
+        dlsvm_cache = dlsvm_store.receipt()
+    except BaseException:
+        dlsvm_store.close()
+        raise
     return write_evaluation_receipt(
         destination,
         samples=samples,
@@ -4829,7 +6778,8 @@ def evaluate_handoff(
         handoff_root=root,
         formal=formal,
         dlsvm_preflight=preflight_path,
-        dlsvm_cache=dlsvm_store.receipt(),
+        dlsvm_cache=dlsvm_cache,
+        dlsvm_available_wall_seconds=dlsvm_available_wall_seconds,
     )
 
 
@@ -5004,32 +6954,55 @@ def _dlsvm_kernel(
         raise ValueError("symmetric DLSVM kernel requires identical sequence order")
     kernel = np.empty((len(left_values), len(right_values)), dtype=np.float64)
 
-    def calculate_row(left_index: int) -> tuple[int, int, tuple[float, ...]]:
+    def calculate_row(left_index: int) -> int:
         start = left_index if symmetric else 0
-        values = tuple(
-            math.exp(
-                -(_cached_normalized_dlsvm_distance_canonical(left_values[left_index], item) ** 2)
-            )
-            for item in right_values[start:]
+        values = np.fromiter(
+            (
+                math.exp(
+                    -(
+                        _normalized_dlsvm_distance_uncached_canonical(left_values[left_index], item)
+                        ** 2
+                    )
+                )
+                for item in right_values[start:]
+            ),
+            dtype=np.float64,
+            count=len(right_values) - start,
         )
-        return left_index, start, values
+        kernel[left_index, start:] = values
+        if symmetric:
+            kernel[start:, left_index] = values
+        return left_index
 
     indexes = range(len(left_values))
     loaded = _load_osad_library()
     if loaded is not None and len(left_values) * len(right_values) >= 1_000:
-        with ThreadPoolExecutor(max_workers=_osad_workers()) as executor:
-            rows = executor.map(calculate_row, indexes)
-            for left_index, start, values in rows:
-                kernel[left_index, start:] = values
-                if symmetric:
-                    kernel[start:, left_index] = values
+        worker_count = _osad_workers()
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            for batch_start in range(0, len(left_values), worker_count):
+                futures = tuple(
+                    executor.submit(calculate_row, left_index)
+                    for left_index in range(
+                        batch_start,
+                        min(batch_start + worker_count, len(left_values)),
+                    )
+                )
+                for future in futures:
+                    future.result()
     else:
         for left_index in indexes:
-            _, start, values = calculate_row(left_index)
-            kernel[left_index, start:] = values
-            if symmetric:
-                kernel[start:, left_index] = values
+            calculate_row(left_index)
     return kernel
+
+
+def _normalized_dlsvm_distance_uncached_canonical(
+    left: tuple[int, ...], right: tuple[int, ...]
+) -> float:
+    return (
+        _normalized_dlsvm_distance_uncached(right, left)
+        if right < left
+        else _normalized_dlsvm_distance_uncached(left, right)
+    )
 
 
 def _cached_normalized_dlsvm_distance_canonical(
@@ -5043,16 +7016,7 @@ def _cached_normalized_dlsvm_distance_canonical(
 
 
 def _osad_workers() -> int:
-    configured = os.environ.get("QCSD_OSAD_WORKERS")
-    if configured is None:
-        return max(1, min(12, os.cpu_count() or 1))
-    try:
-        workers = int(configured)
-    except ValueError as error:
-        raise ValueError("QCSD_OSAD_WORKERS must be an integer") from error
-    if not 1 <= workers <= 256:
-        raise ValueError("QCSD_OSAD_WORKERS must be between 1 and 256")
-    return workers
+    return int(_osad_worker_capacity()["selected_workers"])
 
 
 def _classification_metrics(

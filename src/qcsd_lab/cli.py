@@ -310,7 +310,14 @@ def parser() -> argparse.ArgumentParser:
         action="store_true",
         help="skip raw-PCAP replay while retaining closed-inventory verification",
     )
-    class_study.add_argument("--dlsvm-cache-directory", type=Path)
+    class_study.add_argument(
+        "--dlsvm-cache-directory",
+        type=Path,
+        help=(
+            "explicit persistent read-write DLSVM cache (required by formal "
+            "class-study evaluation for interruption-safe reuse)"
+        ),
+    )
 
     test = commands.add_parser("test", help="run deterministic or controlled live tests")
     test.add_argument("suite", nargs="?", choices=("live",), default=None)

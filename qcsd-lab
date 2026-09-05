@@ -275,6 +275,53 @@ if [[ ( "${1:-}" == "class-study" || "${1:-}" == "buflo-study" ) &&
     'from qcsd_lab.cli import main; main()' "$@"
 fi
 
+# Formal classifier work can run for hours.  Reject missing wall-capacity
+# authority before build-receipt validation or Docker inspection so an invalid
+# invocation cannot pay any evaluator startup cost.  Focused-study callers may
+# provide the typed CLI override; generic analysis receives only the forwarded
+# environment value.
+qcsd_dlsvm_wall_argument=0
+qcsd_validation_attestation_argument=0
+qcsd_option_index=1
+while (( qcsd_option_index <= $# )); do
+  qcsd_option="${!qcsd_option_index}"
+  case "${qcsd_option}" in
+    --dlsvm-wall-seconds=*)
+      if [[ -z "${qcsd_option#--dlsvm-wall-seconds=}" ]]; then
+        echo "--dlsvm-wall-seconds requires a value" >&2
+        exit 2
+      fi
+      qcsd_dlsvm_wall_argument=1
+      ;;
+    --dlsvm-wall-seconds)
+      qcsd_option_value_index=$((qcsd_option_index + 1))
+      if (( qcsd_option_value_index > $# )); then
+        echo "--dlsvm-wall-seconds requires a value" >&2
+        exit 2
+      fi
+      qcsd_dlsvm_wall_argument=1
+      qcsd_option_index="${qcsd_option_value_index}"
+      ;;
+    --validation-attestation|--validation-attestation=*)
+      qcsd_validation_attestation_argument=1
+      ;;
+  esac
+  qcsd_option_index=$((qcsd_option_index + 1))
+done
+if [[ "${1:-}" == "buflo-study" &&
+      ( "${2:-}" == "evaluate" || "${2:-}" == "verify" ) &&
+      -z "${QCSD_DLSVM_AVAILABLE_WALL_SECONDS:-}" &&
+      "${qcsd_dlsvm_wall_argument}" != "1" ]]; then
+  echo "buflo-study ${2} requires --dlsvm-wall-seconds or QCSD_DLSVM_AVAILABLE_WALL_SECONDS for current capacity admission" >&2
+  exit 2
+fi
+if [[ "${1:-}" == "analyze" &&
+      "${qcsd_validation_attestation_argument}" == "1" &&
+      -z "${QCSD_DLSVM_AVAILABLE_WALL_SECONDS:-}" ]]; then
+  echo "analyze --validation-attestation requires QCSD_DLSVM_AVAILABLE_WALL_SECONDS for current capacity admission" >&2
+  exit 2
+fi
+
 # Keep one terminal-signal handler installed for the complete mutable launcher
 # lifetime.  Cleanup routines change only the atomic phase flag; they never
 # replace four traps one at a time and therefore have no transition window in
@@ -3749,6 +3796,53 @@ for filename in (
         ( "${class_acquisition_max_candidates}" != "1" ||
           "${class_acquisition_timeout_ms}" != "60000" ) ]]; then
     echo "class-study acquisition-run requires the canonical one-candidate action bounds" >&2
+    exit 2
+  fi
+  if [[ "${class_study_action}" == "evaluate" &&
+        -z "${class_path_hosts[--dlsvm-cache-directory]:-}" ]]; then
+    echo "class-study evaluate requires --dlsvm-cache-directory for resumable persistent storage" >&2
+    exit 2
+  fi
+  class_requires_dlsvm_wall=0
+  if [[ "${class_study_action}" == "evaluate" ||
+        "${class_study_action}" == "comparison-review" ||
+        "${class_study_action}" == "attest" ]]; then
+    class_requires_dlsvm_wall=1
+  elif [[ "${class_study_action}" == "verify" &&
+          -n "${class_path_hosts[--handoff]:-}" ]]; then
+    class_requires_dlsvm_wall=1
+  elif [[ "${class_study_action}" == "verify" &&
+          -n "${class_path_hosts[--target]:-}" ]]; then
+    class_verify_target_name="$(basename -- "${class_path_hosts[--target]}")"
+    if [[ "${class_verify_target_name}" == *-comparison-review.json ||
+          "${class_verify_target_name}" == *-validation-attestation.json ]]; then
+      class_requires_dlsvm_wall=1
+    elif [[ -f "${class_path_hosts[--target]}" &&
+            ! -L "${class_path_hosts[--target]}" ]]; then
+      class_verify_receipt_type="$({
+        /usr/bin/python3 -I -c '
+import json
+import sys
+
+value = json.load(open(sys.argv[1], encoding="utf-8"))
+print(value.get("receipt_type", ""))
+' "${class_path_hosts[--target]}"
+      } 2>/dev/null || true)"
+      case "${class_verify_receipt_type}" in
+        qcsd-class-study-evaluation|qcsd-class-study-comparison-review|qcsd-class-study-validation-attestation)
+          class_requires_dlsvm_wall=1
+          ;;
+      esac
+    fi
+  elif [[ "${class_study_action}" == "status" &&
+          ( -n "${class_path_hosts[--evaluation-receipt]:-}" ||
+            -n "${class_path_hosts[--comparison-review]:-}" ||
+            -n "${class_path_hosts[--validation-attestation]:-}" ) ]]; then
+    class_requires_dlsvm_wall=1
+  fi
+  if (( class_requires_dlsvm_wall )) &&
+     [[ -z "${QCSD_DLSVM_AVAILABLE_WALL_SECONDS:-}" ]]; then
+    echo "class-study ${class_study_action} requires QCSD_DLSVM_AVAILABLE_WALL_SECONDS for current capacity admission" >&2
     exit 2
   fi
   if [[ "${class_study_action}" == "acquisition-admission" ||

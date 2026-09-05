@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import random
 import shutil
 import subprocess
@@ -18,6 +19,7 @@ from qcsd_lab.buflo_evaluation import (
     DlsvmKernelStore,
     ShapePacket,
     StudySample,
+    admit_dlsvm_preflight_capacity,
     algorithm_breakdowns,
     attack_bootstrap_intervals,
     damerau_levenshtein_distance,
@@ -39,6 +41,7 @@ from qcsd_lab.buflo_evaluation import (
     vngpp_features,
     write_dlsvm_preflight,
 )
+from qcsd_lab.class_evaluation import CLASS_DLSVM_EXECUTION_MODEL
 from qcsd_lab.fidelity import (
     BUFLO_SCHEDULE_STOP_POLICY,
     BUFLO_SCHEDULE_STOP_TERMINAL_TIME_SEMANTICS,
@@ -231,8 +234,7 @@ def test_qcsd_numeric_comparison_remains_unreviewed_until_explained() -> None:
         for difference in row["known_expected_differences"]
     )
     assert any(
-        difference["difference"]
-        == "buflo-terminal-subcell-client-local-cancellation"
+        difference["difference"] == "buflo-terminal-subcell-client-local-cancellation"
         for difference in row["known_expected_differences"]
     )
 
@@ -330,11 +332,275 @@ def test_dlsvm_kernel_store_persists_exact_matrices(tmp_path: Path) -> None:
     second_store = DlsvmKernelStore(samples, cache_directory=cache)
     second, _ = second_store.kernels(samples, samples)
     assert second.tolist() == first.tolist()
+    assert second_store.receipt() == receipt
 
     artifact.write_bytes(b"not-an-npy")
     broken = DlsvmKernelStore(samples, cache_directory=cache)
     with pytest.raises((ValueError, OSError), match="cached|pickle|load|format"):
         broken.kernels(samples, samples)
+
+
+def test_dlsvm_matrix_creation_and_replay_bypass_pair_result_cache(
+    tmp_path: Path,
+) -> None:
+    samples = (
+        _sample("a", "site", "buflo", 0, "a"),
+        _sample("b", "site", "buflo", 1, "b", scale=2),
+    )
+    sequences = tuple(dlsvm_sequence(sample.trace) for sample in samples)
+    expected = np.asarray(
+        [
+            [math.exp(-(normalized_dlsvm_distance(left, right) ** 2)) for right in sequences]
+            for left in sequences
+        ],
+        dtype=np.float64,
+    )
+    assert evaluation._cached_normalized_dlsvm_distance.cache_info().currsize > 0
+    evaluation._cached_normalized_dlsvm_distance.cache_clear()
+    cache = tmp_path / "kernels"
+    try:
+        created, _ = DlsvmKernelStore(samples, cache_directory=cache).kernels(samples, samples)
+        assert np.array_equal(created, expected)
+        assert evaluation._cached_normalized_dlsvm_distance.cache_info().currsize == 0
+
+        replayed, _ = DlsvmKernelStore(samples, cache_directory=cache).kernels(samples, samples)
+        assert np.array_equal(replayed, created)
+        assert evaluation._cached_normalized_dlsvm_distance.cache_info().currsize == 0
+    finally:
+        evaluation._cached_normalized_dlsvm_distance.cache_clear()
+
+
+def test_dlsvm_kernel_store_excludes_concurrent_cache_lifecycles(
+    tmp_path: Path,
+) -> None:
+    samples = (
+        _sample("a", "site", "buflo", 0, "a"),
+        _sample("b", "site", "buflo", 1, "b", scale=2),
+    )
+    cache = tmp_path / "kernels"
+    first = DlsvmKernelStore(samples, cache_directory=cache)
+    try:
+        with pytest.raises(RuntimeError, match="lifecycle lock"):
+            DlsvmKernelStore(samples, cache_directory=cache)
+    finally:
+        first.close()
+
+    resumed = DlsvmKernelStore(samples, cache_directory=cache)
+    resumed.close()
+
+
+def test_dlsvm_kernel_store_discards_only_recognised_crash_temporaries(
+    tmp_path: Path,
+) -> None:
+    cache = tmp_path / "kernels"
+    cache.mkdir()
+    recognised = cache / (f".within-{'a' * 64}.npy{evaluation.ATOMIC_TEMP_MARKER}deadbeef")
+    unrelated = cache / ".unrelated.qcsd-tmp-deadbeef"
+    recognised.write_bytes(b"uncommitted")
+    unrelated.write_bytes(b"retain")
+
+    store = DlsvmKernelStore((), cache_directory=cache)
+    try:
+        assert not recognised.exists()
+        assert unrelated.read_bytes() == b"retain"
+    finally:
+        store.close()
+
+
+def test_dlsvm_kernel_store_rejects_symbolic_cache_directory(tmp_path: Path) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    cache = tmp_path / "kernels"
+    cache.symlink_to(target, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="symbolic link"):
+        DlsvmKernelStore((), cache_directory=cache)
+
+
+def test_dlsvm_kernel_store_replays_complete_cache_read_only(tmp_path: Path) -> None:
+    samples = (
+        _sample("a", "site", "buflo", 0, "a"),
+        _sample("b", "site", "buflo", 1, "b", scale=2),
+    )
+    cache = tmp_path / "kernels"
+    created_store = DlsvmKernelStore(samples, cache_directory=cache)
+    created, _ = created_store.kernels(samples, samples)
+    receipt = created_store.receipt()
+    assert receipt is not None
+    for item in cache.iterdir():
+        item.chmod(0o400)
+    cache.chmod(0o500)
+    try:
+        replayed_store = DlsvmKernelStore(
+            samples,
+            cache_directory=cache,
+            cache_read_only=True,
+        )
+        replayed, _ = replayed_store.kernels(samples, samples)
+        assert np.array_equal(replayed, created)
+        assert replayed_store.receipt() == receipt
+    finally:
+        cache.chmod(0o700)
+        for item in cache.iterdir():
+            item.chmod(0o600)
+
+
+def test_read_only_dlsvm_store_never_repairs_incomplete_cache(tmp_path: Path) -> None:
+    samples = (
+        _sample("a", "site", "buflo", 0, "a"),
+        _sample("b", "site", "buflo", 1, "b", scale=2),
+    )
+    cache = tmp_path / "kernels"
+    created_store = DlsvmKernelStore(samples, cache_directory=cache)
+    created_store.kernels(samples, samples)
+    receipt = created_store.receipt()
+    assert receipt is not None
+    seal = cache / next(iter(receipt["artifacts"].values()))["receipt"]
+    seal.unlink()
+
+    replayed_store = DlsvmKernelStore(
+        samples,
+        cache_directory=cache,
+        cache_read_only=True,
+    )
+    try:
+        with pytest.raises(ValueError, match="complete sealed matrix"):
+            replayed_store.kernels(samples, samples)
+        assert not seal.exists()
+    finally:
+        replayed_store.close()
+
+
+def test_read_only_dlsvm_store_rejects_temporary_without_deleting_it(
+    tmp_path: Path,
+) -> None:
+    cache = tmp_path / "kernels"
+    cache.mkdir()
+    (cache / evaluation._DLSVM_CACHE_LOCK_NAME).write_bytes(b"")
+    temporary = cache / (f".within-{'a' * 64}.npy{evaluation.ATOMIC_TEMP_MARKER}interrupted")
+    temporary.write_bytes(b"uncommitted")
+
+    with pytest.raises(ValueError, match="uncommitted temporary"):
+        DlsvmKernelStore((), cache_directory=cache, cache_read_only=True)
+    assert temporary.read_bytes() == b"uncommitted"
+
+
+def test_dlsvm_kernel_store_recovers_exact_matrix_without_seal(
+    tmp_path: Path,
+) -> None:
+    samples = (
+        _sample("a", "site", "buflo", 0, "a"),
+        _sample("b", "site", "buflo", 1, "b", scale=2),
+    )
+    cache = tmp_path / "kernels"
+    created_store = DlsvmKernelStore(samples, cache_directory=cache)
+    created, _ = created_store.kernels(samples, samples)
+    receipt = created_store.receipt()
+    assert receipt is not None
+    matrix = next(cache.glob("*.npy"))
+    seal = cache / next(iter(receipt["artifacts"].values()))["receipt"]
+    seal.unlink()
+
+    resumed_store = DlsvmKernelStore(samples, cache_directory=cache)
+    resumed, _ = resumed_store.kernels(samples, samples)
+    resumed_receipt = resumed_store.receipt()
+    assert np.array_equal(resumed, created)
+    assert seal.is_file()
+    assert resumed_receipt == receipt
+    assert evaluation.sha256_file(matrix) == next(iter(receipt["artifacts"].values()))["sha256"]
+
+
+def test_dlsvm_kernel_store_recovers_exact_seal_without_matrix(
+    tmp_path: Path,
+) -> None:
+    samples = (
+        _sample("a", "site", "buflo", 0, "a"),
+        _sample("b", "site", "buflo", 1, "b", scale=2),
+    )
+    cache = tmp_path / "kernels"
+    created_store = DlsvmKernelStore(samples, cache_directory=cache)
+    created, _ = created_store.kernels(samples, samples)
+    receipt = created_store.receipt()
+    assert receipt is not None
+    matrix = next(cache.glob("*.npy"))
+    matrix.unlink()
+
+    resumed_store = DlsvmKernelStore(samples, cache_directory=cache)
+    resumed, _ = resumed_store.kernels(samples, samples)
+    resumed_receipt = resumed_store.receipt()
+    assert np.array_equal(resumed, created)
+    assert matrix.is_file()
+    assert resumed_receipt == receipt
+
+
+def test_native_threaded_dlsvm_matrix_creation_and_replay_are_cache_bounded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    compiler = shutil.which("cc")
+    if compiler is None:
+        pytest.skip("a C compiler is unavailable")
+    source = Path(__file__).resolve().parents[1] / "tools/qcsd_osad.c"
+    library = tmp_path / "libqcsd_osad.so"
+    subprocess.run(
+        [
+            compiler,
+            "-O3",
+            "-std=c11",
+            "-fPIC",
+            "-shared",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            str(source),
+            "-o",
+            str(library),
+        ],
+        check=True,
+    )
+    monkeypatch.setenv("QCSD_OSAD_LIBRARY", str(library))
+    monkeypatch.setenv("QCSD_OSAD_WORKERS", "2")
+    monkeypatch.setattr(evaluation.os, "sched_getaffinity", lambda _pid: {0, 1})
+    monkeypatch.setattr(
+        evaluation,
+        "_cgroup_cpu_quota_runtime",
+        lambda: {
+            "schema_version": 1,
+            "source": "test-unlimited",
+            "constraints": [],
+            "finite_worker_limit": None,
+            "unavailable_reason": "test fixture",
+        },
+    )
+    evaluation._load_osad_library.cache_clear()
+    samples = tuple(
+        _sample(f"sample-{index:02d}", "site", "buflo", index % 10, str(index), scale=index + 1)
+        for index in range(32)
+    )
+    sequences = tuple(dlsvm_sequence(sample.trace) for sample in samples)
+    expected = np.asarray(
+        [
+            [math.exp(-(normalized_dlsvm_distance(left, right) ** 2)) for right in sequences]
+            for left in sequences
+        ],
+        dtype=np.float64,
+    )
+    evaluation._cached_normalized_dlsvm_distance.cache_clear()
+    cache = tmp_path / "kernels"
+    try:
+        created_store = DlsvmKernelStore(samples, cache_directory=cache)
+        created, _ = created_store.kernels(samples, samples)
+        created_receipt = created_store.receipt()
+        assert np.array_equal(created, expected)
+        assert evaluation._cached_normalized_dlsvm_distance.cache_info().currsize == 0
+
+        replayed_store = DlsvmKernelStore(samples, cache_directory=cache)
+        replayed, _ = replayed_store.kernels(samples, samples)
+        assert np.array_equal(replayed, created)
+        assert replayed_store.receipt() == created_receipt
+        assert evaluation._cached_normalized_dlsvm_distance.cache_info().currsize == 0
+    finally:
+        evaluation._cached_normalized_dlsvm_distance.cache_clear()
+        evaluation._load_osad_library.cache_clear()
 
 
 def test_dlsvm_kernel_store_rejects_same_shape_finite_matrix_forgery(
@@ -353,6 +619,209 @@ def test_dlsvm_kernel_store_rejects_same_shape_finite_matrix_forgery(
     broken = DlsvmKernelStore(samples, cache_directory=cache)
     with pytest.raises(ValueError, match="receipt|semantic|invariant"):
         broken.kernels(samples, samples)
+
+
+def test_dlsvm_resume_credit_cleans_temporary_and_credits_lone_matrix(
+    tmp_path: Path,
+) -> None:
+    samples = (
+        _sample("a", "site", "buflo", 0, "a"),
+        _sample("b", "site", "buflo", 1, "b", scale=2),
+    )
+    cache = tmp_path / "kernels"
+    store = DlsvmKernelStore(samples, cache_directory=cache)
+    store.kernels(samples, samples)
+    receipt = store.receipt()
+    assert receipt is not None
+
+    sealed = evaluation._dlsvm_cache_resume_credit(cache, samples=samples)
+    assert sealed["sealed_matrix_count"] == 1
+    assert sealed["uncommitted_matrix_count"] == 0
+    assert sealed["credited_payload_bytes"] == 2 * 2 * 8
+
+    seal_path = cache / next(iter(receipt["artifacts"].values()))["receipt"]
+    seal_path.unlink()
+    temporary = cache / (f".within-{'f' * 64}.npy{evaluation.ATOMIC_TEMP_MARKER}interrupted")
+    temporary.write_bytes(b"reclaimable crash temporary")
+    uncommitted = evaluation._dlsvm_cache_resume_credit(cache, samples=samples)
+    assert not temporary.exists()
+    assert uncommitted["sealed_matrix_count"] == 0
+    assert uncommitted["uncommitted_matrix_count"] == 1
+    assert uncommitted["credited_payload_bytes"] == 2 * 2 * 8
+
+    with pytest.raises(ValueError, match="uncommitted matrix"):
+        evaluation._dlsvm_cache_resume_credit(
+            cache,
+            samples=samples,
+            cache_read_only=True,
+        )
+
+
+def test_dlsvm_cross_cache_axes_are_canonical_for_shuffled_callers(
+    tmp_path: Path,
+) -> None:
+    undefended = (
+        _sample("u-z", "site", "undefended", 0, "uz"),
+        _sample("u-a", "site", "undefended", 1, "ua", scale=2),
+    )
+    defended = (
+        _sample("b-z", "site", "buflo", 8, "bz", scale=3),
+        _sample("b-a", "site", "buflo", 8, "ba", scale=4),
+    )
+    samples = (defended[0], undefended[0], defended[1], undefended[1])
+    cache = tmp_path / "kernels"
+    store = DlsvmKernelStore(samples, cache_directory=cache)
+    training_first, testing_first = store.kernels(undefended, defended)
+    training_reversed, testing_reversed = store.kernels(
+        tuple(reversed(undefended)),
+        tuple(reversed(defended)),
+    )
+    receipt = store.receipt()
+    assert receipt is not None
+    assert np.array_equal(training_reversed, training_first[::-1, ::-1])
+    assert np.array_equal(testing_reversed, testing_first[::-1, ::-1])
+
+    credit = evaluation._dlsvm_cache_resume_credit(cache, samples=samples)
+    assert credit["sealed_matrix_count"] == 2
+    assert credit["uncommitted_matrix_count"] == 0
+    assert credit["credited_payload_bytes"] == 2 * (2 * 2 * 8)
+
+
+def test_memory_capacity_accepts_wsl_leaf_pair_when_root_has_no_pair(
+    tmp_path: Path,
+) -> None:
+    meminfo = tmp_path / "meminfo"
+    membership = tmp_path / "self-cgroup"
+    cgroup = tmp_path / "cgroup"
+    leaf = cgroup / "init.scope"
+    leaf.mkdir(parents=True)
+    meminfo.write_text("MemAvailable: 1000 kB\n", encoding="ascii")
+    membership.write_text("0::/init.scope\n", encoding="ascii")
+    (leaf / "memory.max").write_text("max\n", encoding="ascii")
+    (leaf / "memory.current").write_text("123\n", encoding="ascii")
+
+    capacity = evaluation._memory_capacity_runtime(
+        meminfo_path=meminfo,
+        proc_cgroup_path=membership,
+        cgroup_root=cgroup,
+    )
+    assert capacity["effective_available_bytes"] == 1_024_000
+    assert capacity["controller_version"] == 2
+    assert [item["path"] for item in capacity["constraints"]] == [str(leaf)]
+    assert evaluation._validated_memory_capacity_runtime(capacity) == capacity
+
+
+def test_memory_capacity_falls_back_to_v1_on_hybrid_mount_without_v2_memory_files(
+    tmp_path: Path,
+) -> None:
+    meminfo = tmp_path / "meminfo"
+    membership = tmp_path / "self-cgroup"
+    cgroup = tmp_path / "cgroup"
+    (cgroup / "unified").mkdir(parents=True)
+    memory_root = cgroup / "memory"
+    leaf = memory_root / "leaf"
+    leaf.mkdir(parents=True)
+    meminfo.write_text("MemAvailable: 1000 kB\n", encoding="ascii")
+    membership.write_text("0::/unified\n5:memory:/leaf\n", encoding="ascii")
+    (leaf / "memory.limit_in_bytes").write_text("800\n", encoding="ascii")
+    (leaf / "memory.usage_in_bytes").write_text("125\n", encoding="ascii")
+
+    capacity = evaluation._memory_capacity_runtime(
+        meminfo_path=meminfo,
+        proc_cgroup_path=membership,
+        cgroup_root=cgroup,
+    )
+    assert capacity["controller_version"] == 1
+    assert capacity["membership"] == "/leaf"
+    assert capacity["finite_cgroup_remaining_bytes"] == 675
+    assert capacity["effective_available_bytes"] == 675
+    assert evaluation._validated_memory_capacity_runtime(capacity) == capacity
+
+
+def test_memory_capacity_uses_tightest_v2_ancestor_and_zero_remaining(
+    tmp_path: Path,
+) -> None:
+    meminfo = tmp_path / "meminfo"
+    membership = tmp_path / "self-cgroup"
+    cgroup = tmp_path / "cgroup"
+    leaf = cgroup / "parent" / "child"
+    leaf.mkdir(parents=True)
+    meminfo.write_text("MemAvailable: 10000 kB\n", encoding="ascii")
+    membership.write_text("0::/parent/child\n", encoding="ascii")
+    for directory, limit, current in (
+        (cgroup, "1000", "100"),
+        (cgroup / "parent", "500", "100"),
+        (leaf, "300", "400"),
+    ):
+        (directory / "memory.max").write_text(limit + "\n", encoding="ascii")
+        (directory / "memory.current").write_text(current + "\n", encoding="ascii")
+
+    capacity = evaluation._memory_capacity_runtime(
+        meminfo_path=meminfo,
+        proc_cgroup_path=membership,
+        cgroup_root=cgroup,
+    )
+    assert capacity["finite_cgroup_remaining_bytes"] == 0
+    assert capacity["effective_available_bytes"] == 0
+    assert capacity["availability_source"] == ("minimum-of-host-and-finite-cgroup-remaining")
+
+
+def test_memory_capacity_rejects_partial_or_symlinked_cgroup_pair(
+    tmp_path: Path,
+) -> None:
+    meminfo = tmp_path / "meminfo"
+    membership = tmp_path / "self-cgroup"
+    cgroup = tmp_path / "cgroup"
+    leaf = cgroup / "leaf"
+    leaf.mkdir(parents=True)
+    meminfo.write_text("MemAvailable: 1000 kB\n", encoding="ascii")
+    membership.write_text("0::/leaf\n", encoding="ascii")
+    (leaf / "memory.max").write_text("1000\n", encoding="ascii")
+
+    with pytest.raises(ValueError, match="pair is missing or unsafe"):
+        evaluation._memory_capacity_runtime(
+            meminfo_path=meminfo,
+            proc_cgroup_path=membership,
+            cgroup_root=cgroup,
+        )
+
+    target = tmp_path / "usage"
+    target.write_text("10\n", encoding="ascii")
+    (leaf / "memory.current").symlink_to(target)
+    with pytest.raises(ValueError, match="pair is missing or unsafe"):
+        evaluation._memory_capacity_runtime(
+            meminfo_path=meminfo,
+            proc_cgroup_path=membership,
+            cgroup_root=cgroup,
+        )
+
+
+def test_memory_capacity_supports_v1_unlimited_parent_and_finite_child(
+    tmp_path: Path,
+) -> None:
+    meminfo = tmp_path / "meminfo"
+    membership = tmp_path / "self-cgroup"
+    memory_root = tmp_path / "cgroup" / "memory"
+    leaf = memory_root / "child"
+    leaf.mkdir(parents=True)
+    meminfo.write_text("MemAvailable: 1000 kB\n", encoding="ascii")
+    membership.write_text("5:memory:/child\n", encoding="ascii")
+    (memory_root / "memory.limit_in_bytes").write_text(
+        f"{evaluation._CGROUP_V1_MEMORY_UNLIMITED_MIN}\n",
+        encoding="ascii",
+    )
+    (memory_root / "memory.usage_in_bytes").write_text("50\n", encoding="ascii")
+    (leaf / "memory.limit_in_bytes").write_text("900\n", encoding="ascii")
+    (leaf / "memory.usage_in_bytes").write_text("200\n", encoding="ascii")
+
+    capacity = evaluation._memory_capacity_runtime(
+        meminfo_path=meminfo,
+        proc_cgroup_path=membership,
+        cgroup_root=tmp_path / "cgroup",
+    )
+    assert capacity["controller_version"] == 1
+    assert capacity["finite_cgroup_remaining_bytes"] == 700
+    assert capacity["effective_available_bytes"] == 700
 
 
 def test_dlsvm_preflight_is_create_only_and_handoff_bound(
@@ -402,6 +871,39 @@ def test_dlsvm_preflight_is_create_only_and_handoff_bound(
             )
         assert not rejected.exists()
         monkeypatch.setenv("QCSD_DLSVM_AVAILABLE_WALL_SECONDS", "1000000")
+
+        interrupted = tmp_path / "interrupted-preflight.json"
+        orphan = tmp_path / (f".{interrupted.name}{evaluation.ATOMIC_TEMP_MARKER}deadbeef")
+        original_durable_create = evaluation.durable_create
+
+        def interrupt_before_publication(path: Path, value: bytes) -> None:
+            assert path == interrupted
+            orphan.write_bytes(value[:17])
+            raise RuntimeError("simulated SIGKILL before publication")
+
+        monkeypatch.setattr(evaluation, "durable_create", interrupt_before_publication)
+        with pytest.raises(RuntimeError, match="simulated SIGKILL"):
+            write_dlsvm_preflight(
+                interrupted,
+                samples=samples,
+                handoff_root=handoff,
+                formal=True,
+            )
+        assert not interrupted.exists()
+        monkeypatch.setattr(evaluation, "durable_create", original_durable_create)
+        write_dlsvm_preflight(
+            interrupted,
+            samples=samples,
+            handoff_root=handoff,
+            formal=True,
+        )
+        validate_dlsvm_preflight(
+            interrupted,
+            samples=samples,
+            handoff_root=handoff,
+            formal=True,
+        )
+
         write_dlsvm_preflight(
             destination,
             samples=samples,
@@ -428,6 +930,359 @@ def test_dlsvm_preflight_is_create_only_and_handoff_bound(
             )
     finally:
         evaluation._load_osad_library.cache_clear()
+
+
+def test_schema_two_dlsvm_preflight_models_both_passes_and_readmits_current_capacity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    compiler = shutil.which("cc")
+    if compiler is None:
+        pytest.skip("a C compiler is unavailable")
+    source = Path(__file__).resolve().parents[1] / "tools/qcsd_osad.c"
+    library = tmp_path / "libqcsd_osad.so"
+    subprocess.run(
+        [
+            compiler,
+            "-O3",
+            "-std=c11",
+            "-fPIC",
+            "-shared",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            str(source),
+            "-o",
+            str(library),
+        ],
+        check=True,
+    )
+    monkeypatch.setenv("QCSD_OSAD_LIBRARY", str(library))
+    monkeypatch.setenv("QCSD_DLSVM_AVAILABLE_WALL_SECONDS", "1000000")
+    evaluation._load_osad_library.cache_clear()
+    handoff = tmp_path / "handoff"
+    handoff.mkdir()
+    for name in ("SHA256SUMS", "dataset.json", "samples.jsonl"):
+        (handoff / name).write_text(name + "\n", encoding="utf-8")
+    destination = tmp_path / "class-preflight.json"
+    cache = tmp_path / "class-cache"
+    samples = (
+        _sample("a", "site", "buflo", 0, "a"),
+        _sample("b", "site", "buflo", 1, "b", scale=2),
+    )
+    try:
+        write_dlsvm_preflight(
+            destination,
+            samples=samples,
+            handoff_root=handoff,
+            cache_directory=cache,
+            formal=True,
+            execution_model=CLASS_DLSVM_EXECUTION_MODEL,
+        )
+        receipt = validate_dlsvm_preflight(
+            destination,
+            samples=samples,
+            handoff_root=handoff,
+            formal=True,
+            expected_execution_model=CLASS_DLSVM_EXECUTION_MODEL,
+        )
+        projection = receipt["projection"]
+        assert receipt["schema_version"] == 2
+        assert receipt["execution_model"] == CLASS_DLSVM_EXECUTION_MODEL
+        assert (
+            projection["worker_capacity"]["policy"]
+            == (CLASS_DLSVM_EXECUTION_MODEL["worker_capacity_policy"])
+        )
+        assert projection["worker_capacity"]["selected_workers"] == projection["workers"]
+        assert CLASS_DLSVM_EXECUTION_MODEL["cache_resumption_granularity"] == (
+            "completed-sealed-whole-matrix"
+        )
+        assert projection["full_matrix_passes"] == 2
+        assert projection["modeled_execution_seconds"] == pytest.approx(
+            projection["single_full_matrix_pass_seconds"] * 2
+        )
+        assert projection["projected_wall_seconds"] == pytest.approx(
+            projection["modeled_execution_seconds"]
+            * CLASS_DLSVM_EXECUTION_MODEL["contingency_multiplier"]
+        )
+        assert projection["largest_recomputed_matrix_bytes"] > 0
+        assert projection["retained_sequence_native_array_bytes"] > 0
+        assert projection["projected_native_dp_worker_memory_bytes"] > 0
+        assert projection["projected_kernel_row_worker_memory_bytes"] > 0
+        assert projection["projected_memory_bytes"] == sum(
+            projection[field]
+            for field in (
+                "resident_matrix_union_bytes",
+                "largest_recomputed_matrix_bytes",
+                "retained_sequence_native_array_bytes",
+                "projected_native_dp_worker_memory_bytes",
+                "projected_kernel_row_worker_memory_bytes",
+            )
+        )
+
+        forged_engine_path = json.loads(json.dumps(receipt))
+        forged_engine_path["engine"]["path"] = "/tmp/not-the-loaded-osad-library.so"
+        with pytest.raises(ValueError, match="engine binding"):
+            evaluation._validate_dlsvm_preflight_value(
+                forged_engine_path,
+                samples=samples,
+                handoff_root=handoff,
+                formal=True,
+                expected_execution_model=CLASS_DLSVM_EXECUTION_MODEL,
+            )
+
+        monkeypatch.delenv("QCSD_DLSVM_AVAILABLE_WALL_SECONDS")
+        with pytest.raises(ValueError, match="current-capacity admission"):
+            admit_dlsvm_preflight_capacity(
+                destination,
+                samples=samples,
+                handoff_root=handoff,
+                formal=True,
+                expected_execution_model=CLASS_DLSVM_EXECUTION_MODEL,
+                cache_directory=cache,
+            )
+
+        monkeypatch.setenv(
+            "QCSD_DLSVM_AVAILABLE_WALL_SECONDS",
+            str(projection["projected_wall_seconds"] / 2),
+        )
+        with pytest.raises(ValueError, match="current-capacity admission"):
+            admit_dlsvm_preflight_capacity(
+                destination,
+                samples=samples,
+                handoff_root=handoff,
+                formal=True,
+                expected_execution_model=CLASS_DLSVM_EXECUTION_MODEL,
+                cache_directory=cache,
+            )
+
+        monkeypatch.setenv("QCSD_DLSVM_AVAILABLE_WALL_SECONDS", "1000000")
+
+        filesystem_capacity = evaluation._dlsvm_cache_filesystem_capacity
+
+        def insufficient_storage(path: Path) -> dict[str, object]:
+            capacity = filesystem_capacity(path)
+            return {
+                **capacity,
+                "available_bytes": projection["cache_storage"]["required_free_bytes"] - 1,
+            }
+
+        monkeypatch.setattr(
+            evaluation,
+            "_dlsvm_cache_filesystem_capacity",
+            insufficient_storage,
+        )
+        with pytest.raises(ValueError, match="current-capacity admission"):
+            admit_dlsvm_preflight_capacity(
+                destination,
+                samples=samples,
+                handoff_root=handoff,
+                formal=True,
+                expected_execution_model=CLASS_DLSVM_EXECUTION_MODEL,
+                cache_directory=cache,
+            )
+        monkeypatch.setattr(
+            evaluation,
+            "_dlsvm_cache_filesystem_capacity",
+            filesystem_capacity,
+        )
+
+        def memory_capacity(available: int) -> dict[str, object]:
+            return {
+                **projection["memory_capacity"],
+                "host_mem_available_bytes": available,
+                "controller_version": None,
+                "membership": None,
+                "constraints": [],
+                "finite_cgroup_remaining_bytes": None,
+                "effective_available_bytes": available,
+                "availability_source": "host-memavailable",
+                "unavailable_reason": None,
+            }
+
+        monkeypatch.setattr(
+            evaluation,
+            "_memory_capacity_runtime",
+            lambda: memory_capacity(projection["required_memory_bytes"] - 1),
+        )
+        with pytest.raises(ValueError, match="current-capacity admission"):
+            admit_dlsvm_preflight_capacity(
+                destination,
+                samples=samples,
+                handoff_root=handoff,
+                formal=True,
+                expected_execution_model=CLASS_DLSVM_EXECUTION_MODEL,
+                cache_directory=cache,
+            )
+
+        monkeypatch.setattr(
+            evaluation,
+            "_memory_capacity_runtime",
+            lambda: memory_capacity(projection["required_memory_bytes"]),
+        )
+        monkeypatch.delenv("QCSD_DLSVM_AVAILABLE_WALL_SECONDS")
+        admission = admit_dlsvm_preflight_capacity(
+            destination,
+            samples=samples,
+            handoff_root=handoff,
+            formal=True,
+            expected_execution_model=CLASS_DLSVM_EXECUTION_MODEL,
+            available_wall_seconds=1_000_000,
+            cache_directory=cache,
+        )
+        assert admission["wall_time_available"] is True
+        assert admission["memory_available"] is True
+        assert admission["cache_storage_available"] is True
+    finally:
+        evaluation._load_osad_library.cache_clear()
+
+
+def test_osad_workers_reject_effective_cpu_oversubscription(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(evaluation.os, "sched_getaffinity", lambda _pid: {2, 3})
+    monkeypatch.setattr(
+        evaluation,
+        "_cgroup_cpu_quota_runtime",
+        lambda: {
+            "schema_version": 1,
+            "source": "test-cgroup",
+            "constraints": [
+                {
+                    "path": "/test/cpu.max",
+                    "quota_us": 150_000,
+                    "period_us": 100_000,
+                    "worker_limit_floor": 1,
+                }
+            ],
+            "finite_worker_limit": 1,
+            "unavailable_reason": None,
+        },
+    )
+    monkeypatch.setenv("QCSD_OSAD_WORKERS", "2")
+    with pytest.raises(ValueError, match="effective CPU worker limit"):
+        evaluation._osad_workers()
+
+    monkeypatch.setenv("QCSD_OSAD_WORKERS", "1")
+    capacity = evaluation._osad_worker_capacity()
+    assert capacity["affinity_cpu_count"] == 2
+    assert capacity["effective_worker_limit"] == 1
+    assert capacity["requested_worker_source"] == "QCSD_OSAD_WORKERS"
+    assert capacity["selected_workers"] == 1
+
+
+def test_cgroup_cpu_quota_falls_back_to_v1_on_hybrid_without_v2_cpu_files(
+    tmp_path: Path,
+) -> None:
+    membership = tmp_path / "self-cgroup"
+    cgroup = tmp_path / "cgroup"
+    (cgroup / "unified").mkdir(parents=True)
+    leaf = cgroup / "cpu" / "leaf"
+    leaf.mkdir(parents=True)
+    membership.write_text("0::/unified\n5:cpu,cpuacct:/leaf\n", encoding="ascii")
+    (leaf / "cpu.cfs_quota_us").write_text("150000\n", encoding="ascii")
+    (leaf / "cpu.cfs_period_us").write_text("100000\n", encoding="ascii")
+
+    capacity = evaluation._cgroup_cpu_quota_runtime(
+        proc_cgroup_path=membership,
+        cgroup_root=cgroup,
+    )
+    assert capacity["finite_worker_limit"] == 1
+    assert [item["path"] for item in capacity["constraints"]] == [str(leaf / "cpu.cfs_quota_us")]
+    assert capacity["unavailable_reason"] is None
+
+
+def test_cgroup_cpu_quota_uses_tightest_constraint_across_hybrid_controllers(
+    tmp_path: Path,
+) -> None:
+    membership = tmp_path / "self-cgroup"
+    cgroup = tmp_path / "cgroup"
+    unified = cgroup / "unified"
+    unified.mkdir(parents=True)
+    v1_leaf = cgroup / "cpu" / "leaf"
+    v1_leaf.mkdir(parents=True)
+    membership.write_text("0::/unified\n5:cpu,cpuacct:/leaf\n", encoding="ascii")
+    (unified / "cpu.max").write_text("300000 100000\n", encoding="ascii")
+    (v1_leaf / "cpu.cfs_quota_us").write_text("100000\n", encoding="ascii")
+    (v1_leaf / "cpu.cfs_period_us").write_text("100000\n", encoding="ascii")
+
+    capacity = evaluation._cgroup_cpu_quota_runtime(
+        proc_cgroup_path=membership,
+        cgroup_root=cgroup,
+    )
+    assert capacity["finite_worker_limit"] == 1
+    assert [item["worker_limit_floor"] for item in capacity["constraints"]] == [3, 1]
+
+
+def test_focused_deep_cache_validation_readmits_before_matrix_recomputation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[str, object]] = []
+    samples = (_sample("a", "site", "buflo", 0, "a"),)
+    preflight = tmp_path / "preflight.json"
+    handoff = tmp_path / "handoff"
+
+    def validate_preflight(path: Path, **kwargs: object) -> dict[str, object]:
+        calls.append(("validate", kwargs))
+        assert path == preflight
+        return {}
+
+    def admit(path: Path, **kwargs: object) -> dict[str, object]:
+        calls.append(("admit", kwargs))
+        assert path == preflight
+        return {}
+
+    def validate_cache(value: object, **kwargs: object) -> None:
+        calls.append(("cache", kwargs))
+        assert value == {"cache": True, "path": str(tmp_path / "cache")}
+
+    monkeypatch.setattr(evaluation, "validate_dlsvm_preflight", validate_preflight)
+    monkeypatch.setattr(evaluation, "admit_dlsvm_preflight_capacity", admit)
+    monkeypatch.setattr(evaluation, "_validate_dlsvm_cache_receipt", validate_cache)
+
+    evaluation._validate_focused_dlsvm_evidence(
+        preflight_path=preflight,
+        cache={"cache": True, "path": str(tmp_path / "cache")},
+        samples=samples,
+        handoff_root=handoff,
+        deep=True,
+        dlsvm_available_wall_seconds=321.0,
+    )
+    assert [name for name, _ in calls] == ["validate", "admit", "cache"]
+    assert calls[0][1]["expected_execution_model"] == evaluation.FOCUSED_DLSVM_EXECUTION_MODEL
+    assert calls[1][1]["expected_execution_model"] == evaluation.FOCUSED_DLSVM_EXECUTION_MODEL
+    assert calls[1][1]["available_wall_seconds"] == 321.0
+    assert calls[1][1]["cache_directory"] == tmp_path / "cache"
+    assert calls[1][1]["cache_read_only"] is True
+    assert calls[2][1]["deep"] is True
+
+    calls.clear()
+    evaluation._validate_focused_dlsvm_evidence(
+        preflight_path=preflight,
+        cache={"cache": True, "path": str(tmp_path / "cache")},
+        samples=samples,
+        handoff_root=handoff,
+        deep=False,
+        dlsvm_available_wall_seconds=None,
+    )
+    assert [name for name, _ in calls] == ["validate", "cache"]
+    assert calls[1][1]["deep"] is False
+
+    def reject_capacity(path: Path, **kwargs: object) -> dict[str, object]:
+        calls.append(("admit", kwargs))
+        raise ValueError("current-capacity admission rejected")
+
+    calls.clear()
+    monkeypatch.setattr(evaluation, "admit_dlsvm_preflight_capacity", reject_capacity)
+    with pytest.raises(ValueError, match="current-capacity"):
+        evaluation._validate_focused_dlsvm_evidence(
+            preflight_path=preflight,
+            cache={"cache": True, "path": str(tmp_path / "cache")},
+            samples=samples,
+            handoff_root=handoff,
+            deep=True,
+            dlsvm_available_wall_seconds=1.0,
+        )
+    assert [name for name, _ in calls] == ["validate", "admit"]
 
 
 def test_formal_cohort_requires_exact_1500_balanced_samples() -> None:
@@ -673,7 +1528,13 @@ def test_algorithm_breakdown_retains_non_classifier_runner_strata() -> None:
         "mode": "cs-buflo",
         "runtime_kind": "cs_buflo",
         "classifier_input": False,
-        "runner_rows": {"schedule": 2, "events": 1, "packets": 1, "typed_events": 1, "typed_packets": 1},
+        "runner_rows": {
+            "schedule": 2,
+            "events": 1,
+            "packets": 1,
+            "typed_events": 1,
+            "typed_packets": 1,
+        },
         "directions": {"outgoing": direction, "incoming": direction},
         "cs_buflo_state": {
             "padding_variant": "CTSP",
@@ -710,9 +1571,7 @@ def test_algorithm_breakdown_retains_non_classifier_runner_strata() -> None:
             "directions": {"outgoing": cs_direction, "incoming": cs_direction},
         },
     }
-    sample = StudySample(
-        "s", "site", "site", "cs-buflo", 0, "p", _trace(), None, diagnostics
-    )
+    sample = StudySample("s", "site", "site", "cs-buflo", 0, "p", _trace(), None, diagnostics)
 
     result = algorithm_breakdowns([sample])
 
@@ -765,8 +1624,7 @@ def test_algorithm_breakdown_retains_non_classifier_runner_strata() -> None:
     current_v4 = json.loads(json.dumps(current))
     current_v4["schema_version"] = 4
     current_v4["cs_buflo_state"]["early_termination_semantics"] = (
-        "client_only_outgoing_observed_udp_and_incoming_consumed_credit_"
-        "power_of_two_crossing"
+        "client_only_outgoing_observed_udp_and_incoming_consumed_credit_power_of_two_crossing"
     )
     current_v4["cs_buflo_state"]["early_termination_translation"] = {
         "version": 2,
@@ -802,25 +1660,15 @@ def test_algorithm_breakdown_retains_non_classifier_runner_strata() -> None:
                 "terminal_cells_at_stop_timestamp": 0,
             },
         )
-    assert evaluation._load_algorithm_diagnostics(
-        current_v4, defense="cs-buflo"
-    ) == current_v4
+    assert evaluation._load_algorithm_diagnostics(current_v4, defense="cs-buflo") == current_v4
     invalid_translation_version = json.loads(json.dumps(current_v4))
-    invalid_translation_version["cs_buflo_state"]["early_termination_translation"][
-        "version"
-    ] = 2.0
+    invalid_translation_version["cs_buflo_state"]["early_termination_translation"]["version"] = 2.0
     with pytest.raises(ValueError, match="CS-BuFLO algorithm state"):
-        evaluation._load_algorithm_diagnostics(
-            invalid_translation_version, defense="cs-buflo"
-        )
+        evaluation._load_algorithm_diagnostics(invalid_translation_version, defense="cs-buflo")
     invalid_reason_type = json.loads(json.dumps(current_v4))
-    invalid_reason_type["cs_buflo_state"]["directions"]["incoming"][
-        "termination_stop_reason"
-    ] = []
+    invalid_reason_type["cs_buflo_state"]["directions"]["incoming"]["termination_stop_reason"] = []
     with pytest.raises(ValueError, match="CS-BuFLO algorithm state"):
-        evaluation._load_algorithm_diagnostics(
-            invalid_reason_type, defense="cs-buflo"
-        )
+        evaluation._load_algorithm_diagnostics(invalid_reason_type, defense="cs-buflo")
     invalid_v4 = json.loads(json.dumps(current_v4))
     invalid_v4["cs_buflo_state"]["directions"]["incoming"][
         "termination_stop_crossing_total_bytes"
@@ -908,9 +1756,7 @@ def test_buflo_schema_four_diagnostics_aggregate_stop_drain_and_preserve_history
         "last_post_cancellation_defense_control_monotonic_us": 10_000_040,
         "schedule_stop": {
             "policy": BUFLO_SCHEDULE_STOP_POLICY,
-            "terminal_time_semantics": (
-                BUFLO_SCHEDULE_STOP_TERMINAL_TIME_SEMANTICS
-            ),
+            "terminal_time_semantics": (BUFLO_SCHEDULE_STOP_TERMINAL_TIME_SEMANTICS),
             "latched": True,
             "latched_at_us": 10_000_000,
             "available_bytes": 1_199,
@@ -964,9 +1810,7 @@ def test_buflo_schema_four_diagnostics_aggregate_stop_drain_and_preserve_history
     wrong_runtime["buflo_state"] = None
     with pytest.raises(ValueError, match="schema 4 requires BuFLO or CS-BuFLO"):
         evaluation._load_algorithm_diagnostics(wrong_runtime, defense="buflo")
-    sample = StudySample(
-        "b", "site", "site", "buflo", 0, "pair", _trace(), None, loaded
-    )
+    sample = StudySample("b", "site", "site", "buflo", 0, "pair", _trace(), None, loaded)
     result = algorithm_breakdowns([sample])
     assert result["available"] is True
     assert result["schema_version"] == 3
@@ -986,9 +1830,7 @@ def test_buflo_schema_four_diagnostics_aggregate_stop_drain_and_preserve_history
     assert tail["post_cancellation_unscheduled_defense_control_bytes"] == 4
     schedule_stop = result["buflo_schedule_stop_strata"][0]
     assert schedule_stop["policy"] == [BUFLO_SCHEDULE_STOP_POLICY]
-    assert schedule_stop["terminal_time_semantics"] == [
-        BUFLO_SCHEDULE_STOP_TERMINAL_TIME_SEMANTICS
-    ]
+    assert schedule_stop["terminal_time_semantics"] == [BUFLO_SCHEDULE_STOP_TERMINAL_TIME_SEMANTICS]
     assert schedule_stop["latched_samples"] == 1
     assert schedule_stop["available_bytes"] == {
         "total": 1_199,
@@ -1055,16 +1897,12 @@ def test_buflo_schema_four_diagnostics_aggregate_stop_drain_and_preserve_history
     }
     legacy_without_state["schema_version"] = 1
     assert (
-        evaluation._load_algorithm_diagnostics(
-            legacy_without_state, defense="buflo"
-        )
+        evaluation._load_algorithm_diagnostics(legacy_without_state, defense="buflo")
         == legacy_without_state
     )
     legacy_without_state["buflo_state"] = None
     with pytest.raises(ValueError, match="schema is invalid"):
-        evaluation._load_algorithm_diagnostics(
-            legacy_without_state, defense="buflo"
-        )
+        evaluation._load_algorithm_diagnostics(legacy_without_state, defense="buflo")
 
     legacy_sample = StudySample(
         "legacy", "site", "site", "buflo", 0, "legacy-pair", _trace(), None, legacy
@@ -1161,14 +1999,11 @@ def test_historical_panchenko_attack_is_secondary_stratified_ten_fold() -> None:
     assert result.protocol_details["random_state"] == 3
     assert len(result.protocol_details["folds"]) == 10
     assert all(
-        len(fold["training_sample_ids"]) == 18
-        and len(fold["testing_sample_ids"]) == 2
+        len(fold["training_sample_ids"]) == 18 and len(fold["testing_sample_ids"]) == 2
         for fold in result.protocol_details["folds"]
     )
     record = result.as_dict()
-    assert record["predictions_sha256"] == evaluation._canonical_json_sha256(
-        record["predictions"]
-    )
+    assert record["predictions_sha256"] == evaluation._canonical_json_sha256(record["predictions"])
 
 
 def test_attack_receipt_validator_recomputes_membership_predictions_and_metrics() -> None:
@@ -1201,9 +2036,7 @@ def test_attack_receipt_validator_recomputes_membership_predictions_and_metrics(
     forged["predictions"][0]["predicted"] = forged["labels"][-1]
     with pytest.raises(ValueError, match="hash"):
         evaluation._validate_attack_record(forged, samples=samples)
-    forged["predictions_sha256"] = evaluation._canonical_json_sha256(
-        forged["predictions"]
-    )
+    forged["predictions_sha256"] = evaluation._canonical_json_sha256(forged["predictions"])
     with pytest.raises(ValueError, match="metrics"):
         evaluation._validate_attack_record(forged, samples=samples)
 
@@ -1245,9 +2078,7 @@ def test_attack_replay_rejects_consistent_prediction_and_metric_forgery() -> Non
     prediction["predicted"] = next(
         label for label in forged["labels"] if label != prediction["predicted"]
     )
-    forged["predictions_sha256"] = evaluation._canonical_json_sha256(
-        forged["predictions"]
-    )
+    forged["predictions_sha256"] = evaluation._canonical_json_sha256(forged["predictions"])
     accuracy, balanced, matrix, recalls = evaluation._classification_metrics(
         [item["expected"] for item in forged["predictions"]],
         [item["predicted"] for item in forged["predictions"]],
@@ -1341,6 +2172,40 @@ def test_evaluation_receipt_static_contract_is_exact_and_fail_closed(tmp_path: P
             )
 
 
+def test_evaluation_receipt_interruption_never_publishes_partial_final(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    destination = tmp_path / "evaluation.json"
+    orphan = tmp_path / (f".{destination.name}{evaluation.ATOMIC_TEMP_MARKER}interrupted")
+    durable_create = evaluation.durable_create
+
+    def interrupt(path: Path, value: bytes) -> None:
+        assert path == destination
+        orphan.write_bytes(value[:23])
+        raise RuntimeError("simulated publication interruption")
+
+    monkeypatch.setattr(evaluation, "durable_create", interrupt)
+    with pytest.raises(RuntimeError, match="publication interruption"):
+        evaluation.write_evaluation_receipt(
+            destination,
+            samples=(),
+            attack_results=(),
+            bootstrap_draws=1,
+        )
+    assert not destination.exists()
+    assert orphan.is_file()
+
+    monkeypatch.setattr(evaluation, "durable_create", durable_create)
+    evaluation.write_evaluation_receipt(
+        destination,
+        samples=(),
+        attack_results=(),
+        bootstrap_draws=1,
+    )
+    assert destination.is_file()
+
+
 def test_historical_dlsvm_reuses_one_exact_within_defense_matrix() -> None:
     samples = []
     for visit in range(10):
@@ -1372,3 +2237,172 @@ def test_evaluation_destination_cannot_overlap_handoff(tmp_path: Path) -> None:
             handoff_root / "evaluation.json",
             formal=False,
         )
+
+
+def test_existing_evaluation_destination_fails_before_handoff_or_cache_work(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import qcsd_lab.buflo_handoff as handoff_module
+
+    handoff = tmp_path / "handoff"
+    handoff.mkdir()
+    destination = tmp_path / "evaluation.json"
+    destination.write_text('{"existing":true}\n', encoding="utf-8")
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("handoff validation began for an existing destination")
+
+    monkeypatch.setattr(handoff_module, "validate_study_handoff", forbidden)
+    with pytest.raises(FileExistsError, match="already exists"):
+        evaluation.evaluate_handoff(handoff, destination, formal=False)
+    assert not destination.with_name(destination.name + ".dlsvm-preflight.json").exists()
+    assert not destination.with_name(destination.name + ".dlsvm-kernels").exists()
+
+
+@pytest.mark.parametrize("environment", evaluation._FORMAL_RUNTIME_OVERRIDE_ENV)
+def test_formal_evaluate_rejects_runtime_overrides_before_any_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    environment: str,
+) -> None:
+    handoff = tmp_path / "handoff"
+    handoff.mkdir()
+    destination = tmp_path / "evaluation.json"
+    monkeypatch.setenv(environment, "/tmp/qcsd-forged-runtime")
+
+    with pytest.raises(RuntimeError, match="forbids runtime path overrides"):
+        evaluation.evaluate_handoff(handoff, destination, formal=True)
+    assert not destination.exists()
+    assert not destination.with_name(destination.name + ".dlsvm-preflight.json").exists()
+    assert not destination.with_name(destination.name + ".dlsvm-kernels").exists()
+
+
+def test_formal_evaluate_rejects_preloaded_alternate_runtime_before_any_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    approved_java = tmp_path / "approved-java"
+    alternate_java = tmp_path / "alternate-java"
+    approved_jar = tmp_path / "approved.jar"
+    alternate_jar = tmp_path / "alternate.jar"
+    approved_osad = tmp_path / "approved-osad.so"
+    alternate_osad = tmp_path / "alternate-osad.so"
+    for path in (
+        approved_java,
+        alternate_java,
+        approved_jar,
+        alternate_jar,
+        approved_osad,
+        alternate_osad,
+    ):
+        path.write_bytes(path.name.encode("ascii"))
+    approved_runtime = {"sha256": "a" * 64}
+    approved = {
+        "vngpp": {
+            "backend": "pinned-weka-3.7.5",
+            "runtime": {
+                "java_path": str(approved_java),
+                "java_sha256": evaluation.sha256_file(approved_java),
+                "java_version": "fixture-java",
+                "artifacts": [
+                    {"path": str(approved_jar), "sha256": evaluation.sha256_file(approved_jar)}
+                ],
+            },
+            "approved_runtime": approved_runtime,
+        },
+        "dlsvm": {
+            "engine": "clean-room-native-c",
+            "native_library": {
+                "path": str(approved_osad),
+                "sha256": evaluation.sha256_file(approved_osad),
+            },
+            "approved_runtime": approved_runtime,
+        },
+    }
+    monkeypatch.setattr(evaluation, "vngpp_backend_receipt", lambda **_kwargs: approved["vngpp"])
+    monkeypatch.setattr(evaluation, "dlsvm_backend_receipt", lambda **_kwargs: approved["dlsvm"])
+
+    def forbidden_java_version(path: Path) -> str:
+        raise AssertionError(f"alternate Java was executed during rejection: {path}")
+
+    monkeypatch.setattr(evaluation, "_java_version", forbidden_java_version)
+    monkeypatch.setattr(
+        evaluation,
+        "_load_weka_backend",
+        lambda: evaluation.WekaBackend(java=alternate_java, artifacts=(alternate_jar,)),
+    )
+    monkeypatch.setattr(
+        evaluation,
+        "_load_osad_library",
+        lambda: (object(), alternate_osad),
+    )
+    handoff = tmp_path / "handoff"
+    handoff.mkdir()
+    destination = tmp_path / "evaluation.json"
+
+    with pytest.raises(RuntimeError, match="loaded classifier runtime differs"):
+        evaluation.evaluate_handoff(handoff, destination, formal=True)
+    assert not destination.exists()
+    assert not destination.with_name(destination.name + ".dlsvm-preflight.json").exists()
+    assert not destination.with_name(destination.name + ".dlsvm-kernels").exists()
+
+
+def test_formal_evaluate_handoff_readmits_before_initial_matrix_construction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import qcsd_lab.buflo_handoff as handoff_module
+
+    handoff = tmp_path / "handoff"
+    handoff.mkdir()
+    destination = tmp_path / "evaluation.json"
+    samples = (_sample("a", "site", "buflo", 0, "a"),)
+    calls: list[tuple[str, object]] = []
+
+    monkeypatch.setattr(
+        evaluation,
+        "_formal_classifier_runtime_receipts",
+        lambda: {"fixture": True},
+    )
+    monkeypatch.setattr(evaluation, "_load_osad_library", lambda: object())
+    monkeypatch.setattr(evaluation, "_load_weka_backend", lambda: object())
+    monkeypatch.setattr(
+        handoff_module,
+        "validate_study_handoff",
+        lambda path, *, formal, deep: handoff,
+    )
+    monkeypatch.setattr(evaluation, "load_study_handoff", lambda root: samples)
+    monkeypatch.setattr(
+        evaluation,
+        "validate_formal_cohort",
+        lambda selected, *, require_performance: None,
+    )
+
+    def write_preflight(path: Path, **kwargs: object) -> Path:
+        calls.append(("write", kwargs))
+        return path
+
+    def reject_capacity(path: Path, **kwargs: object) -> dict[str, object]:
+        calls.append(("admit", kwargs))
+        raise ValueError("current-capacity admission rejected")
+
+    class ForbiddenKernelStore:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            raise AssertionError("matrix construction began before current admission")
+
+    monkeypatch.setattr(evaluation, "write_dlsvm_preflight", write_preflight)
+    monkeypatch.setattr(evaluation, "admit_dlsvm_preflight_capacity", reject_capacity)
+    monkeypatch.setattr(evaluation, "DlsvmKernelStore", ForbiddenKernelStore)
+
+    with pytest.raises(ValueError, match="current-capacity"):
+        evaluation.evaluate_handoff(
+            handoff,
+            destination,
+            formal=True,
+            dlsvm_available_wall_seconds=654.0,
+        )
+    assert [name for name, _ in calls] == ["write", "admit"]
+    assert calls[0][1]["execution_model"] == evaluation.FOCUSED_DLSVM_EXECUTION_MODEL
+    assert calls[0][1]["available_wall_seconds"] == 654.0
+    assert calls[1][1]["expected_execution_model"] == evaluation.FOCUSED_DLSVM_EXECUTION_MODEL
+    assert calls[1][1]["available_wall_seconds"] == 654.0
