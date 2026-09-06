@@ -2733,7 +2733,7 @@ _qcsd_force_remove_target aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
     assert result.returncode == 0, result.stderr
 
 
-def test_first_signal_is_latched_when_a_second_signal_arrives(
+def test_first_dispatched_signal_is_latched_when_a_second_signal_arrives(
     fake_environment: dict[str, str],
 ) -> None:
     fake_environment["FAKE_DOCKER_BEHAVIOR"] = "ignore-kill"
@@ -2741,7 +2741,11 @@ def test_first_signal_is_latched_when_a_second_signal_arrives(
     state = Path(fake_environment["FAKE_DOCKER_STATE"])
     _wait(state / "run-ready")
     os.kill(process.pid, signal.SIGTERM)
-    time.sleep(0.05)
+    # Bash defers traps while it waits for some foreground external commands.
+    # Waiting for the first signal's exact-target action proves that TERM was
+    # dispatched before injecting INT, rather than relying on two pending
+    # standard signals to retain kernel arrival order.
+    _wait_for_text(state / "calls.log", f"KILL INT {CONTAINER_ID}")
     os.kill(process.pid, signal.SIGINT)
     stdout, stderr = _communicate(process, timeout=10)
     assert process.returncode == 143, (stdout, stderr)

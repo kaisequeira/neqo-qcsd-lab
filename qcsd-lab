@@ -18,14 +18,83 @@ if [[ -n "${QCSD_DOCKER_LOCK_GUARDIAN_QCSD_SOURCE_FD:-}" ||
 else
   ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 fi
-qcsd_invoking_uid="$(/usr/bin/id -u)"
-qcsd_invoking_gid="$(/usr/bin/id -g)"
-if [[ ! "${qcsd_invoking_uid}" =~ ^(0|[1-9][0-9]*)$ ||
-      ! "${qcsd_invoking_gid}" =~ ^(0|[1-9][0-9]*)$ ]]; then
-  echo "Cannot resolve the invoking numeric UID/GID" >&2
+qcsd_status_uid=()
+qcsd_status_gid=()
+declare -A qcsd_status_capabilities=()
+qcsd_identity_valid=1
+while read -r qcsd_status_key qcsd_status_first qcsd_status_second \
+    qcsd_status_third qcsd_status_fourth qcsd_status_extra; do
+  case "${qcsd_status_key}" in
+    Uid:)
+      if (( ${#qcsd_status_uid[@]} != 0 )) ||
+         [[ -n "${qcsd_status_extra}" ]]; then
+        qcsd_identity_valid=0
+      else
+        qcsd_status_uid=(
+          "${qcsd_status_first}" "${qcsd_status_second}"
+          "${qcsd_status_third}" "${qcsd_status_fourth}"
+        )
+      fi
+      ;;
+    Gid:)
+      if (( ${#qcsd_status_gid[@]} != 0 )) ||
+         [[ -n "${qcsd_status_extra}" ]]; then
+        qcsd_identity_valid=0
+      else
+        qcsd_status_gid=(
+          "${qcsd_status_first}" "${qcsd_status_second}"
+          "${qcsd_status_third}" "${qcsd_status_fourth}"
+        )
+      fi
+      ;;
+    CapInh:|CapPrm:|CapEff:|CapAmb:)
+      if [[ -n "${qcsd_status_capabilities[${qcsd_status_key}]+x}" ||
+            -n "${qcsd_status_second}${qcsd_status_third}${qcsd_status_fourth}${qcsd_status_extra}" ]]; then
+        qcsd_identity_valid=0
+      else
+        qcsd_status_capabilities["${qcsd_status_key}"]="${qcsd_status_first}"
+      fi
+      ;;
+  esac
+done </proc/self/status
+if (( ${#qcsd_status_uid[@]} != 4 || ${#qcsd_status_gid[@]} != 4 ||
+      ${#qcsd_status_capabilities[@]} != 4 )); then
+  qcsd_identity_valid=0
+fi
+qcsd_invoking_uid="${qcsd_status_uid[0]:-}"
+qcsd_invoking_gid="${qcsd_status_gid[0]:-}"
+for qcsd_status_value in "${qcsd_status_uid[@]}" "${qcsd_status_gid[@]}"; do
+  [[ "${qcsd_status_value}" =~ ^(0|[1-9][0-9]*)$ ]] ||
+    qcsd_identity_valid=0
+done
+if [[ -z "${qcsd_invoking_uid}" || "${qcsd_invoking_uid}" == 0 ||
+      -z "${qcsd_invoking_gid}" || "${qcsd_invoking_gid}" == 0 ]]; then
+  qcsd_identity_valid=0
+fi
+for qcsd_status_value in "${qcsd_status_uid[@]}"; do
+  [[ "${qcsd_status_value}" == "${qcsd_invoking_uid}" ]] ||
+    qcsd_identity_valid=0
+done
+for qcsd_status_value in "${qcsd_status_gid[@]}"; do
+  [[ "${qcsd_status_value}" == "${qcsd_invoking_gid}" ]] ||
+    qcsd_identity_valid=0
+done
+for qcsd_status_key in CapInh: CapPrm: CapEff: CapAmb:; do
+  qcsd_status_value="${qcsd_status_capabilities[${qcsd_status_key}]:-}"
+  if [[ ! "${qcsd_status_value}" =~ ^[0-9a-fA-F]+$ ||
+        "${qcsd_status_value}" =~ [2367aAbBeEfF]$ ]]; then
+    qcsd_identity_valid=0
+  fi
+done
+if (( qcsd_identity_valid == 0 )); then
+  echo "qcsd-lab requires one matching non-root UID/GID identity without CAP_DAC_OVERRIDE" >&2
   exit 1
 fi
 readonly qcsd_invoking_uid qcsd_invoking_gid
+unset qcsd_status_uid qcsd_status_gid qcsd_status_capabilities
+unset qcsd_identity_valid qcsd_status_key qcsd_status_first
+unset qcsd_status_second qcsd_status_third qcsd_status_fourth
+unset qcsd_status_extra qcsd_status_value
 DOCKER_SUPERVISOR="${ROOT}/tools/docker_signal_supervisor.sh"
 docker_supervisor_canonical="$(readlink -f -- "${DOCKER_SUPERVISOR}" 2>/dev/null)" ||
   docker_supervisor_canonical=""
@@ -1739,7 +1808,7 @@ for k in keys: print(v[k])
   [[ "${_QCSD_LIFECYCLE_DOCKER_CONFIG_PATH}" == "/proc/${_QCSD_LIFECYCLE_GUARD_PID}/fd/"* &&
       -d "${_QCSD_LIFECYCLE_DOCKER_CONFIG_PATH}" &&
       "$(stat -Lc '%d:%i:%u:%a:%h:%F' -- "${_QCSD_LIFECYCLE_DOCKER_CONFIG_PATH}")" == \
-        "${_QCSD_LIFECYCLE_DOCKER_CONFIG_DEVICE}:${_QCSD_LIFECYCLE_DOCKER_CONFIG_INODE}:$(id -u):700:0:directory" &&
+        "${_QCSD_LIFECYCLE_DOCKER_CONFIG_DEVICE}:${_QCSD_LIFECYCLE_DOCKER_CONFIG_INODE}:$(id -u):500:0:directory" &&
       -z "$(find -H "${_QCSD_LIFECYCLE_DOCKER_CONFIG_PATH}" -mindepth 1 -maxdepth 1 -print -quit)" ]] || return 1
   [[ "${_QCSD_LIFECYCLE_BUILDX_CONFIG_PATH}" =~ ^/proc/${_QCSD_LIFECYCLE_GUARD_PID}/fd/[0-9]+/[.]qcsd-buildx-config-$(id -u)[.][0-9a-f]{64}$ &&
       -d "${_QCSD_LIFECYCLE_BUILDX_CONFIG_PATH}" &&

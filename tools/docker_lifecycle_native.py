@@ -44,6 +44,8 @@ API_REQUEST_LIMIT = 4096
 SYSTEMCTL = "/usr/bin/systemctl"
 SYSTEMD_RUN = "/usr/bin/systemd-run"
 TIMEOUT = "/usr/bin/timeout"
+DOCKER_CONFIG_MODE = 0o500
+BUILDX_CONFIG_MODE = 0o700
 
 libc = ctypes.CDLL(None, use_errno=True)
 renameat2 = libc.renameat2
@@ -664,22 +666,14 @@ def _api_service_wrapper(arguments: Sequence[str]) -> int:
         docker_config_fd, buildx_config_fd = descriptors[2:]
         if len({(os.fstat(fd).st_dev, os.fstat(fd).st_ino) for fd in descriptors}) != 4:
             raise RuntimeError("API-service lease descriptors alias")
-        for descriptor, expected_links in (
-            (docker_config_fd, 0),
-            (buildx_config_fd, 2),
+        for descriptor, expected_mode, expected_links in (
+            (docker_config_fd, DOCKER_CONFIG_MODE, 0),
+            (buildx_config_fd, BUILDX_CONFIG_MODE, 2),
         ):
-            value = os.fstat(descriptor)
-            if (
-                not stat.S_ISDIR(value.st_mode)
-                or value.st_uid != os.getuid()
-                or stat.S_IMODE(value.st_mode) != 0o700
-                or (
-                    value.st_nlink != expected_links
-                    if expected_links == 0
-                    else value.st_nlink < expected_links
-                )
-                or os.get_inheritable(descriptor)
-                or (expected_links == 0 and os.listdir(descriptor))
+            if not _exact_configuration_descriptor(
+                descriptor,
+                expected_mode=expected_mode,
+                expected_links=expected_links,
             ):
                 raise RuntimeError("API-service configuration lease changed")
         connection.sendall(API_LEASE_ACK)
@@ -706,6 +700,27 @@ def _api_service_wrapper(arguments: Sequence[str]) -> int:
             os.close(docker_config_fd)
         if buildx_config_fd >= 0:
             os.close(buildx_config_fd)
+
+
+def _exact_configuration_descriptor(
+    descriptor: int, *, expected_mode: int, expected_links: int
+) -> bool:
+    """Validate one Docker/Buildx config descriptor without path fallback."""
+
+    value = os.fstat(descriptor)
+    links_match = (
+        value.st_nlink == expected_links
+        if expected_links == 0
+        else value.st_nlink >= expected_links
+    )
+    return (
+        stat.S_ISDIR(value.st_mode)
+        and value.st_uid == os.getuid()
+        and stat.S_IMODE(value.st_mode) == expected_mode
+        and links_match
+        and not os.get_inheritable(descriptor)
+        and (expected_links != 0 or not os.listdir(descriptor))
+    )
 
 
 def _api_request(payload: bytes) -> dict[str, object]:
@@ -1376,24 +1391,16 @@ def _acquire_lease(
         os.close(descriptor)
         raise
     singleton.detach()
-    for config_descriptor, expected_links in (
-        (docker_config_descriptor, 0),
-        (buildx_config_descriptor, 2),
+    for config_descriptor, expected_mode, expected_links in (
+        (docker_config_descriptor, DOCKER_CONFIG_MODE, 0),
+        (buildx_config_descriptor, BUILDX_CONFIG_MODE, 2),
     ):
         if config_descriptor < 0:
             continue
-        config_value = os.fstat(config_descriptor)
-        if (
-            not stat.S_ISDIR(config_value.st_mode)
-            or config_value.st_uid != os.getuid()
-            or stat.S_IMODE(config_value.st_mode) != 0o700
-            or (
-                config_value.st_nlink != expected_links
-                if expected_links == 0
-                else config_value.st_nlink < expected_links
-            )
-            or os.get_inheritable(config_descriptor)
-            or os.listdir(config_descriptor) and expected_links == 0
+        if not _exact_configuration_descriptor(
+            config_descriptor,
+            expected_mode=expected_mode,
+            expected_links=expected_links,
         ):
             for received in descriptors:
                 os.close(received)

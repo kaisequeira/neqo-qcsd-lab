@@ -41,6 +41,7 @@ BUILDX_CENSUS_ATTEMPTS = 4
 BUILDX_CENSUS_RETRY_SECONDS = 0.005
 CHILD_EXIT_CONFIRM_ATTEMPTS = 20
 CHILD_EXIT_CONFIRM_RETRY_SECONDS = 0.001
+DOCKER_CONFIG_MODE = 0o500
 LOCK_PARENT = Path("/var/tmp")
 FORWARDED_SIGNALS = (
     signal.SIGHUP,
@@ -63,6 +64,7 @@ LEASE_ACTIONS = frozenset(
     }
 )
 HEX_64 = re.compile(r"[0-9a-f]{64}")
+CAP_DAC_OVERRIDE = 1 << 1
 _UNSAFE_ENVIRONMENT = frozenset(
     {
         "BASHOPTS",
@@ -141,6 +143,54 @@ class GuardianError(RuntimeError):
 
 class _CensusRestart(RuntimeError):
     """A numeric PID changed class while one procfs census was being bound."""
+
+
+def _require_unprivileged_identity() -> None:
+    """Require one non-root identity with no path-write override capability."""
+
+    required = {"Uid", "Gid", "CapInh", "CapPrm", "CapEff", "CapAmb"}
+    observed: dict[str, list[str]] = {}
+    try:
+        for line in Path("/proc/self/status").read_text(encoding="ascii").splitlines():
+            key, separator, tail = line.partition(":")
+            if key not in required:
+                continue
+            if not separator or key in observed:
+                _fail("guardian privilege identity is malformed")
+            observed[key] = tail.split()
+    except (OSError, UnicodeError) as error:
+        raise GuardianError("guardian privilege identity is unavailable") from error
+    if set(observed) != required:
+        _fail("guardian privilege identity is incomplete")
+    try:
+        uid = tuple(int(value, 10) for value in observed["Uid"])
+        gid = tuple(int(value, 10) for value in observed["Gid"])
+        capabilities = tuple(
+            int(observed[key][0], 16)
+            for key in ("CapInh", "CapPrm", "CapEff", "CapAmb")
+        )
+    except (IndexError, ValueError) as error:
+        raise GuardianError("guardian privilege identity is malformed") from error
+    if (
+        len(uid) != 4
+        or len(gid) != 4
+        or any(len(observed[key]) != 1 for key in required - {"Uid", "Gid"})
+        or len(set(uid)) != 1
+        or len(set(gid)) != 1
+        or uid[0] == 0
+        or gid[0] == 0
+        or uid[:3] != os.getresuid()
+        or gid[:3] != os.getresgid()
+        or os.getuid() != uid[0]
+        or os.geteuid() != uid[0]
+        or os.getgid() != gid[0]
+        or os.getegid() != gid[0]
+        or any(value & CAP_DAC_OVERRIDE for value in capabilities)
+    ):
+        _fail(
+            "guardian requires one matching non-root UID/GID identity "
+            "without CAP_DAC_OVERRIDE"
+        )
 
 
 @dataclass(frozen=True)
@@ -562,7 +612,14 @@ def _verify_lock_identity(
 def _prepare_private_config(
     parent_fd: int, guardian_pid: int
 ) -> tuple[int, ConfigDirectoryIdentity]:
-    """Create an empty pathname-less config and recover only exact residues."""
+    """Create an empty read-only pathname-less Docker config.
+
+    Pathname-linked construction residues remain mode 0700 so a successor can
+    identify and remove only the exact empty state created before unlink.  The
+    live descriptor is changed to mode 0500 only after unlink: Docker can read
+    and traverse it, while BuildKit's optional token-seed persistence cannot
+    create state that would invalidate the guardian's emptiness proof.
+    """
 
     uid = os.getuid()
     label = "Docker"
@@ -630,11 +687,21 @@ def _prepare_private_config(
             _fail(f"new {label} config directory has an unsafe identity")
         os.rmdir(name, dir_fd=parent_fd)
         os.fsync(parent_fd)
+        os.fchmod(config_fd, DOCKER_CONFIG_MODE)
+        anonymous = os.fstat(config_fd)
+        if (
+            not stat.S_ISDIR(anonymous.st_mode)
+            or (anonymous.st_dev, anonymous.st_ino, anonymous.st_uid)
+            != (opened.st_dev, opened.st_ino, uid)
+            or stat.S_IMODE(anonymous.st_mode) != DOCKER_CONFIG_MODE
+            or anonymous.st_nlink != 0
+            or os.listdir(config_fd)
+        ):
+            _fail(f"anonymous {label} config directory has an unsafe identity")
     except BaseException:
         if config_fd >= 0:
             os.close(config_fd)
         raise
-    anonymous = os.fstat(config_fd)
     identity = ConfigDirectoryIdentity(
         path=Path(f"/proc/{guardian_pid}/fd/{config_fd}"),
         device=anonymous.st_dev,
@@ -676,8 +743,8 @@ def _verify_private_config(
         )
         if not stat.S_ISDIR(observed.st_mode) or actual != wanted:
             _fail("guardian private config identity changed")
-    if wanted[2:] != (os.getuid(), 0o700, 0):
-        _fail("guardian config root is not private and anonymous")
+    if wanted[2:] != (os.getuid(), DOCKER_CONFIG_MODE, 0):
+        _fail("guardian Docker config is not read-only, private, and anonymous")
     if require_empty and children:
         _fail("guardian config root is not empty before admission")
 
@@ -2805,6 +2872,7 @@ def _verify_handshake_source(
 
 
 def verify_inner() -> int:
+    _require_unprivileged_identity()
     values = _required_handshake()
     guardian_pid = _handshake_integer(values, "PID")
     guardian_start = _handshake_integer(values, "START_TIME")
@@ -2984,7 +3052,7 @@ def verify_inner() -> int:
             docker_config_device,
             docker_config_inode,
             os.getuid(),
-            0o700,
+            DOCKER_CONFIG_MODE,
             0,
         )
         or docker_config_children
@@ -3111,6 +3179,7 @@ def guard(
     source_descriptor: int | None = None,
     lock_parent: Path = LOCK_PARENT,
 ) -> int:
+    _require_unprivileged_identity()
     source = (
         Path(__file__).absolute()
         if source_path is None

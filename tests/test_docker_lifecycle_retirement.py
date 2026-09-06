@@ -167,7 +167,7 @@ import sys
 
 root = Path(sys.argv[1])
 docker = root / "docker-config"
-docker.mkdir(mode=0o700)
+docker.mkdir(mode=0o500)
 docker_fd = os.open(docker, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
 docker.rmdir()
 buildx_parent = root / "buildx-parent"
@@ -827,7 +827,7 @@ import json, os, pathlib, sys
 base = pathlib.Path(sys.argv[1])
 docker = base / "docker"
 buildx = base / "buildx"
-docker.mkdir(mode=0o700)
+docker.mkdir(mode=0o500)
 buildx.mkdir(mode=0o700)
 (buildx / "instances").mkdir(mode=0o700)
 docker_fd = os.open(docker, os.O_RDONLY | os.O_DIRECTORY)

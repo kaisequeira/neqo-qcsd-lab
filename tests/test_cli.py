@@ -360,6 +360,28 @@ def test_launcher_routes_only_consolidated_public_commands():
     assert 'qcsd_run_attached_docker "${container[@]}"' in pinned_cdp
 
 
+def test_launcher_rejects_root_split_ids_and_dac_override_before_helper_load() -> None:
+    launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(
+        encoding="utf-8"
+    )
+    admission = launcher.split("qcsd_status_uid=()", maxsplit=1)[1].split(
+        "readonly qcsd_invoking_uid qcsd_invoking_gid", maxsplit=1
+    )[0]
+
+    assert 'done </proc/self/status' in admission
+    assert "${#qcsd_status_uid[@]} != 4" in admission
+    assert "${#qcsd_status_gid[@]} != 4" in admission
+    assert '"${qcsd_invoking_uid}" == 0' in admission
+    assert '"${qcsd_invoking_gid}" == 0' in admission
+    for capability in ("CapInh:", "CapPrm:", "CapEff:", "CapAmb:"):
+        assert capability in admission
+    assert "[2367aAbBeEfF]$" in admission
+    assert "without CAP_DAC_OVERRIDE" in admission
+    assert launcher.index("qcsd_status_uid=()") < launcher.index(
+        'source "${DOCKER_SUPERVISOR}"'
+    )
+
+
 def test_lifecycle_recover_is_host_only_guarded_reconciliation() -> None:
     launcher_path = Path(__file__).parents[1] / "qcsd-lab"
     launcher = launcher_path.read_text(encoding="utf-8")

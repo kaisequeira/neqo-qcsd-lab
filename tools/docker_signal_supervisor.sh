@@ -5979,7 +5979,7 @@ _qcsd_retirement_terminal_reproof() {
       current-guardian:current-guardian:current-guardian &&
       -d "${_QCSD_LIFECYCLE_DOCKER_CONFIG_PATH:-}" &&
       "$(stat -Lc '%d:%i:%u:%a:%h:%F' -- "${_QCSD_LIFECYCLE_DOCKER_CONFIG_PATH}")" == \
-        "${_QCSD_LIFECYCLE_DOCKER_CONFIG_DEVICE}:${_QCSD_LIFECYCLE_DOCKER_CONFIG_INODE}:${EUID}:700:0:directory" &&
+        "${_QCSD_LIFECYCLE_DOCKER_CONFIG_DEVICE}:${_QCSD_LIFECYCLE_DOCKER_CONFIG_INODE}:${EUID}:500:0:directory" &&
       -z "$(find -H "${_QCSD_LIFECYCLE_DOCKER_CONFIG_PATH}" -mindepth 1 -maxdepth 1 -print -quit)" ]] || return 1
   [[ "${values_ref[buildx_config_path]}:${values_ref[buildx_config_device]}:${values_ref[buildx_config_inode]}" == \
       current-guardian:current-guardian:current-guardian &&

@@ -963,6 +963,17 @@ stale Docker-state mutation. The separate acquisition-watcher authority may
 contain only its own stale watcher scopes before this Docker admission point;
 it cannot inspect or mutate Docker state.
 
+The host launcher is supported only when all four kernel-reported UID fields
+are the same nonzero value, all four GID fields are the same nonzero value, and
+`CAP_DAC_OVERRIDE` is absent from its inheritable, permitted, effective, and
+ambient capability sets. The launcher and guardian both enforce this before
+Docker admission. The guardian exposes an empty anonymous mode-`0500`
+`DOCKER_CONFIG`; its separate crash-recoverable `BUILDX_CONFIG` remains linked
+and mode `0700`. This boundary is designed to make optional token-seed writes
+from trusted BuildKit/buildx public, pinned, credentialless pulls fail into the
+upstream in-memory fallback. It is not an immutability claim against a hostile
+same-UID process.
+
 Fresh builds now emit build-execution schema 3 with four nested schema-1
 storage observations, exact IID-bearing command vectors, three distinct role
 IDs, fixed role tags, and independently re-verifiable per-role provenance. It

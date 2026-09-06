@@ -7,6 +7,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import signal
 import socket
@@ -170,6 +171,24 @@ PY
     ready
     docker context show >"$state/docker-context"
     docker buildx ls >"$state/docker-buildx-ls"
+    ;;
+  docker-buildx-pinned-metadata-probe)
+    export DOCKER_CONFIG=$QCSD_DOCKER_LOCK_GUARDIAN_DOCKER_CONFIG_PATH
+    export BUILDX_CONFIG=$QCSD_DOCKER_LOCK_GUARDIAN_BUILDX_CONFIG_PATH
+    ready
+    frontend='docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e'
+    docker info --format '{{json .ClientInfo.Plugins}}' \
+      >"$state/docker-client-plugins.json"
+    docker buildx version >"$state/docker-buildx-version"
+    docker buildx imagetools inspect "$frontend" >"$state/buildx-metadata"
+    stat -Lc '%d:%i:%u:%a:%h:%F' "$DOCKER_CONFIG" \
+      >"$state/buildx-docker-config-identity"
+    find "$DOCKER_CONFIG" -mindepth 1 -maxdepth 1 -print \
+      >"$state/buildx-docker-config-children"
+    stat -Lc '%u:%a:%h:%F' "$BUILDX_CONFIG" \
+      >"$state/buildx-config-identity"
+    find "$BUILDX_CONFIG" -mindepth 1 -maxdepth 1 -print \
+      >"$state/buildx-config-children"
     ;;
   systemd-probe)
     ready
@@ -1101,7 +1120,7 @@ def test_guardian_and_grandchild_never_inherit_the_lifecycle_lock(
         encoding="ascii"
     ).strip()
     device, inode = expected.split(":")
-    assert observed == f"{device}:{inode}:{os.getuid()}:700:0:directory"
+    assert observed == f"{device}:{inode}:{os.getuid()}:500:0:directory"
     assert (state / "docker-config-children").read_text(encoding="ascii") == ""
     assert _can_lock(_lock_path(guardian_bundle))
 
@@ -1217,6 +1236,115 @@ def test_guardian_recovers_only_exact_empty_docker_config_residue(
     )
 
 
+def test_anonymous_docker_config_is_exact_read_only_empty_and_unwritable(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    module = _load_guardian(guardian_bundle[0])
+    native = _load_native(guardian_bundle[0].parent / NATIVE.name)
+    parent_fd, _ = module._open_lock_parent(guardian_bundle[2])
+    config_fd = -1
+    try:
+        config_fd, identity = module._prepare_private_config(
+            parent_fd, os.getpid()
+        )
+        value = os.fstat(config_fd)
+        assert (
+            value.st_dev,
+            value.st_ino,
+            value.st_uid,
+            stat.S_IMODE(value.st_mode),
+            value.st_nlink,
+        ) == (
+            identity.device,
+            identity.inode,
+            os.getuid(),
+            module.DOCKER_CONFIG_MODE,
+            0,
+        )
+        assert identity.path == Path(f"/proc/{os.getpid()}/fd/{config_fd}")
+        assert os.listdir(config_fd) == []
+        assert native._exact_configuration_descriptor(
+            config_fd,
+            expected_mode=native.DOCKER_CONFIG_MODE,
+            expected_links=0,
+        )
+
+        with pytest.raises(OSError) as failure:
+            os.open(
+                ".token_seed.lock",
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC,
+                0o600,
+                dir_fd=config_fd,
+            )
+        assert failure.value.errno in {errno.EACCES, errno.ENOENT, errno.EROFS}
+        assert os.listdir(config_fd) == []
+
+        os.fchmod(config_fd, 0o700)
+        writable = module.ConfigDirectoryIdentity(
+            path=identity.path,
+            device=identity.device,
+            inode=identity.inode,
+            owner=identity.owner,
+            mode=0o700,
+            links=identity.links,
+        )
+        with pytest.raises(module.GuardianError, match="not read-only"):
+            module._verify_private_config(
+                config_fd, writable, require_empty=True
+            )
+        assert not native._exact_configuration_descriptor(
+            config_fd,
+            expected_mode=native.DOCKER_CONFIG_MODE,
+            expected_links=0,
+        )
+    finally:
+        if config_fd >= 0:
+            os.close(config_fd)
+        os.close(parent_fd)
+
+
+@pytest.mark.parametrize(
+    "identity_getter",
+    ["getuid", "geteuid", "getgid", "getegid", "getresuid", "getresgid"],
+)
+def test_guardian_rejects_root_or_split_process_identity(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    identity_getter: str,
+) -> None:
+    module = _load_guardian(guardian_bundle[0])
+    replacement: object = (0, 0, 0) if identity_getter.startswith("getres") else 0
+    monkeypatch.setattr(module.os, identity_getter, lambda: replacement)
+
+    with pytest.raises(module.GuardianError, match="matching non-root UID/GID"):
+        module._require_unprivileged_identity()
+
+
+@pytest.mark.parametrize("capability", ["CapInh", "CapPrm", "CapEff", "CapAmb"])
+def test_guardian_rejects_dac_override_in_every_acquirable_capability_set(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    capability: str,
+) -> None:
+    module = _load_guardian(guardian_bundle[0])
+    original = module.Path.read_text
+
+    def privileged_status(path: Path, *args: object, **kwargs: object) -> str:
+        text = original(path, *args, **kwargs)
+        if path == Path("/proc/self/status"):
+            text, count = re.subn(
+                rf"(?m)^{capability}:\s+[0-9a-fA-F]+$",
+                f"{capability}:\t0000000000000002",
+                text,
+            )
+            assert count == 1
+        return text
+
+    monkeypatch.setattr(module.Path, "read_text", privileged_status)
+    with pytest.raises(module.GuardianError, match="without CAP_DAC_OVERRIDE"):
+        module._require_unprivileged_identity()
+
+
 @pytest.mark.parametrize("case", ["malformed-name", "nonempty"])
 def test_guardian_fails_closed_on_unsafe_docker_config_residue(
     guardian_bundle: tuple[Path, Path, Path, Path], case: str
@@ -1279,6 +1407,63 @@ def test_real_docker_buildx_accepts_guardian_configs(
     assert "NAME/NODE" in (guardian_bundle[3] / "docker-buildx-ls").read_text(
         encoding="utf-8"
     )
+    assert not tuple(guardian_bundle[2].glob(".qcsd-buildx-*"))
+
+
+def test_real_buildx_pinned_metadata_keeps_guardian_docker_config_empty(
+    guardian_bundle: tuple[Path, Path, Path, Path],
+) -> None:
+    if os.environ.get("QCSD_RUN_PINNED_BUILDX_METADATA_PROBE") != "1":
+        pytest.skip("pinned registry metadata probe is opt-in")
+
+    result = _run_guardian(
+        guardian_bundle, "docker-buildx-pinned-metadata-probe", timeout=30
+    )
+
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    plugins = json.loads(
+        (guardian_bundle[3] / "docker-client-plugins.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert isinstance(plugins, list)
+    buildx_plugins = [
+        plugin
+        for plugin in plugins
+        if isinstance(plugin, dict) and plugin.get("Name") == "buildx"
+    ]
+    assert len(buildx_plugins) == 1
+    buildx_plugin = buildx_plugins[0]
+    assert isinstance(buildx_plugin.get("Path"), str)
+    assert Path(buildx_plugin["Path"]).is_absolute()
+    assert Path(buildx_plugin["Path"]).name == "docker-buildx"
+    assert isinstance(buildx_plugin.get("Version"), str)
+    assert buildx_plugin["Version"]
+    buildx_version = (guardian_bundle[3] / "docker-buildx-version").read_text(
+        encoding="utf-8"
+    ).strip()
+    assert buildx_version
+    assert buildx_plugin["Version"] in buildx_version
+    digest = "a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e"
+    assert digest in (guardian_bundle[3] / "buildx-metadata").read_text(
+        encoding="utf-8"
+    )
+    identity = (guardian_bundle[3] / "buildx-docker-config-identity").read_text(
+        encoding="ascii"
+    )
+    assert identity.strip().endswith(f":{os.getuid()}:500:0:directory")
+    assert (guardian_bundle[3] / "buildx-docker-config-children").read_text(
+        encoding="ascii"
+    ) == ""
+    buildx_identity = (guardian_bundle[3] / "buildx-config-identity").read_text(
+        encoding="ascii"
+    ).strip().split(":")
+    assert buildx_identity[:2] == [str(os.getuid()), "700"]
+    assert int(buildx_identity[2]) >= 2
+    assert buildx_identity[3] == "directory"
+    assert (guardian_bundle[3] / "buildx-config-children").read_text(
+        encoding="utf-8"
+    ).strip()
     assert not tuple(guardian_bundle[2].glob(".qcsd-buildx-*"))
 
 
@@ -2755,7 +2940,7 @@ def test_api_transfer_denies_unbound_or_drifting_same_uid_wrapper(
     lock_fd = os.open(lock_path, os.O_RDONLY | os.O_CLOEXEC)
     docker_config = guardian_bundle[3] / "fake-docker-config"
     buildx_config = guardian_bundle[3] / "fake-buildx-config"
-    docker_config.mkdir(mode=0o700)
+    docker_config.mkdir(mode=0o500)
     buildx_config.mkdir(mode=0o700)
     docker_config_fd = os.open(docker_config, os.O_RDONLY | os.O_DIRECTORY)
     buildx_config_fd = os.open(buildx_config, os.O_RDONLY | os.O_DIRECTORY)
