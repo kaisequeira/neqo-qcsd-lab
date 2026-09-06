@@ -59,8 +59,11 @@ parameter/provenance, execution, and checkpoint schema 4. These are interface
 requirements, not evidence of successful execution. Immutable cohort v57
 passed build/reference for its historical parent source but admitted no timing
 sample after the schema-3 runner rejected global TAI-minus-MONOTONIC drift.
-The current item-local clock-evidence repair remains unreceipted until a fresh
-v58 lineage passes the source-bound gates below.
+V58 subsequently bound the item-local clock-evidence repair through a clean
+build and isolated reference run, but it predates the mandatory pinned-CDP
+producer and cannot be completed under the strengthened foundation contract.
+The current post-v58 source therefore remains unreceipted until a fresh v59
+lineage passes the source-bound gates below.
 Summary schema 4 binds the typed schedule-stop policy, stop timestamp,
 sub-cell capacity, direction counts at stop, and exact post-stop advertised
 credit drain; historical summary schemas 2 and 3 remain readable but cannot
@@ -639,14 +642,14 @@ exact source and passed its fresh no-cache build and isolated reference gates,
 then its sole first timing launch failed the historical schema-3 whole-run
 TAI-minus-MONOTONIC drift ceiling.
 
-Current clean Rust `ce0d7a21756ce795d6f50d750a1c25e0fa006327` and the historical
-implementation-bearing Lab timing commit
-`e1ab7d71580055307042188c1ab1f4e0a05bbd60` retain all physical timing
-requirements while replacing that obsolete global gate with nested kernel
-receipt schema 2. The immediate pre-batching clean Lab base is
-`364eb793c53fc7aee513ac5b2f1aa2552d82489c`; the post-batching implementation
-checkpoint is `84d6a19d155f54cee2bb1539abb6ff7797ac26ac` and resolves its gitlink to
-the same Rust commit. Each direct enqueue TAI bracket is corroborated by
+Current clean Rust `ce0d7a21756ce795d6f50d750a1c25e0fa006327` and Lab
+implementation checkpoint `a420d3240b43d92ee0fb1b063ab3c550bd4fbe6f`
+retain all physical timing requirements while replacing the obsolete global
+gate with nested kernel receipt schema 2. The Lab checkpoint also adds the
+source-bound pinned-CDP probe, exact foundation/qualification authority,
+create-only fitting source revalidation, strict schema-2 final fitting and
+selection receipts, and deep campaign-resume admission. Each direct enqueue
+TAI bracket is corroborated by
 item-local post-TX MONOTONIC evidence; the REALTIME intersection remains hard,
 global MONOTONIC drift is diagnostic, the physical TX interval remains inside
 `[release, release + 5 ms)`, and incoming evidence additionally requires
@@ -656,11 +659,13 @@ passed, and Lab clock/timing/parameter 164/164, lifecycle adversarial 8/8, CLI
 38/38, and supervisor 215 with seven skipped passed. Those results belong to
 the pre-batching lineage. For the post-batching source, the acquisition suite
 passed 96/96 and the merged acquisition/watcher/timing/cohort/CLI/successor/
-attestation suite passed 450/450. The complete Lab suite passed 2,841 tests
-with 12 explicit skips and 23 warnings before the final diagnostic-only blocker
-wording correction; all 124 `class_pipeline` tests then passed on the exact
-implementation checkpoint. These are engineering checks only; no v58 build,
-reference, timing, regression, code-gate, or controlled receipt exists.
+attestation suite passed 450/450. The exact `a420d324…` implementation bytes
+then passed the complete Lab suite: 2,910 tests passed, 12 explicit platform or
+opt-in tests skipped, and 23 dependency/platform warnings were reported in
+1,875.42 seconds. These are engineering checks only. V58's build and reference
+receipts bind its parent Lab `c7e8355a…`, not this implementation checkpoint;
+no current-source build, pinned-CDP, timing, regression, code-gate, controlled,
+or foundation receipt exists.
 
 The retained post-v55 Lab engineering lineage also hardens durable Docker HANDOFF
 retirement. It permits at most one additional read-only absence observation,
@@ -798,25 +803,28 @@ all corresponding Docker objects absent. It issued no Docker-object removal
 and left unrelated Docker inventory unchanged. This is operational recovery,
 not scientific evidence.
 
-For current source, fresh v58 build, reference, and regression-bound code-gate
-receipts are absent; timing stress is 0/12, regression is 0/18, and
-controlled qualification is 0/160. Real acquisition observations remain zero.
+For current source, fresh v59 build, pinned-CDP, reference, regression-bound
+code-gate, and foundation receipts are absent; timing stress is 0/12,
+regression is 0/18, and controlled qualification is 0/160. Real acquisition
+observations remain zero.
 Pilot fitting, qualification, and compatibility are 0/480, 0/720, and 0/1,080;
 authoritative fitting and final qualification are 0/2,000 and 0/600;
 certification and canaries are 0/900 and 0/1,000; formal capture is 0/16,000.
-Handoff, evaluation, comparison, and attestation are absent. V57's build and
-reference passed only for Lab `b7811dab7124ffdde113fae111ef8bab4810ebba`
-and Rust `edf44779db0dacac37b8a71f5ccf5ea102e34c29`; its terminal first timing
-launch consumed that cohort. The 6 September post-batching Lab implementation
-checkpoint `84d6a19d155f54cee2bb1539abb6ff7797ac26ac` adds the bounded
-two-candidate acquisition and its schema-4 evidence boundary, but has no
-source-bound build, live acquisition, or candidate-capture receipt and
-therefore advances none of those numerators.
-The next fresh cohort is v58. It must repeat the
-pull/no-cache build, isolated reference gate, 12/12 timing stress, 18/18
-regression, regression-bound code gate, and 160/160 controlled qualification
-before expanded-class acquisition can begin. V55–v57 cannot be retried. The
-complete current status and earlier cohort chronology are retained
+Handoff, evaluation, comparison, and attestation are absent. V58 passed only
+its clean pull/no-cache build and isolated reference execution for Lab
+`c7e8355a8bcf9e3deea138d3a43b3d89d1ebb641` and unchanged Rust
+`ce0d7a21756ce795d6f50d750a1c25e0fa006327`; the receipt SHA-256 values are
+`124ff428729db55ffe7bf2f024823d8db01ac48b46e5598a3fc4d749dc8d9223`
+and `e9a55c93e92c0cc2566984304e06a43ba3660df46828488055befa561c57c69d`.
+Its preparation image has no admissible pinned-CDP producer, so v58 cannot be
+retrofitted or resumed into the current six-gate foundation. Current Lab
+`a420d3240b43d92ee0fb1b063ab3c550bd4fbe6f` adds that probe and the
+authority/schema hardening but has no source-bound live receipt and therefore
+advances none of those numerators. The next fresh cohort is v59. It must pass
+the pull/no-cache build, isolated reference and pinned-CDP gates, 12/12 timing
+stress, 18/18 regression, regression-bound code gate, and 160/160 controlled
+qualification before expanded-class acquisition can begin. V55–v58 cannot be
+retried. The complete current status and earlier cohort chronology are retained
 in the authoritative workspace
 [`PROJECT.md`](../PROJECT.md).
 
@@ -983,9 +991,9 @@ guarded shell owns creation, signal handling, exact-object cleanup, handoff
 retirement, and finalisation; direct Python execution cannot mutate Docker.
 This implementation has synthetic test coverage. The passed live engineering
 probe cited above used the older v56 image plus dirty repaired source; there is
-no clean, current-source v58 capability or campaign-evidence result. V57's
+no clean, current-source v59 capability or campaign-evidence result. V58's
 source-bound build/reference receipts do not convert that older probe into
-evidence for either v57 or current source.
+evidence for either v58 or current source.
 
 The schema-1 receipt is explicitly `evidentiary=false` and
 `authorizes_capture=false`. A passing receipt could demonstrate only that one
@@ -1090,13 +1098,28 @@ claim is exact conformance of the sealed projection and derived graph under the
 pinned instrumentation, not archival replay of Chromium's unsanitised protocol
 stream.
 
-The opt-in `./qcsd-lab test pinned-cdp` command exercises the real pinned
-Playwright 1.52/Chromium topology in the preparation image. It runs as the host
-UID:GID with all capabilities dropped and Docker networking disabled, while a
-local in-container server proves cross-site iframe, worker/shared-worker,
-duplicate-URL, redirect, and shutdown behaviour. Mocked deterministic tests
-have passed during engineering, but the probe must still pass in the freshly
-built preparation image for the fresh v58 lineage before acquisition.
+The create-only `./qcsd-lab test pinned-cdp` command exercises the real pinned
+Playwright 1.52/Chromium topology in the exact preparation image named by a
+versioned no-cache build receipt. It runs as the host UID:GID with all
+capabilities dropped and Docker networking disabled, while a local
+in-container server proves cross-site iframe, worker/shared-worker,
+duplicate-URL, redirect, and complete shutdown behaviour. Success publishes a
+canonical hash-bound receipt containing only minimised topology counts and
+booleans. The receipt binds its cohort, build receipt and payload hashes,
+collection source, exact preparation image/source, observed isolation, and
+probe contract. Mocked tests cannot substitute for that receipt. The receipt
+producer and corrected preparation-image interpreter postdate v58, so v58
+cannot acquire this evidence retroactively; the next attempt requires a new
+unused cohort and a fresh no-cache build. Pass the canonical receipt to the
+foundation command as `--pinned-cdp-receipt "$PINNED_CDP"`. It is the sixth
+explicit foundation hard gate: the foundation binds the receipt and payload
+hashes, its exact build binding, and the fixed probe-contract hash, and requires
+`build finish <= probe recorded_at <= foundation recorded_at`. Acquisition
+initialisation then reconstructs that typed foundation in the preparation
+image; the host acquisition watcher independently reopens the same frozen
+foundation, build, probe, contract, isolation, topology, and chronology on
+every start or recovery. No ambient or replacement probe path can be supplied
+after the foundation is created.
 
 The same complete graph is now independently rederived at every downstream
 evidence boundary. For each accepted fitting, pilot-compatibility,
@@ -1154,6 +1177,14 @@ campaign results resume through `experiment.json`, while acquisition resumes
 only through its own `checkpoint.json`. The full protocol, exact matrices,
 current class-study scientific-numerator ledger, and claim boundary are in
 [`../CLASS-STUDY.md`](../CLASS-STUDY.md).
+
+Numeric fitting provenance remains schema 1. The post-qualification final
+fitting provenance and the final-selection input are schema 2 because they now
+bind the exact qualification authority used to prepare and collect their
+evidence. No final fitting or final-selection artifact was executed or
+published under the earlier pre-publication schema-1 shapes; their validators
+reject schema 1 explicitly as non-evidentiary rather than treating it as a
+legacy evidence format.
 
 #### Fail-closed generational successor policy
 
@@ -1255,8 +1286,9 @@ from the host with:
 ./qcsd-lab class-study acquisition-watch
 ```
 
-The supervisor validates the catalogue, foundation, exact prepare-image
-digest, provenance, and checkpoint before doing any work. It invokes one
+The supervisor validates the catalogue, the foundation's exact pinned-CDP and
+no-cache-build authority, the prepare-image digest, provenance, and checkpoint
+before doing any work. It invokes one
 bounded `acquisition-run` action only when work is due and resumes from the
 same `checkpoint.json` when the command is restarted. An action may advance a
 deterministic compatible pair, but never more than two candidates or five live
@@ -2358,17 +2390,29 @@ the public Internet or start a research campaign.
 ### `test pinned-cdp`
 
 ```shell
-./qcsd-lab test pinned-cdp
+: "${COHORT_VERSION:?export an unused positive cohort version}"
+BUILD="artifacts/buflo-study/build-execution-v${COHORT_VERSION}.json"
+PINNED_CDP="artifacts/buflo-study/pinned-cdp-execution-v${COHORT_VERSION}.json"
+./qcsd-lab test pinned-cdp \
+  --cohort-version "$COHORT_VERSION" \
+  --build-execution-receipt "$BUILD" \
+  --destination "$PINNED_CDP"
 ```
 
-Runs only the real-browser recursive-target probe in the pinned preparation
-image. The launcher selects that image explicitly, sets the opt-in probe flag,
-runs as the invoking UID:GID, drops every capability, and uses Docker network
-mode `none`. The test's own loopback HTTP server exercises a cross-site iframe,
-dedicated and shared workers, duplicate URLs, a redirect, request-stage
-interception ownership, and deliberate context shutdown. This is an
-environment/integration gate, not a public-network acquisition or scientific
-sample.
+Runs only the real-browser recursive-target probe in the preparation image
+bound by the exact cohort build receipt. The launcher rejects an alternate
+build or destination path, a conflicting image override, a symlink, and an
+existing destination before the probe. It runs as the invoking UID:GID, drops
+every capability, and uses Docker network mode `none`. Its guarded writable
+mount can create the one requested receipt but over-mounts every pre-existing
+sibling evidence object read-only. The loopback HTTP server exercises a
+cross-site iframe, dedicated and shared workers, duplicate URLs, a redirect,
+request-stage interception ownership, and deliberate context shutdown. A
+failure or interruption publishes no receipt. Before launch the wrapper also
+requires the exact clean Lab/Neqo checkout embedded in the preparation image,
+so dirty or alternate launcher/module bytes cannot claim the guarded execution
+contract. This is an environment and foundation gate, not a public-network
+acquisition or scientific sample.
 
 ### `test live`
 
