@@ -1,0 +1,402 @@
+{
+  "acceptance": {
+    "all_vectors_required": true,
+    "browser_service_controls": "each-disabled-enabled-pair-requires-exact-static-document-fixture-and-packet-endpoint-evidence",
+    "capture": "exit-zero-and-explicit-zero-pcap-dumpcap-flushed-ps_ifdrop",
+    "negative_vectors": "exact-semantic-outcome-zero-approved-mechanism-sentinels-and-zero-forbidden-syn-accept-tcp-payload-udp-dns",
+    "positive_controls": "exact-tcp-udp-and-deterministic-udp-plus-tcp-dns-evidence"
+  },
+  "artifact_type": "qcsd-browser-egress-qualification-manifest",
+  "axes": {
+    "browser_service_control_pairs": [
+      {
+        "context": "off-the-record",
+        "packet_policy": "approved-speculation-prefetch-zero",
+        "semantic_kind": "action-issued",
+        "semantic_mechanism": "paired-network-prediction-suppression",
+        "surface": "speculation-prefetch-disabled"
+      },
+      {
+        "context": "off-the-record",
+        "packet_policy": "approved-speculation-prefetch-positive",
+        "semantic_kind": "positive-control-observed",
+        "semantic_mechanism": "paired-network-prediction-eligibility",
+        "surface": "speculation-prefetch-enabled"
+      },
+      {
+        "context": "default-profile",
+        "packet_policy": "approved-dns-prefetch-zero",
+        "semantic_kind": "action-issued",
+        "semantic_mechanism": "paired-network-prediction-suppression",
+        "surface": "dns-prefetch-disabled"
+      },
+      {
+        "context": "default-profile",
+        "packet_policy": "approved-dns-prefetch-positive",
+        "semantic_kind": "positive-control-observed",
+        "semantic_mechanism": "paired-network-prediction-eligibility",
+        "surface": "dns-prefetch-enabled"
+      },
+      {
+        "context": "default-profile",
+        "packet_policy": "approved-preconnect-zero",
+        "semantic_kind": "action-issued",
+        "semantic_mechanism": "paired-network-prediction-suppression",
+        "surface": "preconnect-disabled"
+      },
+      {
+        "context": "default-profile",
+        "packet_policy": "approved-preconnect-positive",
+        "semantic_kind": "positive-control-observed",
+        "semantic_mechanism": "paired-network-prediction-eligibility",
+        "surface": "preconnect-enabled"
+      },
+      {
+        "context": "default-profile",
+        "packet_policy": "approved-speculation-prerender-zero",
+        "semantic_kind": "action-issued",
+        "semantic_mechanism": "paired-network-prediction-suppression",
+        "surface": "speculation-prerender-disabled"
+      },
+      {
+        "context": "default-profile",
+        "packet_policy": "approved-speculation-prerender-positive",
+        "semantic_kind": "positive-control-observed",
+        "semantic_mechanism": "paired-network-prediction-eligibility",
+        "surface": "speculation-prerender-enabled"
+      },
+      {
+        "context": "default-profile",
+        "packet_policy": "approved-reporting-zero",
+        "semantic_kind": "action-issued",
+        "semantic_mechanism": "paired-reporting-feature-suppression",
+        "surface": "reporting-disabled"
+      },
+      {
+        "context": "default-profile",
+        "packet_policy": "approved-reporting-positive",
+        "semantic_kind": "positive-control-observed",
+        "semantic_mechanism": "paired-reporting-feature-eligibility",
+        "surface": "reporting-enabled"
+      },
+      {
+        "context": "default-profile",
+        "packet_policy": "approved-network-error-logging-zero",
+        "semantic_kind": "action-issued",
+        "semantic_mechanism": "paired-reporting-feature-suppression",
+        "surface": "network-error-logging-disabled"
+      },
+      {
+        "context": "default-profile",
+        "packet_policy": "approved-network-error-logging-positive",
+        "semantic_kind": "positive-control-observed",
+        "semantic_mechanism": "paired-reporting-feature-eligibility",
+        "surface": "network-error-logging-enabled"
+      }
+    ],
+    "browser_service_surfaces": [
+      "dns-prefetch",
+      "preconnect",
+      "speculation-prefetch",
+      "speculation-prerender",
+      "reporting-nel-live",
+      "reporting-nel-close-flush",
+      "fedcm",
+      "protected-audience",
+      "attribution",
+      "shared-storage",
+      "proxy",
+      "pac",
+      "idle-launch-close"
+    ],
+    "constructor_contexts": [
+      "page",
+      "same-origin-frame",
+      "cross-origin-frame",
+      "dedicated-worker",
+      "shared-worker"
+    ],
+    "constructor_surfaces": [
+      "websocket",
+      "websocket-stream",
+      "webtransport",
+      "rtc-stun-udp",
+      "rtc-stun-tcp",
+      "rtc-turn-udp",
+      "rtc-turn-tcp",
+      "tcp-client",
+      "tcp-server",
+      "udp-socket"
+    ],
+    "document_contexts": [
+      "page",
+      "same-origin-frame",
+      "cross-origin-frame"
+    ],
+    "popup_surfaces": [
+      "window-open-omitted-target",
+      "window-open-empty-target",
+      "window-open-blank-target",
+      "window-open-attacker-name",
+      "window-open-existing-named-frame",
+      "attached-anchor",
+      "detached-anchor",
+      "button-formtarget",
+      "input-formtarget",
+      "request-submit-submitter"
+    ],
+    "positive_control_surfaces": [
+      "tcp",
+      "udp",
+      "dns"
+    ],
+    "service_worker_surfaces": [
+      "registration",
+      "import",
+      "fetch"
+    ]
+  },
+  "execution_contract": {
+    "browser": {
+      "cap_drop": [
+        "ALL"
+      ],
+      "chromium_distribution": "full-chromium-revision-1200",
+      "image_role": "prepare",
+      "managed_dns_over_https_policy": {
+        "DnsOverHttpsMode": "off"
+      },
+      "managed_network_prediction_policy": "NetworkPredictionOptions=2",
+      "privileged": false,
+      "quic": {
+        "disable_switch": "--disable-quic",
+        "disable_switch_bare_and_unique": true,
+        "enabled": false,
+        "rationale": "prevent-preferred-address-migration-bypassing-resolver-pins"
+      },
+      "read_only_root": true,
+      "user": "host-supplied-numeric-nonroot-uid-gid"
+    },
+    "browser_service_control_subject": "fresh-chromium-with-vector-bound-policy-context-and-resolver-profile",
+    "capture_drop_counter_contract": "one-detailed-dumpcap-pcap-dumpcap-flushed-ps_ifdrop-record",
+    "capture_exit_code": 0,
+    "capture_interface_drops": 0,
+    "capture_kernel_drops": 0,
+    "direct_network_members": [
+      "browser",
+      "fixture",
+      "forbidden_sink",
+      "dns_sink"
+    ],
+    "fixture_tls": {
+      "certificate_runtime_gid": 0,
+      "certificate_runtime_mode": "0o444",
+      "certificate_runtime_path": "/opt/qcsd-lab/config/class-study/v1/browser-egress-fixture-cert-v1.pem",
+      "certificate_runtime_uid": 0,
+      "certificate_sha256": "e1fbe7f4b744ed0899eb5fcee39cbc44a2254b0e9a617b40cf4611bbc3a4c3c7",
+      "certificate_source_path": "config/class-study/v1/browser-egress-fixture-cert-v1.pem",
+      "certificate_spki_sha256_base64": "k3C2v8R8+ZvVlGwfaKCfUgaP5meJPA4oHibz7BFn2Zs=",
+      "mask_directory": "/opt/qcsd-lab/config/class-study/v1",
+      "mask_tmpfs_options": "ro,nosuid,nodev,noexec,mode=000",
+      "masked_roles": [
+        "browser",
+        "observer",
+        "forbidden_sink",
+        "dns_sink",
+        "policy_seed"
+      ],
+      "other_roles_masked": true,
+      "private_key_runtime_gid": 0,
+      "private_key_runtime_mode": "0o400",
+      "private_key_runtime_path": "/opt/qcsd-lab/config/class-study/v1/browser-egress-fixture-key-v1.pem",
+      "private_key_runtime_uid": 0,
+      "private_key_sha256": "f65d278ee534629e16e52604696d848dbdaf981606cb49cc190e5df1b2e872bb",
+      "private_key_source_path": "config/class-study/v1/browser-egress-fixture-key-v1.pem",
+      "runtime_visibility": [
+        "fixture"
+      ]
+    },
+    "negative_vector_subject": "fresh-chromium-browser",
+    "network_prediction_enabled_control_policy": {
+      "browser_mount_read_only": true,
+      "dns_over_https_mode": "off",
+      "gid": 0,
+      "mode": "0o444",
+      "runtime_path": "/etc/chromium/policies/managed/qcsd-network-prediction.json",
+      "seed_image_path": "/usr/share/qcsd-lab/browser-egress-controls/network-prediction-options-0.json",
+      "seeder_cap_drop": [
+        "ALL"
+      ],
+      "seeder_network": "none",
+      "seeder_read_only_root": true,
+      "seeder_tls_directory_masked": true,
+      "seeder_user": "0:0",
+      "sha256": "4566be4f014df0cfd45cf8bdeb4333b341bf4c666139e364992306c12873df03",
+      "sole_managed_policy": true,
+      "source_path": "config/class-study/v1/chromium-network-prediction-positive-control-v1.json",
+      "uid": 0,
+      "volume_driver": "local",
+      "volume_name_pattern": "qcsd-be-<attempt-topology-token>-policy0",
+      "volume_options": {},
+      "volume_scope": "local"
+    },
+    "observer": {
+      "cap_add": [
+        "CAP_NET_RAW"
+      ],
+      "cap_drop": [
+        "ALL"
+      ],
+      "capture_filter": null,
+      "interface": "any",
+      "network_mode": "container:browser",
+      "pcap_extraction": "docker-cp-after-dumpcap-stop-before-observer-exit",
+      "pcap_storage": "container-tmpfs",
+      "privileged": false,
+      "separate_container": true,
+      "starts_before_browser": true,
+      "stops_after_browser_exit_and_grace": true,
+      "user": "0:0",
+      "user_rationale": "root-uid-required-for-dumpcap-with-single-effective-capability"
+    },
+    "observer_independent_network_attachments": 0,
+    "one_vector_per_fresh_subject_container": true,
+    "operational_retry_limit": 3,
+    "positive_control_subject": "fresh-idle-chromium-plus-independent-control-emitter",
+    "reporting_close_grace_ms": 5000,
+    "schema_version": 3,
+    "semantic_failure_is_terminal": true,
+    "sink": {
+      "ordinary_http_hit_is_sufficient_evidence": false,
+      "separate_container": true,
+      "tcp_udp_dns_counters_required": true
+    },
+    "topology": "fresh-prepare-image-isolated-internal-bridge-v3"
+  },
+  "expanded_vectors_sha256": "9fecbeb7988fcb28d82803026ef9f3948d1494b14cc5a0930585e6e51e3a4179",
+  "fixture_topology": {
+    "browser_addresses": [
+      "172.30.98.10",
+      "fd00:71:63:73:64:98:0:10"
+    ],
+    "browser_dns_servers": [
+      "172.30.98.53",
+      "fd00:71:63:73:64:98:0:53"
+    ],
+    "browser_service_controls": {
+      "approved_origins": [
+        "https://fixture.test:14443",
+        "https://fixture.test:14445",
+        "https://fixture.test:14446"
+      ],
+      "dns_exception_hostname": "dns-control.browser-egress.test",
+      "dns_positive_query_count": 3,
+      "origin_ip_pins": {
+        "https://fixture.test:14443": "172.30.98.11",
+        "https://fixture.test:14445": "172.30.98.11",
+        "https://fixture.test:14446": "172.30.98.11"
+      },
+      "preconnect_positive_accept_count": 1,
+      "report_positive_post_count": 2,
+      "report_types": {
+        "network-error-logging": "network-error",
+        "reporting": "csp-violation"
+      }
+    },
+    "dns_sink_addresses": [
+      "172.30.98.53",
+      "fd00:71:63:73:64:98:0:53"
+    ],
+    "fixture_addresses": [
+      "172.30.98.11",
+      "fd00:71:63:73:64:98:0:11"
+    ],
+    "forbidden_dns_name": "forbidden.browser-egress.invalid",
+    "forbidden_sink_addresses": [
+      "172.30.98.20",
+      "fd00:71:63:73:64:98:0:20"
+    ],
+    "network": {
+      "driver": "bridge",
+      "internal": true,
+      "ipv4_subnet": "172.30.98.0/24",
+      "ipv6_subnet": "fd00:71:63:73:64:98::/96",
+      "name": "qcsd-browser-egress-v1"
+    },
+    "observer": {
+      "cap_add": [
+        "CAP_NET_RAW"
+      ],
+      "cap_drop": [
+        "ALL"
+      ],
+      "capture_filter": null,
+      "interface": "any",
+      "network_namespace": "browser",
+      "privileged": false
+    },
+    "ports": {
+      "dns": 53,
+      "fixture_cross_https": 14444,
+      "fixture_https": 14443,
+      "fixture_nel_error_https": 14446,
+      "fixture_preconnect_https": 14445,
+      "forbidden_tcp": 18443,
+      "forbidden_udp": 18444
+    },
+    "positive_control_dns_action": {
+      "actor": "fixture-control-client",
+      "resolver_bypass": true,
+      "tcp": {
+        "length_prefix": "rfc1035-two-octet",
+        "qnames": [
+          "tcp4-control.egress.invalid",
+          "tcp6-control.egress.invalid"
+        ],
+        "qtype": "AAAA",
+        "queries": 2
+      },
+      "udp": {
+        "qnames": [
+          "udp4-control.egress.invalid",
+          "udp6-control.egress.invalid"
+        ],
+        "qtype": "A",
+        "queries": 2
+      }
+    },
+    "positive_control_dns_names": [
+      "udp4-control.egress.invalid",
+      "udp6-control.egress.invalid",
+      "tcp4-control.egress.invalid",
+      "tcp6-control.egress.invalid"
+    ],
+    "positive_control_payload": {
+      "bytes": 32,
+      "sha256": "48314e946eeadd754eb7170b265f2c31d9cc2b8f8781a3c0fa746ba2e6f6765d"
+    },
+    "schema_version": 1
+  },
+  "group_counts": {
+    "browser_service": 13,
+    "browser_service_control": 12,
+    "constructor_transport": 50,
+    "popup_navigation": 10,
+    "positive_control": 3,
+    "service_worker": 3,
+    "urlloader": 19
+  },
+  "ordering": [
+    "constructor-transport-context-major",
+    "urlloader-surface-major",
+    "service-worker",
+    "popup-navigation",
+    "browser-service",
+    "browser-service-control-paired-order",
+    "positive-control"
+  ],
+  "qualification_id": "browser-egress-qualification-v1",
+  "schema_version": 1,
+  "study_id": "classifier-multiorigin100-v1",
+  "vector_count": 110
+}

@@ -3,8 +3,9 @@
 
 This host-side process deliberately has no third-party or ``qcsd_lab`` import.
 The acquisition checkpoint remains the only resume authority: this process
-validates it, asks the existing coordinator for status, invokes bounded due
-work, and otherwise sleeps only as far as the next five-second heartbeat.
+validates the immutable foundation, deeply replays its browser-egress gate at
+admission, asks the existing coordinator for status, invokes bounded due work,
+and otherwise sleeps only as far as the next five-second heartbeat.
 """
 
 from __future__ import annotations
@@ -33,15 +34,150 @@ from typing import Any, Protocol
 STUDY_ID = "classifier-multiorigin100-v1"
 CANDIDATE_COUNT = 600
 SCHEMA_VERSION = 1
-ACQUISITION_SCHEMA_VERSION = 4
+ACQUISITION_SCHEMA_VERSION = 5
+HISTORICAL_ACQUISITION_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4})
 CHECKPOINT_SCHEMA_VERSION = 2
-FOUNDATION_SCHEMA_VERSION = 2
+FOUNDATION_SCHEMA_VERSION = 3
 CATALOGUE_TYPE = "qcsd-class-study-candidate-catalogue"
 PROVENANCE_TYPE = "qcsd-class-study-acquisition-provenance"
 CHECKPOINT_TYPE = "qcsd-class-study-acquisition-checkpoint"
 FOUNDATION_TYPE = "qcsd-class-study-foundation-attestation"
 PINNED_CDP_TYPE = "qcsd-class-study-pinned-cdp-probe"
 BUILD_EXECUTION_TYPE = "qcsd-buflo-study-no-cache-build-execution"
+BROWSER_EGRESS_FINAL_TYPE = "qcsd-browser-egress-qualification-final"
+BROWSER_EGRESS_QUALIFICATION_ID = "browser-egress-qualification-v1"
+BROWSER_EGRESS_VECTOR_COUNT = 110
+BROWSER_EGRESS_EXPANDED_VECTORS_SHA256 = (
+    "9fecbeb7988fcb28d82803026ef9f3948d1494b14cc5a0930585e6e51e3a4179"
+)
+BROWSER_EGRESS_MANIFEST_RELATIVE_PATH = (
+    "config/class-study/v1/browser-egress-qualification-v1.json"
+)
+BROWSER_EGRESS_MANIFEST_SHA256 = (
+    "d2990612f613fba7fa887c2f2677064fab3fbd7dc51977c0cfab9cb0dcaa3fc6"
+)
+BROWSER_EGRESS_ARGV_RELATIVE_PATH = (
+    "config/class-study/v1/browser-egress-chromium-argv-v1.json"
+)
+BROWSER_EGRESS_ARGV_SHA256 = (
+    "458f51042d64433c089e5c43ab1167bbfa337ed4b6bda5e9d0d4efc0edf99c36"
+)
+_BROWSER_EGRESS_VECTOR_IDS = tuple(
+    [
+        f"constructor--{context}--{surface}"
+        for context in (
+            "page",
+            "same-origin-frame",
+            "cross-origin-frame",
+            "dedicated-worker",
+            "shared-worker",
+        )
+        for surface in (
+            "websocket",
+            "websocket-stream",
+            "webtransport",
+            "rtc-stun-udp",
+            "rtc-stun-tcp",
+            "rtc-turn-udp",
+            "rtc-turn-tcp",
+            "tcp-client",
+            "tcp-server",
+            "udp-socket",
+        )
+    ]
+    + [
+        f"urlloader--{context}--{surface}"
+        for surface, contexts in (
+            (
+                "fetch",
+                (
+                    "page",
+                    "same-origin-frame",
+                    "cross-origin-frame",
+                    "dedicated-worker",
+                    "shared-worker",
+                ),
+            ),
+            (
+                "xhr",
+                (
+                    "page",
+                    "same-origin-frame",
+                    "cross-origin-frame",
+                    "dedicated-worker",
+                    "shared-worker",
+                ),
+            ),
+            ("beacon", ("page", "same-origin-frame", "cross-origin-frame")),
+            (
+                "trusted-anchor-ping",
+                ("page", "same-origin-frame", "cross-origin-frame"),
+            ),
+            (
+                "legacy-csp-report",
+                ("page", "same-origin-frame", "cross-origin-frame"),
+            ),
+        )
+        for context in contexts
+    ]
+    + [
+        f"service-worker--page--{surface}"
+        for surface in ("registration", "import", "fetch")
+    ]
+    + [
+        f"popup--page--{surface}"
+        for surface in (
+            "window-open-omitted-target",
+            "window-open-empty-target",
+            "window-open-blank-target",
+            "window-open-attacker-name",
+            "window-open-existing-named-frame",
+            "attached-anchor",
+            "detached-anchor",
+            "button-formtarget",
+            "input-formtarget",
+            "request-submit-submitter",
+        )
+    ]
+    + [
+        f"browser-service--browser--{surface}"
+        for surface in (
+            "dns-prefetch",
+            "preconnect",
+            "speculation-prefetch",
+            "speculation-prerender",
+            "reporting-nel-live",
+            "reporting-nel-close-flush",
+            "fedcm",
+            "protected-audience",
+            "attribution",
+            "shared-storage",
+            "proxy",
+            "pac",
+            "idle-launch-close",
+        )
+    ]
+    + [
+        f"browser-service-control--{context}--{surface}"
+        for context, surface in (
+            ("off-the-record", "speculation-prefetch-disabled"),
+            ("off-the-record", "speculation-prefetch-enabled"),
+            ("default-profile", "dns-prefetch-disabled"),
+            ("default-profile", "dns-prefetch-enabled"),
+            ("default-profile", "preconnect-disabled"),
+            ("default-profile", "preconnect-enabled"),
+            ("default-profile", "speculation-prerender-disabled"),
+            ("default-profile", "speculation-prerender-enabled"),
+            ("default-profile", "reporting-disabled"),
+            ("default-profile", "reporting-enabled"),
+            ("default-profile", "network-error-logging-disabled"),
+            ("default-profile", "network-error-logging-enabled"),
+        )
+    ]
+    + [f"positive-control--fixture--{surface}" for surface in ("tcp", "udp", "dns")]
+)
+if len(_BROWSER_EGRESS_VECTOR_IDS) != BROWSER_EGRESS_VECTOR_COUNT:  # pragma: no cover
+    raise RuntimeError("browser-egress watcher vector inventory is inconsistent")
 BUILD_WSL_HOST_MIN_AVAILABLE_BYTES = 64 * 1024**3
 BUILD_HOST_STORAGE_POLICY = "docker-data-vhdx-backing-volume-minimum-v1"
 BUILD_HOST_STORAGE_PROBE = "powershell-get-volume-docker-data-vhdx-v1"
@@ -94,6 +230,7 @@ DEFAULT_HEARTBEAT_SECONDS = 5.0
 SOURCE_RECHECK_SECONDS = 60.0
 DOCKER_SUPERVISOR_SIGNAL_ENVELOPE_SECONDS = 120
 ADMISSION_RUNTIME_SECONDS = 600
+BROWSER_EGRESS_VERIFY_RUNTIME_SECONDS = 600
 STATUS_RUNTIME_SECONDS = 300
 STATUS_CLEANUP_SECONDS = 10
 ACQUISITION_ACTION_TIMEOUT_SECONDS = 1_800
@@ -101,12 +238,8 @@ ACQUISITION_ACTION_CLEANUP_SECONDS = 120
 # The user-systemd scope is the outer backup for the in-container hard action
 # timeout.  At expiry it sends INT, then permits the same cleanup envelope
 # before systemd escalates to KILL.
-RUN_RUNTIME_SECONDS = (
-    ACQUISITION_ACTION_TIMEOUT_SECONDS + ACQUISITION_ACTION_CLEANUP_SECONDS
-)
-ACQUISITION_OUTER_HARD_SECONDS = (
-    RUN_RUNTIME_SECONDS + ACQUISITION_ACTION_CLEANUP_SECONDS
-)
+RUN_RUNTIME_SECONDS = ACQUISITION_ACTION_TIMEOUT_SECONDS + ACQUISITION_ACTION_CLEANUP_SECONDS
+ACQUISITION_OUTER_HARD_SECONDS = RUN_RUNTIME_SECONDS + ACQUISITION_ACTION_CLEANUP_SECONDS
 # Reserve enough separation for the complete configured acquisition hard
 # envelope, one worst-case status scope, and an explicit 50-second scheduling
 # margin.  This also exceeds the 30-minute width of either long probe window.
@@ -138,9 +271,7 @@ _VOLUME_ID_RE = re.compile(
 )
 _WINDOWS_VHD_RE = re.compile(r"[A-Za-z]:\\[^\r\n]+[.]vhdx\Z", re.IGNORECASE)
 _CANDIDATE_ID_RE = re.compile(r"tranco-[0-9]{7}\Z")
-_BOOT_ID_RE = re.compile(
-    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\Z"
-)
+_BOOT_ID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\Z")
 _SCOPE_UNIT_RE = re.compile(r"qcsd-class-watch-[0-9a-f]{32}[.]scope\Z")
 _SCOPE_ROOT_RE = re.compile(r"scope(?:[.]next)?[.][0-9a-f]{32}\Z")
 _STATE_NAMESPACE_RE = re.compile(r"[0-9a-f]{64}\Z")
@@ -181,6 +312,7 @@ _PROVENANCE_PAYLOAD_KEYS = {
     "browser_tool",
     "navigation_implementation",
     "cdp_target_instrumentation_policy",
+    "non_replayable_egress_contract",
     "passive_render_contract",
     "passive_render_contract_sha256",
     "browser_navigation_timeout_ms",
@@ -259,26 +391,311 @@ _BUILD_STORAGE_PREFLIGHT_KEYS = {
     "passed",
 }
 _CDP_TARGET_INSTRUMENTATION_POLICY = (
-    "playwright-1.52-public-cdp-recursive-non-flat-paused-debugger-targets-v3"
+    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v10"
 )
-_PINNED_CDP_CONTRACT = {
+_PLAYWRIGHT_VERSION = "1.57.0"
+_CHROMIUM_VERSION = "143.0.7499.4"
+_CHROMIUM_EXECUTABLE = "/usr/local/bin/qcsd-chromium"
+_PINNED_CDP_SCHEMA_VERSION = 8
+_BOOTSTRAP_PREARM_SUMMARY_SCHEMA_VERSION = 1
+_EGRESS_PREARM_SUMMARY_SCHEMA_VERSION = 2
+_PINNED_CDP_TARGET_ACTIVITY_SCHEMA_VERSION = 1
+_NON_REPLAYABLE_EGRESS_POLICY = "blocked-non-urlloader-egress-v1"
+_NON_REPLAYABLE_EGRESS_SCHEMA_VERSION = 2
+_BROWSER_EGRESS_COMMAND_LINE_SCHEMA_VERSION = 4
+_BROWSER_EGRESS_PRODUCTION_LAUNCH_PROFILE = "production-fail-closed"
+_BROWSER_EGRESS_REQUIRED_CHROMIUM_SWITCHES = [
+    "--disable-background-networking",
+    "--disable-client-side-phishing-detection",
+    "--disable-component-update",
+    "--disable-crashpad-for-testing",
+    "--disable-default-apps",
+    "--disable-domain-reliability",
+    "--disable-extensions",
+    "--disable-quic",
+    "--disable-sync",
+    "--no-first-run",
+    "--no-pings",
+    "--no-proxy-server",
+    "--no-sandbox",
+    "--no-service-autorun",
+    "--no-zygote",
+]
+_BROWSER_EGRESS_ANTAGONISTIC_CHROMIUM_SWITCHES = [
+    "--disable-extensions-except",
+    "--enable-background-networking",
+    "--enable-client-side-phishing-detection",
+    "--enable-component-update",
+    "--enable-default-apps",
+    "--enable-domain-reliability",
+    "--enable-extensions",
+    "--enable-pings",
+    "--enable-quic",
+    "--enable-service-autorun",
+    "--enable-sync",
+    "--first-run",
+    "--force-first-run",
+    "--force-first-run-ui",
+    "--host-rules",
+    "--load-extension",
+    "--proxy-auto-detect",
+    "--proxy-pac-url",
+    "--proxy-server",
+    "--service-autorun",
+    "--single-process",
+]
+_BROWSER_EGRESS_REQUIRED_DISABLED_FEATURE_TOKENS = sorted(
+    [
+        "AcceptCHFrame",
+        "AutoDeElevate",
+        "AvoidUnnecessaryBeforeUnloadCheckSync",
+        "DestroyProfileOnBrowserClose",
+        "DialMediaRouteProvider",
+        "FedCm",
+        "GlobalMediaControls",
+        "HttpsUpgrades",
+        "LensOverlay",
+        "MediaRouter",
+        "NetworkErrorLogging",
+        "OptimizationHints",
+        "PaintHolding",
+        "RenderDocument",
+        "Reporting",
+        "ThirdPartyStoragePartitioning",
+        "Translate",
+    ]
+)
+_BROWSER_EGRESS_REQUIRED_DISABLED_BLINK_FEATURE_TOKENS = sorted(
+    ["AdInterestGroupAPI", "AttributionReporting", "Fledge", "SharedStorageAPI"]
+)
+_BROWSER_EGRESS_REQUIRED_ENABLED_FEATURE_ARGUMENTS = [["CDPScreenshotNewSurface"]]
+_BROWSER_EGRESS_SUBPROCESS_WRAPPER_ARGUMENT = (
+    "--browser-subprocess-path=/usr/local/libexec/qcsd-chromium-child"
+)
+_PINNED_CDP_RESOLVER_PROJECTION = {
     "schema_version": 1,
-    "policy": "pinned-playwright-chromium-recursive-target-topology-v1",
+    "mode": "approved-map-or-exclude-then-not-found",
+    "rule_count": 3,
+    "mapped_host_count": 2,
+    "excluded_host_count": 0,
+    "catch_all_not_found": True,
+    "canonical_rules_sha256": (
+        "d4cb9b5a5ce3719322dedccb391ca058c130a47df7cf22fb1ec436993876e102"
+    ),
+}
+_PAGE_TARGET_EGRESS_APIS = (
+    "WebSocketStream",
+    "WebTransport",
+    "RTCPeerConnection",
+    "webkitRTCPeerConnection",
+    "TCPSocket",
+    "TCPServerSocket",
+    "UDPSocket",
+)
+_WORKER_TARGET_EGRESS_APIS = ("WebSocket", *_PAGE_TARGET_EGRESS_APIS)
+_TARGET_EGRESS_APIS = sorted(set(_WORKER_TARGET_EGRESS_APIS))
+_PLAYWRIGHT_BROWSERS_JSON_SHA256 = (
+    "b509d013de89d621a142818e0937de356fbb0169096922c08581a4f83e463b8e"
+)
+_CHROMIUM_EXECUTABLE_SHA256 = "6f72e258e11d85ec413b1671422c83d65af9f9ddcbc811657a43700b324ce928"
+_PLAYWRIGHT_DRIVER_CONTENT_SHA256 = (
+    "f2f774b92c6074dcab28bc5a0afa13b43c70e372057558b7246d4ba168602d51"
+)
+_PLAYWRIGHT_DRIVER_PAYLOAD_SHA256 = (
+    "926b894666e6b5d6dcdb31dc28d581a9cb22eba1f6dc924be74b49402c44e3c3"
+)
+_PLAYWRIGHT_DRIVER_RECEIPT_SHA256 = (
+    "7194034787b5c1c34ffd88d62cf9969b1510fca7955a0ed7b7c3168f23a8bfb2"
+)
+_PLAYWRIGHT_DRIVER_OWNERSHIP_POLICY = {
+    "name": "qcsd-conditional-exclusive-recursive-cdp-target-ownership-v6",
+    "activation_environment_variable": "QCSD_EXCLUSIVE_CDP_TARGET_OWNERSHIP",
+    "activation_value": "1",
+    "inactive_semantics": "native-playwright-unfiltered-auto-attach",
+    "driver_start_environment_lock": "held-only-through-sync-playwright-enter",
+    "forbidden_driver_environment_variables": [
+        "NODE_OPTIONS",
+        "NODE_PATH",
+        "PLAYWRIGHT_NODEJS_PATH",
+        "PLAYWRIGHT_NODEJS_PORT",
+        "PLAYWRIGHT_DISABLE_FORCED_CHROMIUM_PROXIED_LOOPBACK",
+        "PLAYWRIGHT_DISABLE_SERVICE_WORKER_CONSOLE",
+        "PLAYWRIGHT_DISABLE_SERVICE_WORKER_NETWORK",
+        "PLAYWRIGHT_HOST_PLATFORM_OVERRIDE",
+        "PLAYWRIGHT_LEGACY_SCREENSHOT",
+        "PLAYWRIGHT_SKIP_NAVIGATION_CHECK",
+        "PWDEBUG",
+        "PW_CHROMIUM_ATTACH_TO_OTHER",
+        "SELENIUM_REMOTE_CAPABILITIES",
+        "SELENIUM_REMOTE_HEADERS",
+        "SELENIUM_REMOTE_URL",
+    ],
+    "chromium_child_environment": {
+        "HOME": "/nonexistent",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "TMPDIR": "/tmp",
+        "TZ": "UTC",
+    },
+    "shared_worker_pause_fix": {
+        "chromium_commit": "0606a60db66fc14d6fd76c8d532392b26504b308",
+        "chromium_position": 1_529_406,
+        "required_semantics": "wait-for-debugger-on-start-holds-new-shared-worker",
+    },
+    "browser_service_containment": {
+        "dns_over_https_policy": {"DnsOverHttpsMode": "off"},
+        "network_prediction_policy": {"NetworkPredictionOptions": 2},
+        "same_approved_origin_speculation_prefetch_required": True,
+        "ordinary_playwright_launch": True,
+    },
+}
+_EXPECTED_PLAYWRIGHT_DRIVER_BINDING = {
+    "receipt_sha256": _PLAYWRIGHT_DRIVER_RECEIPT_SHA256,
+    "payload_sha256": _PLAYWRIGHT_DRIVER_PAYLOAD_SHA256,
+    "content_sha256": _PLAYWRIGHT_DRIVER_CONTENT_SHA256,
+    "policy": _PLAYWRIGHT_DRIVER_OWNERSHIP_POLICY,
+    "browsers_json_sha256": _PLAYWRIGHT_BROWSERS_JSON_SHA256,
+    "chromium_executable_sha256": _CHROMIUM_EXECUTABLE_SHA256,
+}
+_EXPECTED_BROWSER_TOOL_IDENTITY = {
+    "schema_version": 1,
+    "name": "playwright-chromium",
+    "playwright_version": _PLAYWRIGHT_VERSION,
+    "chromium_revision": "1200",
+    "chromium_version": _CHROMIUM_VERSION,
+    "configured_executable_path": _CHROMIUM_EXECUTABLE,
+    "playwright_driver": _EXPECTED_PLAYWRIGHT_DRIVER_BINDING,
+}
+_PINNED_CDP_CONTRACT = {
+    "schema_version": _PINNED_CDP_SCHEMA_VERSION,
+    "policy": "pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v8",
     "instrumentation_policy": _CDP_TARGET_INSTRUMENTATION_POLICY,
-    "playwright_version": "1.52.0",
-    "chromium_executable": "/usr/bin/chromium",
+    "playwright_version": _PLAYWRIGHT_VERSION,
+    "chromium_executable": _CHROMIUM_EXECUTABLE,
+    "chromium_version": _CHROMIUM_VERSION,
+    "playwright_driver_ownership_policy": _PLAYWRIGHT_DRIVER_OWNERSHIP_POLICY,
+    "playwright_driver_binding": _EXPECTED_PLAYWRIGHT_DRIVER_BINDING,
+    "playwright_browsers_json_sha256": _PLAYWRIGHT_BROWSERS_JSON_SHA256,
+    "chromium_executable_sha256": _CHROMIUM_EXECUTABLE_SHA256,
     "network_scope": "docker-network-none-loopback-only",
     "observation_timeout_ms": 10_000,
     "required_quiet_interval_ms": 250,
+    "target_activity_schema_version": _PINNED_CDP_TARGET_ACTIVITY_SCHEMA_VERSION,
     "required_target_types": ["iframe", "shared_worker", "worker"],
     "required_observations": [
         "cross-site-iframe-network-request",
         "dedicated-and-shared-worker-network-requests",
-        "worker-fetch-paused-on-owning-page-session",
+        "dedicated-worker-fetch-paused-on-owning-page-session",
+        "shared-worker-fetch-paused-on-guarded-shared-worker-session",
+        "shared-worker-bootstrap-held-through-secondary-fetch-prearm",
+        "target-lifecycle-activity-resets-quiescence",
         "duplicate-url-occurrences-remain-distinct",
-        "redirect-terminal-request-observed",
+        "all-deterministic-http-responses-finished-successfully",
         "router-ledger-extra-info-and-server-shutdown-complete",
+        "all-runnable-targets-prearmed-against-non-urlloader-egress",
+        "context-websocket-route-installed-before-first-page",
+        "zero-service-worker-and-non-replayable-egress-attempts",
+        "required-effective-chromium-egress-switches",
+        "unprivileged-zero-capability-runtime",
     ],
+    "non_replayable_egress_policy": _NON_REPLAYABLE_EGRESS_POLICY,
+    "packet_level_egress_completeness_claimed": False,
+}
+_PINNED_CDP_TARGET_ACTIVITY_EVENTS = (
+    "target-attached",
+    "target-info-changed",
+    "target-detached",
+    "target-destroyed",
+)
+_PINNED_CDP_TARGET_ACTIVITY_TYPES = ("iframe", "page", "shared_worker", "worker")
+_PINNED_CDP_EVENT_METHODS = (
+    "Fetch.requestPaused",
+    "Network.loadingFailed",
+    "Network.loadingFinished",
+    "Network.requestServedFromCache",
+    "Network.requestWillBeSent",
+    "Network.requestWillBeSentExtraInfo",
+    "Network.responseReceived",
+)
+_PINNED_CDP_HTTP_STATUS_COUNTS = {
+    "/": {"200": 1},
+    "/dedicated-data": {"200": 1},
+    "/dedicated-worker.js": {"200": 1},
+    "/duplicate": {"200": 2},
+    "/frame": {"200": 1},
+    "/frame-data": {"200": 1},
+    "/redirect": {"302": 1},
+    "/redirected": {"200": 1},
+    "/shared-data": {"200": 1},
+    "/shared-worker.js": {"200": 1},
+}
+_PINNED_CDP_SERVER_REQUEST_COUNTS = {
+    path: sum(statuses.values()) for path, statuses in _PINNED_CDP_HTTP_STATUS_COUNTS.items()
+}
+_PINNED_CDP_BOOTSTRAP_PREARM_SUMMARY = {
+    "schema_version": _BOOTSTRAP_PREARM_SUMMARY_SCHEMA_VERSION,
+    "held_total": 1,
+    "released_total": 1,
+    "pending_total": 0,
+    "release_before_setup_envelopes_total": 0,
+    "by_worker_type": {
+        "worker": {
+            "held": 0,
+            "released": 0,
+            "pending": 0,
+            "released_after_setup_envelopes": 0,
+            "owner_target_types": {
+                "page": 0,
+                "iframe": 0,
+                "worker": 0,
+                "shared_worker": 0,
+            },
+        },
+        "shared_worker": {
+            "held": 1,
+            "released": 1,
+            "pending": 0,
+            "released_after_setup_envelopes": 1,
+            "owner_target_types": {
+                "page": 1,
+                "iframe": 0,
+                "worker": 0,
+                "shared_worker": 0,
+            },
+        },
+    },
+}
+_NON_REPLAYABLE_EGRESS_CONTRACT = {
+    "schema_version": 2,
+    "policy": _NON_REPLAYABLE_EGRESS_POLICY,
+    "target_shim_schema_version": 1,
+    "target_shim_sha256": {
+        "iframe": "c3e6347e810fbc1b1c1517a0d6888d1743578cebbcb6641df763ef1a11cf9fdf",
+        "page": "c3e6347e810fbc1b1c1517a0d6888d1743578cebbcb6641df763ef1a11cf9fdf",
+        "shared_worker": "41e85a575dac0d0cc1bd67a904ae28666a15f9ab878825170901b58ad736ad7e",
+        "worker": "41e85a575dac0d0cc1bd67a904ae28666a15f9ab878825170901b58ad736ad7e",
+    },
+    "popup_navigation_guard_sha256": (
+        "69b182afbcd0c9bb0b8ecb2c3224a4bc3e6443c1572b939f074eb02e367f2dfe"
+    ),
+    "context_page_init_sha256": (
+        "dbfe0d8953c31631129dfe030d090cf5f7b9936c9b042336d456101e59ed33aa"
+    ),
+    "context_init_target_type": "page",
+    "chromium_popup_blocking": "default-enabled",
+    "popup_urlloader_boundary": (
+        "playwright-browser-context-navigation-route-before-first-page-bound-to-root-page"
+    ),
+    "browser_popup_tab_tripwire_is_pre_io": False,
+    "required_chromium_switches": list(_BROWSER_EGRESS_REQUIRED_CHROMIUM_SWITCHES),
+    "no_pings_is_admission_boundary": False,
+    "fresh_image_kernel_counter_qualification_required": True,
+    "page_frame_websocket_boundary": "playwright-browser-context-route-before-first-page",
+    "worker_websocket_boundary": "paused-target-runtime-shim",
+    "service_worker_policy": "browser-context-block-plus-browser-target-tripwire",
+    "cdp_tripwires_are_pre_io": False,
+    "packet_level_completeness_claimed": False,
 }
 _FOUNDATION_GATES = (
     "current-clean-source-and-no-cache-build",
@@ -287,10 +704,11 @@ _FOUNDATION_GATES = (
     "nine-mode-regression-18-of-18",
     "controlled-qualification-160-of-160",
     "pinned-cdp-integration-probe",
+    "browser-egress-packet-qualification-110-of-110",
 )
 _PASSIVE_RENDER_CONTRACT = {
-    "schema_version": 1,
-    "policy": "bounded-passive-render-quiescence-v1",
+    "schema_version": 3,
+    "policy": "bounded-passive-render-quiescence-v3",
     "viewport": {"width": 1365, "height": 768, "deviceScaleFactor": 1},
     "cache": "disabled",
     "service_workers": "bypassed-and-registration-blocked",
@@ -300,7 +718,15 @@ _PASSIVE_RENDER_CONTRACT = {
     "quiet_window_begins": "after-minimum-or-last-relevant-event-whichever-is-later",
     "hard_cap_after_load_ms": PASSIVE_RENDER_HARD_CAP_MS,
     "poll_interval_ms": 100,
-    "active_request_scope": "all-network-request-occurrences",
+    "active_request_scope": "all-instrumented-urlloader-request-occurrences",
+    "quiescence_requires": [
+        "no-active-network-request-occurrences",
+        "recursive-target-router-shutdown-ready",
+        "no-pending-shared-worker-bootstrap-prearm",
+        "all-observed-target-egress-shims-prearmed",
+        "zero-non-replayable-egress-attempts",
+        "zero-browser-context-service-workers",
+    ],
     "relevant_events": [
         "network-request",
         "fetch-request",
@@ -309,14 +735,19 @@ _PASSIVE_RENDER_CONTRACT = {
         "target-detached",
         "target-destroyed",
         "target-info-changed",
+        "non-replayable-egress-attempt",
     ],
+    "non_replayable_egress_policy": _NON_REPLAYABLE_EGRESS_POLICY,
+    "non_replayable_egress_boundary": {
+        "page_frame_websocket": "playwright-route-before-page",
+        "paused_target_constructor_shim": True,
+        "cdp_network_events": "post-construction-tripwire-only",
+        "packet_level_completeness_claimed": False,
+    },
     "hard_cap_policy": "typed-candidate-rejection",
 }
 _PASSIVE_RENDER_CONTRACT_SHA256 = hashlib.sha256(
-    (
-        json.dumps(_PASSIVE_RENDER_CONTRACT, sort_keys=True, separators=(",", ":"))
-        + "\n"
-    ).encode()
+    (json.dumps(_PASSIVE_RENDER_CONTRACT, sort_keys=True, separators=(",", ":")) + "\n").encode()
 ).hexdigest()
 _ORIGIN_POLICY = {
     "max_passes": 8,
@@ -325,7 +756,7 @@ _ORIGIN_POLICY = {
     "max_observed_audit_origins": 512,
     "max_navigation_attempts": MAX_PROBE_ATTEMPTS,
     "max_probe_attempts_per_window": MAX_PROBE_ATTEMPTS,
-    "navigation_seed_scope": "page-specific-document-navigation-origins-only",
+    "navigation_seed_scope": "page-specific-in-boundary-https-get-origins",
     "resource_graph_scope": "iteratively-converged-public-https-get-request-instances",
     "request_instance_identity": (
         "observation-order-resource-id-with-preceding-initiator-and-redirect-edges"
@@ -333,21 +764,51 @@ _ORIGIN_POLICY = {
     "dns": "all-answers-global-and-browser-host-resolver-pinned",
     "neqo": "QCSD_PUBLIC_ORIGIN_ONLY-resolve-once-connect-exact-address",
 }
+_NAVIGATION_IMPLEMENTATION = "playwright-public-cdp-recursive-catalogue-boundary-egress-guard-v4"
+_REGISTRABLE_DOMAIN_POLICY = "exact-frozen-tranco-candidate-domain"
+_DOMAIN_SAFETY_POLICY = {
+    "policy": "frozen-domain-safety-deny-v2",
+    "denied_substrings": [
+        "adult",
+        "bet",
+        "casino",
+        "escort",
+        "gambl",
+        "hentai",
+        "malware",
+        "phishing",
+        "porn",
+        "sex",
+        "xxx",
+    ],
+    "denied_exact_domains": [
+        "deep-nudes.com",
+        "ebonyfacial.net",
+        "greenxh.live",
+        "hanime.tv",
+        "joyclub.de",
+        "mygirls.me",
+        "xvideos.tube",
+        "xnxx.com",
+    ],
+}
+_DOMAIN_SAFETY_POLICY_SHA256 = hashlib.sha256(
+    (json.dumps(_DOMAIN_SAFETY_POLICY, indent=2, sort_keys=True, allow_nan=False) + "\n").encode()
+).hexdigest()
+_ELIGIBILITY_INPUTS = ["page-safety", "three-window-technical-stability"]
+_PROHIBITED_INPUTS = ["classifier", "defence", "latency", "bandwidth", "privacy"]
 _ACQUISITION_ACTION_TIMING_CONTRACT = {
     "schema_version": 2,
     "policy": "bounded-compatible-candidate-batch-whole-action-deadline-v2",
     "bounded_candidates": MAX_CANDIDATES,
     "global_live_page_cap": GLOBAL_LIVE_PAGE_CAP,
     "batch_selection": (
-        "same-priority-same-stage-immutable-catalogue-order-compatible-pair-"
-        "otherwise-singleton"
+        "same-priority-same-stage-immutable-catalogue-order-compatible-pair-otherwise-singleton"
     ),
     "transactional_publication": (
         "active-batch-and-pending-attempts-published-before-parallel-work"
     ),
-    "coordinator_merge": (
-        "deterministic-immutable-catalogue-order-after-all-workers-return"
-    ),
+    "coordinator_merge": ("deterministic-immutable-catalogue-order-after-all-workers-return"),
     "browser_navigation_timeout_ms": BROWSER_NAVIGATION_TIMEOUT_MS,
     "browser_navigation_timeout_scope": "navigation-component-only",
     "passive_render_hard_cap_after_load_ms": PASSIVE_RENDER_HARD_CAP_MS,
@@ -368,18 +829,12 @@ _ACQUISITION_ACTION_TIMING_CONTRACT = {
         "final_signal": "SIGKILL",
         "hard_deadline_ms": ACQUISITION_OUTER_HARD_SECONDS * 1_000,
     },
-    "direct_public_acquisition_run": (
-        "forbidden-without-validated-watcher-scope-authority"
-    ),
-    "successful_ledger_attempt_duration_limit_ms": (
-        ACQUISITION_ACTION_TIMEOUT_SECONDS * 1_000
-    ),
+    "direct_public_acquisition_run": ("forbidden-without-validated-watcher-scope-authority"),
+    "successful_ledger_attempt_duration_limit_ms": (ACQUISITION_ACTION_TIMEOUT_SECONDS * 1_000),
     "whole_action_duration_evidence": (
         "externally-enforced-process-status-no-per-action-duration-receipt"
     ),
-    "interruption_recovery": (
-        "published-active-batch-attempts-become-interrupted-never-completed"
-    ),
+    "interruption_recovery": ("published-active-batch-attempts-become-interrupted-never-completed"),
 }
 _BASELINE_SCHEDULING_CONTRACT = {
     "schema_version": 2,
@@ -389,13 +844,8 @@ _BASELINE_SCHEDULING_CONTRACT = {
     "minimum_baseline_spacing_ms": PENDING_BASELINE_GUARD_MS,
     "window_start_reservation_ms": PENDING_BASELINE_GUARD_MS,
     "longest_probe_window_width_ms": 1_800_000,
-    "acquisition_outer_configured_hard_cutoff_ms": (
-        ACQUISITION_OUTER_HARD_SECONDS * 1_000
-    ),
-    "status_configured_hard_cutoff_ms": (
-        STATUS_RUNTIME_SECONDS + STATUS_CLEANUP_SECONDS
-    )
-    * 1_000,
+    "acquisition_outer_configured_hard_cutoff_ms": (ACQUISITION_OUTER_HARD_SECONDS * 1_000),
+    "status_configured_hard_cutoff_ms": (STATUS_RUNTIME_SECONDS + STATUS_CLEANUP_SECONDS) * 1_000,
     "scheduler_margin_ms": SERIAL_SCHEDULER_MARGIN_SECONDS * 1_000,
     "navigation_phase": "separate-bounded-action-before-baseline",
     "short_probe": "same-action-wait-until-t+30s-earliest",
@@ -405,17 +855,13 @@ _BASELINE_SCHEDULING_CONTRACT = {
     "unpaired_candidate_policy": "singleton-when-no-compatible-partner",
     "serial_action_start_offsets_ms": [0, 85_500_000, 258_300_000],
     "stability_window_earliest_offsets_ms": [25_000, 85_500_000, 258_300_000],
-    "collision_scope": (
-        "baseline-arming-and-t+24h-t+72h-action-starts-across-batches"
-    ),
+    "collision_scope": ("baseline-arming-and-t+24h-t+72h-action-starts-across-batches"),
     "strict_serial_zero_duration_projection": {
         "candidate_count": CANDIDATE_COUNT,
         "maximum_candidates_per_batch": MAX_CANDIDATES,
         "batch_count": 300,
         "algorithm": "greedy-earliest-safe-baseline-batches",
-        "pairing_assumption": (
-            "all-candidates-form-300-compatible-two-candidate-batches"
-        ),
+        "pairing_assumption": ("all-candidates-form-300-compatible-two-candidate-batches"),
         "last_baseline_offset_ms": 2_784_000_000,
         "last_t+72h_earliest_offset_ms": 3_042_300_000,
     },
@@ -452,7 +898,13 @@ _STATUS_KEYS = {
     "complete",
     "next_due",
 }
-_STATUS_DETAIL_KEYS = _STATUS_KEYS | {"valid", "runner_root", "gate"}
+_STATUS_DETAIL_KEYS = _STATUS_KEYS | {
+    "valid",
+    "runner_root",
+    "gate",
+    "authoritative",
+    "gate_verification",
+}
 _RUN_DETAIL_KEYS = _STATUS_KEYS | {
     "valid",
     "runner_root",
@@ -525,18 +977,14 @@ class WatchPaths:
             lab_root=lab_root,
             launcher=lab_root / "qcsd-lab",
             candidate_catalogue=(
-                lab_root
-                / "config/class-study/v1"
-                / f"{STUDY_ID}-candidates.json"
+                lab_root / "config/class-study/v1" / f"{STUDY_ID}-candidates.json"
             ),
             acquisition_root=lab_root / "artifacts" / f"{STUDY_ID}-acquisition",
             stability_root=lab_root / "artifacts" / f"{STUDY_ID}-stability",
             workload_root=lab_root / "config/workloads",
             state_base=Path(
                 os.path.abspath(
-                    state_base
-                    or Path("/var/tmp")
-                    / f"qcsd-class-watch-lifecycle-{os.getuid()}"
+                    state_base or Path("/var/tmp") / f"qcsd-class-watch-lifecycle-{os.getuid()}"
                 )
             ),
         )
@@ -573,6 +1021,7 @@ class WatchPaths:
 @dataclass(frozen=True)
 class AcquisitionBinding:
     prepare_image: str
+    cohort_version: int
     catalogue_sha256: str
     provenance_sha256: str
     foundation_sha256: str
@@ -580,6 +1029,8 @@ class AcquisitionBinding:
     pinned_cdp_payload_sha256: str
     pinned_cdp_contract_sha256: str
     build_execution_sha256: str
+    browser_egress_qualification: Mapping[str, Any]
+    browser_egress_tree_sha256: str
     candidate_ids: frozenset[str]
     candidate_order: tuple[str, ...]
     source: Mapping[str, Any]
@@ -623,11 +1074,18 @@ class ScopeRecoveryPlan:
 
 def _canonical_json_bytes(value: Any) -> bytes:
     try:
-        return (
-            json.dumps(value, indent=2, sort_keys=True, allow_nan=False) + "\n"
-        ).encode("utf-8")
+        return (json.dumps(value, indent=2, sort_keys=True, allow_nan=False) + "\n").encode("utf-8")
     except (TypeError, ValueError) as error:
         raise WatchError("evidence contains a non-canonical JSON value") from error
+
+
+def _matches_json_contract(value: Any, expected: Any) -> bool:
+    """Compare JSON values without Python's ``bool``/``int`` equality alias."""
+
+    try:
+        return _canonical_json_bytes(value) == _canonical_json_bytes(expected)
+    except WatchError:
+        return False
 
 
 def _sha256_bytes(value: bytes) -> str:
@@ -648,8 +1106,11 @@ def _source_binding_sha256(binding: AcquisitionBinding) -> str:
     return _sha256_bytes(
         _canonical_json_bytes(
             {
+                "browser_egress_qualification": dict(binding.browser_egress_qualification),
+                "browser_egress_tree_sha256": binding.browser_egress_tree_sha256,
                 "candidate_catalogue_sha256": binding.catalogue_sha256,
                 "build_execution_sha256": binding.build_execution_sha256,
+                "cohort_version": binding.cohort_version,
                 "foundation_sha256": binding.foundation_sha256,
                 "pinned_cdp_contract_sha256": binding.pinned_cdp_contract_sha256,
                 "pinned_cdp_payload_sha256": binding.pinned_cdp_payload_sha256,
@@ -797,6 +1258,7 @@ def _read_stable_file(path: Path, *, root: Path, label: str) -> tuple[bytes, str
             raise WatchError(f"{label} pathname changed while it was read") from error
     finally:
         os.close(descriptor)
+
     def identity(value: os.stat_result) -> tuple[int, ...]:
         return (
             value.st_dev,
@@ -834,7 +1296,11 @@ def _load_canonical_receipt(
         raise WatchError(f"{label} receipt envelope differs from the contract")
     if raw != _canonical_json_bytes(value):
         raise WatchError(f"{label} is not canonically encoded")
-    if value["schema_version"] != SCHEMA_VERSION or value["receipt_type"] != receipt_type:
+    if (
+        type(value["schema_version"]) is not int
+        or value["schema_version"] != SCHEMA_VERSION
+        or value["receipt_type"] != receipt_type
+    ):
         raise WatchError(f"{label} identifies another schema or receipt type")
     payload = value["payload"]
     if not isinstance(payload, dict):
@@ -859,6 +1325,24 @@ def _container_binding_path(value: str, *, paths: WatchPaths, label: str) -> Pat
         paths.lab_root / relative,
         root=paths.lab_root,
         directory=False,
+        label=label,
+    )
+
+
+def _container_binding_directory(value: str, *, paths: WatchPaths, label: str) -> Path:
+    if not isinstance(value, str) or not value.startswith("/lab/"):
+        raise WatchError(f"{label} is not a canonical /lab binding")
+    relative = Path(value.removeprefix("/lab/"))
+    if (
+        relative.is_absolute()
+        or ".." in relative.parts
+        or str(relative) != value.removeprefix("/lab/")
+    ):
+        raise WatchError(f"{label} is not a normalised /lab binding")
+    return _require_regular_path(
+        paths.lab_root / relative,
+        root=paths.lab_root,
+        directory=True,
         label=label,
     )
 
@@ -982,13 +1466,10 @@ def _validate_build_role_provenance(
         identity = dict(sources[target])
         identity.pop("image_digest")
         source_identities.append(identity)
-    if (
-        any(identity != source_identities[0] for identity in source_identities[1:])
-        or sources["collection"] != dict(source)
-    ):
-        raise WatchError(
-            "foundation no-cache build image roles used different source snapshots"
-        )
+    if any(identity != source_identities[0] for identity in source_identities[1:]) or sources[
+        "collection"
+    ] != dict(source):
+        raise WatchError("foundation no-cache build image roles used different source snapshots")
     collection_inputs = _validate_build_inputs(
         value["build_inputs"]["collection"],
         label="foundation no-cache build collection role inputs",
@@ -1051,9 +1532,7 @@ def _validate_build_storage_observation(
         or not 0 <= available_bytes <= total_bytes
     ):
         raise WatchError("foundation no-cache build storage observation is invalid")
-    _evidence_timestamp(
-        value["observed_at"], label="foundation no-cache build storage observation"
-    )
+    _evidence_timestamp(value["observed_at"], label="foundation no-cache build storage observation")
     if available_bytes < BUILD_WSL_HOST_MIN_AVAILABLE_BYTES:
         raise WatchError(
             "foundation no-cache build storage observation falls below the 64 GiB minimum"
@@ -1061,9 +1540,7 @@ def _validate_build_storage_observation(
     return dict(value)
 
 
-def _validate_build_storage_preflight(
-    value: Any, *, probe_sha256: str
-) -> dict[str, Any]:
+def _validate_build_storage_preflight(value: Any, *, probe_sha256: str) -> dict[str, Any]:
     if (
         not isinstance(value, dict)
         or set(value) != _BUILD_STORAGE_PREFLIGHT_KEYS
@@ -1071,8 +1548,7 @@ def _validate_build_storage_preflight(
         or value["schema_version"] != 1
         or not isinstance(value.get("applicable"), bool)
         or value.get("policy") != BUILD_HOST_STORAGE_POLICY
-        or value.get("required_available_bytes")
-        != BUILD_WSL_HOST_MIN_AVAILABLE_BYTES
+        or value.get("required_available_bytes") != BUILD_WSL_HOST_MIN_AVAILABLE_BYTES
         or value.get("passed") is not True
     ):
         raise WatchError("foundation no-cache build storage preflight schema is invalid")
@@ -1159,9 +1635,7 @@ def _validate_build_storage_preflight(
         )
         for observation in observations
     ]
-    minimum_available_bytes = min(
-        observation["available_bytes"] for observation in observations
-    )
+    minimum_available_bytes = min(observation["available_bytes"] for observation in observations)
     if (
         len(stable_identities) != 1
         or observed_times != sorted(observed_times)
@@ -1190,9 +1664,7 @@ def _validate_build_execution_schema3(value: Any, *, paths: WatchPaths) -> None:
         not isinstance(claimed, str)
         or _SHA256_RE.fullmatch(claimed) is None
         or claimed
-        != _sha256_bytes(
-            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-        )
+        != _sha256_bytes(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode())
     ):
         raise WatchError("foundation no-cache build execution payload hash is invalid")
     started = _evidence_timestamp(value["started_at"], label="no-cache build start")
@@ -1252,19 +1724,14 @@ def _validate_build_execution_schema3(value: Any, *, paths: WatchPaths) -> None:
             or _IMAGE_RE.fullmatch(record["id"]) is None
             or not isinstance(record.get("repo_digests"), list)
             or any(
-                not isinstance(digest, str)
-                or _REPO_DIGEST_RE.fullmatch(digest) is None
+                not isinstance(digest, str) or _REPO_DIGEST_RE.fullmatch(digest) is None
                 for digest in record["repo_digests"]
             )
         ):
-            raise WatchError(
-                f"foundation no-cache build {target} image binding is invalid"
-            )
+            raise WatchError(f"foundation no-cache build {target} image binding is invalid")
         image_ids[target] = record["id"]
     if len(set(image_ids.values())) != len(image_ids):
-        raise WatchError(
-            "foundation no-cache build image roles lack distinct immutable IDs"
-        )
+        raise WatchError("foundation no-cache build image roles lack distinct immutable IDs")
 
     commands = value["commands"]
     if not isinstance(commands, list) or len(commands) != len(targets):
@@ -1287,9 +1754,7 @@ def _validate_build_execution_schema3(value: Any, *, paths: WatchPaths) -> None:
             if isinstance(iidfile_value, str):
                 iidfile = PurePosixPath(iidfile_value)
                 prefix.extend(["--iidfile", iidfile_value])
-        prefix.extend(
-            ["--target", target, "--tag", images[target]["tag"], "--file"]
-        )
+        prefix.extend(["--target", target, "--tag", images[target]["tag"], "--file"])
         paths_valid = (
             isinstance(argv, list)
             and len(argv) == len(prefix) + 2
@@ -1413,9 +1878,7 @@ def _validate_build_execution_schema3(value: Any, *, paths: WatchPaths) -> None:
         ):
             raise WatchError("foundation no-cache build storage timing is invalid")
         if "docker desktop" not in docker["server_operating_system"].lower():
-            raise WatchError(
-                "foundation no-cache WSL build did not use Docker Desktop"
-            )
+            raise WatchError("foundation no-cache WSL build did not use Docker Desktop")
 
 
 def _load_build_execution(path: Path, *, paths: WatchPaths) -> ReceiptSnapshot:
@@ -1434,49 +1897,409 @@ def _load_build_execution(path: Path, *, paths: WatchPaths) -> ReceiptSnapshot:
     return ReceiptSnapshot(value=value, sha256=sha256)
 
 
+def _validate_bootstrap_prearm_summary(value: Any, *, require_terminal: bool) -> None:
+    fields = {
+        "schema_version",
+        "held_total",
+        "released_total",
+        "pending_total",
+        "release_before_setup_envelopes_total",
+        "by_worker_type",
+    }
+    if not isinstance(value, Mapping) or set(value) != fields:
+        raise WatchError("pinned CDP bootstrap-prearm summary fields are invalid")
+    if (
+        type(value.get("schema_version")) is not int
+        or value["schema_version"] != _BOOTSTRAP_PREARM_SUMMARY_SCHEMA_VERSION
+    ):
+        raise WatchError("pinned CDP bootstrap-prearm summary schema is invalid")
+    total_fields = (
+        "held_total",
+        "released_total",
+        "pending_total",
+        "release_before_setup_envelopes_total",
+    )
+    if any(type(value.get(field)) is not int or value[field] < 0 for field in total_fields):
+        raise WatchError("pinned CDP bootstrap-prearm totals are invalid")
+
+    worker_types = ("worker", "shared_worker")
+    owner_target_types = ("page", "iframe", "worker", "shared_worker")
+    by_worker_type = value.get("by_worker_type")
+    if not isinstance(by_worker_type, Mapping) or set(by_worker_type) != set(worker_types):
+        raise WatchError("pinned CDP bootstrap-prearm worker inventory is invalid")
+
+    held_total = 0
+    released_total = 0
+    pending_total = 0
+    released_after_total = 0
+    for worker_type in worker_types:
+        summary = by_worker_type.get(worker_type)
+        count_fields = (
+            "held",
+            "released",
+            "pending",
+            "released_after_setup_envelopes",
+        )
+        if not isinstance(summary, Mapping) or set(summary) != {
+            *count_fields,
+            "owner_target_types",
+        }:
+            raise WatchError("pinned CDP bootstrap-prearm per-type fields are invalid")
+        if any(type(summary.get(field)) is not int or summary[field] < 0 for field in count_fields):
+            raise WatchError("pinned CDP bootstrap-prearm per-type counts are invalid")
+        owner_counts = summary.get("owner_target_types")
+        if (
+            not isinstance(owner_counts, Mapping)
+            or set(owner_counts) != set(owner_target_types)
+            or any(
+                type(owner_counts.get(target_type)) is not int or owner_counts[target_type] < 0
+                for target_type in owner_target_types
+            )
+        ):
+            raise WatchError("pinned CDP bootstrap-prearm owner counts are invalid")
+        held = summary["held"]
+        released = summary["released"]
+        pending = summary["pending"]
+        released_after = summary["released_after_setup_envelopes"]
+        if (
+            released > held
+            or pending != held - released
+            or released_after > released
+            or sum(owner_counts.values()) != held
+        ):
+            raise WatchError("pinned CDP bootstrap-prearm counts are inconsistent")
+        if worker_type == "worker" and any(
+            (held, released, pending, released_after, *owner_counts.values())
+        ):
+            raise WatchError("dedicated workers cannot use the shared-worker prearm")
+        if require_terminal and (pending or released_after != released):
+            raise WatchError("pinned CDP bootstrap-prearm is not terminal")
+        held_total += held
+        released_total += released
+        pending_total += pending
+        released_after_total += released_after
+
+    if (
+        value["held_total"] != held_total
+        or value["released_total"] != released_total
+        or value["pending_total"] != pending_total
+        or value["release_before_setup_envelopes_total"] != 0
+        or (require_terminal and released_after_total != released_total)
+    ):
+        raise WatchError("pinned CDP bootstrap-prearm aggregate is inconsistent")
+
+
+def _validate_pinned_target_activity(value: Any) -> None:
+    if not isinstance(value, dict) or set(value) != {
+        "schema_version",
+        "generation",
+        "by_target_type",
+    }:
+        raise WatchError("pinned CDP target-activity fields are invalid")
+    generation = value.get("generation")
+    by_target_type = value.get("by_target_type")
+    if (
+        type(value.get("schema_version")) is not int
+        or value["schema_version"] != _PINNED_CDP_TARGET_ACTIVITY_SCHEMA_VERSION
+        or type(generation) is not int
+        or generation < 0
+        or not isinstance(by_target_type, dict)
+        or set(by_target_type) != set(_PINNED_CDP_TARGET_ACTIVITY_TYPES)
+    ):
+        raise WatchError("pinned CDP target-activity aggregate is invalid")
+    observed_total = 0
+    for target_type in _PINNED_CDP_TARGET_ACTIVITY_TYPES:
+        entry = by_target_type[target_type]
+        if not isinstance(entry, dict) or set(entry) != {
+            "total",
+            "max_source_generation",
+            "event_counts",
+        }:
+            raise WatchError("pinned CDP target-activity entry is invalid")
+        total = entry.get("total")
+        maximum = entry.get("max_source_generation")
+        event_counts = entry.get("event_counts")
+        if (
+            type(total) is not int
+            or total < 0
+            or not isinstance(event_counts, dict)
+            or set(event_counts) != set(_PINNED_CDP_TARGET_ACTIVITY_EVENTS)
+            or any(
+                type(event_counts.get(event)) is not int or event_counts[event] < 0
+                for event in _PINNED_CDP_TARGET_ACTIVITY_EVENTS
+            )
+            or sum(event_counts.values()) != total
+            or (total == 0 and maximum is not None)
+            or (total > 0 and (type(maximum) is not int or maximum < 0))
+        ):
+            raise WatchError("pinned CDP target-activity aggregate is invalid")
+        observed_total += total
+    if observed_total != generation:
+        raise WatchError("pinned CDP target-activity generation is inconsistent")
+    if by_target_type["page"]["event_counts"]["target-attached"] != 0 or any(
+        by_target_type[target_type]["event_counts"]["target-attached"] < 1
+        for target_type in ("iframe", "shared_worker", "worker")
+    ):
+        raise WatchError("pinned CDP target-activity observation did not pass")
+
+
+def _target_egress_api_count(target_type: str) -> int:
+    return len(
+        _PAGE_TARGET_EGRESS_APIS
+        if target_type in {"page", "iframe"}
+        else _WORKER_TARGET_EGRESS_APIS
+    )
+
+
+def _validate_egress_prearm_summary(value: Any) -> Mapping[str, Any]:
+    fields = {
+        "schema_version",
+        "policy",
+        "target_total",
+        "installed_total",
+        "pending_total",
+        "popup_guard_required_total",
+        "popup_guard_installed_total",
+        "by_target_type",
+    }
+    if not isinstance(value, Mapping) or set(value) != fields:
+        raise WatchError("pinned CDP target egress-prearm fields are invalid")
+    if (
+        type(value["schema_version"]) is not int
+        or value["schema_version"] != _EGRESS_PREARM_SUMMARY_SCHEMA_VERSION
+        or value["policy"] != _NON_REPLAYABLE_EGRESS_POLICY
+    ):
+        raise WatchError("pinned CDP target egress-prearm identity is invalid")
+    total_fields = (
+        "target_total",
+        "installed_total",
+        "pending_total",
+        "popup_guard_required_total",
+        "popup_guard_installed_total",
+    )
+    if any(type(value[field]) is not int or value[field] < 0 for field in total_fields):
+        raise WatchError("pinned CDP target egress-prearm totals are invalid")
+    by_target_type = value["by_target_type"]
+    target_types = {"page", "iframe", "worker", "shared_worker"}
+    if not isinstance(by_target_type, Mapping) or set(by_target_type) != target_types:
+        raise WatchError("pinned CDP target egress-prearm type inventory is invalid")
+    target_total = installed_total = pending_total = 0
+    for target_type in sorted(target_types):
+        item = by_target_type[target_type]
+        item_fields = {
+            "target_count",
+            "installed_count",
+            "pending_count",
+            "protected_api_observations",
+            "unavailable_api_observations",
+            "popup_guard_required_count",
+            "popup_guard_installed_count",
+        }
+        if not isinstance(item, Mapping) or set(item) != item_fields:
+            raise WatchError("pinned CDP target egress-prearm per-type fields are invalid")
+        if any(type(item[field]) is not int or item[field] < 0 for field in item_fields):
+            raise WatchError("pinned CDP target egress-prearm per-type counts are invalid")
+        if (
+            item["installed_count"] > item["target_count"]
+            or item["pending_count"] != item["target_count"] - item["installed_count"]
+            or item["protected_api_observations"] + item["unavailable_api_observations"]
+            != item["installed_count"] * _target_egress_api_count(target_type)
+            or item["popup_guard_required_count"]
+            != (item["target_count"] if target_type in {"page", "iframe"} else 0)
+            or item["popup_guard_installed_count"] > item["popup_guard_required_count"]
+        ):
+            raise WatchError("pinned CDP target egress-prearm per-type counts are inconsistent")
+        target_total += item["target_count"]
+        installed_total += item["installed_count"]
+        pending_total += item["pending_count"]
+    if (
+        value["target_total"] != target_total
+        or value["installed_total"] != installed_total
+        or value["pending_total"] != pending_total
+        or value["popup_guard_required_total"]
+        != sum(by_target_type[item]["popup_guard_required_count"] for item in target_types)
+        or value["popup_guard_installed_total"]
+        != sum(by_target_type[item]["popup_guard_installed_count"] for item in target_types)
+    ):
+        raise WatchError("pinned CDP target egress-prearm aggregate is inconsistent")
+    if (
+        pending_total
+        or installed_total != target_total
+        or value["popup_guard_installed_total"] != value["popup_guard_required_total"]
+    ):
+        raise WatchError("pinned CDP target egress-prearm is not terminal")
+    return value
+
+
+def _validate_non_replayable_egress_summary(value: Any) -> None:
+    fields = {
+        "schema_version",
+        "policy",
+        "attempt_count",
+        "protected_apis",
+        "context_init_script_installed",
+        "context_navigation_route_installed",
+        "root_page_bound",
+        "context_websocket_route_installed",
+        "context_service_worker_listener_installed",
+        "cdp_tripwires_are_pre_io",
+        "packet_level_completeness_claimed",
+    }
+    if not isinstance(value, Mapping) or set(value) != fields:
+        raise WatchError("pinned CDP non-replayable egress fields are invalid")
+    if (
+        type(value["schema_version"]) is not int
+        or value["schema_version"] != _NON_REPLAYABLE_EGRESS_SCHEMA_VERSION
+        or value["policy"] != _NON_REPLAYABLE_EGRESS_POLICY
+        or type(value["attempt_count"]) is not int
+        or value["attempt_count"] != 0
+        or value["context_init_script_installed"] is not True
+        or value["context_navigation_route_installed"] is not True
+        or value["root_page_bound"] is not True
+        or value["context_websocket_route_installed"] is not True
+        or value["context_service_worker_listener_installed"] is not True
+        or value["cdp_tripwires_are_pre_io"] is not False
+        or value["packet_level_completeness_claimed"] is not False
+        or value["protected_apis"] != _TARGET_EGRESS_APIS
+    ):
+        raise WatchError("pinned CDP non-replayable egress identity is invalid")
+
+
+def _validate_browser_egress_command_line(value: Any) -> None:
+    fields = {
+        "schema_version",
+        "launch_profile",
+        "required_switches",
+        "observed_required_switches",
+        "antagonistic_switches",
+        "observed_antagonistic_switches",
+        "required_disabled_feature_tokens",
+        "observed_disabled_feature_tokens",
+        "required_disabled_blink_feature_tokens",
+        "observed_disabled_blink_feature_tokens",
+        "required_enabled_feature_arguments",
+        "observed_enabled_feature_arguments",
+        "feature_switch_argument_counts",
+        "complete_feature_policy_is_last",
+        "subprocess_wrapper_argument",
+        "required_switches_are_bare_and_unique",
+        "host_resolver_switch_is_unique",
+        "host_resolver_is_fail_closed",
+        "host_resolver_policy",
+        "no_pings_is_admission_boundary",
+        "packet_level_completeness_claimed",
+    }
+    if not isinstance(value, Mapping) or set(value) != fields:
+        raise WatchError("pinned CDP browser egress command-line fields are invalid")
+    if (
+        type(value["schema_version"]) is not int
+        or value["schema_version"] != _BROWSER_EGRESS_COMMAND_LINE_SCHEMA_VERSION
+        or value["launch_profile"] != _BROWSER_EGRESS_PRODUCTION_LAUNCH_PROFILE
+        or value["required_switches"] != _BROWSER_EGRESS_REQUIRED_CHROMIUM_SWITCHES
+        or value["observed_required_switches"] != _BROWSER_EGRESS_REQUIRED_CHROMIUM_SWITCHES
+        or value["antagonistic_switches"] != _BROWSER_EGRESS_ANTAGONISTIC_CHROMIUM_SWITCHES
+        or value["observed_antagonistic_switches"] != []
+        or value["required_disabled_feature_tokens"]
+        != _BROWSER_EGRESS_REQUIRED_DISABLED_FEATURE_TOKENS
+        or value["observed_disabled_feature_tokens"]
+        != _BROWSER_EGRESS_REQUIRED_DISABLED_FEATURE_TOKENS
+        or value["required_disabled_blink_feature_tokens"]
+        != _BROWSER_EGRESS_REQUIRED_DISABLED_BLINK_FEATURE_TOKENS
+        or value["observed_disabled_blink_feature_tokens"]
+        != _BROWSER_EGRESS_REQUIRED_DISABLED_BLINK_FEATURE_TOKENS
+        or value["required_enabled_feature_arguments"]
+        != _BROWSER_EGRESS_REQUIRED_ENABLED_FEATURE_ARGUMENTS
+        or value["observed_enabled_feature_arguments"]
+        != _BROWSER_EGRESS_REQUIRED_ENABLED_FEATURE_ARGUMENTS
+        or value["feature_switch_argument_counts"]
+        != {
+            "disable_features": 2,
+            "disable_blink_features": 1,
+            "enable_features": 1,
+            "enable_blink_features": 0,
+        }
+        or value["complete_feature_policy_is_last"] is not True
+        or value["subprocess_wrapper_argument"]
+        != _BROWSER_EGRESS_SUBPROCESS_WRAPPER_ARGUMENT
+        or value["required_switches_are_bare_and_unique"] is not True
+        or value["host_resolver_switch_is_unique"] is not True
+        or value["host_resolver_is_fail_closed"] is not True
+        or value["host_resolver_policy"] != _PINNED_CDP_RESOLVER_PROJECTION
+        or value["no_pings_is_admission_boundary"] is not False
+        or value["packet_level_completeness_claimed"] is not False
+    ):
+        raise WatchError("pinned CDP browser egress command-line projection is invalid")
+
+
 def _validate_pinned_cdp_observation(value: Any) -> None:
     if not isinstance(value, dict) or set(value) != {
         "playwright_version",
         "chromium_version",
         "chromium_executable",
+        "playwright_driver",
         "isolation",
         "topology",
     }:
         raise WatchError("pinned CDP observation fields are invalid")
     if (
-        value.get("playwright_version") != "1.52.0"
-        or not isinstance(value.get("chromium_version"), str)
-        or not value["chromium_version"].strip()
-        or value.get("chromium_executable") != "/usr/bin/chromium"
+        value.get("playwright_version") != _PLAYWRIGHT_VERSION
+        or value.get("chromium_version") != _CHROMIUM_VERSION
+        or value.get("chromium_executable") != _CHROMIUM_EXECUTABLE
     ):
         raise WatchError("pinned CDP browser observation is invalid")
+    driver = value.get("playwright_driver")
+    if driver != _EXPECTED_PLAYWRIGHT_DRIVER_BINDING:
+        raise WatchError("pinned CDP Playwright driver observation is invalid")
     isolation = value.get("isolation")
-    integer_fields = (
+    credential_fields = (
         "real_uid",
         "effective_uid",
+        "saved_uid",
+        "filesystem_uid",
         "real_gid",
         "effective_gid",
+        "saved_gid",
+        "filesystem_gid",
         "expected_uid",
         "expected_gid",
+    )
+    capability_fields = (
+        "inheritable_capabilities",
+        "permitted_capabilities",
+        "effective_capabilities",
+        "bounding_capabilities",
+        "ambient_capabilities",
     )
     if (
         not isinstance(isolation, dict)
         or set(isolation)
         != {
-            *integer_fields,
-            "effective_capabilities",
+            *credential_fields,
+            "supplementary_groups",
+            *capability_fields,
             "no_new_privileges",
             "observed_interfaces",
         }
         or any(
-            type(isolation.get(field)) is not int or isolation[field] < 0
-            for field in integer_fields
+            type(isolation.get(field)) is not int or isolation[field] < 1
+            for field in credential_fields
         )
-        or isolation["real_uid"] != isolation["expected_uid"]
-        or isolation["effective_uid"] != isolation["expected_uid"]
-        or isolation["real_gid"] != isolation["expected_gid"]
-        or isolation["effective_gid"] != isolation["expected_gid"]
-        or isolation.get("effective_capabilities") != "0000000000000000"
+        or any(
+            isolation[field] != isolation["expected_uid"]
+            for field in ("real_uid", "effective_uid", "saved_uid", "filesystem_uid")
+        )
+        or any(
+            isolation[field] != isolation["expected_gid"]
+            for field in ("real_gid", "effective_gid", "saved_gid", "filesystem_gid")
+        )
+        or not isinstance(isolation.get("supplementary_groups"), list)
+        or any(
+            type(group) is not int or group < 1
+            for group in isolation.get("supplementary_groups", [])
+        )
+        or isolation.get("supplementary_groups")
+        != sorted(set(isolation.get("supplementary_groups", [])))
+        or any(isolation.get(field) != "0000000000000000" for field in capability_fields)
         or isolation.get("no_new_privileges") is not True
         or isolation.get("observed_interfaces") != ["lo"]
     ):
@@ -1484,40 +2307,401 @@ def _validate_pinned_cdp_observation(value: Any) -> None:
     topology = value.get("topology")
     topology_booleans = (
         "cross_site_iframe_request",
-        "redirect_terminal_request",
-        "worker_fetch_paused_on_page",
+        "redirect_target_request",
+        "dedicated_worker_network_request",
+        "shared_worker_network_request",
+        "dedicated_worker_fetch_paused_on_page",
+        "shared_worker_fetch_paused_on_shared_worker",
         "router_closed",
+        "browser_guard_closed",
         "ledger_closed",
         "extra_info_closed",
         "browser_closed",
         "server_thread_stopped",
     )
+    if not isinstance(topology, dict) or set(topology) != {
+        "observed_target_types",
+        "event_count",
+        "event_method_counts",
+        "cross_site_iframe_request",
+        "duplicate_request_occurrences",
+        "redirect_target_request",
+        "worker_network_target_types",
+        "dedicated_worker_network_request",
+        "shared_worker_network_request",
+        "dedicated_worker_fetch_paused_on_page",
+        "shared_worker_fetch_paused_on_shared_worker",
+        "http_status_counts",
+        "server_request_counts",
+        "bootstrap_prearm_summary",
+        "egress_prearm_summary",
+        "non_replayable_egress_summary",
+        "browser_egress_command_line",
+        "browser_context_service_worker_count",
+        "quiescent_target_activity",
+        "router_closed",
+        "browser_guard_closed",
+        "ledger_closed",
+        "extra_info_closed",
+        "browser_closed",
+        "server_thread_stopped",
+    }:
+        raise WatchError("pinned CDP topology fields are invalid")
+    method_counts = topology.get("event_method_counts")
     if (
-        not isinstance(topology, dict)
-        or set(topology)
-        != {
-            "observed_target_types",
-            "event_count",
-            "cross_site_iframe_request",
-            "duplicate_request_occurrences",
-            "redirect_terminal_request",
-            "worker_network_target_types",
-            "worker_fetch_paused_on_page",
-            "router_closed",
-            "ledger_closed",
-            "extra_info_closed",
-            "browser_closed",
-            "server_thread_stopped",
-        }
-        or topology.get("observed_target_types")
-        != ["iframe", "page", "shared_worker", "worker"]
+        not isinstance(method_counts, Mapping)
+        or set(method_counts) != set(_PINNED_CDP_EVENT_METHODS)
+        or any(
+            type(method_counts.get(method)) is not int or method_counts[method] < 0
+            for method in _PINNED_CDP_EVENT_METHODS
+        )
+        or sum(method_counts.values()) != topology.get("event_count")
+        or method_counts["Network.loadingFailed"] != 0
+        or method_counts["Network.requestServedFromCache"] != 0
+    ):
+        raise WatchError("pinned CDP event-method aggregate is invalid")
+    prearm = topology.get("bootstrap_prearm_summary")
+    _validate_bootstrap_prearm_summary(prearm, require_terminal=True)
+    egress_prearm = _validate_egress_prearm_summary(topology.get("egress_prearm_summary"))
+    _validate_non_replayable_egress_summary(topology.get("non_replayable_egress_summary"))
+    _validate_browser_egress_command_line(topology.get("browser_egress_command_line"))
+    _validate_pinned_target_activity(topology.get("quiescent_target_activity"))
+    http_status_counts = topology.get("http_status_counts")
+    server_request_counts = topology.get("server_request_counts")
+    if (
+        not isinstance(http_status_counts, Mapping)
+        or any(
+            not isinstance(statuses, Mapping)
+            or any(type(count) is not int for count in statuses.values())
+            for statuses in http_status_counts.values()
+        )
+        or not isinstance(server_request_counts, Mapping)
+        or any(type(count) is not int for count in server_request_counts.values())
+    ):
+        raise WatchError("pinned CDP topology observation did not pass")
+    if (
+        topology.get("observed_target_types") != ["iframe", "page", "shared_worker", "worker"]
         or type(topology.get("event_count")) is not int
-        or topology["event_count"] < 1
+        or topology["event_count"] < sum(_PINNED_CDP_SERVER_REQUEST_COUNTS.values())
         or topology.get("duplicate_request_occurrences") != 2
         or topology.get("worker_network_target_types") != ["shared_worker", "worker"]
+        or http_status_counts != _PINNED_CDP_HTTP_STATUS_COUNTS
+        or server_request_counts != _PINNED_CDP_SERVER_REQUEST_COUNTS
+        or prearm != _PINNED_CDP_BOOTSTRAP_PREARM_SUMMARY
+        or egress_prearm["target_total"] < 4
+        or egress_prearm["installed_total"] != egress_prearm["target_total"]
+        or egress_prearm["by_target_type"]["page"]["installed_count"] != 1
+        or any(
+            egress_prearm["by_target_type"][target_type]["installed_count"] < 1
+            for target_type in ("iframe", "shared_worker", "worker")
+        )
+        or type(topology.get("browser_context_service_worker_count")) is not int
+        or topology["browser_context_service_worker_count"] != 0
         or any(topology.get(field) is not True for field in topology_booleans)
     ):
         raise WatchError("pinned CDP topology observation did not pass")
+
+
+def _validate_browser_egress_qualification_binding(
+    value: Any,
+    *,
+    paths: WatchPaths,
+    cohort: int,
+    build: Mapping[str, Any],
+    build_binding: Mapping[str, Any],
+    prepare_image: str,
+    foundation_recorded: datetime,
+) -> dict[str, Any]:
+    fields = {
+        "root",
+        "path",
+        "sha256",
+        "payload_sha256",
+        "qualification_id",
+        "cohort_version",
+        "qualification_started_at",
+        "qualification_finished_at",
+        "recorded_at",
+        "prepare_image_id",
+        "build_execution",
+        "expanded_vectors_sha256",
+        "passed_vector_count",
+        "passed",
+    }
+    if not isinstance(value, Mapping) or set(value) != fields:
+        raise WatchError("acquisition foundation browser-egress binding is invalid")
+    expected_root = f"/lab/artifacts/buflo-study/browser-egress-qualification-v{cohort}"
+    expected_final = f"{expected_root}/final.json"
+    if value.get("root") != expected_root or value.get("path") != expected_final:
+        raise WatchError("acquisition foundation browser-egress path is not canonical")
+    qualification_root = _container_binding_directory(
+        value["root"], paths=paths, label="browser-egress qualification root"
+    )
+    final_path = _container_binding_path(
+        value["path"], paths=paths, label="browser-egress qualification final"
+    )
+    if final_path != qualification_root / "final.json":
+        raise WatchError("acquisition foundation browser-egress final is outside its root")
+    snapshot = _load_canonical_receipt(
+        final_path,
+        root=paths.lab_root,
+        receipt_type=BROWSER_EGRESS_FINAL_TYPE,
+        label="browser-egress qualification final",
+    )
+    qualification_build = value.get("build_execution")
+    expected_build_fields = {
+        "path",
+        "sha256",
+        "payload_sha256",
+        "cohort_version",
+        "collection_image_id",
+        "prepare_image_id",
+        "reference_image_id",
+    }
+    images = build.get("images")
+    if not isinstance(images, Mapping) or set(images) != {
+        "collection",
+        "prepare",
+        "reference",
+    }:
+        raise WatchError("browser-egress qualification build image roles are incomplete")
+    expected_build = {
+        "path": build_binding["path"],
+        "sha256": build_binding["sha256"],
+        "payload_sha256": build.get("payload_sha256"),
+        "cohort_version": cohort,
+        "collection_image_id": images["collection"].get("id"),
+        "prepare_image_id": images["prepare"].get("id"),
+        "reference_image_id": images["reference"].get("id"),
+    }
+    if (
+        snapshot.sha256 != value.get("sha256")
+        or snapshot.value["payload_sha256"] != value.get("payload_sha256")
+        or value.get("qualification_id") != BROWSER_EGRESS_QUALIFICATION_ID
+        or type(value.get("cohort_version")) is not int
+        or value["cohort_version"] != cohort
+        or value.get("prepare_image_id") != prepare_image
+        or not isinstance(qualification_build, Mapping)
+        or set(qualification_build) != expected_build_fields
+        or not _matches_json_contract(qualification_build, expected_build)
+        or value.get("expanded_vectors_sha256")
+        != BROWSER_EGRESS_EXPANDED_VECTORS_SHA256
+        or type(value.get("passed_vector_count")) is not int
+        or value["passed_vector_count"] != BROWSER_EGRESS_VECTOR_COUNT
+        or value.get("passed") is not True
+    ):
+        raise WatchError(
+            "acquisition foundation browser-egress source/build/result binding differs"
+        )
+
+    final = snapshot.value["payload"]
+    final_fields = {
+        "schema_version",
+        "qualification_id",
+        "study_id",
+        "cohort_version",
+        "qualification_started_at",
+        "qualification_finished_at",
+        "recorded_at",
+        "foundation",
+        "checkpoint",
+        "expanded_vectors_sha256",
+        "passed_results",
+        "attempt_count",
+        "passed_vector_count",
+        "operational_failure_count",
+        "semantic_failure_count",
+        "packet_level_egress_qualification",
+        "consumer_contract",
+        "verdict",
+    }
+    passed_results = final.get("passed_results") if isinstance(final, Mapping) else None
+    final_foundation = final.get("foundation") if isinstance(final, Mapping) else None
+    final_checkpoint = final.get("checkpoint") if isinstance(final, Mapping) else None
+    if (
+        not isinstance(final, Mapping)
+        or set(final) != final_fields
+        or type(final.get("schema_version")) is not int
+        or final["schema_version"] != 1
+        or final.get("qualification_id") != BROWSER_EGRESS_QUALIFICATION_ID
+        or final.get("study_id") != STUDY_ID
+        or type(final.get("cohort_version")) is not int
+        or final["cohort_version"] != cohort
+        or final.get("qualification_started_at") != value.get("qualification_started_at")
+        or final.get("qualification_finished_at") != value.get("qualification_finished_at")
+        or final.get("recorded_at") != value.get("recorded_at")
+        or final.get("expanded_vectors_sha256")
+        != BROWSER_EGRESS_EXPANDED_VECTORS_SHA256
+        or final.get("expanded_vectors_sha256") != value.get("expanded_vectors_sha256")
+        or type(final.get("passed_vector_count")) is not int
+        or final["passed_vector_count"] != BROWSER_EGRESS_VECTOR_COUNT
+        or type(final.get("attempt_count")) is not int
+        or not BROWSER_EGRESS_VECTOR_COUNT
+        <= final["attempt_count"]
+        <= BROWSER_EGRESS_VECTOR_COUNT * 3
+        or type(final.get("operational_failure_count")) is not int
+        or not 0 <= final["operational_failure_count"] <= BROWSER_EGRESS_VECTOR_COUNT * 2
+        or final["attempt_count"]
+        != final["passed_vector_count"] + final["operational_failure_count"]
+        or type(final.get("semantic_failure_count")) is not int
+        or final["semantic_failure_count"] != 0
+        or final.get("packet_level_egress_qualification") != "passed"
+        or not isinstance(final.get("consumer_contract"), Mapping)
+        or not isinstance(final_foundation, Mapping)
+        or set(final_foundation) != {"path", "sha256", "payload_sha256"}
+        or final_foundation.get("path") != "foundation.json"
+        or _SHA256_RE.fullmatch(str(final_foundation.get("sha256"))) is None
+        or _SHA256_RE.fullmatch(str(final_foundation.get("payload_sha256"))) is None
+        or not isinstance(final_checkpoint, Mapping)
+        or set(final_checkpoint) != {"path", "sha256"}
+        or final_checkpoint.get("path") != "experiment.json"
+        or _SHA256_RE.fullmatch(str(final_checkpoint.get("sha256"))) is None
+        or final.get("verdict") != "passed"
+        or not isinstance(passed_results, list)
+        or len(passed_results) != BROWSER_EGRESS_VECTOR_COUNT
+    ):
+        raise WatchError("browser-egress qualification final payload is invalid")
+    result_paths: list[str] = []
+    result_ids: list[str] = []
+    for ordinal, result in enumerate(passed_results, 1):
+        if not isinstance(result, Mapping) or set(result) != {
+            "vector_ordinal",
+            "vector_id",
+            "attempt_number",
+            "path",
+            "sha256",
+            "payload_sha256",
+        }:
+            raise WatchError("browser-egress qualification result inventory is invalid")
+        result_path = result.get("path")
+        vector_id = result.get("vector_id")
+        if (
+            type(result.get("vector_ordinal")) is not int
+            or result["vector_ordinal"] != ordinal
+            or not isinstance(vector_id, str)
+            or not vector_id
+            or type(result.get("attempt_number")) is not int
+            or not 1 <= result["attempt_number"] <= 3
+            or not isinstance(result_path, str)
+            or re.fullmatch(r"attempts/result-[0-9]{4}\.json", result_path) is None
+            or _SHA256_RE.fullmatch(str(result.get("sha256"))) is None
+            or _SHA256_RE.fullmatch(str(result.get("payload_sha256"))) is None
+        ):
+            raise WatchError("browser-egress qualification result inventory is invalid")
+        result_paths.append(result_path)
+        result_ids.append(vector_id)
+    if (
+        len(set(result_paths)) != len(result_paths)
+        or result_ids != list(_BROWSER_EGRESS_VECTOR_IDS)
+    ):
+        raise WatchError("browser-egress qualification result inventory is not canonical")
+
+    build_finished = _evidence_timestamp(build.get("finished_at"), label="no-cache build finish")
+    qualification_started = _evidence_timestamp(
+        value.get("qualification_started_at"),
+        label="browser-egress qualification start",
+    )
+    qualification_finished = _evidence_timestamp(
+        value.get("qualification_finished_at"),
+        label="browser-egress qualification finish",
+    )
+    qualification_recorded = _evidence_timestamp(
+        value.get("recorded_at"), label="browser-egress qualification final receipt"
+    )
+    if not (
+        build_finished
+        <= qualification_started
+        <= qualification_finished
+        <= qualification_recorded
+        <= foundation_recorded
+    ):
+        raise WatchError("acquisition foundation/browser-egress chronology is invalid")
+    return json.loads(_canonical_json_bytes(value))
+
+
+def _browser_egress_tree_inventory(
+    root: Path,
+    *,
+    paths: WatchPaths,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Enumerate one closed, non-linked qualification tree without following links."""
+
+    qualification_root = _require_regular_path(
+        root,
+        root=paths.lab_root,
+        directory=True,
+        label="browser-egress qualification root",
+    )
+    directories: list[str] = []
+    files: list[str] = []
+    pending = [qualification_root]
+    while pending:
+        directory = pending.pop()
+        try:
+            with os.scandir(directory) as iterator:
+                entries = sorted(iterator, key=lambda entry: entry.name)
+        except OSError as error:
+            raise WatchError("cannot enumerate browser-egress sealed evidence") from error
+        for entry in entries:
+            path = Path(entry.path)
+            relative = path.relative_to(qualification_root).as_posix()
+            try:
+                metadata = entry.stat(follow_symlinks=False)
+            except OSError as error:
+                raise WatchError("cannot inspect browser-egress sealed evidence") from error
+            if stat.S_ISLNK(metadata.st_mode):
+                raise WatchError(
+                    f"browser-egress sealed evidence contains a symlink: {relative}"
+                )
+            if stat.S_ISDIR(metadata.st_mode):
+                directories.append(relative)
+                pending.append(path)
+            elif stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1:
+                files.append(relative)
+            else:
+                raise WatchError(
+                    f"browser-egress sealed evidence contains an unsafe entry: {relative}"
+                )
+    return tuple(sorted(directories)), tuple(sorted(files))
+
+
+def _browser_egress_tree_sha256(
+    qualification: Mapping[str, Any], *, paths: WatchPaths
+) -> str:
+    """Bind every pathname and byte in the tree accepted by the deep verifier."""
+
+    root = _container_binding_directory(
+        qualification.get("root"),
+        paths=paths,
+        label="browser-egress qualification root",
+    )
+    directories, files = _browser_egress_tree_inventory(root, paths=paths)
+    bindings: list[dict[str, Any]] = []
+    for relative in files:
+        raw, digest = _read_stable_file(
+            root / PurePosixPath(relative),
+            root=paths.lab_root,
+            label=f"browser-egress sealed evidence {relative}",
+        )
+        bindings.append(
+            {
+                "path": relative,
+                "sha256": digest,
+                "size_bytes": len(raw),
+            }
+        )
+    after_directories, after_files = _browser_egress_tree_inventory(root, paths=paths)
+    if (after_directories, after_files) != (directories, files):
+        raise WatchError("browser-egress sealed evidence inventory changed while it was read")
+    return _sha256_bytes(
+        _canonical_json_bytes(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "directories": list(directories),
+                "files": bindings,
+            }
+        )
+    )
 
 
 def _validate_foundation(
@@ -1527,7 +2711,7 @@ def _validate_foundation(
     prepare_source: Mapping[str, Any],
     prepare_image: str,
     acquisition_started_at: Any,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     if not isinstance(binding, dict) or set(binding) != {"path", "sha256"}:
         raise WatchError("acquisition foundation binding is malformed")
     claimed = binding["sha256"]
@@ -1571,8 +2755,7 @@ def _validate_foundation(
         or payload.get("study_id") != STUDY_ID
         or type(cohort) is not int
         or cohort < 1
-        or payload.get("implementation_status")
-        != "foundation-ready-for-class-acquisition"
+        or payload.get("implementation_status") != "foundation-ready-for-class-acquisition"
         or payload.get("promotion_authority") is not False
         or payload.get("implementation_scope") != "client_only_quic"
         or payload.get("paper_equivalent") is not False
@@ -1594,6 +2777,7 @@ def _validate_foundation(
     if not isinstance(evidence, dict) or set(evidence) != {
         "build_execution",
         "pinned_cdp_probe",
+        "browser_egress_qualification",
         "reference",
         "code_gate",
         "controlled_qualification",
@@ -1605,8 +2789,7 @@ def _validate_foundation(
     if (
         not isinstance(build_binding, dict)
         or set(build_binding) != {"path", "sha256"}
-        or build_binding.get("path")
-        != f"/lab/artifacts/buflo-study/build-execution-v{cohort}.json"
+        or build_binding.get("path") != f"/lab/artifacts/buflo-study/build-execution-v{cohort}.json"
         or _SHA256_RE.fullmatch(str(build_binding.get("sha256"))) is None
     ):
         raise WatchError("acquisition foundation build binding is invalid")
@@ -1638,6 +2821,20 @@ def _validate_foundation(
     if payload.get("build_execution_identity") != expected_identity:
         raise WatchError("acquisition foundation build identity is invalid")
 
+    foundation_recorded = _evidence_timestamp(payload.get("recorded_at"), label="class foundation")
+    browser_egress = _validate_browser_egress_qualification_binding(
+        evidence.get("browser_egress_qualification"),
+        paths=paths,
+        cohort=cohort,
+        build=build,
+        build_binding={
+            "path": build_binding["path"],
+            "sha256": build_snapshot.sha256,
+        },
+        prepare_image=prepare_image,
+        foundation_recorded=foundation_recorded,
+    )
+
     pinned_binding = evidence.get("pinned_cdp_probe")
     if not isinstance(pinned_binding, dict) or set(pinned_binding) != {
         "path",
@@ -1650,9 +2847,7 @@ def _validate_foundation(
     for key in ("sha256", "payload_sha256", "probe_contract_sha256"):
         if _SHA256_RE.fullmatch(str(pinned_binding.get(key))) is None:
             raise WatchError("acquisition foundation pinned CDP digest is invalid")
-    expected_pinned_path = (
-        f"/lab/artifacts/buflo-study/pinned-cdp-execution-v{cohort}.json"
-    )
+    expected_pinned_path = f"/lab/artifacts/buflo-study/pinned-cdp-execution-v{cohort}.json"
     if pinned_binding.get("path") != expected_pinned_path:
         raise WatchError("acquisition foundation pinned CDP path is not canonical")
     pinned_path = _container_binding_path(
@@ -1693,7 +2888,8 @@ def _validate_foundation(
     if (
         pinned_snapshot.sha256 != pinned_binding["sha256"]
         or pinned_snapshot.value["payload_sha256"] != pinned_binding["payload_sha256"]
-        or pinned.get("probe_schema_version") != 1
+        or type(pinned.get("probe_schema_version")) is not int
+        or pinned.get("probe_schema_version") != _PINNED_CDP_SCHEMA_VERSION
         or pinned.get("artifact_type") != PINNED_CDP_TYPE
         or pinned.get("study_id") != STUDY_ID
         or pinned.get("cohort_version") != cohort
@@ -1713,9 +2909,6 @@ def _validate_foundation(
     _validate_pinned_cdp_observation(pinned.get("observation"))
     build_finished = _evidence_timestamp(build.get("finished_at"), label="no-cache build finish")
     probe_recorded = _evidence_timestamp(pinned.get("recorded_at"), label="pinned CDP probe")
-    foundation_recorded = _evidence_timestamp(
-        payload.get("recorded_at"), label="class foundation"
-    )
     acquisition_started = _evidence_timestamp(
         acquisition_started_at, label="class acquisition start"
     )
@@ -1723,8 +2916,29 @@ def _validate_foundation(
         raise WatchError("acquisition foundation/pinned CDP chronology is invalid")
 
     summary = payload.get("summary")
-    if not isinstance(summary, dict) or summary.get("pinned_cdp_probe") != "pass":
-        raise WatchError("acquisition foundation pinned CDP summary is invalid")
+    if (
+        not isinstance(summary, dict)
+        or set(summary)
+        != {
+            "reference_profiles",
+            "regression_samples",
+            "controlled_samples",
+            "pinned_cdp_probe",
+            "browser_egress_packet_qualification",
+            "browser_egress_vectors",
+        }
+        or type(summary.get("reference_profiles")) is not int
+        or summary["reference_profiles"] != 8
+        or type(summary.get("regression_samples")) is not int
+        or summary["regression_samples"] != 18
+        or type(summary.get("controlled_samples")) is not int
+        or summary["controlled_samples"] != 160
+        or summary.get("pinned_cdp_probe") != "pass"
+        or summary.get("browser_egress_packet_qualification") != "pass"
+        or type(summary.get("browser_egress_vectors")) is not int
+        or summary["browser_egress_vectors"] != BROWSER_EGRESS_VECTOR_COUNT
+    ):
+        raise WatchError("acquisition foundation gate summary is invalid")
     gates = payload.get("hard_gates")
     if not isinstance(gates, list) or len(gates) != len(_FOUNDATION_GATES):
         raise WatchError("acquisition foundation hard-gate inventory is incomplete")
@@ -1760,18 +2974,48 @@ def _validate_foundation(
             contract_sha256,
         }
     )
-    if gates[-1]["evidence_sha256s"] != expected_probe_gate:
+    if gates[-2]["evidence_sha256s"] != expected_probe_gate:
         raise WatchError("acquisition foundation pinned CDP hard gate is not exact")
+    expected_browser_egress_gate = sorted(
+        {
+            browser_egress["sha256"],
+            browser_egress["payload_sha256"],
+            browser_egress["expanded_vectors_sha256"],
+        }
+    )
+    if gates[-1]["evidence_sha256s"] != expected_browser_egress_gate:
+        raise WatchError("acquisition foundation browser-egress hard gate is not exact")
     return {
         "foundation_sha256": snapshot.sha256,
         "pinned_cdp_sha256": pinned_snapshot.sha256,
         "pinned_cdp_payload_sha256": pinned_snapshot.value["payload_sha256"],
         "pinned_cdp_contract_sha256": contract_sha256,
         "build_execution_sha256": build_snapshot.sha256,
+        "cohort_version": cohort,
+        "browser_egress_qualification": browser_egress,
     }
 
 
 def _validate_immutable_binding(paths: WatchPaths) -> AcquisitionBinding:
+    for relative, expected_sha256, label in (
+        (
+            BROWSER_EGRESS_MANIFEST_RELATIVE_PATH,
+            BROWSER_EGRESS_MANIFEST_SHA256,
+            "browser-egress manifest contract",
+        ),
+        (
+            BROWSER_EGRESS_ARGV_RELATIVE_PATH,
+            BROWSER_EGRESS_ARGV_SHA256,
+            "browser-egress Chromium argv contract",
+        ),
+    ):
+        _raw, observed_sha256 = _read_stable_file(
+            paths.lab_root / relative,
+            root=paths.lab_root,
+            label=label,
+        )
+        if observed_sha256 != expected_sha256:
+            raise WatchError(f"{label} differs from the frozen watcher contract")
     _require_regular_path(paths.launcher, root=paths.lab_root, directory=False, label="launcher")
     if not os.access(paths.launcher, os.X_OK):
         raise WatchError(f"launcher is not executable: {paths.launcher}")
@@ -1815,30 +3059,48 @@ def _validate_immutable_binding(paths: WatchPaths) -> AcquisitionBinding:
     )
     provenance = provenance_snapshot.value
     payload = provenance["payload"]
+    acquisition_schema_version = payload.get("acquisition_schema_version")
+    if type(acquisition_schema_version) is not int:
+        raise WatchError("acquisition provenance schema version is not an exact integer")
+    if acquisition_schema_version in HISTORICAL_ACQUISITION_SCHEMA_VERSIONS:
+        raise WatchError("historical acquisition provenance is verify-only and cannot be resumed")
+    if acquisition_schema_version != ACQUISITION_SCHEMA_VERSION:
+        raise WatchError("acquisition provenance uses an unsupported schema")
     if set(payload) != _PROVENANCE_PAYLOAD_KEYS:
-        raise WatchError("acquisition provenance payload fields differ from the v4 contract")
+        raise WatchError("acquisition provenance payload fields differ from the v5 contract")
+    fixed_contract = {
+        "browser_tool": _EXPECTED_BROWSER_TOOL_IDENTITY,
+        "navigation_implementation": _NAVIGATION_IMPLEMENTATION,
+        "cdp_target_instrumentation_policy": _CDP_TARGET_INSTRUMENTATION_POLICY,
+        "non_replayable_egress_contract": _NON_REPLAYABLE_EGRESS_CONTRACT,
+        "passive_render_contract": _PASSIVE_RENDER_CONTRACT,
+        "passive_render_contract_sha256": _PASSIVE_RENDER_CONTRACT_SHA256,
+        "browser_navigation_timeout_ms": BROWSER_NAVIGATION_TIMEOUT_MS,
+        "passive_render_hard_cap_after_load_ms": PASSIVE_RENDER_HARD_CAP_MS,
+        "acquisition_action_timing_contract": _ACQUISITION_ACTION_TIMING_CONTRACT,
+        "baseline_scheduling_contract": _BASELINE_SCHEDULING_CONTRACT,
+        "registrable_domain_policy": _REGISTRABLE_DOMAIN_POLICY,
+        "domain_safety_policy": _DOMAIN_SAFETY_POLICY,
+        "domain_safety_policy_sha256": _DOMAIN_SAFETY_POLICY_SHA256,
+        "origin_policy": _ORIGIN_POLICY,
+        "eligibility_inputs": _ELIGIBILITY_INPUTS,
+        "prohibited_inputs": _PROHIBITED_INPUTS,
+    }
     if (
         payload["study_id"] != STUDY_ID
         or payload["acquisition_schema_version"] != ACQUISITION_SCHEMA_VERSION
+        or type(payload["candidate_count"]) is not int
         or payload["candidate_count"] != CANDIDATE_COUNT
         or payload["candidate_catalogue_sha256"] != catalogue_sha256
         or payload["candidate_catalogue_payload_sha256"] != catalogue["payload_sha256"]
-        or payload["navigation_implementation"]
-        != "playwright-cdp-catalogue-domain-boundary-redirect-pin-convergence-v3"
-        or payload["cdp_target_instrumentation_policy"]
-        != _CDP_TARGET_INSTRUMENTATION_POLICY
-        or payload["passive_render_contract"] != _PASSIVE_RENDER_CONTRACT
-        or payload["passive_render_contract_sha256"]
-        != _PASSIVE_RENDER_CONTRACT_SHA256
-        or payload["browser_navigation_timeout_ms"]
-        != BROWSER_NAVIGATION_TIMEOUT_MS
-        or payload["passive_render_hard_cap_after_load_ms"]
-        != PASSIVE_RENDER_HARD_CAP_MS
-        or payload["acquisition_action_timing_contract"]
-        != _ACQUISITION_ACTION_TIMING_CONTRACT
-        or payload["baseline_scheduling_contract"]
-        != _BASELINE_SCHEDULING_CONTRACT
-        or payload["origin_policy"] != _ORIGIN_POLICY
+        or payload["browser_tool"] != _EXPECTED_BROWSER_TOOL_IDENTITY
+        or not isinstance(payload["browser_tool"], dict)
+        or type(payload["browser_tool"].get("schema_version")) is not int
+        or payload["browser_tool"]["schema_version"] != 1
+        or any(
+            not _matches_json_contract(payload.get(field), expected)
+            for field, expected in fixed_contract.items()
+        )
     ):
         raise WatchError("acquisition provenance is bound to another study or catalogue")
     image = payload["image_digest"]
@@ -1869,17 +3131,19 @@ def _validate_immutable_binding(paths: WatchPaths) -> AcquisitionBinding:
     )
     binding = AcquisitionBinding(
         prepare_image=image,
+        cohort_version=foundation_authority["cohort_version"],
         catalogue_sha256=catalogue_sha256,
         provenance_sha256=provenance_snapshot.sha256,
         foundation_sha256=foundation_authority["foundation_sha256"],
         pinned_cdp_sha256=foundation_authority["pinned_cdp_sha256"],
-        pinned_cdp_payload_sha256=foundation_authority[
-            "pinned_cdp_payload_sha256"
-        ],
-        pinned_cdp_contract_sha256=foundation_authority[
-            "pinned_cdp_contract_sha256"
-        ],
+        pinned_cdp_payload_sha256=foundation_authority["pinned_cdp_payload_sha256"],
+        pinned_cdp_contract_sha256=foundation_authority["pinned_cdp_contract_sha256"],
         build_execution_sha256=foundation_authority["build_execution_sha256"],
+        browser_egress_qualification=foundation_authority["browser_egress_qualification"],
+        browser_egress_tree_sha256=_browser_egress_tree_sha256(
+            foundation_authority["browser_egress_qualification"],
+            paths=paths,
+        ),
         candidate_ids=candidate_ids,
         candidate_order=candidate_order,
         source=dict(source),
@@ -1911,8 +3175,8 @@ def _validate_checkpoint(paths: WatchPaths, binding: AcquisitionBinding) -> Rece
     if set(payload) != _CHECKPOINT_PAYLOAD_KEYS:
         raise WatchError("acquisition checkpoint payload fields differ from the v2 contract")
     if (
-        payload["checkpoint_schema_version"] != CHECKPOINT_SCHEMA_VERSION
-        or isinstance(payload["checkpoint_schema_version"], bool)
+        type(payload["checkpoint_schema_version"]) is not int
+        or payload["checkpoint_schema_version"] != CHECKPOINT_SCHEMA_VERSION
         or payload["provenance_sha256"] != binding.provenance_sha256
         or payload["candidate_catalogue_sha256"] != binding.catalogue_sha256
     ):
@@ -1999,18 +3263,14 @@ def _validate_baseline_batches(
             label="acquisition checkpoint baseline batch time",
         )
         if previous_baseline is not None and baseline <= previous_baseline:
-            raise WatchError(
-                "acquisition checkpoint baseline batches are not append-ordered"
-            )
+            raise WatchError("acquisition checkpoint baseline batches are not append-ordered")
         previous_baseline = baseline
         action_starts.extend(
             (
                 baseline + timedelta(milliseconds=offset),
                 batch_id,
             )
-            for offset in _BASELINE_SCHEDULING_CONTRACT[
-                "serial_action_start_offsets_ms"
-            ]
+            for offset in _BASELINE_SCHEDULING_CONTRACT["serial_action_start_offsets_ms"]
         )
         candidate_ids = _candidate_id_list(
             batch["candidate_ids"],
@@ -2018,9 +3278,7 @@ def _validate_baseline_batches(
             label="acquisition checkpoint baseline batch",
         )
         if set(batch_by_candidate).intersection(candidate_ids):
-            raise WatchError(
-                "acquisition checkpoint schedules a candidate in two baseline batches"
-            )
+            raise WatchError("acquisition checkpoint schedules a candidate in two baseline batches")
         live_pages = _validate_live_page_count(
             batch["live_page_count"],
             label="acquisition checkpoint baseline batch",
@@ -2040,22 +3298,15 @@ def _validate_baseline_batches(
             observed_live_pages += len(pages)
             batch_by_candidate[candidate_id] = batch
         if live_pages != observed_live_pages:
-            raise WatchError(
-                "acquisition checkpoint baseline batch live-page count is false"
-            )
+            raise WatchError("acquisition checkpoint baseline batch live-page count is false")
     ordered_starts = sorted(action_starts)
     for (left, left_batch), (right, right_batch) in pairwise(ordered_starts):
-        if (
-            left_batch != right_batch
-            and right - left < timedelta(milliseconds=PENDING_BASELINE_GUARD_MS)
+        if left_batch != right_batch and right - left < timedelta(
+            milliseconds=PENDING_BASELINE_GUARD_MS
         ):
-            raise WatchError(
-                "acquisition checkpoint baseline batches violate the serial schedule"
-            )
+            raise WatchError("acquisition checkpoint baseline batches violate the serial schedule")
     state_candidates = {
-        candidate_id
-        for candidate_id, state in states.items()
-        if "baseline_started_at" in state
+        candidate_id for candidate_id, state in states.items() if "baseline_started_at" in state
     }
     if set(batch_by_candidate) != state_candidates:
         raise WatchError(
@@ -2073,9 +3324,7 @@ def _validate_active_batch(
 ) -> Mapping[str, Any] | None:
     if value is None:
         if states is not None and _pending_attempts(states):
-            raise WatchError(
-                "acquisition checkpoint has pending attempts without an active batch"
-            )
+            raise WatchError("acquisition checkpoint has pending attempts without an active batch")
         return None
     if not isinstance(value, dict) or set(value) != {
         "active_batch_schema_version",
@@ -2091,9 +3340,8 @@ def _validate_active_batch(
         value["active_batch_schema_version"], bool
     ):
         raise WatchError("acquisition checkpoint active batch schema is invalid")
-    if (
-        not isinstance(value["batch_id"], str)
-        or value["batch_id"] != _content_addressed_batch_id("active", value)
+    if not isinstance(value["batch_id"], str) or value["batch_id"] != _content_addressed_batch_id(
+        "active", value
     ):
         raise WatchError("acquisition checkpoint active batch identity is invalid")
     if value["stage"] not in {"navigation", "probe"}:
@@ -2127,15 +3375,11 @@ def _validate_active_batch(
             raise WatchError("acquisition checkpoint active batch attempt is malformed")
         if attempt["candidate_id"] not in candidate_ids:
             raise WatchError("acquisition checkpoint active batch attempt names another candidate")
-        if (
-            type(attempt["attempt"]) is not int
-            or not 1 <= attempt["attempt"] <= MAX_PROBE_ATTEMPTS
-        ):
+        if type(attempt["attempt"]) is not int or not 1 <= attempt["attempt"] <= MAX_PROBE_ATTEMPTS:
             raise WatchError("acquisition checkpoint active batch attempt count is invalid")
         if value["stage"] == "navigation":
             if any(
-                attempt[name] is not None
-                for name in ("page_ordinal", "probe_id", "workload_id")
+                attempt[name] is not None for name in ("page_ordinal", "probe_id", "workload_id")
             ):
                 raise WatchError(
                     "acquisition checkpoint active navigation attempt has page identity"
@@ -2156,13 +3400,16 @@ def _validate_active_batch(
             raise WatchError(
                 "acquisition checkpoint active batch attempts have unequal start times"
             )
-        identity = tuple(attempt[name] for name in (
-            "candidate_id",
-            "page_ordinal",
-            "probe_id",
-            "workload_id",
-            "attempt",
-        ))
+        identity = tuple(
+            attempt[name]
+            for name in (
+                "candidate_id",
+                "page_ordinal",
+                "probe_id",
+                "workload_id",
+                "attempt",
+            )
+        )
         if identity in attempt_identities:
             raise WatchError("acquisition checkpoint active batch attempt is duplicated")
         attempt_identities.add(identity)
@@ -2170,21 +3417,14 @@ def _validate_active_batch(
         raise WatchError(
             "acquisition checkpoint active batch attempts differ from its live-page count"
         )
-    observed_candidate_ids = list(
-        dict.fromkeys(attempt["candidate_id"] for attempt in attempts)
-    )
+    observed_candidate_ids = list(dict.fromkeys(attempt["candidate_id"] for attempt in attempts))
     if observed_candidate_ids != candidate_ids:
-        raise WatchError(
-            "acquisition checkpoint active candidate ordering is invalid"
-        )
+        raise WatchError("acquisition checkpoint active candidate ordering is invalid")
     if value["stage"] == "navigation" and len(attempts) != len(candidate_ids):
-        raise WatchError(
-            "acquisition checkpoint active navigation cardinality is invalid"
-        )
+        raise WatchError("acquisition checkpoint active navigation cardinality is invalid")
     if value["stage"] == "probe":
         probe_identities = [
-            (attempt["candidate_id"], attempt["page_ordinal"])
-            for attempt in attempts
+            (attempt["candidate_id"], attempt["page_ordinal"]) for attempt in attempts
         ]
         if (
             len(probe_identities) != len(set(probe_identities))
@@ -2223,9 +3463,7 @@ def _pending_attempts(
         navigation = state.get("pending_navigation")
         if "pending_navigation" in state:
             if not isinstance(navigation, Mapping):
-                raise WatchError(
-                    "acquisition checkpoint pending navigation is malformed"
-                )
+                raise WatchError("acquisition checkpoint pending navigation is malformed")
             pending.append((candidate_id, "navigation", navigation, None))
         pages = state.get("pages")
         if "pages" in state and not isinstance(pages, list):
@@ -2260,9 +3498,7 @@ def _reconcile_active_attempts(
         str, list[tuple[str, Mapping[str, Any], Mapping[str, Any] | None]]
     ] = {}
     for candidate_id, pending_stage, pending, page in expected_pending:
-        pending_by_candidate.setdefault(candidate_id, []).append(
-            (pending_stage, pending, page)
-        )
+        pending_by_candidate.setdefault(candidate_id, []).append((pending_stage, pending, page))
     for candidate_id in binding.candidate_order:
         for pending_stage, pending, page in pending_by_candidate.get(candidate_id, []):
             state = states[candidate_id]
@@ -2275,9 +3511,7 @@ def _reconcile_active_attempts(
                     "attempt",
                     "started_at",
                 }:
-                    raise WatchError(
-                        "acquisition checkpoint active navigation state is malformed"
-                    )
+                    raise WatchError("acquisition checkpoint active navigation state is malformed")
                 expected_attempts.append(
                     {
                         "candidate_id": candidate_id,
@@ -2289,20 +3523,14 @@ def _reconcile_active_attempts(
                     }
                 )
                 continue
-            if (
-                state.get("state") != "probing"
-                or candidate_id not in baseline_by_candidate
-            ):
+            if state.get("state") != "probing" or candidate_id not in baseline_by_candidate:
                 raise WatchError("acquisition checkpoint active probe state is malformed")
             page_value = page.get("page") if isinstance(page, Mapping) else None
-            ordinal = (
-                page_value.get("ordinal") if isinstance(page_value, Mapping) else None
-            )
+            ordinal = page_value.get("ordinal") if isinstance(page_value, Mapping) else None
             if (
                 type(ordinal) is not int
                 or ordinal < 0
-                or set(pending)
-                != {"probe_id", "workload_id", "attempt", "observed_at"}
+                or set(pending) != {"probe_id", "workload_id", "attempt", "observed_at"}
             ):
                 raise WatchError("acquisition checkpoint active probe state is malformed")
             expected_attempts.append(
@@ -2319,9 +3547,9 @@ def _reconcile_active_attempts(
         raise WatchError(
             "acquisition checkpoint active attempts differ from pending candidate state"
         )
-    expected_candidate_ids = list(dict.fromkeys(
-        attempt["candidate_id"] for attempt in expected_attempts
-    ))
+    expected_candidate_ids = list(
+        dict.fromkeys(attempt["candidate_id"] for attempt in expected_attempts)
+    )
     if candidate_ids != expected_candidate_ids:
         raise WatchError(
             "acquisition checkpoint active candidates differ from pending candidate state"
@@ -2376,9 +3604,7 @@ def _git_text(paths: WatchPaths, *arguments: str, cwd: Path | None = None) -> st
     return completed.stdout.strip()
 
 
-def _verify_git_checkout_binding(
-    paths: WatchPaths, checkout: Path, expected_git_dir: Path
-) -> None:
+def _verify_git_checkout_binding(paths: WatchPaths, checkout: Path, expected_git_dir: Path) -> None:
     tree = Path(_git_text(paths, "rev-parse", "--show-toplevel", cwd=checkout))
     git_dir = Path(_git_text(paths, "rev-parse", "--absolute-git-dir", cwd=checkout))
     if tree.resolve(strict=True) != checkout.resolve(strict=True) or git_dir.resolve(
@@ -2399,8 +3625,7 @@ def _verify_git_checkout_binding(
             unsafe = bool(content)
         else:
             unsafe = any(
-                line.strip() and not line.lstrip().startswith("#")
-                for line in content.splitlines()
+                line.strip() and not line.lstrip().startswith("#") for line in content.splitlines()
             )
         if unsafe:
             raise WatchError("host source Git metadata can hide checkout bytes")
@@ -2471,16 +3696,13 @@ def _verify_git_index_bytes(paths: WatchPaths, checkout: Path) -> None:
                         raise WatchError("host source symlink mode changed")
                     payload = os.fsencode(os.readlink(name, dir_fd=parent_fd))
                 elif mode in {b"100644", b"100755"}:
-                    descriptor = os.open(
-                        name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd
-                    )
+                    descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
                     try:
                         opened = os.fstat(descriptor)
                         if (
                             not stat.S_ISREG(opened.st_mode)
                             or opened.st_nlink != 1
-                            or (opened.st_dev, opened.st_ino)
-                            != (value.st_dev, value.st_ino)
+                            or (opened.st_dev, opened.st_ino) != (value.st_dev, value.st_ino)
                             or bool(opened.st_mode & 0o111) != (mode == b"100755")
                         ):
                             raise WatchError("host source file identity changed")
@@ -2560,9 +3782,62 @@ def _admission_command(paths: WatchPaths) -> tuple[str, ...]:
     )
 
 
+def _browser_egress_verify_command(
+    paths: WatchPaths, binding: AcquisitionBinding
+) -> tuple[str, ...]:
+    cohort = binding.cohort_version
+    build_path = paths.lab_root / f"artifacts/buflo-study/build-execution-v{cohort}.json"
+    result_root = paths.lab_root / f"artifacts/buflo-study/browser-egress-qualification-v{cohort}"
+    return (
+        "/usr/bin/bash",
+        str(paths.launcher),
+        "test",
+        "browser-egress",
+        "verify",
+        "--cohort-version",
+        str(cohort),
+        "--build-execution-receipt",
+        str(build_path),
+        "--result-root",
+        str(result_root),
+    )
+
+
+def _is_canonical_browser_egress_verify_command(command: Sequence[str]) -> bool:
+    if len(command) != 11 or tuple(command[:1]) != ("/usr/bin/bash",):
+        return False
+    launcher = Path(command[1])
+    if not launcher.is_absolute() or launcher.name != "qcsd-lab":
+        return False
+    cohort_text = command[6]
+    try:
+        cohort = int(cohort_text)
+    except ValueError:
+        return False
+    if cohort < 1 or str(cohort) != cohort_text:
+        return False
+    root = launcher.parent
+    expected = (
+        "/usr/bin/bash",
+        str(root / "qcsd-lab"),
+        "test",
+        "browser-egress",
+        "verify",
+        "--cohort-version",
+        cohort_text,
+        "--build-execution-receipt",
+        str(root / f"artifacts/buflo-study/build-execution-v{cohort}.json"),
+        "--result-root",
+        str(root / f"artifacts/buflo-study/browser-egress-qualification-v{cohort}"),
+    )
+    return tuple(command) == expected
+
+
 def _scope_command_runtime(command: Sequence[str]) -> int:
     if "acquisition-admission" in command:
         return ADMISSION_RUNTIME_SECONDS
+    if _is_canonical_browser_egress_verify_command(command):
+        return BROWSER_EGRESS_VERIFY_RUNTIME_SECONDS
     if "acquisition-status" in command:
         return STATUS_RUNTIME_SECONDS
     if "acquisition-run" in command:
@@ -2884,17 +4159,11 @@ def _create_private_state_directory(path: Path, *, label: str) -> None:
         or not stat.S_ISDIR(parent_state.st_mode)
         or (
             not parent_is_var_tmp
-            and (
-                parent_state.st_uid != os.getuid()
-                or stat.S_IMODE(parent_state.st_mode) & 0o022
-            )
+            and (parent_state.st_uid != os.getuid() or stat.S_IMODE(parent_state.st_mode) & 0o022)
         )
         or (
             parent_is_var_tmp
-            and (
-                parent_state.st_uid != 0
-                or stat.S_IMODE(parent_state.st_mode) & stat.S_ISVTX == 0
-            )
+            and (parent_state.st_uid != 0 or stat.S_IMODE(parent_state.st_mode) & stat.S_ISVTX == 0)
         )
     ):
         raise WatchError(f"{label} parent is not a trusted directory: {parent}")
@@ -2922,18 +4191,14 @@ def _ensure_state_namespace(paths: WatchPaths) -> Path:
     namespace_path = root / "NAMESPACE.json"
     namespace_staged = root / "NAMESPACE.json.next"
     try:
-        namespace_state: os.stat_result | None = namespace_path.stat(
-            follow_symlinks=False
-        )
+        namespace_state: os.stat_result | None = namespace_path.stat(follow_symlinks=False)
     except FileNotFoundError:
         namespace_state = None
     except OSError as error:
         raise WatchError("cannot inspect acquisition watch state namespace receipt") from error
     if namespace_state is None:
         try:
-            staged_state: os.stat_result | None = namespace_staged.stat(
-                follow_symlinks=False
-            )
+            staged_state: os.stat_result | None = namespace_staged.stat(follow_symlinks=False)
         except FileNotFoundError:
             staged_state = None
         except OSError as error:
@@ -2947,9 +4212,7 @@ def _ensure_state_namespace(paths: WatchPaths) -> Path:
                 or staged_state.st_nlink != 1
                 or stat.S_IMODE(staged_state.st_mode) != 0o600
             ):
-                raise WatchError(
-                    "staged acquisition watch state namespace receipt is unsafe"
-                )
+                raise WatchError("staged acquisition watch state namespace receipt is unsafe")
             staged_raw, _ = _read_stable_file(
                 namespace_staged,
                 root=root,
@@ -2962,9 +4225,7 @@ def _ensure_state_namespace(paths: WatchPaths) -> Path:
                     "staged acquisition watch state namespace receipt is malformed"
                 ) from error
             if staged_raw != _canonical_json_bytes(staged_value) or staged_value != expected:
-                raise WatchError(
-                    "staged acquisition watch state namespace receipt does not verify"
-                )
+                raise WatchError("staged acquisition watch state namespace receipt does not verify")
             try:
                 os.replace(namespace_staged, namespace_path)
                 directory_fd = os.open(
@@ -3010,9 +4271,7 @@ def _ensure_state_namespace(paths: WatchPaths) -> Path:
     except FileNotFoundError:
         staged_state = None
     except OSError as error:
-        raise WatchError(
-            "cannot inspect stale acquisition watch namespace publication"
-        ) from error
+        raise WatchError("cannot inspect stale acquisition watch namespace publication") from error
     if staged_state is not None:
         if (
             not stat.S_ISREG(staged_state.st_mode)
@@ -3191,9 +4450,7 @@ def _validate_scope_record(
         "wrapper_start_time",
     }
     expected = common | (
-        {"empty_observations", "outcome", "recovered_from_phase"}
-        if recovery
-        else set()
+        {"empty_observations", "outcome", "recovered_from_phase"} if recovery else set()
     )
     if not isinstance(value, dict) or set(value) != expected:
         raise WatchError("acquisition scope record differs from the exact contract")
@@ -3215,9 +4472,9 @@ def _validate_scope_record(
     )
     launch_phase = value.get("recovered_from_phase") if recovery else value["phase"]
     if (
-        value["schema_version"] != SCHEMA_VERSION
-        or value["artifact_type"]
-        != (SCOPE_RECOVERY_TYPE if recovery else SCOPE_SUPERVISION_TYPE)
+        type(value["schema_version"]) is not int
+        or value["schema_version"] != SCHEMA_VERSION
+        or value["artifact_type"] != (SCOPE_RECOVERY_TYPE if recovery else SCOPE_SUPERVISION_TYPE)
         or value["phase"]
         not in (
             {"empty-proven"}
@@ -3260,14 +4517,8 @@ def _validate_scope_record(
             source_binding_sha256=value["source_binding_sha256"],
             state_namespace_sha256=value["state_namespace_sha256"],
         )
-        or any(
-            type(value[name]) is not int or value[name] <= 0
-            for name in positive_numeric
-        )
-        or any(
-            type(value[name]) is not int or value[name] < 0
-            for name in wrapper_numeric
-        )
+        or any(type(value[name]) is not int or value[name] <= 0 for name in positive_numeric)
+        or any(type(value[name]) is not int or value[name] < 0 for name in wrapper_numeric)
     ):
         raise WatchError("acquisition scope record contains malformed identity")
     wrapper_values = tuple(value[name] for name in wrapper_numeric)
@@ -3302,9 +4553,7 @@ def _read_scope_record(
     if raw != _canonical_json_bytes(value):
         raise WatchError("acquisition scope lifecycle record is not canonical")
     recovery = (
-        value.get("artifact_type") == SCOPE_RECOVERY_TYPE
-        if isinstance(value, dict)
-        else False
+        value.get("artifact_type") == SCOPE_RECOVERY_TYPE if isinstance(value, dict) else False
     )
     # During the atomic SUPERVISION -> RECOVERY pathname transition a recovery
     # envelope is deliberately valid at either of the two names.
@@ -3477,6 +4726,7 @@ def _validate_state_namespace_root(state_root: Path) -> None:
         or not isinstance(value, dict)
         or set(value) != expected_keys
         or value["artifact_type"] != SCOPE_NAMESPACE_TYPE
+        or type(value["schema_version"]) is not int
         or value["schema_version"] != SCHEMA_VERSION
         or value["study_id"] != STUDY_ID
         or value["namespace_sha256"] != state_root.name
@@ -3495,7 +4745,8 @@ def _validate_state_namespace_root(state_root: Path) -> None:
 def _paths_from_state_namespace(state_root: Path) -> WatchPaths:
     _validate_state_namespace_root(state_root)
     raw, _ = _read_stable_file(
-        state_root / "NAMESPACE.json", root=state_root,
+        state_root / "NAMESPACE.json",
+        root=state_root,
         label="acquisition watch state namespace receipt",
     )
     value = json.loads(raw.decode("utf-8"))
@@ -3535,7 +4786,11 @@ def _assert_watch_lock_held(state_root: Path) -> tuple[int, int]:
 
 
 def _assert_recorded_watch_lock_holder(state_root: Path, record: Mapping[str, Any]) -> None:
-    expected = (record["supervisor_start_time"], record["supervisor_session"], record["supervisor_process_group"])
+    expected = (
+        record["supervisor_start_time"],
+        record["supervisor_session"],
+        record["supervisor_process_group"],
+    )
     if _process_identity(record["supervisor_pid"]) != expected:
         raise WatchError("recorded acquisition supervisor identity is not live")
     metadata = os.stat(state_root / "WATCH.lock", follow_symlinks=False)
@@ -3637,8 +4892,7 @@ def _open_scope_birth_lock(
             or pathname.st_nlink != 1
             or stat.S_IMODE(metadata.st_mode) != 0o600
             or stat.S_IMODE(pathname.st_mode) != 0o600
-            or (metadata.st_dev, metadata.st_ino)
-            != (pathname.st_dev, pathname.st_ino)
+            or (metadata.st_dev, metadata.st_ino) != (pathname.st_dev, pathname.st_ino)
             or (
                 record is not None
                 and (metadata.st_dev, metadata.st_ino)
@@ -3695,8 +4949,7 @@ def _validate_held_scope_birth_lock(
         or stat.S_IMODE(held.st_mode) != 0o600
         or stat.S_IMODE(current.st_mode) != 0o600
         or (held.st_dev, held.st_ino) != (current.st_dev, current.st_ino)
-        or (held.st_dev, held.st_ino)
-        != (record["birth_lock_device"], record["birth_lock_inode"])
+        or (held.st_dev, held.st_ino) != (record["birth_lock_device"], record["birth_lock_inode"])
     ):
         raise WatchError("held acquisition scope birth lock identity does not verify")
 
@@ -3746,6 +4999,7 @@ def _read_scope_request(
         or not isinstance(value, dict)
         or set(value) != expected
         or value["artifact_type"] != "qcsd-class-watch-scope-request"
+        or type(value["schema_version"]) is not int
         or value["schema_version"] != SCHEMA_VERSION
         or type(value["wrapper_pid"]) is not int
         or value["wrapper_pid"] <= 0
@@ -3933,9 +5187,7 @@ def _recover_stale_scope_roots(
     lock_identity = _assert_watch_lock_held(state_root)
     roots, unexpected = _state_scope_roots(state_root)
     if unexpected:
-        raise WatchError(
-            f"acquisition watch state contains an unexpected entry: {unexpected[0]}"
-        )
+        raise WatchError(f"acquisition watch state contains an unexpected entry: {unexpected[0]}")
     seen_tokens: set[str] = set()
     plans: list[ScopeRecoveryPlan] = []
     held_birth_fds: set[int] = set()
@@ -3950,9 +5202,8 @@ def _recover_stale_scope_roots(
             unit = f"qcsd-class-watch-{token}.scope"
             if not child_names & {"SUPERVISION", "RECOVERY"}:
                 if (
-                    (not root.name.startswith("scope.next.") and bool(child_names))
-                    or child_names - {"BIRTH.lock", "SUPERVISION.next"}
-                ):
+                    not root.name.startswith("scope.next.") and bool(child_names)
+                ) or child_names - {"BIRTH.lock", "SUPERVISION.next"}:
                     raise WatchError("acquisition scope root has no durable lifecycle record")
                 birth_fd, birth_busy = _open_scope_birth_lock(root, record=None)
                 if birth_fd is not None:
@@ -4078,21 +5329,13 @@ def _recover_stale_scope_roots(
                     raise WatchError("unpublished acquisition scope unit appeared during recovery")
             else:
                 launch_phase = (
-                    plan.record["recovered_from_phase"]
-                    if plan.recovery
-                    else plan.record["phase"]
+                    plan.record["recovered_from_phase"] if plan.recovery else plan.record["phase"]
                 )
-                authorised = (
-                    launch_phase != "declared-before-request" or plan.request is not None
-                )
+                authorised = launch_phase != "declared-before-request" or plan.request is not None
                 if plan.record["host_boot_id"] == _host_boot_id() and authorised:
                     state = _scope_state(plan.unit, environment)
-                    if state.processes and not _scope_signal(
-                        plan.unit, "SIGKILL", environment
-                    ):
-                        raise WatchError(
-                            f"cannot terminate stale acquisition scope {plan.unit}"
-                        )
+                    if state.processes and not _scope_signal(plan.unit, "SIGKILL", environment):
+                        raise WatchError(f"cannot terminate stale acquisition scope {plan.unit}")
                 birth_missing_after_recovery = plan.birth_missing_after_recovery
                 if birth_fd is None and not birth_missing_after_recovery:
                     birth_fd = _wait_scope_birth_lock(
@@ -4104,9 +5347,7 @@ def _recover_stale_scope_roots(
                         held_birth_fds.add(birth_fd)
                 if birth_missing_after_recovery:
                     if not _wait_scope_absent(plan.unit, environment):
-                        raise WatchError(
-                            "birth-free acquisition recovery unit reappeared"
-                        )
+                        raise WatchError("birth-free acquisition recovery unit reappeared")
                 elif plan.record["host_boot_id"] != _host_boot_id():
                     if not _wait_scope_absent(plan.unit, environment):
                         raise WatchError("pre-boot acquisition scope unit was reused")
@@ -4121,20 +5362,14 @@ def _recover_stale_scope_roots(
                         )
                 else:
                     state = _scope_state(plan.unit, environment)
-                    if state.processes and not _scope_signal(
-                        plan.unit, "SIGKILL", environment
-                    ):
-                        raise WatchError(
-                            f"cannot terminate stale acquisition scope {plan.unit}"
-                        )
+                    if state.processes and not _scope_signal(plan.unit, "SIGKILL", environment):
+                        raise WatchError(f"cannot terminate stale acquisition scope {plan.unit}")
                     if not _wait_scope_empty(
                         plan.unit,
                         environment,
                         deadline=time.monotonic() + SCOPE_CLIENT_GRACE_SECONDS,
                     ):
-                        raise WatchError(
-                            f"stale acquisition scope remains non-empty: {plan.unit}"
-                        )
+                        raise WatchError(f"stale acquisition scope remains non-empty: {plan.unit}")
                 if not birth_missing_after_recovery:
                     _discard_staged_scope_files(plan.root, state_root=state_root)
                 if not plan.recovery:
@@ -4294,7 +5529,8 @@ def _cleanup_scope_root(root: Path, *, state_root: Path) -> None:
     if children & {"SUPERVISION", "RECOVERY"}:
         record, _, recovered = _read_scope_record(root, state_root=state_root)
         held = _wait_scope_birth_lock(
-            root, record=record,
+            root,
+            record=record,
             deadline=time.monotonic() + SCOPE_CLIENT_GRACE_SECONDS * 2,
         )
         if held is None:
@@ -4303,8 +5539,14 @@ def _cleanup_scope_root(root: Path, *, state_root: Path) -> None:
             if not _wait_scope_absent(record["scope_unit"], _safe_host_environment()):
                 raise WatchError("acquisition scope unit is not absent during cleanup")
             _discard_staged_scope_files(root, state_root=state_root)
-            recovery = record if recovered else _publish_scope_recovery(root, record, state_root=state_root)
-            _finish_scope_teardown(root, state_root=state_root, recovery=recovery, birth_lock_fd=held)
+            recovery = (
+                record
+                if recovered
+                else _publish_scope_recovery(root, record, state_root=state_root)
+            )
+            _finish_scope_teardown(
+                root, state_root=state_root, recovery=recovery, birth_lock_fd=held
+            )
         finally:
             os.close(held)
     else:
@@ -4341,8 +5583,13 @@ def _terminate_and_reap_launcher(process: subprocess.Popen[str] | None) -> None:
 
 
 def _finalize_scope_root(
-    root: Path, *, state_root: Path, supervision: Mapping[str, Any], unit: str,
-    environment: Mapping[str, str], process: subprocess.Popen[str] | None,
+    root: Path,
+    *,
+    state_root: Path,
+    supervision: Mapping[str, Any],
+    unit: str,
+    environment: Mapping[str, str],
+    process: subprocess.Popen[str] | None,
     birth_lock_fd: int,
 ) -> None:
     _terminate_and_reap_launcher(process)
@@ -4350,7 +5597,8 @@ def _finalize_scope_root(
     acquired = False
     if held < 0:
         value = _wait_scope_birth_lock(
-            root, record=supervision,
+            root,
+            record=supervision,
             deadline=time.monotonic() + SCOPE_CLIENT_GRACE_SECONDS * 2,
         )
         if value is None:
@@ -4359,23 +5607,35 @@ def _finalize_scope_root(
     try:
         _validate_held_scope_birth_lock(root, record=supervision, descriptor=held)
         current, _, recovered = _read_scope_record(root, state_root=state_root)
-        for name in ("scope_unit", "scope_token", "action_sha256", "source_binding_sha256", "request_authority_sha256", "birth_lock_device", "birth_lock_inode"):
+        for name in (
+            "scope_unit",
+            "scope_token",
+            "action_sha256",
+            "source_binding_sha256",
+            "request_authority_sha256",
+            "birth_lock_device",
+            "birth_lock_inode",
+        ):
             if current[name] != supervision[name]:
                 raise WatchError("acquisition scope authority changed before teardown")
         state = _scope_state(unit, environment)
         if state.processes:
             _scope_signal(unit, "SIGKILL", environment)
-        if not _wait_scope_empty(unit, environment, deadline=time.monotonic() + SCOPE_CLIENT_GRACE_SECONDS):
+        if not _wait_scope_empty(
+            unit, environment, deadline=time.monotonic() + SCOPE_CLIENT_GRACE_SECONDS
+        ):
             raise WatchError("acquisition scope remains populated before teardown")
         _discard_staged_scope_files(root, state_root=state_root)
-        recovery = current if recovered else _publish_scope_recovery(root, current, state_root=state_root)
+        recovery = (
+            current if recovered else _publish_scope_recovery(root, current, state_root=state_root)
+        )
         _finish_scope_teardown(root, state_root=state_root, recovery=recovery, birth_lock_fd=held)
     finally:
         if acquired:
             os.close(held)
 
 
-_HOST_SCOPE_LAUNCHER = r'''
+_HOST_SCOPE_LAUNCHER = r"""
 set -u
 birth_fd=$1
 root=$2
@@ -4414,10 +5674,10 @@ wait "${launcher_pid}"
 status=$?
 eval "exec ${birth_fd}>&-" || exit 125
 exit "${status}"
-'''
+"""
 
 
-_SCOPE_WRAPPER = r'''
+_SCOPE_WRAPPER = r"""
 set -u
 umask 077
 root=$1
@@ -4492,7 +5752,7 @@ sync -f "${staged}" || exit 125
 mv -f -- "${staged}" "${status_path}" || exit 125
 sync -f "${status_path%/*}" || exit 125
 exit "${status}"
-'''
+"""
 
 
 class _SignalLatch:
@@ -4511,9 +5771,7 @@ class _SignalLatch:
 
     def __enter__(self) -> _SignalLatch:
         self.previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, self.watched)
-        self.previous_handlers = {
-            watched: signal.getsignal(watched) for watched in self.watched
-        }
+        self.previous_handlers = {watched: signal.getsignal(watched) for watched in self.watched}
         for watched in self.watched:
             signal.signal(watched, self._handle)
         signal.pthread_sigmask(
@@ -4671,9 +5929,7 @@ def _scope_completed(
     status_path = root / "status"
     graceful_run = "acquisition-run" in command
     kill_signal = "SIGINT" if graceful_run else "SIGKILL"
-    stop_seconds = (
-        ACQUISITION_ACTION_CLEANUP_SECONDS if graceful_run else STATUS_CLEANUP_SECONDS
-    )
+    stop_seconds = ACQUISITION_ACTION_CLEANUP_SECONDS if graceful_run else STATUS_CLEANUP_SECONDS
     systemd_command = (
         "/usr/bin/systemd-run",
         "--user",
@@ -4809,9 +6065,7 @@ def _scope_completed(
                             wrapper_pid not in state.processes
                             or _process_identity(wrapper_pid) != wrapper_process
                         ):
-                            raise WatchError(
-                                "acquisition scope wrapper changed before arming"
-                            )
+                            raise WatchError("acquisition scope wrapper changed before arming")
                         supervision = _replace_scope_phase(
                             root,
                             supervision,
@@ -4850,9 +6104,7 @@ def _scope_completed(
                 timed_out = True
                 break
             try:
-                launcher_stdout, launcher_stderr = process.communicate(
-                    timeout=min(0.2, remaining)
-                )
+                launcher_stdout, launcher_stderr = process.communicate(timeout=min(0.2, remaining))
                 break
             except subprocess.TimeoutExpired:
                 continue
@@ -4934,8 +6186,13 @@ def _scope_completed(
     finally:
         try:
             _finalize_scope_root(
-                root, state_root=state_root, supervision=supervision, unit=unit,
-                environment=environment, process=process, birth_lock_fd=birth_lock_fd,
+                root,
+                state_root=state_root,
+                supervision=supervision,
+                unit=unit,
+                environment=environment,
+                process=process,
+                birth_lock_fd=birth_lock_fd,
             )
             birth_lock_fd = -1
         except WatchError:
@@ -4962,10 +6219,12 @@ def _validate_docker_admission(value: Any) -> DockerAdmission:
     server_id = value["docker_server_id"]
     host_boot_id = value["host_boot_id"]
     if (
-        value["schema_version"] != SCHEMA_VERSION
+        type(value["schema_version"]) is not int
+        or value["schema_version"] != SCHEMA_VERSION
         or value["artifact_type"] != DOCKER_ADMISSION_TYPE
         or context != "default"
-        or host not in {
+        or host
+        not in {
             "unix:///var/run/docker.sock",
             "npipe:////./pipe/dockerDesktopLinuxEngine",
         }
@@ -5003,8 +6262,7 @@ def _run_docker_admission(
     if completed.returncode != 0:
         diagnostic = (completed.stderr or completed.stdout or "").strip()
         raise WatchError(
-            "Docker admission/recovery failed"
-            + (f": {diagnostic}" if diagnostic else "")
+            "Docker admission/recovery failed" + (f": {diagnostic}" if diagnostic else "")
         )
     value = _parse_exact_json_object(completed.stdout, label="Docker admission output")
     return _validate_docker_admission(value)
@@ -5021,6 +6279,52 @@ def _docker_environment(
     environment[PINNED_SERVER_ID_ENV] = admission.server_id
     environment[PREPARE_IMAGE_ENV] = binding.prepare_image
     return environment
+
+
+def _run_browser_egress_verification(
+    *,
+    paths: WatchPaths,
+    binding: AcquisitionBinding,
+    runner: CommandRunner,
+    environment: Mapping[str, str],
+    authority_fd: int,
+    state_root: Path,
+    source_binding_sha256: str,
+) -> dict[str, Any]:
+    command = _browser_egress_verify_command(paths, binding)
+    try:
+        completed = runner(
+            command,
+            cwd=paths.lab_root,
+            env=environment,
+            authority_fd=authority_fd,
+            state_root=state_root,
+            source_binding_sha256=source_binding_sha256,
+        )
+    except OSError as error:
+        raise WatchError(f"cannot execute browser-egress deep verification: {error}") from error
+    if completed.returncode != 0:
+        diagnostic = (completed.stderr or completed.stdout or "").strip()
+        raise WatchError(
+            "browser-egress deep verification failed with exit "
+            f"{completed.returncode}" + (f": {diagnostic}" if diagnostic else "")
+        )
+    result = _parse_exact_json_object(
+        completed.stdout,
+        label="browser-egress deep-verification output",
+    )
+    try:
+        encoded = completed.stdout.encode("utf-8")
+    except UnicodeError as error:  # pragma: no cover - CompletedProcess[str] contract
+        raise WatchError("browser-egress deep-verification output is not UTF-8") from error
+    if encoded != _canonical_json_bytes(result):
+        raise WatchError("browser-egress deep-verification output is not canonical JSON")
+    expected = {
+        key: value for key, value in binding.browser_egress_qualification.items() if key != "root"
+    }
+    if not _matches_json_contract(result, expected):
+        raise WatchError("browser-egress deep verification differs from the foundation binding")
+    return result
 
 
 def _status_command(paths: WatchPaths) -> tuple[str, ...]:
@@ -5132,7 +6436,8 @@ def _validate_action_result(value: Any, *, action: str) -> dict[str, Any]:
     if not isinstance(value, dict) or set(value) != _ACTION_KEYS:
         raise WatchError(f"{action} result envelope differs from the coordinator contract")
     if (
-        value["schema_version"] != SCHEMA_VERSION
+        type(value["schema_version"]) is not int
+        or value["schema_version"] != SCHEMA_VERSION
         or value["artifact_type"] != ACTION_RESULT_TYPE
         or value["action"] != action
     ):
@@ -5149,7 +6454,8 @@ def _validate_action_result(value: Any, *, action: str) -> dict[str, Any]:
     _validate_status_details(details, action=action)
     if action == "acquisition-status":
         gate = details["gate"]
-        if gate != {
+        gate_verification = details["gate_verification"]
+        expected_gate = {
             "required_windows": _EXPECTED_WINDOWS,
             "labels": ["t+30s", "t+24h", "t+72h"],
             "all_three_required_per_page_receipt": True,
@@ -5159,14 +6465,32 @@ def _validate_action_result(value: Any, *, action: str) -> dict[str, Any]:
                 "global_live_page_cap": GLOBAL_LIVE_PAGE_CAP,
             },
             "runner_wait_policy": _RUN_WAIT_POLICY,
-        }:
+        }
+        if not _matches_json_contract(gate, expected_gate):
             raise WatchError("acquisition-status result carries another stability gate")
+        if (
+            details["authoritative"] is not False
+            or not isinstance(gate_verification, dict)
+            or set(gate_verification)
+            != {"foundation_path", "foundation_sha256", "informational_only"}
+            or not isinstance(gate_verification["foundation_path"], str)
+            or re.fullmatch(
+                r"/lab/artifacts/class-study-foundation-v[1-9][0-9]*\.json",
+                gate_verification["foundation_path"],
+            )
+            is None
+            or not isinstance(gate_verification["foundation_sha256"], str)
+            or _SHA256_RE.fullmatch(gate_verification["foundation_sha256"]) is None
+            or gate_verification["informational_only"] is not True
+        ):
+            raise WatchError("acquisition-status foundation verification is not informational")
         if value["status"] != "complete" or blockers:
             raise WatchError("acquisition-status result has invalid action status or blockers")
     else:
         if (
-            details["bounded_candidates"] != MAX_CANDIDATES
-            or details["runner_wait_policy"] != _RUN_WAIT_POLICY
+            type(details["bounded_candidates"]) is not int
+            or details["bounded_candidates"] != MAX_CANDIDATES
+            or not _matches_json_contract(details["runner_wait_policy"], _RUN_WAIT_POLICY)
         ):
             raise WatchError("acquisition-run result differs from the bounded wait contract")
         expected_status = "ready" if details["complete"] else "pending"
@@ -5177,14 +6501,14 @@ def _validate_action_result(value: Any, *, action: str) -> dict[str, Any]:
 
 def _validate_status_details(details: Mapping[str, Any], *, action: str) -> None:
     if (
-        details["acquisition_schema_version"] != ACQUISITION_SCHEMA_VERSION
-        or isinstance(details["acquisition_schema_version"], bool)
+        type(details["acquisition_schema_version"]) is not int
+        or details["acquisition_schema_version"] != ACQUISITION_SCHEMA_VERSION
+        or type(details["checkpoint_schema_version"]) is not int
         or details["checkpoint_schema_version"] != CHECKPOINT_SCHEMA_VERSION
-        or isinstance(details["checkpoint_schema_version"], bool)
+        or type(details["maximum_candidates_per_action"]) is not int
         or details["maximum_candidates_per_action"] != MAX_CANDIDATES
-        or isinstance(details["maximum_candidates_per_action"], bool)
+        or type(details["global_live_page_cap"]) is not int
         or details["global_live_page_cap"] != GLOBAL_LIVE_PAGE_CAP
-        or isinstance(details["global_live_page_cap"], bool)
     ):
         raise WatchError(f"{action} result carries another acquisition schema or batch cap")
     active_batch = details["active_batch"]
@@ -5246,9 +6570,7 @@ def _validate_status_details(details: Mapping[str, Any], *, action: str) -> None
         details["candidate_count"] != CANDIDATE_COUNT
         or details["terminal_count"] + details["pending_count"] + details["probing_count"]
         != CANDIDATE_COUNT
-        or details["due_now_count"]
-        + details["finalisable_count"]
-        + details["missed_window_count"]
+        or details["due_now_count"] + details["finalisable_count"] + details["missed_window_count"]
         > details["probing_count"]
         or details["recovery_required_count"]
         > details["pending_count"]
@@ -5256,8 +6578,7 @@ def _validate_status_details(details: Mapping[str, Any], *, action: str) -> None
         + (active_batch["attempt_count"] if active_batch is not None else 0)
         or (
             active_batch is not None
-            and details["recovery_required_count"]
-            < active_batch["attempt_count"]
+            and details["recovery_required_count"] < active_batch["attempt_count"]
         )
         or (details["pending_start_blocked"] and not details["pending_count"])
     ):
@@ -5340,9 +6661,7 @@ def _acquire_mutation_lock(path: Path) -> int:
         _validate_lock_identity(path, descriptor)
     except BlockingIOError as error:
         os.close(descriptor)
-        raise WatchError(
-            "another class-study acquisition process holds the runner lock"
-        ) from error
+        raise WatchError("another class-study acquisition process holds the runner lock") from error
     except (OSError, WatchError):
         os.close(descriptor)
         raise
@@ -5415,8 +6734,21 @@ def _run_verified_action(
     )
     if result["details"]["active_batch"] != observed_active_batch:
         raise WatchError(f"{action} result active batch differs from the checkpoint")
-    if action == "acquisition-status" and after.sha256 != before.sha256:
-        raise WatchError("acquisition-status mutated or raced the checkpoint")
+    if action == "acquisition-status":
+        expected_gate_verification = {
+            "foundation_path": (
+                f"/lab/artifacts/class-study-foundation-v{binding.cohort_version}.json"
+            ),
+            "foundation_sha256": binding.foundation_sha256,
+            "informational_only": True,
+        }
+        if not _matches_json_contract(
+            result["details"]["gate_verification"],
+            expected_gate_verification,
+        ):
+            raise WatchError("acquisition-status uses another foundation binding")
+        if after.sha256 != before.sha256:
+            raise WatchError("acquisition-status mutated or raced the checkpoint")
     if action == "acquisition-run" and after.sha256 == before.sha256:
         details = result["details"]
         # A status snapshot can be just outside a reservation boundary, while
@@ -5499,8 +6831,19 @@ def watch_acquisition(
             )
             _validate_lock_identity(active_paths.mutation_lock, descriptor)
             _revalidate_immutable_and_source(active_paths, binding, validate_source)
-            _validate_checkpoint(active_paths, binding)
             child_environment = _docker_environment(admission, binding)
+            _run_browser_egress_verification(
+                paths=active_paths,
+                binding=binding,
+                runner=active_runner,
+                environment=child_environment,
+                authority_fd=descriptor,
+                state_root=state_root,
+                source_binding_sha256=source_binding_sha256,
+            )
+            _validate_lock_identity(active_paths.mutation_lock, descriptor)
+            _revalidate_immutable_and_source(active_paths, binding, validate_source)
+            _validate_checkpoint(active_paths, binding)
             last_source_check = monotonic()
 
             while True:
@@ -5519,9 +6862,7 @@ def watch_acquisition(
                 details = status_result["details"]
                 if details["complete"]:
                     _validate_lock_identity(active_paths.mutation_lock, descriptor)
-                    _revalidate_immutable_and_source(
-                        active_paths, binding, validate_source
-                    )
+                    _revalidate_immutable_and_source(active_paths, binding, validate_source)
                     _validate_checkpoint(active_paths, binding)
                     latch.raise_if_set()
                     return status_result
@@ -5553,9 +6894,7 @@ def watch_acquisition(
                     _validate_lock_identity(active_paths.mutation_lock, descriptor)
                     monotonic_now = monotonic()
                     if monotonic_now - last_source_check >= SOURCE_RECHECK_SECONDS:
-                        _revalidate_immutable_and_source(
-                            active_paths, binding, validate_source
-                        )
+                        _revalidate_immutable_and_source(active_paths, binding, validate_source)
                         _validate_checkpoint(active_paths, binding)
                         last_source_check = monotonic_now
                     remaining = (target - _utc_now(clock)).total_seconds()
@@ -5646,9 +6985,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             current_root = arguments.current_scope_root_internal
             current_authority = arguments.current_authority_internal
             expected_action_sha256 = arguments.expected_action_sha256_internal
-            expected_source_binding_sha256 = (
-                arguments.expected_source_binding_sha256_internal
-            )
+            expected_source_binding_sha256 = arguments.expected_source_binding_sha256_internal
             if (
                 state_root is None
                 or current_root is None
@@ -5669,6 +7006,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 _sha256_bytes(_canonical_json_bytes(list(command)))
                 for command in (
                     _admission_command(paths),
+                    _browser_egress_verify_command(paths, binding),
                     _status_command(paths),
                     _run_command(paths),
                 )

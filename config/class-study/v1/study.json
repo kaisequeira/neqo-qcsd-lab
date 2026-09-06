@@ -513,7 +513,7 @@
   },
   "stage_order": [
     "pinned-tranco-receipt-and-deterministic-600-domain-candidate-catalogue",
-    "fresh-no-cache-build-reference-code-regression-and-controlled-gates",
+    "fresh-no-cache-build-reference-code-regression-controlled-pinned-cdp-and-browser-egress-gates",
     "class-acquisition-foundation-attestation-freeze",
     "30s-24h-72h-public-page-acquisition-and-stability-evidence",
     "pilot-selection-and-cohort-assembly-receipts-freeze",
@@ -540,11 +540,13 @@
         "every-class-study-capture-role"
       ],
       "reconstructed_gates": [
-        "one-current-clean-source-and-pinned-no-cache-build",
+        "current-clean-source-and-no-cache-build",
         "independent-reference-conformance",
         "complete-code-gate",
         "nine-mode-regression-18-of-18",
-        "controlled-qualification-160-of-160"
+        "controlled-qualification-160-of-160",
+        "pinned-cdp-integration-probe",
+        "browser-egress-packet-qualification-110-of-110"
       ]
     },
     "readiness": {
@@ -818,7 +820,7 @@
     "historical_classifier_corpus": "read-only-byte-for-byte-unchanged"
   },
   "readiness_gates": {
-    "foundation_attestation": "required-before-any-real-public-page-acquisition-or-class-study-capture-role-and-frozen-by-every-result-only-after-the-five-source-build-reference-code-regression-controlled-gates-pass",
+    "foundation_attestation": "required-before-any-real-public-page-acquisition-or-class-study-capture-role-and-frozen-by-every-result-only-after-the-seven-source-build-reference-code-regression-controlled-pinned-cdp-and-browser-egress-gates-pass",
     "class_readiness_attestation": "required-before-any-canary-or-formal-launch-and-only-after-foundation-acquisition-admission-final-selection-and-assembly-final-fitting-final-qualification-and-900-of-900-first-launch-certification-verify",
     "historical_pre_snapshot": "required-after-readiness-and-before-every-canary-or-formal-launch",
     "validation_attestation": "only-after-1000-of-1000-canaries-16000-of-16000-formal-samples-handoff-correctness-performance-classifier-evaluation-paper-comparison-historical-post-snapshot-and-independent-hash-verification-pass",

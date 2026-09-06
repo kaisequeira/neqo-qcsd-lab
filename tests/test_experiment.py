@@ -53,7 +53,7 @@ def _class_configuration(
         class_study_cohort_sha256="c" * 64,
         class_study_cohort_assembly_sha256="d" * 64,
         class_study_id=(
-            "classifier-multiorigin100-v2-012345abcdef"
+            "classifier-multiorigin100-v2-g01-012345abcdef"
             if successor
             else "classifier-multiorigin100-v1"
         ),
@@ -577,6 +577,24 @@ def test_class_study_configuration_survives_initialize_checkpoint_load_and_resum
             "classifier-multiorigin100-v2",
             False,
         ),
+        (
+            "certification",
+            "class_study_id",
+            "classifier-multiorigin100-v2-012345abcdef",
+            True,
+        ),
+        (
+            "certification",
+            "class_study_id",
+            "classifier-multiorigin100-v2-g00-012345abcdef",
+            True,
+        ),
+        (
+            "certification",
+            "class_study_id",
+            "classifier-multiorigin100-v2-g01-012345abcdef-extra",
+            True,
+        ),
         ("certification", "class_study_cohort_sha256", "A" * 64, False),
         (
             "certification",
@@ -712,6 +730,27 @@ def test_class_study_configuration_enforces_role_authority_and_successor_cooccur
             tmp_path / "successor",
             role="formal",
             configuration=successor,
+        )
+
+
+def test_generated_successor_identity_requires_durable_attempt_evidence() -> None:
+    successor = "classifier-multiorigin100-v2-g01-0123456789ab"
+    assert experiment_module._requires_durable_attempt_evidence(
+        {
+            "name": f"{successor}-formal-01-1200",
+            "configuration": {"class_study_id": successor},
+        }
+    )
+    for malformed in (
+        "classifier-multiorigin100-v2-0123456789ab",
+        "classifier-multiorigin100-v2-g00-0123456789ab",
+        "classifier-multiorigin100-v2-g01-0123456789ab-extra",
+    ):
+        assert not experiment_module._requires_durable_attempt_evidence(
+            {
+                "name": f"{malformed}-formal-01-1200",
+                "configuration": {"class_study_id": malformed},
+            }
         )
 
 

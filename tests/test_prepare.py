@@ -9,15 +9,93 @@ from pathlib import Path
 import pytest
 
 import qcsd_lab.prepare as prepare
+from qcsd_lab.browser_egress import (
+    NON_REPLAYABLE_EGRESS_POLICY,
+    NON_REPLAYABLE_EGRESS_SCHEMA_VERSION,
+    TARGET_EGRESS_APIS,
+    target_egress_apis,
+)
+from qcsd_lab.cdp_targets import (
+    CDP_TARGET_INSTRUMENTATION_POLICY,
+    EGRESS_PREARM_SUMMARY_SCHEMA_VERSION,
+)
 from qcsd_lab.discover import DiscoveryResult
-from qcsd_lab.cdp_targets import CDP_TARGET_INSTRUMENTATION_POLICY
 from qcsd_lab.discovery_evidence import (
     DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION,
     PASSIVE_RENDER_CONTRACT_SHA256,
+    RENDER_OBSERVATION_SCHEMA_VERSION,
     evidence_sha256,
     passive_render_contract,
 )
 from qcsd_lab.manifest import runtime_manifest, validate_manifest
+
+
+def _terminal_bootstrap_prearm_summary() -> dict[str, object]:
+    worker_summary = {
+        "held": 0,
+        "released": 0,
+        "pending": 0,
+        "released_after_setup_envelopes": 0,
+        "owner_target_types": {
+            "page": 0,
+            "iframe": 0,
+            "worker": 0,
+            "shared_worker": 0,
+        },
+    }
+    return {
+        "schema_version": 1,
+        "held_total": 0,
+        "released_total": 0,
+        "pending_total": 0,
+        "release_before_setup_envelopes_total": 0,
+        "by_worker_type": {
+            "worker": deepcopy(worker_summary),
+            "shared_worker": deepcopy(worker_summary),
+        },
+    }
+
+
+def _terminal_egress_prearm_summary() -> dict[str, object]:
+    return {
+        "schema_version": EGRESS_PREARM_SUMMARY_SCHEMA_VERSION,
+        "policy": NON_REPLAYABLE_EGRESS_POLICY,
+        "target_total": 1,
+        "installed_total": 1,
+        "pending_total": 0,
+        "popup_guard_required_total": 1,
+        "popup_guard_installed_total": 1,
+        "by_target_type": {
+            target_type: {
+                "target_count": int(target_type == "page"),
+                "installed_count": int(target_type == "page"),
+                "pending_count": 0,
+                "protected_api_observations": (
+                    len(target_egress_apis("page")) if target_type == "page" else 0
+                ),
+                "unavailable_api_observations": 0,
+                "popup_guard_required_count": int(target_type == "page"),
+                "popup_guard_installed_count": int(target_type == "page"),
+            }
+            for target_type in ("page", "iframe", "worker", "shared_worker")
+        },
+    }
+
+
+def _non_replayable_egress_summary() -> dict[str, object]:
+    return {
+        "schema_version": NON_REPLAYABLE_EGRESS_SCHEMA_VERSION,
+        "policy": NON_REPLAYABLE_EGRESS_POLICY,
+        "attempt_count": 0,
+        "protected_apis": list(TARGET_EGRESS_APIS),
+        "context_init_script_installed": True,
+        "context_navigation_route_installed": True,
+        "root_page_bound": True,
+        "context_websocket_route_installed": True,
+        "context_service_worker_listener_installed": True,
+        "cdp_tripwires_are_pre_io": False,
+        "packet_level_completeness_claimed": False,
+    }
 
 
 def discovered() -> DiscoveryResult:
@@ -57,7 +135,7 @@ def discovered() -> DiscoveryResult:
         "parent_frame_id": None,
     }
     render = {
-        "schema_version": 1,
+        "schema_version": RENDER_OBSERVATION_SCHEMA_VERSION,
         "clock": "monotonic-relative-ms",
         "navigation_started_ms": 0,
         "load_event_ms": 0,
@@ -66,6 +144,11 @@ def discovered() -> DiscoveryResult:
         "cutoff_ms": 13_000,
         "active_request_ids": [],
         "active_request_count": 0,
+        "router_shutdown_ready": True,
+        "bootstrap_prearm_summary": _terminal_bootstrap_prearm_summary(),
+        "egress_prearm_summary": _terminal_egress_prearm_summary(),
+        "non_replayable_egress_summary": _non_replayable_egress_summary(),
+        "browser_context_service_worker_count": 0,
         "cutoff_reason": "quiescent",
     }
     events = []

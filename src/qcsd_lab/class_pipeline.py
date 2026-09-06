@@ -118,7 +118,9 @@ from .class_study import (
     bind_receipt,
     canonical_json_bytes,
     canonical_json_sha256,
+    is_successor_study_id,
     load_study_receipt,
+    parse_class_study_campaign_name,
     select_cohort,
 )
 from .class_study import (
@@ -1330,18 +1332,18 @@ def class_study_status(
         validate_class_validation_attestation,
     )
 
-    stages["foundation"] = (
-        {
-            "state": "verified",
-            **validate_class_foundation_attestation(
-                foundation_attestation,
-                deep_code_gate=deep,
-                runtime_role="collection",
-            ),
-        }
-        if foundation_attestation is not None
-        else {"state": "absent"}
-    )
+    verified_foundation: dict[str, Any] | None = None
+    if foundation_attestation is not None:
+        verified_foundation = validate_class_foundation_attestation(
+            foundation_attestation,
+            # A displayed acquisition state is only verified after the same
+            # complete foundation reconstruction required by live acquisition.
+            deep_code_gate=deep or acquisition_root is not None,
+            runtime_role="collection",
+        )
+        stages["foundation"] = {"state": "verified", **verified_foundation}
+    else:
+        stages["foundation"] = {"state": "absent"}
     qualification_authority: dict[str, Any] | None = None
     if qualification_manifests or final_bundle_roots or final_selection_path is not None:
         if foundation_attestation is None:
@@ -1381,18 +1383,75 @@ def class_study_status(
             "gate": stability_gate(),
         }
     else:
-        from .class_acquisition import acquisition_status
+        from . import class_acquisition
 
-        runner_status = acquisition_status(
+        runner_status = class_acquisition.acquisition_status(
             acquisition_root,
             candidate_catalogue_path=candidate_catalogue_path,
         )
-        stages["acquisition_runner"] = {
-            "state": "verified",
+        acquisition_stage = {
+            **runner_status,
+            "state": "unverified",
             "root": str(Path(acquisition_root).resolve()),
             "gate": stability_gate(),
-            **runner_status,
+            "authoritative": False,
         }
+        if verified_foundation is None:
+            acquisition_stage["reason"] = (
+                "acquisition runner status requires --foundation-attestation for "
+                "current deep gate verification"
+            )
+        elif (
+            runner_status.get("acquisition_schema_version")
+            != class_acquisition.SCHEMA_VERSION
+        ):
+            acquisition_stage["reason"] = (
+                "historical acquisition runners are verify-only and cannot carry "
+                "current gate authority"
+            )
+        else:
+            provenance_path = _regular_file(
+                Path(acquisition_root) / "provenance.json",
+                "class acquisition provenance",
+            )
+            provenance = validate_hash_bound_receipt(
+                _load_json_object(provenance_path, "class acquisition provenance"),
+                expected_type=class_acquisition.PROVENANCE_TYPE,
+            )
+            foundation_binding = provenance.get("foundation_attestation")
+            if (
+                not isinstance(foundation_binding, Mapping)
+                or set(foundation_binding) != {"path", "sha256"}
+                or not isinstance(foundation_binding.get("path"), str)
+                or not isinstance(foundation_binding.get("sha256"), str)
+            ):
+                raise ValueError("class acquisition provenance has no exact foundation binding")
+            bound_foundation = _regular_file(
+                Path(foundation_binding["path"]),
+                "class acquisition foundation",
+            )
+            if (
+                str(bound_foundation) != verified_foundation.get("path")
+                or foundation_binding["sha256"] != verified_foundation.get("sha256")
+                or sha256_file(bound_foundation) != foundation_binding["sha256"]
+            ):
+                raise ValueError(
+                    "class acquisition runner uses another foundation attestation"
+                )
+            acquisition_stage.update(
+                {
+                    "state": "verified",
+                    "gate_verification": {
+                        "foundation_path": str(bound_foundation),
+                        "foundation_sha256": foundation_binding["sha256"],
+                        "browser_egress_vectors": verified_foundation["summary"][
+                            "browser_egress_vectors"
+                        ],
+                        "informational_only": True,
+                    },
+                }
+            )
+        stages["acquisition_runner"] = acquisition_stage
 
     if acquisition_completion_path is None:
         stages["acquisition_completion"] = {"state": "absent"}
@@ -1809,19 +1868,24 @@ def run_class_study_action(
     formal_result_roots: Sequence[Path] = (),
     artifacts_root: Path | None = None,
     numeric_bundle_root: Path | None = None,
+    numeric_bundle_roots: Sequence[Path] = (),
     prefix_spec_root: Path | None = None,
+    prefix_spec_roots: Sequence[Path] = (),
     qualification_checkpoint: Path | None = None,
     qualification_sidecar_root: Path | None = None,
     qualification_publication_root: Path | None = None,
     qualification_manifest: Path | None = None,
+    qualification_manifests: Sequence[Path] = (),
     qualification_workload: str | None = None,
     qualify_all_pending: bool = False,
     final_bundle_root: Path | None = None,
+    final_bundle_roots: Sequence[Path] = (),
     handoff: Path | None = None,
     evaluation_receipt: Path | None = None,
     cohort_version: int | None = None,
     build_execution_receipt: Path | None = None,
     pinned_cdp_receipt: Path | None = None,
+    browser_egress_qualification_root: Path | None = None,
     reference_receipt: Path | None = None,
     code_gate_receipt: Path | None = None,
     controlled_qualification_receipt: Path | None = None,
@@ -1857,6 +1921,30 @@ def run_class_study_action(
 
     if action not in STUDY_ACTIONS:
         raise ValueError(f"class-study action must be one of: {', '.join(STUDY_ACTIONS)}")
+    status_numeric_bundle_roots = _status_artifact_inputs(
+        action,
+        numeric_bundle_roots,
+        numeric_bundle_root,
+        option="--numeric-bundle",
+    )
+    status_prefix_spec_roots = _status_artifact_inputs(
+        action,
+        prefix_spec_roots,
+        prefix_spec_root,
+        option="--prefix-spec-root",
+    )
+    status_qualification_manifests = _status_artifact_inputs(
+        action,
+        qualification_manifests,
+        qualification_manifest,
+        option="--qualification-manifest",
+    )
+    status_final_bundle_roots = _status_artifact_inputs(
+        action,
+        final_bundle_roots,
+        final_bundle_root,
+        option="--final-bundle",
+    )
     successor_context = _successor_action_context(
         action,
         successor_restart=successor_restart,
@@ -1915,6 +2003,7 @@ def run_class_study_action(
         "acquisition-status",
         "acquisition-complete",
     }:
+        from . import class_acquisition
         from .class_acquisition import (
             ExistingAcquisitionBackend,
             acquisition_status,
@@ -1952,12 +2041,40 @@ def run_class_study_action(
             details.update({"valid": True, "runner_root": str(output.resolve())})
             return ClassStudyActionResult(action, "complete", details)
         if action == "acquisition-status":
+            provenance_path = _regular_file(
+                Path(runner) / "provenance.json",
+                "class acquisition provenance",
+            )
+            provenance = validate_hash_bound_receipt(
+                _load_json_object(provenance_path, "class acquisition provenance"),
+                expected_type=class_acquisition.PROVENANCE_TYPE,
+            )
+            # A status snapshot is operational guidance, not promotion
+            # authority.  It nevertheless runs under the exact same current
+            # prepare-image, source, and deeply reconstructed foundation
+            # contract as a mutating acquisition action.
+            class_acquisition._validate_runner_runtime(provenance)
+            foundation_binding = provenance.get("foundation_attestation")
+            if (
+                not isinstance(foundation_binding, Mapping)
+                or set(foundation_binding) != {"path", "sha256"}
+                or not isinstance(foundation_binding.get("path"), str)
+                or not isinstance(foundation_binding.get("sha256"), str)
+                or _SHA256.fullmatch(foundation_binding["sha256"]) is None
+            ):
+                raise ValueError("class acquisition provenance has no exact foundation binding")
             details = acquisition_status(runner, candidate_catalogue_path=catalogue)
             details.update(
                 {
                     "valid": True,
                     "runner_root": str(Path(runner).resolve()),
                     "gate": stability_gate(),
+                    "authoritative": False,
+                    "gate_verification": {
+                        "foundation_path": foundation_binding["path"],
+                        "foundation_sha256": foundation_binding["sha256"],
+                        "informational_only": True,
+                    },
                 }
             )
             return ClassStudyActionResult(action, "complete", details)
@@ -2068,10 +2185,10 @@ def run_class_study_action(
             final_selection_path=final_selection_path,
             campaign_root=campaign_root,
             result_roots=result_roots,
-            numeric_bundle_roots=(numeric_bundle_root,) if numeric_bundle_root else (),
-            prefix_spec_roots=(prefix_spec_root,) if prefix_spec_root else (),
-            qualification_manifests=(qualification_manifest,) if qualification_manifest else (),
-            final_bundle_roots=(final_bundle_root,) if final_bundle_root else (),
+            numeric_bundle_roots=status_numeric_bundle_roots,
+            prefix_spec_roots=status_prefix_spec_roots,
+            qualification_manifests=status_qualification_manifests,
+            final_bundle_roots=status_final_bundle_roots,
             handoff=handoff,
             evaluation_receipt=evaluation_receipt,
             foundation_attestation=foundation_attestation,
@@ -2258,6 +2375,10 @@ def run_class_study_action(
             raise ValueError("class-study foundation requires --cohort-version")
         build_path = _required(build_execution_receipt, "--build-execution-receipt")
         pinned_path = _required(pinned_cdp_receipt, "--pinned-cdp-receipt")
+        browser_egress_root = _required(
+            browser_egress_qualification_root,
+            "--browser-egress-qualification-root",
+        )
         expected_pinned_path = (
             Path(build_path).absolute().parent
             / f"pinned-cdp-execution-v{cohort_version}.json"
@@ -2265,6 +2386,15 @@ def run_class_study_action(
         if Path(pinned_path).absolute() != expected_pinned_path:
             raise ValueError(
                 "class-study foundation pinned CDP receipt has the wrong canonical filename"
+            )
+        expected_browser_egress_root = (
+            Path(build_path).absolute().parent
+            / f"browser-egress-qualification-v{cohort_version}"
+        )
+        if Path(browser_egress_root).absolute() != expected_browser_egress_root:
+            raise ValueError(
+                "class-study foundation browser-egress qualification root has the "
+                "wrong canonical path"
             )
         foundation_destination = _required(destination, "--destination")
         expected_foundation_destination = (
@@ -2280,6 +2410,7 @@ def run_class_study_action(
             cohort_version=cohort_version,
             build_execution_receipt=build_path,
             pinned_cdp_receipt=pinned_path,
+            browser_egress_qualification_root=browser_egress_root,
             reference_receipt=_required(reference_receipt, "--reference-receipt"),
             code_gate_receipt=_required(code_gate_receipt, "--code-gate-receipt"),
             controlled_qualification_receipt=_required(
@@ -3596,7 +3727,7 @@ def _validate_formal_capture_authority(
     if role == "formal":
         expected_set = (
             f"{readiness['study_id']}-final-full"
-            if str(readiness.get("study_id", "")).startswith("classifier-multiorigin100-v2-")
+            if is_successor_study_id(readiness.get("study_id"))
             else AUTHORITATIVE_QUALIFICATION_SET
         )
         if observed_manifest != final_qualification_manifest_sha256 or observed_set != expected_set:
@@ -4154,8 +4285,7 @@ def _validate_verified_class_result(
             label="class-study successor restart",
         )
         if (
-            not isinstance(study_id, str)
-            or not study_id.startswith("classifier-multiorigin100-v2-")
+            not is_successor_study_id(study_id)
             or role not in {"authoritative-fitting", "certification", "canary", "formal"}
         ):
             raise ValueError("class-study result successor identity is invalid")
@@ -4662,9 +4792,7 @@ def _require_successor_result_records(
 ) -> None:
     """Reject predecessor or mixed-successor downstream evidence."""
 
-    if _SHA256.fullmatch(restart_sha256) is None or not study_id.startswith(
-        "classifier-multiorigin100-v2-"
-    ):
+    if _SHA256.fullmatch(restart_sha256) is None or not is_successor_study_id(study_id):
         raise ValueError("successor result authority is malformed")
     if any(
         record.get("class_study_successor_sha256") != restart_sha256
@@ -5097,13 +5225,17 @@ def _campaign_block(preflight: Mapping[str, Any]) -> int | None:
 def _result_block(name: str, role: str, *, study_id: str = STUDY_ID) -> int | None:
     if role not in {"canary", "formal"}:
         return None
-    match = re.fullmatch(
-        rf"{re.escape(study_id)}-(canary|formal)-([0-9]{{2}})-1200",
-        name,
-    )
-    if match is None or match.group(1) != role:
+    try:
+        identity = parse_class_study_campaign_name(name)
+    except ValueError as error:
+        raise ValueError(f"{role} result name is not canonical") from error
+    if (
+        identity.study_id != study_id
+        or identity.evidence_role != role
+        or identity.block is None
+    ):
         raise ValueError(f"{role} result name is not canonical")
-    block = int(match.group(2))
+    block = identity.block
     if not 1 <= block <= FORMAL_BLOCK_COUNT:
         raise ValueError(f"{role} block is outside 01..{FORMAL_BLOCK_COUNT:02d}")
     return block
@@ -5976,6 +6108,41 @@ def _require_campaign_reference_binding(
 def _relative_reference(root: Path, target: Path) -> str:
     directory = _regular_directory(root, "class-study campaign root")
     return Path(os.path.relpath(target.resolve(), directory)).as_posix()
+
+
+def _status_artifact_inputs(
+    action: str,
+    repeated: Sequence[Path],
+    legacy: Path | None,
+    *,
+    option: str,
+) -> tuple[Path, ...]:
+    """Preserve repeatable status inputs while retaining the singular API.
+
+    The four fitting artefact options remain singular for every producing or
+    consuming action.  ``status`` alone needs one pilot and one authoritative
+    instance at the same time.  Deduplicate the singular compatibility value
+    against the repeatable form without allowing a non-status caller to smuggle
+    a second artefact into an otherwise singular action.
+    """
+
+    values = tuple(Path(path) for path in repeated)
+    legacy_identity = Path(os.path.abspath(legacy)) if legacy is not None else None
+    if action != "status" and values:
+        if legacy_identity is None or any(
+            Path(os.path.abspath(path)) != legacy_identity for path in values
+        ):
+            raise ValueError(f"{option} is repeatable only for class-study status")
+
+    ordered: list[Path] = []
+    identities: set[Path] = set()
+    for path in (*values, *((legacy,) if legacy is not None else ())):
+        identity = Path(os.path.abspath(path))
+        if identity in identities:
+            continue
+        identities.add(identity)
+        ordered.append(path)
+    return tuple(ordered)
 
 
 def _next_required_stage(

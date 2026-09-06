@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import base64
 import json
+import os
+import stat
 from collections import Counter
+from copy import deepcopy
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -18,20 +21,99 @@ from qcsd_lab import (
     orchestrator,
     util,
 )
+from qcsd_lab.browser_egress import (
+    NON_REPLAYABLE_EGRESS_POLICY,
+    NON_REPLAYABLE_EGRESS_SCHEMA_VERSION,
+    TARGET_EGRESS_APIS,
+    target_egress_apis,
+)
 from qcsd_lab.capture_session import Defense, Limits
 from qcsd_lab.class_acquisition import validate_class_study_preparation
 from qcsd_lab.class_campaigns import FINAL_QUALIFICATION_SET
 from qcsd_lab.class_study import STUDY_ID
-from qcsd_lab.cdp_targets import CDP_TARGET_INSTRUMENTATION_POLICY
+from qcsd_lab.cdp_targets import (
+    CDP_TARGET_INSTRUMENTATION_POLICY,
+    EGRESS_PREARM_SUMMARY_SCHEMA_VERSION,
+)
 from qcsd_lab.discover import origin
 from qcsd_lab.discovery_evidence import (
     DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION,
     PASSIVE_RENDER_CONTRACT_SHA256,
+    RENDER_OBSERVATION_SCHEMA_VERSION,
     evidence_sha256,
     passive_render_contract,
 )
 from qcsd_lab.orchestrator import Campaign, Workload, plan_campaign
 from qcsd_lab.util import sha256_file
+
+
+def _terminal_bootstrap_prearm_summary() -> dict[str, object]:
+    worker_summary = {
+        "held": 0,
+        "released": 0,
+        "pending": 0,
+        "released_after_setup_envelopes": 0,
+        "owner_target_types": {
+            "page": 0,
+            "iframe": 0,
+            "worker": 0,
+            "shared_worker": 0,
+        },
+    }
+    return {
+        "schema_version": 1,
+        "held_total": 0,
+        "released_total": 0,
+        "pending_total": 0,
+        "release_before_setup_envelopes_total": 0,
+        "by_worker_type": {
+            "worker": deepcopy(worker_summary),
+            "shared_worker": deepcopy(worker_summary),
+        },
+    }
+
+
+def _terminal_egress_prearm_summary() -> dict[str, object]:
+    return {
+        "schema_version": EGRESS_PREARM_SUMMARY_SCHEMA_VERSION,
+        "policy": NON_REPLAYABLE_EGRESS_POLICY,
+        "target_total": 1,
+        "installed_total": 1,
+        "pending_total": 0,
+        "popup_guard_required_total": 1,
+        "popup_guard_installed_total": 1,
+        "by_target_type": {
+            target_type: {
+                "target_count": int(target_type == "page"),
+                "installed_count": int(target_type == "page"),
+                "pending_count": 0,
+                "protected_api_observations": (
+                    len(target_egress_apis("page")) if target_type == "page" else 0
+                ),
+                "unavailable_api_observations": 0,
+                "popup_guard_required_count": int(target_type == "page"),
+                "popup_guard_installed_count": int(target_type == "page"),
+            }
+            for target_type in ("page", "iframe", "worker", "shared_worker")
+        },
+    }
+
+
+def _non_replayable_egress_summary() -> dict[str, object]:
+    return {
+        "schema_version": NON_REPLAYABLE_EGRESS_SCHEMA_VERSION,
+        "policy": NON_REPLAYABLE_EGRESS_POLICY,
+        "attempt_count": 0,
+        "protected_apis": list(TARGET_EGRESS_APIS),
+        "context_init_script_installed": True,
+        "context_navigation_route_installed": True,
+        "root_page_bound": True,
+        "context_websocket_route_installed": True,
+        "context_service_worker_listener_installed": True,
+        "cdp_tripwires_are_pre_io": False,
+        "packet_level_completeness_claimed": False,
+    }
+
 
 FORMAL_MODES = (
     ("undefended", "none", True),
@@ -157,7 +239,7 @@ def _campaign(
     return Campaign(
         path=Path("/synthetic/formal.yml"),
         source_bytes=b"synthetic",
-        name=f"classifier-multiorigin100-v1-formal-{block:02d}",
+        name=f"classifier-multiorigin100-v1-formal-{block:02d}-1200",
         purpose="evaluation",
         seed=2_026_082_800 + block,
         profile="research-1200",
@@ -188,6 +270,9 @@ def _install_preclaim_authority(
     foundation_recorded_at: str = "2026-08-27T23:00:00+00:00",
     snapshot_recorded_at: str = "2026-08-27T23:30:00+00:00",
 ) -> tuple[Path, Path | None, Path | None]:
+    # Fresh launch tests model one isolated canonical Lab workspace.  Frozen
+    # result validation tests intentionally do not need this live-layout bind.
+    monkeypatch.setattr(util, "LAB_ROOT", tmp_path)
     monkeypatch.setattr(
         orchestrator,
         "_revalidate_loaded_class_study_runtime_files",
@@ -432,7 +517,7 @@ def _complete_origin_workload(
             ]
         )
     render_observation = {
-        "schema_version": 1,
+        "schema_version": RENDER_OBSERVATION_SCHEMA_VERSION,
         "clock": "monotonic-relative-ms",
         "navigation_started_ms": 0,
         "load_event_ms": 0,
@@ -441,6 +526,11 @@ def _complete_origin_workload(
         "cutoff_ms": 13_000,
         "active_request_ids": [],
         "active_request_count": 0,
+        "router_shutdown_ready": True,
+        "bootstrap_prearm_summary": _terminal_bootstrap_prearm_summary(),
+        "egress_prearm_summary": _terminal_egress_prearm_summary(),
+        "non_replayable_egress_summary": _non_replayable_egress_summary(),
+        "browser_context_service_worker_count": 0,
         "cutoff_reason": "quiescent",
     }
     render_observation_sha256 = evidence_sha256(render_observation)
@@ -1297,6 +1387,16 @@ def test_class_launch_claim_is_global_format_invariant_and_recovers_only_prelaun
     assert orchestrator._class_study_launch_key(reformatted) == (
         orchestrator._class_study_launch_key(campaign)
     )
+    marker_sha256 = sha256_file(marker)
+    with pytest.raises(ValueError, match="differs from its campaign"):
+        orchestrator._claim_class_study_launch(
+            reformatted,
+            results_root=results,
+            source=source,
+            started_at=started,
+        )
+    assert sha256_file(marker) == marker_sha256
+    assert not root.exists()
     root.mkdir(parents=True)
     (root / "inputs").mkdir()
     (root / "inputs/campaign.yml").write_bytes(campaign.source_bytes)
@@ -1325,8 +1425,233 @@ def test_class_launch_claim_is_global_format_invariant_and_recovers_only_prelaun
         )
 
 
+def test_class_launch_claim_rejects_a_second_results_root_and_symlink_alias(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    results = tmp_path / "results"
+    results.mkdir()
+    campaign = replace(
+        _campaign(tuple(_workload(index) for index in range(100))),
+        class_study_cohort_sha256="a" * 64,
+        class_study_cohort_assembly_sha256="b" * 64,
+    )
+    _install_preclaim_authority(tmp_path, monkeypatch, campaign)
+    started = datetime(2026, 8, 28, tzinfo=UTC)
+
+    # A normalised lexical alias resolves back to the one canonical authority.
+    lexical_alias = tmp_path / "unused" / ".." / "results"
+    root, _run_id, marker = orchestrator._claim_class_study_launch(
+        campaign,
+        results_root=lexical_alias,
+        source=_SOURCE,
+        started_at=started,
+    )
+    assert marker.parent.parent == results
+
+    alternate = tmp_path / "alternate-results"
+    alternate.mkdir()
+    with pytest.raises(ValueError, match="outside the canonical class-study layout"):
+        orchestrator._claim_class_study_launch(
+            campaign,
+            results_root=alternate,
+            source=_SOURCE,
+            started_at=started,
+        )
+    assert list(alternate.iterdir()) == []
+
+    alias = tmp_path / "results-alias"
+    alias.symlink_to(results, target_is_directory=True)
+    with pytest.raises(ValueError, match="outside the canonical class-study layout"):
+        orchestrator._claim_class_study_launch(
+            campaign,
+            results_root=alias,
+            source=_SOURCE,
+            started_at=started,
+        )
+    assert marker.is_file()
+    assert not root.exists()
+
+    rebound_namespace = replace(
+        campaign,
+        class_study_launch_namespace=".alternate-launches",
+    )
+    with pytest.raises(ValueError, match="differs from its study identity"):
+        orchestrator._claim_class_study_launch(
+            rebound_namespace,
+            results_root=results,
+            source=_SOURCE,
+            started_at=started,
+        )
+    assert not (results / ".alternate-launches").exists()
+
+
+def test_public_run_api_rejects_an_alternate_class_results_root_before_locking(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(util, "LAB_ROOT", tmp_path)
+    campaign = replace(
+        _campaign(tuple(_workload(index) for index in range(100))),
+        class_study_cohort_sha256="a" * 64,
+        class_study_cohort_assembly_sha256="b" * 64,
+    )
+    monkeypatch.setattr(orchestrator, "load_campaign", lambda _path: campaign)
+    monkeypatch.setattr(
+        orchestrator,
+        "_require_class_study_coordinator_capture_authority",
+        lambda _campaign: None,
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "_run_loaded_campaign",
+        lambda *_args, **_kwargs: pytest.fail("alternate root reached campaign execution"),
+    )
+    alternate = tmp_path / "alternate-results"
+    alternate.mkdir()
+
+    with pytest.raises(ValueError, match="outside the canonical class-study layout"):
+        orchestrator.run_campaign(tmp_path / "campaign.yml", alternate)
+    assert list(alternate.iterdir()) == []
+
+
+@pytest.mark.parametrize("mutation", ("symlink", "insecure-mode"))
+def test_class_launch_claim_rejects_an_unsafe_canonical_registry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    results = tmp_path / "results"
+    results.mkdir()
+    campaign = replace(
+        _campaign(tuple(_workload(index) for index in range(100))),
+        class_study_cohort_sha256="a" * 64,
+        class_study_cohort_assembly_sha256="b" * 64,
+    )
+    _install_preclaim_authority(tmp_path, monkeypatch, campaign)
+    registry = results / f".{STUDY_ID}-launches"
+    if mutation == "symlink":
+        foreign = tmp_path / "foreign-registry"
+        foreign.mkdir(mode=0o700)
+        registry.symlink_to(foreign, target_is_directory=True)
+    else:
+        registry.mkdir(mode=0o700)
+        registry.chmod(0o750)
+
+    with pytest.raises(ValueError, match="owner-owned mode-0700"):
+        orchestrator._claim_class_study_launch(
+            campaign,
+            results_root=results,
+            source=_SOURCE,
+            started_at=datetime(2026, 8, 28, tzinfo=UTC),
+        )
+    assert not tuple(registry.glob("*.json"))
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="requires POSIX process atomicity")
+def test_class_launch_claim_is_atomic_across_direct_api_processes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    results = tmp_path / "results"
+    results.mkdir()
+    campaign = replace(
+        _campaign(tuple(_workload(index) for index in range(100))),
+        class_study_cohort_sha256="a" * 64,
+        class_study_cohort_assembly_sha256="b" * 64,
+    )
+    _install_preclaim_authority(tmp_path, monkeypatch, campaign)
+    read_gate, write_gate = os.pipe()
+    children: list[int] = []
+    outputs: list[Path] = []
+    for index in range(2):
+        output = tmp_path / f"claim-child-{index}.json"
+        outputs.append(output)
+        pid = os.fork()
+        if pid == 0:  # pragma: no branch - each child exits below.
+            try:
+                os.close(write_gate)
+                os.read(read_gate, 1)
+                started = datetime(2026, 8, 28, 0, 0, index, tzinfo=UTC)
+                root, run_id, marker = orchestrator._claim_class_study_launch(
+                    campaign,
+                    results_root=results,
+                    source=_SOURCE,
+                    started_at=started,
+                )
+                output.write_text(
+                    json.dumps(
+                        {
+                            "root": str(root),
+                            "run_id": run_id,
+                            "marker": str(marker),
+                        },
+                        sort_keys=True,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+            except BaseException as error:  # pragma: no cover - parent reports it.
+                output.write_text(
+                    json.dumps({"error": f"{type(error).__name__}: {error}"}) + "\n",
+                    encoding="utf-8",
+                )
+                os._exit(1)
+            os._exit(0)
+        children.append(pid)
+    os.close(read_gate)
+    os.write(write_gate, b"12")
+    os.close(write_gate)
+    statuses = [os.waitpid(pid, 0)[1] for pid in children]
+
+    assert statuses == [0, 0]
+    records = [json.loads(path.read_text(encoding="utf-8")) for path in outputs]
+    assert len({record["root"] for record in records}) == 1
+    assert len({record["run_id"] for record in records}) == 1
+    assert len({record["marker"] for record in records}) == 1
+    registry = results / f".{STUDY_ID}-launches"
+    assert stat.S_IMODE(registry.stat().st_mode) == 0o700
+    assert len(tuple(registry.glob("*.json"))) == 1
+
+
+def test_frozen_class_launch_validation_keeps_its_historical_results_ancestor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    results = tmp_path / "results"
+    results.mkdir()
+    campaign = replace(
+        _campaign(tuple(_workload(index) for index in range(100))),
+        class_study_cohort_sha256="a" * 64,
+        class_study_cohort_assembly_sha256="b" * 64,
+    )
+    _install_preclaim_authority(tmp_path, monkeypatch, campaign)
+    root, _run_id, marker = orchestrator._claim_class_study_launch(
+        campaign,
+        results_root=results,
+        source=_SOURCE,
+        started_at=datetime(2026, 8, 28, tzinfo=UTC),
+    )
+    inputs = root / "inputs"
+    inputs.mkdir(parents=True)
+    (inputs / "source.json").write_text(
+        json.dumps(_SOURCE, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    frozen = root / orchestrator.CLASS_STUDY_LAUNCH_INPUT
+    frozen.write_bytes(marker.read_bytes())
+
+    expected = sha256_file(frozen)
+    assert orchestrator._validate_class_study_launch(root, campaign) == expected
+    monkeypatch.setattr(util, "LAB_ROOT", tmp_path / "different-live-checkout")
+    assert orchestrator._validate_class_study_launch(root, campaign) == expected
+
+
 @pytest.mark.parametrize("successor", (False, True))
-@pytest.mark.parametrize("mutation", ("missing", "mismatch", "symlink"))
+@pytest.mark.parametrize(
+    "mutation",
+    ("missing", "mismatch", "symlink", "registry-symlink"),
+)
 def test_downstream_launch_validation_requires_exact_global_registry_marker(
     tmp_path: Path,
     successor: bool,
@@ -1373,37 +1698,50 @@ def test_downstream_launch_validation_requires_exact_global_registry_marker(
     marker.write_text(encoded, encoding="utf-8")
 
     assert orchestrator._validate_class_study_launch(root, campaign) == sha256_file(frozen)
-    marker.unlink()
-    if mutation == "mismatch":
-        marker.write_text("{}\n", encoding="utf-8")
-    elif mutation == "symlink":
-        marker.symlink_to(frozen)
+    if mutation == "registry-symlink":
+        foreign = tmp_path / "foreign-launch-registry"
+        registry.rename(foreign)
+        registry.symlink_to(foreign, target_is_directory=True)
+    else:
+        marker.unlink()
+        if mutation == "mismatch":
+            marker.write_text("{}\n", encoding="utf-8")
+        elif mutation == "symlink":
+            marker.symlink_to(frozen)
 
-    with pytest.raises(ValueError, match="global first-launch claim differs"):
+    with pytest.raises(
+        ValueError,
+        match="launch registry is not a regular directory|global first-launch claim differs",
+    ):
         orchestrator._validate_class_study_launch(root, campaign)
 
 
 @pytest.mark.parametrize(
-    "role",
+    ("role", "campaign_name"),
     (
-        "pilot-fitting",
-        "pilot-compatibility",
-        "authoritative-fitting",
-        "certification",
-        "canary",
-        "formal",
+        ("pilot-fitting", f"{STUDY_ID}-pilot-fitting-1200"),
+        (
+            "pilot-compatibility",
+            f"{STUDY_ID}-pilot-compatibility-1080-1200",
+        ),
+        ("authoritative-fitting", f"{STUDY_ID}-authoritative-fitting-1200"),
+        ("certification", f"{STUDY_ID}-certification-900-1200"),
+        ("canary", f"{STUDY_ID}-canary-01-1200"),
+        ("formal", f"{STUDY_ID}-formal-01-1200"),
     ),
 )
 def test_every_class_role_requires_foundation_before_global_claim(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     role: str,
+    campaign_name: str,
 ) -> None:
+    monkeypatch.setattr(util, "LAB_ROOT", tmp_path)
     results = tmp_path / "results"
     results.mkdir()
     campaign = replace(
         _campaign(tuple(_workload(index) for index in range(100))),
-        name=f"classifier-multiorigin100-v1-{role}-preclaim",
+        name=campaign_name,
         evidence_role=role,
         class_study_cohort_sha256="a" * 64,
         class_study_cohort_assembly_sha256="b" * 64,
@@ -1741,14 +2079,14 @@ def test_preclaim_file_revalidation_rejects_parameter_and_manifest_races(
         (
             "qcsd-class-study-research-defense-bundle",
             {
-                "study_id": "classifier-multiorigin100-v2-other",
+                "study_id": "classifier-multiorigin100-v2-g01-abcdef123456",
                 "class_study_successor_sha256": "a" * 64,
             },
         ),
         (
             "qcsd-class-study-research-defense-bundle",
             {
-                "study_id": "classifier-multiorigin100-v2-active",
+                "study_id": "classifier-multiorigin100-v2-g01-0123456789ab",
                 "class_study_successor_sha256": "b" * 64,
             },
         ),
@@ -1795,7 +2133,7 @@ def test_successor_runtime_revalidation_requires_exact_fitting_identity(
         _campaign((workload,)),
         workloads=(workload,),
         defenses=(defense,),
-        class_study_id="classifier-multiorigin100-v2-active",
+        class_study_id="classifier-multiorigin100-v2-g01-0123456789ab",
         class_study_successor_sha256="a" * 64,
     )
 
@@ -1813,6 +2151,7 @@ def test_successor_preclaim_rejects_wrong_restart_before_global_claim(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(util, "LAB_ROOT", tmp_path)
     results = tmp_path / "results"
     results.mkdir()
     parameter = tmp_path / "traffic-morphing.json"
@@ -1824,7 +2163,7 @@ def test_successor_preclaim_rejects_wrong_restart_before_global_claim(
             {
                 "artifact_type": "qcsd-class-study-research-defense-bundle",
                 "source_result": {
-                    "study_id": "classifier-multiorigin100-v2-active",
+                    "study_id": "classifier-multiorigin100-v2-g01-0123456789ab",
                     "class_study_successor_sha256": "b" * 64,
                 },
             },
@@ -1851,11 +2190,16 @@ def test_successor_preclaim_rejects_wrong_restart_before_global_claim(
     )
     campaign = replace(
         _campaign((workload,)),
+        name="classifier-multiorigin100-v2-g01-0123456789ab-formal-01-1200",
         workloads=(workload,),
         defenses=(defense,),
-        class_study_id="classifier-multiorigin100-v2-active",
+        class_study_id="classifier-multiorigin100-v2-g01-0123456789ab",
+        class_study_cohort_sha256="c" * 64,
+        class_study_cohort_assembly_sha256="d" * 64,
         class_study_successor_sha256="a" * 64,
-        class_study_launch_namespace=".classifier-multiorigin100-v2-active-launches",
+        class_study_launch_namespace=(
+            ".classifier-multiorigin100-v2-g01-0123456789ab-launches"
+        ),
     )
     monkeypatch.setattr(
         orchestrator,
@@ -2028,7 +2372,9 @@ def test_successor_resume_rejects_wrong_fitting_lineage_before_temp_cleanup(
     inputs = root / "inputs"
     inputs.mkdir(parents=True)
     (root / "experiment.json").write_text(
-        json.dumps({"name": "classifier-multiorigin100-v2-active-formal-01-1200"})
+        json.dumps(
+            {"name": "classifier-multiorigin100-v2-g01-0123456789ab-formal-01-1200"}
+        )
         + "\n",
         encoding="utf-8",
     )
@@ -2071,6 +2417,20 @@ def test_class_capture_requires_public_origin_policy_in_direct_api(
         orchestrator._require_class_study_public_origin_policy(campaign)
     monkeypatch.setenv("QCSD_PUBLIC_ORIGIN_ONLY", "1")
     orchestrator._require_class_study_public_origin_policy(campaign)
+
+
+def test_successor_durable_campaign_recognition_uses_the_exact_generated_name() -> None:
+    successor = "classifier-multiorigin100-v2-g01-0123456789ab"
+    assert orchestrator._has_durable_attempt_name(
+        f"{successor}-formal-01-1200"
+    )
+    for malformed in (
+        "classifier-multiorigin100-v2-0123456789ab-formal-01-1200",
+        "classifier-multiorigin100-v2-g00-0123456789ab-formal-01-1200",
+        f"{successor}-formal-11-1200",
+        f"{successor}-formal-01-1200-extra",
+    ):
+        assert not orchestrator._has_durable_attempt_name(malformed)
 
 
 def test_fresh_schema_two_campaign_requires_canonical_unsymlinked_path(

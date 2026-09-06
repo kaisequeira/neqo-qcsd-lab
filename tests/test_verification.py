@@ -103,6 +103,96 @@ def _write_failure_receipt(path: Path, failure: dict) -> None:
     atomic_json(path / "failure.json", failure)
 
 
+def test_generated_successor_create_checkpoint_seal_and_verify_is_durable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        verification,
+        "_validate_frozen_contract",
+        lambda *_args, **_kwargs: None,
+    )
+    study_id = "classifier-multiorigin100-v2-g01-0123456789ab"
+    name = f"{study_id}-formal-01-1200"
+    root = tmp_path / "results" / name / "run-001"
+    inputs = root / "inputs"
+    inputs.mkdir(parents=True)
+    campaign = inputs / "campaign.yml"
+    atomic_text(campaign, "schema: 2\n")
+    configuration = {
+        "campaign_sha256": sha256_file(campaign),
+        "profile": "research-1200",
+        "request_policies": ["as-defined"],
+        "workloads": [{"id": "site", "sha256": "b" * 64}],
+        "defenses": [{"name": "undefended", "kind": "none"}],
+        "limits": {"max_attempts": 3},
+        "evidence_role": "formal",
+        "class_study_cohort_sha256": "c" * 64,
+        "class_study_cohort_assembly_sha256": "d" * 64,
+        "class_study_id": study_id,
+        "class_study_launch_sha256": "e" * 64,
+        "class_study_foundation_sha256": "f" * 64,
+        "class_study_successor_sha256": "1" * 64,
+        "class_study_readiness_sha256": "2" * 64,
+        "class_study_historical_pre_snapshot_sha256": "3" * 64,
+        "public_origin_policy": {
+            "environment": "QCSD_PUBLIC_ORIGIN_ONLY",
+            "required_value": "1",
+            "resolution": "resolve-once-reject-any-non-public-connect-exact-address",
+        },
+    }
+    planned = {
+        "sample_id": "site-as-defined-000-undefended",
+        "workload_id": "site",
+        "request_policy": "as-defined",
+        "visit": 0,
+        "defense": "undefended",
+        "runtime_kind": "none",
+        "baseline": True,
+        "seed": 41,
+        "path": "samples/site/as-defined/visit-000/undefended",
+    }
+    experiment = initialize_experiment(
+        root,
+        name=name,
+        purpose="evaluation",
+        run_id="run-001",
+        source={"lab_commit": "a" * 40},
+        configuration=configuration,
+        samples=[planned],
+        started_at="2026-09-06T00:00:00+00:00",
+    )
+    transition_sample(experiment, planned["sample_id"], "running", increment_attempt=True)
+    failure = {"stage": "collection", "type": "UnexpectedFailure"}
+    _write_failure_receipt(
+        root / "failures" / planned["sample_id"] / "attempt-001",
+        failure,
+    )
+    transition_sample(
+        experiment,
+        planned["sample_id"],
+        "failed",
+        failure=failure,
+        eligible=False,
+    )
+    checkpoint_experiment(root, experiment)
+    finalize_experiment(
+        root,
+        experiment,
+        status="incomplete",
+        completed_at="2026-09-06T00:01:00+00:00",
+    )
+
+    seal_result(root)
+    verified = verify_result(root)
+
+    assert verified.experiment["configuration"]["class_study_id"] == study_id
+    assert (
+        f"failures/{planned['sample_id']}/attempt-001/failure.json"
+        in verified.checksums
+    )
+
+
 def test_seal_is_deterministic_and_excludes_rebuildable_derived_files(tmp_path):
     root, _ = _make_result(tmp_path, complete=True)
     atomic_text(root / "derived/report.html", "first report")
@@ -196,9 +286,17 @@ def test_seal_and_verify_enforce_durable_physical_attempt_evidence(
     "terminal_type",
     ["StrictDefenseFidelityFailure", "StrictClientDefenseExecutionFailure"],
 )
+@pytest.mark.parametrize(
+    "study_id",
+    (
+        "classifier-multiorigin100-v1",
+        "classifier-multiorigin100-v2-g01-0123456789ab",
+    ),
+)
 def test_durable_attempt_evidence_requires_exact_contiguous_terminal_receipts(
     tmp_path: Path,
     terminal_type: str,
+    study_id: str,
 ) -> None:
     root = tmp_path / "durable"
     (root / "failures").mkdir(parents=True)
@@ -213,9 +311,9 @@ def test_durable_attempt_evidence_requires_exact_contiguous_terminal_receipts(
         {"success": False, "failure": terminal_failure},
     )
     experiment = {
-        "name": "classifier-multiorigin100-v1-formal-01-1200",
+        "name": f"{study_id}-formal-01-1200",
         "configuration": {
-            "class_study_id": "classifier-multiorigin100-v1",
+            "class_study_id": study_id,
             "limits": {"max_attempts": 3},
         },
         "samples": [

@@ -4,11 +4,22 @@ from copy import deepcopy
 
 import pytest
 
-from qcsd_lab.cdp_targets import CDP_TARGET_INSTRUMENTATION_POLICY
+from qcsd_lab.browser_egress import (
+    NON_REPLAYABLE_EGRESS_POLICY,
+    NON_REPLAYABLE_EGRESS_SCHEMA_VERSION,
+    TARGET_EGRESS_APIS,
+    target_egress_apis,
+)
+from qcsd_lab.cdp_targets import (
+    CDP_TARGET_INSTRUMENTATION_POLICY,
+    EGRESS_PREARM_SUMMARY_SCHEMA_VERSION,
+)
 from qcsd_lab.discovery_evidence import (
     DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION,
     PASSIVE_RENDER_CONTRACT_SHA256,
+    RENDER_OBSERVATION_SCHEMA_VERSION,
     evidence_sha256,
+    validate_render_observation,
     verify_discovery_event_audit,
 )
 
@@ -21,6 +32,91 @@ ROOT = {
     "parent_session_path": None,
     "parent_frame_id": None,
 }
+
+
+def _bootstrap_prearm_summary(
+    *,
+    held: int = 0,
+    released: int = 0,
+    released_after_setup: int = 0,
+) -> dict:
+    """Build a structurally complete shared-worker prearm summary."""
+
+    return {
+        "schema_version": 1,
+        "held_total": held,
+        "released_total": released,
+        "pending_total": held - released,
+        "release_before_setup_envelopes_total": 0,
+        "by_worker_type": {
+            "worker": {
+                "held": 0,
+                "released": 0,
+                "pending": 0,
+                "released_after_setup_envelopes": 0,
+                "owner_target_types": {
+                    "page": 0,
+                    "iframe": 0,
+                    "worker": 0,
+                    "shared_worker": 0,
+                },
+            },
+            "shared_worker": {
+                "held": held,
+                "released": released,
+                "pending": held - released,
+                "released_after_setup_envelopes": released_after_setup,
+                "owner_target_types": {
+                    "page": held,
+                    "iframe": 0,
+                    "worker": 0,
+                    "shared_worker": 0,
+                },
+            },
+        },
+    }
+
+
+def _egress_prearm_summary() -> dict:
+    return {
+        "schema_version": EGRESS_PREARM_SUMMARY_SCHEMA_VERSION,
+        "policy": NON_REPLAYABLE_EGRESS_POLICY,
+        "target_total": 1,
+        "installed_total": 1,
+        "pending_total": 0,
+        "popup_guard_required_total": 1,
+        "popup_guard_installed_total": 1,
+        "by_target_type": {
+            target_type: {
+                "target_count": int(target_type == "page"),
+                "installed_count": int(target_type == "page"),
+                "pending_count": 0,
+                "protected_api_observations": len(target_egress_apis("page"))
+                if target_type == "page"
+                else 0,
+                "unavailable_api_observations": 0,
+                "popup_guard_required_count": int(target_type == "page"),
+                "popup_guard_installed_count": int(target_type == "page"),
+            }
+            for target_type in ("page", "iframe", "worker", "shared_worker")
+        },
+    }
+
+
+def _non_replayable_egress_summary() -> dict:
+    return {
+        "schema_version": NON_REPLAYABLE_EGRESS_SCHEMA_VERSION,
+        "policy": NON_REPLAYABLE_EGRESS_POLICY,
+        "attempt_count": 0,
+        "protected_apis": list(TARGET_EGRESS_APIS),
+        "context_init_script_installed": True,
+        "context_navigation_route_installed": True,
+        "root_page_bound": True,
+        "context_websocket_route_installed": True,
+        "context_service_worker_listener_installed": True,
+        "cdp_tripwires_are_pre_io": False,
+        "packet_level_completeness_claimed": False,
+    }
 
 
 def _source(
@@ -200,7 +296,7 @@ def _audit(events: list[dict]) -> dict:
 def _render_for(audit: dict) -> dict:
     last_event = max(event["monotonic_ms"] for event in audit["events"])
     return {
-        "schema_version": 1,
+        "schema_version": RENDER_OBSERVATION_SCHEMA_VERSION,
         "clock": "monotonic-relative-ms",
         "navigation_started_ms": 0,
         "load_event_ms": last_event,
@@ -209,6 +305,11 @@ def _render_for(audit: dict) -> dict:
         "cutoff_ms": last_event + 13_000,
         "active_request_ids": [],
         "active_request_count": 0,
+        "router_shutdown_ready": True,
+        "bootstrap_prearm_summary": _bootstrap_prearm_summary(),
+        "egress_prearm_summary": _egress_prearm_summary(),
+        "non_replayable_egress_summary": _non_replayable_egress_summary(),
+        "browser_context_service_worker_count": 0,
         "cutoff_reason": "quiescent",
     }
 
@@ -251,6 +352,53 @@ def _root_resource_audit(*extra_events: dict) -> tuple[dict, list[dict]]:
         ),
         [_resource(0, url)],
     )
+
+
+def test_quiescent_render_requires_router_shutdown_readiness() -> None:
+    audit, _resources = _root_resource_audit()
+    render = _render_for(audit)
+    render["router_shutdown_ready"] = False
+
+    with pytest.raises(ValueError, match="premature"):
+        validate_render_observation(render)
+
+
+def test_quiescent_render_requires_terminal_shared_worker_prearm() -> None:
+    audit, _resources = _root_resource_audit()
+    render = _render_for(audit)
+    render["bootstrap_prearm_summary"] = _bootstrap_prearm_summary(held=1)
+
+    with pytest.raises(ValueError, match="valid terminal state"):
+        validate_render_observation(render)
+
+
+def test_quiescent_render_accepts_released_shared_worker_prearm() -> None:
+    audit, _resources = _root_resource_audit()
+    render = _render_for(audit)
+    render["bootstrap_prearm_summary"] = _bootstrap_prearm_summary(
+        held=1,
+        released=1,
+        released_after_setup=1,
+    )
+
+    validate_render_observation(render)
+
+
+def test_hard_cap_render_can_record_an_unready_router_without_active_requests() -> None:
+    audit, _resources = _root_resource_audit()
+    render = _render_for(audit)
+    load = render["load_event_ms"]
+    render.update(
+        {
+            "quiet_started_ms": load + 10_000,
+            "cutoff_ms": load + 30_000,
+            "router_shutdown_ready": False,
+            "bootstrap_prearm_summary": _bootstrap_prearm_summary(held=1),
+            "cutoff_reason": "hard-cap-non-quiescent",
+        }
+    )
+
+    validate_render_observation(render, allow_failure=True)
 
 
 def test_target_replay_requires_exact_parent_route_and_never_reuses_a_route() -> None:

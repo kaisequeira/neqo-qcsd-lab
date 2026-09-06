@@ -40,6 +40,7 @@ from .class_study import (
     STUDY_ID,
     canonical_json_bytes,
     canonical_json_sha256,
+    is_successor_study_id,
     validate_study_receipt,
 )
 from .experiment import resolved_sample_directory
@@ -272,8 +273,7 @@ def validate_class_fitting_result(
     if successor_sha256 is not None:
         if (
             stage != AUTHORITATIVE_STAGE
-            or not isinstance(study_id, str)
-            or not study_id.startswith("classifier-multiorigin100-v2-")
+            or not is_successor_study_id(study_id)
             or not _digest(successor_sha256)
         ):
             raise ValueError("class-study fitting successor identity is invalid")
@@ -1010,8 +1010,7 @@ def require_successor_fitting_identity(
     """Require one fitting artifact to originate from the exact successor restart."""
 
     if (
-        not isinstance(expected_study_id, str)
-        or not expected_study_id.startswith("classifier-multiorigin100-v2-")
+        not is_successor_study_id(expected_study_id)
         or not _digest(expected_restart_sha256)
     ):
         raise ValueError("expected successor fitting authority is invalid")
@@ -1826,8 +1825,7 @@ def _validate_source_result(value: object, stage: str) -> None:
         successor_sha256 = value.get("class_study_successor_sha256")
         if (
             stage != AUTHORITATIVE_STAGE
-            or not isinstance(study_id, str)
-            or not study_id.startswith("classifier-multiorigin100-v2-")
+            or not is_successor_study_id(study_id)
             or not _digest(successor_sha256)
         ):
             raise ValueError("class fitting source-result successor identity is invalid")

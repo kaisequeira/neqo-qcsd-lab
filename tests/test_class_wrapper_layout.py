@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from qcsd_lab import class_layout
+from qcsd_lab import class_attestation, class_layout
 from qcsd_lab.class_layout import class_study_layout
 
 
@@ -423,6 +423,16 @@ def test_prospective_contract_paths_match_the_canonical_layout() -> None:
     )
     assert contract["final_selection"] == (
         "config/class-study/v1/" + class_layout.FINAL_SELECTION_FILENAME
+    )
+
+
+def test_prospective_contract_tracks_current_foundation_gates() -> None:
+    contract = json.loads(
+        (ROOT / "config/class-study/v1/study.json").read_text(encoding="utf-8")
+    )
+
+    assert contract["authority_gates"]["foundation"]["reconstructed_gates"] == list(
+        class_attestation._FOUNDATION_GATES
     )
 
 

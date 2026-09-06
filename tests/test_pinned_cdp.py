@@ -4,12 +4,29 @@ import copy
 import hashlib
 import json
 import subprocess
+import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from qcsd_lab import pinned_cdp
+from qcsd_lab.browser_egress import (
+    BROWSER_EGRESS_DISABLED_BASE_FEATURES,
+    BROWSER_EGRESS_DISABLED_BLINK_FEATURES,
+    BROWSER_EGRESS_PLAYWRIGHT_DISABLED_FEATURES,
+    BROWSER_EGRESS_PLAYWRIGHT_ENABLED_FEATURES,
+    BROWSER_EGRESS_REQUIRED_CHROMIUM_SWITCHES,
+    BROWSER_EGRESS_SUBPROCESS_WRAPPER_ARGUMENT,
+    NON_REPLAYABLE_EGRESS_POLICY,
+    NonReplayableEgressGuard,
+    build_fail_closed_host_resolver_argument,
+    target_egress_apis,
+    validate_browser_egress_command_line,
+)
+from qcsd_lab.cdp_targets import EGRESS_PREARM_SUMMARY_SCHEMA_VERSION
 from qcsd_lab.class_study import bind_receipt, canonical_json_bytes
+from qcsd_lab.playwright_driver import DEFAULT_CONFIGURED_EXECUTABLE
 
 COLLECTION_IMAGE = "sha256:" + "1" * 64
 PREPARE_IMAGE = "sha256:" + "2" * 64
@@ -18,6 +35,90 @@ BUILD_PAYLOAD_SHA256 = "4" * 64
 LAB_COMMIT = "5" * 40
 NEQO_COMMIT = "6" * 40
 EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
+
+
+def _driver_binding() -> dict[str, object]:
+    return copy.deepcopy(pinned_cdp.EXPECTED_PLAYWRIGHT_DRIVER_BINDING)
+
+
+def _browser_egress_command_line_projection() -> dict[str, object]:
+    return validate_browser_egress_command_line(
+        {
+            "arguments": [
+                str(DEFAULT_CONFIGURED_EXECUTABLE),
+                *BROWSER_EGRESS_REQUIRED_CHROMIUM_SWITCHES,
+                BROWSER_EGRESS_SUBPROCESS_WRAPPER_ARGUMENT,
+                "--disable-features="
+                + ",".join(BROWSER_EGRESS_PLAYWRIGHT_DISABLED_FEATURES),
+                "--disable-features=" + ",".join(BROWSER_EGRESS_DISABLED_BASE_FEATURES),
+                "--disable-blink-features="
+                + ",".join(BROWSER_EGRESS_DISABLED_BLINK_FEATURES),
+                "--enable-features="
+                + ",".join(BROWSER_EGRESS_PLAYWRIGHT_ENABLED_FEATURES),
+                build_fail_closed_host_resolver_argument(
+                    approved_origins=pinned_cdp._PINNED_CDP_APPROVED_ORIGINS,
+                    origin_ip_pins=pinned_cdp._PINNED_CDP_ORIGIN_IP_PINS,
+                ),
+            ]
+        }
+    )
+
+
+def _target_activity() -> dict[str, object]:
+    by_target_type: dict[str, object] = {}
+    for target_type in pinned_cdp._TARGET_ACTIVITY_TYPES:
+        attached = 0 if target_type == "page" else 1
+        by_target_type[target_type] = {
+            "total": attached,
+            "max_source_generation": 0 if attached else None,
+            "event_counts": {
+                event: attached if event == "target-attached" else 0
+                for event in pinned_cdp._TARGET_ACTIVITY_EVENTS
+            },
+        }
+    return {
+        "schema_version": pinned_cdp.TARGET_ACTIVITY_SCHEMA_VERSION,
+        "generation": 3,
+        "by_target_type": by_target_type,
+    }
+
+
+def _egress_prearm_summary() -> dict[str, object]:
+    by_type = {}
+    for target_type in ("page", "iframe", "worker", "shared_worker"):
+        by_type[target_type] = {
+            "target_count": 1,
+            "installed_count": 1,
+            "pending_count": 0,
+            "protected_api_observations": len(target_egress_apis(target_type)),
+            "unavailable_api_observations": 0,
+            "popup_guard_required_count": int(target_type in {"page", "iframe"}),
+            "popup_guard_installed_count": int(target_type in {"page", "iframe"}),
+        }
+    return {
+        "schema_version": EGRESS_PREARM_SUMMARY_SCHEMA_VERSION,
+        "policy": NON_REPLAYABLE_EGRESS_POLICY,
+        "target_total": 4,
+        "installed_total": 4,
+        "pending_total": 0,
+        "popup_guard_required_total": 2,
+        "popup_guard_installed_total": 2,
+        "by_target_type": by_type,
+    }
+
+
+def _non_replayable_egress_summary() -> dict[str, object]:
+    guard = NonReplayableEgressGuard()
+    guard.mark_context_guards_installed()
+    guard.bind_root_page(object())
+    return guard.success_summary()
+
+
+def _successful_egress_guard() -> NonReplayableEgressGuard:
+    guard = NonReplayableEgressGuard()
+    guard.mark_context_guards_installed()
+    guard.bind_root_page(object())
+    return guard
 
 
 def _source(image: str) -> dict[str, object]:
@@ -35,29 +136,62 @@ def _source(image: str) -> dict[str, object]:
 
 def _observation(uid: int = 1000, gid: int = 1000) -> dict[str, object]:
     return {
-        "playwright_version": "1.52.0",
-        "chromium_version": "Chromium 136.0.7103.25",
-        "chromium_executable": "/usr/bin/chromium",
+        "playwright_version": "1.57.0",
+        "chromium_version": "143.0.7499.4",
+        "chromium_executable": "/usr/local/bin/qcsd-chromium",
+        "playwright_driver": _driver_binding(),
         "isolation": {
             "real_uid": uid,
             "effective_uid": uid,
+            "saved_uid": uid,
+            "filesystem_uid": uid,
             "real_gid": gid,
             "effective_gid": gid,
+            "saved_gid": gid,
+            "filesystem_gid": gid,
             "expected_uid": uid,
             "expected_gid": gid,
+            "supplementary_groups": [gid],
+            "inheritable_capabilities": "0000000000000000",
+            "permitted_capabilities": "0000000000000000",
             "effective_capabilities": "0000000000000000",
+            "bounding_capabilities": "0000000000000000",
+            "ambient_capabilities": "0000000000000000",
             "no_new_privileges": True,
             "observed_interfaces": ["lo"],
         },
         "topology": {
             "observed_target_types": ["iframe", "page", "shared_worker", "worker"],
             "event_count": 42,
+            "event_method_counts": {
+                "Fetch.requestPaused": 2,
+                "Network.loadingFailed": 0,
+                "Network.loadingFinished": 11,
+                "Network.requestServedFromCache": 0,
+                "Network.requestWillBeSent": 11,
+                "Network.requestWillBeSentExtraInfo": 7,
+                "Network.responseReceived": 11,
+            },
             "cross_site_iframe_request": True,
             "duplicate_request_occurrences": 2,
-            "redirect_terminal_request": True,
+            "redirect_target_request": True,
             "worker_network_target_types": ["shared_worker", "worker"],
-            "worker_fetch_paused_on_page": True,
+            "dedicated_worker_network_request": True,
+            "shared_worker_network_request": True,
+            "dedicated_worker_fetch_paused_on_page": True,
+            "shared_worker_fetch_paused_on_shared_worker": True,
+            "http_status_counts": copy.deepcopy(pinned_cdp._EXPECTED_HTTP_STATUS_COUNTS),
+            "server_request_counts": copy.deepcopy(pinned_cdp._EXPECTED_SERVER_REQUEST_COUNTS),
+            "bootstrap_prearm_summary": copy.deepcopy(
+                pinned_cdp._EXPECTED_PINNED_BOOTSTRAP_PREARM_SUMMARY
+            ),
+            "egress_prearm_summary": _egress_prearm_summary(),
+            "non_replayable_egress_summary": _non_replayable_egress_summary(),
+            "browser_egress_command_line": _browser_egress_command_line_projection(),
+            "browser_context_service_worker_count": 0,
+            "quiescent_target_activity": _target_activity(),
             "router_closed": True,
+            "browser_guard_closed": True,
             "ledger_closed": True,
             "extra_info_closed": True,
             "browser_closed": True,
@@ -95,6 +229,16 @@ def fake_build(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(pinned_cdp, "source_metadata", lambda: _source(PREPARE_IMAGE))
     monkeypatch.setattr(
         pinned_cdp,
+        "validate_default_playwright_driver_once",
+        lambda: {"validated": True},
+    )
+    monkeypatch.setattr(
+        pinned_cdp,
+        "_driver_binding",
+        lambda _receipt: _driver_binding(),
+    )
+    monkeypatch.setattr(
+        pinned_cdp,
         "run_pinned_cdp_probe",
         lambda **_kwargs: _observation(),
     )
@@ -128,6 +272,7 @@ def test_receipt_is_create_only_and_binds_build_source_prepare_image_and_cohort(
     assert validated["prepare_image_digest"] == PREPARE_IMAGE
     assert validated["prepare_source"] == _source(PREPARE_IMAGE)
     assert validated["collection_source"] == _source(COLLECTION_IMAGE)
+    assert validated["observation"]["playwright_driver"] == _driver_binding()
     assert validated["build_execution"] == {
         "path": "/lab/artifacts/buflo-study/build-execution-v59.json",
         "sha256": BUILD_SHA256,
@@ -169,9 +314,15 @@ def test_receipt_is_create_only_and_binds_build_source_prepare_image_and_cohort(
         ),
         (
             lambda payload: payload["observation"]["topology"].update(
-                worker_fetch_paused_on_page=False
+                shared_worker_fetch_paused_on_shared_worker=False
             ),
             "topology evidence",
+        ),
+        (
+            lambda payload: payload["observation"]["playwright_driver"].update(
+                content_sha256="b" * 63
+            ),
+            "Playwright driver evidence",
         ),
         (
             lambda payload: payload.update(probe_contract_sha256="a" * 64),
@@ -264,6 +415,28 @@ def test_validator_rejects_wrong_runtime_role_source(
     )
 
 
+def test_prepare_role_revalidates_playwright_driver_binding(
+    tmp_path: Path,
+    fake_build: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = _create(tmp_path, fake_build)
+    changed_binding = _driver_binding()
+    changed_binding["content_sha256"] = "b" * 64
+    monkeypatch.setattr(
+        pinned_cdp,
+        "_driver_binding",
+        lambda _receipt: changed_binding,
+    )
+
+    with pytest.raises(ValueError, match="differs from the prepare runtime"):
+        pinned_cdp.validate_pinned_cdp_receipt(
+            output,
+            build_execution_receipt=fake_build,
+            runtime_role="prepare",
+        )
+
+
 @pytest.mark.parametrize(
     ("mutation", "message"),
     [
@@ -274,13 +447,21 @@ def test_validator_rejects_wrong_runtime_role_source(
             "isolation evidence",
         ),
         (
-            lambda observation: observation["isolation"].update(
-                no_new_privileges=False
-            ),
+            lambda observation: observation["isolation"].update(no_new_privileges=False),
             "isolation evidence",
         ),
         (
             lambda observation: observation["isolation"].update(effective_uid=0),
+            "isolation evidence",
+        ),
+        (
+            lambda observation: observation["isolation"].update(saved_uid=2000),
+            "isolation evidence",
+        ),
+        (
+            lambda observation: observation["isolation"].update(
+                bounding_capabilities="0000000000000001"
+            ),
             "isolation evidence",
         ),
         (
@@ -292,6 +473,78 @@ def test_validator_rejects_wrong_runtime_role_source(
         (
             lambda observation: observation["topology"].update(router_closed=False),
             "topology evidence",
+        ),
+        (
+            lambda observation: observation["topology"].update(browser_guard_closed=False),
+            "topology evidence",
+        ),
+        (
+            lambda observation: observation["topology"]["http_status_counts"]["/"].update(
+                {"200": 2}
+            ),
+            "topology evidence",
+        ),
+        (
+            lambda observation: observation["topology"]["http_status_counts"]["/"].update(
+                {"200": True}
+            ),
+            "topology evidence",
+        ),
+        (
+            lambda observation: observation["topology"]["server_request_counts"].update({"/": 2}),
+            "topology evidence",
+        ),
+        (
+            lambda observation: observation["topology"]["server_request_counts"].update(
+                {"/": True}
+            ),
+            "topology evidence",
+        ),
+        (
+            lambda observation: observation["topology"]["event_method_counts"].update(
+                {"Network.loadingFailed": 1, "Network.loadingFinished": 10}
+            ),
+            "event-method aggregate",
+        ),
+        (
+            lambda observation: observation["topology"]["bootstrap_prearm_summary"].update(
+                release_before_setup_envelopes_total=1
+            ),
+            "prearm",
+        ),
+        (
+            lambda observation: observation["topology"]["bootstrap_prearm_summary"].update(
+                schema_version=True
+            ),
+            "prearm",
+        ),
+        (
+            lambda observation: observation["topology"]["quiescent_target_activity"].update(
+                generation=4
+            ),
+            "target-activity generation",
+        ),
+        (
+            lambda observation: observation["topology"]["quiescent_target_activity"].update(
+                schema_version=True
+            ),
+            "target-activity aggregate",
+        ),
+        (
+            lambda observation: observation["topology"]["quiescent_target_activity"][
+                "by_target_type"
+            ]["iframe"]["event_counts"].update({"target-attached": 0, "target-info-changed": 1}),
+            "topology evidence",
+        ),
+        (
+            lambda observation: observation["playwright_driver"]["policy"].update(
+                activation_value="0"
+            ),
+            "Playwright driver evidence",
+        ),
+        (
+            lambda observation: observation["playwright_driver"].update(receipt_sha256="b" * 64),
+            "Playwright driver evidence",
         ),
         (
             lambda observation: observation.update(playwright_version="1.53.0"),
@@ -317,15 +570,227 @@ def test_required_topology_wait_condition_is_event_driven() -> None:
         ("page", "Network.requestWillBeSent", "http://a.test/duplicate"),
         ("page", "Network.requestWillBeSent", "http://a.test/duplicate"),
         ("page", "Network.requestWillBeSent", "http://a.test/redirected"),
-        ("worker", "Network.requestWillBeSent", "http://a.test/worker-data"),
-        ("shared_worker", "Network.requestWillBeSent", "http://a.test/worker-data"),
-        ("page", "Fetch.requestPaused", "http://a.test/worker-data"),
+        ("worker", "Network.requestWillBeSent", "http://a.test/dedicated-data"),
+        (
+            "shared_worker",
+            "Network.requestWillBeSent",
+            "http://a.test/shared-data",
+        ),
+        ("page", "Fetch.requestPaused", "http://a.test/dedicated-data"),
+        ("shared_worker", "Fetch.requestPaused", "http://a.test/shared-data"),
     ]
 
     assert pinned_cdp._required_event_topology_observed(events) is True
     assert pinned_cdp._required_event_topology_observed(events[:-1]) is False
+    assert pinned_cdp._event_topology(events) == {
+        "observed_target_types": ["iframe", "page", "shared_worker", "worker"],
+        "event_count": 9,
+        "event_method_counts": {
+            "Fetch.requestPaused": 2,
+            "Network.loadingFailed": 0,
+            "Network.loadingFinished": 0,
+            "Network.requestServedFromCache": 0,
+            "Network.requestWillBeSent": 7,
+            "Network.requestWillBeSentExtraInfo": 0,
+            "Network.responseReceived": 0,
+        },
+        "cross_site_iframe_request": True,
+        "duplicate_request_occurrences": 2,
+        "redirect_target_request": True,
+        "worker_network_target_types": ["shared_worker", "worker"],
+        "dedicated_worker_network_request": True,
+        "shared_worker_network_request": True,
+        "dedicated_worker_fetch_paused_on_page": True,
+        "shared_worker_fetch_paused_on_shared_worker": True,
+    }
+    assert pinned_cdp.PROBE_SCHEMA_VERSION == 8
+    assert pinned_cdp.PROBE_CONTRACT["schema_version"] == 8
+    assert pinned_cdp.PROBE_CONTRACT["policy"] == (
+        "pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v8"
+    )
+    assert pinned_cdp.PROBE_CONTRACT["instrumentation_policy"] == (
+        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v10"
+    )
+    assert pinned_cdp.PROBE_CONTRACT["chromium_version"] == "143.0.7499.4"
+    assert pinned_cdp.PROBE_CONTRACT["chromium_executable"] == ("/usr/local/bin/qcsd-chromium")
     assert pinned_cdp.PROBE_CONTRACT["observation_timeout_ms"] == 10_000
     assert pinned_cdp.PROBE_CONTRACT["required_quiet_interval_ms"] == 250
+    assert pinned_cdp.PROBE_CONTRACT["target_activity_schema_version"] == 1
+    assert pinned_cdp.PROBE_CONTRACT["playwright_driver_binding"] == (
+        pinned_cdp.EXPECTED_PLAYWRIGHT_DRIVER_BINDING
+    )
+
+
+def test_target_only_activity_resets_probe_quiescence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events = [
+        ("page", "Network.requestWillBeSent", "http://a.test/"),
+        ("iframe", "Network.requestWillBeSent", "http://b.test/frame-data"),
+        ("page", "Network.requestWillBeSent", "http://a.test/duplicate"),
+        ("page", "Network.requestWillBeSent", "http://a.test/duplicate"),
+        ("page", "Network.requestWillBeSent", "http://a.test/redirected"),
+        ("worker", "Network.requestWillBeSent", "http://a.test/dedicated-data"),
+        ("shared_worker", "Network.requestWillBeSent", "http://a.test/shared-data"),
+        ("page", "Fetch.requestPaused", "http://a.test/dedicated-data"),
+        ("shared_worker", "Fetch.requestPaused", "http://a.test/shared-data"),
+    ]
+    activity = pinned_cdp._TargetActivityLedger()
+    for target_type in ("iframe", "shared_worker", "worker"):
+        activity.record(
+            SimpleNamespace(target_type=target_type, generation=0),
+            "target-attached",
+        )
+
+    class Router:
+        active_request_identities: tuple[object, ...] = ()
+        shutdown_ready = True
+
+        def raise_if_failed(self) -> None:
+            return None
+
+    clock = [0.0]
+
+    class Page:
+        waits = 0
+
+        def wait_for_timeout(self, milliseconds: int) -> None:
+            assert milliseconds == 25
+            self.waits += 1
+            clock[0] += milliseconds / 1_000
+            if self.waits == 6:
+                activity.record(
+                    SimpleNamespace(target_type="worker", generation=0),
+                    "target-info-changed",
+                )
+
+    monkeypatch.setattr(pinned_cdp.time, "monotonic", lambda: clock[0])
+    page = Page()
+    generation = pinned_cdp._wait_for_required_observations(
+        page,
+        Router(),
+        events,
+        activity,
+        _successful_egress_guard(),
+        deadline=2.0,
+    )
+
+    assert generation == 4
+    assert page.waits >= 17
+    assert clock[0] >= 0.425
+    assert activity.snapshot()["by_target_type"]["worker"] == {
+        "total": 2,
+        "max_source_generation": 0,
+        "event_counts": {
+            "target-attached": 1,
+            "target-info-changed": 1,
+            "target-detached": 0,
+            "target-destroyed": 0,
+        },
+    }
+
+
+def test_http_status_aggregate_records_redirect_and_terminal_responses() -> None:
+    counts = {}
+    pinned_cdp._record_http_status(
+        counts,
+        {"url": "http://a.test:123/redirect", "status": 302.0},
+    )
+    pinned_cdp._record_http_status(
+        counts,
+        {"url": "http://a.test:123/redirected", "status": 200},
+    )
+    pinned_cdp._record_http_status(
+        counts,
+        {"url": "data:,", "status": 200},
+    )
+    assert {path: dict(value) for path, value in counts.items()} == {
+        "/redirect": {"302": 1},
+        "/redirected": {"200": 1},
+    }
+
+    with pytest.raises(ValueError, match="status is malformed"):
+        pinned_cdp._record_http_status(
+            counts,
+            {"url": "http://a.test:123/", "status": True},
+        )
+
+
+def test_page_load_wait_surfaces_router_failure_before_waiting() -> None:
+    class FailedRouter:
+        def raise_if_failed(self) -> None:
+            raise RuntimeError("instrumentation failed")
+
+    class Page:
+        def wait_for_timeout(self, _milliseconds: int) -> None:
+            pytest.fail("page wait ran after the router had already failed")
+
+    with pytest.raises(RuntimeError, match="instrumentation failed"):
+        pinned_cdp._wait_for_page_load(
+            Page(),
+            FailedRouter(),
+            [False],
+            _successful_egress_guard(),
+            deadline=time.monotonic() + 1,
+        )
+
+
+def test_page_load_wait_pumps_until_real_load_event() -> None:
+    load_seen = [False]
+
+    class Router:
+        checks = 0
+
+        def raise_if_failed(self) -> None:
+            self.checks += 1
+
+    class Page:
+        waits = 0
+
+        def wait_for_timeout(self, milliseconds: int) -> None:
+            assert milliseconds == 25
+            self.waits += 1
+            load_seen[0] = True
+
+    router = Router()
+    page = Page()
+    pinned_cdp._wait_for_page_load(
+        page,
+        router,
+        load_seen,
+        _successful_egress_guard(),
+        deadline=time.monotonic() + 1,
+    )
+    assert router.checks == 2
+    assert page.waits == 1
+
+
+def test_probe_delegates_executable_selection_to_pinned_path_helper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pinned_cdp, "_observe_isolation", lambda **_kwargs: {})
+    monkeypatch.setattr(
+        pinned_cdp,
+        "validate_default_playwright_driver_once",
+        dict,
+    )
+    monkeypatch.setattr(
+        pinned_cdp.importlib.metadata,
+        "version",
+        lambda _package: pinned_cdp.EXPECTED_PLAYWRIGHT_VERSION,
+    )
+
+    def reject_override() -> str:
+        raise ValueError("non-default executable override")
+
+    monkeypatch.setattr(
+        pinned_cdp,
+        "pinned_chromium_executable_path",
+        reject_override,
+    )
+
+    with pytest.raises(ValueError, match="non-default executable override"):
+        pinned_cdp.run_pinned_cdp_probe(expected_uid=1000, expected_gid=1000)
 
 
 def test_main_fails_closed_without_wrapper_identity_environment(
@@ -426,20 +891,18 @@ def test_launcher_rejects_malformed_requests_before_docker() -> None:
 def test_launcher_pinned_probe_is_receipt_bound_and_least_privilege() -> None:
     launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
     assert (
-        "artifacts/buflo-study/"
-        "pinned-cdp-execution-v${pinned_cdp_cohort_version}.json"
+        "artifacts/buflo-study/pinned-cdp-execution-v${pinned_cdp_cohort_version}.json"
     ) in launcher
     assert 'network_mode="none"' in launcher
     assert 'runtime+=(--user "$(id -u):$(id -g)" --cap-drop ALL)' in launcher
-    assert '--entrypoint /usr/bin/tini' in launcher
-    assert '/usr/bin/timeout --signal=TERM --kill-after=10s 120s' in launcher
+    assert "--entrypoint /usr/bin/tini" in launcher
+    assert "/usr/bin/timeout --signal=TERM --kill-after=10s 120s" in launcher
     assert "/opt/qcsd-venv/bin/python3 -m qcsd_lab.pinned_cdp" in launcher
     assert 'verify_qualification_checkout "test pinned-cdp"' in launcher
     assert '--expected-cohort "${pinned_cdp_cohort_version}"' in launcher
     assert "--build-execution-receipt|--pinned-cdp-receipt|--reference-receipt" in launcher
     assert (
-        '"${pinned_cdp_destination_parent}:'
-        '${pinned_cdp_destination_parent_container}:rw"'
+        '"${pinned_cdp_destination_parent}:${pinned_cdp_destination_parent_container}:rw"'
     ) in launcher
     assert '"${pinned_cdp_existing_child}:${pinned_cdp_existing_container}:ro"' in launcher
     assert "pinned_cdp_build_overlay" in launcher

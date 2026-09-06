@@ -16,12 +16,17 @@ from .util import SOURCE_METADATA_KEYS, sha256_file
 
 
 RUNTIME_RECEIPT_TYPE = "qcsd-python-runtime-implementation"
-RUNTIME_RECEIPT_DOMAIN = "qcsd-python-runtime-implementation-v1"
-RUNTIME_RECEIPT_SCHEMA_VERSION = 1
+LEGACY_RUNTIME_RECEIPT_DOMAIN = "qcsd-python-runtime-implementation-v1"
+LEGACY_RUNTIME_RECEIPT_SCHEMA_VERSION = 1
+RUNTIME_RECEIPT_DOMAIN = "qcsd-python-runtime-implementation-v2"
+RUNTIME_RECEIPT_SCHEMA_VERSION = 2
 DEFAULT_RUNTIME_RECEIPT = Path(
     "/usr/share/qcsd-lab/python-runtime-implementation.json"
 )
 DEFAULT_CATALOGUE_TOOL = Path("/usr/local/bin/qcsd-build-class-catalogue")
+DEFAULT_BROWSER_EGRESS_TOOL = Path(
+    "/usr/local/bin/qcsd-browser-egress-qualification"
+)
 DEFAULT_ENTRYPOINT = Path("/usr/local/bin/qcsd-lab-internal")
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 _COMMIT = re.compile(r"[0-9a-f]{40}\Z")
@@ -29,6 +34,10 @@ _IMAGE_DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
 _MODULE_PREFIX = "src/qcsd_lab/"
 _CATALOGUE_TOOL_SOURCE = "tools/build_class_catalogue.py"
+_BROWSER_EGRESS_TOOL_SOURCE = "tools/browser_egress_qualification.py"
+_REQUIRED_TOOL_SOURCES = frozenset(
+    {_CATALOGUE_TOOL_SOURCE, _BROWSER_EGRESS_TOOL_SOURCE}
+)
 _REQUIRED_CLASS_MODULES = {
     f"{_MODULE_PREFIX}{name}.py"
     for name in (
@@ -65,9 +74,10 @@ def build_runtime_receipt(
     destination: Path = DEFAULT_RUNTIME_RECEIPT,
     *,
     catalogue_tool: Path = DEFAULT_CATALOGUE_TOOL,
+    browser_egress_tool: Path = DEFAULT_BROWSER_EGRESS_TOOL,
     entrypoint: Path = DEFAULT_ENTRYPOINT,
 ) -> dict[str, Any]:
-    """Bind every packaged module and standalone catalogue tool to source bytes."""
+    """Bind every packaged module and standalone runtime tool to source bytes."""
 
     source_files = _source_file_manifest(source_manifest_path)
     source = _source_metadata(source_metadata_path)
@@ -94,9 +104,22 @@ def build_runtime_receipt(
         or not installed_modules
     ):
         raise ValueError("installed Python module inventory is incomplete")
-    tool_sha256 = _regular_executable_sha256(catalogue_tool, "class catalogue tool")
-    if tool_sha256 != source_files.get(_CATALOGUE_TOOL_SOURCE):
-        raise ValueError("installed class catalogue tool differs from source")
+    installed_tools: dict[str, dict[str, str]] = {}
+    for source_path, installed_path, label in (
+        (_CATALOGUE_TOOL_SOURCE, catalogue_tool, "class catalogue tool"),
+        (
+            _BROWSER_EGRESS_TOOL_SOURCE,
+            browser_egress_tool,
+            "browser-egress qualification tool",
+        ),
+    ):
+        tool_sha256 = _regular_executable_sha256(installed_path, label)
+        if tool_sha256 != source_files.get(source_path):
+            raise ValueError(f"installed {label} differs from source")
+        installed_tools[source_path] = {
+            "path": str(installed_path),
+            "sha256": tool_sha256,
+        }
     receipt: dict[str, Any] = {
         "schema_version": RUNTIME_RECEIPT_SCHEMA_VERSION,
         "artifact_type": RUNTIME_RECEIPT_TYPE,
@@ -104,12 +127,7 @@ def build_runtime_receipt(
         "source": source,
         "source_files": source_files,
         "installed_modules": installed_modules,
-        "installed_tools": {
-            _CATALOGUE_TOOL_SOURCE: {
-                "path": str(catalogue_tool),
-                "sha256": tool_sha256,
-            }
-        },
+        "installed_tools": installed_tools,
         "installed_entrypoint": {
             "path": str(entrypoint),
             "sha256": _regular_executable_sha256(
@@ -117,18 +135,26 @@ def build_runtime_receipt(
             ),
         },
     }
-    receipt["payload_sha256"] = _payload_sha256(receipt)
+    receipt["payload_sha256"] = _payload_sha256(
+        receipt, domain=RUNTIME_RECEIPT_DOMAIN
+    )
     encoded = (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode()
     output = Path(destination)
     if output.is_symlink():
         raise ValueError("Python runtime receipt destination cannot be a symlink")
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_bytes(encoded)
-    validate_runtime_receipt(output)
+    validate_runtime_receipt(
+        output, required_schema_version=RUNTIME_RECEIPT_SCHEMA_VERSION
+    )
     return receipt
 
 
-def validate_runtime_receipt(path: Path = DEFAULT_RUNTIME_RECEIPT) -> dict[str, Any]:
+def validate_runtime_receipt(
+    path: Path = DEFAULT_RUNTIME_RECEIPT,
+    *,
+    required_schema_version: int | None = None,
+) -> dict[str, Any]:
     """Re-hash every installed byte named by one runtime receipt."""
 
     receipt_path = Path(path)
@@ -138,16 +164,33 @@ def validate_runtime_receipt(path: Path = DEFAULT_RUNTIME_RECEIPT) -> dict[str, 
         value = json.loads(receipt_path.read_text(encoding="utf-8"))
     except (OSError, ValueError, TypeError) as error:
         raise ValueError("Python runtime implementation receipt is invalid") from error
+    schema_version = value.get("schema_version") if isinstance(value, Mapping) else None
+    if type(schema_version) is not int:
+        raise ValueError("Python runtime implementation receipt identity is invalid")
+    if schema_version == RUNTIME_RECEIPT_SCHEMA_VERSION:
+        expected_domain = RUNTIME_RECEIPT_DOMAIN
+        required_tool_sources = _REQUIRED_TOOL_SOURCES
+    elif schema_version == LEGACY_RUNTIME_RECEIPT_SCHEMA_VERSION:
+        expected_domain = LEGACY_RUNTIME_RECEIPT_DOMAIN
+        required_tool_sources = frozenset({_CATALOGUE_TOOL_SOURCE})
+    else:
+        raise ValueError("Python runtime implementation receipt identity is invalid")
     if (
         not isinstance(value, Mapping)
         or set(value) != _RECEIPT_KEYS
-        or value.get("schema_version") != RUNTIME_RECEIPT_SCHEMA_VERSION
         or value.get("artifact_type") != RUNTIME_RECEIPT_TYPE
-        or value.get("domain") != RUNTIME_RECEIPT_DOMAIN
-        or value.get("payload_sha256") != _payload_sha256(value)
+        or value.get("domain") != expected_domain
+        or value.get("payload_sha256")
+        != _payload_sha256(value, domain=expected_domain)
+        or (
+            required_schema_version is not None
+            and schema_version != required_schema_version
+        )
     ):
         raise ValueError("Python runtime implementation receipt identity is invalid")
-    source_files = _source_files(value.get("source_files"))
+    source_files = _source_files(
+        value.get("source_files"), required_tool_sources=required_tool_sources
+    )
     _validate_source(value.get("source"))
     expected_modules = {
         source for source in source_files if source.startswith(_MODULE_PREFIX)
@@ -161,7 +204,7 @@ def validate_runtime_receipt(path: Path = DEFAULT_RUNTIME_RECEIPT) -> dict[str, 
     )
     tools = _installed_records(
         value.get("installed_tools"),
-        expected={_CATALOGUE_TOOL_SOURCE},
+        expected=set(required_tool_sources),
         label="installed Python tool",
     )
     entrypoint = _installed_record(
@@ -192,7 +235,11 @@ def _source_file_manifest(path: Path) -> dict[str, str]:
     return _source_files(value)
 
 
-def _source_files(value: object) -> dict[str, str]:
+def _source_files(
+    value: object,
+    *,
+    required_tool_sources: frozenset[str] = _REQUIRED_TOOL_SOURCES,
+) -> dict[str, str]:
     if not isinstance(value, Mapping) or not value:
         raise ValueError("Python runtime source-file inventory is invalid")
     files = dict(value)
@@ -201,7 +248,7 @@ def _source_files(value: object) -> dict[str, str]:
         "Dockerfile",
         "pyproject.toml",
         "uv.lock",
-        _CATALOGUE_TOOL_SOURCE,
+        *required_tool_sources,
         *_REQUIRED_CLASS_MODULES,
     }
     modules = {path for path in files if path.startswith(_MODULE_PREFIX)}
@@ -334,10 +381,10 @@ def _installed_module_inventory(root: Path) -> set[str]:
     return modules
 
 
-def _payload_sha256(value: Mapping[str, Any]) -> str:
+def _payload_sha256(value: Mapping[str, Any], *, domain: str) -> str:
     payload = {key: item for key, item in value.items() if key != "payload_sha256"}
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-    return hashlib.sha256(RUNTIME_RECEIPT_DOMAIN.encode() + b"\0" + encoded).hexdigest()
+    return hashlib.sha256(domain.encode() + b"\0" + encoded).hexdigest()
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -357,7 +404,10 @@ def main(argv: Sequence[str] | None = None) -> None:
             arguments.destination,
         )
     else:
-        validate_runtime_receipt(arguments.receipt)
+        validate_runtime_receipt(
+            arguments.receipt,
+            required_schema_version=RUNTIME_RECEIPT_SCHEMA_VERSION,
+        )
 
 
 if __name__ == "__main__":  # pragma: no cover - exercised in image builds.

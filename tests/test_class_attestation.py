@@ -76,6 +76,36 @@ def _source(*, dirty: bool = False) -> dict[str, Any]:
     }
 
 
+def _browser_egress_result(root: Path, build: dict[str, Any]) -> dict[str, Any]:
+    root.mkdir(exist_ok=True)
+    final = root / "final.json"
+    final.write_text("{}\n", encoding="utf-8")
+    images = build["images"]
+    return {
+        "path": str(final.absolute()),
+        "sha256": sha256_file(final),
+        "payload_sha256": _digest("a"),
+        "qualification_id": attestation.BROWSER_EGRESS_QUALIFICATION_ID,
+        "cohort_version": 23,
+        "qualification_started_at": "2026-08-28T01:10:00+00:00",
+        "qualification_finished_at": "2026-08-28T01:20:00+00:00",
+        "recorded_at": "2026-08-28T01:30:00+00:00",
+        "prepare_image_id": images["prepare"]["id"],
+        "build_execution": {
+            "path": str(Path(build["path"]).absolute()),
+            "sha256": build["sha256"],
+            "payload_sha256": build["payload_sha256"],
+            "cohort_version": 23,
+            "collection_image_id": images["collection"]["id"],
+            "prepare_image_id": images["prepare"]["id"],
+            "reference_image_id": images["reference"]["id"],
+        },
+        "expanded_vectors_sha256": attestation.browser_egress_vectors_sha256(),
+        "passed_vector_count": attestation.BROWSER_EGRESS_VECTOR_COUNT,
+        "passed": True,
+    }
+
+
 def test_qualification_authority_derives_prepare_identity_from_exact_foundation_build(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -406,6 +436,26 @@ def test_immutable_source_gate_rejects_dirty_or_unpinned_source() -> None:
         attestation._validate_immutable_source(unpinned, label="test")
 
 
+@pytest.mark.parametrize(
+    "field",
+    (
+        "acquisition_schema_version",
+        "completion_schema_version",
+        "checkpoint_schema_version",
+    ),
+)
+def test_readiness_current_acquisition_schema_gate_rejects_bool_alias(field: str) -> None:
+    identity = {
+        "acquisition_schema_version": attestation.ACQUISITION_SCHEMA_VERSION,
+        "completion_schema_version": attestation.ACQUISITION_COMPLETION_SCHEMA_VERSION,
+        "checkpoint_schema_version": attestation.ACQUISITION_CHECKPOINT_SCHEMA_VERSION,
+    }
+    assert attestation._require_current_acquisition_completion(identity) == identity
+    identity[field] = True
+    with pytest.raises(ValueError, match="requires current acquisition schema"):
+        attestation._require_current_acquisition_completion(identity)
+
+
 def test_class_result_materializes_and_revalidates_real_study_environment(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -457,7 +507,7 @@ def test_acquisition_toolchain_must_match_current_image_and_neqo_source() -> Non
     build = {"images": {"prepare": {"id": prepare_image}}}
     acquisition_source = {**source, "image_digest": prepare_image}
     observed = {
-        "chromium_version": "Chromium 140.0",
+        "chromium_version": attestation.EXPECTED_CHROMIUM_VERSION,
         "neqo_provenance": {
             "neqo_version": "neqo-qcsd 1",
             "neqo_base_commit": "5" * 40,
@@ -480,6 +530,15 @@ def test_acquisition_toolchain_must_match_current_image_and_neqo_source() -> Non
     }
     with pytest.raises(ValueError, match="current source/build"):
         attestation._require_acquisition_toolchain(substituted, source=source, build_receipt=build)
+
+    for forged_version in ("forged-browser 0", "", 143, True):
+        substituted = {**observed, "chromium_version": forged_version}
+        with pytest.raises(ValueError, match="current source/build"):
+            attestation._require_acquisition_toolchain(
+                substituted,
+                source=source,
+                build_receipt=build,
+            )
 
 
 def test_foundation_runtime_accepts_only_bound_collection_or_prepare_image(
@@ -525,7 +584,7 @@ def test_foundation_runtime_accepts_only_bound_collection_or_prepare_image(
         )
 
 
-def test_foundation_binds_sixth_pinned_cdp_gate_and_chronology(
+def test_foundation_binds_pinned_cdp_and_seventh_browser_egress_gate(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     source = _source()
@@ -553,8 +612,13 @@ def test_foundation_binds_sixth_pinned_cdp_gate_and_chronology(
     build = {
         **build_identity,
         "path": str(files["build"].resolve()),
+        "payload_sha256": _digest("5"),
         "source": source,
-        "images": {"prepare": {"id": prepare_image}},
+        "images": {
+            "collection": {"id": source["image_digest"]},
+            "prepare": {"id": prepare_image},
+            "reference": {"id": f"sha256:{_digest('9')}"},
+        },
     }
     build_binding = {"path": build["path"], "sha256": build_sha256}
     environment = {"build_execution": build_identity}
@@ -578,6 +642,19 @@ def test_foundation_binds_sixth_pinned_cdp_gate_and_chronology(
 
     monkeypatch.setattr(attestation, "validate_build_execution_receipt", lambda *_a, **_k: build)
     monkeypatch.setattr(attestation, "validate_pinned_cdp_receipt", validate_pinned)
+    browser_egress_root = tmp_path / "browser-egress-qualification-v23"
+    browser_egress = _browser_egress_result(browser_egress_root, build)
+    browser_observed: dict[str, Any] = {}
+
+    def verify_browser(root: Path, **kwargs: Any) -> dict[str, Any]:
+        browser_observed.update(root=root, **kwargs)
+        return dict(browser_egress)
+
+    monkeypatch.setattr(
+        attestation,
+        "verify_browser_egress_qualification",
+        verify_browser,
+    )
     monkeypatch.setattr(
         attestation,
         "validate_reference_gate_receipt",
@@ -625,6 +702,7 @@ def test_foundation_binds_sixth_pinned_cdp_gate_and_chronology(
         "cohort_version": 23,
         "build_execution_receipt": files["build"],
         "pinned_cdp_receipt": files["pinned"],
+        "browser_egress_qualification_root": browser_egress_root,
         "reference_receipt": files["reference"],
         "code_gate_receipt": files["code"],
         "controlled_qualification_receipt": files["controlled"],
@@ -642,8 +720,19 @@ def test_foundation_binds_sixth_pinned_cdp_gate_and_chronology(
     assert [gate["gate"] for gate in value["hard_gates"]] == list(
         attestation._FOUNDATION_GATES
     )
+    assert attestation._BROWSER_EGRESS_GATE == (
+        "browser-egress-packet-qualification-"
+        f"{attestation.BROWSER_EGRESS_VECTOR_COUNT}-of-"
+        f"{attestation.BROWSER_EGRESS_VECTOR_COUNT}"
+    )
+    assert value["summary"]["browser_egress_vectors"] == (
+        attestation.BROWSER_EGRESS_VECTOR_COUNT
+    )
     assert value["evidence"]["pinned_cdp_probe"] == attestation._pinned_cdp_binding(
         pinned
+    )
+    assert value["evidence"]["browser_egress_qualification"] == (
+        attestation._browser_egress_binding(browser_egress, browser_egress_root)
     )
     assert observed == {
         "build_execution_receipt": files["build"],
@@ -651,10 +740,89 @@ def test_foundation_binds_sixth_pinned_cdp_gate_and_chronology(
         "runtime_role": "collection",
     }
     assert files["pinned"] in attestation._protected_foundation_inputs(kwargs)
+    assert browser_egress_root in attestation._protected_foundation_inputs(kwargs)
+    assert browser_observed == {
+        "root": browser_egress_root,
+        "lab_root": attestation.LAB_ROOT,
+        "expected_cohort_version": 23,
+    }
 
     pinned["recorded_at"] = "2026-08-28T04:00:00+00:00"
     with pytest.raises(ValueError, match="build finish <= pinned CDP probe <= foundation"):
         attestation._foundation_value(**kwargs)
+    pinned["recorded_at"] = "2026-08-28T02:00:00+00:00"
+    browser_egress["recorded_at"] = "2026-08-28T04:00:00+00:00"
+    with pytest.raises(ValueError, match="browser-egress start"):
+        attestation._foundation_value(**kwargs)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        lambda receipt: receipt.update(
+            passed_vector_count=attestation.BROWSER_EGRESS_VECTOR_COUNT - 1
+        ),
+        lambda receipt: receipt.update(expanded_vectors_sha256=_digest("f")),
+        lambda receipt: receipt["build_execution"].update(sha256=_digest("c")),
+        lambda receipt: receipt["build_execution"].update(
+            reference_image_id=f"sha256:{_digest('d')}"
+        ),
+        lambda receipt: receipt.update(prepare_image_id=f"sha256:{_digest('e')}"),
+    ),
+)
+def test_browser_egress_gate_rejects_incomplete_or_different_build(
+    mutation, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    build_path = tmp_path / "build.json"
+    build_path.write_text("{}\n", encoding="utf-8")
+    build = {
+        "path": str(build_path.absolute()),
+        "sha256": sha256_file(build_path),
+        "payload_sha256": _digest("1"),
+        "images": {
+            "collection": {"id": f"sha256:{_digest('2')}"},
+            "prepare": {"id": f"sha256:{_digest('3')}"},
+            "reference": {"id": f"sha256:{_digest('4')}"},
+        },
+    }
+    root = tmp_path / "browser-egress-qualification-v23"
+    receipt = _browser_egress_result(root, build)
+    mutation(receipt)
+    monkeypatch.setattr(
+        attestation,
+        "verify_browser_egress_qualification",
+        lambda *_a, **_k: receipt,
+    )
+    with pytest.raises(ValueError, match="different source/build/image"):
+        attestation._validate_browser_egress_qualification(
+            root, cohort_version=23, build=build
+        )
+
+
+@pytest.mark.parametrize("diagnostic", ("capture dropped packets", "resealed PCAP differs"))
+def test_browser_egress_gate_propagates_deep_packet_verification_failure(
+    diagnostic: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = tmp_path / "browser-egress-qualification-v23"
+    root.mkdir()
+
+    def reject(*_args, **_kwargs):
+        raise ValueError(diagnostic)
+
+    monkeypatch.setattr(attestation, "verify_browser_egress_qualification", reject)
+    with pytest.raises(ValueError, match=diagnostic):
+        attestation._validate_browser_egress_qualification(
+            root,
+            cohort_version=23,
+            build={
+                "path": str(tmp_path / "build.json"),
+                "images": {
+                    "collection": {},
+                    "prepare": {},
+                    "reference": {},
+                },
+            },
+        )
 
 
 def test_foundation_validator_rejects_resealed_missing_pinned_cdp_gate(
@@ -709,11 +877,53 @@ def test_hard_gate_inventory_is_ordered_typed_and_nonempty() -> None:
     }
     records = attestation._hard_gate_records(attestation._READINESS_GATES, evidence)
     attestation._validate_hard_gates(records, attestation._READINESS_GATES)
-
     records[0]["gate"] = records[1]["gate"]
     with pytest.raises(ValueError, match="hard gate"):
         attestation._validate_hard_gates(records, attestation._READINESS_GATES)
 
+
+def test_stale_base_attestation_schemas_cannot_satisfy_current_admission() -> None:
+    foundation = {
+        "attestation_schema_version": 2,
+        "artifact_type": attestation.FOUNDATION_RECEIPT_TYPE,
+        "study_id": attestation.STUDY_ID,
+    }
+    readiness = {
+        "attestation_schema_version": 1,
+        "artifact_type": attestation.READINESS_RECEIPT_TYPE,
+        "study_id": attestation.STUDY_ID,
+    }
+    with pytest.raises(ValueError, match="foundation promotion envelope"):
+        attestation._validate_foundation_envelope(foundation)
+    with pytest.raises(ValueError, match="readiness promotion envelope"):
+        attestation._validate_readiness_envelope(readiness)
+
+
+def test_successor_readiness_keeps_its_separate_schema_dispatch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import qcsd_lab.class_successor as successor
+
+    path = tmp_path / "successor-readiness.json"
+    payload = {
+        "attestation_schema_version": 1,
+        "artifact_type": attestation.READINESS_RECEIPT_TYPE,
+        "study_id": "classifier-multiorigin100-v2-g01-abcdef123456",
+    }
+    path.write_bytes(
+        canonical_json_bytes(
+            bind_receipt(payload, receipt_type=attestation.READINESS_RECEIPT_TYPE)
+        )
+    )
+    observed: dict[str, Any] = {}
+
+    def validate(candidate: Path, *, deep_code_gate: bool) -> dict[str, Any]:
+        observed.update(path=candidate, deep=deep_code_gate)
+        return {"successor": True}
+
+    monkeypatch.setattr(successor, "validate_successor_readiness", validate)
+    assert attestation.validate_class_readiness_attestation(path) == {"successor": True}
+    assert observed == {"path": path.resolve(), "deep": True}
 
 def test_formal_evidence_retains_and_rejects_mixed_capture_authority(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1001,7 +1211,7 @@ def test_successor_full_final_lineage_reconstructs_positive_promotion(
     import qcsd_lab.class_pipeline as pipeline
 
     source = _source()
-    study_id = f"classifier-multiorigin100-v2-{_digest('a')[:12]}"
+    study_id = f"classifier-multiorigin100-v2-g01-{_digest('a')[:12]}"
     foundation = tmp_path / "foundation.json"
     restart = tmp_path / "successor-restart.json"
     readiness_path = tmp_path / "readiness.json"
@@ -1546,7 +1756,7 @@ def test_readiness_receipt_reconstruction_rejects_hard_gate_identity_tamper(
         for index, gate in enumerate(attestation._READINESS_GATES)
     }
     payload: dict[str, Any] = {
-        "attestation_schema_version": 1,
+        "attestation_schema_version": attestation.READINESS_SCHEMA_VERSION,
         "artifact_type": attestation.READINESS_RECEIPT_TYPE,
         "study_id": attestation.STUDY_ID,
         "cohort_version": 23,
@@ -1560,6 +1770,7 @@ def test_readiness_receipt_reconstruction_rejects_hard_gate_identity_tamper(
         "evidence": {
             "foundation": file_binding,
             "build_execution": file_binding,
+            "browser_egress_qualification": {"root": "/evidence/browser-egress"},
             "reference": file_binding,
             "code_gate": file_binding,
             "controlled_qualification": file_binding,
@@ -1634,6 +1845,18 @@ def test_readiness_receipt_reconstruction_rejects_hard_gate_identity_tamper(
     with pytest.raises(ValueError, match="hard gate"):
         attestation.validate_class_readiness_attestation(destination)
 
+    substituted = json.loads(json.dumps(payload))
+    substituted["evidence"]["browser_egress_qualification"]["root"] = (
+        "/evidence/substituted-browser-egress"
+    )
+    destination.write_bytes(
+        canonical_json_bytes(
+            bind_receipt(substituted, receipt_type=attestation.READINESS_RECEIPT_TYPE)
+        )
+    )
+    with pytest.raises(ValueError, match="differs from reconstructed evidence"):
+        attestation.validate_class_readiness_attestation(destination)
+
 
 def test_readiness_derivation_rechecks_every_prerequisite_and_fitted_parameters(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -1699,9 +1922,12 @@ def test_readiness_derivation_rechecks_every_prerequisite_and_fitted_parameters(
     build = {
         **build_identity,
         "path": str(build_file.resolve()),
+        "payload_sha256": _digest("0"),
         "source": source,
         "images": {
+            "collection": {"id": source["image_digest"]},
             "prepare": {"id": f"sha256:{_digest('9')}"},
+            "reference": {"id": f"sha256:{_digest('8')}"},
         },
     }
     build_binding = {"path": str(build_file.resolve()), "sha256": _digest("1")}
@@ -1762,6 +1988,16 @@ def test_readiness_derivation_rechecks_every_prerequisite_and_fitted_parameters(
         "validate_pinned_cdp_receipt",
         lambda *_a, **_k: pinned_cdp,
     )
+    browser_egress_root = tmp_path / "browser-egress-qualification-v23"
+    browser_egress = _browser_egress_result(browser_egress_root, build)
+    browser_egress_binding = attestation._browser_egress_binding(
+        browser_egress, browser_egress_root
+    )
+    monkeypatch.setattr(
+        attestation,
+        "verify_browser_egress_qualification",
+        lambda *_a, **_k: dict(browser_egress),
+    )
     foundation_binding = {
         "path": str(foundation_file.resolve()),
         "sha256": sha256_file(foundation_file),
@@ -1774,6 +2010,7 @@ def test_readiness_derivation_rechecks_every_prerequisite_and_fitted_parameters(
         "evidence": {
             "build_execution": attestation._file_binding(build_file),
             "pinned_cdp_probe": attestation._pinned_cdp_binding(pinned_cdp),
+            "browser_egress_qualification": browser_egress_binding,
             "reference": attestation._file_binding(ordinary_file),
             "code_gate": attestation._file_binding(ordinary_file),
             "controlled_qualification": attestation._file_binding(ordinary_file),
@@ -1842,7 +2079,7 @@ def test_readiness_derivation_rechecks_every_prerequisite_and_fitted_parameters(
         )
     )
     observed_toolchain = {
-        "chromium_version": "Chromium fixture",
+        "chromium_version": attestation.EXPECTED_CHROMIUM_VERSION,
         "neqo_provenance": {
             "neqo_version": "fixture",
             "neqo_base_commit": "5" * 40,
@@ -1855,13 +2092,26 @@ def test_readiness_derivation_rechecks_every_prerequisite_and_fitted_parameters(
             "image_digest": build["images"]["prepare"]["id"],
         },
     }
+    completion_payload = {
+        "study_id": attestation.STUDY_ID,
+        "acquisition_schema_version": attestation.ACQUISITION_SCHEMA_VERSION,
+        "completion_schema_version": attestation.ACQUISITION_COMPLETION_SCHEMA_VERSION,
+        "checkpoint_schema_version": attestation.ACQUISITION_CHECKPOINT_SCHEMA_VERSION,
+        "observed_toolchain": observed_toolchain,
+        "provenance_sha256": sha256_file(provenance_file),
+    }
+    completion_file.write_bytes(
+        canonical_json_bytes(
+            bind_receipt(completion_payload, receipt_type=attestation.COMPLETION_TYPE)
+        )
+    )
     monkeypatch.setattr(
         attestation,
         "validate_acquisition_completion",
-        lambda *_a, **_k: {
-            "observed_toolchain": observed_toolchain,
-            "provenance_sha256": sha256_file(provenance_file),
-        },
+        lambda value, **_kwargs: attestation.validate_hash_bound_receipt(
+            value,
+            expected_type=attestation.COMPLETION_TYPE,
+        ),
     )
 
     pilot_admission = SimpleNamespace(
@@ -2049,7 +2299,42 @@ def test_readiness_derivation_rechecks_every_prerequisite_and_fitted_parameters(
     assert value["evidence"]["qualification_context"]["qualification_authority"] == (
         qualification_authority
     )
+    assert value["evidence"]["browser_egress_qualification"] == browser_egress_binding
     assert len(value["hard_gates"]) == len(attestation._READINESS_GATES)
+
+    browser_egress["passed_vector_count"] = attestation.BROWSER_EGRESS_VECTOR_COUNT - 1
+    with pytest.raises(ValueError, match="different source/build/image"):
+        attestation._readiness_value(**kwargs)
+    browser_egress["passed_vector_count"] = attestation.BROWSER_EGRESS_VECTOR_COUNT
+
+    substituted_root = tmp_path / "substituted-browser-egress"
+    substituted_root.mkdir()
+    (substituted_root / "final.json").write_text("{}\n", encoding="utf-8")
+    foundation["evidence"]["browser_egress_qualification"] = {
+        **browser_egress_binding,
+        "root": str(substituted_root),
+        "path": str(substituted_root / "final.json"),
+    }
+    with pytest.raises(ValueError, match="final receipt path is not canonical"):
+        attestation._readiness_value(**kwargs)
+    foundation["evidence"]["browser_egress_qualification"] = browser_egress_binding
+
+    current_completion = completion_file.read_bytes()
+    for legacy_schema in (*range(1, attestation.ACQUISITION_SCHEMA_VERSION), True):
+        legacy_payload = {
+            key: content
+            for key, content in completion_payload.items()
+            if key not in {"completion_schema_version", "checkpoint_schema_version"}
+        }
+        legacy_payload["acquisition_schema_version"] = legacy_schema
+        completion_file.write_bytes(
+            canonical_json_bytes(
+                bind_receipt(legacy_payload, receipt_type=attestation.COMPLETION_TYPE)
+            )
+        )
+        with pytest.raises(ValueError, match="requires current acquisition schema"):
+            attestation._readiness_value(**kwargs)
+    completion_file.write_bytes(current_completion)
 
     substituted_authority = json.loads(json.dumps(qualification_authority))
     substituted_authority["foundation_attestation"] = {

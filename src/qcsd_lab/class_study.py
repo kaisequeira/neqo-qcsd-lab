@@ -20,6 +20,10 @@ from pathlib import Path
 from typing import Any
 
 STUDY_ID = "classifier-multiorigin100-v1"
+SUCCESSOR_STUDY_PREFIX = "classifier-multiorigin100-v2"
+SUCCESSOR_GENERATION_MIN = 1
+SUCCESSOR_GENERATION_MAX = 99
+SUCCESSOR_IDENTITY_PREFIX_LENGTH = 12
 CONTRACT_SCHEMA_VERSION = 1
 RECEIPT_TYPE = "qcsd-class-study-cohort"
 LAUNCH_UNIQUENESS_POLICY = "canonical-role-block-and-cohort-assembly-v1"
@@ -111,6 +115,157 @@ EXPORTABLE_EVIDENCE_ROLES = frozenset({"formal"})
 _SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 _IDENTIFIER_RE = re.compile(r"[a-z0-9][a-z0-9._-]{0,127}\Z")
 _DOMAIN_LABEL_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
+_SUCCESSOR_STUDY_ID_RE = re.compile(
+    rf"{re.escape(SUCCESSOR_STUDY_PREFIX)}-g(?P<generation>[0-9]{{2}})-"
+    rf"(?P<identity>[0-9a-f]{{{SUCCESSOR_IDENTITY_PREFIX_LENGTH}}})\Z"
+)
+_CLASS_STUDY_CAMPAIGN_RE = re.compile(
+    rf"(?P<study_id>(?:{re.escape(STUDY_ID)}|"
+    rf"{re.escape(SUCCESSOR_STUDY_PREFIX)}-g[0-9]{{2}}-"
+    rf"[0-9a-f]{{{SUCCESSOR_IDENTITY_PREFIX_LENGTH}}}))-"
+    r"(?P<suffix>(?:pilot-fitting-1200|pilot-compatibility-1080-1200|"
+    r"authoritative-fitting-(?:1200|2000-1200)|certification-900-1200|"
+    r"(?:canary|formal)-(?:0[1-9]|10)-1200))\Z"
+)
+
+
+@dataclass(frozen=True)
+class ClassStudyIdentity:
+    """One exact base or hash-derived successor study identity."""
+
+    study_id: str
+    generation: int
+    identity_prefix: str | None
+
+    @property
+    def successor(self) -> bool:
+        return self.generation > 0
+
+
+@dataclass(frozen=True)
+class ClassStudyCampaignIdentity:
+    """The study, evidence role, and optional block encoded by a campaign name."""
+
+    name: str
+    study_id: str
+    evidence_role: str
+    block: int | None
+
+
+def parse_class_study_id(value: object) -> ClassStudyIdentity:
+    """Parse the complete anchored class-study identity grammar.
+
+    The only admitted identities are the frozen v1 identifier and generated
+    v2 identifiers of the form ``v2-gNN-<12 lowercase hex>``.  The two-digit
+    generation namespace is deliberately bounded so formatting cannot silently
+    grow into a different grammar.
+    """
+
+    if not isinstance(value, str):
+        raise ValueError("class-study identity is invalid")
+    if value == STUDY_ID:
+        return ClassStudyIdentity(STUDY_ID, 0, None)
+    match = _SUCCESSOR_STUDY_ID_RE.fullmatch(value)
+    if match is None:
+        raise ValueError("class-study identity is invalid")
+    generation = int(match.group("generation"))
+    if not SUCCESSOR_GENERATION_MIN <= generation <= SUCCESSOR_GENERATION_MAX:
+        raise ValueError("class-study successor generation is outside its ID bounds")
+    return ClassStudyIdentity(value, generation, match.group("identity"))
+
+
+def is_class_study_id(value: object) -> bool:
+    """Return whether ``value`` is one complete admitted study identity."""
+
+    try:
+        parse_class_study_id(value)
+    except ValueError:
+        return False
+    return True
+
+
+def is_successor_study_id(value: object) -> bool:
+    """Return whether ``value`` is one complete generated successor identity."""
+
+    try:
+        return parse_class_study_id(value).successor
+    except ValueError:
+        return False
+
+
+def successor_study_id(*, generation: int, identity_sha256: str) -> str:
+    """Build a successor identity without permitting formatting overflow."""
+
+    if (
+        type(generation) is not int
+        or not SUCCESSOR_GENERATION_MIN <= generation <= SUCCESSOR_GENERATION_MAX
+    ):
+        raise ValueError("class-study successor generation is outside its ID bounds")
+    if (
+        not isinstance(identity_sha256, str)
+        or _SHA256_RE.fullmatch(identity_sha256) is None
+    ):
+        raise ValueError("class-study successor decision identity digest is invalid")
+    value = (
+        f"{SUCCESSOR_STUDY_PREFIX}-g{generation:02d}-"
+        f"{identity_sha256[:SUCCESSOR_IDENTITY_PREFIX_LENGTH]}"
+    )
+    parsed = parse_class_study_id(value)
+    if (
+        parsed.generation != generation
+        or parsed.identity_prefix != identity_sha256[:SUCCESSOR_IDENTITY_PREFIX_LENGTH]
+    ):
+        raise AssertionError("generated class-study successor identity is inconsistent")
+    return value
+
+
+def parse_class_study_campaign_name(value: object) -> ClassStudyCampaignIdentity:
+    """Parse one exact generated class-study campaign name."""
+
+    if not isinstance(value, str):
+        raise ValueError("class-study campaign name is invalid")
+    match = _CLASS_STUDY_CAMPAIGN_RE.fullmatch(value)
+    if match is None:
+        raise ValueError("class-study campaign name is invalid")
+    identity = parse_class_study_id(match.group("study_id"))
+    suffix = match.group("suffix")
+    if identity.successor:
+        if suffix in {
+            "pilot-fitting-1200",
+            "pilot-compatibility-1080-1200",
+            "authoritative-fitting-1200",
+        }:
+            raise ValueError("class-study successor campaign name is invalid")
+    elif suffix == "authoritative-fitting-2000-1200":
+        raise ValueError("class-study v1 campaign name is invalid")
+    if suffix == "pilot-fitting-1200":
+        role, block = "pilot-fitting", None
+    elif suffix == "pilot-compatibility-1080-1200":
+        role, block = "pilot-compatibility", None
+    elif suffix.startswith("authoritative-fitting-"):
+        role, block = "authoritative-fitting", None
+    elif suffix == "certification-900-1200":
+        role, block = "certification", None
+    else:
+        role, raw_block, _profile = suffix.split("-")
+        block = int(raw_block)
+    return ClassStudyCampaignIdentity(value, identity.study_id, role, block)
+
+
+def class_study_id_from_campaign_name(value: object) -> str:
+    """Return the study ID from one exact generated campaign name."""
+
+    return parse_class_study_campaign_name(value).study_id
+
+
+def is_class_study_campaign_name(value: object) -> bool:
+    """Return whether ``value`` is one exact generated class campaign name."""
+
+    try:
+        parse_class_study_campaign_name(value)
+    except ValueError:
+        return False
+    return True
 
 
 @dataclass(frozen=True)
@@ -455,7 +610,8 @@ def validate_hash_bound_receipt(
     expected_keys = {"schema_version", "receipt_type", "payload_sha256", "payload"}
     if set(value) != expected_keys:
         raise ValueError("receipt envelope fields differ from the contract")
-    if value.get("schema_version") != CONTRACT_SCHEMA_VERSION:
+    schema_version = value.get("schema_version")
+    if type(schema_version) is not int or schema_version != CONTRACT_SCHEMA_VERSION:
         raise ValueError("receipt schema version is unsupported")
     receipt_type = value.get("receipt_type")
     if not isinstance(receipt_type, str) or not receipt_type:

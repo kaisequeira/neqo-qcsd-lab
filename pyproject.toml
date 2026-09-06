@@ -18,7 +18,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-discovery = ["playwright==1.52.0"]
+discovery = ["playwright==1.57.0"]
 evaluation = ["scikit-learn==1.9.0"]
 test = ["dpkt==1.9.8", "pytest==8.4.0"]
 

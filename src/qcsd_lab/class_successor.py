@@ -44,6 +44,8 @@ from .class_study import (
     PILOT_COUNT,
     RESERVE_COUNT,
     STUDY_ID,
+    SUCCESSOR_GENERATION_MAX,
+    SUCCESSOR_STUDY_PREFIX,
     TRANCO_RANK_STRATA,
     ClassCandidate,
     CohortSelection,
@@ -51,7 +53,10 @@ from .class_study import (
     build_study_receipt,
     canonical_json_bytes,
     canonical_json_sha256,
+    is_successor_study_id,
     load_study_receipt,
+    parse_class_study_id,
+    successor_study_id as build_successor_study_id,
     validate_hash_bound_receipt,
     validate_study_receipt,
     write_create_only_json,
@@ -67,7 +72,6 @@ SUCCESSOR_COHORT_RECEIPT_TYPE = "qcsd-class-study-successor-cohort"
 QUALIFICATION_PLAN_RECEIPT_TYPE = "qcsd-class-study-successor-qualification-plan"
 READINESS_RECEIPT_TYPE = "qcsd-class-study-readiness-attestation"
 READINESS_IMPLEMENTATION_STATUS = "candidate-ready-for-pre-formal-snapshot"
-SUCCESSOR_STUDY_PREFIX = "classifier-multiorigin100-v2"
 CERTIFICATION_NAME = f"{STUDY_ID}-certification-900-1200"
 CERTIFICATION_SAMPLE_COUNT = FINAL_CLASS_COUNT * len(COMPATIBILITY_MODES)
 
@@ -431,7 +435,7 @@ def validate_successor_readiness(
     source = _regular_file(path, "successor readiness")
     value = _load_json_object(source, "successor readiness")
     payload = validate_hash_bound_receipt(value, expected_type=READINESS_RECEIPT_TYPE)
-    if not str(payload.get("study_id", "")).startswith(f"{SUCCESSOR_STUDY_PREFIX}-"):
+    if not is_successor_study_id(payload.get("study_id")):
         raise ValueError("successor readiness has the wrong study identity")
     evidence = payload.get("evidence")
     qualification = evidence.get("qualification_context") if isinstance(evidence, Mapping) else None
@@ -923,6 +927,20 @@ def _successor_restart_files(
         or len(matching) != FINAL_CLASS_COUNT // 2
     ):
         raise ValueError("successor restart selection is malformed")
+    identity = parse_class_study_id(study_id)
+    replacement_lineage = decision.get("replacement_lineage")
+    generation = (
+        replacement_lineage.get("generation")
+        if isinstance(replacement_lineage, Mapping)
+        else None
+    )
+    if (
+        not identity.successor
+        or identity.generation != generation
+        or identity.identity_prefix != identity_sha256[:12]
+        or launch_namespace != f".{study_id}-launches"
+    ):
+        raise ValueError("successor decision identity is inconsistent")
     decision_sha256 = canonical_json_sha256(decision)
     compatible_cohort, compatible_assembly, successor_final_selection = (
         _successor_compatible_cohort_files(decision)
@@ -1674,6 +1692,7 @@ def _predecessor_lineage(
         not isinstance(generation, int)
         or isinstance(generation, bool)
         or generation < 1
+        or generation > SUCCESSOR_GENERATION_MAX
         or not isinstance(cumulative, list)
         or not cumulative
         or any(not isinstance(item, str) or item not in authority_order for item in cumulative)
@@ -1684,6 +1703,22 @@ def _predecessor_lineage(
         )
     ):
         raise ValueError("immediate predecessor cumulative-failure lineage is invalid")
+    predecessor_identity = parse_class_study_id(restart.get("study_id"))
+    predecessor_successor = decision.get("successor")
+    predecessor_digest = (
+        predecessor_successor.get("identity_sha256")
+        if isinstance(predecessor_successor, Mapping)
+        else None
+    )
+    if (
+        not predecessor_identity.successor
+        or predecessor_identity.generation != generation
+        or not isinstance(predecessor_digest, str)
+        or _DIGEST.fullmatch(predecessor_digest) is None
+        or predecessor_identity.identity_prefix != predecessor_digest[:12]
+        or restart.get("replacement_generation") != generation
+    ):
+        raise ValueError("immediate predecessor successor identity is inconsistent")
 
     return _PredecessorLineage(
         study_id=str(restart["study_id"]),
@@ -1828,7 +1863,10 @@ def _decision_payload(
         "successor_selection_sha256": canonical_json_sha256(successor_selection.as_dict()),
     }
     identity_sha256 = canonical_json_sha256(decision_basis)
-    successor_study_id = f"{SUCCESSOR_STUDY_PREFIX}-g{generation:02d}-{identity_sha256[:12]}"
+    successor_study_id = build_successor_study_id(
+        generation=generation,
+        identity_sha256=identity_sha256,
+    )
     launch_namespace = f".{successor_study_id}-launches"
     if successor_study_id == lineage.study_id or launch_namespace == (
         f".{lineage.study_id}-launches"

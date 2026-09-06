@@ -1,0 +1,251 @@
+{
+  "accepted_executable_argv0": [
+    "/usr/local/bin/qcsd-chromium",
+    "/opt/qcsd-playwright/chromium-1200/chrome-linux/chrome"
+  ],
+  "antagonistic_effective_switches": [
+    "--disable-extensions-except",
+    "--enable-background-networking",
+    "--enable-client-side-phishing-detection",
+    "--enable-component-update",
+    "--enable-default-apps",
+    "--enable-domain-reliability",
+    "--enable-extensions",
+    "--enable-pings",
+    "--enable-quic",
+    "--enable-service-autorun",
+    "--enable-sync",
+    "--first-run",
+    "--force-first-run",
+    "--force-first-run-ui",
+    "--host-rules",
+    "--load-extension",
+    "--proxy-auto-detect",
+    "--proxy-pac-url",
+    "--proxy-server",
+    "--service-autorun",
+    "--single-process"
+  ],
+  "artifact_type": "qcsd-browser-egress-chromium-argv-contract",
+  "child_environment": {
+    "HOME": "/nonexistent",
+    "LANG": "C",
+    "LC_ALL": "C",
+    "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    "TMPDIR": "/tmp",
+    "TZ": "UTC"
+  },
+  "chromium_archive_sha256": "e73eeb680312e96d4f8fbca589ad42e3fb719178b4bdd8707f9fe796123bf48b",
+  "chromium_archive_url": "https://cdn.playwright.dev/dbazure/download/playwright/builds/chromium/1200/chromium-linux-arm64.zip",
+  "chromium_executable": "/usr/local/bin/qcsd-chromium",
+  "chromium_executable_sha256": "6f72e258e11d85ec413b1671422c83d65af9f9ddcbc811657a43700b324ce928",
+  "chromium_managed_policy": {
+    "managed_directory_file_count": 1,
+    "mode": "0o444",
+    "path": "/etc/chromium/policies/managed/qcsd-network-prediction.json",
+    "sha256": "8293900f406510aaf6eb23ae7123d8c7321d91a00c98646671b21f58dbf41526",
+    "sole_managed_policy": true,
+    "value": {
+      "DnsOverHttpsMode": "off",
+      "NetworkPredictionOptions": 2
+    }
+  },
+  "chromium_network_prediction_control_policy": {
+    "managed_directory_file_count": 1,
+    "mode": "0o444",
+    "runtime_path": "/etc/chromium/policies/managed/qcsd-network-prediction.json",
+    "seed_image_path": "/usr/share/qcsd-lab/browser-egress-controls/network-prediction-options-0.json",
+    "sha256": "4566be4f014df0cfd45cf8bdeb4333b341bf4c666139e364992306c12873df03",
+    "sole_managed_policy": true,
+    "source_path": "config/class-study/v1/chromium-network-prediction-positive-control-v1.json",
+    "value": {
+      "DnsOverHttpsMode": "off",
+      "NetworkPredictionOptions": 0
+    }
+  },
+  "chromium_revision": "1200",
+  "chromium_subprocess_wrapper": {
+    "mode": "0o555",
+    "path": "/usr/local/libexec/qcsd-chromium-child",
+    "sha256": "da91275fe972e3ca89815abfc2abaa6000631ea4f3b79179d1dc02780addef4d"
+  },
+  "chromium_version": "143.0.7499.4",
+  "command_line_projection_schema_version": 4,
+  "effective_argv_source": "Browser.getBrowserCommandLine",
+  "explicit_launch_arguments": [
+    "--disable-crashpad-for-testing",
+    "--disable-domain-reliability",
+    "--disable-quic",
+    "--no-pings",
+    "--no-proxy-server",
+    "--no-zygote",
+    "--browser-subprocess-path=/usr/local/libexec/qcsd-chromium-child",
+    "--disable-features=AcceptCHFrame,AvoidUnnecessaryBeforeUnloadCheckSync,DestroyProfileOnBrowserClose,DialMediaRouteProvider,GlobalMediaControls,HttpsUpgrades,LensOverlay,MediaRouter,PaintHolding,ThirdPartyStoragePartitioning,Translate,AutoDeElevate,RenderDocument,OptimizationHints,FedCm,NetworkErrorLogging,Reporting",
+    "--disable-blink-features=Fledge,AdInterestGroupAPI,AttributionReporting,SharedStorageAPI"
+  ],
+  "fixture_certificate": {
+    "mode": "0o444",
+    "runtime_path": "/opt/qcsd-lab/config/class-study/v1/browser-egress-fixture-cert-v1.pem",
+    "sha256": "e1fbe7f4b744ed0899eb5fcee39cbc44a2254b0e9a617b40cf4611bbc3a4c3c7",
+    "source_path": "config/class-study/v1/browser-egress-fixture-cert-v1.pem",
+    "spki_sha256_base64": "k3C2v8R8+ZvVlGwfaKCfUgaP5meJPA4oHibz7BFn2Zs="
+  },
+  "fixture_private_key": {
+    "mode": "0o400",
+    "runtime_path": "/opt/qcsd-lab/config/class-study/v1/browser-egress-fixture-key-v1.pem",
+    "sha256": "f65d278ee534629e16e52604696d848dbdaf981606cb49cc190e5df1b2e872bb",
+    "source_path": "config/class-study/v1/browser-egress-fixture-key-v1.pem",
+    "visible_to_browser": false
+  },
+  "forbidden_driver_environment_variables": [
+    "NODE_OPTIONS",
+    "NODE_PATH",
+    "PLAYWRIGHT_NODEJS_PATH",
+    "PLAYWRIGHT_NODEJS_PORT",
+    "PLAYWRIGHT_DISABLE_FORCED_CHROMIUM_PROXIED_LOOPBACK",
+    "PLAYWRIGHT_DISABLE_SERVICE_WORKER_CONSOLE",
+    "PLAYWRIGHT_DISABLE_SERVICE_WORKER_NETWORK",
+    "PLAYWRIGHT_HOST_PLATFORM_OVERRIDE",
+    "PLAYWRIGHT_LEGACY_SCREENSHOT",
+    "PLAYWRIGHT_SKIP_NAVIGATION_CHECK",
+    "PWDEBUG",
+    "PW_CHROMIUM_ATTACH_TO_OTHER",
+    "SELENIUM_REMOTE_CAPABILITIES",
+    "SELENIUM_REMOTE_HEADERS",
+    "SELENIUM_REMOTE_URL"
+  ],
+  "packet_level_admission_boundary": false,
+  "playwright_browsers_json_sha256": "b509d013de89d621a142818e0937de356fbb0169096922c08581a4f83e463b8e",
+  "playwright_version": "1.57.0",
+  "policy_root_inventory": [
+    {
+      "file_count": 1,
+      "path": "/etc/chromium/policies/managed",
+      "state": "sole-managed-policy"
+    },
+    {
+      "file_count": 0,
+      "path": "/etc/chromium/policies/recommended",
+      "state": "empty-directory"
+    },
+    {
+      "file_count": 0,
+      "path": "/etc/opt/chrome/policies",
+      "state": "absent"
+    },
+    {
+      "file_count": 0,
+      "path": "/etc/chromium-browser/policies",
+      "state": "absent"
+    }
+  ],
+  "qualification_control_contracts_sha256": "e29de41ce6802e4785b1a409e517d860771dc559829d10ea63ef58c13a95ca70",
+  "qualification_control_profiles": [
+    {
+      "context_kinds": [
+        "off-the-record-playwright",
+        "raw-default-profile-cdp-unattached-target"
+      ],
+      "launch_profile": "qualification-network-prediction-disabled-control",
+      "managed_policy": {
+        "DnsOverHttpsMode": "off",
+        "NetworkPredictionOptions": 2,
+        "semantics": "never-predict",
+        "sha256": "8293900f406510aaf6eb23ae7123d8c7321d91a00c98646671b21f58dbf41526"
+      },
+      "resolver_profiles": [
+        "approved-map-or-exclude-then-not-found",
+        "qualification-single-dns-hostname-exception"
+      ],
+      "vector_ids": [
+        "browser-service-control--off-the-record--speculation-prefetch-disabled",
+        "browser-service-control--default-profile--dns-prefetch-disabled",
+        "browser-service-control--default-profile--preconnect-disabled",
+        "browser-service-control--default-profile--speculation-prerender-disabled"
+      ]
+    },
+    {
+      "context_kinds": [
+        "off-the-record-playwright",
+        "raw-default-profile-cdp-unattached-target"
+      ],
+      "launch_profile": "qualification-network-prediction-enabled-control",
+      "managed_policy": {
+        "DnsOverHttpsMode": "off",
+        "NetworkPredictionOptions": 0,
+        "semantics": "predict-on-any-connection",
+        "sha256": "4566be4f014df0cfd45cf8bdeb4333b341bf4c666139e364992306c12873df03"
+      },
+      "resolver_profiles": [
+        "approved-map-or-exclude-then-not-found",
+        "qualification-single-dns-hostname-exception"
+      ],
+      "vector_ids": [
+        "browser-service-control--off-the-record--speculation-prefetch-enabled",
+        "browser-service-control--default-profile--dns-prefetch-enabled",
+        "browser-service-control--default-profile--preconnect-enabled",
+        "browser-service-control--default-profile--speculation-prerender-enabled"
+      ]
+    },
+    {
+      "context_kinds": [
+        "raw-default-profile-cdp-unattached-target"
+      ],
+      "launch_profile": "qualification-reporting-disabled-control",
+      "managed_policy": {
+        "DnsOverHttpsMode": "off",
+        "NetworkPredictionOptions": 2,
+        "semantics": "never-predict",
+        "sha256": "8293900f406510aaf6eb23ae7123d8c7321d91a00c98646671b21f58dbf41526"
+      },
+      "resolver_profiles": [
+        "approved-map-or-exclude-then-not-found"
+      ],
+      "vector_ids": [
+        "browser-service-control--default-profile--reporting-disabled",
+        "browser-service-control--default-profile--network-error-logging-disabled"
+      ]
+    },
+    {
+      "context_kinds": [
+        "raw-default-profile-cdp-unattached-target"
+      ],
+      "launch_profile": "qualification-reporting-enabled-control",
+      "managed_policy": {
+        "DnsOverHttpsMode": "off",
+        "NetworkPredictionOptions": 2,
+        "semantics": "never-predict",
+        "sha256": "8293900f406510aaf6eb23ae7123d8c7321d91a00c98646671b21f58dbf41526"
+      },
+      "resolver_profiles": [
+        "approved-map-or-exclude-then-not-found"
+      ],
+      "vector_ids": [
+        "browser-service-control--default-profile--reporting-enabled",
+        "browser-service-control--default-profile--network-error-logging-enabled"
+      ]
+    }
+  ],
+  "qualification_id": "browser-egress-qualification-v1",
+  "qualification_launch_arguments": [
+    "--host-resolver-rules=MAP fixture.test 172.30.98.11, MAP * ^NOTFOUND, EXCLUDE 172.30.98.11, EXCLUDE [fd00:71:63:73:64:98:0:11]"
+  ],
+  "required_effective_switches": [
+    "--disable-background-networking",
+    "--disable-client-side-phishing-detection",
+    "--disable-component-update",
+    "--disable-crashpad-for-testing",
+    "--disable-default-apps",
+    "--disable-domain-reliability",
+    "--disable-extensions",
+    "--disable-quic",
+    "--disable-sync",
+    "--no-first-run",
+    "--no-pings",
+    "--no-proxy-server",
+    "--no-sandbox",
+    "--no-service-autorun",
+    "--no-zygote"
+  ],
+  "schema_version": 1
+}

@@ -25,6 +25,112 @@ def _canonical(value: Any) -> bytes:
     return (json.dumps(value, indent=2, sort_keys=True, allow_nan=False) + "\n").encode()
 
 
+def _target_activity() -> dict[str, Any]:
+    by_target_type: dict[str, Any] = {}
+    for target_type in watch._PINNED_CDP_TARGET_ACTIVITY_TYPES:
+        attached = 0 if target_type == "page" else 1
+        by_target_type[target_type] = {
+            "total": attached,
+            "max_source_generation": 0 if attached else None,
+            "event_counts": {
+                event: attached if event == "target-attached" else 0
+                for event in watch._PINNED_CDP_TARGET_ACTIVITY_EVENTS
+            },
+        }
+    return {
+        "schema_version": watch._PINNED_CDP_TARGET_ACTIVITY_SCHEMA_VERSION,
+        "generation": 3,
+        "by_target_type": by_target_type,
+    }
+
+
+def _egress_prearm_summary() -> dict[str, Any]:
+    by_target_type = {}
+    for target_type in ("page", "iframe", "worker", "shared_worker"):
+        popup_required = 1 if target_type in {"page", "iframe"} else 0
+        by_target_type[target_type] = {
+            "target_count": 1,
+            "installed_count": 1,
+            "pending_count": 0,
+            "protected_api_observations": watch._target_egress_api_count(target_type),
+            "unavailable_api_observations": 0,
+            "popup_guard_required_count": popup_required,
+            "popup_guard_installed_count": popup_required,
+        }
+    return {
+        "schema_version": watch._EGRESS_PREARM_SUMMARY_SCHEMA_VERSION,
+        "policy": watch._NON_REPLAYABLE_EGRESS_POLICY,
+        "target_total": 4,
+        "installed_total": 4,
+        "pending_total": 0,
+        "popup_guard_required_total": 2,
+        "popup_guard_installed_total": 2,
+        "by_target_type": by_target_type,
+    }
+
+
+def _non_replayable_egress_summary() -> dict[str, Any]:
+    return {
+        "schema_version": watch._NON_REPLAYABLE_EGRESS_SCHEMA_VERSION,
+        "policy": watch._NON_REPLAYABLE_EGRESS_POLICY,
+        "attempt_count": 0,
+        "protected_apis": copy.deepcopy(watch._TARGET_EGRESS_APIS),
+        "context_init_script_installed": True,
+        "context_navigation_route_installed": True,
+        "root_page_bound": True,
+        "context_websocket_route_installed": True,
+        "context_service_worker_listener_installed": True,
+        "cdp_tripwires_are_pre_io": False,
+        "packet_level_completeness_claimed": False,
+    }
+
+
+def _browser_egress_command_line() -> dict[str, Any]:
+    switches = copy.deepcopy(watch._BROWSER_EGRESS_REQUIRED_CHROMIUM_SWITCHES)
+    return {
+        "schema_version": watch._BROWSER_EGRESS_COMMAND_LINE_SCHEMA_VERSION,
+        "launch_profile": watch._BROWSER_EGRESS_PRODUCTION_LAUNCH_PROFILE,
+        "required_switches": switches,
+        "observed_required_switches": copy.deepcopy(switches),
+        "antagonistic_switches": copy.deepcopy(
+            watch._BROWSER_EGRESS_ANTAGONISTIC_CHROMIUM_SWITCHES
+        ),
+        "observed_antagonistic_switches": [],
+        "required_disabled_feature_tokens": copy.deepcopy(
+            watch._BROWSER_EGRESS_REQUIRED_DISABLED_FEATURE_TOKENS
+        ),
+        "observed_disabled_feature_tokens": copy.deepcopy(
+            watch._BROWSER_EGRESS_REQUIRED_DISABLED_FEATURE_TOKENS
+        ),
+        "required_disabled_blink_feature_tokens": copy.deepcopy(
+            watch._BROWSER_EGRESS_REQUIRED_DISABLED_BLINK_FEATURE_TOKENS
+        ),
+        "observed_disabled_blink_feature_tokens": copy.deepcopy(
+            watch._BROWSER_EGRESS_REQUIRED_DISABLED_BLINK_FEATURE_TOKENS
+        ),
+        "required_enabled_feature_arguments": copy.deepcopy(
+            watch._BROWSER_EGRESS_REQUIRED_ENABLED_FEATURE_ARGUMENTS
+        ),
+        "observed_enabled_feature_arguments": copy.deepcopy(
+            watch._BROWSER_EGRESS_REQUIRED_ENABLED_FEATURE_ARGUMENTS
+        ),
+        "feature_switch_argument_counts": {
+            "disable_features": 2,
+            "disable_blink_features": 1,
+            "enable_features": 1,
+            "enable_blink_features": 0,
+        },
+        "complete_feature_policy_is_last": True,
+        "subprocess_wrapper_argument": watch._BROWSER_EGRESS_SUBPROCESS_WRAPPER_ARGUMENT,
+        "required_switches_are_bare_and_unique": True,
+        "host_resolver_switch_is_unique": True,
+        "host_resolver_is_fail_closed": True,
+        "host_resolver_policy": copy.deepcopy(watch._PINNED_CDP_RESOLVER_PROJECTION),
+        "no_pings_is_admission_boundary": False,
+        "packet_level_completeness_claimed": False,
+    }
+
+
 def _receipt(receipt_type: str, payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "schema_version": 1,
@@ -36,6 +142,44 @@ def _receipt(receipt_type: str, payload: dict[str, Any]) -> dict[str, Any]:
 
 def _write_receipt(path: Path, receipt_type: str, payload: dict[str, Any]) -> None:
     path.write_bytes(_canonical(_receipt(receipt_type, payload)))
+
+
+@pytest.mark.parametrize("historical_schema", (1, 2, 3, 4))
+def test_receipt_loader_accepts_legitimate_historical_payload_schemas(
+    tmp_path: Path,
+    historical_schema: int,
+) -> None:
+    path = tmp_path / "historical.json"
+    payload = {"acquisition_schema_version": historical_schema}
+    _write_receipt(path, "historical-acquisition", payload)
+
+    snapshot = watch._load_canonical_receipt(
+        path,
+        root=tmp_path,
+        receipt_type="historical-acquisition",
+        label="historical acquisition",
+    )
+
+    assert snapshot.value["payload"] == payload
+
+
+@pytest.mark.parametrize("schema_alias", (True, 1.0, "1"))
+def test_receipt_loader_requires_an_exact_integer_envelope_schema(
+    tmp_path: Path,
+    schema_alias: object,
+) -> None:
+    path = tmp_path / "receipt.json"
+    receipt = _receipt("test-receipt", {"historical_schema": 1})
+    receipt["schema_version"] = schema_alias
+    path.write_bytes(_canonical(receipt))
+
+    with pytest.raises(watch.WatchError, match="another schema or receipt type"):
+        watch._load_canonical_receipt(
+            path,
+            root=tmp_path,
+            receipt_type="test-receipt",
+            label="test receipt",
+        )
 
 
 def _write_build_execution(path: Path, payload: dict[str, Any]) -> None:
@@ -70,6 +214,8 @@ class Fixture:
     foundation_path: Path
     pinned_cdp_path: Path
     build_execution_path: Path
+    browser_egress_root: Path
+    browser_egress_final_path: Path
 
     def advance_checkpoint(self) -> None:
         value = json.loads(self.paths.checkpoint.read_text(encoding="utf-8"))
@@ -86,6 +232,14 @@ def acquisition(tmp_path: Path) -> Fixture:
         state_base=tmp_path / "host-watch-state",
     )
     paths.candidate_catalogue.parent.mkdir(parents=True)
+    source_root = Path(__file__).resolve().parents[1]
+    for relative in (
+        watch.BROWSER_EGRESS_MANIFEST_RELATIVE_PATH,
+        watch.BROWSER_EGRESS_ARGV_RELATIVE_PATH,
+    ):
+        target = paths.lab_root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes((source_root / relative).read_bytes())
     paths.acquisition_root.mkdir(parents=True)
     paths.action_lock.write_bytes(b"")
     paths.stability_root.mkdir(parents=True)
@@ -99,9 +253,7 @@ def acquisition(tmp_path: Path) -> Fixture:
     (paths.lab_root / "neqo-qcsd").mkdir()
     (paths.lab_root / "Dockerfile").write_text("FROM scratch\n", encoding="utf-8")
     (paths.lab_root / "uv.lock").write_text("fixture uv lock\n", encoding="utf-8")
-    (paths.lab_root / "neqo-qcsd/Cargo.lock").write_text(
-        "fixture Cargo lock\n", encoding="utf-8"
-    )
+    (paths.lab_root / "neqo-qcsd/Cargo.lock").write_text("fixture Cargo lock\n", encoding="utf-8")
 
     candidate_ids = [f"tranco-{rank:07d}" for rank in range(1, watch.CANDIDATE_COUNT + 1)]
     catalogue_payload = {
@@ -137,9 +289,7 @@ def acquisition(tmp_path: Path) -> Fixture:
         "neqo_patch_sha256": watch.EMPTY_SHA256,
     }
     prepare_source = {**collection_source, "image_digest": image}
-    build_execution_path = (
-        paths.lab_root / "artifacts/buflo-study/build-execution-v23.json"
-    )
+    build_execution_path = paths.lab_root / "artifacts/buflo-study/build-execution-v23.json"
     build_execution_path.parent.mkdir(parents=True)
     reference_image = "sha256:" + "f" * 64
     build_images = {
@@ -173,10 +323,7 @@ def acquisition(tmp_path: Path) -> Fixture:
                     "--pull",
                     "--no-cache",
                     "--iidfile",
-                    (
-                        f"{build_root}/artifacts/buflo-study/"
-                        f".build-iids-v23.ABC123/{target}.iid"
-                    ),
+                    (f"{build_root}/artifacts/buflo-study/.build-iids-v23.ABC123/{target}.iid"),
                     "--target",
                     target,
                     "--tag",
@@ -194,9 +341,7 @@ def acquisition(tmp_path: Path) -> Fixture:
         "artifact_type": "qcsd-study-build-inputs",
         "rust_base_image": watch.BUILD_RUST_BASE_IMAGE,
         "debian_base_image": watch.BUILD_DEBIAN_BASE_IMAGE,
-        "uv_lock_sha256": hashlib.sha256(
-            (paths.lab_root / "uv.lock").read_bytes()
-        ).hexdigest(),
+        "uv_lock_sha256": hashlib.sha256((paths.lab_root / "uv.lock").read_bytes()).hexdigest(),
         "cargo_lock_sha256": hashlib.sha256(
             (paths.lab_root / "neqo-qcsd/Cargo.lock").read_bytes()
         ).hexdigest(),
@@ -232,8 +377,7 @@ def acquisition(tmp_path: Path) -> Fixture:
                 "pull": True,
                 "no_cache": True,
                 "scope": (
-                    "Docker-layer-cache-disabled;"
-                    "declared-BuildKit-dependency-cache-mounts-only"
+                    "Docker-layer-cache-disabled;declared-BuildKit-dependency-cache-mounts-only"
                 ),
             },
             "host_storage_preflight": {
@@ -286,14 +430,10 @@ def acquisition(tmp_path: Path) -> Fixture:
         "started_at": build["started_at"],
         "finished_at": build["finished_at"],
     }
-    pinned_cdp_path = (
-        paths.lab_root / "artifacts/buflo-study/pinned-cdp-execution-v23.json"
-    )
-    contract_sha256 = hashlib.sha256(
-        _canonical(watch._PINNED_CDP_CONTRACT)
-    ).hexdigest()
+    pinned_cdp_path = paths.lab_root / "artifacts/buflo-study/pinned-cdp-execution-v23.json"
+    contract_sha256 = hashlib.sha256(_canonical(watch._PINNED_CDP_CONTRACT)).hexdigest()
     pinned_payload = {
-        "probe_schema_version": 1,
+        "probe_schema_version": watch._PINNED_CDP_SCHEMA_VERSION,
         "artifact_type": watch.PINNED_CDP_TYPE,
         "study_id": watch.STUDY_ID,
         "cohort_version": 23,
@@ -307,29 +447,62 @@ def acquisition(tmp_path: Path) -> Fixture:
         "probe_contract": copy.deepcopy(watch._PINNED_CDP_CONTRACT),
         "probe_contract_sha256": contract_sha256,
         "observation": {
-            "playwright_version": "1.52.0",
-            "chromium_version": "136.0.7103.113",
-            "chromium_executable": "/usr/bin/chromium",
+            "playwright_version": "1.57.0",
+            "chromium_version": "143.0.7499.4",
+            "chromium_executable": "/usr/local/bin/qcsd-chromium",
+            "playwright_driver": copy.deepcopy(watch._EXPECTED_PLAYWRIGHT_DRIVER_BINDING),
             "isolation": {
                 "real_uid": 1000,
                 "effective_uid": 1000,
+                "saved_uid": 1000,
+                "filesystem_uid": 1000,
                 "real_gid": 1000,
                 "effective_gid": 1000,
+                "saved_gid": 1000,
+                "filesystem_gid": 1000,
                 "expected_uid": 1000,
                 "expected_gid": 1000,
+                "supplementary_groups": [1000],
+                "inheritable_capabilities": "0000000000000000",
+                "permitted_capabilities": "0000000000000000",
                 "effective_capabilities": "0000000000000000",
+                "bounding_capabilities": "0000000000000000",
+                "ambient_capabilities": "0000000000000000",
                 "no_new_privileges": True,
                 "observed_interfaces": ["lo"],
             },
             "topology": {
                 "observed_target_types": ["iframe", "page", "shared_worker", "worker"],
-                "event_count": 20,
+                "event_count": 42,
+                "event_method_counts": {
+                    "Fetch.requestPaused": 2,
+                    "Network.loadingFailed": 0,
+                    "Network.loadingFinished": 11,
+                    "Network.requestServedFromCache": 0,
+                    "Network.requestWillBeSent": 11,
+                    "Network.requestWillBeSentExtraInfo": 7,
+                    "Network.responseReceived": 11,
+                },
                 "cross_site_iframe_request": True,
                 "duplicate_request_occurrences": 2,
-                "redirect_terminal_request": True,
+                "redirect_target_request": True,
                 "worker_network_target_types": ["shared_worker", "worker"],
-                "worker_fetch_paused_on_page": True,
+                "dedicated_worker_network_request": True,
+                "shared_worker_network_request": True,
+                "dedicated_worker_fetch_paused_on_page": True,
+                "shared_worker_fetch_paused_on_shared_worker": True,
+                "http_status_counts": copy.deepcopy(watch._PINNED_CDP_HTTP_STATUS_COUNTS),
+                "server_request_counts": copy.deepcopy(watch._PINNED_CDP_SERVER_REQUEST_COUNTS),
+                "bootstrap_prearm_summary": copy.deepcopy(
+                    watch._PINNED_CDP_BOOTSTRAP_PREARM_SUMMARY
+                ),
+                "egress_prearm_summary": _egress_prearm_summary(),
+                "non_replayable_egress_summary": _non_replayable_egress_summary(),
+                "browser_egress_command_line": _browser_egress_command_line(),
+                "browser_context_service_worker_count": 0,
+                "quiescent_target_activity": _target_activity(),
                 "router_closed": True,
+                "browser_guard_closed": True,
                 "ledger_closed": True,
                 "extra_info_closed": True,
                 "browser_closed": True,
@@ -347,6 +520,75 @@ def acquisition(tmp_path: Path) -> Fixture:
         "build_execution": build_binding,
         "probe_contract_sha256": contract_sha256,
     }
+    browser_egress_root = paths.lab_root / "artifacts/buflo-study/browser-egress-qualification-v23"
+    browser_egress_root.mkdir()
+    browser_egress_final_path = browser_egress_root / "final.json"
+    expanded_vectors_sha256 = watch.BROWSER_EGRESS_EXPANDED_VECTORS_SHA256
+    browser_egress_vector_ids = list(watch._BROWSER_EGRESS_VECTOR_IDS)
+    browser_egress_final_payload = {
+        "schema_version": 1,
+        "qualification_id": watch.BROWSER_EGRESS_QUALIFICATION_ID,
+        "study_id": watch.STUDY_ID,
+        "cohort_version": 23,
+        "qualification_started_at": "2026-08-28T01:15:00+00:00",
+        "qualification_finished_at": "2026-08-28T01:30:00+00:00",
+        "recorded_at": "2026-08-28T01:45:00+00:00",
+        "foundation": {
+            "path": "foundation.json",
+            "sha256": "1" * 64,
+            "payload_sha256": "2" * 64,
+        },
+        "checkpoint": {"path": "experiment.json", "sha256": "3" * 64},
+        "expanded_vectors_sha256": expanded_vectors_sha256,
+        "passed_results": [
+            {
+                "vector_ordinal": ordinal,
+                "vector_id": browser_egress_vector_ids[ordinal - 1],
+                "attempt_number": 1,
+                "path": f"attempts/result-{ordinal:04d}.json",
+                "sha256": hashlib.sha256(f"result-{ordinal}".encode()).hexdigest(),
+                "payload_sha256": hashlib.sha256(f"payload-{ordinal}".encode()).hexdigest(),
+            }
+            for ordinal in range(1, watch.BROWSER_EGRESS_VECTOR_COUNT + 1)
+        ],
+        "attempt_count": watch.BROWSER_EGRESS_VECTOR_COUNT,
+        "passed_vector_count": watch.BROWSER_EGRESS_VECTOR_COUNT,
+        "operational_failure_count": 0,
+        "semantic_failure_count": 0,
+        "packet_level_egress_qualification": "passed",
+        "consumer_contract": {"policy": "fixture-closed-egress-v1"},
+        "verdict": "passed",
+    }
+    _write_receipt(
+        browser_egress_final_path,
+        watch.BROWSER_EGRESS_FINAL_TYPE,
+        browser_egress_final_payload,
+    )
+    browser_egress_final = json.loads(browser_egress_final_path.read_text(encoding="utf-8"))
+    browser_egress_binding = {
+        "root": ("/lab/artifacts/buflo-study/browser-egress-qualification-v23"),
+        "path": ("/lab/artifacts/buflo-study/browser-egress-qualification-v23/final.json"),
+        "sha256": hashlib.sha256(browser_egress_final_path.read_bytes()).hexdigest(),
+        "payload_sha256": browser_egress_final["payload_sha256"],
+        "qualification_id": watch.BROWSER_EGRESS_QUALIFICATION_ID,
+        "cohort_version": 23,
+        "qualification_started_at": browser_egress_final_payload["qualification_started_at"],
+        "qualification_finished_at": browser_egress_final_payload["qualification_finished_at"],
+        "recorded_at": browser_egress_final_payload["recorded_at"],
+        "prepare_image_id": image,
+        "build_execution": {
+            "path": build_binding["path"],
+            "sha256": build_binding["sha256"],
+            "payload_sha256": build_binding["payload_sha256"],
+            "cohort_version": 23,
+            "collection_image_id": collection_image,
+            "prepare_image_id": image,
+            "reference_image_id": reference_image,
+        },
+        "expanded_vectors_sha256": expanded_vectors_sha256,
+        "passed_vector_count": watch.BROWSER_EGRESS_VECTOR_COUNT,
+        "passed": True,
+    }
     foundation_path = paths.lab_root / "artifacts/class-study-foundation-v23.json"
     hard_gates = []
     for ordinal, gate in enumerate(watch._FOUNDATION_GATES, 1):
@@ -359,6 +601,14 @@ def acquisition(tmp_path: Path) -> Fixture:
                     build_sha256,
                     build["payload_sha256"],
                     contract_sha256,
+                }
+            )
+        elif gate == "browser-egress-packet-qualification-110-of-110":
+            evidence_sha256s = sorted(
+                {
+                    browser_egress_binding["sha256"],
+                    browser_egress_binding["payload_sha256"],
+                    browser_egress_binding["expanded_vectors_sha256"],
                 }
             )
         hard_gates.append(
@@ -394,6 +644,7 @@ def acquisition(tmp_path: Path) -> Fixture:
                     "sha256": build_binding["sha256"],
                 },
                 "pinned_cdp_probe": pinned_binding,
+                "browser_egress_qualification": browser_egress_binding,
                 "reference": {},
                 "code_gate": {},
                 "controlled_qualification": {},
@@ -405,6 +656,8 @@ def acquisition(tmp_path: Path) -> Fixture:
                 "regression_samples": 18,
                 "controlled_samples": 160,
                 "pinned_cdp_probe": "pass",
+                "browser_egress_packet_qualification": "pass",
+                "browser_egress_vectors": watch.BROWSER_EGRESS_VECTOR_COUNT,
             },
             "hard_gates": hard_gates,
             "all_foundation_gates_passed": True,
@@ -423,11 +676,10 @@ def acquisition(tmp_path: Path) -> Fixture:
         "started_at": "2026-08-29T00:00:00Z",
         "image_digest": image,
         "source": prepare_source,
-        "browser_tool": "playwright-chromium",
-        "navigation_implementation": (
-            "playwright-cdp-catalogue-domain-boundary-redirect-pin-convergence-v3"
-        ),
+        "browser_tool": copy.deepcopy(watch._EXPECTED_BROWSER_TOOL_IDENTITY),
+        "navigation_implementation": watch._NAVIGATION_IMPLEMENTATION,
         "cdp_target_instrumentation_policy": watch._CDP_TARGET_INSTRUMENTATION_POLICY,
+        "non_replayable_egress_contract": copy.deepcopy(watch._NON_REPLAYABLE_EGRESS_CONTRACT),
         "passive_render_contract": copy.deepcopy(watch._PASSIVE_RENDER_CONTRACT),
         "passive_render_contract_sha256": watch._PASSIVE_RENDER_CONTRACT_SHA256,
         "browser_navigation_timeout_ms": watch.BROWSER_NAVIGATION_TIMEOUT_MS,
@@ -435,15 +687,13 @@ def acquisition(tmp_path: Path) -> Fixture:
         "acquisition_action_timing_contract": copy.deepcopy(
             watch._ACQUISITION_ACTION_TIMING_CONTRACT
         ),
-        "baseline_scheduling_contract": copy.deepcopy(
-            watch._BASELINE_SCHEDULING_CONTRACT
-        ),
-        "registrable_domain_policy": "exact-frozen-tranco-candidate-domain",
-        "domain_safety_policy": {},
-        "domain_safety_policy_sha256": "d" * 64,
+        "baseline_scheduling_contract": copy.deepcopy(watch._BASELINE_SCHEDULING_CONTRACT),
+        "registrable_domain_policy": watch._REGISTRABLE_DOMAIN_POLICY,
+        "domain_safety_policy": copy.deepcopy(watch._DOMAIN_SAFETY_POLICY),
+        "domain_safety_policy_sha256": watch._DOMAIN_SAFETY_POLICY_SHA256,
         "origin_policy": copy.deepcopy(watch._ORIGIN_POLICY),
-        "eligibility_inputs": ["page-safety", "three-window-technical-stability"],
-        "prohibited_inputs": ["classifier", "defence", "latency", "bandwidth", "privacy"],
+        "eligibility_inputs": copy.deepcopy(watch._ELIGIBILITY_INPUTS),
+        "prohibited_inputs": copy.deepcopy(watch._PROHIBITED_INPUTS),
     }
     _write_receipt(paths.provenance, watch.PROVENANCE_TYPE, provenance_payload)
     provenance_sha256 = hashlib.sha256(paths.provenance.read_bytes()).hexdigest()
@@ -467,6 +717,8 @@ def acquisition(tmp_path: Path) -> Fixture:
         foundation_path,
         pinned_cdp_path,
         build_execution_path,
+        browser_egress_root,
+        browser_egress_final_path,
     )
 
 
@@ -494,9 +746,7 @@ def _details(
         and recovery == 0
         and active_batch is None
     )
-    work_due = bool(
-        recovery or due or finalisable or missed or (pending and not blocked)
-    )
+    work_due = bool(recovery or due or finalisable or missed or (pending and not blocked))
     return {
         "acquisition_schema_version": watch.ACQUISITION_SCHEMA_VERSION,
         "checkpoint_schema_version": watch.CHECKPOINT_SCHEMA_VERSION,
@@ -518,7 +768,13 @@ def _details(
     }
 
 
-def _result(action: str, details: dict[str, Any], *, runner_root: str | None = None) -> dict:
+def _result(
+    action: str,
+    details: dict[str, Any],
+    *,
+    runner_root: str | None = None,
+    foundation_sha256: str = "0" * 64,
+) -> dict:
     payload = copy.deepcopy(details)
     payload.update(
         {
@@ -537,6 +793,12 @@ def _result(action: str, details: dict[str, Any], *, runner_root: str | None = N
                 "global_live_page_cap": watch.GLOBAL_LIVE_PAGE_CAP,
             },
             "runner_wait_policy": copy.deepcopy(watch._RUN_WAIT_POLICY),
+        }
+        payload["authoritative"] = False
+        payload["gate_verification"] = {
+            "foundation_path": "/lab/artifacts/class-study-foundation-v23.json",
+            "foundation_sha256": foundation_sha256,
+            "informational_only": True,
         }
         status = "complete"
         blockers: list[str] = []
@@ -560,6 +822,20 @@ def _completed(value: Any, *, returncode: int = 0, stderr: str = "") -> subproce
     return subprocess.CompletedProcess((), returncode, stdout, stderr)
 
 
+def _completed_canonical(
+    value: Any, *, returncode: int = 0, stderr: str = ""
+) -> subprocess.CompletedProcess:
+    return subprocess.CompletedProcess((), returncode, _canonical(value).decode("utf-8"), stderr)
+
+
+def _browser_egress_result(paths: watch.WatchPaths) -> dict[str, Any]:
+    foundation = json.loads(
+        (paths.lab_root / "artifacts/class-study-foundation-v23.json").read_text(encoding="utf-8")
+    )
+    binding = foundation["payload"]["evidence"]["browser_egress_qualification"]
+    return {key: copy.deepcopy(value) for key, value in binding.items() if key != "root"}
+
+
 def _admission() -> dict[str, Any]:
     return {
         "schema_version": 1,
@@ -571,9 +847,18 @@ def _admission() -> dict[str, Any]:
     }
 
 
+_DEFAULT_BROWSER_EGRESS_RESPONSE = object()
+
+
 class FakeRunner:
-    def __init__(self, responses: list[Any]) -> None:
+    def __init__(
+        self,
+        responses: list[Any],
+        *,
+        browser_egress_response: Any = _DEFAULT_BROWSER_EGRESS_RESPONSE,
+    ) -> None:
         self.responses = list(responses)
+        self.browser_egress_response = browser_egress_response
         self.calls: list[tuple[tuple[str, ...], Path, dict[str, str]]] = []
 
     def __call__(
@@ -592,11 +877,36 @@ class FakeRunner:
         self.calls.append((tuple(command), cwd, dict(env)))
         if tuple(command) == watch._admission_command(self._paths(command)):
             return _completed(_admission())
+        if watch._is_canonical_browser_egress_verify_command(command):
+            response = self.browser_egress_response
+            if response is _DEFAULT_BROWSER_EGRESS_RESPONSE:
+                return _completed_canonical(_browser_egress_result(self._paths(command)))
+            if callable(response):
+                response = response(tuple(command), cwd, dict(env))
+            return response
         if not self.responses:
             raise AssertionError("unexpected coordinator call")
         response = self.responses.pop(0)
         if callable(response):
             response = response(tuple(command), cwd, dict(env))
+        if (
+            isinstance(response, subprocess.CompletedProcess)
+            and command[3] == "acquisition-status"
+            and response.returncode == 0
+        ):
+            try:
+                value = json.loads(response.stdout)
+            except (TypeError, json.JSONDecodeError):
+                pass
+            else:
+                verification = value.get("details", {}).get("gate_verification")
+                if (
+                    isinstance(verification, dict)
+                    and verification.get("foundation_sha256") == "0" * 64
+                ):
+                    binding = watch._validate_immutable_binding(self._paths(command))
+                    verification["foundation_sha256"] = binding.foundation_sha256
+                    response = _completed(value)
         return response
 
     @staticmethod
@@ -627,7 +937,7 @@ class FakeMonotonic:
 
 
 def test_due_work_uses_exact_command_environment_and_paths(acquisition: Fixture) -> None:
-    assert watch.ACQUISITION_SCHEMA_VERSION == 4
+    assert watch.ACQUISITION_SCHEMA_VERSION == 5
     assert watch.CHECKPOINT_SCHEMA_VERSION == 2
     assert watch.ACQUISITION_TIMEOUT_MS == 60_000
     assert watch.PENDING_BASELINE_GUARD_MS == 2_400_000
@@ -686,6 +996,9 @@ def test_due_work_uses_exact_command_environment_and_paths(acquisition: Fixture)
     assert result["details"]["complete"] is True
     assert [call[0] for call in runner.calls] == [
         watch._admission_command(acquisition.paths),
+        watch._browser_egress_verify_command(
+            acquisition.paths, watch._validate_immutable_binding(acquisition.paths)
+        ),
         watch._status_command(acquisition.paths),
         watch._run_command(acquisition.paths),
         watch._status_command(acquisition.paths),
@@ -699,10 +1012,40 @@ def test_due_work_uses_exact_command_environment_and_paths(acquisition: Fixture)
     coordinator_calls = [
         call for call in runner.calls if call[0] != watch._admission_command(acquisition.paths)
     ]
-    assert all(
-        call[2][watch.PREPARE_IMAGE_ENV] == acquisition.image for call in coordinator_calls
-    )
+    assert all(call[2][watch.PREPARE_IMAGE_ENV] == acquisition.image for call in coordinator_calls)
     assert all(watch.LOCK_ENV not in call[2] for call in runner.calls)
+
+
+def test_browser_egress_verify_command_has_one_exact_supervised_scope(
+    acquisition: Fixture,
+) -> None:
+    binding = watch._validate_immutable_binding(acquisition.paths)
+    command = watch._browser_egress_verify_command(acquisition.paths, binding)
+    assert command == (
+        "/usr/bin/bash",
+        str(acquisition.paths.launcher),
+        "test",
+        "browser-egress",
+        "verify",
+        "--cohort-version",
+        "23",
+        "--build-execution-receipt",
+        str(acquisition.build_execution_path),
+        "--result-root",
+        str(acquisition.browser_egress_root),
+    )
+    assert watch._scope_command_runtime(command) == 600
+
+    for index, replacement in (
+        (4, "run"),
+        (6, "023"),
+        (8, str(acquisition.build_execution_path.with_name("other.json"))),
+        (10, str(acquisition.browser_egress_root.with_name("other"))),
+    ):
+        forged = list(command)
+        forged[index] = replacement
+        with pytest.raises(watch.WatchError, match="unrecognised acquisition command"):
+            watch._scope_command_runtime(forged)
 
 
 def test_action_status_validates_transactional_active_batch_summary() -> None:
@@ -720,9 +1063,7 @@ def test_action_status_validates_transactional_active_batch_summary() -> None:
     )
 
     probe_active = copy.deepcopy(active)
-    probe_active.update(
-        {"stage": "probe", "live_page_count": 5, "attempt_count": 5}
-    )
+    probe_active.update({"stage": "probe", "live_page_count": 5, "attempt_count": 5})
     watch._validate_action_result(
         _result(
             "acquisition-status",
@@ -744,6 +1085,77 @@ def test_action_status_validates_transactional_active_batch_summary() -> None:
                 _result("acquisition-status", invalid),
                 action="acquisition-status",
             )
+
+
+@pytest.mark.parametrize("schema_alias", (True, 1.0))
+def test_action_result_requires_an_exact_integer_schema(schema_alias: object) -> None:
+    result = _result("acquisition-status", _details())
+    result["schema_version"] = schema_alias
+
+    with pytest.raises(watch.WatchError, match="identity is mismatched"):
+        watch._validate_action_result(result, action="acquisition-status")
+
+
+@pytest.mark.parametrize(
+    "field",
+    (
+        "acquisition_schema_version",
+        "checkpoint_schema_version",
+        "maximum_candidates_per_action",
+        "global_live_page_cap",
+    ),
+)
+@pytest.mark.parametrize("alias_kind", ("bool", "float"))
+def test_action_status_requires_exact_integer_schema_and_cap_fields(
+    field: str,
+    alias_kind: str,
+) -> None:
+    details = _details()
+    details[field] = True if alias_kind == "bool" else float(details[field])
+
+    with pytest.raises(watch.WatchError, match="schema or batch cap"):
+        watch._validate_action_result(
+            _result("acquisition-status", details),
+            action="acquisition-status",
+        )
+
+
+@pytest.mark.parametrize("alias_kind", ("bool", "float"))
+def test_action_status_gate_requires_exact_integer_nested_caps(alias_kind: str) -> None:
+    result = _result("acquisition-status", _details())
+    cap = result["details"]["gate"]["batching"]["maximum_candidates_per_action"]
+    result["details"]["gate"]["batching"]["maximum_candidates_per_action"] = (
+        True if alias_kind == "bool" else float(cap)
+    )
+
+    with pytest.raises(watch.WatchError, match="another stability gate"):
+        watch._validate_action_result(result, action="acquisition-status")
+
+
+@pytest.mark.parametrize("alias_kind", ("bool", "float"))
+def test_action_run_requires_an_exact_integer_candidate_cap(alias_kind: str) -> None:
+    result = _result("acquisition-run", _details())
+    result["details"]["bounded_candidates"] = (
+        True if alias_kind == "bool" else float(watch.MAX_CANDIDATES)
+    )
+
+    with pytest.raises(watch.WatchError, match="bounded wait contract"):
+        watch._validate_action_result(result, action="acquisition-run")
+
+
+@pytest.mark.parametrize("schema_alias", (True, 1.0))
+def test_docker_admission_requires_an_exact_integer_schema(schema_alias: object) -> None:
+    value = {
+        "schema_version": schema_alias,
+        "artifact_type": watch.DOCKER_ADMISSION_TYPE,
+        "docker_context": "default",
+        "docker_host": "unix:///var/run/docker.sock",
+        "docker_server_id": "fixture-server",
+        "host_boot_id": watch._host_boot_id(),
+    }
+
+    with pytest.raises(watch.WatchError, match="unsafe binding"):
+        watch._validate_docker_admission(value)
 
 
 def test_action_status_validates_finalisable_work_as_disjoint_and_due() -> None:
@@ -785,6 +1197,113 @@ def test_complete_exits_without_creating_completion_receipt(acquisition: Fixture
     watch.watch_acquisition(paths=acquisition.paths, runner=runner)
 
     assert not (acquisition.paths.acquisition_root / "completion.json").exists()
+    assert len(runner.calls) == 3
+
+
+def test_browser_egress_deep_verify_is_exactly_once_before_status(
+    acquisition: Fixture,
+) -> None:
+    complete = _details(terminal=watch.CANDIDATE_COUNT)
+    runner = FakeRunner([_completed(_result("acquisition-status", complete))])
+
+    watch.watch_acquisition(paths=acquisition.paths, runner=runner)
+
+    binding = watch._validate_immutable_binding(acquisition.paths)
+    assert [call[0] for call in runner.calls] == [
+        watch._admission_command(acquisition.paths),
+        watch._browser_egress_verify_command(acquisition.paths, binding),
+        watch._status_command(acquisition.paths),
+    ]
+    verification_environment = runner.calls[1][2]
+    assert verification_environment[watch.PREPARE_IMAGE_ENV] == acquisition.image
+    assert verification_environment[watch.PINNED_CONTEXT_ENV] == "default"
+    assert verification_environment[watch.PINNED_HOST_ENV] == ("unix:///var/run/docker.sock")
+    assert verification_environment[watch.PINNED_SERVER_ID_ENV] == "test-daemon-01"
+
+
+@pytest.mark.parametrize(
+    ("response", "message"),
+    (
+        (
+            _completed("", returncode=19, stderr="deep replay failed"),
+            "deep verification failed with exit 19: deep replay failed",
+        ),
+        (_completed("not-json"), "not exactly one JSON"),
+    ),
+)
+def test_browser_egress_deep_verify_child_failure_is_fail_closed(
+    acquisition: Fixture,
+    response: subprocess.CompletedProcess,
+    message: str,
+) -> None:
+    runner = FakeRunner([], browser_egress_response=response)
+
+    with pytest.raises(watch.WatchError, match=message):
+        watch.watch_acquisition(paths=acquisition.paths, runner=runner)
+
+    assert len(runner.calls) == 2
+    assert watch._is_canonical_browser_egress_verify_command(runner.calls[-1][0])
+
+
+def test_browser_egress_deep_verify_rejects_noncanonical_stdout(
+    acquisition: Fixture,
+) -> None:
+    response = _completed(_browser_egress_result(acquisition.paths))
+
+    with pytest.raises(watch.WatchError, match="not canonical JSON"):
+        watch.watch_acquisition(
+            paths=acquisition.paths,
+            runner=FakeRunner([], browser_egress_response=response),
+        )
+
+
+def test_browser_egress_deep_verify_rejects_mismatched_pass_summary(
+    acquisition: Fixture,
+) -> None:
+    result = _browser_egress_result(acquisition.paths)
+    result["passed"] = False
+
+    with pytest.raises(watch.WatchError, match="differs from the foundation binding"):
+        watch.watch_acquisition(
+            paths=acquisition.paths,
+            runner=FakeRunner([], browser_egress_response=_completed_canonical(result)),
+        )
+
+
+def test_browser_egress_binding_tamper_after_deep_verify_is_detected_before_status(
+    acquisition: Fixture,
+) -> None:
+    result = _browser_egress_result(acquisition.paths)
+
+    def tamper(_command, _cwd, _env):
+        acquisition.browser_egress_final_path.write_bytes(
+            acquisition.browser_egress_final_path.read_bytes() + b"\n"
+        )
+        return _completed_canonical(result)
+
+    runner = FakeRunner([], browser_egress_response=tamper)
+    with pytest.raises(watch.WatchError, match="not canonically encoded"):
+        watch.watch_acquisition(paths=acquisition.paths, runner=runner)
+
+    assert len(runner.calls) == 2
+
+
+def test_browser_egress_nested_evidence_tamper_after_deep_verify_is_detected_before_status(
+    acquisition: Fixture,
+) -> None:
+    nested = acquisition.browser_egress_root / "evidence/001--fixture/capture.pcapng"
+    nested.parent.mkdir(parents=True)
+    nested.write_bytes(b"sealed packet evidence")
+    result = _browser_egress_result(acquisition.paths)
+
+    def tamper(_command, _cwd, _env):
+        nested.write_bytes(b"tampered packet evidence")
+        return _completed_canonical(result)
+
+    runner = FakeRunner([], browser_egress_response=tamper)
+    with pytest.raises(watch.WatchError, match="immutable evidence binding changed"):
+        watch.watch_acquisition(paths=acquisition.paths, runner=runner)
+
     assert len(runner.calls) == 2
 
 
@@ -819,7 +1338,7 @@ def test_waits_to_target_with_five_second_heartbeats_and_no_busy_spin(
 
     assert clock.sleeps == [5.0, 5.0, 2.0]
     assert clock.value == target
-    assert [call[0][3] for call in runner.calls[1:]] == [
+    assert [call[0][3] for call in runner.calls[2:]] == [
         "acquisition-status",
         "acquisition-run",
         "acquisition-status",
@@ -868,8 +1387,8 @@ def test_wait_revalidates_host_source_without_polling_status_containers(
         source_validator=validate,
     )
 
-    assert validations == [0.0, 0.0, 0.0, 0.0, 0.0, 60.0, 65.0, 65.0, 65.0, 65.0, 65.0]
-    assert [call[0][3] for call in runner.calls[1:]] == [
+    assert validations == [0.0] * 6 + [60.0] + [65.0] * 5
+    assert [call[0][3] for call in runner.calls[2:]] == [
         "acquisition-status",
         "acquisition-run",
         "acquisition-status",
@@ -906,9 +1425,7 @@ def test_resume_uses_existing_checkpoint_and_releases_lock_on_interrupt(
             _completed(_result("acquisition-status", complete)),
         ]
     )
-    assert watch.watch_acquisition(paths=acquisition.paths, runner=resumed)["details"][
-        "complete"
-    ]
+    assert watch.watch_acquisition(paths=acquisition.paths, runner=resumed)["details"]["complete"]
 
 
 def test_clock_jump_delegates_missed_terminalisation_to_existing_runner(
@@ -984,9 +1501,7 @@ def test_incomplete_status_without_due_or_next_due_fails(acquisition: Fixture) -
             "another acquisition root",
         ),
         (
-            _completed(
-                _result("acquisition-run", _details(terminal=watch.CANDIDATE_COUNT))
-            ),
+            _completed(_result("acquisition-run", _details(terminal=watch.CANDIDATE_COUNT))),
             "identity is mismatched",
         ),
     ],
@@ -1015,9 +1530,10 @@ def test_mismatched_prepare_image_and_child_failure_fail_closed(acquisition: Fix
 @pytest.mark.parametrize(
     "field",
     [
-        "acquisition_schema_version",
+        "browser_tool",
         "navigation_implementation",
         "cdp_target_instrumentation_policy",
+        "non_replayable_egress_contract",
         "passive_render_contract",
         "passive_render_contract_sha256",
         "browser_navigation_timeout_ms",
@@ -1027,9 +1543,7 @@ def test_mismatched_prepare_image_and_child_failure_fail_closed(acquisition: Fix
         "origin_policy",
     ],
 )
-def test_watcher_rejects_discovery_contract_drift(
-    acquisition: Fixture, field: str
-) -> None:
+def test_watcher_rejects_discovery_contract_drift(acquisition: Fixture, field: str) -> None:
     provenance = json.loads(acquisition.paths.provenance.read_text(encoding="utf-8"))
     payload = copy.deepcopy(provenance["payload"])
     if field == "passive_render_contract":
@@ -1038,7 +1552,7 @@ def test_watcher_rejects_discovery_contract_drift(
         payload[field]["inner_timeout"]["soft_deadline_ms"] -= 1
     elif field == "baseline_scheduling_contract":
         payload[field]["minimum_baseline_spacing_ms"] -= 1
-    elif field.endswith("_ms") or field == "acquisition_schema_version":
+    elif field.endswith("_ms"):
         payload[field] -= 1
     else:
         payload[field] = "stale-contract"
@@ -1076,15 +1590,11 @@ def test_watcher_reconciles_baseline_batches_with_candidate_state(
     watch._validate_checkpoint(acquisition.paths, binding)
 
     mutations = (
-        lambda value: value["baseline_batches"][0].__setitem__(
-            "live_page_count", 1
-        ),
+        lambda value: value["baseline_batches"][0].__setitem__("live_page_count", 1),
         lambda value: value["candidates"][candidate_ids[0]].__setitem__(
             "baseline_started_at", "2026-08-29T01:00:01Z"
         ),
-        lambda value: value["baseline_batches"].append(
-            copy.deepcopy(value["baseline_batches"][0])
-        ),
+        lambda value: value["baseline_batches"].append(copy.deepcopy(value["baseline_batches"][0])),
         lambda value: value["baseline_batches"][0]["candidate_ids"].reverse(),
         lambda value: value["baseline_batches"].clear(),
     )
@@ -1188,14 +1698,10 @@ def test_watcher_reconciles_transactional_navigation_batch(
     invalid["active_batch"]["published_at"] = "2026-08-29T01:00:00.000000Z"
     for attempt in invalid["active_batch"]["attempts"]:
         attempt["started_at"] = invalid["active_batch"]["published_at"]
-        invalid["candidates"][attempt["candidate_id"]]["pending_navigation"][
-            "started_at"
-        ] = invalid["active_batch"]["published_at"]
-    body = {
-        name: item
-        for name, item in invalid["active_batch"].items()
-        if name != "batch_id"
-    }
+        invalid["candidates"][attempt["candidate_id"]]["pending_navigation"]["started_at"] = (
+            invalid["active_batch"]["published_at"]
+        )
+    body = {name: item for name, item in invalid["active_batch"].items() if name != "batch_id"}
     invalid["active_batch"] = _batch("active", body)
     _replace_checkpoint(acquisition, invalid)
     with pytest.raises(watch.WatchError, match="canonical UTC timestamp"):
@@ -1206,6 +1712,7 @@ def test_watcher_reconciles_transactional_navigation_batch(
     _replace_checkpoint(acquisition, invalid)
     with pytest.raises(watch.WatchError, match="differ from pending candidate state"):
         watch._validate_checkpoint(acquisition.paths, binding)
+
 
 def test_watcher_reconciles_transactional_probe_batch(
     acquisition: Fixture,
@@ -1283,9 +1790,7 @@ def test_watcher_reconciles_transactional_probe_batch(
         }
     )
     baseline_body = {
-        name: item
-        for name, item in invalid["baseline_batches"][0].items()
-        if name != "batch_id"
+        name: item for name, item in invalid["baseline_batches"][0].items() if name != "batch_id"
     }
     baseline_body["live_page_count"] = 2
     invalid["baseline_batches"][0] = _batch("baseline", baseline_body)
@@ -1300,11 +1805,7 @@ def test_watcher_reconciles_transactional_probe_batch(
             "started_at": started_at,
         }
     )
-    body = {
-        name: item
-        for name, item in invalid["active_batch"].items()
-        if name != "batch_id"
-    }
+    body = {name: item for name, item in invalid["active_batch"].items() if name != "batch_id"}
     invalid["active_batch"] = _batch("active", body)
     _replace_checkpoint(acquisition, invalid)
     with pytest.raises(watch.WatchError, match="mixes identities or windows"):
@@ -1354,9 +1855,7 @@ def _replace_foundation_and_rebind_provenance(
     _write_receipt(acquisition.paths.provenance, watch.PROVENANCE_TYPE, provenance_payload)
 
 
-def _replace_pinned_and_rebind_foundation(
-    acquisition: Fixture, payload: dict[str, Any]
-) -> None:
+def _replace_pinned_and_rebind_foundation(acquisition: Fixture, payload: dict[str, Any]) -> None:
     _write_receipt(acquisition.pinned_cdp_path, watch.PINNED_CDP_TYPE, payload)
     pinned = json.loads(acquisition.pinned_cdp_path.read_text(encoding="utf-8"))
     foundation = json.loads(acquisition.foundation_path.read_text(encoding="utf-8"))
@@ -1366,7 +1865,7 @@ def _replace_pinned_and_rebind_foundation(
     binding["payload_sha256"] = pinned["payload_sha256"]
     binding["build_execution"] = copy.deepcopy(payload["build_execution"])
     binding["probe_contract_sha256"] = payload["probe_contract_sha256"]
-    foundation_payload["hard_gates"][-1]["evidence_sha256s"] = sorted(
+    foundation_payload["hard_gates"][-2]["evidence_sha256s"] = sorted(
         {
             binding["sha256"],
             binding["payload_sha256"],
@@ -1378,9 +1877,7 @@ def _replace_pinned_and_rebind_foundation(
     _replace_foundation_and_rebind_provenance(acquisition, foundation_payload)
 
 
-def _replace_build_and_rebind_foundation(
-    acquisition: Fixture, payload: dict[str, Any]
-) -> None:
+def _replace_build_and_rebind_foundation(acquisition: Fixture, payload: dict[str, Any]) -> None:
     """Reseal every outer digest so build semantics are the only rejection."""
 
     _write_build_execution(acquisition.build_execution_path, payload)
@@ -1408,7 +1905,7 @@ def _replace_build_and_rebind_foundation(
     pinned_binding["sha256"] = pinned_sha256
     pinned_binding["payload_sha256"] = pinned["payload_sha256"]
     pinned_binding["build_execution"] = copy.deepcopy(build_binding)
-    foundation_payload["hard_gates"][-1]["evidence_sha256s"] = sorted(
+    foundation_payload["hard_gates"][-2]["evidence_sha256s"] = sorted(
         {
             pinned_sha256,
             pinned["payload_sha256"],
@@ -1467,8 +1964,7 @@ def test_watcher_rejects_fully_resealed_relocated_build_root(
         target = command["target"]
         iid_index = command["argv"].index("--iidfile") + 1
         command["argv"][iid_index] = (
-            f"{replacement_root}/artifacts/buflo-study/"
-            f".build-iids-v23.ABC123/{target}.iid"
+            f"{replacement_root}/artifacts/buflo-study/.build-iids-v23.ABC123/{target}.iid"
         )
         command["argv"][-2] = f"{replacement_root}/Dockerfile"
         command["argv"][-1] = replacement_root
@@ -1492,16 +1988,597 @@ def test_watcher_rejects_resealed_foundation_without_pinned_cdp_gate(
         watch._validate_immutable_binding(acquisition.paths)
 
 
+def test_watcher_rejects_resealed_foundation_without_browser_egress_gate(
+    acquisition: Fixture,
+) -> None:
+    foundation = json.loads(acquisition.foundation_path.read_text(encoding="utf-8"))
+    payload = copy.deepcopy(foundation["payload"])
+    payload["evidence"].pop("browser_egress_qualification")
+
+    _replace_foundation_and_rebind_provenance(acquisition, payload)
+
+    with pytest.raises(watch.WatchError, match="evidence inventory"):
+        watch._validate_immutable_binding(acquisition.paths)
+
+
+@pytest.mark.parametrize(
+    "relative",
+    (
+        watch.BROWSER_EGRESS_MANIFEST_RELATIVE_PATH,
+        watch.BROWSER_EGRESS_ARGV_RELATIVE_PATH,
+    ),
+)
+def test_watcher_rejects_browser_egress_contract_byte_tamper(
+    acquisition: Fixture,
+    relative: str,
+) -> None:
+    contract = acquisition.paths.lab_root / relative
+    value = json.loads(contract.read_text(encoding="utf-8"))
+    value["schema_version"] = True
+    contract.write_bytes(_canonical(value))
+
+    with pytest.raises(watch.WatchError, match="frozen watcher contract"):
+        watch._validate_immutable_binding(acquisition.paths)
+
+
+@pytest.mark.parametrize(
+    ("field_path", "replacement", "message"),
+    (
+        (("root",), "/lab/artifacts/buflo-study/browser-egress-qualification-v24", "path"),
+        (("passed",), False, "source/build/result"),
+        (("passed_vector_count",), 97, "source/build/result"),
+        (("expanded_vectors_sha256",), "e" * 64, "source/build/result"),
+        (("build_execution", "prepare_image_id"), "sha256:" + "7" * 64, "source/build/result"),
+    ),
+)
+def test_watcher_rejects_resealed_browser_egress_binding_tamper(
+    acquisition: Fixture,
+    field_path: tuple[str, ...],
+    replacement: Any,
+    message: str,
+) -> None:
+    foundation = json.loads(acquisition.foundation_path.read_text(encoding="utf-8"))
+    payload = copy.deepcopy(foundation["payload"])
+    target = payload["evidence"]["browser_egress_qualification"]
+    for component in field_path[:-1]:
+        target = target[component]
+    target[field_path[-1]] = replacement
+    _replace_foundation_and_rebind_provenance(acquisition, payload)
+
+    with pytest.raises(watch.WatchError, match=message):
+        watch._validate_immutable_binding(acquisition.paths)
+
+
+def test_watcher_rejects_fully_resealed_browser_egress_final_semantic_tamper(
+    acquisition: Fixture,
+) -> None:
+    final = json.loads(acquisition.browser_egress_final_path.read_text(encoding="utf-8"))
+    final_payload = copy.deepcopy(final["payload"])
+    final_payload["verdict"] = "failed"
+    _write_receipt(
+        acquisition.browser_egress_final_path,
+        watch.BROWSER_EGRESS_FINAL_TYPE,
+        final_payload,
+    )
+    rewritten = json.loads(acquisition.browser_egress_final_path.read_text(encoding="utf-8"))
+    foundation = json.loads(acquisition.foundation_path.read_text(encoding="utf-8"))
+    payload = copy.deepcopy(foundation["payload"])
+    binding = payload["evidence"]["browser_egress_qualification"]
+    binding["sha256"] = hashlib.sha256(
+        acquisition.browser_egress_final_path.read_bytes()
+    ).hexdigest()
+    binding["payload_sha256"] = rewritten["payload_sha256"]
+    payload["hard_gates"][-1]["evidence_sha256s"] = sorted(
+        {
+            binding["sha256"],
+            binding["payload_sha256"],
+            binding["expanded_vectors_sha256"],
+        }
+    )
+    _replace_foundation_and_rebind_provenance(acquisition, payload)
+
+    with pytest.raises(watch.WatchError, match="final payload is invalid"):
+        watch._validate_immutable_binding(acquisition.paths)
+
+
+def test_watcher_rejects_resealed_same_count_wrong_ordered_vector_id(
+    acquisition: Fixture,
+) -> None:
+    final = json.loads(acquisition.browser_egress_final_path.read_text(encoding="utf-8"))
+    final_payload = copy.deepcopy(final["payload"])
+    final_payload["passed_results"][0]["vector_id"] = final_payload["passed_results"][1][
+        "vector_id"
+    ]
+    _write_receipt(
+        acquisition.browser_egress_final_path,
+        watch.BROWSER_EGRESS_FINAL_TYPE,
+        final_payload,
+    )
+    rewritten = json.loads(acquisition.browser_egress_final_path.read_text(encoding="utf-8"))
+    foundation = json.loads(acquisition.foundation_path.read_text(encoding="utf-8"))
+    payload = copy.deepcopy(foundation["payload"])
+    binding = payload["evidence"]["browser_egress_qualification"]
+    binding["sha256"] = hashlib.sha256(
+        acquisition.browser_egress_final_path.read_bytes()
+    ).hexdigest()
+    binding["payload_sha256"] = rewritten["payload_sha256"]
+    payload["hard_gates"][-1]["evidence_sha256s"] = sorted(
+        {
+            binding["sha256"],
+            binding["payload_sha256"],
+            binding["expanded_vectors_sha256"],
+        }
+    )
+    _replace_foundation_and_rebind_provenance(acquisition, payload)
+
+    with pytest.raises(watch.WatchError, match="result inventory"):
+        watch._validate_immutable_binding(acquisition.paths)
+
+
+def test_watcher_pinned_cdp_contract_matches_runtime_contract() -> None:
+    from qcsd_lab import (
+        browser_egress,
+        browser_egress_fixture,
+        browser_egress_qualification,
+        cdp_targets,
+        class_acquisition,
+        class_attestation,
+        discovery_evidence,
+        pinned_cdp,
+        playwright_driver,
+    )
+
+    lab_root = Path(__file__).resolve().parents[1]
+    study = json.loads(
+        (lab_root / "config/class-study/v1/study.json").read_text(encoding="utf-8")
+    )
+    manifest_path = lab_root / watch.BROWSER_EGRESS_MANIFEST_RELATIVE_PATH
+    argv_path = lab_root / watch.BROWSER_EGRESS_ARGV_RELATIVE_PATH
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    argv = json.loads(argv_path.read_text(encoding="utf-8"))
+
+    assert hashlib.sha256(manifest_path.read_bytes()).hexdigest() == (
+        watch.BROWSER_EGRESS_MANIFEST_SHA256
+    )
+    assert hashlib.sha256(argv_path.read_bytes()).hexdigest() == (
+        watch.BROWSER_EGRESS_ARGV_SHA256
+    )
+    assert manifest == browser_egress_qualification.expected_manifest_config()
+    assert argv == browser_egress_qualification.expected_argv_config()
+    assert manifest["vector_count"] == watch.BROWSER_EGRESS_VECTOR_COUNT
+    assert manifest["expanded_vectors_sha256"] == (
+        watch.BROWSER_EGRESS_EXPANDED_VECTORS_SHA256
+    )
+    assert manifest["execution_contract"]["browser"]["quic"] == {
+        "disable_switch": "--disable-quic",
+        "disable_switch_bare_and_unique": True,
+        "enabled": False,
+        "rationale": "prevent-preferred-address-migration-bypassing-resolver-pins",
+    }
+    assert argv["command_line_projection_schema_version"] == (
+        watch._BROWSER_EGRESS_COMMAND_LINE_SCHEMA_VERSION
+    )
+    assert argv["antagonistic_effective_switches"] == (
+        watch._BROWSER_EGRESS_ANTAGONISTIC_CHROMIUM_SWITCHES
+    )
+    assert argv["required_effective_switches"].count("--disable-quic") == 1
+    assert "--disable-quic" not in argv["antagonistic_effective_switches"]
+    assert "--enable-quic" in argv["antagonistic_effective_switches"]
+
+    assert watch._CDP_TARGET_INSTRUMENTATION_POLICY == (
+        cdp_targets.CDP_TARGET_INSTRUMENTATION_POLICY
+    )
+    assert watch._BOOTSTRAP_PREARM_SUMMARY_SCHEMA_VERSION == (
+        cdp_targets.BOOTSTRAP_PREARM_SUMMARY_SCHEMA_VERSION
+    )
+    assert watch._EGRESS_PREARM_SUMMARY_SCHEMA_VERSION == (
+        cdp_targets.EGRESS_PREARM_SUMMARY_SCHEMA_VERSION
+    )
+    assert watch._PINNED_CDP_SCHEMA_VERSION == pinned_cdp.PROBE_SCHEMA_VERSION
+    assert watch._PINNED_CDP_TARGET_ACTIVITY_SCHEMA_VERSION == (
+        pinned_cdp.TARGET_ACTIVITY_SCHEMA_VERSION
+    )
+    assert watch._PINNED_CDP_TARGET_ACTIVITY_EVENTS == (pinned_cdp._TARGET_ACTIVITY_EVENTS)
+    assert watch._PINNED_CDP_TARGET_ACTIVITY_TYPES == (pinned_cdp._TARGET_ACTIVITY_TYPES)
+    assert watch._PINNED_CDP_CONTRACT == pinned_cdp.PROBE_CONTRACT
+    assert watch._PINNED_CDP_EVENT_METHODS == pinned_cdp._EVENT_METHODS
+    assert watch._PINNED_CDP_HTTP_STATUS_COUNTS == (pinned_cdp._EXPECTED_HTTP_STATUS_COUNTS)
+    assert watch._PINNED_CDP_SERVER_REQUEST_COUNTS == (pinned_cdp._EXPECTED_SERVER_REQUEST_COUNTS)
+    assert watch._PINNED_CDP_BOOTSTRAP_PREARM_SUMMARY == (
+        pinned_cdp._EXPECTED_PINNED_BOOTSTRAP_PREARM_SUMMARY
+    )
+    assert watch._PLAYWRIGHT_DRIVER_OWNERSHIP_POLICY == (playwright_driver.OWNERSHIP_POLICY_RECEIPT)
+    assert watch._EXPECTED_PLAYWRIGHT_DRIVER_BINDING == (
+        playwright_driver.EXPECTED_PLAYWRIGHT_DRIVER_BINDING
+    )
+    assert watch._EXPECTED_BROWSER_TOOL_IDENTITY == (
+        playwright_driver.expected_browser_tool_identity()
+    )
+    assert watch._NON_REPLAYABLE_EGRESS_CONTRACT == (browser_egress.NON_REPLAYABLE_EGRESS_CONTRACT)
+    assert watch._BROWSER_EGRESS_COMMAND_LINE_SCHEMA_VERSION == (
+        browser_egress.BROWSER_EGRESS_COMMAND_LINE_SCHEMA_VERSION
+    )
+    assert watch._BROWSER_EGRESS_REQUIRED_CHROMIUM_SWITCHES == list(
+        browser_egress.BROWSER_EGRESS_REQUIRED_CHROMIUM_SWITCHES
+    )
+    assert watch._BROWSER_EGRESS_ANTAGONISTIC_CHROMIUM_SWITCHES == list(
+        browser_egress.BROWSER_EGRESS_ANTAGONISTIC_CHROMIUM_SWITCHES
+    )
+    assert watch._BROWSER_EGRESS_PRODUCTION_LAUNCH_PROFILE == (
+        browser_egress.BROWSER_EGRESS_PRODUCTION_LAUNCH_PROFILE
+    )
+    assert watch._BROWSER_EGRESS_REQUIRED_DISABLED_FEATURE_TOKENS == sorted(
+        browser_egress.BROWSER_EGRESS_DISABLED_BASE_FEATURES
+    )
+    assert watch._BROWSER_EGRESS_REQUIRED_DISABLED_BLINK_FEATURE_TOKENS == sorted(
+        browser_egress.BROWSER_EGRESS_DISABLED_BLINK_FEATURES
+    )
+    assert watch._BROWSER_EGRESS_REQUIRED_ENABLED_FEATURE_ARGUMENTS == [
+        list(browser_egress.BROWSER_EGRESS_PLAYWRIGHT_ENABLED_FEATURES)
+    ]
+    assert watch._BROWSER_EGRESS_SUBPROCESS_WRAPPER_ARGUMENT == (
+        browser_egress.BROWSER_EGRESS_SUBPROCESS_WRAPPER_ARGUMENT
+    )
+    assert watch._PINNED_CDP_RESOLVER_PROJECTION == (
+        pinned_cdp._PINNED_CDP_RESOLVER_PROJECTION
+    )
+    assert watch.BROWSER_EGRESS_FINAL_TYPE == (browser_egress_qualification.FINAL_RECEIPT_TYPE)
+    assert watch.BROWSER_EGRESS_QUALIFICATION_ID == (browser_egress_fixture.QUALIFICATION_ID)
+    assert watch.BROWSER_EGRESS_VECTOR_COUNT == (browser_egress_fixture.VECTOR_COUNT)
+    assert watch.BROWSER_EGRESS_EXPANDED_VECTORS_SHA256 == (
+        browser_egress_fixture.expanded_vectors_sha256()
+    )
+    assert list(watch._BROWSER_EGRESS_VECTOR_IDS) == [
+        vector.vector_id for vector in browser_egress_fixture.expected_vectors()
+    ]
+    assert watch.FOUNDATION_SCHEMA_VERSION == class_attestation.FOUNDATION_SCHEMA_VERSION
+    assert watch._FOUNDATION_GATES == class_attestation._FOUNDATION_GATES
+    assert study["authority_gates"]["foundation"]["reconstructed_gates"] == list(
+        watch._FOUNDATION_GATES
+    )
+    assert watch._PASSIVE_RENDER_CONTRACT == discovery_evidence.PASSIVE_RENDER_CONTRACT
+    assert watch._PASSIVE_RENDER_CONTRACT_SHA256 == (
+        discovery_evidence.PASSIVE_RENDER_CONTRACT_SHA256
+    )
+    assert watch.ACQUISITION_SCHEMA_VERSION == class_acquisition.SCHEMA_VERSION
+    assert watch.HISTORICAL_ACQUISITION_SCHEMA_VERSIONS == (
+        class_acquisition.HISTORICAL_SCHEMA_VERSIONS
+    )
+    assert watch._PROVENANCE_PAYLOAD_KEYS == class_acquisition.CURRENT_PROVENANCE_FIELDS
+    assert watch._NAVIGATION_IMPLEMENTATION == class_acquisition.NAVIGATION_IMPLEMENTATION
+    assert watch._REGISTRABLE_DOMAIN_POLICY == class_acquisition.REGISTRABLE_DOMAIN_POLICY
+    assert watch._DOMAIN_SAFETY_POLICY == class_acquisition.DOMAIN_SAFETY_POLICY
+    assert (
+        watch._DOMAIN_SAFETY_POLICY_SHA256
+        == hashlib.sha256(
+            class_acquisition.canonical_json_bytes(class_acquisition.DOMAIN_SAFETY_POLICY)
+        ).hexdigest()
+    )
+    assert watch._ORIGIN_POLICY == class_acquisition.ORIGIN_POLICY
+    assert watch._ELIGIBILITY_INPUTS == class_acquisition.ELIGIBILITY_INPUTS
+    assert watch._PROHIBITED_INPUTS == class_acquisition.PROHIBITED_INPUTS
+    assert watch._ACQUISITION_ACTION_TIMING_CONTRACT == (class_acquisition.ACTION_TIMING_CONTRACT)
+    assert watch._BASELINE_SCHEDULING_CONTRACT == (class_acquisition.BASELINE_SCHEDULING_CONTRACT)
+
+
+@pytest.mark.parametrize("historical_schema", (1, 2, 3, 4))
+def test_watcher_treats_historical_provenance_as_verify_only(
+    acquisition: Fixture,
+    historical_schema: int,
+) -> None:
+    provenance = json.loads(acquisition.paths.provenance.read_text(encoding="utf-8"))
+    payload = copy.deepcopy(provenance["payload"])
+    payload["acquisition_schema_version"] = historical_schema
+    _write_receipt(acquisition.paths.provenance, watch.PROVENANCE_TYPE, payload)
+
+    with pytest.raises(watch.WatchError, match="historical.*verify-only"):
+        watch._validate_immutable_binding(acquisition.paths)
+
+
+@pytest.mark.parametrize("schema_alias", (True, 5.0, "5"))
+def test_watcher_rejects_non_integer_current_provenance_schema(
+    acquisition: Fixture,
+    schema_alias: object,
+) -> None:
+    provenance = json.loads(acquisition.paths.provenance.read_text(encoding="utf-8"))
+    payload = copy.deepcopy(provenance["payload"])
+    payload["acquisition_schema_version"] = schema_alias
+    _write_receipt(acquisition.paths.provenance, watch.PROVENANCE_TYPE, payload)
+
+    with pytest.raises(watch.WatchError, match="not an exact integer"):
+        watch._validate_immutable_binding(acquisition.paths)
+
+
+def test_watcher_accepts_current_runtime_pinned_cdp_observation(
+    acquisition: Fixture,
+) -> None:
+    from qcsd_lab import pinned_cdp
+
+    receipt = json.loads(acquisition.pinned_cdp_path.read_text(encoding="utf-8"))
+    observation = receipt["payload"]["observation"]
+
+    assert pinned_cdp._validate_observation(copy.deepcopy(observation)) == observation
+    watch._validate_pinned_cdp_observation(copy.deepcopy(observation))
+
+
 def test_watcher_rejects_resealed_pinned_cdp_topology_tamper(
     acquisition: Fixture,
 ) -> None:
     pinned = json.loads(acquisition.pinned_cdp_path.read_text(encoding="utf-8"))
     payload = copy.deepcopy(pinned["payload"])
-    payload["observation"]["topology"]["worker_fetch_paused_on_page"] = False
+    payload["observation"]["topology"]["shared_worker_fetch_paused_on_shared_worker"] = False
 
     _replace_pinned_and_rebind_foundation(acquisition, payload)
 
     with pytest.raises(watch.WatchError, match="topology observation"):
+        watch._validate_immutable_binding(acquisition.paths)
+
+
+@pytest.mark.parametrize(
+    ("field_path", "replacement", "message"),
+    (
+        (("egress_prearm_summary", "schema_version"), True, "egress-prearm identity"),
+        (
+            ("egress_prearm_summary", "by_target_type", "worker", "pending_count"),
+            1,
+            "egress-prearm per-type counts",
+        ),
+        (
+            ("non_replayable_egress_summary", "attempt_count"),
+            True,
+            "non-replayable egress identity",
+        ),
+        (
+            ("non_replayable_egress_summary", "protected_apis"),
+            [],
+            "non-replayable egress identity",
+        ),
+        (
+            ("browser_egress_command_line", "schema_version"),
+            True,
+            "command-line projection",
+        ),
+        (
+            ("browser_egress_command_line", "observed_required_switches"),
+            [],
+            "command-line projection",
+        ),
+        (
+            ("browser_egress_command_line", "antagonistic_switches"),
+            [],
+            "command-line projection",
+        ),
+        (
+            ("browser_egress_command_line", "observed_antagonistic_switches"),
+            ["--proxy-server"],
+            "command-line projection",
+        ),
+        (
+            ("browser_egress_command_line", "required_switches_are_bare_and_unique"),
+            False,
+            "command-line projection",
+        ),
+        (("browser_context_service_worker_count",), True, "topology observation"),
+    ),
+)
+def test_watcher_rejects_resealed_pinned_cdp_egress_tamper(
+    acquisition: Fixture,
+    field_path: tuple[str, ...],
+    replacement: Any,
+    message: str,
+) -> None:
+    pinned = json.loads(acquisition.pinned_cdp_path.read_text(encoding="utf-8"))
+    payload = copy.deepcopy(pinned["payload"])
+    target: Any = payload["observation"]["topology"]
+    for component in field_path[:-1]:
+        target = target[component]
+    target[field_path[-1]] = replacement
+    _replace_pinned_and_rebind_foundation(acquisition, payload)
+
+    with pytest.raises(watch.WatchError, match=message):
+        watch._validate_immutable_binding(acquisition.paths)
+
+
+@pytest.mark.parametrize(
+    ("field_path", "replacement", "message"),
+    (
+        (
+            ("event_method_counts", "Network.loadingFailed"),
+            1,
+            "event-method aggregate",
+        ),
+        (("http_status_counts", "/shared-data", "200"), 2, "topology observation"),
+        (("http_status_counts", "/shared-data", "200"), True, "topology observation"),
+        (("server_request_counts", "/shared-data"), 2, "topology observation"),
+        (("server_request_counts", "/shared-data"), True, "topology observation"),
+        (("bootstrap_prearm_summary", "schema_version"), True, "bootstrap-prearm summary schema"),
+        (
+            ("bootstrap_prearm_summary", "pending_total"),
+            1,
+            "bootstrap-prearm aggregate",
+        ),
+        (
+            (
+                "bootstrap_prearm_summary",
+                "by_worker_type",
+                "shared_worker",
+                "released_after_setup_envelopes",
+            ),
+            0,
+            "bootstrap-prearm is not terminal",
+        ),
+        (
+            ("quiescent_target_activity", "generation"),
+            4,
+            "target-activity generation",
+        ),
+        (
+            ("quiescent_target_activity", "schema_version"),
+            True,
+            "target-activity aggregate",
+        ),
+    ),
+)
+def test_watcher_rejects_resealed_pinned_cdp_aggregate_tamper(
+    acquisition: Fixture,
+    field_path: tuple[str, ...],
+    replacement: Any,
+    message: str,
+) -> None:
+    pinned = json.loads(acquisition.pinned_cdp_path.read_text(encoding="utf-8"))
+    payload = copy.deepcopy(pinned["payload"])
+    target: Any = payload["observation"]["topology"]
+    for component in field_path[:-1]:
+        target = target[component]
+    target[field_path[-1]] = replacement
+
+    _replace_pinned_and_rebind_foundation(acquisition, payload)
+
+    with pytest.raises(watch.WatchError, match=message):
+        watch._validate_immutable_binding(acquisition.paths)
+
+
+def test_watcher_rejects_structurally_valid_wrong_bootstrap_owner(
+    acquisition: Fixture,
+) -> None:
+    pinned = json.loads(acquisition.pinned_cdp_path.read_text(encoding="utf-8"))
+    payload = copy.deepcopy(pinned["payload"])
+    owner_counts = payload["observation"]["topology"]["bootstrap_prearm_summary"]["by_worker_type"][
+        "shared_worker"
+    ]["owner_target_types"]
+    owner_counts["page"] = 0
+    owner_counts["iframe"] = 1
+
+    _replace_pinned_and_rebind_foundation(acquisition, payload)
+
+    with pytest.raises(watch.WatchError, match="topology observation"):
+        watch._validate_immutable_binding(acquisition.paths)
+
+
+def test_watcher_rejects_structurally_valid_missing_target_attach(
+    acquisition: Fixture,
+) -> None:
+    pinned = json.loads(acquisition.pinned_cdp_path.read_text(encoding="utf-8"))
+    payload = copy.deepcopy(pinned["payload"])
+    counts = payload["observation"]["topology"]["quiescent_target_activity"]["by_target_type"][
+        "iframe"
+    ]["event_counts"]
+    counts["target-attached"] = 0
+    counts["target-info-changed"] = 1
+
+    _replace_pinned_and_rebind_foundation(acquisition, payload)
+
+    with pytest.raises(watch.WatchError, match="target-activity observation"):
+        watch._validate_immutable_binding(acquisition.paths)
+
+
+@pytest.mark.parametrize(
+    ("field_path", "replacement"),
+    (
+        (("browser_tool", "chromium_revision"), "1201"),
+        (("browser_tool", "schema_version"), True),
+        (("passive_render_contract", "viewport", "deviceScaleFactor"), True),
+        (("non_replayable_egress_contract", "schema_version"), True),
+        (
+            ("non_replayable_egress_contract", "target_shim_sha256", "worker"),
+            "0" * 64,
+        ),
+        (("cdp_target_instrumentation_policy",), "stale-policy"),
+        (("origin_policy", "max_origins"), 31),
+        (("eligibility_inputs",), ["classifier"]),
+    ),
+)
+def test_watcher_rejects_resealed_provenance_contract_tamper(
+    acquisition: Fixture,
+    field_path: tuple[str, ...],
+    replacement: Any,
+) -> None:
+    provenance = json.loads(acquisition.paths.provenance.read_text(encoding="utf-8"))
+    payload = copy.deepcopy(provenance["payload"])
+    target: Any = payload
+    for component in field_path[:-1]:
+        target = target[component]
+    target[field_path[-1]] = replacement
+    _write_receipt(acquisition.paths.provenance, watch.PROVENANCE_TYPE, payload)
+
+    with pytest.raises(watch.WatchError, match="another study or catalogue"):
+        watch._validate_immutable_binding(acquisition.paths)
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    (
+        ("saved_uid", 1001),
+        ("filesystem_gid", 1001),
+        ("supplementary_groups", [1000, 1000]),
+        ("bounding_capabilities", "0000000000000001"),
+    ),
+)
+def test_watcher_rejects_resealed_pinned_cdp_isolation_tamper(
+    acquisition: Fixture,
+    field: str,
+    replacement: Any,
+) -> None:
+    pinned = json.loads(acquisition.pinned_cdp_path.read_text(encoding="utf-8"))
+    payload = copy.deepcopy(pinned["payload"])
+    payload["observation"]["isolation"][field] = replacement
+
+    _replace_pinned_and_rebind_foundation(acquisition, payload)
+
+    with pytest.raises(watch.WatchError, match="isolation observation"):
+        watch._validate_immutable_binding(acquisition.paths)
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    (
+        ("receipt_sha256", "d" * 64),
+        ("payload_sha256", "e" * 64),
+        ("content_sha256", "f" * 64),
+        ("policy", {"name": "unbound-driver"}),
+        ("browsers_json_sha256", "0" * 64),
+        ("chromium_executable_sha256", "1" * 64),
+    ),
+)
+def test_watcher_rejects_resealed_pinned_cdp_driver_tamper(
+    acquisition: Fixture,
+    field: str,
+    replacement: Any,
+) -> None:
+    pinned = json.loads(acquisition.pinned_cdp_path.read_text(encoding="utf-8"))
+    payload = copy.deepcopy(pinned["payload"])
+    payload["observation"]["playwright_driver"][field] = replacement
+
+    _replace_pinned_and_rebind_foundation(acquisition, payload)
+
+    with pytest.raises(watch.WatchError, match="Playwright driver observation"):
+        watch._validate_immutable_binding(acquisition.paths)
+
+
+def test_watcher_rejects_resealed_legacy_pinned_cdp_schema(
+    acquisition: Fixture,
+) -> None:
+    pinned = json.loads(acquisition.pinned_cdp_path.read_text(encoding="utf-8"))
+    payload = copy.deepcopy(pinned["payload"])
+    payload["probe_schema_version"] = 4
+
+    _replace_pinned_and_rebind_foundation(acquisition, payload)
+
+    with pytest.raises(watch.WatchError, match="source/build/contract"):
+        watch._validate_immutable_binding(acquisition.paths)
+
+
+@pytest.mark.parametrize("schema_alias", (True, 7.0, "7"))
+def test_watcher_rejects_non_integer_current_pinned_cdp_schema(
+    acquisition: Fixture,
+    schema_alias: object,
+) -> None:
+    pinned = json.loads(acquisition.pinned_cdp_path.read_text(encoding="utf-8"))
+    payload = copy.deepcopy(pinned["payload"])
+    payload["probe_schema_version"] = schema_alias
+    _replace_pinned_and_rebind_foundation(acquisition, payload)
+
+    with pytest.raises(watch.WatchError, match="source/build/contract"):
         watch._validate_immutable_binding(acquisition.paths)
 
 
@@ -1577,7 +2654,7 @@ def test_launch_drift_to_a_blocked_boundary_restatuses_without_fabrication(
     )
 
     assert clock.value == target
-    assert [call[0][3] for call in runner.calls[1:]] == [
+    assert [call[0][3] for call in runner.calls[2:]] == [
         "acquisition-status",
         "acquisition-run",
         "acquisition-status",
@@ -1608,7 +2685,7 @@ def test_expired_next_due_runs_immediately_without_redundant_status(
 
     watch.watch_acquisition(paths=acquisition.paths, runner=runner, clock=lambda: now)
 
-    assert [call[0][3] for call in runner.calls[1:]] == [
+    assert [call[0][3] for call in runner.calls[2:]] == [
         "acquisition-status",
         "acquisition-run",
         "acquisition-status",
@@ -1648,15 +2725,16 @@ def test_trusted_environment_ignores_shell_python_docker_and_home_overrides() ->
     assert environment["GIT_NO_REPLACE_OBJECTS"] == "1"
     assert environment["GIT_OPTIONAL_LOCKS"] == "0"
     assert environment["XDG_RUNTIME_DIR"] == f"/run/user/{os.getuid()}"
-    assert environment["DBUS_SESSION_BUS_ADDRESS"] == (
-        f"unix:path=/run/user/{os.getuid()}/bus"
+    assert environment["DBUS_SESSION_BUS_ADDRESS"] == (f"unix:path=/run/user/{os.getuid()}/bus")
+    assert (
+        not {
+            "BASH_ENV",
+            "PYTHONPATH",
+            "DOCKER_HOST",
+            "DOCKER_CONFIG",
+        }
+        & environment.keys()
     )
-    assert not {
-        "BASH_ENV",
-        "PYTHONPATH",
-        "DOCKER_HOST",
-        "DOCKER_CONFIG",
-    } & environment.keys()
 
 
 @pytest.mark.parametrize(
@@ -1704,11 +2782,22 @@ def test_admission_precedes_first_checkpoint_read_and_source_precedes_admission(
         assert authority_fd >= 0
         assert state_root == acquisition.paths.state_root
         assert re.fullmatch(r"[0-9a-f]{64}", source_binding_sha256)
+        if watch._is_canonical_browser_egress_verify_command(command):
+            events.append("browser-egress-verify")
+            return _completed_canonical(_browser_egress_result(acquisition.paths))
         action = command[3]
         events.append(action)
         if action == "acquisition-admission":
             return _completed(_admission())
-        return _completed(_result("acquisition-status", complete))
+        return _completed(
+            _result(
+                "acquisition-status",
+                complete,
+                foundation_sha256=watch._validate_immutable_binding(
+                    acquisition.paths
+                ).foundation_sha256,
+            )
+        )
 
     monkeypatch.setattr(watch, "_validate_checkpoint", checkpoint)
     watch.watch_acquisition(
@@ -1718,7 +2807,9 @@ def test_admission_precedes_first_checkpoint_read_and_source_precedes_admission(
     )
 
     assert events.index("source") < events.index("acquisition-admission")
-    assert events.index("acquisition-admission") < events.index("checkpoint")
+    assert events.index("acquisition-admission") < events.index("browser-egress-verify")
+    assert events.index("browser-egress-verify") < events.index("checkpoint")
+    assert events.count("browser-egress-verify") == 1
     assert events[-2:] == ["source", "checkpoint"]
 
 
@@ -1727,12 +2818,37 @@ def test_status_checkpoint_race_fails_closed_after_action(acquisition: Fixture) 
 
     def status_mutation(_command, _cwd, _env):
         acquisition.advance_checkpoint()
-        return _completed(_result("acquisition-status", complete))
+        return _completed(
+            _result(
+                "acquisition-status",
+                complete,
+                foundation_sha256=watch._validate_immutable_binding(
+                    acquisition.paths
+                ).foundation_sha256,
+            )
+        )
 
     with pytest.raises(watch.WatchError, match="mutated or raced"):
         watch.watch_acquisition(
             paths=acquisition.paths,
             runner=FakeRunner([status_mutation]),
+        )
+
+
+def test_status_result_from_another_foundation_fails_closed(
+    acquisition: Fixture,
+) -> None:
+    complete = _details(terminal=watch.CANDIDATE_COUNT)
+    response = _result(
+        "acquisition-status",
+        complete,
+        foundation_sha256="f" * 64,
+    )
+
+    with pytest.raises(watch.WatchError, match="another foundation binding"):
+        watch.watch_acquisition(
+            paths=acquisition.paths,
+            runner=FakeRunner([_completed(response)]),
         )
 
 
@@ -1765,7 +2881,15 @@ def test_lock_path_replacement_during_action_fails_and_new_lock_is_reacquirable(
         staged = acquisition.paths.mutation_lock.with_suffix(".replacement")
         staged.write_bytes(b"")
         os.replace(staged, acquisition.paths.mutation_lock)
-        return _completed(_result("acquisition-status", complete))
+        return _completed(
+            _result(
+                "acquisition-status",
+                complete,
+                foundation_sha256=watch._validate_immutable_binding(
+                    acquisition.paths
+                ).foundation_sha256,
+            )
+        )
 
     with pytest.raises(watch.WatchError, match="lock pathname identity changed"):
         watch.watch_acquisition(
@@ -1908,6 +3032,20 @@ def test_stable_receipt_read_detects_path_replacement(
         )
 
 
+@pytest.mark.parametrize("schema_alias", (True, 2.0))
+def test_checkpoint_requires_an_exact_integer_schema(
+    acquisition: Fixture,
+    schema_alias: object,
+) -> None:
+    binding = watch._validate_immutable_binding(acquisition.paths)
+    payload = _checkpoint_payload(acquisition)
+    payload["checkpoint_schema_version"] = schema_alias
+    _replace_checkpoint(acquisition, payload)
+
+    with pytest.raises(watch.WatchError, match="bindings do not verify"):
+        watch._validate_checkpoint(acquisition.paths, binding)
+
+
 def test_host_source_validator_uses_two_identical_fixed_git_snapshots(
     acquisition: Fixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1955,7 +3093,9 @@ def test_watch_git_verifier_rejects_clean_filter_bytes(tmp_path: Path) -> None:
     checkout.mkdir()
     subprocess.run(("git", "-C", checkout, "init", "-q"), check=True)
     subprocess.run(("git", "-C", checkout, "config", "user.name", "test"), check=True)
-    subprocess.run(("git", "-C", checkout, "config", "user.email", "test@example.invalid"), check=True)
+    subprocess.run(
+        ("git", "-C", checkout, "config", "user.email", "test@example.invalid"), check=True
+    )
     (checkout / "payload").write_bytes(b"clean")
     (checkout / ".gitattributes").write_text("payload filter=hide\n", encoding="ascii")
     subprocess.run(("git", "-C", checkout, "add", "."), check=True)
@@ -1965,9 +3105,7 @@ def test_watch_git_verifier_rejects_clean_filter_bytes(tmp_path: Path) -> None:
         check=True,
     )
     (checkout / "payload").write_bytes(b"evil!")
-    assert subprocess.check_output(
-        ("git", "-C", checkout, "status", "--porcelain")
-    ) == b""
+    assert subprocess.check_output(("git", "-C", checkout, "status", "--porcelain")) == b""
     paths = watch.WatchPaths.from_lab_root(checkout, state_base=tmp_path / "state")
     watch._verify_git_checkout_binding(paths, checkout, checkout / ".git")
     with pytest.raises(watch.WatchError, match="raw bytes"):
@@ -1987,9 +3125,7 @@ def test_watch_git_binding_rejects_local_exclude_and_worktree_redirect(
     with pytest.raises(watch.WatchError, match="hide checkout bytes"):
         watch._verify_git_checkout_binding(paths, checkout, checkout / ".git")
     (checkout / ".git/info/exclude").write_text("# comments only\n", encoding="ascii")
-    subprocess.run(
-        ("git", "-C", checkout, "config", "core.worktree", str(alternate)), check=True
-    )
+    subprocess.run(("git", "-C", checkout, "config", "core.worktree", str(alternate)), check=True)
     with pytest.raises(watch.WatchError, match="redirected worktree"):
         watch._verify_git_checkout_binding(paths, checkout, checkout / ".git")
 
@@ -2091,6 +3227,30 @@ def test_state_namespace_does_not_replace_unsafe_receipt_path(tmp_path: Path) ->
     assert namespace.is_symlink()
 
 
+@pytest.mark.parametrize("schema_alias", (True, 1.0))
+def test_state_namespace_requires_an_exact_integer_schema(
+    tmp_path: Path,
+    schema_alias: object,
+) -> None:
+    paths = watch.WatchPaths.from_lab_root(
+        tmp_path / "lab",
+        state_base=tmp_path / "watch-state",
+    )
+    watch._create_private_state_directory(paths.state_base, label="test state base")
+    identity = watch._state_namespace_identity(paths)
+    identity["schema_version"] = schema_alias
+    namespace_sha256 = watch._sha256_bytes(watch._canonical_json_bytes(identity))
+    state_root = paths.state_base / namespace_sha256
+    watch._create_private_state_directory(state_root, label="test state namespace")
+    receipt = {**identity, "namespace_sha256": namespace_sha256}
+    namespace = state_root / "NAMESPACE.json"
+    namespace.write_bytes(_canonical(receipt))
+    namespace.chmod(0o600)
+
+    with pytest.raises(watch.WatchError, match="does not verify"):
+        watch._validate_state_namespace_root(state_root)
+
+
 def _publish_test_scope_request(
     root: Path,
     supervision: dict[str, Any],
@@ -2111,6 +3271,43 @@ def _publish_test_scope_request(
     }
     (root / "REQUEST").write_bytes(_canonical(request))
     (root / "REQUEST").chmod(0o600)
+
+
+@pytest.mark.parametrize("schema_alias", (True, 1.0))
+def test_scope_record_and_request_require_exact_integer_schemas(
+    tmp_path: Path,
+    schema_alias: object,
+) -> None:
+    state_root, descriptor = _scope_test_state(tmp_path)
+    root, supervision, birth_lock_fd = watch._create_scope_root(
+        state_root=state_root,
+        unit="qcsd-class-watch-" + "a" * 32 + ".scope",
+        command=("ignored", "acquisition-status"),
+        authority_fd=descriptor,
+        source_binding_sha256="b" * 64,
+    )
+    try:
+        aliased_supervision = {**supervision, "schema_version": schema_alias}
+        with pytest.raises(watch.WatchError, match="malformed identity"):
+            watch._validate_scope_record(
+                aliased_supervision,
+                recovery=False,
+                root=root,
+                state_root=state_root,
+            )
+
+        _publish_test_scope_request(root, supervision, wrapper_pid=os.getpid())
+        request_path = root / "REQUEST"
+        request = json.loads(request_path.read_text(encoding="utf-8"))
+        request["schema_version"] = schema_alias
+        request_path.write_bytes(_canonical(request))
+        request_path.chmod(0o600)
+        with pytest.raises(watch.WatchError, match="does not verify"):
+            watch._read_scope_request(root, record=supervision, required=True)
+    finally:
+        os.close(birth_lock_fd)
+        _force_remove_test_scope_root(root, state_root=state_root)
+        os.close(descriptor)
 
 
 def _locked_descriptor(path: Path) -> int:
@@ -2146,20 +3343,20 @@ def test_real_scope_gates_execution_authenticates_current_scope_and_leaves_no_re
                 "--noprofile",
                 "--norc",
                 "-c",
-                    (
-                        f"birth_identity=$(/usr/bin/stat -Lc '%d:%i' "
-                        f"\"${{{watch.SCOPE_ROOT_ENV}}}/BIRTH.lock\") || exit 89; "
-                        "for fd_path in /proc/$$/fd/*; do "
-                        "observed=$(/usr/bin/stat -Lc '%d:%i' -- \"${fd_path}\") || exit 90; "
-                        f"test \"${{observed}}\" != {lock_identity} || exit 91; "
-                        "test \"${observed}\" != \"${birth_identity}\" || exit 92; "
-                        "done; "
-                        f"test ! -e /proc/$$/fd/{descriptor} && "
-                            "printf started >\"$1\""
-                    ),
-                    "acquisition-admission",
-                    str(marker),
+                (
+                    f"birth_identity=$(/usr/bin/stat -Lc '%d:%i' "
+                    f'"${{{watch.SCOPE_ROOT_ENV}}}/BIRTH.lock") || exit 89; '
+                    "for fd_path in /proc/$$/fd/*; do "
+                    "observed=$(/usr/bin/stat -Lc '%d:%i' -- \"${fd_path}\") || exit 90; "
+                    f'test "${{observed}}" != {lock_identity} || exit 91; '
+                    'test "${observed}" != "${birth_identity}" || exit 92; '
+                    "done; "
+                    f"test ! -e /proc/$$/fd/{descriptor} && "
+                    'printf started >"$1"'
                 ),
+                "acquisition-admission",
+                str(marker),
+            ),
             cwd=tmp_path,
             env={},
             authority_fd=descriptor,
@@ -2225,20 +3422,16 @@ def test_internal_scope_admission_rejects_expected_binding_mismatch(
 ) -> None:
     state_root, descriptor = _scope_test_state(tmp_path)
     before = _scope_inventory(state_root)
-    action_value = (
-        "b" * 64 if mismatch == "action" else f"${{{watch.SCOPE_ACTION_ENV}}}"
-    )
-    source_value = (
-        "b" * 64 if mismatch == "source" else f"${{{watch.SCOPE_SOURCE_ENV}}}"
-    )
+    action_value = "b" * 64 if mismatch == "action" else f"${{{watch.SCOPE_ACTION_ENV}}}"
+    source_value = "b" * 64 if mismatch == "source" else f"${{{watch.SCOPE_SOURCE_ENV}}}"
     script = (
-        "exec /usr/bin/python3 -I \"$1\" "
+        'exec /usr/bin/python3 -I "$1" '
         "--recover-stale-scopes-internal "
-        f"--state-root-internal \"${{{watch.SCOPE_STATE_ROOT_ENV}}}\" "
-        f"--current-scope-root-internal \"${{{watch.SCOPE_ROOT_ENV}}}\" "
-        f"--current-authority-internal \"${{{watch.SCOPE_AUTHORITY_ENV}}}\" "
-        f"--expected-action-sha256-internal \"{action_value}\" "
-        f"--expected-source-binding-sha256-internal \"{source_value}\""
+        f'--state-root-internal "${{{watch.SCOPE_STATE_ROOT_ENV}}}" '
+        f'--current-scope-root-internal "${{{watch.SCOPE_ROOT_ENV}}}" '
+        f'--current-authority-internal "${{{watch.SCOPE_AUTHORITY_ENV}}}" '
+        f'--expected-action-sha256-internal "{action_value}" '
+        f'--expected-source-binding-sha256-internal "{source_value}"'
     )
     try:
         completed = watch._subprocess_runner(
@@ -2561,7 +3754,7 @@ def test_sigkill_handshake_restart_closes_delayed_scope_birth(
     before = _scope_inventory(state_root)
     marker = tmp_path / "interruption-point"
     repository = Path(__file__).parents[1]
-    child_program = r'''
+    child_program = r"""
 import os
 import subprocess
 import sys
@@ -2616,7 +3809,7 @@ try:
     )
 finally:
     os.close(descriptor)
-'''
+"""
     supervisor = subprocess.Popen(
         (
             sys.executable,
@@ -3242,7 +4435,7 @@ def test_watcher_has_no_direct_docker_discovery_or_cleanup() -> None:
     source = (Path(__file__).parents[1] / "tools/class_acquisition_watch.py").read_text(
         encoding="utf-8"
     )
-    assert "subprocess.run((\"docker\"" not in source
+    assert 'subprocess.run(("docker"' not in source
     assert "container inspect" not in source
     assert "container rm" not in source
     assert "_cleanup_orphan_container" not in source
@@ -3255,12 +4448,10 @@ def test_acquisition_run_has_nested_truthful_action_deadlines() -> None:
         BASELINE_SCHEDULING_CONTRACT,
     )
 
-    watcher_source = (
-        Path(__file__).parents[1] / "tools/class_acquisition_watch.py"
-    ).read_text(encoding="utf-8")
-    launcher_source = (Path(__file__).parents[1] / "qcsd-lab").read_text(
+    watcher_source = (Path(__file__).parents[1] / "tools/class_acquisition_watch.py").read_text(
         encoding="utf-8"
     )
+    launcher_source = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
     assert "MAX_CANDIDATES = 2" in watcher_source
     assert "GLOBAL_LIVE_PAGE_CAP = 5" in watcher_source
     assert 'kill_signal = "SIGINT" if graceful_run else "SIGKILL"' in watcher_source
@@ -3269,15 +4460,18 @@ def test_acquisition_run_has_nested_truthful_action_deadlines() -> None:
     assert watch.RUN_RUNTIME_SECONDS == 1_920
     assert watch.ACQUISITION_OUTER_HARD_SECONDS == 2_040
     assert watch.MINIMUM_BASELINE_SPACING_SECONDS == 2_400
-    assert watch._ACQUISITION_ACTION_TIMING_CONTRACT[
-        "direct_public_acquisition_run"
-    ] == "forbidden-without-validated-watcher-scope-authority"
-    assert watch._ACQUISITION_ACTION_TIMING_CONTRACT[
-        "successful_ledger_attempt_duration_limit_ms"
-    ] == 1_800_000
-    assert watch._ACQUISITION_ACTION_TIMING_CONTRACT[
-        "whole_action_duration_evidence"
-    ] == "externally-enforced-process-status-no-per-action-duration-receipt"
+    assert (
+        watch._ACQUISITION_ACTION_TIMING_CONTRACT["direct_public_acquisition_run"]
+        == "forbidden-without-validated-watcher-scope-authority"
+    )
+    assert (
+        watch._ACQUISITION_ACTION_TIMING_CONTRACT["successful_ledger_attempt_duration_limit_ms"]
+        == 1_800_000
+    )
+    assert (
+        watch._ACQUISITION_ACTION_TIMING_CONTRACT["whole_action_duration_evidence"]
+        == "externally-enforced-process-status-no-per-action-duration-receipt"
+    )
     assert watch._ACQUISITION_ACTION_TIMING_CONTRACT == ACTION_TIMING_CONTRACT
     assert watch._BASELINE_SCHEDULING_CONTRACT == BASELINE_SCHEDULING_CONTRACT
     assert watch._BASELINE_SCHEDULING_CONTRACT == {
@@ -3303,39 +4497,39 @@ def test_acquisition_run_has_nested_truthful_action_deadlines() -> None:
             85_500_000,
             258_300_000,
         ],
-        "collision_scope": (
-            "baseline-arming-and-t+24h-t+72h-action-starts-across-batches"
-        ),
+        "collision_scope": ("baseline-arming-and-t+24h-t+72h-action-starts-across-batches"),
         "strict_serial_zero_duration_projection": {
             "candidate_count": 600,
             "maximum_candidates_per_batch": 2,
             "batch_count": 300,
             "algorithm": "greedy-earliest-safe-baseline-batches",
-            "pairing_assumption": (
-                "all-candidates-form-300-compatible-two-candidate-batches"
-            ),
+            "pairing_assumption": ("all-candidates-form-300-compatible-two-candidate-batches"),
             "last_baseline_offset_ms": 2_784_000_000,
             "last_t+72h_earliest_offset_ms": 3_042_300_000,
         },
     }
-    assert "-- /usr/bin/timeout --signal=INT --kill-after=120s 1800s" \
-        in launcher_source
+    assert "-- /usr/bin/timeout --signal=INT --kill-after=120s 1800s" in launcher_source
     assert "accepts at most two candidates per action" in launcher_source
 
 
-@pytest.mark.parametrize("fault_label", (
-    "acquisition scope output removal",
-    "acquisition scope birth-lock removal",
-    "acquisition scope recovery-record removal",
-    "acquisition scope root removal",
-))
+@pytest.mark.parametrize(
+    "fault_label",
+    (
+        "acquisition scope output removal",
+        "acquisition scope birth-lock removal",
+        "acquisition scope recovery-record removal",
+        "acquisition scope root removal",
+    ),
+)
 def test_scope_teardown_crash_boundaries_are_restart_recoverable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault_label: str
 ) -> None:
     state_root, descriptor = _scope_test_state(tmp_path)
     root, supervision, birth_fd = watch._create_scope_root(
-        state_root=state_root, unit="qcsd-class-watch-" + "d" * 32 + ".scope",
-        command=("ignored", "acquisition-status"), authority_fd=descriptor,
+        state_root=state_root,
+        unit="qcsd-class-watch-" + "d" * 32 + ".scope",
+        command=("ignored", "acquisition-status"),
+        authority_fd=descriptor,
         source_binding_sha256="a" * 64,
     )
     (root / "stdout").write_text("complete", encoding="ascii")
@@ -3343,17 +4537,21 @@ def test_scope_teardown_crash_boundaries_are_restart_recoverable(
     recovery = watch._publish_scope_recovery(root, supervision, state_root=state_root)
     real_fsync = watch._fsync_scope_directory
     faulted = False
+
     def inject(path: Path, *, label: str) -> None:
         nonlocal faulted
         real_fsync(path, label=label)
         if not faulted and label == fault_label:
             faulted = True
             raise watch.WatchError("injected teardown crash")
+
     monkeypatch.setattr(watch, "_fsync_scope_directory", inject)
     try:
         with pytest.raises(watch.WatchError, match="injected teardown crash"):
             watch._finish_scope_teardown(
-                root, state_root=state_root, recovery=recovery,
+                root,
+                state_root=state_root,
+                recovery=recovery,
                 birth_lock_fd=birth_fd,
             )
     finally:
@@ -3367,19 +4565,19 @@ def test_scope_teardown_crash_boundaries_are_restart_recoverable(
 
 
 @pytest.mark.parametrize(
-    "command_factory",
-    (watch._admission_command, watch._status_command, watch._run_command),
-    ids=("admission", "status", "run"),
+    "command_kind",
+    ("admission", "browser-egress-verify", "status", "run"),
 )
 def test_internal_scope_accepts_each_current_canonical_action_binding(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
-    command_factory,
+    command_kind: str,
 ) -> None:
     paths = watch.WatchPaths.from_lab_root(tmp_path, state_base=tmp_path / "state")
     binding = watch.AcquisitionBinding(
         prepare_image="image@sha256:" + "1" * 64,
+        cohort_version=23,
         catalogue_sha256="2" * 64,
         provenance_sha256="3" * 64,
         foundation_sha256="6" * 64,
@@ -3387,6 +4585,11 @@ def test_internal_scope_accepts_each_current_canonical_action_binding(
         pinned_cdp_payload_sha256="8" * 64,
         pinned_cdp_contract_sha256="9" * 64,
         build_execution_sha256="a" * 64,
+        browser_egress_qualification={
+            "root": "/lab/artifacts/buflo-study/browser-egress-qualification-v23",
+            "build_execution": {"path": "/lab/artifacts/buflo-study/build-execution-v23.json"},
+        },
+        browser_egress_tree_sha256="b" * 64,
         candidate_ids=frozenset(),
         candidate_order=(),
         source={
@@ -3395,30 +4598,47 @@ def test_internal_scope_accepts_each_current_canonical_action_binding(
             "neqo_pinned_commit": "5" * 40,
         },
     )
-    action = watch._sha256_bytes(
-        watch._canonical_json_bytes(list(command_factory(paths)))
-    )
+    commands = {
+        "admission": watch._admission_command(paths),
+        "browser-egress-verify": watch._browser_egress_verify_command(paths, binding),
+        "status": watch._status_command(paths),
+        "run": watch._run_command(paths),
+    }
+    action = watch._sha256_bytes(watch._canonical_json_bytes(list(commands[command_kind])))
     source = watch._source_binding_sha256(binding)
     monkeypatch.setattr(watch, "_paths_from_state_namespace", lambda _root: paths)
     monkeypatch.setattr(watch, "_validate_immutable_binding", lambda _paths: binding)
     monkeypatch.setattr(watch, "_validate_host_source", lambda *_args: None)
     monkeypatch.setattr(watch, "_validate_scope_root", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(watch, "_recover_stale_scope_roots", lambda **_kwargs: 0)
-    assert watch.main((
-        "--recover-stale-scopes-internal", "--state-root-internal", str(paths.state_root),
-        "--current-scope-root-internal", str(paths.state_root / ("scope." + "e" * 32)),
-        "--current-authority-internal", "6" * 64,
-        "--expected-action-sha256-internal", action,
-        "--expected-source-binding-sha256-internal", source,
-    )) == 0
+    assert (
+        watch.main(
+            (
+                "--recover-stale-scopes-internal",
+                "--state-root-internal",
+                str(paths.state_root),
+                "--current-scope-root-internal",
+                str(paths.state_root / ("scope." + "e" * 32)),
+                "--current-authority-internal",
+                "6" * 64,
+                "--expected-action-sha256-internal",
+                action,
+                "--expected-source-binding-sha256-internal",
+                source,
+            )
+        )
+        == 0
+    )
     assert json.loads(capsys.readouterr().out) == {"recovered_scope_roots": 0}
 
 
 def test_recorded_watch_lock_holder_must_be_exact_supervisor(tmp_path: Path) -> None:
     state_root, descriptor = _scope_test_state(tmp_path)
     root, supervision, birth_fd = watch._create_scope_root(
-        state_root=state_root, unit="qcsd-class-watch-" + "f" * 32 + ".scope",
-        command=("ignored", "acquisition-status"), authority_fd=descriptor,
+        state_root=state_root,
+        unit="qcsd-class-watch-" + "f" * 32 + ".scope",
+        command=("ignored", "acquisition-status"),
+        authority_fd=descriptor,
         source_binding_sha256="a" * 64,
     )
     other = subprocess.Popen(("/usr/bin/sleep", "10"))
@@ -3426,8 +4646,12 @@ def test_recorded_watch_lock_holder_must_be_exact_supervisor(tmp_path: Path) -> 
         identity = watch._process_identity(other.pid)
         assert identity is not None
         forged = dict(supervision)
-        forged.update(supervisor_pid=other.pid, supervisor_start_time=identity[0],
-                      supervisor_session=identity[1], supervisor_process_group=identity[2])
+        forged.update(
+            supervisor_pid=other.pid,
+            supervisor_start_time=identity[0],
+            supervisor_session=identity[1],
+            supervisor_process_group=identity[2],
+        )
         with pytest.raises(watch.WatchError, match="does not hold the exact watch lock"):
             watch._assert_recorded_watch_lock_holder(state_root, forged)
     finally:

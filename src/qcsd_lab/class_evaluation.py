@@ -75,6 +75,7 @@ from .class_study import (
     STUDY_ID,
     bind_receipt,
     canonical_json_bytes,
+    is_class_study_id,
     load_study_receipt,
     validate_hash_bound_receipt,
     write_create_only_json,
@@ -179,7 +180,7 @@ _FORMAL_DIMENSIONS = _Dimensions(
 
 
 def _formal_dimensions_for_study(study_id: str) -> _Dimensions:
-    if study_id != STUDY_ID and not study_id.startswith("classifier-multiorigin100-v2-"):
+    if not is_class_study_id(study_id):
         raise ValueError("formal class evaluation study identity is invalid")
     return _Dimensions(
         study_id=study_id,
@@ -196,10 +197,7 @@ def _is_formal_dimensions(dimensions: _Dimensions) -> bool:
         and dimensions.modes == FORMAL_MODES
         and dimensions.blocks == FORMAL_BLOCK_COUNT
         and dimensions.visits_per_block == FORMAL_VISITS_PER_BLOCK
-        and (
-            dimensions.study_id == STUDY_ID
-            or dimensions.study_id.startswith("classifier-multiorigin100-v2-")
-        )
+        and is_class_study_id(dimensions.study_id)
     )
 
 
@@ -1250,10 +1248,7 @@ def _validate_attack_configuration(
     if type(include_secondary) is not bool or type(formal) is not bool:
         raise ValueError("class attack protocol flags must be booleans")
     if formal and (
-        (
-            dataset.study_id != STUDY_ID
-            and not dataset.study_id.startswith("classifier-multiorigin100-v2-")
-        )
+        not is_class_study_id(dataset.study_id)
         or len(dataset.classes) != FINAL_CLASS_COUNT
         or dataset.modes != FORMAL_MODES
         or len(dataset.samples) != FORMAL_SAMPLE_COUNT

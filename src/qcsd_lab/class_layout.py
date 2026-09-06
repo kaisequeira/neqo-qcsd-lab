@@ -48,6 +48,7 @@ class ClassStudyLayout:
     """Exact workspace paths for fresh class-study inputs and publications."""
 
     lab_root: Path
+    results_root: Path
     config_root: Path
     campaign_root: Path
     workload_root: Path
@@ -76,6 +77,7 @@ def class_study_layout() -> ClassStudyLayout:
     qualification_sets_root = config_root / "chaff-qualification-store/sets"
     return ClassStudyLayout(
         lab_root=lab_root,
+        results_root=lab_root / "results",
         config_root=config_root,
         campaign_root=config_root / CAMPAIGN_DIRECTORY,
         workload_root=config_root / "workloads",

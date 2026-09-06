@@ -325,6 +325,143 @@ if [[ "${1:-}" == "test" && "${2:-}" == "pinned-cdp" ]]; then
   pinned_cdp_destination_parent_container="/lab/artifacts/buflo-study"
 fi
 
+browser_egress_action=""
+browser_egress_cohort_version=""
+browser_egress_build_host=""
+browser_egress_build_container=""
+browser_egress_result_host=""
+browser_egress_result_container=""
+browser_egress_result_parent=""
+browser_egress_result_parent_container=""
+if [[ "${1:-}" == "test" && "${2:-}" == "browser-egress" ]]; then
+  umask 077
+  if (( $# == 3 )) && [[ "${3:-}" == "-h" || "${3:-}" == "--help" ]]; then
+    echo "Usage: qcsd-lab test browser-egress {create|resume|verify} --cohort-version N --build-execution-receipt PATH --result-root PATH"
+    exit 0
+  fi
+  browser_egress_action="${3:-}"
+  case "${browser_egress_action}" in
+    create|resume|verify) ;;
+    *)
+      echo "test browser-egress requires exactly one action: create, resume, or verify" >&2
+      exit 2
+      ;;
+  esac
+  browser_egress_build_raw=""
+  browser_egress_result_raw=""
+  browser_egress_seen_cohort=0
+  browser_egress_seen_build=0
+  browser_egress_seen_result=0
+  browser_egress_index=4
+  while (( browser_egress_index <= $# )); do
+    browser_egress_argument="${!browser_egress_index}"
+    browser_egress_value=""
+    case "${browser_egress_argument}" in
+      --cohort-version|--build-execution-receipt|--result-root)
+        browser_egress_next=$((browser_egress_index + 1))
+        if (( browser_egress_next > $# )); then
+          echo "${browser_egress_argument} requires a value" >&2
+          exit 2
+        fi
+        browser_egress_value="${!browser_egress_next}"
+        browser_egress_index=$((browser_egress_index + 2))
+        ;;
+      --cohort-version=*|--build-execution-receipt=*|--result-root=*)
+        browser_egress_value="${browser_egress_argument#*=}"
+        if [[ -z "${browser_egress_value}" ]]; then
+          echo "${browser_egress_argument%%=*} requires a value" >&2
+          exit 2
+        fi
+        browser_egress_index=$((browser_egress_index + 1))
+        ;;
+      *)
+        echo "test browser-egress rejects unknown argument: ${browser_egress_argument}" >&2
+        exit 2
+        ;;
+    esac
+    case "${browser_egress_argument%%=*}" in
+      --cohort-version)
+        (( browser_egress_seen_cohort == 0 )) || {
+          echo "test browser-egress accepts exactly one --cohort-version" >&2
+          exit 2
+        }
+        browser_egress_seen_cohort=1
+        browser_egress_cohort_version="${browser_egress_value}"
+        ;;
+      --build-execution-receipt)
+        (( browser_egress_seen_build == 0 )) || {
+          echo "test browser-egress accepts exactly one --build-execution-receipt" >&2
+          exit 2
+        }
+        browser_egress_seen_build=1
+        browser_egress_build_raw="${browser_egress_value}"
+        ;;
+      --result-root)
+        (( browser_egress_seen_result == 0 )) || {
+          echo "test browser-egress accepts exactly one --result-root" >&2
+          exit 2
+        }
+        browser_egress_seen_result=1
+        browser_egress_result_raw="${browser_egress_value}"
+        ;;
+    esac
+  done
+  if (( ! browser_egress_seen_cohort || ! browser_egress_seen_build ||
+        ! browser_egress_seen_result )); then
+    echo "test browser-egress requires --cohort-version, --build-execution-receipt, and --result-root" >&2
+    exit 2
+  fi
+  if [[ ! "${browser_egress_cohort_version}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "test browser-egress cohort version must be a positive integer" >&2
+    exit 2
+  fi
+  browser_egress_build_relative="artifacts/buflo-study/build-execution-v${browser_egress_cohort_version}.json"
+  browser_egress_result_relative="artifacts/buflo-study/browser-egress-qualification-v${browser_egress_cohort_version}"
+  case "${browser_egress_build_raw}" in
+    "${browser_egress_build_relative}"|"/lab/${browser_egress_build_relative}"|"${ROOT}/${browser_egress_build_relative}")
+      browser_egress_build_host="${ROOT}/${browser_egress_build_relative}"
+      ;;
+    *)
+      echo "test browser-egress build receipt must be ${browser_egress_build_relative}" >&2
+      exit 2
+      ;;
+  esac
+  case "${browser_egress_result_raw}" in
+    "${browser_egress_result_relative}"|"/lab/${browser_egress_result_relative}"|"${ROOT}/${browser_egress_result_relative}")
+      browser_egress_result_host="${ROOT}/${browser_egress_result_relative}"
+      ;;
+    *)
+      echo "test browser-egress result root must be ${browser_egress_result_relative}" >&2
+      exit 2
+      ;;
+  esac
+  browser_egress_result_parent="${ROOT}/artifacts/buflo-study"
+  if [[ -L "${ROOT}/artifacts" || -L "${browser_egress_result_parent}" ||
+        ! -d "${browser_egress_result_parent}" ||
+        "$(realpath -e -- "${browser_egress_result_parent}" 2>/dev/null)" != "${browser_egress_result_parent}" ]]; then
+    echo "test browser-egress requires the canonical non-symlink artifacts/buflo-study directory" >&2
+    exit 1
+  fi
+  if [[ -L "${browser_egress_build_host}" || ! -f "${browser_egress_build_host}" ||
+        "$(realpath -e -- "${browser_egress_build_host}" 2>/dev/null)" != "${browser_egress_build_host}" ]]; then
+    echo "test browser-egress requires its exact regular no-cache build receipt" >&2
+    exit 1
+  fi
+  if [[ "${browser_egress_action}" == "create" ]]; then
+    if [[ -e "${browser_egress_result_host}" || -L "${browser_egress_result_host}" ]]; then
+      echo "test browser-egress create requires an absent create-only result root" >&2
+      exit 1
+    fi
+  elif [[ -L "${browser_egress_result_host}" || ! -d "${browser_egress_result_host}" ||
+          "$(realpath -e -- "${browser_egress_result_host}" 2>/dev/null)" != "${browser_egress_result_host}" ]]; then
+    echo "test browser-egress ${browser_egress_action} requires its canonical existing result root" >&2
+    exit 1
+  fi
+  browser_egress_build_container="/lab/${browser_egress_build_relative}"
+  browser_egress_result_container="/lab/${browser_egress_result_relative}"
+  browser_egress_result_parent_container="/lab/artifacts/buflo-study"
+fi
+
 if [[ "${1:-}" == "lifecycle-recover" && $# != 1 ]]; then
   echo "lifecycle-recover accepts no arguments" >&2
   exit 2
@@ -3893,11 +4030,22 @@ print(GLOBAL_LIVE_PAGE_CAP)
         elif [[ "${class_flag}" == "--formal-result" ]]; then
           class_formal_result_hosts+=("${class_host}")
         else
-          if [[ -n "${class_path_hosts[${class_flag}]:-}" ]]; then
+          class_repeatable_status_path=0
+          if [[ "${class_study_action}" == "status" ]]; then
+            case "${class_flag}" in
+              --numeric-bundle|--prefix-spec-root|--qualification-manifest|--final-bundle)
+                class_repeatable_status_path=1
+                ;;
+            esac
+          fi
+          if [[ -n "${class_path_hosts[${class_flag}]:-}" &&
+                "${class_repeatable_status_path}" != "1" ]]; then
             echo "class-study accepts ${class_flag} at most once" >&2
             exit 2
           fi
-          class_path_hosts["${class_flag}"]="${class_host}"
+          if [[ -z "${class_path_hosts[${class_flag}]:-}" ]]; then
+            class_path_hosts["${class_flag}"]="${class_host}"
+          fi
         fi
         class_container_args+=("${class_flag}" "${class_inside}")
         class_index=$((class_index + 1))
@@ -4420,6 +4568,26 @@ if [[ "${1:-}" == "test" && "${2:-}" == "pinned-cdp" ]]; then
   fi
   PREPARE_IMAGE="${pinned_cdp_prepare_image}"
 fi
+if [[ "${1:-}" == "test" && "${2:-}" == "browser-egress" ]]; then
+  mapfile -t browser_egress_build_fields < <(
+    python3 -I "${ROOT}/src/qcsd_lab/build_storage.py" receipt \
+      "${browser_egress_build_host}" \
+      --expected-cohort "${browser_egress_cohort_version}" \
+      --probe-path "${ROOT}/tools/windows_docker_storage_probe.ps1"
+  )
+  if (( ${#browser_egress_build_fields[@]} != 4 )); then
+    echo "test browser-egress no-cache build receipt is invalid" >&2
+    exit 1
+  fi
+  browser_egress_build_sha256="${browser_egress_build_fields[0]}"
+  browser_egress_prepare_image="${browser_egress_build_fields[2]}"
+  if [[ -n "${QCSD_LAB_PREPARE_IMAGE:-}" &&
+        "${QCSD_LAB_PREPARE_IMAGE}" != "${browser_egress_prepare_image}" ]]; then
+    echo "test browser-egress rejects QCSD_LAB_PREPARE_IMAGE that differs from its build receipt" >&2
+    exit 2
+  fi
+  PREPARE_IMAGE="${browser_egress_prepare_image}"
+fi
 
 class_resume_environment=""
 if [[ "${1:-}" == "class-study" &&
@@ -4564,6 +4732,9 @@ case "${1:-}" in
   *) usage; exit 2 ;;
 esac
 if [[ "${1:-}" == "test" && "${2:-}" == "pinned-cdp" ]]; then
+  image="${PREPARE_IMAGE}"
+fi
+if [[ "${1:-}" == "test" && "${2:-}" == "browser-egress" ]]; then
   image="${PREPARE_IMAGE}"
 fi
 if [[ "${1:-}" == "buflo-study" && "${2:-}" == "reference" ]]; then
@@ -5211,6 +5382,9 @@ if [[ "${1:-}" == "buflo-study" && "${2:-}" == "qualify" ]]; then
 fi
 if [[ "${1:-}" == "test" && "${2:-}" == "pinned-cdp" ]]; then
   verify_qualification_checkout "test pinned-cdp"
+fi
+if [[ "${1:-}" == "test" && "${2:-}" == "browser-egress" ]]; then
+  verify_qualification_checkout "test browser-egress ${browser_egress_action}"
 fi
 if [[ "${1:-}" == "fit" ]]; then
   verify_fit_neqo_checkout
@@ -7416,6 +7590,1410 @@ iptables -t nat -C POSTROUTING -s "$2" -o eth1 -j MASQUERADE
   kernel_tx_public_status=$?
   set -e
   exit "${kernel_tx_public_status}"
+fi
+
+browser_egress_wait_healthy() {
+  local container_id="$1" deadline state
+  deadline=$((SECONDS + 20))
+  while (( SECONDS < deadline )); do
+    state="$(_qcsd_docker_api container inspect --format \
+      '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' \
+      "${container_id}" 2>/dev/null)" || state="unavailable"
+    case "${state}" in
+      healthy) return 0 ;;
+      unhealthy|missing|unavailable)
+        echo "browser-egress role failed readiness: ${state}" >&2
+        return 1
+        ;;
+    esac
+    sleep 0.1
+  done
+  echo "browser-egress role readiness timed out" >&2
+  return 1
+}
+
+browser_egress_cleanup_topology() {
+  local cleanup_status=0 container_id network_id volume_name container_index
+  local volume_inventory
+  local -a retained_containers=() retained_networks=() retained_volumes=()
+  for ((container_index=${#QCSD_DOCKER_IDS_BROWSER_EGRESS_CONTAINERS[@]}-1;
+       container_index>=0; container_index--)); do
+    container_id="${QCSD_DOCKER_IDS_BROWSER_EGRESS_CONTAINERS[container_index]}"
+    [[ -n "${container_id}" ]] || continue
+    _qcsd_docker_api rm --force "${container_id}" >/dev/null 2>&1 || true
+    if ! qcsd_retire_docker_handoff run "${container_id}" \
+      QCSD_DOCKER_IDS_BROWSER_EGRESS_CONTAINERS; then
+      cleanup_status=1
+      retained_containers+=("${container_id}")
+    fi
+  done
+  QCSD_DOCKER_IDS_BROWSER_EGRESS_CONTAINERS=("${retained_containers[@]}")
+  for network_id in "${QCSD_DOCKER_IDS_BROWSER_EGRESS_NETWORKS[@]:-}"; do
+    [[ -n "${network_id}" ]] || continue
+    _qcsd_docker_api network rm "${network_id}" >/dev/null 2>&1 || true
+    if ! qcsd_retire_docker_handoff network "${network_id}" \
+      QCSD_DOCKER_IDS_BROWSER_EGRESS_NETWORKS; then
+      cleanup_status=1
+      retained_networks+=("${network_id}")
+    fi
+  done
+  QCSD_DOCKER_IDS_BROWSER_EGRESS_NETWORKS=("${retained_networks[@]}")
+  for volume_name in "${QCSD_DOCKER_IDS_BROWSER_EGRESS_VOLUMES[@]:-}"; do
+    [[ -n "${volume_name}" ]] || continue
+    _qcsd_docker_api volume rm "${volume_name}" >/dev/null 2>&1 || true
+    if ! volume_inventory="$(_qcsd_docker_api volume ls --quiet \
+      --filter "name=^${volume_name}$" 2>/dev/null)" ||
+       [[ -n "${volume_inventory}" ]]; then
+      echo "browser-egress policy volume absence could not be proved" >&2
+      cleanup_status=1
+      retained_volumes+=("${volume_name}")
+    fi
+  done
+  QCSD_DOCKER_IDS_BROWSER_EGRESS_VOLUMES=("${retained_volumes[@]}")
+  return "${cleanup_status}"
+}
+
+browser_egress_exit_cleanup() {
+  local cleanup_entry_status="$?"
+  local cleanup_signal_status=0 cleanup_complete=0 cleanup_failure_status=0
+  _qcsd_begin_latched_cleanup
+  browser_egress_cleanup_topology || cleanup_failure_status=1
+  if [[ -n "${browser_egress_scratch:-}" &&
+        -d "${browser_egress_scratch}" ]]; then
+    rm -rf -- "${browser_egress_scratch}" || cleanup_failure_status=1
+  fi
+  _qcsd_finish_latched_cleanup
+}
+
+browser_egress_wait_observer_receipt() {
+  local container_id="$1" destination="$2" deadline state
+  deadline=$((SECONDS + 30))
+  while (( SECONDS < deadline )); do
+    _qcsd_docker_api logs "${container_id}" >"${destination}.candidate" 2>/dev/null || true
+    if python3 -I -c '
+import json, sys
+from pathlib import Path
+path=Path(sys.argv[1])
+raw=path.read_bytes()
+try:
+    value=json.loads(raw)
+except (UnicodeDecodeError, json.JSONDecodeError):
+    raise SystemExit(1)
+canonical=(json.dumps(value, indent=2, sort_keys=True, allow_nan=False)+"\n").encode()
+if raw != canonical or not isinstance(value, dict) or value.get("role") != "observer":
+    raise SystemExit(1)
+' "${destination}.candidate"; then
+      mv -- "${destination}.candidate" "${destination}"
+      return 0
+    fi
+    state="$(_qcsd_docker_api container inspect --format '{{.State.Status}}' \
+      "${container_id}" 2>/dev/null)" || state="unavailable"
+    if [[ "${state}" != "running" ]]; then
+      echo "browser-egress observer exited before PCAP extraction" >&2
+      return 1
+    fi
+    sleep 0.1
+  done
+  echo "browser-egress observer receipt timed out" >&2
+  return 1
+}
+
+browser_egress_wait_container_marker() {
+  local container_id="$1" marker="$2" label="$3" deadline state
+  deadline=$((SECONDS + 30))
+  while (( SECONDS < deadline )); do
+    if _qcsd_docker_api exec "${container_id}" test -f "${marker}" >/dev/null 2>&1; then
+      return 0
+    fi
+    state="$(_qcsd_docker_api container inspect --format '{{.State.Status}}' \
+      "${container_id}" 2>/dev/null)" || state="unavailable"
+    if [[ "${state}" != "running" ]]; then
+      echo "browser-egress ${label} exited before its phase marker" >&2
+      return 1
+    fi
+    sleep 0.1
+  done
+  echo "browser-egress ${label} phase marker timed out" >&2
+  return 1
+}
+
+browser_egress_wait_exit_code() {
+  local container_id="$1" label="$2" deadline state exit_code
+  deadline=$((SECONDS + 120))
+  while (( SECONDS < deadline )); do
+    if ! read -r state exit_code < <(_qcsd_docker_api container inspect --format \
+      '{{.State.Status}} {{.State.ExitCode}}' "${container_id}" 2>/dev/null); then
+      echo "browser-egress ${label} exit state is unavailable" >&2
+      return 1
+    fi
+    case "${state}" in
+      exited|dead)
+        if [[ ! "${exit_code}" =~ ^(0|[1-9][0-9]{0,2})$ ]] ||
+           (( exit_code > 255 )); then
+          echo "browser-egress ${label} exit code is invalid" >&2
+          return 1
+        fi
+        printf '%s\n' "${exit_code}"
+        return 0
+        ;;
+      created|running|restarting)
+        sleep 0.1
+        ;;
+      *)
+        echo "browser-egress ${label} entered unexpected state: ${state}" >&2
+        return 1
+        ;;
+    esac
+  done
+  echo "browser-egress ${label} exit timed out" >&2
+  return 1
+}
+
+browser_egress_live_docker_binding() {
+  local docker_version_json docker_info_json
+  local QCSD_DOCKER_OUTPUT_BROWSER_EGRESS_DAEMON=""
+  docker_version_json="$(_qcsd_docker_api version --format '{{json .}}')" || {
+    echo "browser-egress could not inspect the live Docker version" >&2
+    return 1
+  }
+  docker_info_json="$(_qcsd_docker_api info --format '{{json .}}')" || {
+    echo "browser-egress could not inspect the live Docker daemon" >&2
+    return 1
+  }
+  qcsd_capture_attached_docker_output QCSD_DOCKER_OUTPUT_BROWSER_EGRESS_DAEMON \
+    docker run --network none \
+    --user "${qcsd_invoking_uid}:${qcsd_invoking_gid}" \
+    --cap-drop ALL --security-opt no-new-privileges:true --read-only \
+    --tmpfs /tmp:rw,nosuid,nodev,noexec,mode=1777 \
+    --entrypoint /usr/bin/tini "${image_id}" -- \
+    /usr/bin/timeout --signal=TERM --kill-after=10s 60s \
+    /usr/local/bin/qcsd-browser-egress-qualification live-docker-binding \
+    --docker-version-json "${docker_version_json}" \
+    --docker-info-json "${docker_info_json}" \
+    --context "${_QCSD_DOCKER_PINNED_CONTEXT}" \
+    --endpoint "${_QCSD_DOCKER_PINNED_HOST}" \
+    --server-id "${_QCSD_DOCKER_PINNED_SERVER_ID}" || {
+    echo "browser-egress live Docker binding projection failed" >&2
+    return 1
+  }
+  printf '%s\n' "${QCSD_DOCKER_OUTPUT_BROWSER_EGRESS_DAEMON}"
+}
+
+browser_egress_reconcile_filesystem() {
+  local entry name relative residue_entry="" residue_kind="" residue_count=0
+  local recovery_parent recovery_relative target_name
+  local -a reconcile_mounts=()
+  while IFS= read -r -d '' entry; do
+    name="${entry##*/}"
+    relative="${entry#"${browser_egress_result_host}/"}"
+    case "${relative}" in
+      .foundation.json.[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f].qcsd-tmp)
+        residue_kind=foundation ;;
+      .final.json.[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f].qcsd-tmp)
+        residue_kind=final ;;
+      .experiment.json.qcsd-tmp-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f])
+        residue_kind=checkpoint ;;
+      attempts/.result-[0-9][0-9][0-9][0-9].json.[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f].qcsd-tmp)
+        residue_kind=result ;;
+      attempt-intents/.intent-[0-9][0-9][0-9][0-9].json.[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f].qcsd-tmp)
+        residue_kind=intent ;;
+      *)
+        if [[ "${relative}" =~ ^evidence/[0-9]{3}--[a-z0-9][a-z0-9-]{0,127}/attempt-[1-3]/\.resume-recovery\.json\.[0-9a-f]{8}\.qcsd-tmp$ ]]; then
+          residue_kind=recovery
+        else
+          continue
+        fi
+        ;;
+    esac
+    residue_entry="${entry}"
+    residue_count=$((residue_count + 1))
+  done < <(find "${browser_egress_result_host}" -mindepth 1 -maxdepth 4 \
+    -name '*qcsd-tmp*' -print0)
+  if (( residue_count > 1 )); then
+    echo "browser-egress reconciliation found multiple ledger residues" >&2
+    return 1
+  fi
+  if (( residue_count == 0 )); then
+    reconcile_mounts=(
+      --volume "${browser_egress_result_host}:${browser_egress_result_container}:ro"
+    )
+  else
+    reconcile_mounts=(
+      --volume "${browser_egress_result_host}:${browser_egress_result_container}:rw"
+      --volume "${browser_egress_result_host}/evidence:${browser_egress_result_container}/evidence:ro"
+    )
+    if [[ "${residue_kind}" != result ]]; then
+      reconcile_mounts+=(
+        --volume "${browser_egress_result_host}/attempts:${browser_egress_result_container}/attempts:ro"
+      )
+    fi
+    if [[ "${residue_kind}" != intent ]]; then
+      reconcile_mounts+=(
+        --volume "${browser_egress_result_host}/attempt-intents:${browser_egress_result_container}/attempt-intents:ro"
+      )
+    fi
+    if [[ "${residue_kind}" != foundation ]]; then
+      reconcile_mounts+=(
+        --volume "${browser_egress_result_host}/foundation.json:${browser_egress_result_container}/foundation.json:ro"
+      )
+    fi
+    if [[ "${residue_kind}" != checkpoint && "${residue_kind}" != result ]]; then
+      reconcile_mounts+=(
+        --volume "${browser_egress_result_host}/experiment.json:${browser_egress_result_container}/experiment.json:ro"
+      )
+    fi
+    if [[ -f "${browser_egress_result_host}/final.json" &&
+          "${residue_kind}" != final ]]; then
+      reconcile_mounts+=(
+        --volume "${browser_egress_result_host}/final.json:${browser_egress_result_container}/final.json:ro"
+      )
+    fi
+    if [[ "${residue_kind}" == result ]]; then
+      while IFS= read -r -d '' entry; do
+        target_name="${entry##*/}"
+        if compgen -G "${browser_egress_result_host}/attempts/.${target_name}.????????.qcsd-tmp" >/dev/null; then
+          continue
+        fi
+        reconcile_mounts+=(
+          --volume "${entry}:${browser_egress_result_container}/attempts/${target_name}:ro"
+        )
+      done < <(find "${browser_egress_result_host}/attempts" -mindepth 1 -maxdepth 1 \
+        -type f -name 'result-????.json' -print0)
+    elif [[ "${residue_kind}" == intent ]]; then
+      while IFS= read -r -d '' entry; do
+        target_name="${entry##*/}"
+        if compgen -G "${browser_egress_result_host}/attempt-intents/.${target_name}.????????.qcsd-tmp" >/dev/null; then
+          continue
+        fi
+        reconcile_mounts+=(
+          --volume "${entry}:${browser_egress_result_container}/attempt-intents/${target_name}:ro"
+        )
+      done < <(find "${browser_egress_result_host}/attempt-intents" -mindepth 1 -maxdepth 1 \
+        -type f -name 'intent-????.json' -print0)
+    elif [[ "${residue_kind}" == recovery ]]; then
+      recovery_parent="$(dirname "${residue_entry}")"
+      recovery_relative="${recovery_parent#"${browser_egress_result_host}/"}"
+      reconcile_mounts+=(
+        --volume "${recovery_parent}:${browser_egress_result_container}/${recovery_relative}:rw"
+      )
+    fi
+  fi
+  qcsd_run_attached_docker docker run --network none \
+    --user "${qcsd_invoking_uid}:${qcsd_invoking_gid}" \
+    --cap-drop ALL --security-opt no-new-privileges:true --read-only \
+    --tmpfs /tmp:rw,nosuid,nodev,noexec,mode=1777 \
+    --env "QCSD_LAB_IMAGE_DIGEST=${image_id}" --volume "${ROOT}:/lab:ro" \
+    "${reconcile_mounts[@]}" \
+    --entrypoint /usr/bin/tini "${image_id}" -- \
+    /usr/bin/timeout --signal=TERM --kill-after=10s 600s \
+    /usr/local/bin/qcsd-browser-egress-qualification reconcile-filesystem \
+    --cohort-version "${browser_egress_cohort_version}" \
+    --build-execution-receipt "${browser_egress_build_container}" \
+    --result-root "${browser_egress_result_container}" \
+    --live-docker-json "${browser_egress_live_docker_json}" >/dev/null
+}
+
+browser_egress_retire_stale_topology() {
+  local resume_plan_json="$1" container_inspect_json='[]' network_inspect_json='null'
+  local volume_inspect_json='null' volume_name_output=''
+  local cleanup_json cleanup_output container_id_output network_id network_id_output stale_id volume_name
+  local QCSD_DOCKER_OUTPUT_BROWSER_EGRESS_STALE_PLAN=""
+  local -a discovered_container_ids=() discovered_network_ids=() discovered_volume_names=() cleanup_fields=()
+  container_id_output="$(_qcsd_docker_api ps --all --quiet --no-trunc \
+    --filter label=org.qcsd.owner=qcsd-lab \
+    --filter label=org.qcsd.study=classifier-multiorigin100-v1 \
+    --filter label=org.qcsd.qualification=browser-egress-qualification-v1)" || return 1
+  if [[ -n "${container_id_output}" ]]; then
+    mapfile -t discovered_container_ids <<<"${container_id_output}"
+  fi
+  if (( ${#discovered_container_ids[@]} )); then
+    container_inspect_json="$(_qcsd_docker_api container inspect \
+      "${discovered_container_ids[@]}")" || return 1
+  fi
+  network_id_output="$(_qcsd_docker_api network ls --quiet --no-trunc \
+    --filter name='^qcsd-browser-egress-v1$')" || return 1
+  if [[ -n "${network_id_output}" ]]; then
+    mapfile -t discovered_network_ids <<<"${network_id_output}"
+  fi
+  if (( ${#discovered_network_ids[@]} > 1 )); then
+    echo "browser-egress found multiple canonical stale networks" >&2
+    return 1
+  fi
+  if (( ${#discovered_network_ids[@]} == 1 )); then
+    network_inspect_json="$(_qcsd_docker_api network inspect \
+      "${discovered_network_ids[0]}")" || return 1
+  fi
+  volume_name_output="$(_qcsd_docker_api volume ls --quiet \
+    --filter label=org.qcsd.owner=qcsd-lab \
+    --filter label=org.qcsd.study=classifier-multiorigin100-v1 \
+    --filter label=org.qcsd.qualification=browser-egress-qualification-v1)" || return 1
+  if [[ -n "${volume_name_output}" ]]; then
+    mapfile -t discovered_volume_names <<<"${volume_name_output}"
+  fi
+  if (( ${#discovered_volume_names[@]} > 1 )); then
+    echo "browser-egress found multiple bound stale policy volumes" >&2
+    return 1
+  fi
+  if (( ${#discovered_volume_names[@]} == 1 )); then
+    volume_inspect_json="$(_qcsd_docker_api volume inspect \
+      "${discovered_volume_names[0]}")" || return 1
+  fi
+  qcsd_capture_attached_docker_output QCSD_DOCKER_OUTPUT_BROWSER_EGRESS_STALE_PLAN \
+    docker run --network none \
+    --user "${qcsd_invoking_uid}:${qcsd_invoking_gid}" \
+    --cap-drop ALL --security-opt no-new-privileges:true --read-only \
+    --tmpfs /tmp:rw,nosuid,nodev,noexec,mode=1777 \
+    --entrypoint /usr/bin/tini "${image_id}" -- \
+    /usr/bin/timeout --signal=TERM --kill-after=10s 60s \
+    /usr/local/bin/qcsd-browser-egress-qualification stale-topology-cleanup-plan \
+    --resume-plan-json "${resume_plan_json}" \
+    --network-inspect-json "${network_inspect_json}" \
+    --container-inspect-json "${container_inspect_json}" \
+    --volume-inspect-json "${volume_inspect_json}" || return 1
+  cleanup_json="${QCSD_DOCKER_OUTPUT_BROWSER_EGRESS_STALE_PLAN}"
+  cleanup_output="$(python3 -I -c '
+import json,re,sys
+value=json.loads(sys.argv[1])
+if set(value) != {"schema_version","container_ids","network_id","volume_name"} or value["schema_version"] != 1:
+    raise SystemExit("browser-egress stale cleanup plan is malformed")
+ids=value["container_ids"]
+network=value["network_id"]
+volume=value["volume_name"]
+if not isinstance(ids,list) or len(ids) != len(set(ids)):
+    raise SystemExit("browser-egress stale cleanup container inventory is malformed")
+if any(not isinstance(item,str) or re.fullmatch(r"[0-9a-f]{64}",item) is None for item in ids):
+    raise SystemExit("browser-egress stale cleanup container ID is malformed")
+if network is not None and (not isinstance(network,str) or re.fullmatch(r"[0-9a-f]{64}",network) is None):
+    raise SystemExit("browser-egress stale cleanup network ID is malformed")
+if volume is not None and (not isinstance(volume,str) or re.fullmatch(r"qcsd-be-[0-9a-f]{32}-policy0",volume) is None):
+    raise SystemExit("browser-egress stale cleanup volume name is malformed")
+print(network or "none")
+print(volume or "none")
+print(*ids,sep="\n")
+' "${cleanup_json}")" || return 1
+  mapfile -t cleanup_fields <<<"${cleanup_output}"
+  (( ${#cleanup_fields[@]} >= 2 )) || return 1
+  network_id="${cleanup_fields[0]}"
+  volume_name="${cleanup_fields[1]}"
+  for stale_id in "${cleanup_fields[@]:2}"; do
+    _qcsd_docker_api container rm --force "${stale_id}" >/dev/null || return 1
+  done
+  if [[ "${network_id}" != none ]]; then
+    _qcsd_docker_api network rm "${network_id}" >/dev/null || return 1
+  fi
+  if [[ "${volume_name}" != none ]]; then
+    _qcsd_docker_api volume rm "${volume_name}" >/dev/null || return 1
+  fi
+  container_id_output="$(_qcsd_docker_api ps --all --quiet --no-trunc \
+      --filter label=org.qcsd.owner=qcsd-lab \
+      --filter label=org.qcsd.study=classifier-multiorigin100-v1 \
+      --filter label=org.qcsd.qualification=browser-egress-qualification-v1)" || return 1
+  network_id_output="$(_qcsd_docker_api network ls --quiet --no-trunc \
+    --filter name='^qcsd-browser-egress-v1$')" || return 1
+  volume_name_output="$(_qcsd_docker_api volume ls --quiet \
+    --filter label=org.qcsd.owner=qcsd-lab \
+    --filter label=org.qcsd.study=classifier-multiorigin100-v1 \
+    --filter label=org.qcsd.qualification=browser-egress-qualification-v1)" || return 1
+  if [[ -n "${container_id_output}" || -n "${network_id_output}" ||
+        -n "${volume_name_output}" ]]; then
+    echo "browser-egress could not prove exact stale topology retirement" >&2
+    return 1
+  fi
+}
+
+browser_egress_preserve_causal_evidence() {
+  [[ "${browser_egress_causal_inputs_ready:-0}" == 1 ]] || return 0
+  python3 -I -c '
+import json
+import os
+from pathlib import Path
+import stat
+import sys
+
+source_root = Path(sys.argv[1])
+destination_root = Path(sys.argv[2])
+vector_id = sys.argv[3]
+names = ("actor", "capture", "dns", "fixture", "forbidden", "runtime")
+for name in names:
+    source = source_root / f"{name}.json"
+    descriptor = os.open(
+        source,
+        os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0),
+    )
+    try:
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or metadata.st_nlink != 1
+            or metadata.st_size <= 0
+            or metadata.st_size > 32 * 1024 * 1024
+        ):
+            raise SystemExit("browser-egress causal input is unsafe")
+        raw = b""
+        while chunk := os.read(descriptor, 1024 * 1024):
+            raw += chunk
+    finally:
+        os.close(descriptor)
+    try:
+        value = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise SystemExit("browser-egress causal input is not JSON") from error
+    canonical = (
+        json.dumps(value, indent=2, sort_keys=True, allow_nan=False) + "\n"
+    ).encode()
+    if not isinstance(value, dict) or raw != canonical:
+        raise SystemExit("browser-egress causal input is not canonical")
+    if name != "runtime" and value.get("vector_id") != vector_id:
+        raise SystemExit("browser-egress causal input belongs to another vector")
+    destination = destination_root / f"causal-{name}.json"
+    try:
+        output = os.open(
+            destination,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | os.O_CLOEXEC
+            | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+    except FileExistsError:
+        existing = destination.lstat()
+        if (
+            not stat.S_ISREG(existing.st_mode)
+            or existing.st_uid != os.geteuid()
+            or stat.S_IMODE(existing.st_mode) != 0o600
+            or existing.st_nlink != 1
+            or destination.read_bytes() != canonical
+        ):
+            raise SystemExit("browser-egress causal evidence conflicts")
+        continue
+    try:
+        view = memoryview(canonical)
+        while view:
+            written = os.write(output, view)
+            if written <= 0:
+                raise OSError("short causal-evidence write")
+            view = view[written:]
+        os.fsync(output)
+    finally:
+        os.close(output)
+directory = os.open(
+    destination_root,
+    os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_DIRECTORY", 0),
+)
+try:
+    os.fsync(directory)
+finally:
+    os.close(directory)
+' "${browser_egress_attempt_scratch}" \
+    "${browser_egress_attempt_evidence_host}" "${browser_egress_vector_id}"
+}
+
+browser_egress_record_failed_attempt() {
+  local original_status="$?" failure_finished prior_artifact prior_result role_name role_id
+  trap - ERR
+  set +e
+  failure_finished="$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
+  if ! browser_egress_preserve_causal_evidence; then
+    echo "browser-egress could not preserve its causal failure evidence" >&2
+    exit "${original_status}"
+  fi
+  for role_name in browser observer fixture forbidden dns; do
+    case "${role_name}" in
+      browser) role_id="${browser_egress_browser_id:-}" ;;
+      observer) role_id="${browser_egress_observer_id:-}" ;;
+      fixture) role_id="${browser_egress_fixture_id:-}" ;;
+      forbidden) role_id="${browser_egress_forbidden_id:-}" ;;
+      dns) role_id="${browser_egress_dns_id:-}" ;;
+    esac
+    [[ -n "${role_id}" ]] || continue
+    if [[ ! -e "${browser_egress_attempt_evidence_host}/${role_name}.log" ]]; then
+      _qcsd_docker_api logs "${role_id}" \
+        >"${browser_egress_attempt_evidence_host}/${role_name}.log" 2>&1 || true
+      [[ -s "${browser_egress_attempt_evidence_host}/${role_name}.log" ]] || \
+        rm -f -- "${browser_egress_attempt_evidence_host}/${role_name}.log"
+    fi
+    if [[ ! -e "${browser_egress_attempt_evidence_host}/${role_name}-inspect.txt" ]]; then
+      _qcsd_docker_api container inspect --format \
+        '{{.Id}} {{.Image}} {{.State.Status}} {{.State.ExitCode}}' "${role_id}" \
+        >"${browser_egress_attempt_evidence_host}/${role_name}-inspect.txt" 2>/dev/null || true
+      [[ -s "${browser_egress_attempt_evidence_host}/${role_name}-inspect.txt" ]] || \
+        rm -f -- "${browser_egress_attempt_evidence_host}/${role_name}-inspect.txt"
+    fi
+  done
+  if [[ -n "${browser_egress_network_id:-}" &&
+        ! -e "${browser_egress_attempt_evidence_host}/network-inspect.txt" ]]; then
+    _qcsd_docker_api network inspect --format \
+      '{{.Id}} {{.Name}} {{.Driver}} {{.Internal}} {{.EnableIPv6}}' \
+      "${browser_egress_network_id}" \
+      >"${browser_egress_attempt_evidence_host}/network-inspect.txt" 2>/dev/null || true
+    [[ -s "${browser_egress_attempt_evidence_host}/network-inspect.txt" ]] || \
+      rm -f -- "${browser_egress_attempt_evidence_host}/network-inspect.txt"
+  fi
+  if [[ -n "${browser_egress_observer_id:-}" &&
+        ! -e "${browser_egress_evidence_host}" ]]; then
+    _qcsd_docker_api cp "${browser_egress_observer_id}:/tmp/capture.pcapng" \
+      "${browser_egress_evidence_host}" >/dev/null 2>&1 || true
+    if [[ -f "${browser_egress_evidence_host}" &&
+          ! -L "${browser_egress_evidence_host}" ]]; then
+      chmod 0600 -- "${browser_egress_evidence_host}" || true
+    fi
+  fi
+  if ! browser_egress_cleanup_topology; then
+    echo "browser-egress left its attempt outstanding after teardown failed" >&2
+    exit "${original_status}"
+  fi
+  browser_egress_failure_mounts=(
+    --volume "${browser_egress_result_host}:${browser_egress_result_container}:rw"
+    --volume "${browser_egress_result_host}/foundation.json:${browser_egress_result_container}/foundation.json:ro"
+    --volume "${browser_egress_result_host}/attempts:${browser_egress_result_container}/attempts:rw"
+    --volume "${browser_egress_result_host}/attempt-intents:${browser_egress_result_container}/attempt-intents:ro"
+    --volume "${browser_egress_result_host}/evidence:${browser_egress_result_container}/evidence:ro"
+    --volume "${browser_egress_attempt_evidence_host}:${browser_egress_result_container}/evidence/$(printf '%03d' "${browser_egress_vector_ordinal}")--${browser_egress_vector_id}/attempt-${browser_egress_attempt_number}:rw"
+  )
+  while IFS= read -r -d '' prior_artifact; do
+    [[ -f "${prior_artifact}" && ! -L "${prior_artifact}" ]] || continue
+    browser_egress_failure_mounts+=(
+      --volume "${prior_artifact}:${browser_egress_result_container}/${prior_artifact#"${browser_egress_result_host}/"}:ro"
+    )
+  done < <(find "${browser_egress_attempt_evidence_host}" -mindepth 1 -maxdepth 1 -print0)
+  while IFS= read -r -d '' prior_result; do
+    [[ -f "${prior_result}" && ! -L "${prior_result}" ]] || continue
+    browser_egress_failure_mounts+=(
+      --volume "${prior_result}:${browser_egress_result_container}/attempts/${prior_result##*/}:ro"
+    )
+  done < <(find "${browser_egress_result_host}/attempts" -mindepth 1 -maxdepth 1 -print0)
+  qcsd_run_attached_docker docker run --network none \
+    --user "${qcsd_invoking_uid}:${qcsd_invoking_gid}" --cap-drop ALL \
+    --security-opt no-new-privileges:true --read-only \
+    --tmpfs /tmp:rw,nosuid,nodev,noexec,mode=1777 \
+    --env "QCSD_LAB_IMAGE_DIGEST=${image_id}" --volume "${ROOT}:/lab:ro" \
+    "${browser_egress_failure_mounts[@]}" \
+    --volume "${browser_egress_attempt_scratch}:/qcsd-input:ro" \
+    --entrypoint /usr/bin/tini "${image_id}" -- "${browser_egress_tool}" record-failure \
+    --result-root "${browser_egress_result_container}" \
+    --vector-id "${browser_egress_vector_id}" --next-json /qcsd-input/next.json \
+    --started-at "${browser_egress_started_at}" --finished-at "${failure_finished}" \
+    --verdict "${browser_egress_failure_verdict}" \
+    --failure-code "${browser_egress_failure_code}" \
+    --stage "${browser_egress_failure_stage}" >/dev/null
+  failure_record_status=$?
+  if (( failure_record_status != 0 )); then
+    echo "browser-egress failed to seal failed attempt at ${browser_egress_failure_stage}" >&2
+  else
+    echo "browser-egress sealed ${browser_egress_failure_verdict} at ${browser_egress_failure_stage}" >&2
+  fi
+  exit "${original_status}"
+}
+
+browser_egress_live_docker_json=""
+if [[ "${1:-}" == "test" && "${2:-}" == "browser-egress" ]]; then
+  browser_egress_live_docker_json="$(browser_egress_live_docker_binding)" || exit 1
+fi
+
+if [[ "${1:-}" == "test" && "${2:-}" == "browser-egress" &&
+      "${browser_egress_action}" == "verify" ]]; then
+  browser_egress_tool=/usr/local/bin/qcsd-browser-egress-qualification
+  browser_egress_reconcile_filesystem || exit 1
+  set +e
+  qcsd_run_attached_docker docker run --network none \
+    --user "${qcsd_invoking_uid}:${qcsd_invoking_gid}" \
+    --cap-drop ALL --security-opt no-new-privileges:true --read-only \
+    --tmpfs /tmp:rw,nosuid,nodev,noexec,mode=1777 \
+    --env "QCSD_LAB_IMAGE_DIGEST=${image_id}" \
+    --volume "${ROOT}:/lab:ro" \
+    --entrypoint /usr/bin/tini "${image_id}" -- \
+    /usr/bin/timeout --signal=TERM --kill-after=10s 600s \
+    /usr/local/bin/qcsd-browser-egress-qualification verify \
+    --cohort-version "${browser_egress_cohort_version}" \
+    --build-execution-receipt "${browser_egress_build_container}" \
+    --result-root "${browser_egress_result_container}" \
+    --live-docker-json "${browser_egress_live_docker_json}"
+  browser_egress_verify_status=$?
+  set -e
+  exit "${browser_egress_verify_status}"
+fi
+
+if [[ "${1:-}" == "test" && "${2:-}" == "browser-egress" &&
+      ( "${browser_egress_action}" == "create" ||
+        "${browser_egress_action}" == "resume" ) ]]; then
+  if (( qcsd_invoking_uid == 0 || qcsd_invoking_gid == 0 )); then
+    echo "test browser-egress requires a numeric non-root invoking UID and GID" >&2
+    exit 2
+  fi
+  browser_egress_tool=/usr/local/bin/qcsd-browser-egress-qualification
+  browser_egress_repo_digests="$(_qcsd_docker_api image inspect --format \
+    '{{json .RepoDigests}}' "${image_id}")"
+  browser_egress_coordinator_prefix=(
+    docker run --network none
+    --user "${qcsd_invoking_uid}:${qcsd_invoking_gid}"
+    --cap-drop ALL --security-opt no-new-privileges:true --read-only
+    --tmpfs /tmp:rw,nosuid,nodev,noexec,mode=1777
+    --env "QCSD_LAB_IMAGE_DIGEST=${image_id}"
+    --volume "${ROOT}:/lab:ro"
+  )
+  browser_egress_coordinator_suffix=(
+    --entrypoint /usr/bin/tini "${image_id}" --
+    /usr/bin/timeout --signal=TERM --kill-after=10s 600s
+    "${browser_egress_tool}"
+  )
+  if [[ "${browser_egress_action}" == "create" ]]; then
+    browser_egress_foundation_mounts=(
+      --volume "${browser_egress_result_parent}:${browser_egress_result_parent_container}:rw"
+    )
+    while IFS= read -r -d '' browser_egress_existing_child; do
+      if [[ -L "${browser_egress_existing_child}" ]]; then
+        echo "browser-egress result parent contains a symlink" >&2
+        exit 1
+      fi
+      if [[ ! -f "${browser_egress_existing_child}" &&
+            ! -d "${browser_egress_existing_child}" ]]; then
+        echo "browser-egress result parent contains a non-regular entry" >&2
+        exit 1
+      fi
+      browser_egress_existing_name="${browser_egress_existing_child##*/}"
+      if [[ ! "${browser_egress_existing_name}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+        echo "browser-egress result parent contains an unsafe existing name" >&2
+        exit 1
+      fi
+      if [[ "${browser_egress_existing_name}" =~ ^\.browser-egress-qualification-v${browser_egress_cohort_version}\.[0-9a-f]{8}\.qcsd-tmp$ ]]; then
+        # A process may die after publishing private staging entries but before
+        # the no-replace root rename.  The coordinator must inspect and retire
+        # only this exact cohort-bound sibling, so do not mask it read-only.
+        continue
+      fi
+      browser_egress_foundation_mounts+=(
+        --volume "${browser_egress_existing_child}:${browser_egress_result_parent_container}/${browser_egress_existing_name}:ro"
+      )
+    done < <(find "${browser_egress_result_parent}" -mindepth 1 -maxdepth 1 -print0)
+    qcsd_run_attached_docker docker run --network none \
+      --user "${qcsd_invoking_uid}:${qcsd_invoking_gid}" \
+      --cap-drop ALL --security-opt no-new-privileges:true --read-only \
+      --tmpfs /tmp:rw,nosuid,nodev,noexec,mode=1777 \
+      --env "QCSD_LAB_IMAGE_DIGEST=${image_id}" \
+      --volume "${ROOT}:/lab:ro" \
+      "${browser_egress_foundation_mounts[@]}" \
+      --entrypoint /usr/bin/tini "${image_id}" -- \
+      /usr/bin/timeout --signal=TERM --kill-after=10s 600s \
+      "${browser_egress_tool}" foundation \
+      --cohort-version "${browser_egress_cohort_version}" \
+      --build-execution-receipt "${browser_egress_build_container}" \
+      --result-root "${browser_egress_result_container}" \
+      --prepare-repo-digests-json "${browser_egress_repo_digests}" \
+      --live-docker-json "${browser_egress_live_docker_json}" >/dev/null
+  else
+    browser_egress_reconcile_filesystem || exit 1
+    QCSD_DOCKER_OUTPUT_BROWSER_EGRESS_RESUME=""
+    qcsd_capture_attached_docker_output QCSD_DOCKER_OUTPUT_BROWSER_EGRESS_RESUME \
+      "${browser_egress_coordinator_prefix[@]}" \
+      --volume "${browser_egress_result_host}:${browser_egress_result_container}:ro" \
+      "${browser_egress_coordinator_suffix[@]}" \
+      admit-resume --cohort-version "${browser_egress_cohort_version}" \
+      --build-execution-receipt "${browser_egress_build_container}" \
+      --result-root "${browser_egress_result_container}" \
+      --live-docker-json "${browser_egress_live_docker_json}"
+    browser_egress_retire_stale_topology \
+      "${QCSD_DOCKER_OUTPUT_BROWSER_EGRESS_RESUME}"
+    browser_egress_resume_fields_output="$(python3 -I -c '
+import json,re,sys
+value=json.loads(sys.argv[1])
+if set(value) != {"schema_version","checkpoint_publish_lag","checkpoint_status","prepare_image_id","docker_root_dir","cleanup"}:
+    raise SystemExit("browser-egress resume plan is malformed")
+if type(value["checkpoint_publish_lag"]) is not bool:
+    raise SystemExit("browser-egress resume publish-lag flag is malformed")
+cleanup=value["cleanup"]
+if cleanup is None:
+    print("true" if value["checkpoint_publish_lag"] else "false")
+    print("false")
+    print("none")
+    raise SystemExit(0)
+if set(cleanup) != {"vector_id","global_ordinal","attempt_number","evidence_directory","topology_token","cohort_version","foundation_payload_sha256","outstanding"}:
+    raise SystemExit("browser-egress resume cleanup binding is malformed")
+relative=cleanup["evidence_directory"]
+if not isinstance(relative,str) or re.fullmatch(r"evidence/[0-9]{3}--[a-z0-9][a-z0-9-]{0,127}/attempt-[1-3]",relative) is None:
+    raise SystemExit("browser-egress resume evidence path is malformed")
+print("true" if value["checkpoint_publish_lag"] else "false")
+print("true" if cleanup["outstanding"] is True else "false")
+print(relative)
+' "${QCSD_DOCKER_OUTPUT_BROWSER_EGRESS_RESUME}")" || exit 1
+    mapfile -t browser_egress_resume_fields <<<"${browser_egress_resume_fields_output}"
+    if (( ${#browser_egress_resume_fields[@]} != 3 )); then
+      echo "browser-egress resume mount plan is malformed" >&2
+      exit 1
+    fi
+    browser_egress_checkpoint_publish_lag="${browser_egress_resume_fields[0]}"
+    browser_egress_resume_outstanding="${browser_egress_resume_fields[1]}"
+    browser_egress_recovery_evidence_relative="${browser_egress_resume_fields[2]}"
+    browser_egress_recovery_mounts=(
+      --volume "${browser_egress_result_host}:${browser_egress_result_container}:ro"
+    )
+    if [[ "${browser_egress_checkpoint_publish_lag}" == true ||
+          "${browser_egress_resume_outstanding}" == true ]]; then
+      browser_egress_recovery_mounts=(
+        --volume "${browser_egress_result_host}:${browser_egress_result_container}:rw"
+        --volume "${browser_egress_result_host}/foundation.json:${browser_egress_result_container}/foundation.json:ro"
+        --volume "${browser_egress_result_host}/attempt-intents:${browser_egress_result_container}/attempt-intents:ro"
+        --volume "${browser_egress_result_host}/evidence:${browser_egress_result_container}/evidence:ro"
+      )
+      if [[ "${browser_egress_resume_outstanding}" == true ]]; then
+        browser_egress_recovery_vector_host="$(dirname \
+          "${browser_egress_result_host}/${browser_egress_recovery_evidence_relative}")"
+        browser_egress_recovery_attempt_host="${browser_egress_result_host}/${browser_egress_recovery_evidence_relative}"
+        if [[ ! -e "${browser_egress_recovery_vector_host}" ]]; then
+          mkdir --mode=0700 -- "${browser_egress_recovery_vector_host}"
+        elif [[ -L "${browser_egress_recovery_vector_host}" ||
+                ! -d "${browser_egress_recovery_vector_host}" ]]; then
+          echo "browser-egress recovery vector evidence directory is unsafe" >&2
+          exit 1
+        fi
+        if [[ ! -e "${browser_egress_recovery_attempt_host}" ]]; then
+          mkdir --mode=0700 -- "${browser_egress_recovery_attempt_host}"
+        elif [[ -L "${browser_egress_recovery_attempt_host}" ||
+                ! -d "${browser_egress_recovery_attempt_host}" ]]; then
+          echo "browser-egress recovery attempt evidence directory is unsafe" >&2
+          exit 1
+        fi
+        browser_egress_recovery_mounts+=(
+          --volume "${browser_egress_result_host}/attempts:${browser_egress_result_container}/attempts:rw"
+          --volume "${browser_egress_recovery_attempt_host}:${browser_egress_result_container}/${browser_egress_recovery_evidence_relative}:rw"
+        )
+      else
+        browser_egress_recovery_mounts+=(
+          --volume "${browser_egress_result_host}/attempts:${browser_egress_result_container}/attempts:ro"
+        )
+      fi
+    fi
+    while IFS= read -r -d '' browser_egress_recovery_result; do
+      if [[ -L "${browser_egress_recovery_result}" ||
+            ! -f "${browser_egress_recovery_result}" ]]; then
+        echo "browser-egress recovery ledger contains an unsafe result" >&2
+        exit 1
+      fi
+      if [[ "${browser_egress_resume_outstanding}" == true ]]; then
+        browser_egress_recovery_mounts+=(
+          --volume "${browser_egress_recovery_result}:${browser_egress_result_container}/attempts/${browser_egress_recovery_result##*/}:ro"
+        )
+      fi
+    done < <(find "${browser_egress_result_host}/attempts" -mindepth 1 -maxdepth 1 -print0)
+    qcsd_run_attached_docker "${browser_egress_coordinator_prefix[@]}" \
+      "${browser_egress_recovery_mounts[@]}" \
+      "${browser_egress_coordinator_suffix[@]}" \
+      recover-resume --cohort-version "${browser_egress_cohort_version}" \
+      --build-execution-receipt "${browser_egress_build_container}" \
+      --result-root "${browser_egress_result_container}" \
+      --live-docker-json "${browser_egress_live_docker_json}" >/dev/null
+  fi
+
+  QCSD_DOCKER_IDS_BROWSER_EGRESS_CONTAINERS=()
+  QCSD_DOCKER_IDS_BROWSER_EGRESS_NETWORKS=()
+  QCSD_DOCKER_IDS_BROWSER_EGRESS_VOLUMES=()
+  browser_egress_scratch="$(mktemp -d --tmpdir=/tmp qcsd-browser-egress.XXXXXXXX)"
+  trap browser_egress_exit_cleanup EXIT
+  browser_egress_network_name="qcsd-browser-egress-v1"
+  while :; do
+    browser_egress_attempt_scratch=""
+    browser_egress_causal_inputs_ready=0
+    if [[ -n "$(find "${browser_egress_result_host}" -type l -print -quit)" ]]; then
+      echo "browser-egress qualification tree contains a symlink" >&2
+      exit 1
+    fi
+    QCSD_DOCKER_OUTPUT_BROWSER_EGRESS_NEXT=""
+    if ! qcsd_capture_attached_docker_output QCSD_DOCKER_OUTPUT_BROWSER_EGRESS_NEXT \
+      "${browser_egress_coordinator_prefix[@]}" \
+      --volume "${browser_egress_result_host}:${browser_egress_result_container}:ro" \
+      "${browser_egress_coordinator_suffix[@]}" next \
+      --result-root "${browser_egress_result_container}"; then
+      echo "browser-egress next-vector admission failed" >&2
+      exit 1
+    fi
+    printf '%s\n' "${QCSD_DOCKER_OUTPUT_BROWSER_EGRESS_NEXT}" \
+      >"${browser_egress_scratch}/next.json"
+    mapfile -t browser_egress_vector_fields < <(python3 -I -c '
+import json, sys
+value=json.load(open(sys.argv[1], encoding="utf-8"))
+print("complete" if value.get("complete") is True else "vector")
+if value.get("complete") is True:
+    raise SystemExit(0)
+vector=value["vector"]
+print(vector["vector_id"])
+print(vector["ordinal"])
+print(value["global_ordinal"])
+print(value["attempt_number"])
+print(vector["family"])
+launch=vector.get("browser_launch_contract")
+if not isinstance(launch,dict):
+    raise SystemExit("browser-egress vector launch contract is absent")
+policy=launch.get("managed_policy")
+if not isinstance(policy,dict) or policy.get("NetworkPredictionOptions") not in {0,2}:
+    raise SystemExit("browser-egress vector managed policy is invalid")
+print(policy["NetworkPredictionOptions"])
+print(launch.get("launch_profile"))
+' "${browser_egress_scratch}/next.json")
+    if (( ${#browser_egress_vector_fields[@]} == 1 )) &&
+       [[ "${browser_egress_vector_fields[0]}" == "complete" ]]; then
+      break
+    fi
+    if (( ${#browser_egress_vector_fields[@]} != 8 )) ||
+       [[ "${browser_egress_vector_fields[0]}" != "vector" ]]; then
+      echo "browser-egress next-vector plan is malformed" >&2
+      exit 1
+    fi
+    browser_egress_vector_id="${browser_egress_vector_fields[1]}"
+    browser_egress_vector_ordinal="${browser_egress_vector_fields[2]}"
+    browser_egress_global_ordinal="${browser_egress_vector_fields[3]}"
+    browser_egress_attempt_number="${browser_egress_vector_fields[4]}"
+    browser_egress_vector_family="${browser_egress_vector_fields[5]}"
+    browser_egress_network_prediction_option="${browser_egress_vector_fields[6]}"
+    browser_egress_launch_profile="${browser_egress_vector_fields[7]}"
+    if [[ "${browser_egress_network_prediction_option}" == 0 &&
+          "${browser_egress_launch_profile}" != \
+            qualification-network-prediction-enabled-control ]]; then
+      echo "browser-egress enabled policy is not bound to its qualification profile" >&2
+      exit 1
+    fi
+    browser_egress_attempt_scratch="${browser_egress_scratch}/attempt-${browser_egress_global_ordinal}"
+    mkdir --mode=0700 -- "${browser_egress_attempt_scratch}"
+    mv -- "${browser_egress_scratch}/next.json" \
+      "${browser_egress_attempt_scratch}/next.json"
+    browser_egress_started_at="$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
+    browser_egress_begin_mounts=(
+      --volume "${browser_egress_result_host}:${browser_egress_result_container}:ro"
+      --volume "${browser_egress_result_host}/attempt-intents:${browser_egress_result_container}/attempt-intents:rw"
+    )
+    while IFS= read -r -d '' browser_egress_prior_intent; do
+      if [[ -L "${browser_egress_prior_intent}" ||
+            ! -f "${browser_egress_prior_intent}" ]]; then
+        echo "browser-egress attempt-intent ledger contains an unsafe entry" >&2
+        exit 1
+      fi
+      browser_egress_begin_mounts+=(
+        --volume "${browser_egress_prior_intent}:${browser_egress_result_container}/attempt-intents/${browser_egress_prior_intent##*/}:ro"
+      )
+    done < <(find "${browser_egress_result_host}/attempt-intents" -mindepth 1 -maxdepth 1 -print0)
+    QCSD_DOCKER_OUTPUT_BROWSER_EGRESS_BEGIN=""
+    qcsd_capture_attached_docker_output QCSD_DOCKER_OUTPUT_BROWSER_EGRESS_BEGIN \
+      "${browser_egress_coordinator_prefix[@]}" \
+      "${browser_egress_begin_mounts[@]}" \
+      "${browser_egress_coordinator_suffix[@]}" \
+      begin-attempt --result-root "${browser_egress_result_container}" \
+      --vector-id "${browser_egress_vector_id}" \
+      --next-plan-json "${QCSD_DOCKER_OUTPUT_BROWSER_EGRESS_NEXT}" \
+      --started-at "${browser_egress_started_at}"
+    browser_egress_begin_fields_output="$(python3 -I -c '
+import json,re,sys
+value=json.loads(sys.argv[1])
+if set(value) != {"schema_version","created","intent"} or value["schema_version"] != 1 or value["created"] is not True:
+    raise SystemExit("browser-egress begin-attempt output is malformed")
+intent=value["intent"]
+if not isinstance(intent,dict) or set(intent) != {"path","sha256","payload_sha256","topology_token","foundation_payload_sha256","global_ordinal","attempt_number","evidence_directory"}:
+    raise SystemExit("browser-egress attempt binding is malformed")
+if intent["global_ordinal"] != int(sys.argv[2]) or intent["attempt_number"] != int(sys.argv[3]):
+    raise SystemExit("browser-egress attempt binding differs from its plan")
+for key,size in (("sha256",64),("payload_sha256",64),("foundation_payload_sha256",64),("topology_token",32)):
+    if not isinstance(intent[key],str) or re.fullmatch(rf"[0-9a-f]{{{size}}}",intent[key]) is None:
+        raise SystemExit("browser-egress attempt digest/token is malformed")
+print(intent["topology_token"])
+print(intent["foundation_payload_sha256"])
+print(intent["evidence_directory"])
+' "${QCSD_DOCKER_OUTPUT_BROWSER_EGRESS_BEGIN}" \
+      "${browser_egress_global_ordinal}" "${browser_egress_attempt_number}")" || exit 1
+    mapfile -t browser_egress_begin_fields <<<"${browser_egress_begin_fields_output}"
+    if (( ${#browser_egress_begin_fields[@]} != 3 )); then
+      echo "browser-egress begin-attempt binding is incomplete" >&2
+      exit 1
+    fi
+    browser_egress_topology_token="${browser_egress_begin_fields[0]}"
+    browser_egress_foundation_payload_sha256="${browser_egress_begin_fields[1]}"
+    browser_egress_bound_evidence_directory="${browser_egress_begin_fields[2]}"
+    browser_egress_evidence_relative="evidence/$(printf '%03d' "${browser_egress_vector_ordinal}")--${browser_egress_vector_id}/attempt-${browser_egress_attempt_number}/capture.pcapng"
+    if [[ "${browser_egress_bound_evidence_directory}/capture.pcapng" != \
+          "${browser_egress_evidence_relative}" ]]; then
+      echo "browser-egress attempt evidence path differs from its durable intent" >&2
+      exit 1
+    fi
+    browser_egress_evidence_host="${browser_egress_result_host}/${browser_egress_evidence_relative}"
+    if [[ -e "${browser_egress_evidence_host}" || -L "${browser_egress_evidence_host}" ]]; then
+      echo "browser-egress attempt PCAP destination already exists" >&2
+      exit 1
+    fi
+    browser_egress_vector_evidence_host="$(dirname "$(dirname "${browser_egress_evidence_host}")")"
+    browser_egress_attempt_evidence_host="$(dirname "${browser_egress_evidence_host}")"
+    if [[ ! -e "${browser_egress_vector_evidence_host}" ]]; then
+      mkdir --mode=0700 -- "${browser_egress_vector_evidence_host}"
+    elif [[ ! -d "${browser_egress_vector_evidence_host}" ||
+            -L "${browser_egress_vector_evidence_host}" ]]; then
+      echo "browser-egress vector evidence root is unsafe" >&2
+      exit 1
+    fi
+    mkdir --mode=0700 -- "${browser_egress_attempt_evidence_host}"
+    browser_egress_failure_verdict=operational-failure
+    browser_egress_failure_code=docker-start-failed
+    browser_egress_failure_stage=network-create
+    trap browser_egress_record_failed_attempt ERR
+    browser_egress_name_prefix="qcsd-be-${browser_egress_topology_token}"
+    browser_egress_labels=(
+      --label "org.qcsd.owner=qcsd-lab"
+      --label "org.qcsd.study=classifier-multiorigin100-v1"
+      --label "org.qcsd.qualification=browser-egress-qualification-v1"
+      --label "org.qcsd.vector=${browser_egress_vector_id}"
+      --label "org.qcsd.cohort-version=${browser_egress_cohort_version}"
+      --label "org.qcsd.foundation=${browser_egress_foundation_payload_sha256}"
+      --label "org.qcsd.global-ordinal=${browser_egress_global_ordinal}"
+      --label "org.qcsd.attempt-number=${browser_egress_attempt_number}"
+      --label "org.qcsd.topology-token=${browser_egress_topology_token}"
+    )
+    browser_egress_policy_volume_name=""
+    browser_egress_browser_policy_mount=()
+    if [[ "${browser_egress_network_prediction_option}" == 0 ]]; then
+      browser_egress_failure_stage=policy-volume-create
+      browser_egress_policy_volume_name="${browser_egress_name_prefix}-policy0"
+      if _qcsd_docker_api volume inspect \
+           "${browser_egress_policy_volume_name}" >/dev/null 2>&1; then
+        echo "browser-egress policy volume already exists" >&2
+        false
+      fi
+      # Publish the deterministic intent-bound name to cleanup before the
+      # daemon mutation.  A lost create response is therefore recoverable;
+      # exact absence proof also handles a create that never took effect.
+      QCSD_DOCKER_IDS_BROWSER_EGRESS_VOLUMES+=(
+        "${browser_egress_policy_volume_name}"
+      )
+      browser_egress_created_volume="$(_qcsd_docker_api volume create \
+        "${browser_egress_labels[@]}" --label org.qcsd.role=policy_volume \
+        "${browser_egress_policy_volume_name}")"
+      if [[ "${browser_egress_created_volume}" != \
+            "${browser_egress_policy_volume_name}" ]]; then
+        echo "browser-egress Docker returned a different policy volume" >&2
+        false
+      fi
+      browser_egress_failure_stage=policy-volume-seed
+      qcsd_run_attached_docker docker run --network none \
+        --name "${browser_egress_name_prefix}-policy-seed" --user 0:0 \
+        --cap-drop ALL --security-opt no-new-privileges:true --read-only \
+        --tmpfs /tmp:rw,nosuid,nodev,noexec,mode=1777 \
+        --tmpfs /opt/qcsd-lab/config/class-study/v1:ro,nosuid,nodev,noexec,mode=000 \
+        "${browser_egress_labels[@]}" --label org.qcsd.role=policy_seed \
+        --volume "${browser_egress_policy_volume_name}:/qcsd-policy:rw" \
+        --entrypoint /bin/sh "${image_id}" -euc '
+source=/usr/share/qcsd-lab/browser-egress-controls/network-prediction-options-0.json
+target=/qcsd-policy/qcsd-network-prediction.json
+test "$(stat -c "%u:%g:%a:%h:%s:%F" -- "$source")" = "0:0:444:1:56:regular file"
+set -- $(sha256sum -- "$source")
+test "$1" = "4566be4f014df0cfd45cf8bdeb4333b341bf4c666139e364992306c12873df03"
+test -z "$(find /qcsd-policy -mindepth 1 -maxdepth 1 -print -quit)"
+install -o 0 -g 0 -m 0444 -- "$source" "$target"
+sync -f "$target"
+sync -f /qcsd-policy
+test "$(stat -c "%u:%g:%a:%h:%s:%F" -- "$target")" = "0:0:444:1:56:regular file"
+set -- $(sha256sum -- "$target")
+test "$1" = "4566be4f014df0cfd45cf8bdeb4333b341bf4c666139e364992306c12873df03"
+test "$(find /qcsd-policy -mindepth 1 -maxdepth 1 -type f -printf x)" = x
+'
+      browser_egress_browser_policy_mount=(
+        --volume "${browser_egress_policy_volume_name}:/etc/chromium/policies/managed:ro"
+      )
+    fi
+    if _qcsd_docker_api network inspect "${browser_egress_network_name}" >/dev/null 2>&1; then
+      echo "browser-egress canonical network name already exists" >&2
+      false
+    fi
+    qcsd_create_docker_network QCSD_DOCKER_IDS_BROWSER_EGRESS_NETWORKS \
+      docker network create --driver bridge --internal --ipv6 \
+      --subnet 172.30.98.0/24 --subnet fd00:71:63:73:64:98::/96 \
+      "${browser_egress_labels[@]}" "${browser_egress_network_name}" >/dev/null
+    browser_egress_network_id="${QCSD_DOCKER_IDS_BROWSER_EGRESS_NETWORKS[-1]}"
+    browser_egress_failure_stage=container-start
+    browser_egress_role_common=(
+      --cap-drop ALL --security-opt no-new-privileges:true --read-only
+      --tmpfs /tmp:rw,nosuid,nodev,mode=1777
+      --health-cmd "test -f /tmp/qcsd-browser-egress-role.ready"
+      --health-interval 100ms --health-timeout 1s --health-retries 100
+      --entrypoint /usr/bin/tini "${image_id}" --
+      "${browser_egress_tool}"
+    )
+    browser_egress_actor_command=actor
+    [[ "${browser_egress_vector_family}" != "positive-control" ]] || \
+      browser_egress_actor_command=control
+    qcsd_run_detached_docker QCSD_DOCKER_IDS_BROWSER_EGRESS_CONTAINERS \
+      docker run --name "${browser_egress_name_prefix}-browser" \
+      --network "${browser_egress_network_name}" --ip 172.30.98.10 \
+      --ip6 fd00:71:63:73:64:98:0:10 \
+      --dns 172.30.98.53 --dns fd00:71:63:73:64:98:0:53 \
+      --user "${qcsd_invoking_uid}:${qcsd_invoking_gid}" \
+      --tmpfs /opt/qcsd-lab/config/class-study/v1:ro,nosuid,nodev,noexec,mode=000 \
+      "${browser_egress_browser_policy_mount[@]}" \
+      "${browser_egress_labels[@]}" --label org.qcsd.role=browser \
+      "${browser_egress_role_common[@]}" "${browser_egress_actor_command}" \
+      --vector-id "${browser_egress_vector_id}" >/dev/null
+    browser_egress_browser_id="${QCSD_DOCKER_IDS_BROWSER_EGRESS_CONTAINERS[-1]}"
+    browser_egress_failure_code=browser-start-failed
+    browser_egress_failure_stage=browser-readiness
+    browser_egress_wait_healthy "${browser_egress_browser_id}" || false
+    qcsd_run_detached_docker QCSD_DOCKER_IDS_BROWSER_EGRESS_CONTAINERS \
+      docker run --name "${browser_egress_name_prefix}-observer" \
+      --network "container:${browser_egress_browser_id}" --user 0:0 \
+      --cap-drop ALL --cap-add NET_RAW --security-opt no-new-privileges:true \
+      --read-only --tmpfs /tmp:rw,nosuid,nodev,mode=1777 \
+      --tmpfs /opt/qcsd-lab/config/class-study/v1:ro,nosuid,nodev,noexec,mode=000 \
+      --health-cmd "test -f /tmp/qcsd-browser-egress-role.ready" \
+      --health-interval 100ms --health-timeout 1s --health-retries 100 \
+      "${browser_egress_labels[@]}" --label org.qcsd.role=observer \
+      --entrypoint /usr/bin/tini "${image_id}" -- \
+      "${browser_egress_tool}" observer \
+      --vector-id "${browser_egress_vector_id}" --pcap /tmp/capture.pcapng \
+      --evidence-relative "${browser_egress_evidence_relative}" >/dev/null
+    browser_egress_observer_id="${QCSD_DOCKER_IDS_BROWSER_EGRESS_CONTAINERS[-1]}"
+    browser_egress_failure_code=observer-start-failed
+    browser_egress_failure_stage=observer-readiness
+    browser_egress_wait_healthy "${browser_egress_observer_id}" || false
+    qcsd_run_detached_docker QCSD_DOCKER_IDS_BROWSER_EGRESS_CONTAINERS \
+      docker run --name "${browser_egress_name_prefix}-fixture" \
+      --network "${browser_egress_network_name}" --ip 172.30.98.11 \
+      --ip6 fd00:71:63:73:64:98:0:11 --user 0:0 \
+      "${browser_egress_labels[@]}" --label org.qcsd.role=fixture \
+      "${browser_egress_role_common[@]}" fixture --vector-id "${browser_egress_vector_id}" >/dev/null
+    browser_egress_fixture_id="${QCSD_DOCKER_IDS_BROWSER_EGRESS_CONTAINERS[-1]}"
+    browser_egress_failure_code=docker-start-failed
+    browser_egress_failure_stage=fixture-readiness
+    browser_egress_wait_healthy "${browser_egress_fixture_id}" || false
+    qcsd_run_detached_docker QCSD_DOCKER_IDS_BROWSER_EGRESS_CONTAINERS \
+      docker run --name "${browser_egress_name_prefix}-forbidden" \
+      --network "${browser_egress_network_name}" --ip 172.30.98.20 \
+      --ip6 fd00:71:63:73:64:98:0:20 --user 0:0 \
+      --tmpfs /opt/qcsd-lab/config/class-study/v1:ro,nosuid,nodev,noexec,mode=000 \
+      "${browser_egress_labels[@]}" --label org.qcsd.role=forbidden_sink \
+      "${browser_egress_role_common[@]}" forbidden-sink --vector-id "${browser_egress_vector_id}" >/dev/null
+    browser_egress_forbidden_id="${QCSD_DOCKER_IDS_BROWSER_EGRESS_CONTAINERS[-1]}"
+    browser_egress_failure_code=docker-start-failed
+    browser_egress_failure_stage=forbidden-sink-readiness
+    browser_egress_wait_healthy "${browser_egress_forbidden_id}" || false
+    qcsd_run_detached_docker QCSD_DOCKER_IDS_BROWSER_EGRESS_CONTAINERS \
+      docker run --name "${browser_egress_name_prefix}-dns" \
+      --network "${browser_egress_network_name}" --ip 172.30.98.53 \
+      --ip6 fd00:71:63:73:64:98:0:53 --user 0:0 \
+      --tmpfs /opt/qcsd-lab/config/class-study/v1:ro,nosuid,nodev,noexec,mode=000 \
+      "${browser_egress_labels[@]}" --label org.qcsd.role=dns_sink \
+      "${browser_egress_role_common[@]}" dns-sink --vector-id "${browser_egress_vector_id}" >/dev/null
+    browser_egress_dns_id="${QCSD_DOCKER_IDS_BROWSER_EGRESS_CONTAINERS[-1]}"
+    browser_egress_failure_code=docker-start-failed
+    browser_egress_failure_stage=dns-sink-readiness
+    browser_egress_wait_healthy "${browser_egress_dns_id}" || false
+    browser_egress_failure_code=browser-start-failed
+    browser_egress_failure_stage=observer-subject-start
+    _qcsd_docker_api kill --signal USR1 "${browser_egress_observer_id}" >/dev/null
+    browser_egress_wait_container_marker "${browser_egress_observer_id}" \
+      /tmp/qcsd-browser-egress-subject-started.ready observer-subject-start || false
+    browser_egress_failure_stage=browser-action
+    _qcsd_docker_api kill --signal USR1 "${browser_egress_browser_id}" >/dev/null
+    browser_egress_browser_exit="$(browser_egress_wait_exit_code \
+      "${browser_egress_browser_id}" browser)"
+    [[ "${browser_egress_browser_exit}" == 0 ]] || false
+    browser_egress_failure_code=capture-process-failed
+    browser_egress_failure_stage=reporting-grace
+    _qcsd_docker_api kill --signal USR2 "${browser_egress_observer_id}" >/dev/null
+    browser_egress_wait_container_marker "${browser_egress_observer_id}" \
+      /tmp/qcsd-browser-egress-grace.ready observer-grace || false
+    browser_egress_failure_code=infrastructure-timeout
+    browser_egress_failure_stage=sink-fixture-stop
+    for browser_egress_role_id in "${browser_egress_fixture_id}" \
+      "${browser_egress_forbidden_id}" "${browser_egress_dns_id}"; do
+      _qcsd_docker_api kill --signal TERM "${browser_egress_role_id}" >/dev/null
+      [[ "$(browser_egress_wait_exit_code \
+        "${browser_egress_role_id}" sink-or-fixture)" == 0 ]] || false
+    done
+    browser_egress_failure_code=capture-process-failed
+    browser_egress_failure_stage=capture-finalization
+    _qcsd_docker_api kill --signal HUP "${browser_egress_observer_id}" >/dev/null
+    browser_egress_wait_container_marker "${browser_egress_observer_id}" \
+      /tmp/qcsd-browser-egress-receipt.ready observer-receipt || false
+    browser_egress_wait_observer_receipt "${browser_egress_observer_id}" \
+      "${browser_egress_attempt_scratch}/capture.json" || false
+    _qcsd_docker_api cp "${browser_egress_observer_id}:/tmp/capture.pcapng" \
+      "${browser_egress_evidence_host}"
+    chmod 0600 -- "${browser_egress_evidence_host}"
+    _qcsd_docker_api kill --signal TERM "${browser_egress_observer_id}" >/dev/null
+    browser_egress_observer_exit="$(browser_egress_wait_exit_code \
+      "${browser_egress_observer_id}" observer)"
+    [[ "${browser_egress_observer_exit}" == 0 ]] || false
+    _qcsd_docker_api logs "${browser_egress_browser_id}" >"${browser_egress_attempt_scratch}/actor.json"
+    _qcsd_docker_api logs "${browser_egress_fixture_id}" >"${browser_egress_attempt_scratch}/fixture.json"
+    _qcsd_docker_api logs "${browser_egress_forbidden_id}" >"${browser_egress_attempt_scratch}/forbidden.json"
+    _qcsd_docker_api logs "${browser_egress_dns_id}" >"${browser_egress_attempt_scratch}/dns.json"
+    _qcsd_docker_api network inspect "${browser_egress_network_id}" \
+      >"${browser_egress_attempt_scratch}/network.json"
+    _qcsd_docker_api container inspect \
+      "${browser_egress_browser_id}" "${browser_egress_observer_id}" \
+      "${browser_egress_fixture_id}" "${browser_egress_forbidden_id}" \
+      "${browser_egress_dns_id}" >"${browser_egress_attempt_scratch}/containers.json"
+    if [[ -n "${browser_egress_policy_volume_name}" ]]; then
+      _qcsd_docker_api volume inspect "${browser_egress_policy_volume_name}" \
+        >"${browser_egress_attempt_scratch}/volume.json"
+    else
+      printf 'null\n' >"${browser_egress_attempt_scratch}/volume.json"
+    fi
+    browser_egress_failure_verdict=semantic-failure
+    browser_egress_failure_code=runtime-binding-failed
+    browser_egress_failure_stage=runtime-projection
+    qcsd_capture_attached_docker_output QCSD_DOCKER_OUTPUT_BROWSER_EGRESS_RUNTIME \
+      docker run --network none --user "${qcsd_invoking_uid}:${qcsd_invoking_gid}" \
+      --cap-drop ALL --security-opt no-new-privileges:true --read-only \
+      --tmpfs /tmp:rw,nosuid,nodev,noexec,mode=1777 \
+      --env "QCSD_LAB_IMAGE_DIGEST=${image_id}" --volume "${ROOT}:/lab:ro" \
+      --volume "${browser_egress_attempt_scratch}:/qcsd-input:ro" \
+      --entrypoint /usr/bin/tini "${image_id}" -- "${browser_egress_tool}" project-runtime \
+      --result-root "${browser_egress_result_container}" --vector-id "${browser_egress_vector_id}" \
+      --browser-uid "${qcsd_invoking_uid}" --browser-gid "${qcsd_invoking_gid}" \
+      --global-ordinal "${browser_egress_global_ordinal}" \
+      --attempt-number "${browser_egress_attempt_number}" \
+      --started-at "${browser_egress_started_at}" \
+      --actor-json /qcsd-input/actor.json --network-inspect-json /qcsd-input/network.json \
+      --container-inspect-json /qcsd-input/containers.json \
+      --volume-inspect-json /qcsd-input/volume.json \
+      --fixture-json /qcsd-input/fixture.json \
+      --live-docker-json "${browser_egress_live_docker_json}"
+    printf '%s\n' "${QCSD_DOCKER_OUTPUT_BROWSER_EGRESS_RUNTIME}" >"${browser_egress_attempt_scratch}/runtime.json"
+    browser_egress_finished_at="$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
+    browser_egress_causal_inputs_ready=1
+    browser_egress_failure_code=semantic-observation-failed
+    browser_egress_failure_stage=result-prevalidation
+    QCSD_DOCKER_OUTPUT_BROWSER_EGRESS_PREVALIDATE=""
+    if ! qcsd_capture_attached_docker_output \
+      QCSD_DOCKER_OUTPUT_BROWSER_EGRESS_PREVALIDATE \
+      docker run --network none \
+      --user "${qcsd_invoking_uid}:${qcsd_invoking_gid}" --cap-drop ALL \
+      --security-opt no-new-privileges:true --read-only \
+      --tmpfs /tmp:rw,nosuid,nodev,noexec,mode=1777 \
+      --env "QCSD_LAB_IMAGE_DIGEST=${image_id}" --volume "${ROOT}:/lab:ro" \
+      --volume "${browser_egress_result_host}:${browser_egress_result_container}:ro" \
+      --volume "${browser_egress_attempt_scratch}:/qcsd-input:ro" \
+      --entrypoint /usr/bin/tini "${image_id}" -- "${browser_egress_tool}" assemble \
+      --validate-only --result-root "${browser_egress_result_container}" \
+      --vector-id "${browser_egress_vector_id}" \
+      --next-json /qcsd-input/next.json --actor-json /qcsd-input/actor.json \
+      --forbidden-json /qcsd-input/forbidden.json --dns-json /qcsd-input/dns.json \
+      --fixture-json /qcsd-input/fixture.json --capture-json /qcsd-input/capture.json \
+      --runtime-json /qcsd-input/runtime.json --started-at "${browser_egress_started_at}" \
+      --finished-at "${browser_egress_finished_at}"; then
+      browser_egress_failure_verdict=operational-failure
+      browser_egress_failure_code=infrastructure-timeout
+      false
+    fi
+    printf '%s\n' "${QCSD_DOCKER_OUTPUT_BROWSER_EGRESS_PREVALIDATE}" \
+      >"${browser_egress_attempt_scratch}/prevalidate.json"
+    browser_egress_prevalidate_fields_output=""
+    if browser_egress_prevalidate_fields_output="$(python3 -I -c '
+import json, re, sys
+value=json.load(open(sys.argv[1], encoding="utf-8"))
+if set(value) not in ({"schema_version","assembled"},{"schema_version","assembled","failure_code"}) or type(value.get("schema_version")) is not int or value["schema_version"] != 1 or type(value.get("assembled")) is not bool:
+    raise SystemExit("browser-egress prevalidation result is malformed")
+print("passed" if value["assembled"] else "failed")
+if value["assembled"] is False:
+    code=value.get("failure_code")
+    if not isinstance(code,str) or re.fullmatch(r"[a-z0-9][a-z0-9-]{0,127}",code) is None:
+        raise SystemExit("browser-egress prevalidation failure code is malformed")
+    print(code)
+' "${browser_egress_attempt_scratch}/prevalidate.json")"; then
+      mapfile -t browser_egress_prevalidate_fields \
+        <<<"${browser_egress_prevalidate_fields_output}"
+    else
+      browser_egress_prevalidate_fields=()
+    fi
+    if (( ${#browser_egress_prevalidate_fields[@]} == 2 )) &&
+       [[ "${browser_egress_prevalidate_fields[0]}" == failed ]]; then
+      browser_egress_failure_code="${browser_egress_prevalidate_fields[1]}"
+      browser_egress_failure_stage="classified-${browser_egress_failure_code}"
+      browser_egress_failure_verdict=semantic-failure
+      [[ "${browser_egress_failure_code}" != capture-process-failed ]] || \
+        browser_egress_failure_verdict=operational-failure
+      false
+    fi
+    if (( ${#browser_egress_prevalidate_fields[@]} != 1 )) ||
+       [[ "${browser_egress_prevalidate_fields[0]}" != passed ]]; then
+      browser_egress_failure_verdict=operational-failure
+      browser_egress_failure_code=infrastructure-timeout
+      echo "browser-egress prevalidation output is malformed" >&2
+      false
+    fi
+    browser_egress_failure_verdict=operational-failure
+    browser_egress_failure_code=infrastructure-timeout
+    browser_egress_failure_stage=topology-teardown
+    browser_egress_cleanup_topology || false
+    browser_egress_append_mounts=(
+      --volume "${browser_egress_result_host}:${browser_egress_result_container}:rw"
+      --volume "${browser_egress_result_host}/foundation.json:${browser_egress_result_container}/foundation.json:ro"
+      --volume "${browser_egress_result_host}/attempts:${browser_egress_result_container}/attempts:rw"
+      --volume "${browser_egress_result_host}/attempt-intents:${browser_egress_result_container}/attempt-intents:ro"
+      --volume "${browser_egress_result_host}/evidence:${browser_egress_result_container}/evidence:ro"
+    )
+    while IFS= read -r -d '' browser_egress_prior_result; do
+      if [[ -L "${browser_egress_prior_result}" || ! -f "${browser_egress_prior_result}" ]]; then
+        echo "browser-egress attempt ledger contains an unsafe entry" >&2
+        false
+      fi
+      browser_egress_append_mounts+=(
+        --volume "${browser_egress_prior_result}:${browser_egress_result_container}/attempts/${browser_egress_prior_result##*/}:ro"
+      )
+    done < <(find "${browser_egress_result_host}/attempts" -mindepth 1 -maxdepth 1 -print0)
+    browser_egress_failure_code=semantic-observation-failed
+    browser_egress_failure_stage=result-assembly
+    QCSD_DOCKER_OUTPUT_BROWSER_EGRESS_ASSEMBLE=""
+    browser_egress_assemble_command_status=0
+    if qcsd_capture_attached_docker_output QCSD_DOCKER_OUTPUT_BROWSER_EGRESS_ASSEMBLE \
+      docker run --network none \
+      --user "${qcsd_invoking_uid}:${qcsd_invoking_gid}" --cap-drop ALL \
+      --security-opt no-new-privileges:true --read-only \
+      --tmpfs /tmp:rw,nosuid,nodev,noexec,mode=1777 \
+      --env "QCSD_LAB_IMAGE_DIGEST=${image_id}" --volume "${ROOT}:/lab:ro" \
+      "${browser_egress_append_mounts[@]}" \
+      --volume "${browser_egress_attempt_scratch}:/qcsd-input:ro" \
+      --entrypoint /usr/bin/tini "${image_id}" -- "${browser_egress_tool}" assemble \
+      --result-root "${browser_egress_result_container}" --vector-id "${browser_egress_vector_id}" \
+      --next-json /qcsd-input/next.json --actor-json /qcsd-input/actor.json \
+      --forbidden-json /qcsd-input/forbidden.json --dns-json /qcsd-input/dns.json \
+      --fixture-json /qcsd-input/fixture.json --capture-json /qcsd-input/capture.json \
+      --runtime-json /qcsd-input/runtime.json --started-at "${browser_egress_started_at}" \
+      --finished-at "${browser_egress_finished_at}"; then
+      browser_egress_assemble_command_status=0
+    else
+      browser_egress_assemble_command_status=$?
+    fi
+    printf '%s\n' "${QCSD_DOCKER_OUTPUT_BROWSER_EGRESS_ASSEMBLE}" \
+      >"${browser_egress_attempt_scratch}/assemble.json"
+    browser_egress_assemble_fields_output=""
+    if browser_egress_assemble_fields_output="$(python3 -I -c '
+import json, re, sys
+value=json.load(open(sys.argv[1], encoding="utf-8"))
+if set(value) not in ({"schema_version","assembled"},{"schema_version","assembled","failure_code"}) or type(value.get("schema_version")) is not int or value["schema_version"] != 1 or type(value.get("assembled")) is not bool:
+    raise SystemExit("browser-egress assembly result is malformed")
+print("passed" if value["assembled"] else "failed")
+if value["assembled"] is False:
+    code=value.get("failure_code")
+    if not isinstance(code, str) or re.fullmatch(r"[a-z0-9][a-z0-9-]{0,127}", code) is None:
+        raise SystemExit("browser-egress assembly failure code is malformed")
+    print(code)
+' "${browser_egress_attempt_scratch}/assemble.json")"; then
+      mapfile -t browser_egress_assemble_fields \
+        <<<"${browser_egress_assemble_fields_output}"
+    else
+      browser_egress_assemble_fields=()
+    fi
+    if (( ${#browser_egress_assemble_fields[@]} == 2 )) &&
+       [[ "${browser_egress_assemble_fields[0]}" == "failed" ]] &&
+       (( browser_egress_assemble_command_status == 0 )); then
+      browser_egress_failure_code="${browser_egress_assemble_fields[1]}"
+      browser_egress_failure_stage="classified-${browser_egress_failure_code}"
+      browser_egress_failure_verdict=semantic-failure
+      [[ "${browser_egress_failure_code}" != "capture-process-failed" ]] || \
+        browser_egress_failure_verdict=operational-failure
+      false
+    fi
+    if (( browser_egress_assemble_command_status != 0 )) ||
+       (( ${#browser_egress_assemble_fields[@]} != 1 )) ||
+       [[ "${browser_egress_assemble_fields[0]}" != "passed" ]]; then
+      browser_egress_failure_verdict=operational-failure
+      browser_egress_failure_code=infrastructure-timeout
+      browser_egress_failure_stage=result-publication-reconciliation
+      # The mutating append may already have published a passed receipt.  Do
+      # not add failure artifacts until the authoritative ledger proves that
+      # this exact attempt remains unpublished.
+      browser_egress_causal_inputs_ready=0
+      QCSD_DOCKER_OUTPUT_BROWSER_EGRESS_ATTEMPT_STATUS=""
+      if ! qcsd_capture_attached_docker_output \
+        QCSD_DOCKER_OUTPUT_BROWSER_EGRESS_ATTEMPT_STATUS \
+        docker run --network none \
+        --user "${qcsd_invoking_uid}:${qcsd_invoking_gid}" --cap-drop ALL \
+        --security-opt no-new-privileges:true --read-only \
+        --tmpfs /tmp:rw,nosuid,nodev,noexec,mode=1777 \
+        --env "QCSD_LAB_IMAGE_DIGEST=${image_id}" --volume "${ROOT}:/lab:ro" \
+        "${browser_egress_append_mounts[@]}" \
+        --volume "${browser_egress_attempt_scratch}:/qcsd-input:ro" \
+        --entrypoint /usr/bin/tini "${image_id}" -- "${browser_egress_tool}" \
+        attempt-status --result-root "${browser_egress_result_container}" \
+        --vector-id "${browser_egress_vector_id}" \
+        --next-json /qcsd-input/next.json; then
+        trap - ERR
+        echo "browser-egress could not reconcile ambiguous result publication" >&2
+        exit 1
+      fi
+      browser_egress_attempt_status="$(python3 -I -c '
+import json,sys
+value=json.loads(sys.argv[1])
+if set(value) != {"schema_version","published","verdict","checkpoint"} or value.get("schema_version") != 1 or type(value.get("published")) is not bool:
+    raise SystemExit("browser-egress attempt-status output is malformed")
+if value["published"]:
+    if value.get("verdict") not in {"passed","operational-failure","semantic-failure"}:
+        raise SystemExit("browser-egress published attempt verdict is invalid")
+    print("published-" + value["verdict"])
+elif value.get("verdict") is None:
+    print("unpublished")
+else:
+    raise SystemExit("browser-egress unpublished attempt has a verdict")
+' "${QCSD_DOCKER_OUTPUT_BROWSER_EGRESS_ATTEMPT_STATUS}")" || {
+        trap - ERR
+        echo "browser-egress attempt-status output is malformed" >&2
+        exit 1
+      }
+      if [[ "${browser_egress_attempt_status}" != published-passed ]]; then
+        if [[ "${browser_egress_attempt_status}" == published-* ]]; then
+          trap - ERR
+          echo "browser-egress ambiguous publication resolved to an unexpected recorded verdict" >&2
+          exit 1
+        fi
+        browser_egress_causal_inputs_ready=1
+        echo "browser-egress assembly did not publish its result" >&2
+        false
+      fi
+    fi
+    trap - ERR
+    rm -rf -- "${browser_egress_attempt_scratch}"
+    browser_egress_attempt_scratch=""
+    browser_egress_causal_inputs_ready=0
+  done
+  browser_egress_finalize_mounts=(
+    --volume "${browser_egress_result_host}:${browser_egress_result_container}:rw"
+  )
+  while IFS= read -r -d '' browser_egress_final_existing; do
+    if [[ -L "${browser_egress_final_existing}" ]]; then
+      echo "browser-egress finalization input contains a symlink" >&2
+      exit 1
+    fi
+    if [[ ! -f "${browser_egress_final_existing}" &&
+          ! -d "${browser_egress_final_existing}" ]]; then
+      echo "browser-egress finalization input is non-regular" >&2
+      exit 1
+    fi
+    browser_egress_final_name="${browser_egress_final_existing##*/}"
+    if [[ ! "${browser_egress_final_name}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+      echo "browser-egress finalization input has an unsafe name" >&2
+      exit 1
+    fi
+    browser_egress_finalize_mounts+=(
+      --volume "${browser_egress_final_existing}:${browser_egress_result_container}/${browser_egress_final_name}:ro"
+    )
+  done < <(find "${browser_egress_result_host}" -mindepth 1 -maxdepth 1 -print0)
+  qcsd_run_attached_docker docker run --network none \
+    --user "${qcsd_invoking_uid}:${qcsd_invoking_gid}" --cap-drop ALL \
+    --security-opt no-new-privileges:true --read-only \
+    --tmpfs /tmp:rw,nosuid,nodev,noexec,mode=1777 \
+    --env "QCSD_LAB_IMAGE_DIGEST=${image_id}" --volume "${ROOT}:/lab:ro" \
+    "${browser_egress_finalize_mounts[@]}" \
+    --entrypoint /usr/bin/tini "${image_id}" -- "${browser_egress_tool}" finalize \
+    --result-root "${browser_egress_result_container}" >/dev/null
+  rm -rf -- "${browser_egress_scratch}"
+  trap - EXIT
+  qcsd_run_attached_docker docker run --network none \
+    --user "${qcsd_invoking_uid}:${qcsd_invoking_gid}" --cap-drop ALL \
+    --security-opt no-new-privileges:true --read-only \
+    --tmpfs /tmp:rw,nosuid,nodev,noexec,mode=1777 \
+    --env "QCSD_LAB_IMAGE_DIGEST=${image_id}" --volume "${ROOT}:/lab:ro" \
+    --entrypoint /usr/bin/tini "${image_id}" -- \
+    /usr/bin/timeout --signal=TERM --kill-after=10s 600s \
+    "${browser_egress_tool}" verify --cohort-version "${browser_egress_cohort_version}" \
+    --build-execution-receipt "${browser_egress_build_container}" \
+    --result-root "${browser_egress_result_container}" \
+    --live-docker-json "${browser_egress_live_docker_json}"
+  exit $?
 fi
 
 if [[ "${1:-}" == "test" && "${2:-}" == "pinned-cdp" ]]; then

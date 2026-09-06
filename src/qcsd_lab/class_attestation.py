@@ -6,8 +6,8 @@ create-only, hash-bound foundation, readiness, historical, comparison, and
 final-validation receipts:
 
 * a *foundation* receipt after fresh source/build/reference/code/regression/
-  controlled and pinned-CDP gates reverify, before any class acquisition or
-  pilot fitting;
+  controlled, pinned-CDP, and packet-observed browser-egress gates reverify,
+  before any class acquisition or pilot fitting;
 * a *readiness* receipt after the final cohort, authoritative fit, full live
   qualification, and the 900-cell first-launch certification all reverify;
 * a final validation attestation after all ten canaries and formal blocks, the
@@ -30,6 +30,16 @@ from pathlib import Path
 from typing import Any
 
 from . import class_evaluation
+from .browser_egress_fixture import (
+    QUALIFICATION_ID as BROWSER_EGRESS_QUALIFICATION_ID,
+)
+from .browser_egress_fixture import VECTOR_COUNT as BROWSER_EGRESS_VECTOR_COUNT
+from .browser_egress_fixture import (
+    expanded_vectors_sha256 as browser_egress_vectors_sha256,
+)
+from .browser_egress_qualification import (
+    verify_qualification as verify_browser_egress_qualification,
+)
 from .buflo_evaluation import historical_anchor_metric_inventory, original_study_comparison_rows
 from .buflo_study import (
     _one_build_execution_identity,
@@ -42,7 +52,10 @@ from .buflo_study import (
     validate_regression_results,
 )
 from .class_acquisition import (
+    CHECKPOINT_SCHEMA_VERSION as ACQUISITION_CHECKPOINT_SCHEMA_VERSION,
+    COMPLETION_SCHEMA_VERSION as ACQUISITION_COMPLETION_SCHEMA_VERSION,
     COMPLETION_TYPE,
+    SCHEMA_VERSION as ACQUISITION_SCHEMA_VERSION,
     validate_acquisition_completion,
 )
 from .class_acquisition import PROVENANCE_TYPE as ACQUISITION_PROVENANCE_TYPE
@@ -71,15 +84,19 @@ from .class_study import (
     bind_receipt,
     canonical_json_bytes,
     canonical_json_sha256,
+    is_class_study_id,
+    is_successor_study_id,
     validate_hash_bound_receipt,
     write_create_only_json,
 )
 from .pinned_cdp import validate_pinned_cdp_receipt
+from .playwright_driver import EXPECTED_CHROMIUM_VERSION
 from .util import LAB_ROOT, load_json, require_disjoint_path, sha256_file, source_metadata
 from .verification import verify_result
 
 SCHEMA_VERSION = 1
-FOUNDATION_SCHEMA_VERSION = 2
+FOUNDATION_SCHEMA_VERSION = 3
+READINESS_SCHEMA_VERSION = 2
 FOUNDATION_RECEIPT_TYPE = "qcsd-class-study-foundation-attestation"
 READINESS_RECEIPT_TYPE = "qcsd-class-study-readiness-attestation"
 READINESS_IMPLEMENTATION_STATUS = "candidate-ready-for-pre-formal-snapshot"
@@ -97,6 +114,10 @@ CANARY_SAMPLE_COUNT = 1_000
 FINAL_QUALIFICATION_EXECUTIONS = 600
 REGRESSION_SAMPLE_COUNT = 18
 CONTROLLED_SAMPLE_COUNT = 160
+_BROWSER_EGRESS_GATE = (
+    "browser-egress-packet-qualification-"
+    f"{BROWSER_EGRESS_VECTOR_COUNT}-of-{BROWSER_EGRESS_VECTOR_COUNT}"
+)
 
 IMPLEMENTATION_SCOPE = "client_only_quic"
 VALIDATED_DESCRIPTION = "validated client-only QCSD adaptation"
@@ -133,6 +154,7 @@ _READINESS_GATES = (
     "complete-code-gate",
     "nine-mode-regression-18-of-18",
     "controlled-qualification-160-of-160",
+    _BROWSER_EGRESS_GATE,
     "pilot-derived-final-selection-and-cohort-assembly",
     "authoritative-fitting-2000-of-2000",
     "full-live-final-qualification-600-of-600",
@@ -145,6 +167,7 @@ _FOUNDATION_GATES = (
     "nine-mode-regression-18-of-18",
     "controlled-qualification-160-of-160",
     "pinned-cdp-integration-probe",
+    _BROWSER_EGRESS_GATE,
 )
 
 _FINAL_GATES = (
@@ -192,7 +215,7 @@ def validate_class_foundation_attestation(
     deep_code_gate: bool = True,
     runtime_role: str = "collection",
 ) -> dict[str, Any]:
-    """Reconstruct the six prerequisite gates from immutable evidence."""
+    """Reconstruct the seven prerequisite gates from immutable evidence."""
 
     receipt_path, value, payload = _load_bound_receipt(path, expected_type=FOUNDATION_RECEIPT_TYPE)
     _validate_foundation_envelope(payload)
@@ -212,6 +235,9 @@ def validate_class_foundation_attestation(
         ),
         pinned_cdp_receipt=_pinned_cdp_path_from_binding(
             evidence.get("pinned_cdp_probe")
+        ),
+        browser_egress_qualification_root=_browser_egress_root_from_binding(
+            evidence.get("browser_egress_qualification")
         ),
         regression_result_roots=_roots_from_bindings(evidence.get("regression_results")),
         controlled_result_roots=_roots_from_bindings(evidence.get("controlled_results")),
@@ -366,7 +392,7 @@ def validate_class_readiness_attestation(
     """Independently reconstruct one readiness receipt from its evidence."""
 
     receipt_path, value, payload = _load_bound_receipt(path, expected_type=READINESS_RECEIPT_TYPE)
-    if str(payload.get("study_id", "")).startswith("classifier-multiorigin100-v2-"):
+    if is_successor_study_id(payload.get("study_id")):
         from .class_successor import validate_successor_readiness
 
         return validate_successor_readiness(
@@ -635,6 +661,7 @@ def _foundation_value(
     code_gate_receipt: Path,
     controlled_qualification_receipt: Path,
     pinned_cdp_receipt: Path,
+    browser_egress_qualification_root: Path,
     regression_result_roots: Sequence[Path],
     controlled_result_roots: Sequence[Path],
     recorded_at: object,
@@ -659,6 +686,11 @@ def _foundation_value(
     if build["source"] != current_source:
         raise ValueError("class foundation build differs from current source")
     build_identity = _build_identity(build)
+    browser_egress = _validate_browser_egress_qualification(
+        browser_egress_qualification_root,
+        cohort_version=cohort_version,
+        build=build,
+    )
     pinned_cdp = validate_pinned_cdp_receipt(
         pinned_cdp_receipt,
         build_execution_receipt=build_execution_receipt,
@@ -721,9 +753,35 @@ def _foundation_value(
         raise ValueError(
             "class foundation requires build finish <= pinned CDP probe <= foundation"
         )
+    qualification_started = _aware_timestamp(
+        browser_egress.get("qualification_started_at"),
+        label="browser-egress qualification start",
+    )
+    qualification_finished = _aware_timestamp(
+        browser_egress.get("qualification_finished_at"),
+        label="browser-egress qualification finish",
+    )
+    qualification_recorded = _aware_timestamp(
+        browser_egress.get("recorded_at"),
+        label="browser-egress qualification final receipt",
+    )
+    if not (
+        build_finished
+        <= qualification_started
+        <= qualification_finished
+        <= qualification_recorded
+        <= timestamp
+    ):
+        raise ValueError(
+            "class foundation requires build finish <= browser-egress start <= "
+            "finish <= final receipt <= foundation"
+        )
     evidence = {
         "build_execution": _file_binding(build_execution_receipt),
         "pinned_cdp_probe": _pinned_cdp_binding(pinned_cdp),
+        "browser_egress_qualification": _browser_egress_binding(
+            browser_egress, browser_egress_qualification_root
+        ),
         "reference": _file_binding(reference_receipt),
         "code_gate": _file_binding(code_gate_receipt),
         "controlled_qualification": _file_binding(controlled_qualification_receipt),
@@ -748,6 +806,11 @@ def _foundation_value(
             pinned_cdp["build_execution"]["payload_sha256"],
             pinned_cdp["probe_contract_sha256"],
         ],
+        _BROWSER_EGRESS_GATE: [
+            browser_egress["sha256"],
+            browser_egress["payload_sha256"],
+            browser_egress["expanded_vectors_sha256"],
+        ],
     }
     return {
         "attestation_schema_version": FOUNDATION_SCHEMA_VERSION,
@@ -768,6 +831,8 @@ def _foundation_value(
             "regression_samples": REGRESSION_SAMPLE_COUNT,
             "controlled_samples": CONTROLLED_SAMPLE_COUNT,
             "pinned_cdp_probe": "pass",
+            "browser_egress_packet_qualification": "pass",
+            "browser_egress_vectors": BROWSER_EGRESS_VECTOR_COUNT,
         },
         "hard_gates": _hard_gate_records(_FOUNDATION_GATES, gate_evidence),
         "all_foundation_gates_passed": True,
@@ -944,9 +1009,21 @@ def _readiness_value(
         expected_cohort_version=cohort_version,
         runtime_role="collection",
     )
+    browser_egress_root = _browser_egress_root_from_binding(
+        foundation_evidence.get("browser_egress_qualification")
+    )
+    browser_egress = _validate_browser_egress_qualification(
+        browser_egress_root,
+        cohort_version=cohort_version,
+        build=build,
+    )
+    browser_egress_binding = _browser_egress_binding(
+        browser_egress, browser_egress_root
+    )
     expected_foundation_evidence = {
         "build_execution": _file_binding(build_execution_receipt),
         "pinned_cdp_probe": _pinned_cdp_binding(pinned_cdp),
+        "browser_egress_qualification": browser_egress_binding,
         "reference": _file_binding(reference_receipt),
         "code_gate": _file_binding(code_gate_receipt),
         "controlled_qualification": _file_binding(controlled_qualification_receipt),
@@ -969,6 +1046,7 @@ def _readiness_value(
         candidate_catalogue_path=_regular_file(candidate_catalogue, "candidate catalogue"),
         runner_root=completion_path.parent,
     )
+    _require_current_acquisition_completion(completion)
     observed_toolchain = _require_acquisition_toolchain(
         completion.get("observed_toolchain"),
         source=current_source,
@@ -1193,6 +1271,7 @@ def _readiness_value(
     evidence = {
         "foundation": foundation_binding,
         "build_execution": _file_binding(build_execution_receipt),
+        "browser_egress_qualification": browser_egress_binding,
         "reference": _file_binding(reference_receipt),
         "code_gate": _file_binding(code_gate_receipt),
         "controlled_qualification": _file_binding(controlled_qualification_receipt),
@@ -1248,6 +1327,12 @@ def _readiness_value(
             controlled["sha256"],
             *(item["evidence_sha256"] for item in evidence["controlled_results"]),
         ],
+        _BROWSER_EGRESS_GATE: [
+            foundation_binding["sha256"],
+            browser_egress["sha256"],
+            browser_egress["payload_sha256"],
+            browser_egress["expanded_vectors_sha256"],
+        ],
         "pilot-derived-final-selection-and-cohort-assembly": [
             evidence["acquisition_completion"]["sha256"],
             canonical_json_sha256(observed_toolchain),
@@ -1271,7 +1356,7 @@ def _readiness_value(
         ],
     }
     return {
-        "attestation_schema_version": SCHEMA_VERSION,
+        "attestation_schema_version": READINESS_SCHEMA_VERSION,
         "artifact_type": READINESS_RECEIPT_TYPE,
         "study_id": STUDY_ID,
         "cohort_version": cohort_version,
@@ -1287,6 +1372,8 @@ def _readiness_value(
             "reference_profiles": reference["profiles_checked"],
             "regression_samples": REGRESSION_SAMPLE_COUNT,
             "controlled_samples": CONTROLLED_SAMPLE_COUNT,
+            "browser_egress_packet_qualification": "pass",
+            "browser_egress_vectors": BROWSER_EGRESS_VECTOR_COUNT,
             "pilot_fitting_samples": pilot_fit["samples"],
             "pilot_compatibility_samples": pilot_compatibility["samples"],
             "acquisition_observed_toolchain_sha256": canonical_json_sha256(observed_toolchain),
@@ -1371,7 +1458,7 @@ def _validation_value(
     successor_sha256 = (
         readiness_successor.get("sha256") if isinstance(readiness_successor, Mapping) else None
     )
-    successor_study = str(readiness.get("study_id", "")).startswith("classifier-multiorigin100-v2-")
+    successor_study = is_successor_study_id(readiness.get("study_id"))
     if successor_study != (
         isinstance(successor_sha256, str) and _DIGEST.fullmatch(successor_sha256) is not None
     ):
@@ -1774,7 +1861,7 @@ def _validate_post_snapshot_formal_results(
     successor_sha256 = (
         readiness_successor.get("sha256") if isinstance(readiness_successor, Mapping) else None
     )
-    successor_study = str(readiness.get("study_id", "")).startswith("classifier-multiorigin100-v2-")
+    successor_study = is_successor_study_id(readiness.get("study_id"))
     if successor_study != (
         isinstance(successor_sha256, str) and _DIGEST.fullmatch(successor_sha256) is not None
     ):
@@ -2673,7 +2760,7 @@ def _admission_from_readiness(readiness: Mapping[str, Any]) -> Any:
     )
 
     study_id = readiness.get("study_id")
-    if isinstance(study_id, str) and study_id.startswith("classifier-multiorigin100-v2-"):
+    if is_successor_study_id(study_id):
         evidence = readiness.get("evidence")
         restart = evidence.get("successor_restart") if isinstance(evidence, Mapping) else None
         return verify_successor_cohort_admission(
@@ -2694,7 +2781,7 @@ def _admission_from_readiness(readiness: Mapping[str, Any]) -> Any:
 
 def _validate_readiness_envelope(payload: Mapping[str, Any]) -> None:
     if (
-        payload.get("attestation_schema_version") != SCHEMA_VERSION
+        payload.get("attestation_schema_version") != READINESS_SCHEMA_VERSION
         or payload.get("artifact_type") != READINESS_RECEIPT_TYPE
         or payload.get("study_id") != STUDY_ID
         or payload.get("implementation_status") != READINESS_IMPLEMENTATION_STATUS
@@ -2730,12 +2817,7 @@ def _validate_validation_envelope(payload: Mapping[str, Any]) -> None:
     if (
         payload.get("attestation_schema_version") != SCHEMA_VERSION
         or payload.get("artifact_type") != VALIDATION_RECEIPT_TYPE
-        or (
-            study_id != STUDY_ID
-            and not (
-                isinstance(study_id, str) and study_id.startswith("classifier-multiorigin100-v2-")
-            )
-        )
+        or not is_class_study_id(study_id)
         or payload.get("implementation_status") != VALIDATED_STATUS
         or payload.get("implementation_status_description") != VALIDATED_DESCRIPTION
         or payload.get("promotion_authority") is not True
@@ -2872,7 +2954,7 @@ def _require_acquisition_toolchain(
     acquisition_source = {**source, "image_digest": prepare_image}
     if (
         not isinstance(value.get("chromium_version"), str)
-        or not str(value["chromium_version"]).strip()
+        or value["chromium_version"] != EXPECTED_CHROMIUM_VERSION
         or _IMAGE_DIGEST.fullmatch(str(prepare_image)) is None
         or value.get("image_digest") != prepare_image
         or value.get("source") != acquisition_source
@@ -2898,6 +2980,24 @@ def _require_acquisition_toolchain(
         or source.get("neqo_commit") != source.get("neqo_pinned_commit")
     ):
         raise ValueError("class acquisition observed toolchain differs from current source/build")
+    return dict(value)
+
+
+def _require_current_acquisition_completion(value: object) -> dict[str, Any]:
+    """Keep historical acquisition evidence verify-only at the readiness boundary."""
+
+    if (
+        not isinstance(value, Mapping)
+        or type(value.get("acquisition_schema_version")) is not int
+        or value["acquisition_schema_version"] != ACQUISITION_SCHEMA_VERSION
+        or type(value.get("completion_schema_version")) is not int
+        or value["completion_schema_version"] != ACQUISITION_COMPLETION_SCHEMA_VERSION
+        or type(value.get("checkpoint_schema_version")) is not int
+        or value["checkpoint_schema_version"] != ACQUISITION_CHECKPOINT_SCHEMA_VERSION
+    ):
+        raise ValueError(
+            "class readiness requires current acquisition schema, completion, and checkpoint evidence"
+        )
     return dict(value)
 
 
@@ -3055,6 +3155,92 @@ def _pinned_cdp_binding(receipt: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _validate_browser_egress_qualification(
+    root: Path, *, cohort_version: int, build: Mapping[str, Any]
+) -> dict[str, Any]:
+    qualification_root = _regular_directory(root, "browser-egress qualification root")
+    receipt = verify_browser_egress_qualification(
+        qualification_root,
+        lab_root=LAB_ROOT,
+        expected_cohort_version=cohort_version,
+    )
+    required = {
+        "path",
+        "sha256",
+        "payload_sha256",
+        "qualification_id",
+        "cohort_version",
+        "qualification_started_at",
+        "qualification_finished_at",
+        "recorded_at",
+        "prepare_image_id",
+        "build_execution",
+        "expanded_vectors_sha256",
+        "passed_vector_count",
+        "passed",
+    }
+    if not isinstance(receipt, Mapping) or set(receipt) != required:
+        raise ValueError("browser-egress qualification result has an invalid exact schema")
+    qualification_build = receipt.get("build_execution")
+    expected_build_fields = {
+        "path",
+        "sha256",
+        "payload_sha256",
+        "cohort_version",
+        "collection_image_id",
+        "prepare_image_id",
+        "reference_image_id",
+    }
+    images = build.get("images")
+    if not isinstance(images, Mapping) or set(images) != {"collection", "prepare", "reference"}:
+        raise ValueError("browser-egress qualification build image roles are incomplete")
+    if (
+        not isinstance(qualification_build, Mapping)
+        or set(qualification_build) != expected_build_fields
+    ):
+        raise ValueError("browser-egress qualification build binding is invalid")
+    qualification_build_path = Path(str(qualification_build.get("path")))
+    if not qualification_build_path.is_absolute():
+        qualification_build_path = LAB_ROOT / qualification_build_path
+    build_payload_sha256 = build.get("payload_sha256")
+    if build_payload_sha256 is None:
+        build_payload_sha256 = _load_regular_json(
+            Path(str(build.get("path"))), "no-cache build execution"
+        ).get("payload_sha256")
+    if (
+        receipt.get("qualification_id") != BROWSER_EGRESS_QUALIFICATION_ID
+        or receipt.get("cohort_version") != cohort_version
+        or receipt.get("passed_vector_count") != BROWSER_EGRESS_VECTOR_COUNT
+        or receipt.get("expanded_vectors_sha256") != browser_egress_vectors_sha256()
+        or receipt.get("passed") is not True
+        or receipt.get("prepare_image_id") != images["prepare"].get("id")
+        or qualification_build_path.absolute() != Path(str(build.get("path"))).absolute()
+        or qualification_build.get("sha256") != build.get("sha256")
+        or qualification_build.get("payload_sha256") != build_payload_sha256
+        or qualification_build.get("cohort_version") != cohort_version
+        or qualification_build.get("collection_image_id") != images["collection"].get("id")
+        or qualification_build.get("prepare_image_id") != images["prepare"].get("id")
+        or qualification_build.get("reference_image_id") != images["reference"].get("id")
+    ):
+        raise ValueError("browser-egress qualification uses a different source/build/image")
+    for key in ("sha256", "payload_sha256", "expanded_vectors_sha256"):
+        if _DIGEST.fullmatch(str(receipt.get(key))) is None:
+            raise ValueError("browser-egress qualification digest is invalid")
+    expected_final = qualification_root / "final.json"
+    if Path(str(receipt.get("path"))).absolute() != expected_final.absolute():
+        raise ValueError("browser-egress qualification final receipt path is not canonical")
+    return dict(receipt)
+
+
+def _browser_egress_binding(
+    receipt: Mapping[str, Any], root: Path
+) -> dict[str, Any]:
+    return {
+        "root": str(_regular_directory(root, "browser-egress qualification root")),
+        **dict(receipt),
+    }
+
+
 def _result_binding(path: Path) -> dict[str, str]:
     root = _regular_directory(path, "evidence result")
     evidence = _regular_file(root / "evidence.sha256", "result evidence seal")
@@ -3135,8 +3321,7 @@ def _class_result_binding(path: Path) -> dict[str, str]:
             raise ValueError("class-study result has an unbound successor identity")
     else:
         if (
-            not isinstance(study_id, str)
-            or not study_id.startswith("classifier-multiorigin100-v2-")
+            not is_successor_study_id(study_id)
             or not isinstance(successor_digest, str)
             or _DIGEST.fullmatch(successor_digest) is None
         ):
@@ -3217,6 +3402,18 @@ def _pinned_cdp_path_from_binding(value: object) -> Path:
     if sha256_file(path) != value["sha256"]:
         raise ValueError("class attestation pinned CDP probe digest changed")
     return path
+
+
+def _browser_egress_root_from_binding(value: object) -> Path:
+    if not isinstance(value, Mapping) or "root" not in value:
+        raise ValueError("class attestation browser-egress qualification binding is invalid")
+    root = _regular_directory(
+        Path(str(value["root"])), "browser-egress qualification root"
+    )
+    receipt = {key: item for key, item in value.items() if key != "root"}
+    if _browser_egress_binding(receipt, root) != dict(value):
+        raise ValueError("class attestation browser-egress qualification binding is invalid")
+    return root
 
 
 def _root_from_result_binding(value: object, *, label: str) -> Path:
@@ -3315,6 +3512,7 @@ def _protected_foundation_inputs(inputs: Mapping[str, Any]) -> tuple[Path, ...]:
     for key in (
         "build_execution_receipt",
         "pinned_cdp_receipt",
+        "browser_egress_qualification_root",
         "reference_receipt",
         "code_gate_receipt",
         "controlled_qualification_receipt",

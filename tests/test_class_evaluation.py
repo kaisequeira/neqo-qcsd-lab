@@ -20,6 +20,7 @@ from qcsd_lab.class_evaluation import (
     TRANSFER_PROTOCOL,
     ClassificationPrediction,
     _Dimensions,
+    _formal_dimensions_for_study,
     _load_class_handoff,
     _load_sample,
     adaptive_temporal_splits,
@@ -47,6 +48,18 @@ _DIMENSIONS = _Dimensions(
     blocks=10,
     visits_per_block=2,
 )
+
+
+def test_evaluation_dimensions_reject_prefix_only_successor_identities() -> None:
+    successor = "classifier-multiorigin100-v2-g01-0123456789ab"
+    assert _formal_dimensions_for_study(successor).study_id == successor
+    for malformed in (
+        "classifier-multiorigin100-v2-0123456789ab",
+        "classifier-multiorigin100-v2-g00-0123456789ab",
+        "classifier-multiorigin100-v2-g01-0123456789ab-extra",
+    ):
+        with pytest.raises(ValueError, match="study identity"):
+            _formal_dimensions_for_study(malformed)
 
 
 def test_formal_sample_accepts_preserved_retry_success(tmp_path: Path) -> None:

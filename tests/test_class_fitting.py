@@ -67,11 +67,11 @@ EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
     (
         {"study_id": "classifier-multiorigin100-v1"},
         {
-            "study_id": "classifier-multiorigin100-v2-other",
+            "study_id": "classifier-multiorigin100-v2-g01-abcdef123456",
             "class_study_successor_sha256": "a" * 64,
         },
         {
-            "study_id": "classifier-multiorigin100-v2-active",
+            "study_id": "classifier-multiorigin100-v2-g01-0123456789ab",
             "class_study_successor_sha256": "b" * 64,
         },
     ),
@@ -80,7 +80,7 @@ EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 def test_successor_fitting_identity_requires_exact_study_and_restart(
     source_result: Mapping[str, Any],
 ) -> None:
-    expected_study_id = "classifier-multiorigin100-v2-active"
+    expected_study_id = "classifier-multiorigin100-v2-g01-0123456789ab"
     expected_restart_sha256 = "a" * 64
 
     with pytest.raises(

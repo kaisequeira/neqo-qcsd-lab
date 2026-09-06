@@ -150,6 +150,11 @@ for candidate in Path("/proc/self/fd").iterdir():
         matches.append(candidate.name)
 Path(sys.argv[1]).write_text(",".join(matches), encoding="ascii")
 PY
+    # Keep the exact qcsd Bash process alive through the terminal command.
+    # Otherwise Bash may exec-optimise the final Python command, creating a
+    # load-sensitive /proc/<pid>/cmdline transition that the guardian correctly
+    # rejects as an inner-command identity change.
+    :
     ;;
   buildx-write)
     buildx_config=$QCSD_DOCKER_LOCK_GUARDIAN_BUILDX_CONFIG_PATH

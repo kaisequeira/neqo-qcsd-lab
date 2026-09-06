@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
+import os
+import py_compile
 import shutil
+import subprocess
+import sys
 import tarfile
 from pathlib import Path
 
@@ -35,12 +40,76 @@ from qcsd_lab.buflo_reference import (
     csbuflo_padding_target_bytes,
     csbuflo_rate_intervals_us,
     reference_document_json,
+    _run_buflo_author_gate,
     run_reference_gate,
     transform_buflo,
     validate_reference_receipt,
 )
 
 REFERENCE_ROOT = Path(__file__).resolve().parents[1] / "config" / "reference" / "buflo-csbuflo"
+EXTERNAL_REFERENCE_ROOT = (
+    Path(__file__).resolve().parents[1] / "artifacts" / "buflo-study-reference-input-v1"
+)
+
+
+def _copy_pinned_buflo_author_runtime(tmp_path: Path) -> tuple[Path, Path]:
+    source_root = EXTERNAL_REFERENCE_ROOT / "website-fingerprinting"
+    source_paths = (
+        Path("Packet.py"),
+        Path("Webpage.py"),
+        Path("Trace.py"),
+        Path("countermeasures/Folklore.py"),
+    )
+    if any(not (source_root / relative).is_file() for relative in source_paths):
+        pytest.skip("pinned external BuFLO author input is not installed")
+    author_root = tmp_path / "website-fingerprinting"
+    for relative in source_paths:
+        destination = author_root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source_root / relative, destination)
+    return author_root, author_root / "countermeasures/Folklore.py"
+
+
+def _tree_file_digests(root: Path) -> dict[str, str]:
+    return {
+        path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
+
+
+def _install_malicious_timestamp_or_hash_valid_cache(
+    source: Path, *, validation: str
+) -> Path:
+    original = source.read_bytes()
+    marker = b'raise RuntimeError("unreceipted bytecode executed")\n'
+    assert len(marker) < len(original)
+    malicious = marker + b"#" + (b"x" * (len(original) - len(marker) - 1))
+    fixed_mtime = 1_700_000_000
+    source.write_bytes(malicious)
+    os.utime(source, (fixed_mtime, fixed_mtime))
+    mode = (
+        py_compile.PycInvalidationMode.TIMESTAMP
+        if validation == "timestamp"
+        else py_compile.PycInvalidationMode.CHECKED_HASH
+    )
+    cache = Path(
+        py_compile.compile(
+            str(source),
+            doraise=True,
+            invalidation_mode=mode,
+        )
+    )
+    if validation == "checked-hash":
+        encoded = bytearray(cache.read_bytes())
+        # A checked-hash cache authenticates only this header value against the
+        # source.  It does not prove that the following marshalled code object
+        # was compiled from those bytes, so construct that adversarial case.
+        encoded[8:16] = importlib.util.source_hash(original)
+        cache.write_bytes(encoded)
+    source.write_bytes(original)
+    os.utime(source, (fixed_mtime, fixed_mtime))
+    return cache
 
 
 def test_all_eight_published_buflo_profiles_are_explicit() -> None:
@@ -109,6 +178,67 @@ def test_buflo_source_order_is_explicit_and_event_equivalent_to_live_order() -> 
     assert sorted(source, key=lambda item: item.direction) == sorted(
         live, key=lambda item: item.direction
     )
+
+
+def test_buflo_author_gate_does_not_create_bytecode_cache(tmp_path: Path) -> None:
+    author_root, folklore = _copy_pinned_buflo_author_runtime(tmp_path)
+    before = _tree_file_digests(author_root)
+
+    profiles, source_projection_sha256 = _run_buflo_author_gate(folklore)
+
+    assert len(profiles) == 8
+    assert all(profile["source_match"] is True for profile in profiles)
+    assert len(source_projection_sha256) == 64
+    assert _tree_file_digests(author_root) == before
+    assert not list(author_root.rglob("*.pyc"))
+    assert not list(author_root.rglob("__pycache__"))
+
+
+@pytest.mark.parametrize("validation", ["timestamp", "checked-hash"])
+def test_buflo_author_gate_never_loads_preexisting_valid_bytecode(
+    tmp_path: Path, validation: str
+) -> None:
+    author_root, folklore = _copy_pinned_buflo_author_runtime(tmp_path)
+    cache = _install_malicious_timestamp_or_hash_valid_cache(
+        folklore,
+        validation=validation,
+    )
+
+    # Prove the adversarial cache is valid for Python's ordinary importer even
+    # with -B: importing the restored source executes the unreceipted cache.
+    control = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-S",
+            "-B",
+            "-c",
+            (
+                "import sys; "
+                "sys.path.insert(0, sys.argv[1]); "
+                "sys.path.insert(0, sys.argv[2]); "
+                "import Folklore"
+            ),
+            str(author_root),
+            str(author_root / "countermeasures"),
+        ],
+        cwd=author_root,
+        text=True,
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+    assert control.returncode != 0
+    assert "unreceipted bytecode executed" in control.stderr
+    before = _tree_file_digests(author_root)
+
+    profiles, source_projection_sha256 = _run_buflo_author_gate(folklore)
+
+    assert len(profiles) == 8
+    assert all(profile["source_match"] is True for profile in profiles)
+    assert len(source_projection_sha256) == 64
+    assert _tree_file_digests(author_root) == before
+    assert cache.is_file()
 
 
 def test_buflo_transform_drains_large_source_payload_over_later_ticks() -> None:

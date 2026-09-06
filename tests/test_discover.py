@@ -6,9 +6,25 @@ from types import ModuleType
 import pytest
 
 import qcsd_lab.discover as discover_module
-from qcsd_lab.acquisition_errors import PassiveRenderPolicyError
-from qcsd_lab.cdp_targets import CdpTargetSource
-from qcsd_lab.discovery_evidence import PASSIVE_RENDER_CONTRACT_SHA256
+from qcsd_lab.acquisition_errors import (
+    PassiveRenderPolicyError,
+    RecoverableAcquisitionError,
+)
+from qcsd_lab.browser_egress import (
+    NON_REPLAYABLE_EGRESS_POLICY,
+    NonReplayableEgressGuard,
+    TARGET_EGRESS_APIS,
+    target_egress_apis,
+)
+from qcsd_lab.cdp_targets import (
+    CdpTargetIntegrityError,
+    CdpTargetSource,
+    EGRESS_PREARM_SUMMARY_SCHEMA_VERSION,
+)
+from qcsd_lab.discovery_evidence import (
+    PASSIVE_RENDER_CONTRACT_SHA256,
+    RENDER_OBSERVATION_SCHEMA_VERSION,
+)
 from qcsd_lab.discover import (
     _DependencyOccurrence,
     DiscoveryIntegrityError,
@@ -20,12 +36,93 @@ from qcsd_lab.discover import (
     _validate_request_instance_ledger,
     _resolve_dependency_url,
     _stack_frame_urls,
+    _wait_for_navigation_load,
     _wait_for_passive_render,
     build_resources,
     discover_page,
     exclusion_reason,
     merge_request_headers,
 )
+
+
+def _bootstrap_prearm_summary(
+    *,
+    held: int = 0,
+    released: int = 0,
+    released_after_setup: int = 0,
+) -> dict:
+    """Build the content-minimised router summary used at render cutoffs."""
+
+    return {
+        "schema_version": 1,
+        "held_total": held,
+        "released_total": released,
+        "pending_total": held - released,
+        "release_before_setup_envelopes_total": 0,
+        "by_worker_type": {
+            "worker": {
+                "held": 0,
+                "released": 0,
+                "pending": 0,
+                "released_after_setup_envelopes": 0,
+                "owner_target_types": {
+                    "page": 0,
+                    "iframe": 0,
+                    "worker": 0,
+                    "shared_worker": 0,
+                },
+            },
+            "shared_worker": {
+                "held": held,
+                "released": released,
+                "pending": held - released,
+                "released_after_setup_envelopes": released_after_setup,
+                "owner_target_types": {
+                    "page": held,
+                    "iframe": 0,
+                    "worker": 0,
+                    "shared_worker": 0,
+                },
+            },
+        },
+    }
+
+
+def _egress_prearm_summary() -> dict:
+    return {
+        "schema_version": EGRESS_PREARM_SUMMARY_SCHEMA_VERSION,
+        "policy": NON_REPLAYABLE_EGRESS_POLICY,
+        "target_total": 1,
+        "installed_total": 1,
+        "pending_total": 0,
+        "popup_guard_required_total": 1,
+        "popup_guard_installed_total": 1,
+        "by_target_type": {
+            target_type: {
+                "target_count": int(target_type == "page"),
+                "installed_count": int(target_type == "page"),
+                "pending_count": 0,
+                "protected_api_observations": len(target_egress_apis("page"))
+                if target_type == "page"
+                else 0,
+                "unavailable_api_observations": 0,
+                "popup_guard_required_count": int(target_type == "page"),
+                "popup_guard_installed_count": int(target_type == "page"),
+            }
+            for target_type in ("page", "iframe", "worker", "shared_worker")
+        },
+    }
+
+
+def _successful_egress_guard() -> NonReplayableEgressGuard:
+    guard = NonReplayableEgressGuard()
+    guard.mark_context_guards_installed()
+    guard.bind_root_page(object())
+    return guard
+
+
+class _NoServiceWorkerContext:
+    service_workers: tuple = ()
 
 
 def test_dependency_extraction_keeps_all_resolvable_initiators():
@@ -76,19 +173,22 @@ def test_request_instance_ledger_rejects_cross_target_identity_collision():
 
 def test_chromium_host_resolver_rejects_conflicting_origin_pins_for_one_hostname():
     with pytest.raises(ValueError, match="conflict for a shared hostname"):
-        discover_module._host_resolver_rules(
+        discover_module._pins_by_hostname(
             {
                 "https://example.com": "1.1.1.1",
                 "https://example.com:8443": "8.8.8.8",
             }
         )
 
-    assert discover_module._host_resolver_rules(
-        {
-            "https://example.com": "1.1.1.1",
-            "https://example.com:8443": "1.1.1.1",
-        }
-    ) == "MAP example.com 1.1.1.1,MAP * ~NOTFOUND"
+    assert (
+        discover_module._pins_by_hostname(
+            {
+                "https://example.com": "1.1.1.1",
+                "https://example.com:8443": "1.1.1.1",
+            }
+        )
+        == {"example.com": "1.1.1.1"}
+    )
 
 
 def test_ephemeral_cdp_ids_do_not_change_the_canonical_resource_graph():
@@ -166,9 +266,7 @@ def test_https_get_observation_requires_matching_source_aware_interception():
 def test_worker_network_occurrence_correlates_with_parent_page_fetch() -> None:
     ledger = _RequestObservationLedger()
     page = CdpTargetSource((), "page", "page")
-    worker = CdpTargetSource(
-        ("worker-session",), "worker", "worker", parent_session_path=()
-    )
+    worker = CdpTargetSource(("worker-session",), "worker", "worker", parent_session_path=())
     ledger.add_network(
         worker, request_id="shared-network", method="GET", url="https://page.test/data"
     )
@@ -249,12 +347,8 @@ def test_fetch_redirect_requires_the_exact_immediate_predecessor_once() -> None:
             "request": {"method": "GET", "url": "https://page.test/final"},
         },
     )
-    ledger.add_network(
-        source, request_id="network", method="GET", url="https://page.test/first"
-    )
-    ledger.add_network(
-        source, request_id="network", method="GET", url="https://page.test/final"
-    )
+    ledger.add_network(source, request_id="network", method="GET", url="https://page.test/first")
+    ledger.add_network(source, request_id="network", method="GET", url="https://page.test/final")
     ledger.add_terminal(source, "network")
     ledger.finish()
 
@@ -389,9 +483,7 @@ def test_fetch_redirect_cannot_follow_its_network_terminal() -> None:
         "request": {"method": "GET", "url": "https://page.test/first"},
     }
     ledger.add_interception(source, first)
-    ledger.add_network(
-        source, request_id="network", method="GET", url="https://page.test/first"
-    )
+    ledger.add_network(source, request_id="network", method="GET", url="https://page.test/first")
     ledger.add_terminal(source, "network")
     with pytest.raises(DiscoveryIntegrityError, match="terminated request chain"):
         ledger.add_interception(
@@ -408,9 +500,7 @@ def test_fetch_redirect_cannot_follow_its_network_terminal() -> None:
 def test_raw_network_identity_cannot_be_reused_after_terminal() -> None:
     ledger = _RequestObservationLedger()
     source = CdpTargetSource((), "page", "page")
-    ledger.add_network(
-        source, request_id="network", method="GET", url="https://page.test/first"
-    )
+    ledger.add_network(source, request_id="network", method="GET", url="https://page.test/first")
     ledger.add_interception(
         source,
         {
@@ -578,7 +668,13 @@ def test_request_stage_admission_rejects_a_response_stage_event():
 
 def test_discover_page_installs_request_stage_policy_before_navigation(monkeypatch):
     clock_ns = [0]
+    driver_validations = []
     monkeypatch.setattr(discover_module.time, "monotonic_ns", lambda: clock_ns[0])
+    monkeypatch.setattr(
+        discover_module,
+        "validate_default_playwright_driver_once",
+        lambda: driver_validations.append(True),
+    )
     events = [
         {
             "requestId": "page-chain",
@@ -654,7 +750,33 @@ def test_discover_page_installs_request_stage_policy_before_navigation(monkeypat
         def send(self, command: str, parameters=None) -> dict:
             self.commands.append((command, parameters))
             if command == "Target.getTargetInfo":
-                return {"targetInfo": {"targetId": "root-page", "type": "page"}}
+                return {
+                    "targetInfo": {
+                        "targetId": "root-page",
+                        "type": "page",
+                        "url": "https://page.test/",
+                        "browserContextId": "browser-context",
+                    }
+                }
+            if command == "Page.addScriptToEvaluateOnNewDocument":
+                return {"identifier": "root-egress-init"}
+            if command == "Runtime.evaluate":
+                expression = parameters["expression"]
+                if "__qcsd_popup_navigation_guard_v1__" in expression:
+                    return {"result": {"type": "boolean", "value": True}}
+                return {
+                    "result": {
+                        "type": "object",
+                        "value": {
+                            "schema_version": 1,
+                            "policy": NON_REPLAYABLE_EGRESS_POLICY,
+                            "protected_apis": sorted(target_egress_apis("page")),
+                            "unavailable_apis": [],
+                            "failed_apis": [],
+                            "already_installed": True,
+                        },
+                    }
+                }
             if command == "Fetch.continueRequest":
                 network_event = self.paused[parameters["requestId"]].pop(0)
                 self.handlers["Network.requestWillBeSent"](network_event)
@@ -671,15 +793,11 @@ def test_discover_page_installs_request_stage_policy_before_navigation(monkeypat
                             "response": {},
                         }
                     )
-                    self.handlers["Network.loadingFinished"](
-                        {"requestId": network_id}
-                    )
+                    self.handlers["Network.loadingFinished"]({"requestId": network_id})
             if command == "Fetch.failRequest":
                 network_event = self.paused[parameters["requestId"]].pop(0)
                 self.handlers["Network.requestWillBeSent"](network_event)
-                self.handlers["Network.loadingFailed"](
-                    {"requestId": network_event["requestId"]}
-                )
+                self.handlers["Network.loadingFailed"]({"requestId": network_event["requestId"]})
             return {}
 
     class Page:
@@ -688,11 +806,16 @@ def test_discover_page_installs_request_stage_policy_before_navigation(monkeypat
 
         def __init__(self, session: Session) -> None:
             self.session = session
+            self.handlers = {}
+
+        def on(self, event: str, handler) -> None:
+            self.handlers[event] = handler
 
         def goto(self, url: str, *, wait_until: str, timeout: int) -> None:
             assert url == self.source_url
-            assert wait_until == "load"
+            assert wait_until == "commit"
             assert timeout == 1_000
+            assert "load" in self.handlers
             previous_fetch_id = None
             for index, event in enumerate(events):
                 fetch_id = f"fetch-{index}"
@@ -710,6 +833,7 @@ def test_discover_page_installs_request_stage_policy_before_navigation(monkeypat
                     }
                 )
                 previous_fetch_id = fetch_id
+            self.handlers["load"]()
 
         def wait_for_timeout(self, milliseconds: int) -> None:
             assert 1 <= milliseconds <= 100
@@ -723,6 +847,23 @@ def test_discover_page_installs_request_stage_policy_before_navigation(monkeypat
             self.session = Session()
             self.page = Page(self.session)
             self.closed = False
+            self.service_workers = []
+            self.init_scripts = []
+            self.websocket_routes = []
+            self.handlers = {}
+
+        def add_init_script(self, *, script: str) -> None:
+            self.init_scripts.append(script)
+
+        def route_web_socket(self, pattern: str, handler) -> None:
+            self.websocket_routes.append((pattern, handler))
+
+        def route(self, pattern: str, handler) -> None:
+            assert pattern == "**/*"
+            self.handlers["route"] = handler
+
+        def on(self, event: str, handler) -> None:
+            self.handlers[event] = handler
 
         def new_page(self) -> Page:
             return self.page
@@ -735,24 +876,92 @@ def test_discover_page_installs_request_stage_policy_before_navigation(monkeypat
             self.closed = True
             self.page.close()
 
+    class BrowserSession:
+        def __init__(self) -> None:
+            self.handlers = {}
+            self.commands = []
+            self.detached = False
+
+        def on(self, event: str, handler) -> None:
+            self.handlers[event] = handler
+
+        def send(self, command: str, parameters=None) -> dict:
+            self.commands.append((command, parameters))
+            if (
+                command == "Target.setAutoAttach"
+                and parameters.get("autoAttach") is True
+                and any(
+                    item.get("type") == "tab" and item.get("exclude") is False
+                    for item in parameters.get("filter", [])
+                )
+            ):
+                self.handlers["Target.attachedToTarget"](
+                    {
+                        "sessionId": "root-tab-session",
+                        "targetInfo": {
+                            "targetId": "root-tab",
+                            "type": "tab",
+                            "url": "https://page.test/",
+                            "browserContextId": "browser-context",
+                            "attached": True,
+                        },
+                        "waitingForDebugger": False,
+                    }
+                )
+            if command == "Target.getTargets":
+                return {
+                    "targetInfos": [
+                        {
+                            "targetId": "root-page",
+                            "type": "page",
+                            "url": "https://page.test/",
+                            "browserContextId": "browser-context",
+                            "attached": True,
+                        }
+                    ]
+                }
+            return {}
+
+        def detach(self) -> None:
+            self.detached = True
+
     class Browser:
         version = "test-chromium"
 
         def __init__(self) -> None:
             self.context = Context()
+            self.browser_session = BrowserSession()
             self.context_options = None
+            self.launch_options = None
 
         def new_context(self, **options) -> Context:
             self.context_options = options
             return self.context
 
+        def new_browser_cdp_session(self) -> BrowserSession:
+            return self.browser_session
+
         def close(self) -> None:
             return None
 
     browser = Browser()
+    launch_calls = []
+
+    def launch_production(playwright, *, approved_origins, origin_ip_pins):
+        launch_calls.append(
+            {
+                "playwright": playwright,
+                "approved_origins": list(approved_origins),
+                "origin_ip_pins": dict(origin_ip_pins),
+            }
+        )
+        return browser, {"launch_profile": "production-fail-closed"}
+
+    monkeypatch.setattr(discover_module, "launch_production_browser", launch_production)
 
     class Chromium:
-        def launch(self, **_options) -> Browser:
+        def launch(self, **options) -> Browser:
+            browser.launch_options = options
             return browser
 
     class Playwright:
@@ -776,8 +985,18 @@ def test_discover_page_installs_request_stage_policy_before_navigation(monkeypat
         "https://page.test/",
         allow_origins=["https://page.test", "https://cdn.test"],
         timeout_ms=1_000,
+        origin_ip_pins={
+            "https://page.test": "1.1.1.1",
+            "https://cdn.test": "8.8.8.8",
+        },
     )
 
+    assert driver_validations == [True]
+    assert len(launch_calls) == 1
+    assert launch_calls[0]["approved_origins"] == [
+        "https://cdn.test",
+        "https://page.test",
+    ]
     assert browser.context_options == {
         "ignore_https_errors": False,
         "service_workers": "block",
@@ -785,6 +1004,46 @@ def test_discover_page_installs_request_stage_policy_before_navigation(monkeypat
         "device_scale_factor": 1,
     }
     assert browser.context.closed is True
+    assert browser.browser_session.commands == [
+        (
+            "Target.setDiscoverTargets",
+            {
+                "discover": True,
+                "filter": [
+                    {"type": "page", "exclude": False},
+                    {"type": "service_worker", "exclude": False},
+                    {"exclude": True},
+                ],
+            },
+        ),
+        (
+            "Target.setAutoAttach",
+            {
+                "autoAttach": True,
+                "waitForDebuggerOnStart": True,
+                "flatten": True,
+                "filter": [
+                    {"type": "shared_worker", "exclude": False},
+                    {"type": "tab", "exclude": False},
+                    {"exclude": True},
+                ],
+            },
+        ),
+        ("Target.getTargets", {}),
+        (
+            "Target.setAutoAttach",
+            {
+                "autoAttach": False,
+                "waitForDebuggerOnStart": False,
+                "flatten": True,
+            },
+        ),
+        (
+            "Target.setDiscoverTargets",
+            {"discover": False},
+        ),
+    ]
+    assert browser.browser_session.detached is True
     assert (
         "Fetch.enable",
         {"patterns": [{"urlPattern": "*", "requestStage": "Request"}]},
@@ -824,7 +1083,7 @@ def test_discover_page_installs_request_stage_policy_before_navigation(monkeypat
     assert result.settle_ms == 10_000
     assert result.passive_render_contract_sha256 == PASSIVE_RENDER_CONTRACT_SHA256
     assert result.render_observation == {
-        "schema_version": 1,
+        "schema_version": RENDER_OBSERVATION_SCHEMA_VERSION,
         "clock": "monotonic-relative-ms",
         "navigation_started_ms": 0,
         "load_event_ms": 0,
@@ -833,8 +1092,13 @@ def test_discover_page_installs_request_stage_policy_before_navigation(monkeypat
         "cutoff_ms": 13_000,
         "active_request_ids": [],
         "active_request_count": 0,
-        "cutoff_reason": "quiescent",
-    }
+            "router_shutdown_ready": True,
+            "bootstrap_prearm_summary": _bootstrap_prearm_summary(),
+            "egress_prearm_summary": _egress_prearm_summary(),
+            "non_replayable_egress_summary": _successful_egress_guard().success_summary(),
+            "browser_context_service_worker_count": 0,
+            "cutoff_reason": "quiescent",
+        }
     assert result.discovery_event_audit["summary"] == {
         "event_count": 17,
         "target_event_count": 0,
@@ -847,6 +1111,82 @@ def test_discover_page_installs_request_stage_policy_before_navigation(monkeypat
     }
 
 
+def test_navigation_load_wait_surfaces_router_failure_after_one_poll(
+    monkeypatch,
+) -> None:
+    clock = [0.0]
+    monkeypatch.setattr(discover_module.time, "monotonic", lambda: clock[0])
+
+    class Router:
+        def __init__(self) -> None:
+            self.checks = 0
+
+        def raise_if_failed(self) -> None:
+            self.checks += 1
+            if self.checks == 2:
+                raise CdpTargetIntegrityError("worker instrumentation failed")
+
+    class Page:
+        def __init__(self) -> None:
+            self.waits = []
+
+        def wait_for_timeout(self, milliseconds: int) -> None:
+            self.waits.append(milliseconds)
+            clock[0] += milliseconds / 1_000
+
+    router = Router()
+    page = Page()
+    with pytest.raises(CdpTargetIntegrityError, match="worker instrumentation failed"):
+        _wait_for_navigation_load(
+            page,
+            router,  # type: ignore[arg-type]
+            [False],
+            _successful_egress_guard(),
+            deadline=1.0,
+        )
+
+    assert router.checks == 2
+    assert len(page.waits) == 1
+    assert 1 <= page.waits[0] <= 100
+
+
+def test_navigation_load_wait_uses_the_existing_absolute_deadline(monkeypatch) -> None:
+    clock = [0.9]
+    monkeypatch.setattr(discover_module.time, "monotonic", lambda: clock[0])
+
+    class Router:
+        def __init__(self) -> None:
+            self.checks = 0
+
+        def raise_if_failed(self) -> None:
+            self.checks += 1
+
+    class Page:
+        def __init__(self) -> None:
+            self.waits = []
+
+        def wait_for_timeout(self, milliseconds: int) -> None:
+            self.waits.append(milliseconds)
+            clock[0] += milliseconds / 1_000
+
+    router = Router()
+    page = Page()
+    with pytest.raises(
+        RecoverableAcquisitionError,
+        match="did not reach the genuine page load event",
+    ):
+        _wait_for_navigation_load(
+            page,
+            router,  # type: ignore[arg-type]
+            [False],
+            _successful_egress_guard(),
+            deadline=1.0,
+        )
+
+    assert page.waits == [100]
+    assert router.checks == 2
+
+
 class _PassiveClock:
     def __init__(self) -> None:
         self.ms = 0
@@ -856,8 +1196,16 @@ class _PassiveClock:
 
 
 class _PassiveRouter:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        shutdown_ready: bool = True,
+        bootstrap_prearm_summary: dict | None = None,
+    ) -> None:
         self.active_request_identities = ()
+        self.shutdown_ready = shutdown_ready
+        self.bootstrap_prearm_summary = bootstrap_prearm_summary or _bootstrap_prearm_summary()
+        self.egress_prearm_summary = _egress_prearm_summary()
 
     def raise_if_failed(self) -> None:
         return None
@@ -921,6 +1269,8 @@ def test_passive_render_waits_for_quiet_after_minimum_and_a_late_fetch() -> None
         page,
         router,  # type: ignore[arg-type]
         audit,
+        _successful_egress_guard(),
+        _NoServiceWorkerContext(),
         navigation_started_ms=0,
         load_event_ms=0,
     )
@@ -928,6 +1278,42 @@ def test_passive_render_waits_for_quiet_after_minimum_and_a_late_fetch() -> None
     assert observation["quiet_started_ms"] == 12_500
     assert observation["cutoff_ms"] == 15_500
     assert observation["cutoff_reason"] == "quiescent"
+
+
+def test_passive_render_waits_for_terminal_shared_worker_prearm() -> None:
+    clock = _PassiveClock()
+    audit = _SanitizedEventProjection(clock_ns=clock.nanoseconds)
+    router = _PassiveRouter(
+        shutdown_ready=False,
+        bootstrap_prearm_summary=_bootstrap_prearm_summary(held=1),
+    )
+
+    def release_prearm() -> None:
+        router.shutdown_ready = True
+        router.bootstrap_prearm_summary = _bootstrap_prearm_summary(
+            held=1,
+            released=1,
+            released_after_setup=1,
+        )
+
+    page = _PassivePage(clock, ((14_000, release_prearm),))
+    observation = _wait_for_passive_render(
+        page,
+        router,  # type: ignore[arg-type]
+        audit,
+        _successful_egress_guard(),
+        _NoServiceWorkerContext(),
+        navigation_started_ms=0,
+        load_event_ms=0,
+    )
+
+    assert observation["cutoff_ms"] == 14_000
+    assert observation["router_shutdown_ready"] is True
+    assert observation["bootstrap_prearm_summary"] == _bootstrap_prearm_summary(
+        held=1,
+        released=1,
+        released_after_setup=1,
+    )
 
 
 def test_passive_render_hard_cap_is_a_typed_rejection_with_active_ids() -> None:
@@ -943,6 +1329,8 @@ def test_passive_render_hard_cap_is_a_typed_rejection_with_active_ids() -> None:
             page,
             router,  # type: ignore[arg-type]
             audit,
+            _successful_egress_guard(),
+            _NoServiceWorkerContext(),
             navigation_started_ms=0,
             load_event_ms=0,
         )
@@ -951,6 +1339,202 @@ def test_passive_render_hard_cap_is_a_typed_rejection_with_active_ids() -> None:
     assert observation["cutoff_ms"] == 30_000
     assert observation["active_request_count"] == 1
     assert observation["cutoff_reason"] == "hard-cap-non-quiescent"
+
+
+def test_passive_render_hard_cap_rejects_unready_router_without_active_requests() -> None:
+    clock = _PassiveClock()
+    audit = _SanitizedEventProjection(clock_ns=clock.nanoseconds)
+    router = _PassiveRouter(
+        shutdown_ready=False,
+        bootstrap_prearm_summary=_bootstrap_prearm_summary(held=1),
+    )
+
+    with pytest.raises(PassiveRenderPolicyError) as caught:
+        _wait_for_passive_render(
+            _PassivePage(clock),
+            router,  # type: ignore[arg-type]
+            audit,
+            _successful_egress_guard(),
+            _NoServiceWorkerContext(),
+            navigation_started_ms=0,
+            load_event_ms=0,
+        )
+
+    observation = caught.value.evidence["render_observation"]
+    assert observation["cutoff_ms"] == 30_000
+    assert observation["active_request_count"] == 0
+    assert observation["router_shutdown_ready"] is False
+    assert observation["bootstrap_prearm_summary"]["pending_total"] == 1
+    assert observation["cutoff_reason"] == "hard-cap-non-quiescent"
+
+
+def test_discover_page_aborts_pending_prearm_without_masking_policy_error(
+    monkeypatch,
+) -> None:
+    clock_ns = [0]
+    lifecycle: list[str] = []
+    monkeypatch.setattr(discover_module.time, "monotonic_ns", lambda: clock_ns[0])
+    monkeypatch.setattr(discover_module, "validate_default_playwright_driver_once", lambda: None)
+
+    class Router:
+        active_request_identities = ()
+        shutdown_ready = False
+        bootstrap_prearm_summary = _bootstrap_prearm_summary(held=1)
+        egress_prearm_summary = _egress_prearm_summary()
+
+        def __init__(self, *_args, **_kwargs) -> None:
+            self.abort_started = False
+
+        def start(self) -> None:
+            lifecycle.append("router-start")
+
+        def raise_if_failed(self) -> None:
+            return None
+
+        def begin_shutdown(self) -> None:
+            raise AssertionError("unready router must not use normal shutdown")
+
+        def begin_abort(self) -> None:
+            self.abort_started = True
+            lifecycle.append("router-begin-abort")
+
+        def finish_abort(self) -> None:
+            assert self.abort_started
+            lifecycle.append("router-finish-abort")
+
+    class Guard:
+        def __init__(self, _session, router: Router) -> None:
+            self.router = router
+            self.abort_started = False
+
+        def start(self) -> None:
+            lifecycle.append("guard-start")
+
+        def begin_abort(self) -> None:
+            assert self.router.abort_started
+            self.abort_started = True
+            lifecycle.append("guard-begin-abort")
+
+        def finish_abort(self) -> None:
+            assert self.abort_started
+            lifecycle.append("guard-finish-abort")
+
+    class Page:
+        url = "https://page.test/"
+
+        def __init__(self) -> None:
+            self.handlers = {}
+
+        def on(self, event: str, handler) -> None:
+            self.handlers[event] = handler
+
+        def goto(self, *_args, **_kwargs) -> None:
+            self.handlers["load"]()
+
+        def wait_for_timeout(self, milliseconds: int) -> None:
+            clock_ns[0] += milliseconds * 1_000_000
+
+    class Context:
+        def __init__(self) -> None:
+            self.page = Page()
+            self.closed = False
+            self.service_workers = []
+
+        def add_init_script(self, *, script: str) -> None:
+            assert script
+
+        def route_web_socket(self, pattern: str, _handler) -> None:
+            assert pattern == "**"
+
+        def route(self, pattern: str, _handler) -> None:
+            assert pattern == "**/*"
+
+        def on(self, event: str, _handler) -> None:
+            assert event == "serviceworker"
+
+        def new_page(self) -> Page:
+            return self.page
+
+        def new_cdp_session(self, _page: Page) -> object:
+            return object()
+
+        def close(self) -> None:
+            self.closed = True
+            lifecycle.append("context-close")
+
+    class Browser:
+        version = "test-chromium"
+
+        def __init__(self) -> None:
+            self.context = Context()
+            self.closed = False
+
+        def new_context(self, **_kwargs) -> Context:
+            return self.context
+
+        def new_browser_cdp_session(self) -> object:
+            return object()
+
+        def close(self) -> None:
+            self.closed = True
+            lifecycle.append("browser-close")
+
+    browser = Browser()
+    monkeypatch.setattr(
+        discover_module,
+        "launch_production_browser",
+        lambda _playwright, **_kwargs: (
+            browser,
+            {"launch_profile": "production-fail-closed"},
+        ),
+    )
+
+    class Chromium:
+        def launch(self, **_kwargs) -> Browser:
+            return browser
+
+    class PlaywrightManager:
+        chromium = Chromium()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+    sync_api = ModuleType("playwright.sync_api")
+    sync_api.Error = RuntimeError  # type: ignore[attr-defined]
+    sync_api.sync_playwright = PlaywrightManager  # type: ignore[attr-defined]
+    playwright = ModuleType("playwright")
+    playwright.sync_api = sync_api  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "playwright", playwright)
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", sync_api)
+    monkeypatch.setattr(discover_module, "RecursiveCdpTargetRouter", Router)
+    monkeypatch.setattr(discover_module, "BrowserSharedWorkerGuard", Guard)
+
+    with pytest.raises(PassiveRenderPolicyError) as caught:
+        discover_page(
+            "https://page.test/",
+            allow_origins=["https://page.test"],
+            timeout_ms=1_000,
+            origin_ip_pins={"https://page.test": "1.1.1.1"},
+        )
+
+    observation = caught.value.evidence["render_observation"]
+    assert observation["bootstrap_prearm_summary"]["pending_total"] == 1
+    assert observation["cutoff_reason"] == "hard-cap-non-quiescent"
+    assert browser.context.closed is True
+    assert browser.closed is True
+    assert lifecycle == [
+        "router-start",
+        "guard-start",
+        "router-begin-abort",
+        "guard-begin-abort",
+        "context-close",
+        "guard-finish-abort",
+        "router-finish-abort",
+        "browser-close",
+    ]
 
 
 def test_post_cutoff_network_occurrence_cannot_enter_an_accepted_graph() -> None:
@@ -993,7 +1577,7 @@ def test_post_cutoff_network_occurrence_cannot_enter_an_accepted_graph() -> None
     )
     late["mapping"] = {"kind": "resource", "resource_id": 1}
     render = {
-        "schema_version": 1,
+        "schema_version": RENDER_OBSERVATION_SCHEMA_VERSION,
         "clock": "monotonic-relative-ms",
         "navigation_started_ms": 0,
         "load_event_ms": 0,
@@ -1002,6 +1586,20 @@ def test_post_cutoff_network_occurrence_cannot_enter_an_accepted_graph() -> None
         "cutoff_ms": 13_000,
         "active_request_ids": [],
         "active_request_count": 0,
+        "router_shutdown_ready": True,
+        "bootstrap_prearm_summary": _bootstrap_prearm_summary(),
+        "egress_prearm_summary": {
+            **_egress_prearm_summary(),
+            "by_target_type": {
+                **_egress_prearm_summary()["by_target_type"],
+                "page": {
+                    **_egress_prearm_summary()["by_target_type"]["page"],
+                    "protected_api_observations": len(target_egress_apis("page")),
+                },
+            },
+        },
+        "non_replayable_egress_summary": _successful_egress_guard().success_summary(),
+        "browser_context_service_worker_count": 0,
         "cutoff_reason": "quiescent",
     }
     resources = [
@@ -1072,12 +1670,8 @@ def test_cdp_header_merge_is_case_insensitive_and_extra_info_wins():
 
 
 def test_cdp_extra_info_is_fifo_across_redirect_request_id_reuse():
-    first = DiscoveredRequest(
-        "https://page.test/old", "Document", {"accept": "first-base"}
-    )
-    second = DiscoveredRequest(
-        "https://page.test/new", "Document", {"accept": "second-base"}
-    )
+    first = DiscoveredRequest("https://page.test/old", "Document", {"accept": "first-base"})
+    second = DiscoveredRequest("https://page.test/new", "Document", {"accept": "second-base"})
     association = _RequestExtraInfoAssociator()
 
     association.add_request("redirect-chain", first, redirected=False)

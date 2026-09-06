@@ -26,6 +26,20 @@ class _Candidate:
     candidate_id: str
 
 
+def _class_campaign_name(role: str, *, block: int | None = None) -> str:
+    if role == "pilot-fitting":
+        return f"{STUDY_ID}-pilot-fitting-1200"
+    if role == "pilot-compatibility":
+        return f"{STUDY_ID}-pilot-compatibility-1080-1200"
+    if role == "authoritative-fitting":
+        return f"{STUDY_ID}-authoritative-fitting-1200"
+    if role == "certification":
+        return f"{STUDY_ID}-certification-900-1200"
+    if role in {"canary", "formal"} and block is not None:
+        return f"{STUDY_ID}-{role}-{block:02d}-1200"
+    raise ValueError("test class campaign role/block is invalid")
+
+
 def _admission(tmp_path: Path, *, pilot: int = 120, final: int = 100):
     tmp_path.mkdir(parents=True, exist_ok=True)
     cohort = tmp_path / "cohort.json"
@@ -57,7 +71,7 @@ def _record(role: str, *, block: int | None = None) -> dict[str, object]:
     return {
         "valid": True,
         "root": f"/evidence/{role}{suffix}",
-        "name": f"{STUDY_ID}-{role}{suffix}-1200",
+        "name": _class_campaign_name(role, block=block),
         "evidence_role": role,
         "block": block,
         "samples": 1,
@@ -244,10 +258,14 @@ def _loaded_fitting_generation_campaign(
         )
     campaign_path = tmp_path / f"{role}.yml"
     campaign_path.write_text("schema: 2\n", encoding="utf-8")
+    name = {
+        "pilot-compatibility": f"{STUDY_ID}-pilot-compatibility-1080-1200",
+        "certification": f"{STUDY_ID}-certification-900-1200",
+    }[role]
     return orchestrator.Campaign(
         path=campaign_path,
         source_bytes=campaign_path.read_bytes(),
-        name=f"{STUDY_ID}-{role}-1200",
+        name=name,
         purpose="evaluation",
         seed=1,
         profile="research-1200",
@@ -728,6 +746,291 @@ def test_status_exposes_stability_and_certification_contracts():
     assert status["attestation_generated"] is False
 
 
+def test_standalone_acquisition_status_deep_verifies_bound_runtime_but_is_informational(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import qcsd_lab.class_acquisition as acquisition
+
+    catalogue = tmp_path / "catalogue.json"
+    catalogue.write_text("{}\n", encoding="utf-8")
+    runner = tmp_path / "acquisition"
+    runner.mkdir()
+    foundation = tmp_path / "foundation.json"
+    foundation.write_text("{}\n", encoding="utf-8")
+    foundation_sha256 = pipeline.sha256_file(foundation)
+    provenance = pipeline.bind_receipt(
+        {
+            "foundation_attestation": {
+                "path": str(foundation.absolute()),
+                "sha256": foundation_sha256,
+            }
+        },
+        receipt_type=acquisition.PROVENANCE_TYPE,
+    )
+    (runner / "provenance.json").write_bytes(pipeline.canonical_json_bytes(provenance))
+    observed: list[dict[str, object]] = []
+    monkeypatch.setattr(pipeline, "_validate_fresh_layout_arguments", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        acquisition,
+        "_validate_runner_runtime",
+        lambda value: observed.append(dict(value)),
+    )
+    monkeypatch.setattr(
+        acquisition,
+        "acquisition_status",
+        lambda *_args, **_kwargs: {"complete": False, "candidate_count": 600},
+    )
+
+    result = pipeline.run_class_study_action(
+        "acquisition-status",
+        candidate_catalogue_path=catalogue,
+        acquisition_root=runner,
+    )
+
+    assert observed == [provenance["payload"]]
+    assert result.status == "complete"
+    assert result.details["valid"] is True
+    assert result.details["authoritative"] is False
+    assert result.details["gate_verification"] == {
+        "foundation_path": str(foundation.absolute()),
+        "foundation_sha256": foundation_sha256,
+        "informational_only": True,
+    }
+
+
+def test_standalone_acquisition_status_cannot_bypass_runtime_foundation_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import qcsd_lab.class_acquisition as acquisition
+
+    catalogue = tmp_path / "catalogue.json"
+    catalogue.write_text("{}\n", encoding="utf-8")
+    runner = tmp_path / "acquisition"
+    runner.mkdir()
+    provenance = pipeline.bind_receipt(
+        {
+            "foundation_attestation": {
+                "path": str(tmp_path / "foundation.json"),
+                "sha256": "1" * 64,
+            }
+        },
+        receipt_type=acquisition.PROVENANCE_TYPE,
+    )
+    (runner / "provenance.json").write_bytes(pipeline.canonical_json_bytes(provenance))
+    monkeypatch.setattr(pipeline, "_validate_fresh_layout_arguments", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        acquisition,
+        "_validate_runner_runtime",
+        lambda _value: (_ for _ in ()).throw(ValueError("foundation runtime changed")),
+    )
+    monkeypatch.setattr(
+        acquisition,
+        "acquisition_status",
+        lambda *_args, **_kwargs: pytest.fail("status read preceded foundation verification"),
+    )
+
+    with pytest.raises(ValueError, match="foundation runtime changed"):
+        pipeline.run_class_study_action(
+            "acquisition-status",
+            candidate_catalogue_path=catalogue,
+            acquisition_root=runner,
+        )
+
+
+def test_status_action_preserves_both_fitting_generations(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    numeric = tuple(tmp_path / f"numeric-{stage}" for stage in ("pilot", "authoritative"))
+    prefixes = tuple(tmp_path / f"prefix-{stage}" for stage in ("pilot", "authoritative"))
+    qualifications = tuple(
+        tmp_path / f"qualification-{stage}.json" for stage in ("pilot", "authoritative")
+    )
+    finals = tuple(tmp_path / f"final-{stage}" for stage in ("pilot", "authoritative"))
+    observed: dict[str, object] = {}
+
+    def status(**kwargs: object) -> dict[str, object]:
+        observed.update(kwargs)
+        return {"next_required_stage": "study-complete"}
+
+    monkeypatch.setattr(pipeline, "class_study_status", status)
+    result = pipeline.run_class_study_action(
+        "status",
+        numeric_bundle_roots=numeric,
+        prefix_spec_roots=prefixes,
+        qualification_manifests=qualifications,
+        final_bundle_roots=finals,
+    )
+
+    assert result.status == "complete"
+    assert observed["numeric_bundle_roots"] == numeric
+    assert observed["prefix_spec_roots"] == prefixes
+    assert observed["qualification_manifests"] == qualifications
+    assert observed["final_bundle_roots"] == finals
+
+
+def test_status_keeps_acquisition_runner_unverified_without_foundation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import qcsd_lab.class_acquisition as acquisition
+
+    catalogue = tmp_path / "catalogue.json"
+    catalogue.write_text("{}\n", encoding="utf-8")
+    runner_root = tmp_path / "acquisition"
+    runner_root.mkdir()
+    monkeypatch.setattr(
+        pipeline,
+        "load_candidate_catalogue_receipt",
+        lambda _path: ({}, [_Candidate("candidate-001")]),
+    )
+    monkeypatch.setattr(
+        acquisition,
+        "acquisition_status",
+        lambda *_args, **_kwargs: {
+            "acquisition_schema_version": acquisition.SCHEMA_VERSION,
+            "candidate_count": 1,
+            "state": "verified",
+            "authoritative": True,
+        },
+    )
+
+    status = pipeline.class_study_status(
+        candidate_catalogue_path=catalogue,
+        acquisition_root=runner_root,
+    )
+
+    runner = status["stages"]["acquisition_runner"]
+    assert runner["state"] == "unverified"
+    assert runner["authoritative"] is False
+    assert "--foundation-attestation" in runner["reason"]
+    assert "gate_verification" not in runner
+
+
+def test_status_deep_verifies_current_foundation_but_keeps_runner_informational(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import qcsd_lab.class_acquisition as acquisition
+    import qcsd_lab.class_attestation as attestation
+
+    catalogue = tmp_path / "catalogue.json"
+    catalogue.write_text("{}\n", encoding="utf-8")
+    foundation = tmp_path / "foundation.json"
+    foundation.write_text("{}\n", encoding="utf-8")
+    foundation_sha256 = pipeline.sha256_file(foundation)
+    runner_root = tmp_path / "acquisition"
+    runner_root.mkdir()
+    provenance = pipeline.bind_receipt(
+        {
+            "acquisition_schema_version": acquisition.SCHEMA_VERSION,
+            "foundation_attestation": {
+                "path": str(foundation.absolute()),
+                "sha256": foundation_sha256,
+            },
+        },
+        receipt_type=acquisition.PROVENANCE_TYPE,
+    )
+    (runner_root / "provenance.json").write_bytes(pipeline.canonical_json_bytes(provenance))
+    validation_calls: list[dict[str, object]] = []
+
+    def validate_foundation(path: Path, **kwargs: object) -> dict[str, object]:
+        validation_calls.append({"path": path, **kwargs})
+        return {
+            "path": str(path.absolute()),
+            "sha256": pipeline.sha256_file(path),
+            "summary": {"browser_egress_vectors": 98},
+        }
+
+    monkeypatch.setattr(
+        pipeline,
+        "load_candidate_catalogue_receipt",
+        lambda _path: ({}, [_Candidate("candidate-001")]),
+    )
+    monkeypatch.setattr(attestation, "validate_class_foundation_attestation", validate_foundation)
+    monkeypatch.setattr(
+        acquisition,
+        "acquisition_status",
+        lambda *_args, **_kwargs: {
+            "acquisition_schema_version": acquisition.SCHEMA_VERSION,
+            "candidate_count": 1,
+        },
+    )
+
+    status = pipeline.class_study_status(
+        candidate_catalogue_path=catalogue,
+        acquisition_root=runner_root,
+        foundation_attestation=foundation,
+    )
+
+    assert validation_calls == [
+        {
+            "path": foundation,
+            "deep_code_gate": True,
+            "runtime_role": "collection",
+        }
+    ]
+    runner = status["stages"]["acquisition_runner"]
+    assert runner["state"] == "verified"
+    assert runner["authoritative"] is False
+    assert runner["gate_verification"] == {
+        "foundation_path": str(foundation.absolute()),
+        "foundation_sha256": foundation_sha256,
+        "browser_egress_vectors": 98,
+        "informational_only": True,
+    }
+
+
+def test_status_keeps_historical_acquisition_runner_unverified(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import qcsd_lab.class_acquisition as acquisition
+    import qcsd_lab.class_attestation as attestation
+
+    catalogue = tmp_path / "catalogue.json"
+    catalogue.write_text("{}\n", encoding="utf-8")
+    foundation = tmp_path / "foundation.json"
+    foundation.write_text("{}\n", encoding="utf-8")
+    runner_root = tmp_path / "acquisition"
+    runner_root.mkdir()
+    monkeypatch.setattr(
+        pipeline,
+        "load_candidate_catalogue_receipt",
+        lambda _path: ({}, [_Candidate("candidate-001")]),
+    )
+    monkeypatch.setattr(
+        attestation,
+        "validate_class_foundation_attestation",
+        lambda path, **_kwargs: {
+            "path": str(path.absolute()),
+            "sha256": pipeline.sha256_file(path),
+        },
+    )
+    monkeypatch.setattr(
+        acquisition,
+        "acquisition_status",
+        lambda *_args, **_kwargs: {
+            "acquisition_schema_version": acquisition.SCHEMA_VERSION - 1,
+            "candidate_count": 1,
+        },
+    )
+
+    status = pipeline.class_study_status(
+        candidate_catalogue_path=catalogue,
+        acquisition_root=runner_root,
+        foundation_attestation=foundation,
+    )
+
+    runner = status["stages"]["acquisition_runner"]
+    assert runner["state"] == "unverified"
+    assert runner["authoritative"] is False
+    assert "historical" in runner["reason"]
+    assert "gate_verification" not in runner
+
+
 def test_status_verifies_supplied_promotion_receipts(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -792,6 +1095,8 @@ def test_foundation_action_requires_and_forwards_canonical_pinned_cdp_receipt(
     evidence_root.mkdir(parents=True)
     build = evidence_root / "build-execution-v23.json"
     pinned = evidence_root / "pinned-cdp-execution-v23.json"
+    browser_egress = evidence_root / "browser-egress-qualification-v23"
+    browser_egress.mkdir()
     destination = tmp_path / "artifacts/class-study-foundation-v23.json"
     other = tmp_path / "other.json"
     for path in (build, pinned, other):
@@ -821,19 +1126,35 @@ def test_foundation_action_requires_and_forwards_canonical_pinned_cdp_receipt(
 
     with pytest.raises(ValueError, match="--pinned-cdp-receipt"):
         pipeline.run_class_study_action("foundation", **kwargs)
+    with pytest.raises(ValueError, match="--browser-egress-qualification-root"):
+        pipeline.run_class_study_action(
+            "foundation", **kwargs, pinned_cdp_receipt=pinned
+        )
     with pytest.raises(ValueError, match="wrong canonical filename"):
         pipeline.run_class_study_action(
             "foundation",
             **kwargs,
             pinned_cdp_receipt=tmp_path / "copied-probe.json",
+            browser_egress_qualification_root=browser_egress,
+        )
+    with pytest.raises(ValueError, match="wrong canonical path"):
+        pipeline.run_class_study_action(
+            "foundation",
+            **kwargs,
+            pinned_cdp_receipt=pinned,
+            browser_egress_qualification_root=tmp_path / "copied-browser-egress",
         )
 
     result = pipeline.run_class_study_action(
-        "foundation", **kwargs, pinned_cdp_receipt=pinned
+        "foundation",
+        **kwargs,
+        pinned_cdp_receipt=pinned,
+        browser_egress_qualification_root=browser_egress,
     )
 
     assert result.status == "complete"
     assert observed["pinned_cdp_receipt"] == pinned
+    assert observed["browser_egress_qualification_root"] == browser_egress
     assert observed["build_execution_receipt"] == build
     assert observed["destination"] == destination
 
@@ -2295,7 +2616,7 @@ def test_fitted_capture_preflight_receives_scoped_foundation_binding(
     def preflight(_path: Path) -> dict[str, object]:
         observed.append(pipeline.os.environ.get("QCSD_CLASS_FOUNDATION_ATTESTATION"))
         return {
-            "name": f"{STUDY_ID}-{role}-1200",
+            "name": _class_campaign_name(role),
             "evidence_role": role,
             "sample_count": 1,
         }
@@ -2450,7 +2771,7 @@ def test_capture_delegates_only_after_prerequisites(monkeypatch, tmp_path):
 @pytest.mark.parametrize(
     ("role", "name"),
     (
-        ("pilot-fitting", f"{STUDY_ID}-pilot-fitting-600-1200"),
+        ("pilot-fitting", f"{STUDY_ID}-pilot-fitting-1200"),
         ("pilot-compatibility", f"{STUDY_ID}-pilot-compatibility-1080-1200"),
         ("authoritative-fitting", f"{STUDY_ID}-authoritative-fitting-1200"),
         ("formal", f"{STUDY_ID}-formal-01-1200"),
@@ -2494,7 +2815,7 @@ def test_generic_run_rejects_coordinator_only_class_capture_before_mutation(
 @pytest.mark.parametrize(
     ("role", "name"),
     (
-        ("pilot-fitting", f"{STUDY_ID}-pilot-fitting-600-1200"),
+        ("pilot-fitting", f"{STUDY_ID}-pilot-fitting-1200"),
         ("pilot-compatibility", f"{STUDY_ID}-pilot-compatibility-1080-1200"),
         ("authoritative-fitting", f"{STUDY_ID}-authoritative-fitting-1200"),
         ("certification", f"{STUDY_ID}-certification-900-1200"),
@@ -2800,7 +3121,7 @@ def test_fitted_generation_capability_binds_runtime_inputs_before_launch_and_res
     source = _record(source_role)
     runtime = _fitting_runtime_projection(role)
     configuration = {
-        "name": f"{STUDY_ID}-{role}-1200",
+        "name": _class_campaign_name(role),
         "evidence_role": role,
         "class_study_id": STUDY_ID,
         "campaign_sha256": "c" * 64,
@@ -2865,7 +3186,7 @@ def test_fitted_generation_capability_rejects_bundle_runtime_mismatch(
     runtime_inputs = runtime["defense_runtime_inputs"]
     assert isinstance(runtime_inputs, dict)
     configuration = {
-        "name": f"{STUDY_ID}-{role}-1200",
+        "name": _class_campaign_name(role),
         "evidence_role": role,
         "class_study_id": STUDY_ID,
         "campaign_sha256": "c" * 64,
@@ -2930,7 +3251,7 @@ def test_fitted_generation_capability_is_scoped_to_one_role_and_campaign(
     source = _record(source_role)
     runtime = _fitting_runtime_projection(role)
     configuration = {
-        "name": f"{STUDY_ID}-{role}-1200",
+        "name": _class_campaign_name(role),
         "evidence_role": role,
         "class_study_id": STUDY_ID,
         "campaign_sha256": "c" * 64,
@@ -2955,7 +3276,7 @@ def test_fitted_generation_capability_is_scoped_to_one_role_and_campaign(
             {**configuration, "class_study_cohort_sha256": "d" * 64},
             {
                 **configuration,
-                "name": f"{STUDY_ID}-{other_role}-1200",
+                "name": _class_campaign_name(other_role),
                 "evidence_role": other_role,
             },
         )
@@ -2968,7 +3289,7 @@ def test_fitted_generation_capability_is_scoped_to_one_role_and_campaign(
 
 
 def test_successor_authoritative_fitting_uses_exact_restart_authority() -> None:
-    study_id = "classifier-multiorigin100-v2-" + "c" * 16
+    study_id = "classifier-multiorigin100-v2-g01-" + "c" * 12
     configuration = {
         "name": f"{study_id}-authoritative-fitting-2000-1200",
         "evidence_role": "authoritative-fitting",
@@ -2992,7 +3313,7 @@ def test_successor_authoritative_fitting_uses_exact_restart_authority() -> None:
 
 def test_initial_pilot_fitting_uses_coordinator_authority_without_predecessor() -> None:
     configuration = {
-        "name": f"{STUDY_ID}-pilot-fitting-600-1200",
+        "name": f"{STUDY_ID}-pilot-fitting-1200",
         "evidence_role": "pilot-fitting",
         "class_study_id": STUDY_ID,
         "campaign_sha256": "f" * 64,
@@ -3285,11 +3606,11 @@ def _qualification_coordinator_inputs(monkeypatch, tmp_path):
     (
         {"study_id": STUDY_ID},
         {
-            "study_id": "classifier-multiorigin100-v2-other",
+            "study_id": "classifier-multiorigin100-v2-g01-abcdef123456",
             "class_study_successor_sha256": "a" * 64,
         },
         {
-            "study_id": "classifier-multiorigin100-v2-active",
+            "study_id": "classifier-multiorigin100-v2-g01-0123456789ab",
             "class_study_successor_sha256": "b" * 64,
         },
     ),
@@ -3334,7 +3655,9 @@ def test_successor_qualification_rejects_wrong_numeric_lineage_before_mutation(
             workload_id=None,
             qualify_all_pending=False,
             qualification_authority=_qualification_authority(),
-            expected_successor_study_id="classifier-multiorigin100-v2-active",
+            expected_successor_study_id=(
+                "classifier-multiorigin100-v2-g01-0123456789ab"
+            ),
             expected_successor_restart_sha256="a" * 64,
         )
     assert not checkpoint.exists()
@@ -3347,7 +3670,7 @@ def test_successor_numeric_publishers_reject_wrong_restart_before_mutation(
     tmp_path: Path,
     action: str,
 ) -> None:
-    study_id = "classifier-multiorigin100-v2-active"
+    study_id = "classifier-multiorigin100-v2-g01-0123456789ab"
     restart = tmp_path / "restart.json"
     restart.write_text("restart\n", encoding="utf-8")
     context = {

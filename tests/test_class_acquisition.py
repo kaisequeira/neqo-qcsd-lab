@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 import sys
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
@@ -12,9 +13,17 @@ from types import ModuleType, SimpleNamespace
 import pytest
 
 import qcsd_lab.class_acquisition as acquisition_module
-from qcsd_lab import buflo_study, class_attestation, pinned_cdp
+from qcsd_lab import buflo_study, class_attestation, pinned_cdp, playwright_driver
 from qcsd_lab.acquisition_errors import RecoverableAcquisitionError
-from qcsd_lab.cdp_targets import CDP_TARGET_INSTRUMENTATION_POLICY
+from qcsd_lab.browser_egress import (
+    NON_REPLAYABLE_EGRESS_POLICY,
+    NonReplayableEgressGuard,
+    target_egress_apis,
+)
+from qcsd_lab.cdp_targets import (
+    CDP_TARGET_INSTRUMENTATION_POLICY,
+    EGRESS_PREARM_SUMMARY_SCHEMA_VERSION,
+)
 from qcsd_lab.class_acquisition import (
     CHECKPOINT_SCHEMA_VERSION,
     COMPLETION_SCHEMA_VERSION,
@@ -69,6 +78,7 @@ from qcsd_lab.discover import DiscoveryResult, origin
 from qcsd_lab.discovery_evidence import (
     DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION,
     PASSIVE_RENDER_CONTRACT_SHA256,
+    RENDER_OBSERVATION_SCHEMA_VERSION,
     evidence_sha256,
     passive_render_contract,
 )
@@ -77,9 +87,40 @@ from qcsd_lab.util import load_json
 from tests.test_buflo_study import _build_execution_value
 from tests.test_pinned_cdp import _observation as _pinned_cdp_observation
 
-_PRODUCTION_FOUNDATION_ATTESTATION_BINDING = (
-    acquisition_module._foundation_attestation_binding
-)
+_PRODUCTION_FOUNDATION_ATTESTATION_BINDING = acquisition_module._foundation_attestation_binding
+
+
+def _egress_prearm_summary() -> dict[str, object]:
+    return {
+        "schema_version": EGRESS_PREARM_SUMMARY_SCHEMA_VERSION,
+        "policy": NON_REPLAYABLE_EGRESS_POLICY,
+        "target_total": 1,
+        "installed_total": 1,
+        "pending_total": 0,
+        "popup_guard_required_total": 1,
+        "popup_guard_installed_total": 1,
+        "by_target_type": {
+            target_type: {
+                "target_count": int(target_type == "page"),
+                "installed_count": int(target_type == "page"),
+                "pending_count": 0,
+                "protected_api_observations": len(target_egress_apis("page"))
+                if target_type == "page"
+                else 0,
+                "unavailable_api_observations": 0,
+                "popup_guard_required_count": int(target_type == "page"),
+                "popup_guard_installed_count": int(target_type == "page"),
+            }
+            for target_type in ("page", "iframe", "worker", "shared_worker")
+        },
+    }
+
+
+def _non_replayable_egress_summary() -> dict[str, object]:
+    guard = NonReplayableEgressGuard()
+    guard.mark_context_guards_installed()
+    guard.bind_root_page(object())
+    return guard.success_summary()
 
 
 @pytest.fixture(autouse=True)
@@ -196,9 +237,7 @@ def _write_rust_code_gate_fixture(
         "rust_base_image": buflo_study.RUST_BASE_IMAGE,
         "debian_base_image": buflo_study.DEBIAN_BASE_IMAGE,
         "uv_lock_sha256": buflo_study.sha256_file(buflo_study.LAB_ROOT / "uv.lock"),
-        "cargo_lock_sha256": buflo_study.sha256_file(
-            buflo_study.LAB_ROOT / "neqo-qcsd/Cargo.lock"
-        ),
+        "cargo_lock_sha256": buflo_study.sha256_file(buflo_study.LAB_ROOT / "neqo-qcsd/Cargo.lock"),
     }
     build_source = {**collection_source, "image_digest": None}
     source_bytes = (json.dumps(build_source, indent=2, sort_keys=True) + "\n").encode()
@@ -246,9 +285,7 @@ def _write_rust_code_gate_fixture(
         },
     }
     unsigned = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
-    value["sha256"] = hashlib.sha256(
-        b"qcsd-rust-code-gate-v1\0" + unsigned
-    ).hexdigest()
+    value["sha256"] = hashlib.sha256(b"qcsd-rust-code-gate-v1\0" + unsigned).hexdigest()
     (root / "receipt.json").write_text(
         json.dumps(value, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -260,7 +297,7 @@ def _real_prepare_runtime_foundation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[Path, Path, dict[str, object], dict[str, object]]:
-    """Create a real schema-2 foundation around deterministic gate fixtures.
+    """Create a real schema-3 foundation around deterministic gate fixtures.
 
     Expensive packet/result parsing and the browser launch are replaced by
     deterministic gate outputs, but the build, reference, pinned-CDP, code,
@@ -345,9 +382,7 @@ def _real_prepare_runtime_foundation(
                 {
                     "root": str(root),
                     "name": root.name,
-                    "evidence_sha256": acquisition_module.sha256_file(
-                        root / "evidence.sha256"
-                    ),
+                    "evidence_sha256": acquisition_module.sha256_file(root / "evidence.sha256"),
                     "samples": 40 if stage == "controlled" else 6,
                     "campaign_sha256": "1" * 64,
                     "authoritative_bytes": 1,
@@ -375,10 +410,7 @@ def _real_prepare_runtime_foundation(
     def lab_commands() -> list[dict[str, object]]:
         records = []
         for gate, template in buflo_study._LAB_CODE_GATE_COMMANDS:
-            argv = [
-                str(Path(sys.executable)) if item == "python" else item
-                for item in template
-            ]
+            argv = [str(Path(sys.executable)) if item == "python" else item for item in template]
             output = "fixture passed\n"
             records.append(
                 {
@@ -446,10 +478,21 @@ def _real_prepare_runtime_foundation(
 
     active_source["value"] = prepare_source
     monkeypatch.setenv("QCSD_LAB_IMAGE_DIGEST", str(prepare_source["image_digest"]))
+    pinned_observation = _pinned_cdp_observation()
+    monkeypatch.setattr(
+        pinned_cdp,
+        "validate_default_playwright_driver_once",
+        lambda: {"test_fixture": True},
+    )
+    monkeypatch.setattr(
+        pinned_cdp,
+        "_driver_binding",
+        lambda _receipt: copy.deepcopy(pinned_observation["playwright_driver"]),
+    )
     monkeypatch.setattr(
         pinned_cdp,
         "run_pinned_cdp_probe",
-        lambda **_kwargs: _pinned_cdp_observation(),
+        lambda **_kwargs: copy.deepcopy(pinned_observation),
     )
     pinned_path = pinned_cdp.create_pinned_cdp_receipt(
         tmp_path / "pinned-cdp-execution-v59.json",
@@ -459,6 +502,40 @@ def _real_prepare_runtime_foundation(
         expected_gid=1000,
     )
 
+    browser_egress_root = tmp_path / "browser-egress-qualification-v59"
+    browser_egress_root.mkdir()
+    browser_egress_final = browser_egress_root / "final.json"
+    browser_egress_final.write_text("{}\n", encoding="utf-8")
+    build_finished = datetime.fromisoformat(str(build["finished_at"]))
+    browser_egress = {
+        "path": str(browser_egress_final.absolute()),
+        "sha256": hashlib.sha256(browser_egress_final.read_bytes()).hexdigest(),
+        "payload_sha256": "1" * 64,
+        "qualification_id": class_attestation.BROWSER_EGRESS_QUALIFICATION_ID,
+        "cohort_version": cohort_version,
+        "qualification_started_at": (build_finished + timedelta(seconds=1)).isoformat(),
+        "qualification_finished_at": (build_finished + timedelta(seconds=2)).isoformat(),
+        "recorded_at": (build_finished + timedelta(seconds=3)).isoformat(),
+        "prepare_image_id": build_value["images"]["prepare"]["id"],
+        "build_execution": {
+            "path": str(build_path.absolute()),
+            "sha256": build["sha256"],
+            "payload_sha256": build_value["payload_sha256"],
+            "cohort_version": cohort_version,
+            "collection_image_id": build_value["images"]["collection"]["id"],
+            "prepare_image_id": build_value["images"]["prepare"]["id"],
+            "reference_image_id": build_value["images"]["reference"]["id"],
+        },
+        "expanded_vectors_sha256": class_attestation.browser_egress_vectors_sha256(),
+        "passed_vector_count": class_attestation.BROWSER_EGRESS_VECTOR_COUNT,
+        "passed": True,
+    }
+    monkeypatch.setattr(
+        class_attestation,
+        "verify_browser_egress_qualification",
+        lambda *_args, **_kwargs: copy.deepcopy(browser_egress),
+    )
+
     active_source["value"] = collection_source
     monkeypatch.setenv("QCSD_LAB_IMAGE_DIGEST", str(collection_source["image_digest"]))
     foundation_path = class_attestation.create_class_foundation_attestation(
@@ -466,6 +543,7 @@ def _real_prepare_runtime_foundation(
         cohort_version=cohort_version,
         build_execution_receipt=build_path,
         pinned_cdp_receipt=pinned_path,
+        browser_egress_qualification_root=browser_egress_root,
         reference_receipt=reference_path,
         code_gate_receipt=code_path,
         controlled_qualification_receipt=qualification_path,
@@ -481,6 +559,19 @@ def _real_prepare_runtime_foundation(
 def _replace_receipt_payload(path: Path, payload: dict) -> None:
     receipt_type = load_json(path)["receipt_type"]
     path.write_bytes(canonical_json_bytes(bind_receipt(payload, receipt_type=receipt_type)))
+
+
+def _strip_schema_five_policy_evidence(value: dict) -> None:
+    """Convert current attempt ledgers to their exact schema 1--4 shape."""
+
+    candidates = value.get("candidates")
+    states = candidates.values() if isinstance(candidates, dict) else (value,)
+    for state in states:
+        for attempt in state.get("navigation_attempts", []):
+            attempt.pop("policy_evidence", None)
+        for page in state.get("pages", []):
+            for attempt in page.get("probe_attempts", []):
+                attempt.pop("policy_evidence", None)
 
 
 def _first_terminal_state(runner: Path) -> tuple[str, dict]:
@@ -616,8 +707,20 @@ def _prepared_manifest(url: str, approved_origins, *, source_override=None) -> d
                 },
             ]
         )
+    worker_summary = {
+        "held": 0,
+        "released": 0,
+        "pending": 0,
+        "released_after_setup_envelopes": 0,
+        "owner_target_types": {
+            "page": 0,
+            "iframe": 0,
+            "worker": 0,
+            "shared_worker": 0,
+        },
+    }
     render_observation = {
-        "schema_version": 1,
+        "schema_version": RENDER_OBSERVATION_SCHEMA_VERSION,
         "clock": "monotonic-relative-ms",
         "navigation_started_ms": 0,
         "load_event_ms": 0,
@@ -626,6 +729,21 @@ def _prepared_manifest(url: str, approved_origins, *, source_override=None) -> d
         "cutoff_ms": 13_000,
         "active_request_ids": [],
         "active_request_count": 0,
+        "router_shutdown_ready": True,
+        "bootstrap_prearm_summary": {
+            "schema_version": 1,
+            "held_total": 0,
+            "released_total": 0,
+            "pending_total": 0,
+            "release_before_setup_envelopes_total": 0,
+            "by_worker_type": {
+                "worker": copy.deepcopy(worker_summary),
+                "shared_worker": copy.deepcopy(worker_summary),
+            },
+        },
+        "egress_prearm_summary": _egress_prearm_summary(),
+        "non_replayable_egress_summary": _non_replayable_egress_summary(),
+        "browser_context_service_worker_count": 0,
         "cutoff_reason": "quiescent",
     }
     render_observation_sha256 = evidence_sha256(render_observation)
@@ -774,7 +892,12 @@ def test_runner_distinguishes_component_limits_from_whole_action_cutoffs(
 
     assert MAX_ACQUISITION_BACKEND_TIMEOUT_MS == 60_000
     assert MAX_PASSIVE_RENDER_AFTER_LOAD_MS == 30_000
-    assert provenance["acquisition_schema_version"] == 4
+    assert provenance["acquisition_schema_version"] == 5
+    assert provenance["browser_tool"] == playwright_driver.expected_browser_tool_identity()
+    tampered = copy.deepcopy(provenance)
+    tampered["browser_tool"]["chromium_version"] = "caller-authored"
+    with pytest.raises(ValueError, match="provenance policy"):
+        acquisition_module._validate_runner_runtime(tampered)
     checkpoint = load_json(runner / "checkpoint.json")["payload"]
     assert checkpoint["checkpoint_schema_version"] == 2
     assert checkpoint["baseline_batches"] == []
@@ -790,6 +913,106 @@ def test_runner_distinguishes_component_limits_from_whole_action_cutoffs(
     assert "browser_discovery_attempt_budget_ms" not in provenance
     assert "pending_baseline_guard_ms" not in provenance["origin_policy"]
     assert PENDING_BASELINE_GUARD_MS == 2_400_000
+
+
+@pytest.mark.parametrize(
+    "mutate_provenance",
+    (
+        lambda payload: payload["browser_tool"].update(chromium_revision="unattested"),
+        lambda payload: payload["browser_tool"].update(schema_version=True),
+        lambda payload: payload["passive_render_contract"]["viewport"].update(
+            deviceScaleFactor=True
+        ),
+        lambda payload: payload.update(cdp_target_instrumentation_policy="stale-policy"),
+        lambda payload: payload["origin_policy"].update(max_origins=31),
+        lambda payload: payload.update(eligibility_inputs=["classifier"]),
+        lambda payload: payload.update(unexpected_contract_field="resealed"),
+    ),
+    ids=(
+        "browser-identity",
+        "browser-schema-bool-alias",
+        "passive-contract-bool-alias",
+        "cdp-policy",
+        "origin-policy",
+        "eligibility-policy",
+        "exact-keyset",
+    ),
+)
+def test_current_completion_rejects_coherently_rebound_provenance_tamper(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutate_provenance,
+) -> None:
+    catalogue = _catalogue(tmp_path / "catalogue.json")
+    catalogue_value, candidates = acquisition_module.load_candidate_catalogue_receipt(catalogue)
+    monkeypatch.setattr(
+        acquisition_module,
+        "load_candidate_catalogue_receipt",
+        lambda _path: (catalogue_value, candidates[:1]),
+    )
+    runner = initialise_runner(
+        tmp_path / "runner",
+        candidate_catalogue_path=catalogue,
+        foundation_attestation=_foundation(tmp_path / "foundation.json"),
+        started_at="2026-08-28T00:00:00Z",
+        browser_tool="ignored-caller-value",
+    )
+    run_due_acquisition(
+        runner,
+        candidate_catalogue_path=catalogue,
+        stability_root=tmp_path / "stability",
+        workload_root=tmp_path / "workloads",
+        backend=RejectingBackend(),
+    )
+    completion_payload = copy.deepcopy(
+        load_json(write_acquisition_completion(runner, candidate_catalogue_path=catalogue))[
+            "payload"
+        ]
+    )
+
+    provenance_path = runner / "provenance.json"
+    provenance_payload = copy.deepcopy(load_json(provenance_path)["payload"])
+    mutate_provenance(provenance_payload)
+    _replace_receipt_payload(provenance_path, provenance_payload)
+    provenance_sha256 = hashlib.sha256(provenance_path.read_bytes()).hexdigest()
+
+    checkpoint_path = runner / "checkpoint.json"
+    checkpoint_payload = copy.deepcopy(load_json(checkpoint_path)["payload"])
+    checkpoint_payload["provenance_sha256"] = provenance_sha256
+    terminal_receipts: dict[str, dict] = {}
+    for candidate_id, state in checkpoint_payload["candidates"].items():
+        terminal_path = runner / state["terminal"]["path"]
+        terminal_payload = copy.deepcopy(load_json(terminal_path)["payload"])
+        terminal_payload["provenance_sha256"] = provenance_sha256
+        _replace_receipt_payload(terminal_path, terminal_payload)
+        state["terminal"]["sha256"] = hashlib.sha256(terminal_path.read_bytes()).hexdigest()
+        terminal_receipts[candidate_id] = copy.deepcopy(state["terminal"])
+    _replace_receipt_payload(checkpoint_path, checkpoint_payload)
+    checkpoint = load_json(checkpoint_path)
+
+    completion_payload.update(
+        provenance_sha256=provenance_sha256,
+        checkpoint_payload_sha256=checkpoint["payload_sha256"],
+        terminal_receipts=terminal_receipts,
+    )
+    resealed_completion = bind_receipt(
+        completion_payload,
+        receipt_type=COMPLETION_TYPE,
+    )
+    assert (
+        resealed_completion["payload"]["provenance_sha256"]
+        == hashlib.sha256(provenance_path.read_bytes()).hexdigest()
+    )
+    assert (
+        resealed_completion["payload"]["checkpoint_payload_sha256"] == checkpoint["payload_sha256"]
+    )
+
+    with pytest.raises(ValueError, match="schema-five acquisition"):
+        validate_acquisition_completion(
+            resealed_completion,
+            candidate_catalogue_path=catalogue,
+            runner_root=runner,
+        )
 
 
 def test_batch_constants_and_public_action_bound_are_exact(tmp_path: Path) -> None:
@@ -910,6 +1133,7 @@ def test_probe_window_edges_use_exact_elapsed_time_not_rounded_milliseconds(
                 "completed_at": acquisition_module._format_time(observed),
                 "outcome": "interrupted",
                 "reason": "fixture interruption",
+                "policy_evidence": None,
             }
         ],
     }
@@ -1273,13 +1497,11 @@ def test_prepare_runtime_deep_foundation_supports_acquisition_and_authority(
 ) -> None:
     """Exercise the production foundation boundary in the prepare image role."""
 
-    foundation, build_path, collection_source, active_source = (
-        _real_prepare_runtime_foundation(tmp_path, monkeypatch)
+    foundation, build_path, collection_source, active_source = _real_prepare_runtime_foundation(
+        tmp_path, monkeypatch
     )
     catalogue_path = _catalogue(tmp_path / "catalogue.json")
-    catalogue, candidates = acquisition_module.load_candidate_catalogue_receipt(
-        catalogue_path
-    )
+    catalogue, candidates = acquisition_module.load_candidate_catalogue_receipt(catalogue_path)
     candidates = candidates[:2]
     monkeypatch.setattr(
         acquisition_module,
@@ -1509,9 +1731,10 @@ def test_navigation_pair_is_prepublished_and_coordinator_merged(
                 "attempt": 1,
                 "started_at": acquisition_module._format_time(now),
                 "completed_at": acquisition_module._format_time(now),
-                "outcome": "completed",
-                "reason": None,
-            }
+                    "outcome": "completed",
+                    "reason": None,
+                    "policy_evidence": None,
+                }
         ]
         for candidate_id in expected_ids
     )
@@ -2594,7 +2817,7 @@ def test_all_candidates_require_terminal_evidence_and_completion_detects_tamper(
         )
     assert status == {
         "candidate_count": CANDIDATE_COUNT,
-        "acquisition_schema_version": 4,
+        "acquisition_schema_version": 5,
         "checkpoint_schema_version": 2,
         "maximum_candidates_per_action": 2,
         "global_live_page_cap": 5,
@@ -2765,6 +2988,7 @@ def test_historical_schemas_are_readable_but_cannot_be_mutated(
     checkpoint_payload.pop("checkpoint_schema_version")
     checkpoint_payload.pop("baseline_batches")
     checkpoint_payload.pop("active_batch")
+    _strip_schema_five_policy_evidence(checkpoint_payload)
     checkpoint_payload["provenance_sha256"] = hashlib.sha256(
         provenance_path.read_bytes()
     ).hexdigest()
@@ -2814,6 +3038,7 @@ def test_historical_orphan_terminals_are_verify_only(tmp_path: Path) -> None:
     checkpoint_payload.pop("checkpoint_schema_version")
     checkpoint_payload.pop("baseline_batches")
     checkpoint_payload.pop("active_batch")
+    _strip_schema_five_policy_evidence(checkpoint_payload)
     checkpoint_payload["provenance_sha256"] = provenance_sha256
     orphan_count = 0
     for state in checkpoint_payload["candidates"].values():
@@ -2826,6 +3051,12 @@ def test_historical_orphan_terminals_are_verify_only(tmp_path: Path) -> None:
         terminal_payload["provenance_sha256"] = provenance_sha256
         terminal_payload.pop("checkpoint_schema_version")
         terminal_payload.pop("baseline_batch")
+        terminal_payload["checkpoint_state_sha256"] = (
+            acquisition_module._normalised_terminal_state_sha256(
+                state,
+                kind=terminal_payload["kind"],
+            )
+        )
         _replace_receipt_payload(terminal_path, terminal_payload)
         state["state"] = "pending"
         state["terminal"] = None
@@ -2890,6 +3121,7 @@ def test_completion_validation_accepts_each_legacy_schema_shape(
     checkpoint_payload.pop("checkpoint_schema_version")
     checkpoint_payload.pop("baseline_batches")
     checkpoint_payload.pop("active_batch")
+    _strip_schema_five_policy_evidence(checkpoint_payload)
     checkpoint_payload["provenance_sha256"] = provenance_sha256
     candidate_id, state = next(iter(checkpoint_payload["candidates"].items()))
     terminal_path = runner / state["terminal"]["path"]
@@ -2897,6 +3129,12 @@ def test_completion_validation_accepts_each_legacy_schema_shape(
     terminal_payload["provenance_sha256"] = provenance_sha256
     terminal_payload.pop("checkpoint_schema_version")
     terminal_payload.pop("baseline_batch")
+    terminal_payload["checkpoint_state_sha256"] = (
+        acquisition_module._normalised_terminal_state_sha256(
+            state,
+            kind=terminal_payload["kind"],
+        )
+    )
     if legacy_schema == 1:
         terminal_payload.pop("terminal_schema_version")
         terminal_payload.pop("terminalised_at")
@@ -2987,6 +3225,7 @@ def test_schema_one_observed_eligible_completion_uses_its_original_evidence_shap
     checkpoint_payload.pop("checkpoint_schema_version")
     checkpoint_payload.pop("baseline_batches")
     checkpoint_payload.pop("active_batch")
+    _strip_schema_five_policy_evidence(checkpoint_payload)
     checkpoint_payload["provenance_sha256"] = provenance_sha256
     state = checkpoint_payload["candidates"][candidate_id]
     for page in state["pages"]:
@@ -3115,6 +3354,7 @@ def test_schema_three_observed_eligible_completion_rebinds_transitive_evidence(
     checkpoint_payload.pop("checkpoint_schema_version")
     checkpoint_payload.pop("baseline_batches")
     checkpoint_payload.pop("active_batch")
+    _strip_schema_five_policy_evidence(checkpoint_payload)
     checkpoint_payload["provenance_sha256"] = provenance_sha256
     state = checkpoint_payload["candidates"][candidate_id]
     for page in state["pages"]:
@@ -3496,6 +3736,7 @@ def test_interrupted_navigation_duration_is_not_fabricated_as_success(
             "completed_at": "2026-08-28T02:00:00Z",
             "outcome": "interrupted",
             "reason": "externally bounded action ended before an outcome",
+            "policy_evidence": None,
         }
     ]
     _replace_receipt_payload(runner / "checkpoint.json", payload)
@@ -4463,6 +4704,7 @@ def test_probe_attempt_ledger_rejects_gaps_post_success_work_and_missing_success
             "completed_at": "2026-08-28T00:00:31Z",
             "outcome": outcome,
             "reason": None if outcome == "completed" else "transient",
+            "policy_evidence": None,
         }
 
     with pytest.raises(ValueError, match="ledger"):
@@ -4495,6 +4737,51 @@ def test_probe_attempt_ledger_rejects_gaps_post_success_work_and_missing_success
             },
             candidate_id=candidate_id,
         )
+
+
+@pytest.mark.parametrize("historical_schema", (1, 2, 3, 4))
+def test_probe_attempt_policy_evidence_field_is_exactly_schema_versioned(
+    historical_schema: int,
+) -> None:
+    candidate_id = "class-schema-attempt"
+    historical_attempt = {
+        "probe_id": "t+30s",
+        "workload_id": _probe_attempt_workload_id(candidate_id, 0, "t+30s", 1),
+        "attempt": 1,
+        "observed_at": "2026-08-28T00:00:30Z",
+        "completed_at": "2026-08-28T00:00:31Z",
+        "outcome": "interrupted",
+        "reason": "fixture interruption",
+    }
+
+    _validate_probe_attempts(
+        {"page": {"ordinal": 0}, "observations": [], "probe_attempts": [historical_attempt]},
+        candidate_id=candidate_id,
+        acquisition_schema_version=historical_schema,
+    )
+    with pytest.raises(ValueError, match="probe-attempt ledger"):
+        _validate_probe_attempts(
+            {
+                "page": {"ordinal": 0},
+                "observations": [],
+                "probe_attempts": [{**historical_attempt, "policy_evidence": None}],
+            },
+            candidate_id=candidate_id,
+            acquisition_schema_version=historical_schema,
+        )
+
+    with pytest.raises(ValueError, match="probe-attempt ledger"):
+        _validate_probe_attempts(
+            {"page": {"ordinal": 0}, "observations": [], "probe_attempts": [historical_attempt]},
+            candidate_id=candidate_id,
+            acquisition_schema_version=acquisition_module.SCHEMA_VERSION,
+        )
+    current_attempt = {**historical_attempt, "policy_evidence": None}
+    _validate_probe_attempts(
+        {"page": {"ordinal": 0}, "observations": [], "probe_attempts": [current_attempt]},
+        candidate_id=candidate_id,
+        acquisition_schema_version=acquisition_module.SCHEMA_VERSION,
+    )
 
 
 def test_manifest_written_before_kill_is_never_relabelled_on_resume(tmp_path: Path):
@@ -4632,6 +4919,7 @@ def test_pending_probe_cannot_restart_network_work_after_its_window(tmp_path: Pa
         "completed_at": "2026-08-28T01:00:00Z",
         "outcome": "interrupted",
         "reason": "prior invocation ended before recording an outcome",
+        "policy_evidence": None,
     }
     assert page["probe_attempts"][0]["workload_id"].endswith("-t30s-a001")
 
@@ -4749,7 +5037,12 @@ def test_navigation_redirect_convergence_rejects_private_subdomain_answer(
         catalogue_boundary_navigation("example.com")
 
 
-def _run_navigation_pass_with_primary_redirect(target_url: str):
+def _run_navigation_pass_with_primary_redirect(
+    target_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    holder: dict[str, object] = {}
+
     class FakePlaywrightError(Exception):
         pass
 
@@ -4777,34 +5070,134 @@ def _run_navigation_pass_with_primary_redirect(target_url: str):
         def __init__(self, context):
             self.context = context
             self.main_frame = object()
+            self.url = "https://example.com/"
 
         def goto(self, *_args, **_kwargs):
-            for url in ("https://example.com/", target_url):
-                self.context.route_handler(FakeRoute(FakeRequest(url, self.main_frame)))
+            router = holder["router"]
+            source = SimpleNamespace(target_type="page", generation=0)
+            for index, url in enumerate(("https://example.com/", target_url)):
+                router.on_event(
+                    source,
+                    "Fetch.requestPaused",
+                    {
+                        "requestId": f"fetch-{index}",
+                        "request": {"method": "GET", "url": url},
+                        "frameId": "root-frame",
+                        "resourceType": "Document",
+                    },
+                )
             raise FakePlaywrightError("request-stage redirect abort")
 
     class FakeContext:
+        service_workers = []
+
+        def __init__(self):
+            self.handlers = {}
+
+        def add_init_script(self, *, script):
+            assert script
+
         def route(self, _pattern, handler):
             self.route_handler = handler
+
+        def route_web_socket(self, pattern, handler):
+            assert pattern == "**"
+            self.websocket_handler = handler
+
+        def on(self, event, handler):
+            self.handlers[event] = handler
 
         def new_page(self):
             return FakePage(self)
 
+        def new_cdp_session(self, _page):
+            return SimpleNamespace(
+                send=lambda command, _parameters=None: (
+                    {"frameTree": {"frame": {"id": "root-frame"}}}
+                    if command == "Page.getFrameTree"
+                    else {}
+                )
+            )
+
+        def close(self):
+            return None
+
     class FakeBrowser:
         def new_context(self, **_kwargs):
             return FakeContext()
+
+        def new_browser_cdp_session(self):
+            return object()
 
         def close(self):
             return None
 
     class FakePlaywright:
         def __enter__(self):
-            chromium = SimpleNamespace(launch=lambda **_kwargs: FakeBrowser())
+            def launch(**kwargs):
+                assert kwargs["env"] == acquisition_module.chromium_child_environment()
+                assert kwargs["executable_path"] == str(
+                    playwright_driver.DEFAULT_CONFIGURED_EXECUTABLE
+                )
+                return FakeBrowser()
+
+            chromium = SimpleNamespace(launch=launch)
             return SimpleNamespace(chromium=chromium)
 
         def __exit__(self, *_args):
             return None
 
+    class FakeRouter:
+        shutdown_ready = True
+        active_request_identities = ()
+
+        def __init__(self, _session, *, on_event, **_kwargs):
+            self.on_event = on_event
+            holder["router"] = self
+
+        def start(self):
+            return None
+
+        def send(self, *_args, **_kwargs):
+            return None
+
+        def raise_if_failed(self):
+            return None
+
+        def begin_abort(self):
+            return None
+
+        def finish_abort(self):
+            return None
+
+    class FakeBrowserGuard:
+        def __init__(self, _session, _router):
+            pass
+
+        def start(self):
+            return None
+
+        def begin_abort(self):
+            return None
+
+        def finish_abort(self):
+            return None
+
+    monkeypatch.setattr(
+        acquisition_module,
+        "validate_default_playwright_driver_once",
+        lambda: {"test_fixture": True},
+    )
+    monkeypatch.setattr(
+        acquisition_module,
+        "launch_production_browser",
+        lambda _playwright, **_kwargs: (
+            FakeBrowser(),
+            {"launch_profile": "production-fail-closed"},
+        ),
+    )
+    monkeypatch.setattr(acquisition_module, "RecursiveCdpTargetRouter", FakeRouter)
+    monkeypatch.setattr(acquisition_module, "BrowserSharedWorkerGuard", FakeBrowserGuard)
     return acquisition_module._catalogue_boundary_navigation_pass(
         "example.com",
         deadline=acquisition_module.time.monotonic() + 1,
@@ -4814,19 +5207,231 @@ def _run_navigation_pass_with_primary_redirect(target_url: str):
     )
 
 
-def test_navigation_pass_aborts_then_requests_a_pin_for_primary_subdomain_redirect():
+def test_navigation_pass_aborts_then_requests_a_pin_for_primary_subdomain_redirect(
+    monkeypatch: pytest.MonkeyPatch,
+):
     with pytest.raises(acquisition_module._NavigationPinExpansion) as captured:
-        _run_navigation_pass_with_primary_redirect("https://news.example.com/article")
+        _run_navigation_pass_with_primary_redirect(
+            "https://news.example.com/article",
+            monkeypatch,
+        )
 
     assert captured.value.origins == ("https://news.example.com",)
 
 
-def test_navigation_pass_retains_out_of_boundary_redirect_as_explicit_policy_rejection():
+def test_navigation_pass_retains_out_of_boundary_redirect_as_explicit_policy_rejection(
+    monkeypatch: pytest.MonkeyPatch,
+):
     with pytest.raises(
         TerminalProbePolicyError,
         match="document navigation left the allowed HTTPS candidate-domain boundary",
     ):
-        _run_navigation_pass_with_primary_redirect("https://example.net/")
+        _run_navigation_pass_with_primary_redirect("https://example.net/", monkeypatch)
+
+
+def test_content_type_probe_validates_then_uses_central_browser_launch(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    class FakePlaywrightError(Exception):
+        pass
+
+    class FakeLocator:
+        def inner_text(self, **_kwargs):
+            return "ordinary page"
+
+        def count(self):
+            return 0
+
+    class FakePage:
+        url = "https://example.com/article"
+
+        def __init__(self, context, session):
+            self.context = context
+            self.session = session
+            self.main_frame = object()
+
+        def goto(self, *_args, **_kwargs):
+            request = SimpleNamespace(
+                method="GET",
+                url=self.url,
+                frame=self.main_frame,
+                is_navigation_request=lambda: True,
+            )
+            route = SimpleNamespace(
+                request=request,
+                abort=lambda *_args: pytest.fail("root document route was aborted"),
+                continue_=lambda: None,
+            )
+            self.context.route_handler(route)
+            self.session.handlers["Fetch.requestPaused"](
+                {
+                    "requestId": "root-document",
+                    "request": {"method": "GET", "url": self.url},
+                    "resourceType": "Document",
+                    "frameId": "root-frame",
+                }
+            )
+            return SimpleNamespace(
+                status=200,
+                headers={"content-type": "text/html; charset=utf-8"},
+            )
+
+        def title(self):
+            return "Example"
+
+        def locator(self, _selector):
+            return FakeLocator()
+
+        def close(self):
+            return None
+
+    class FakeContext:
+        def __init__(self):
+            self.session = SimpleNamespace(handlers={}, commands=[])
+
+            def on(event, handler):
+                self.session.handlers[event] = handler
+
+            def send(command, parameters=None):
+                self.session.commands.append((command, parameters))
+                if command == "Page.getFrameTree":
+                    return {"frameTree": {"frame": {"id": "root-frame"}}}
+                return {}
+
+            self.session.on = on
+            self.session.send = send
+
+        def route(self, _pattern, _handler):
+            self.route_handler = _handler
+
+        def new_page(self):
+            return FakePage(self, self.session)
+
+        def new_cdp_session(self, _page):
+            return self.session
+
+        def close(self):
+            return None
+
+    class FakeBrowser:
+        version = "143.0.7499.4"
+
+        def new_context(self, **options):
+            observed.append(("context-options", options))
+            return FakeContext()
+
+        def close(self):
+            return None
+
+    observed = []
+
+    class FakeManager:
+        def __enter__(self):
+            observed.append(
+                ("driver-enter", os.environ.get(playwright_driver.OWNERSHIP_MARKER_NAME))
+            )
+
+            def launch(**kwargs):
+                observed.append(("browser-env", kwargs["env"]))
+                observed.append(("browser-executable", kwargs["executable_path"]))
+                observed.append(("browser-args", kwargs["args"]))
+                return FakeBrowser()
+
+            return SimpleNamespace(chromium=SimpleNamespace(launch=launch))
+
+        def __exit__(self, *_args):
+            return None
+
+    sync_api = ModuleType("playwright.sync_api")
+    sync_api.Error = FakePlaywrightError  # type: ignore[attr-defined]
+    sync_api.sync_playwright = FakeManager  # type: ignore[attr-defined]
+    playwright = ModuleType("playwright")
+    playwright.sync_api = sync_api  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "playwright", playwright)
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", sync_api)
+    monkeypatch.setattr(
+        acquisition_module,
+        "validate_default_playwright_driver_once",
+        lambda: observed.append(("validated", True)),
+    )
+
+    def launch_production(_playwright, *, approved_origins, origin_ip_pins):
+        observed.append(
+            (
+                "browser-launch",
+                tuple(approved_origins),
+                dict(origin_ip_pins),
+            )
+        )
+        return FakeBrowser(), {"launch_profile": "production-fail-closed"}
+
+    monkeypatch.setattr(
+        acquisition_module,
+        "launch_production_browser",
+        launch_production,
+    )
+    monkeypatch.setenv(playwright_driver.OWNERSHIP_MARKER_NAME, "1")
+
+    response = acquisition_module.browser_document_content_type(
+        "https://example.com/article",
+        ("https://example.com",),
+        1_000,
+        {"https://example.com": "1.1.1.1"},
+    )
+
+    assert response.status == 200
+    assert response.content_type == "text/html"
+    assert observed == [
+        ("validated", True),
+        ("driver-enter", None),
+        (
+            "browser-launch",
+            ("https://example.com",),
+            {"https://example.com": "1.1.1.1"},
+        ),
+        (
+            "context-options",
+            {
+                "ignore_https_errors": False,
+                "java_script_enabled": False,
+                "service_workers": "block",
+            },
+        ),
+    ]
+    assert os.environ[playwright_driver.OWNERSHIP_MARKER_NAME] == "1"
+
+
+def test_content_type_probe_rejects_executable_override_before_driver_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sync_api = ModuleType("playwright.sync_api")
+    sync_api.Error = RuntimeError  # type: ignore[attr-defined]
+
+    def must_not_start():
+        raise AssertionError("substituted executable reached the Playwright driver")
+
+    sync_api.sync_playwright = must_not_start  # type: ignore[attr-defined]
+    playwright = ModuleType("playwright")
+    playwright.sync_api = sync_api  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "playwright", playwright)
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", sync_api)
+    monkeypatch.setattr(
+        acquisition_module,
+        "validate_default_playwright_driver_once",
+        lambda: {"test_fixture": True},
+    )
+    monkeypatch.setenv(
+        playwright_driver.CHROMIUM_EXECUTABLE_ENVIRONMENT_VARIABLE,
+        "/tmp/substituted-chromium",
+    )
+
+    with pytest.raises(ValueError, match="PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH"):
+        acquisition_module.browser_document_content_type(
+            "https://example.com/article",
+            ("https://example.com",),
+            1_000,
+            {"https://example.com": "1.1.1.1"},
+        )
 
 
 def test_public_origin_policy_pins_public_dns_and_rejects_private_answers(

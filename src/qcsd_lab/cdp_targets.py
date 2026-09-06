@@ -1,10 +1,14 @@
 """Race-free recursive CDP instrumentation for page-related network targets.
 
-Playwright 1.52 does not expose child CDP sessions (notably dedicated workers)
-to Python, nor can its public ``CDPSession.send`` attach a top-level flattened
-``sessionId``.  This adapter therefore uses Chromium's public non-flat target
-transport recursively.  Every child starts paused, acknowledges the complete
-Network/Fetch/recursion setup, and only then resumes.
+The image-level Playwright ownership patch prevents Playwright's private CDP
+clients from attaching iframe, dedicated-worker, or shared-worker targets.
+QCSD then owns every resume decision.  Page-related targets use Chromium's
+public non-flat target transport recursively.  A separate browser-session
+guard holds browser-level shared workers paused while the page transport adopts
+them non-flat. The same public browser session discovers page targets and
+rejects any sibling popup in the root context. Every child acknowledges its
+complete Network/Fetch/recursion setup and exact bootstrap-request ownership
+before it resumes.
 """
 
 from __future__ import annotations
@@ -14,9 +18,24 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-CDP_TARGET_INSTRUMENTATION_POLICY = (
-    "playwright-1.52-public-cdp-recursive-non-flat-paused-debugger-targets-v3"
+from .browser_egress import (
+    NON_REPLAYABLE_EGRESS_POLICY,
+    POPUP_GUARD_MARKER,
+    POPUP_NAVIGATION_API,
+    TARGET_EGRESS_BINDING,
+    TARGET_EGRESS_SHIM_SCHEMA_VERSION,
+    target_egress_apis,
+    target_egress_shim_source,
+    validate_target_egress_shim_result,
 )
+
+CDP_TARGET_INSTRUMENTATION_POLICY = (
+    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v10"
+)
+BOOTSTRAP_PREARM_SUMMARY_SCHEMA_VERSION = 1
+EGRESS_PREARM_SUMMARY_SCHEMA_VERSION = 2
+_BOOTSTRAP_WORKER_TYPES = ("worker", "shared_worker")
+_BOOTSTRAP_OWNER_TYPES = ("page", "iframe", "worker", "shared_worker")
 _ALLOWED_CHILD_TARGET_TYPES = frozenset({"iframe", "shared_worker", "worker"})
 _FORWARDED_METHODS = frozenset(
     {
@@ -29,6 +48,26 @@ _FORWARDED_METHODS = frozenset(
         "Network.responseReceived",
     }
 )
+_NON_REPLAYABLE_NETWORK_EVENTS = frozenset(
+    {
+        "Network.webSocketCreated",
+        "Network.webSocketWillSendHandshakeRequest",
+        "Network.webSocketHandshakeResponseReceived",
+        "Network.webSocketFrameSent",
+        "Network.webTransportCreated",
+        "Network.webTransportConnectionEstablished",
+        "Network.directTCPSocketCreated",
+        "Network.directTCPSocketOpened",
+        "Network.directTCPSocketChunkSent",
+        "Network.directUDPSocketCreated",
+        "Network.directUDPSocketOpened",
+        "Network.directUDPSocketChunkSent",
+    }
+)
+_NON_REPLAYABLE_RUNTIME_EVENTS = frozenset({"Runtime.bindingCalled"})
+_NON_REPLAYABLE_EGRESS_EVENTS = (
+    _NON_REPLAYABLE_NETWORK_EVENTS | _NON_REPLAYABLE_RUNTIME_EVENTS
+)
 _TARGET_LIFECYCLE_METHODS = frozenset(
     {
         "Inspector.targetCrashed",
@@ -38,9 +77,7 @@ _TARGET_LIFECYCLE_METHODS = frozenset(
         "Target.targetInfoChanged",
     }
 )
-_EMPTY_RESULT_POLICY_COMMANDS = frozenset(
-    {"Fetch.continueRequest", "Fetch.failRequest"}
-)
+_EMPTY_RESULT_POLICY_COMMANDS = frozenset({"Fetch.continueRequest", "Fetch.failRequest"})
 _BASE_SETUP_COMMANDS = (
     # Network.Initiator.stack is populated for script-created requests only
     # when the Debugger domain was enabled before the relevant script ran.
@@ -48,6 +85,8 @@ _BASE_SETUP_COMMANDS = (
     ("Network.enable", {}),
     ("Network.setCacheDisabled", {"cacheDisabled": True}),
     ("Network.setBypassServiceWorker", {"bypass": True}),
+    ("Runtime.enable", {}),
+    ("Runtime.addBinding", {"name": TARGET_EGRESS_BINDING}),
 )
 _FETCH_SETUP_COMMAND = (
     "Fetch.enable",
@@ -58,16 +97,294 @@ _AUTO_ATTACH_COMMAND = (
     {"autoAttach": True, "waitForDebuggerOnStart": True, "flatten": False},
 )
 _TARGET_BARRIER_COMMAND = ("Target.getTargetInfo", {})
+_PAGE_TARGET_TYPES = frozenset({"page", "iframe"})
+
+
+def _egress_evaluate_command(target_type: str) -> tuple[str, dict[str, Any]]:
+    return (
+        "Runtime.evaluate",
+        {
+            "expression": target_egress_shim_source(target_type),
+            "returnByValue": True,
+            "awaitPromise": False,
+        },
+    )
+
+
+def _egress_new_document_command(target_type: str) -> tuple[str, dict[str, Any]]:
+    if target_type not in _PAGE_TARGET_TYPES:
+        raise ValueError("only page targets accept pre-document egress shims")
+    return (
+        "Page.addScriptToEvaluateOnNewDocument",
+        {"source": target_egress_shim_source(target_type)},
+    )
+
+
+def _popup_guard_evaluate_command() -> tuple[str, dict[str, Any]]:
+    return (
+        "Runtime.evaluate",
+        {
+            "expression": f"globalThis[{json.dumps(POPUP_GUARD_MARKER)}] === true",
+            "returnByValue": True,
+            "awaitPromise": False,
+        },
+    )
+
+
+_SHARED_WORKER_GUARD_FILTER = [
+    {"type": "shared_worker", "exclude": False},
+    # Browser-scope ``tab`` targets expose a paused creation tripwire for a
+    # newly created popup before its page target is resumed. Packet tests show
+    # that target creation itself may already perform transport I/O, so this is
+    # defence-in-depth and lifecycle evidence, never a pre-I/O claim.
+    # Do not select ``page`` here: the recursive non-flat page transport owns
+    # page/OOPIF instrumentation and every resume decision inside the root tab.
+    {"type": "tab", "exclude": False},
+    {"exclude": True},
+]
+_SHARED_WORKER_GUARD_COMMAND = (
+    "Target.setAutoAttach",
+    {
+        "autoAttach": True,
+        "waitForDebuggerOnStart": True,
+        "flatten": True,
+        "filter": _SHARED_WORKER_GUARD_FILTER,
+    },
+)
+_SHARED_WORKER_GUARD_BARRIER = ("Target.getTargets", {})
+_POPUP_TAB_LIFECYCLE_BARRIER_LIMIT = 3
+_PAGE_DISCOVERY_FILTER = [
+    {"type": "page", "exclude": False},
+    {"type": "service_worker", "exclude": False},
+    {"exclude": True},
+]
+_PAGE_DISCOVERY_COMMAND = (
+    "Target.setDiscoverTargets",
+    {"discover": True, "filter": _PAGE_DISCOVERY_FILTER},
+)
+_PAGE_DISCOVERY_DISABLE_COMMAND = (
+    "Target.setDiscoverTargets",
+    {"discover": False},
+)
 
 
 class CdpTargetIntegrityError(RuntimeError):
     """A malformed, incomplete, or uninstrumented related-target event stream."""
 
 
+def validate_bootstrap_prearm_summary(
+    value: object,
+    *,
+    require_terminal: bool,
+) -> dict[str, Any]:
+    """Validate the content-minimised shared-worker bootstrap diagnostic.
+
+    Dedicated-worker bootstraps deliberately retain their immediate-policy
+    path, so every held prearm belongs to a guarded shared worker.  Successful
+    evidence boundaries additionally require every held continue to have been
+    released after all initial setup envelopes were issued.
+    """
+
+    fields = {
+        "schema_version",
+        "held_total",
+        "released_total",
+        "pending_total",
+        "release_before_setup_envelopes_total",
+        "by_worker_type",
+    }
+    if not isinstance(value, Mapping) or set(value) != fields:
+        raise ValueError("worker-bootstrap prearm summary fields are invalid")
+    if (
+        type(value.get("schema_version")) is not int
+        or value["schema_version"] != BOOTSTRAP_PREARM_SUMMARY_SCHEMA_VERSION
+    ):
+        raise ValueError("worker-bootstrap prearm summary schema is invalid")
+    for field_name in (
+        "held_total",
+        "released_total",
+        "pending_total",
+        "release_before_setup_envelopes_total",
+    ):
+        if type(value.get(field_name)) is not int or value[field_name] < 0:
+            raise ValueError("worker-bootstrap prearm totals are invalid")
+    by_worker_type = value.get("by_worker_type")
+    if not isinstance(by_worker_type, Mapping) or set(by_worker_type) != set(
+        _BOOTSTRAP_WORKER_TYPES
+    ):
+        raise ValueError("worker-bootstrap prearm worker inventory is invalid")
+
+    held_total = 0
+    released_total = 0
+    pending_total = 0
+    released_after_total = 0
+    for worker_type in _BOOTSTRAP_WORKER_TYPES:
+        summary = by_worker_type.get(worker_type)
+        if not isinstance(summary, Mapping) or set(summary) != {
+            "held",
+            "released",
+            "pending",
+            "released_after_setup_envelopes",
+            "owner_target_types",
+        }:
+            raise ValueError("worker-bootstrap prearm per-type fields are invalid")
+        for field_name in (
+            "held",
+            "released",
+            "pending",
+            "released_after_setup_envelopes",
+        ):
+            if type(summary.get(field_name)) is not int or summary[field_name] < 0:
+                raise ValueError("worker-bootstrap prearm per-type counts are invalid")
+        owner_types = summary.get("owner_target_types")
+        if (
+            not isinstance(owner_types, Mapping)
+            or set(owner_types) != set(_BOOTSTRAP_OWNER_TYPES)
+            or any(
+                type(owner_types.get(owner_type)) is not int or owner_types[owner_type] < 0
+                for owner_type in _BOOTSTRAP_OWNER_TYPES
+            )
+        ):
+            raise ValueError("worker-bootstrap prearm owner counts are invalid")
+        held = summary["held"]
+        released = summary["released"]
+        pending = summary["pending"]
+        released_after = summary["released_after_setup_envelopes"]
+        if (
+            released > held
+            or pending != held - released
+            or released_after > released
+            or sum(owner_types.values()) != held
+        ):
+            raise ValueError("worker-bootstrap prearm counts are inconsistent")
+        if worker_type == "worker" and any(
+            (held, released, pending, released_after, *owner_types.values())
+        ):
+            raise ValueError("dedicated workers cannot use the shared-worker prearm")
+        if require_terminal and (pending or released_after != released):
+            raise ValueError("worker-bootstrap prearm did not reach a valid terminal state")
+        held_total += held
+        released_total += released
+        pending_total += pending
+        released_after_total += released_after
+    if (
+        value["held_total"] != held_total
+        or value["released_total"] != released_total
+        or value["pending_total"] != pending_total
+        or value["release_before_setup_envelopes_total"] != 0
+        or released_after_total != released_total
+    ):
+        raise ValueError("worker-bootstrap prearm aggregate is inconsistent")
+    return json.loads(json.dumps(value, sort_keys=True, separators=(",", ":")))
+
+
+def validate_egress_prearm_summary(
+    value: object,
+    *,
+    require_terminal: bool,
+) -> dict[str, Any]:
+    """Validate aggregate proof that every runnable target received its shim."""
+
+    fields = {
+        "schema_version",
+        "policy",
+        "target_total",
+        "installed_total",
+        "pending_total",
+        "popup_guard_required_total",
+        "popup_guard_installed_total",
+        "by_target_type",
+    }
+    if not isinstance(value, Mapping) or set(value) != fields:
+        raise ValueError("target egress prearm summary fields are invalid")
+    if (
+        type(value["schema_version"]) is not int
+        or value["schema_version"] != EGRESS_PREARM_SUMMARY_SCHEMA_VERSION
+        or value["policy"] != NON_REPLAYABLE_EGRESS_POLICY
+    ):
+        raise ValueError("target egress prearm summary identity is invalid")
+    for field_name in (
+        "target_total",
+        "installed_total",
+        "pending_total",
+        "popup_guard_required_total",
+        "popup_guard_installed_total",
+    ):
+        if type(value[field_name]) is not int or value[field_name] < 0:
+            raise ValueError("target egress prearm totals are invalid")
+    by_target_type = value["by_target_type"]
+    target_types = {"page", "iframe", "worker", "shared_worker"}
+    if not isinstance(by_target_type, Mapping) or set(by_target_type) != target_types:
+        raise ValueError("target egress prearm type inventory is invalid")
+    target_total = installed_total = pending_total = 0
+    for target_type in sorted(target_types):
+        item = by_target_type[target_type]
+        if not isinstance(item, Mapping) or set(item) != {
+            "target_count",
+            "installed_count",
+            "pending_count",
+            "protected_api_observations",
+            "unavailable_api_observations",
+            "popup_guard_required_count",
+            "popup_guard_installed_count",
+        }:
+            raise ValueError("target egress prearm per-type fields are invalid")
+        for field_name in (
+            "target_count",
+            "installed_count",
+            "pending_count",
+            "protected_api_observations",
+            "unavailable_api_observations",
+            "popup_guard_required_count",
+            "popup_guard_installed_count",
+        ):
+            if type(item[field_name]) is not int or item[field_name] < 0:
+                raise ValueError("target egress prearm per-type counts are invalid")
+        if (
+            item["installed_count"] > item["target_count"]
+            or item["pending_count"] != item["target_count"] - item["installed_count"]
+            or item["protected_api_observations"]
+            + item["unavailable_api_observations"]
+            != item["installed_count"] * len(target_egress_apis(target_type))
+            or item["popup_guard_required_count"]
+            != (item["target_count"] if target_type in _PAGE_TARGET_TYPES else 0)
+            or item["popup_guard_installed_count"] > item["popup_guard_required_count"]
+        ):
+            raise ValueError("target egress prearm per-type counts are inconsistent")
+        target_total += item["target_count"]
+        installed_total += item["installed_count"]
+        pending_total += item["pending_count"]
+    if (
+        target_total != value["target_total"]
+        or installed_total != value["installed_total"]
+        or pending_total != value["pending_total"]
+        or value["popup_guard_required_total"]
+        != sum(
+            by_target_type[target_type]["popup_guard_required_count"]
+            for target_type in target_types
+        )
+        or value["popup_guard_installed_total"]
+        != sum(
+            by_target_type[target_type]["popup_guard_installed_count"]
+            for target_type in target_types
+        )
+    ):
+        raise ValueError("target egress prearm aggregate is inconsistent")
+    if require_terminal and (
+        pending_total
+        or installed_total != target_total
+        or value["popup_guard_installed_total"] != value["popup_guard_required_total"]
+    ):
+        raise ValueError("target egress prearm did not reach a terminal state")
+    return json.loads(json.dumps(value, sort_keys=True, separators=(",", ":")))
+
+
 class _CdpSession(Protocol):
     def on(self, event: str, handler: Callable[[dict[str, Any]], None]) -> None: ...
 
     def send(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]: ...
+
+    def detach(self) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -85,9 +402,7 @@ class CdpTargetSource:
     def session_id(self) -> str:
         return self.session_path[-1] if self.session_path else "root"
 
-    def request_chain_key(
-        self, request_id: str
-    ) -> tuple[tuple[str, ...], str, int, str]:
+    def request_chain_key(self, request_id: str) -> tuple[tuple[str, ...], str, int, str]:
         if not isinstance(request_id, str) or not request_id:
             raise CdpTargetIntegrityError("CDP request identity is empty or malformed")
         return (self.session_path, self.target_id, self.generation, request_id)
@@ -109,6 +424,32 @@ class _ActiveRequest:
     loader_id: str | None
     frame_id: str | None
     resource_type: str | None
+    method: str | None
+    url: str | None
+
+
+@dataclass
+class _WorkerBootstrap:
+    source: CdpTargetSource | None
+    url: str
+    parent_route: tuple[str, ...]
+    parent_frame_id: str | None
+    browser_context_id: str
+    guardian_session_id: str | None = None
+    owner_source: CdpTargetSource | None = None
+    attach_requested: bool = False
+    attach_session_id: str | None = None
+    attach_command_session_id: str | None = None
+    attach_command_resolved: bool = False
+    guardian_detached: bool = False
+    initial_setup_envelopes_expected: int = 0
+    initial_setup_envelopes_issued: int = 0
+    fetch_source: CdpTargetSource | None = None
+    fetch_request_id: str | None = None
+    fetch_network_id: str | None = None
+    fetch_policy_outcome: str | None = None
+    fetch_released: bool = False
+    fetch_release_after_setup_envelopes: bool | None = None
 
 
 @dataclass
@@ -116,6 +457,13 @@ class _PendingCommand:
     label: str
     on_success: Callable[[Mapping[str, Any]], None] | None = None
     policy_decision: bool = False
+
+
+@dataclass
+class _BootstrapFetchDecision:
+    bootstrap: _WorkerBootstrap
+    prearm: bool
+    decided: bool = False
 
 
 class RecursiveCdpTargetRouter:
@@ -127,10 +475,14 @@ class RecursiveCdpTargetRouter:
         *,
         on_event: Callable[[CdpTargetSource, str, Mapping[str, Any]], None],
         on_target_activity: Callable[[CdpTargetSource, str], None] | None = None,
+        on_non_replayable_egress: (
+            Callable[[CdpTargetSource | None, str, str, object | None], None] | None
+        ) = None,
     ) -> None:
         self._session = session
         self._on_event = on_event
         self._on_target_activity = on_target_activity
+        self._on_non_replayable_egress = on_non_replayable_egress
         self._root_source: CdpTargetSource | None = None
         self._states: dict[tuple[str, ...], _TargetState] = {}
         self._target_routes: dict[str, tuple[str, ...]] = {}
@@ -139,8 +491,24 @@ class RecursiveCdpTargetRouter:
         self._next_command_id = 1
         self._failure: CdpTargetIntegrityError | None = None
         self._shutting_down = False
+        self._aborting = False
+        self._abort_finished = False
         self._target_generations: dict[str, int] = {}
         self._active_requests: dict[str, list[_ActiveRequest]] = {}
+        self._claimed_worker_bootstraps: set[tuple[CdpTargetSource, str]] = set()
+        self._root_browser_context_id: str | None = None
+        self._worker_bootstraps: dict[CdpTargetSource, _WorkerBootstrap] = {}
+        self._pending_worker_sources: set[CdpTargetSource] = set()
+        self._guarded_shared_workers: dict[str, _WorkerBootstrap] = {}
+        self._guardian_target_by_session: dict[str, str] = {}
+        self._bootstrap_fetch_by_policy_identity: dict[
+            tuple[CdpTargetSource, str], _BootstrapFetchDecision
+        ] = {}
+        self._shared_guard_registered = False
+        self._shared_guard_shutdown = False
+        self._shared_guard_finished = False
+        self._egress_shim_receipts: dict[CdpTargetSource, dict[str, Any]] = {}
+        self._popup_guard_receipts: set[CdpTargetSource] = set()
 
     @property
     def active_request_identities(self) -> tuple[tuple[CdpTargetSource, str], ...]:
@@ -168,6 +536,143 @@ class RecursiveCdpTargetRouter:
             raise CdpTargetIntegrityError("CDP target instrumentation has not started")
         return self._root_source
 
+    @property
+    def root_browser_context_id(self) -> str:
+        """Return the exact incognito context containing the observed page."""
+
+        if self._root_browser_context_id is None:
+            raise CdpTargetIntegrityError("root CDP browser-context identity is unavailable")
+        return self._root_browser_context_id
+
+    @property
+    def bootstrap_prearm_summary(self) -> dict[str, Any]:
+        """Return aggregate evidence for race-free worker-bootstrap release.
+
+        The diagnostic deliberately excludes URLs and protocol identities.  A
+        fresh mapping is returned on every access so callers cannot mutate the
+        router's state.
+        """
+
+        by_worker_type: dict[str, dict[str, Any]] = {}
+        bootstraps = {
+            "worker": [
+                bootstrap
+                for source, bootstrap in self._worker_bootstraps.items()
+                if source.target_type == "worker"
+            ],
+            "shared_worker": list(self._guarded_shared_workers.values()),
+        }
+        for worker_type in _BOOTSTRAP_WORKER_TYPES:
+            held = [
+                bootstrap
+                for bootstrap in bootstraps[worker_type]
+                if bootstrap.fetch_policy_outcome == "continue"
+            ]
+            released = [bootstrap for bootstrap in held if bootstrap.fetch_released]
+            by_worker_type[worker_type] = {
+                "held": len(held),
+                "released": len(released),
+                "pending": len(held) - len(released),
+                "released_after_setup_envelopes": sum(
+                    bootstrap.fetch_release_after_setup_envelopes is True for bootstrap in released
+                ),
+                "owner_target_types": {
+                    owner_type: sum(
+                        bootstrap.fetch_source is not None
+                        and bootstrap.fetch_source.target_type == owner_type
+                        for bootstrap in held
+                    )
+                    for owner_type in _BOOTSTRAP_OWNER_TYPES
+                },
+            }
+        held_total = sum(value["held"] for value in by_worker_type.values())
+        released_total = sum(value["released"] for value in by_worker_type.values())
+        return {
+            "schema_version": BOOTSTRAP_PREARM_SUMMARY_SCHEMA_VERSION,
+            "held_total": held_total,
+            "released_total": released_total,
+            "pending_total": held_total - released_total,
+            "release_before_setup_envelopes_total": sum(
+                bootstrap.fetch_release_after_setup_envelopes is False
+                for values in bootstraps.values()
+                for bootstrap in values
+                if bootstrap.fetch_released
+            ),
+            "by_worker_type": by_worker_type,
+        }
+
+    @property
+    def egress_prearm_summary(self) -> dict[str, Any]:
+        """Return aggregate proof that each observed target was shimmed before resume."""
+
+        by_target_type: dict[str, dict[str, int]] = {}
+        # Targets that detached or were positively resumed only for disposal
+        # before completing setup never ran accepted author code.  Retain every
+        # target that produced a receipt, plus every still-live target whose
+        # prearm remains an obligation.
+        states = tuple(
+            state
+            for state in self._states.values()
+            if state.source in self._egress_shim_receipts
+            or state.phase not in {"closing", "destroyed", "detached"}
+        )
+        for target_type in ("page", "iframe", "worker", "shared_worker"):
+            sources = [state.source for state in states if state.target_type == target_type]
+            receipts = [
+                self._egress_shim_receipts[source]
+                for source in sources
+                if source in self._egress_shim_receipts
+            ]
+            by_target_type[target_type] = {
+                "target_count": len(sources),
+                "installed_count": len(receipts),
+                "pending_count": len(sources) - len(receipts),
+                "protected_api_observations": sum(
+                    len(receipt["protected_apis"]) for receipt in receipts
+                ),
+                "unavailable_api_observations": sum(
+                    len(receipt["unavailable_apis"]) for receipt in receipts
+                ),
+                "popup_guard_required_count": (
+                    len(sources) if target_type in _PAGE_TARGET_TYPES else 0
+                ),
+                "popup_guard_installed_count": sum(
+                    source in self._popup_guard_receipts for source in sources
+                ),
+            }
+        target_total = sum(item["target_count"] for item in by_target_type.values())
+        installed_total = sum(item["installed_count"] for item in by_target_type.values())
+        popup_guard_required_total = sum(
+            item["popup_guard_required_count"] for item in by_target_type.values()
+        )
+        popup_guard_installed_total = sum(
+            item["popup_guard_installed_count"] for item in by_target_type.values()
+        )
+        return {
+            "schema_version": EGRESS_PREARM_SUMMARY_SCHEMA_VERSION,
+            "policy": NON_REPLAYABLE_EGRESS_POLICY,
+            "target_total": target_total,
+            "installed_total": installed_total,
+            "pending_total": target_total - installed_total,
+            "popup_guard_required_total": popup_guard_required_total,
+            "popup_guard_installed_total": popup_guard_installed_total,
+            "by_target_type": by_target_type,
+        }
+
+    @property
+    def shutdown_ready(self) -> bool:
+        """Whether the router can enter its fail-closed context-disposal boundary."""
+
+        self.raise_if_failed()
+        egress = self.egress_prearm_summary
+        return (
+            self._root_source is not None
+            and self._shared_guard_registered
+            and not self._shutting_down
+            and egress["pending_total"] == 0
+            and not self._has_pending_shutdown_work()
+        )
+
     def start(self) -> CdpTargetSource:
         """Install root handlers and finish root setup before page navigation."""
 
@@ -180,13 +685,20 @@ class RecursiveCdpTargetRouter:
                     lambda event, forwarded=method: self._handle_root_event(forwarded, event)
                 ),
             )
+        for method in _NON_REPLAYABLE_EGRESS_EVENTS:
+            self._session.on(
+                method,
+                self._guard(
+                    lambda event, egress_method=method: self._handle_non_replayable_egress(
+                        self.root_source, egress_method, event
+                    )
+                ),
+            )
         for method in _TARGET_LIFECYCLE_METHODS:
             self._session.on(
                 method,
                 self._guard(
-                    lambda event, lifecycle=method: self._target_lifecycle_event(
-                        lifecycle, event
-                    )
+                    lambda event, lifecycle=method: self._target_lifecycle_event(lifecycle, event)
                 ),
             )
         self._session.on(
@@ -207,15 +719,31 @@ class RecursiveCdpTargetRouter:
             raise CdpTargetIntegrityError("root CDP target identity response is malformed")
         target_id = target_info.get("targetId")
         target_type = target_info.get("type")
-        if not isinstance(target_id, str) or not target_id or target_type != "page":
+        browser_context_id = target_info.get("browserContextId")
+        if (
+            not isinstance(target_id, str)
+            or not target_id
+            or target_type != "page"
+            or not isinstance(browser_context_id, str)
+            or not browser_context_id
+        ):
             raise CdpTargetIntegrityError("root CDP target is not an identified page")
         source = CdpTargetSource((), target_id, "page", 0, None, None)
         self._root_source = source
+        self._root_browser_context_id = browser_context_id
         self._states[()] = _TargetState(source, "page", "ready")
         self._target_routes[target_id] = ()
 
-        for method, params in (*_BASE_SETUP_COMMANDS, _FETCH_SETUP_COMMAND, _AUTO_ATTACH_COMMAND):
+        for method, params in _BASE_SETUP_COMMANDS:
             self._root_send(method, dict(params))
+        page_init = self._root_send(*_egress_new_document_command("page"))
+        self._validate_page_init_result(page_init)
+        evaluation = self._root_send(*_egress_evaluate_command("page"))
+        self._record_egress_evaluation(source, evaluation)
+        popup_evaluation = self._root_send(*_popup_guard_evaluate_command())
+        self._record_popup_guard_evaluation(source, popup_evaluation)
+        self._root_send(*_FETCH_SETUP_COMMAND)
+        self._root_send(*_AUTO_ATTACH_COMMAND)
         # Chromium's auto-attach command has historically returned before all
         # existing related targets were reported. A following target query is
         # the explicit protocol barrier used by Playwright itself.
@@ -225,10 +753,358 @@ class RecursiveCdpTargetRouter:
             not isinstance(barrier_info, Mapping)
             or barrier_info.get("targetId") != target_id
             or barrier_info.get("type") != "page"
+            or barrier_info.get("browserContextId") != browser_context_id
         ):
             raise CdpTargetIntegrityError("root CDP auto-attach barrier changed target identity")
         self.raise_if_failed()
         return source
+
+    def register_shared_worker_guard(self) -> None:
+        """Bind the one browser-level shared-worker guard to this router."""
+
+        self.raise_if_failed()
+        if self._root_source is None:
+            raise CdpTargetIntegrityError("shared-worker guard started before root instrumentation")
+        if self._shared_guard_registered:
+            raise CdpTargetIntegrityError("shared-worker guard was registered more than once")
+        if self._shutting_down:
+            raise CdpTargetIntegrityError("shared-worker guard started during shutdown")
+        self._shared_guard_registered = True
+
+    @staticmethod
+    def _validate_page_init_result(result: Mapping[str, Any]) -> None:
+        identifier = result.get("identifier")
+        if not isinstance(identifier, str) or not identifier:
+            raise CdpTargetIntegrityError(
+                "CDP pre-document egress shim returned no script identifier"
+            )
+
+    def _record_egress_evaluation(
+        self,
+        source: CdpTargetSource,
+        result: Mapping[str, Any],
+    ) -> None:
+        if result.get("exceptionDetails") is not None:
+            raise CdpTargetIntegrityError("CDP target egress shim evaluation threw")
+        remote = result.get("result")
+        if not isinstance(remote, Mapping) or remote.get("type") != "object":
+            raise CdpTargetIntegrityError("CDP target egress shim result is malformed")
+        try:
+            receipt = validate_target_egress_shim_result(
+                remote.get("value"), target_type=source.target_type
+            )
+        except ValueError as error:
+            raise CdpTargetIntegrityError("CDP target egress shim receipt is invalid") from error
+        # Page/frame realms are protected first by the context init script so
+        # sibling popups cannot execute before browser-target rejection.  The
+        # CDP evaluation must therefore observe that exact idempotent receipt;
+        # workers have no context init script and must be first-installed while
+        # still paused for debugging.
+        expected_already_installed = source.target_type in _PAGE_TARGET_TYPES
+        if receipt["already_installed"] is not expected_already_installed:
+            raise CdpTargetIntegrityError(
+                "CDP target egress shim installation order differs from policy"
+            )
+        if source in self._egress_shim_receipts:
+            raise CdpTargetIntegrityError("CDP target egress shim receipt was reused")
+        self._egress_shim_receipts[source] = receipt
+
+    def _record_popup_guard_evaluation(
+        self,
+        source: CdpTargetSource,
+        result: Mapping[str, Any],
+    ) -> None:
+        if source.target_type not in _PAGE_TARGET_TYPES:
+            raise CdpTargetIntegrityError("non-page target reported a popup guard")
+        if result.get("exceptionDetails") is not None:
+            raise CdpTargetIntegrityError("CDP popup-guard marker evaluation threw")
+        remote = result.get("result")
+        if (
+            not isinstance(remote, Mapping)
+            or remote.get("type") != "boolean"
+            or remote.get("value") is not True
+            or source in self._popup_guard_receipts
+        ):
+            raise CdpTargetIntegrityError(
+                "CDP target did not prove its context-init popup guard"
+            )
+        self._popup_guard_receipts.add(source)
+
+    def _handle_non_replayable_egress(
+        self,
+        source: CdpTargetSource,
+        method: str,
+        event: Mapping[str, Any],
+    ) -> None:
+        """Consume a constructor binding or a post-construction Network tripwire."""
+
+        if method == "Runtime.bindingCalled":
+            if event.get("name") != TARGET_EGRESS_BINDING:
+                raise CdpTargetIntegrityError("CDP Runtime binding event changed identity")
+            payload = event.get("payload")
+            if not isinstance(payload, str):
+                raise CdpTargetIntegrityError("CDP egress binding payload is malformed")
+            try:
+                decoded = json.loads(payload)
+            except (TypeError, ValueError, json.JSONDecodeError) as error:
+                raise CdpTargetIntegrityError("CDP egress binding payload is not JSON") from error
+            if not isinstance(decoded, Mapping) or set(decoded) != {
+                "schema_version",
+                "policy",
+                "kind",
+                "api",
+            }:
+                raise CdpTargetIntegrityError("CDP egress binding payload fields are invalid")
+            api = decoded.get("api")
+            if (
+                type(decoded.get("schema_version")) is not int
+                or decoded.get("schema_version") != TARGET_EGRESS_SHIM_SCHEMA_VERSION
+                or decoded.get("policy") != NON_REPLAYABLE_EGRESS_POLICY
+                or decoded.get("kind") != "attempt"
+                or api
+                not in (
+                    {*target_egress_apis(source.target_type), POPUP_NAVIGATION_API}
+                    if source.target_type in _PAGE_TARGET_TYPES
+                    else set(target_egress_apis(source.target_type))
+                )
+            ):
+                raise CdpTargetIntegrityError("CDP egress binding payload is invalid")
+            mechanism = (
+                "context-init-popup-guard"
+                if api == POPUP_NAVIGATION_API
+                else "paused-target-runtime-shim"
+            )
+            url: object | None = None
+        elif method in _NON_REPLAYABLE_NETWORK_EVENTS:
+            api_by_method = {
+                "Network.webSocketCreated": "WebSocket",
+                "Network.webSocketWillSendHandshakeRequest": "WebSocket",
+                "Network.webSocketHandshakeResponseReceived": "WebSocket",
+                "Network.webSocketFrameSent": "WebSocket",
+                "Network.webTransportCreated": "WebTransport",
+                "Network.webTransportConnectionEstablished": "WebTransport",
+                "Network.directTCPSocketCreated": "TCPSocket",
+                "Network.directTCPSocketOpened": "TCPSocket",
+                "Network.directTCPSocketChunkSent": "TCPSocket",
+                "Network.directUDPSocketCreated": "UDPSocket",
+                "Network.directUDPSocketOpened": "UDPSocket",
+                "Network.directUDPSocketChunkSent": "UDPSocket",
+            }
+            api = api_by_method[method]
+            mechanism = "cdp-network-tripwire"
+            url = event.get("url") if method.endswith("Created") else None
+        else:
+            raise CdpTargetIntegrityError("unsupported non-replayable CDP egress event")
+        if self._on_non_replayable_egress is None:
+            raise CdpTargetIntegrityError(
+                f"non-replayable browser egress reached an unguarded router: {api}"
+            )
+        self._on_non_replayable_egress(source, str(api), mechanism, url)
+
+    def browser_service_worker_attempt(self, url: object) -> None:
+        """Record browser-scope service-worker creation as typed egress."""
+
+        if self._on_non_replayable_egress is None:
+            raise CdpTargetIntegrityError(
+                "service-worker target reached an unguarded browser context"
+            )
+        self._on_non_replayable_egress(
+            None,
+            "ServiceWorker",
+            "browser-service-worker-tripwire",
+            url,
+        )
+
+    def browser_popup_tab_attempt(self, url: object) -> None:
+        """Send a popup-tab tripwire through the content-minimising callback."""
+
+        if self._on_non_replayable_egress is None:
+            raise CdpTargetIntegrityError(
+                "popup tab reached an unguarded browser context"
+            )
+        self._on_non_replayable_egress(
+            None,
+            POPUP_NAVIGATION_API,
+            "browser-popup-tab-tripwire",
+            url,
+        )
+
+    def browser_target_info_changed(self, info: Mapping[str, Any]) -> None:
+        """Record a browser-session root-page info change in the quiet ledger."""
+
+        root = self.root_source
+        if (
+            info.get("targetId") != root.target_id
+            or info.get("type") != "page"
+            or info.get("browserContextId") != self.root_browser_context_id
+        ):
+            raise CdpTargetIntegrityError("browser root target-info update changed identity")
+        self._notify_target_activity(root, "target-info-changed")
+
+    def adopt_guarded_shared_worker(self, event: Mapping[str, Any]) -> None:
+        """Validate a paused browser attachment and adopt it on the page transport.
+
+        Chromium exposes shared workers only at browser scope.  The browser
+        guard owns the flattened debugger hold, while this method creates the
+        independently routable non-flat page session used for all policy and
+        evidence commands.  The worker is not resumed until its exact root
+        Script occurrence has also been bound.
+        """
+
+        self.raise_if_failed()
+        if not self._shared_guard_registered or self._shared_guard_finished:
+            raise CdpTargetIntegrityError(
+                "shared-worker attachment arrived without an active browser guard"
+            )
+        guardian_session_id = event.get("sessionId")
+        target_info = event.get("targetInfo")
+        if (
+            not isinstance(guardian_session_id, str)
+            or not guardian_session_id
+            or not isinstance(target_info, Mapping)
+            or event.get("waitingForDebugger") is not True
+        ):
+            raise CdpTargetIntegrityError(
+                "browser shared-worker attachment is malformed or unpaused"
+            )
+        target_id = target_info.get("targetId")
+        target_type = target_info.get("type")
+        url = target_info.get("url")
+        browser_context_id = target_info.get("browserContextId")
+        if (
+            not isinstance(target_id, str)
+            or not target_id
+            or target_type != "shared_worker"
+            or not isinstance(url, str)
+            or not url
+            or not isinstance(browser_context_id, str)
+            or browser_context_id != self.root_browser_context_id
+            or target_info.get("attached") is not True
+        ):
+            raise CdpTargetIntegrityError(
+                "browser shared-worker target identity, URL, or context is invalid"
+            )
+        if (
+            guardian_session_id in self._guardian_target_by_session
+            or target_id in self._guarded_shared_workers
+            or target_id in self._target_routes
+        ):
+            raise CdpTargetIntegrityError(
+                "browser shared-worker target/session identity was reused"
+            )
+        bootstrap = _WorkerBootstrap(
+            source=None,
+            url=url,
+            parent_route=(),
+            parent_frame_id=None,
+            browser_context_id=browser_context_id,
+            guardian_session_id=guardian_session_id,
+        )
+        self._guarded_shared_workers[target_id] = bootstrap
+        self._guardian_target_by_session[guardian_session_id] = target_id
+        self._bind_bootstrap_owner(target_id, bootstrap, shared=True)
+        if bootstrap.owner_source is not None or self._shutting_down:
+            self._request_guarded_shared_worker_attach(target_id, bootstrap)
+
+    def guarded_shared_worker_detached(self, event: Mapping[str, Any]) -> None:
+        """Validate termination of the browser-level flattened guardian session."""
+
+        if not self._aborting:
+            self.raise_if_failed()
+        session_id = event.get("sessionId")
+        target_id = event.get("targetId")
+        if not isinstance(session_id, str) or not session_id:
+            raise CdpTargetIntegrityError(
+                "browser shared-worker detach omitted its guardian session"
+            )
+        expected_target = self._guardian_target_by_session.get(session_id)
+        if (
+            expected_target is None
+            or not isinstance(target_id, str)
+            or target_id != expected_target
+        ):
+            raise CdpTargetIntegrityError(
+                "browser shared-worker detach changed or reused target identity"
+            )
+        bootstrap = self._guarded_shared_workers[target_id]
+        if bootstrap.guardian_detached:
+            raise CdpTargetIntegrityError("browser shared-worker guardian detached more than once")
+        bootstrap.guardian_detached = True
+        self._guardian_target_by_session.pop(session_id, None)
+        if (
+            bootstrap.fetch_policy_outcome == "continue"
+            and not bootstrap.fetch_released
+            and not self._aborting
+        ):
+            raise CdpTargetIntegrityError(
+                "browser shared worker detached with a held bootstrap request"
+            )
+        if (
+            bootstrap.source is None
+            and bootstrap.fetch_policy_outcome != "fail"
+            and not self._shutting_down
+        ):
+            raise CdpTargetIntegrityError(
+                "browser shared worker detached before guarded adoption completed"
+            )
+
+    def begin_shared_worker_guard_shutdown(self) -> None:
+        """Bind the guard's shutdown boundary to the router shutdown boundary."""
+
+        self.raise_if_failed()
+        if not self._shared_guard_registered or self._shared_guard_shutdown:
+            raise CdpTargetIntegrityError("shared-worker guard shutdown is missing or repeated")
+        if not self._shutting_down:
+            raise CdpTargetIntegrityError("shared-worker guard shut down before the target router")
+        self._shared_guard_shutdown = True
+
+    def begin_shared_worker_guard_abort(self) -> None:
+        """Bind exceptional guard cleanup to an already-declared router abort."""
+
+        if not self._shared_guard_registered or self._shared_guard_shutdown:
+            raise CdpTargetIntegrityError("shared-worker guard abort is missing or repeated")
+        if not self._shutting_down or not self._aborting:
+            raise CdpTargetIntegrityError("shared-worker guard aborted before the target router")
+        self._shared_guard_shutdown = True
+
+    def finish_shared_worker_guard(self) -> None:
+        """Prove every browser-level guardian reached a terminal detach."""
+
+        self.raise_if_failed()
+        if self._aborting:
+            raise CdpTargetIntegrityError("normal shared-worker guard finish was used during abort")
+        if not self._shared_guard_shutdown or self._shared_guard_finished:
+            raise CdpTargetIntegrityError(
+                "shared-worker guard finished without one deliberate shutdown"
+            )
+        unresolved = [
+            target_id
+            for target_id, bootstrap in self._guarded_shared_workers.items()
+            if not bootstrap.guardian_detached
+        ]
+        if unresolved or self._guardian_target_by_session:
+            raise CdpTargetIntegrityError(
+                "browser shared-worker guardian sessions remain unresolved"
+            )
+        self._shared_guard_finished = True
+
+    def finish_shared_worker_guard_abort(self) -> None:
+        """Retire guardian sessions after the complete context was disposed.
+
+        ``BrowserContext.close()`` is the exceptional-disposal barrier. CDP is
+        not required to report every target detach before it returns, so an
+        abort locally retires remaining guardian identities. This deliberately
+        cannot satisfy the strict successful finish above.
+        """
+
+        if not self._aborting or not self._shared_guard_shutdown or self._shared_guard_finished:
+            raise CdpTargetIntegrityError(
+                "shared-worker guard abort finished without context disposal"
+            )
+        for bootstrap in self._guarded_shared_workers.values():
+            bootstrap.guardian_detached = True
+        self._guardian_target_by_session.clear()
+        self._shared_guard_finished = True
 
     def send(
         self,
@@ -256,16 +1132,39 @@ class RecursiveCdpTargetRouter:
             raise CdpTargetIntegrityError(
                 f"cannot send {label} to an unready or detached CDP target"
             )
-        if not source.session_path:
-            self._root_send(method, dict(params))
-            return
-        self._queue_command(
-            source,
-            method,
-            dict(params),
-            label=label,
-            policy_decision=True,
+        parameters = dict(params)
+        request_id = parameters.get("requestId")
+        bootstrap_decision = (
+            self._bootstrap_fetch_by_policy_identity.get((source, request_id))
+            if isinstance(request_id, str)
+            else None
         )
+        if bootstrap_decision is not None:
+            if bootstrap_decision.decided:
+                raise CdpTargetIntegrityError(
+                    "worker-bootstrap Fetch policy was decided more than once"
+                )
+            bootstrap_decision.decided = True
+            bootstrap = bootstrap_decision.bootstrap
+            if not bootstrap_decision.prearm:
+                self._send_policy_decision(source, method, parameters, label=label)
+                return
+            if bootstrap.fetch_policy_outcome is not None:
+                raise CdpTargetIntegrityError(
+                    "worker-bootstrap prearm policy was decided more than once"
+                )
+            if method == "Fetch.failRequest":
+                bootstrap.fetch_policy_outcome = "fail"
+                self._send_policy_decision(source, method, parameters, label=label)
+                return
+            if set(parameters) != {"requestId"}:
+                raise CdpTargetIntegrityError(
+                    "worker-bootstrap continue command changed its exact request"
+                )
+            bootstrap.fetch_policy_outcome = "continue"
+            self._maybe_release_bootstrap_continue(bootstrap)
+            return
+        self._send_policy_decision(source, method, parameters, label=label)
 
     def begin_shutdown(self) -> None:
         """Freeze target creation after all setup/policy commands are acknowledged.
@@ -278,13 +1177,30 @@ class RecursiveCdpTargetRouter:
         self.raise_if_failed()
         if self._shutting_down:
             raise CdpTargetIntegrityError("CDP target shutdown started more than once")
-        if any(command.policy_decision for command in self._pending.values()) or any(
-            state.phase not in {"ready", "detached", "destroyed"}
-            for state in self._states.values()
-        ):
+        if not self._shared_guard_registered:
             raise CdpTargetIntegrityError(
-                "CDP target shutdown began with setup or policy commands pending"
+                "CDP target shutdown began without the browser shared-worker guard"
             )
+        if self._has_pending_shutdown_work():
+            raise CdpTargetIntegrityError(
+                "CDP target shutdown began with setup, ownership, adoption, "
+                "bootstrap prearm, or policy commands pending"
+            )
+        self._shutting_down = True
+
+    def begin_abort(self) -> None:
+        """Begin exceptional disposal after an acquisition was rejected.
+
+        Unlike normal shutdown this permits setup, policy, ownership, and
+        shared-worker prearm work to remain pending. It is usable only with the
+        separate abort finish after the browser context has been disposed.
+        """
+
+        if self._shutting_down or self._abort_finished:
+            raise CdpTargetIntegrityError("CDP target abort started more than once")
+        if self._root_source is None or not self._shared_guard_registered:
+            raise CdpTargetIntegrityError("CDP target abort began before complete root/guard setup")
+        self._aborting = True
         self._shutting_down = True
 
     def raise_if_failed(self) -> None:
@@ -295,15 +1211,20 @@ class RecursiveCdpTargetRouter:
         """Prove no child escaped setup and no target/protocol work remains pending."""
 
         self.raise_if_failed()
+        validate_egress_prearm_summary(self.egress_prearm_summary, require_terminal=True)
+        if self._aborting:
+            raise CdpTargetIntegrityError("normal CDP target finish was used during abort")
         if not self._shutting_down:
             raise CdpTargetIntegrityError(
                 "CDP target instrumentation finished without a deliberate context shutdown"
             )
+        if not self._shared_guard_finished:
+            raise CdpTargetIntegrityError(
+                "CDP target instrumentation finished before its shared-worker guard"
+            )
         if self._pending:
             labels = ", ".join(sorted(command.label for command in self._pending.values()))
-            raise CdpTargetIntegrityError(
-                f"CDP shutdown commands remain unresolved: {labels}"
-            )
+            raise CdpTargetIntegrityError(f"CDP shutdown commands remain unresolved: {labels}")
         # BrowserContext.close() is the disposal barrier. Chromium is not
         # required to deliver every descendant detach or loadingFailed event
         # before the root CDP session closes, so close any observation that was
@@ -323,11 +1244,47 @@ class RecursiveCdpTargetRouter:
             if not route and state.phase != "ready":
                 raise CdpTargetIntegrityError("root CDP target did not remain instrumented")
 
-    def _guard(
-        self, handler: Callable[[dict[str, Any]], None]
-    ) -> Callable[[dict[str, Any]], None]:
+    def finish_abort(self) -> None:
+        """Retire rejected observations after ``BrowserContext.close()``.
+
+        No graph can be built from this state. Outstanding commands and target
+        identities are cancelled only at that explicit disposal boundary; the
+        original failure remains recorded and this path cannot become a normal
+        successful :meth:`finish`.
+        """
+
+        if (
+            not self._aborting
+            or not self._shutting_down
+            or not self._shared_guard_finished
+            or self._abort_finished
+        ):
+            raise CdpTargetIntegrityError(
+                "CDP target abort finished without complete context disposal"
+            )
+        for state in self._states.values():
+            for request_id in tuple(state.active_request_ids):
+                self._terminalise_request(
+                    state.source,
+                    request_id,
+                    # The rejected audit is already frozen. Abort retirement
+                    # cannot publish synthetic evidence into it.
+                    synthetic_shutdown=False,
+                )
+            state.setup_pending.clear()
+            if state.source.session_path and state.phase != "destroyed":
+                state.phase = "detached"
+        self._pending.clear()
+        self._pending_worker_sources.clear()
+        self._session_routes.clear()
+        self._target_routes = {
+            self.root_source.target_id: self.root_source.session_path,
+        }
+        self._abort_finished = True
+
+    def _guard(self, handler: Callable[[dict[str, Any]], None]) -> Callable[[dict[str, Any]], None]:
         def dispatch(event: dict[str, Any]) -> None:
-            if self._failure is not None:
+            if self._failure is not None and not self._aborting:
                 return
             try:
                 handler(event)
@@ -363,12 +1320,180 @@ class RecursiveCdpTargetRouter:
             raise CdpTargetIntegrityError("CDP event named an unknown child-session route")
         return state
 
+    def _has_pending_shutdown_work(self) -> bool:
+        unresolved_guarded = any(
+            not (bootstrap.fetch_policy_outcome == "fail" and bootstrap.guardian_detached)
+            and (
+                bootstrap.source is None
+                or not bootstrap.attach_command_resolved
+                or bootstrap.attach_session_id != bootstrap.attach_command_session_id
+            )
+            for bootstrap in self._guarded_shared_workers.values()
+        )
+        unresolved_prearms = any(
+            bootstrap.fetch_policy_outcome is None
+            or (bootstrap.fetch_policy_outcome == "continue" and not bootstrap.fetch_released)
+            for bootstrap in self._guarded_shared_workers.values()
+        )
+        return (
+            any(command.policy_decision for command in self._pending.values())
+            or any(
+                state.phase not in {"ready", "detached", "destroyed"}
+                for state in self._states.values()
+            )
+            or bool(self._pending_worker_sources)
+            or unresolved_guarded
+            or unresolved_prearms
+        )
+
+    def _send_policy_decision(
+        self,
+        source: CdpTargetSource,
+        method: str,
+        params: dict[str, Any],
+        *,
+        label: str,
+    ) -> None:
+        if not source.session_path:
+            result = self._root_send(method, params)
+            if type(result) is not dict or result != {}:
+                raise CdpTargetIntegrityError(
+                    f"root CDP policy command {label} did not return an exact empty result"
+                )
+            return
+        self._queue_command(
+            source,
+            method,
+            params,
+            label=label,
+            policy_decision=True,
+        )
+
+    def _guarded_shared_bootstrap_for_target_id(self, target_id: str) -> _WorkerBootstrap | None:
+        return self._guarded_shared_workers.get(target_id)
+
+    def _register_bootstrap_fetch(
+        self,
+        source: CdpTargetSource,
+        event: Mapping[str, Any],
+    ) -> _BootstrapFetchDecision | None:
+        """Bind an owner-side Fetch pause only to a guarded shared worker.
+
+        Ordinary page scripts are never speculatively held: the Fetch
+        ``networkId`` must already name a guarded shared-worker bootstrap,
+        and its exact owner-side Network Script occurrence must already exist.
+        Dedicated-worker bootstrap Fetch can precede target attachment in
+        Chromium and therefore retains the normal immediate policy path.
+        """
+
+        network_id = event.get("networkId")
+        if not isinstance(network_id, str) or not network_id:
+            return None
+        bootstrap = self._guarded_shared_bootstrap_for_target_id(network_id)
+        if bootstrap is None:
+            return None
+        request_id = event.get("requestId")
+        request = event.get("request")
+        resource_type = event.get("resourceType")
+        frame_id = event.get("frameId")
+        if (
+            not isinstance(request_id, str)
+            or not request_id
+            or not isinstance(request, Mapping)
+            or resource_type != "Other"
+            or request.get("method") != "GET"
+            or bootstrap.owner_source != source
+        ):
+            raise CdpTargetIntegrityError(
+                "worker-bootstrap Fetch identity, type, method, URL, or owner is invalid"
+            )
+        owner_occurrences = [
+            active
+            for active in self._active_requests.get(network_id, ())
+            if active.source == source
+        ]
+        if len(owner_occurrences) != 1:
+            raise CdpTargetIntegrityError(
+                "worker-bootstrap Fetch has no unique owner Network occurrence"
+            )
+        owner = owner_occurrences[0]
+        if (
+            owner.resource_type != "Script"
+            or owner.method != "GET"
+            or request.get("url") != owner.url
+            or (frame_id is not None and frame_id != owner.frame_id)
+        ):
+            raise CdpTargetIntegrityError(
+                "worker-bootstrap Fetch does not match its owner Network Script"
+            )
+        identity = (source, request_id)
+        if identity in self._bootstrap_fetch_by_policy_identity:
+            raise CdpTargetIntegrityError(
+                "worker-bootstrap Fetch interception was duplicated or reused"
+            )
+        prearm = bootstrap.fetch_request_id is None
+        if prearm:
+            if owner.url != bootstrap.url:
+                raise CdpTargetIntegrityError(
+                    "initial worker-bootstrap Fetch changed its target URL"
+                )
+            bootstrap.fetch_source = source
+            bootstrap.fetch_request_id = request_id
+            bootstrap.fetch_network_id = network_id
+        elif (
+            bootstrap.fetch_policy_outcome != "continue"
+            or not bootstrap.fetch_released
+            or bootstrap.fetch_source != source
+            or bootstrap.fetch_network_id != network_id
+        ):
+            raise CdpTargetIntegrityError(
+                "worker-bootstrap redirect arrived before its exact prearm release"
+            )
+        decision = _BootstrapFetchDecision(bootstrap=bootstrap, prearm=prearm)
+        self._bootstrap_fetch_by_policy_identity[identity] = decision
+        return decision
+
+    def _maybe_release_bootstrap_continue(self, bootstrap: _WorkerBootstrap) -> None:
+        if bootstrap.fetch_policy_outcome != "continue" or bootstrap.fetch_released:
+            return
+        if bootstrap.source is None:
+            return
+        if (
+            bootstrap.initial_setup_envelopes_expected <= 0
+            or bootstrap.initial_setup_envelopes_issued
+            != bootstrap.initial_setup_envelopes_expected
+        ):
+            return
+        source = bootstrap.fetch_source
+        request_id = bootstrap.fetch_request_id
+        if source is None or request_id is None:
+            raise CdpTargetIntegrityError(
+                "worker-bootstrap continue lost its owner policy identity"
+            )
+        state = self._state(source.session_path)
+        if state.source != source or state.phase not in {"ready", "resuming"}:
+            raise CdpTargetIntegrityError(
+                "worker-bootstrap owner detached before its held request was released"
+            )
+        self._send_policy_decision(
+            source,
+            "Fetch.continueRequest",
+            {"requestId": request_id},
+            label="worker-bootstrap-prearmed:Fetch.continueRequest",
+        )
+        bootstrap.fetch_released = True
+        bootstrap.fetch_release_after_setup_envelopes = True
+        child_state = self._state(bootstrap.source.session_path)
+        if child_state.phase in {
+            "awaiting-bootstrap-policy",
+            "awaiting-bootstrap-release",
+        }:
+            self._resume_instrumented_child(bootstrap.source)
+
     def _handle_root_event(self, method: str, event: Mapping[str, Any]) -> None:
         self._handle_forwarded(self.root_source, method, event)
 
-    def _target_lifecycle_event(
-        self, method: str, event: Mapping[str, Any]
-    ) -> None:
+    def _target_lifecycle_event(self, method: str, event: Mapping[str, Any]) -> None:
         if method in {"Inspector.targetCrashed", "Target.targetCrashed"}:
             raise CdpTargetIntegrityError(f"CDP target crashed: {method}")
         if method == "Target.targetCreated":
@@ -382,11 +1507,7 @@ class RecursiveCdpTargetRouter:
             target_id = info.get("targetId")
             route = self._target_routes.get(target_id) if isinstance(target_id, str) else None
             state = self._states.get(route) if route is not None else None
-            if (
-                state is None
-                or info.get("type") != state.target_type
-                or state.phase == "destroyed"
-            ):
+            if state is None or info.get("type") != state.target_type or state.phase == "destroyed":
                 raise CdpTargetIntegrityError(
                     "CDP target-info update named an unknown or changed target"
                 )
@@ -400,8 +1521,7 @@ class RecursiveCdpTargetRouter:
                 historical = [
                     candidate
                     for candidate in self._states.values()
-                    if candidate.source.target_id == target_id
-                    and candidate.phase == "detached"
+                    if candidate.source.target_id == target_id and candidate.phase == "detached"
                 ]
                 state = max(historical, key=lambda item: item.source.generation, default=None)
             if state is None or state.phase != "detached":
@@ -421,28 +1541,32 @@ class RecursiveCdpTargetRouter:
     ) -> None:
         state = self._state(source.session_path)
         if state.phase not in {"ready", "resuming"}:
+            request = event.get("request")
+            request_id = event.get("requestId")
+            url = request.get("url") if isinstance(request, Mapping) else None
             raise CdpTargetIntegrityError(
-                f"CDP target emitted {method} before instrumentation was acknowledged"
+                f"CDP {source.target_type} target emitted {method} for "
+                f"request {request_id!r} ({url!r}) during {state.phase}"
             )
         if method == "Network.requestServedFromCache":
             raise CdpTargetIntegrityError(
                 "CDP served a request from cache despite the disabled-cache policy"
             )
         event_source = source
+        advance_bootstraps = False
+        bootstrap_fetch: _BootstrapFetchDecision | None = None
         if method == "Network.requestWillBeSent":
             request_id = event.get("requestId")
             if not isinstance(request_id, str) or not request_id:
                 raise CdpTargetIntegrityError("CDP request event omitted its request ID")
             redirected = event.get("redirectResponse") is not None
             local = [
-                item
-                for item in self._active_requests.get(request_id, ())
-                if item.source == source
+                item for item in self._active_requests.get(request_id, ()) if item.source == source
             ]
             migrated = None
             if redirected and not local:
                 migrated = self._resolve_active_request(
-                    source, request_id, allow_oopif_migration=True
+                    source, request_id, allow_target_migration=True
                 )
             canonical_source = migrated.source if migrated is not None else source
             active = _ActiveRequest(
@@ -451,6 +1575,18 @@ class RecursiveCdpTargetRouter:
                 loader_id=event.get("loaderId") if isinstance(event.get("loaderId"), str) else None,
                 frame_id=event.get("frameId") if isinstance(event.get("frameId"), str) else None,
                 resource_type=event.get("type") if isinstance(event.get("type"), str) else None,
+                method=(
+                    event.get("request", {}).get("method")
+                    if isinstance(event.get("request"), Mapping)
+                    and isinstance(event.get("request", {}).get("method"), str)
+                    else None
+                ),
+                url=(
+                    event.get("request", {}).get("url")
+                    if isinstance(event.get("request"), Mapping)
+                    and isinstance(event.get("request", {}).get("url"), str)
+                    else None
+                ),
             )
             if local and not redirected:
                 raise CdpTargetIntegrityError(
@@ -466,11 +1602,26 @@ class RecursiveCdpTargetRouter:
             else:
                 state.active_request_ids.add(request_id)
                 self._active_requests.setdefault(request_id, []).append(active)
+            advance_bootstraps = True
         elif method in {"Network.loadingFinished", "Network.loadingFailed"}:
             request_id = event.get("requestId")
             if not isinstance(request_id, str):
                 raise CdpTargetIntegrityError("CDP loading terminal event omitted its request ID")
-            active = self._resolve_active_request(source, request_id, allow_oopif_migration=True)
+            bootstrap = self._guarded_shared_bootstrap_for_target_id(request_id)
+            if bootstrap is not None and bootstrap.fetch_policy_outcome is None:
+                raise CdpTargetIntegrityError(
+                    "worker-bootstrap request terminated before its exact Fetch policy"
+                )
+            if (
+                bootstrap is not None
+                and bootstrap.fetch_network_id == request_id
+                and bootstrap.fetch_policy_outcome == "continue"
+                and not bootstrap.fetch_released
+            ):
+                raise CdpTargetIntegrityError(
+                    "worker-bootstrap request terminated before its held continue was released"
+                )
+            active = self._resolve_active_request(source, request_id, allow_target_migration=True)
             if active is None:
                 raise CdpTargetIntegrityError(
                     "CDP loading terminal event has no active request occurrence"
@@ -481,11 +1632,164 @@ class RecursiveCdpTargetRouter:
             request_id = event.get("requestId")
             if isinstance(request_id, str):
                 active = self._resolve_active_request(
-                    source, request_id, allow_oopif_migration=True
+                    source, request_id, allow_target_migration=True
                 )
+                if active is None and method == "Network.requestWillBeSentExtraInfo":
+                    active = self._resolve_worker_subresource_extra_info(source, request_id)
                 if active is not None:
                     event_source = active.source
+                elif self._active_requests.get(request_id):
+                    raise CdpTargetIntegrityError(
+                        "CDP network event collided with an unrelated active request identity"
+                    )
+        elif method == "Fetch.requestPaused":
+            bootstrap_fetch = self._register_bootstrap_fetch(source, event)
         self._on_event(event_source, method, event)
+        if bootstrap_fetch is not None and not bootstrap_fetch.decided:
+            raise CdpTargetIntegrityError(
+                "worker-bootstrap Fetch policy callback returned without a decision"
+            )
+        if advance_bootstraps:
+            # The evidence consumer must observe the owning Script occurrence
+            # before resuming code in the target that it created.
+            self._advance_pending_worker_bootstraps()
+
+    def _bind_bootstrap_owner(
+        self,
+        target_id: str,
+        bootstrap: _WorkerBootstrap,
+        *,
+        shared: bool,
+    ) -> None:
+        if bootstrap.owner_source is not None:
+            return
+        candidates = list(self._active_requests.get(target_id, ()))
+        exact = [
+            item
+            for item in candidates
+            if item.resource_type == "Script"
+            and item.method == "GET"
+            and item.url == bootstrap.url
+            and (
+                shared
+                or (
+                    item.source.session_path == bootstrap.parent_route
+                    and (
+                        bootstrap.parent_frame_id is None
+                        or item.frame_id == bootstrap.parent_frame_id
+                    )
+                )
+            )
+        ]
+        if len(exact) > 1:
+            raise CdpTargetIntegrityError("worker bootstrap request ownership is ambiguous")
+        if not exact:
+            if candidates:
+                raise CdpTargetIntegrityError(
+                    "worker bootstrap request identity, URL, type, method, route, or "
+                    "parent frame does not match"
+                )
+            return
+        claim = (exact[0].source, exact[0].request_id)
+        if claim in self._claimed_worker_bootstraps:
+            raise CdpTargetIntegrityError("worker bootstrap request occurrence was already claimed")
+        self._claimed_worker_bootstraps.add(claim)
+        bootstrap.owner_source = exact[0].source
+        if bootstrap.source is not None:
+            self._pending_worker_sources.discard(bootstrap.source)
+            state = self._states.get(bootstrap.source.session_path)
+            if state is not None and state.phase == "awaiting-owner":
+                self._resume_instrumented_child(bootstrap.source)
+
+    def _advance_pending_worker_bootstraps(self) -> None:
+        for source in tuple(self._pending_worker_sources):
+            bootstrap = self._worker_bootstraps[source]
+            self._bind_bootstrap_owner(source.target_id, bootstrap, shared=False)
+        for target_id, bootstrap in tuple(self._guarded_shared_workers.items()):
+            if bootstrap.source is not None or bootstrap.attach_requested:
+                continue
+            self._bind_bootstrap_owner(target_id, bootstrap, shared=True)
+            if bootstrap.owner_source is not None:
+                self._request_guarded_shared_worker_attach(target_id, bootstrap)
+
+    def _request_guarded_shared_worker_attach(
+        self,
+        target_id: str,
+        bootstrap: _WorkerBootstrap,
+    ) -> None:
+        if bootstrap.attach_requested:
+            raise CdpTargetIntegrityError(
+                "shared-worker page adoption was requested more than once"
+            )
+        bootstrap.attach_requested = True
+        result = self._root_send(
+            "Target.attachToTarget",
+            {"targetId": target_id, "flatten": False},
+        )
+        session_id = result.get("sessionId")
+        if not isinstance(session_id, str) or not session_id:
+            raise CdpTargetIntegrityError(
+                "shared-worker page adoption returned no session identity"
+            )
+        bootstrap.attach_command_session_id = session_id
+        bootstrap.attach_command_resolved = True
+        if bootstrap.attach_session_id is not None and bootstrap.attach_session_id != session_id:
+            raise CdpTargetIntegrityError(
+                "shared-worker adoption response changed its page session identity"
+            )
+        if bootstrap.source is not None:
+            state = self._state(bootstrap.source.session_path)
+            if state.phase == "awaiting-adoption-ack":
+                self._resume_instrumented_child(bootstrap.source)
+        self.raise_if_failed()
+
+    def _resume_instrumented_child(self, source: CdpTargetSource) -> None:
+        state = self._state(source.session_path)
+        if (
+            state.phase
+            not in {
+                "configuring",
+                "awaiting-adoption-ack",
+                "awaiting-bootstrap-policy",
+                "awaiting-bootstrap-release",
+                "awaiting-owner",
+            }
+            or state.setup_pending
+        ):
+            raise CdpTargetIntegrityError(
+                "CDP child resume was attempted before setup and ownership converged"
+            )
+        bootstrap = self._worker_bootstraps.get(source)
+        if source.target_type in {"worker", "shared_worker"} and (
+            bootstrap is None or bootstrap.owner_source is None
+        ):
+            state.phase = "awaiting-owner"
+            return
+        if source.target_type == "shared_worker" and (
+            bootstrap is None
+            or not bootstrap.attach_command_resolved
+            or bootstrap.attach_session_id != bootstrap.attach_command_session_id
+        ):
+            state.phase = "awaiting-adoption-ack"
+            return
+        if source.target_type == "shared_worker":
+            if bootstrap is None or bootstrap.fetch_policy_outcome is None:
+                state.phase = "awaiting-bootstrap-policy"
+                return
+            if bootstrap.fetch_policy_outcome == "fail":
+                state.phase = "awaiting-bootstrap-failure"
+                return
+            if not bootstrap.fetch_released:
+                state.phase = "awaiting-bootstrap-release"
+                return
+        state.phase = "resuming"
+        self._queue_command(
+            source,
+            "Runtime.runIfWaitingForDebugger",
+            {},
+            label=f"{state.target_type}:Runtime.runIfWaitingForDebugger",
+            on_success=lambda _result, child=source: self._resume_ack(child),
+        )
 
     def _attached(self, parent_route: tuple[str, ...], event: Mapping[str, Any]) -> None:
         parent = self._state(parent_route)
@@ -498,9 +1802,8 @@ class RecursiveCdpTargetRouter:
             not isinstance(session_id, str)
             or not session_id
             or not isinstance(target_info, Mapping)
-            or waiting is not True
         ):
-            raise CdpTargetIntegrityError("related CDP target attachment is malformed or unpaused")
+            raise CdpTargetIntegrityError("related CDP target attachment is malformed")
         target_id = target_info.get("targetId")
         target_type = target_info.get("type")
         if not isinstance(target_id, str) or not target_id or not isinstance(target_type, str):
@@ -513,6 +1816,41 @@ class RecursiveCdpTargetRouter:
             raise CdpTargetIntegrityError(
                 f"unsupported related CDP target type cannot be instrumented: {target_type}"
             )
+        guarded = self._guarded_shared_workers.get(target_id)
+        if target_type == "shared_worker":
+            if (
+                parent_route
+                or waiting is not False
+                or guarded is None
+                or not guarded.attach_requested
+                or guarded.source is not None
+                or target_info.get("url") != guarded.url
+                or target_info.get("browserContextId") != guarded.browser_context_id
+            ):
+                raise CdpTargetIntegrityError(
+                    "shared-worker page attachment was not exactly preauthorised by its "
+                    "browser guard"
+                )
+            if (
+                guarded.attach_command_session_id is not None
+                and guarded.attach_command_session_id != session_id
+            ):
+                raise CdpTargetIntegrityError(
+                    "shared-worker adoption returned a different page session"
+                )
+        elif waiting is not True:
+            raise CdpTargetIntegrityError(
+                "related CDP target attachment was not held for instrumentation"
+            )
+        if target_type == "iframe":
+            browser_context_id = target_info.get("browserContextId")
+            if (
+                browser_context_id is not None
+                and browser_context_id != self.root_browser_context_id
+            ):
+                raise CdpTargetIntegrityError(
+                    "iframe target named a foreign browser context"
+                )
         route = (*parent_route, session_id)
         if (
             route in self._states
@@ -533,6 +1871,35 @@ class RecursiveCdpTargetRouter:
             parent_route,
             parent_frame_id,
         )
+        bootstrap: _WorkerBootstrap | None = None
+        if target_type == "shared_worker":
+            assert guarded is not None
+            guarded.source = source
+            guarded.attach_session_id = session_id
+            self._worker_bootstraps[source] = guarded
+            bootstrap = guarded
+        elif target_type == "worker" and not self._shutting_down:
+            url = target_info.get("url")
+            browser_context_id = target_info.get("browserContextId")
+            if (
+                not isinstance(url, str)
+                or not url
+                or not isinstance(browser_context_id, str)
+                or browser_context_id != self.root_browser_context_id
+            ):
+                raise CdpTargetIntegrityError(
+                    "dedicated-worker target omitted its URL or root context"
+                )
+            bootstrap = _WorkerBootstrap(
+                source=source,
+                url=url,
+                parent_route=parent_route,
+                parent_frame_id=parent_frame_id,
+                browser_context_id=browser_context_id,
+            )
+            self._worker_bootstraps[source] = bootstrap
+            self._pending_worker_sources.add(source)
+            self._bind_bootstrap_owner(target_id, bootstrap, shared=False)
         if self._shutting_down:
             state = _TargetState(source, target_type, "closing")
             state.setup_pending.add("Runtime.runIfWaitingForDebugger")
@@ -550,13 +1917,24 @@ class RecursiveCdpTargetRouter:
             return
         state = _TargetState(source, target_type, "configuring")
         setup = list(_BASE_SETUP_COMMANDS)
-        if target_type == "iframe":
+        if target_type in _PAGE_TARGET_TYPES:
+            setup.append(_egress_new_document_command(target_type))
+        if target_type in {"iframe", "shared_worker"}:
             setup.append(_FETCH_SETUP_COMMAND)
         state.setup_pending = {method for method, _params in setup}
         self._states[route] = state
         self._target_routes[target_id] = route
         self._session_routes[session_id] = route
         self._notify_target_activity(source, "target-attached")
+        if target_type == "shared_worker" and bootstrap is not None:
+            if (
+                bootstrap.initial_setup_envelopes_expected
+                or bootstrap.initial_setup_envelopes_issued
+            ):
+                raise CdpTargetIntegrityError(
+                    "worker-bootstrap initial setup envelopes were reused"
+                )
+            bootstrap.initial_setup_envelopes_expected = len(setup)
         for method, params in setup:
             self._queue_command(
                 source,
@@ -567,6 +1945,14 @@ class RecursiveCdpTargetRouter:
                     child, setup_method, result
                 ),
             )
+            # A nested target or transport event may be dispatched re-entrantly
+            # while the outer send is in progress.  Never count that envelope,
+            # or release a held bootstrap, after such an event failed the router.
+            self.raise_if_failed()
+            if target_type == "shared_worker" and bootstrap is not None:
+                bootstrap.initial_setup_envelopes_issued += 1
+        if target_type == "shared_worker" and bootstrap is not None:
+            self._maybe_release_bootstrap_continue(bootstrap)
 
     def _setup_ack(
         self,
@@ -585,10 +1971,58 @@ class RecursiveCdpTargetRouter:
                 or info.get("type") != state.target_type
             ):
                 raise CdpTargetIntegrityError("CDP child setup changed target identity")
+            bootstrap = self._worker_bootstraps.get(source)
+            if bootstrap is not None and (
+                info.get("url") != bootstrap.url
+                or info.get("browserContextId") != bootstrap.browser_context_id
+            ):
+                raise CdpTargetIntegrityError("CDP worker setup changed its URL or browser context")
+            if state.target_type == "iframe":
+                browser_context_id = info.get("browserContextId")
+                if (
+                    browser_context_id is not None
+                    and browser_context_id != self.root_browser_context_id
+                ):
+                    raise CdpTargetIntegrityError(
+                        "CDP iframe setup named a foreign browser context"
+                    )
+        elif method == "Page.addScriptToEvaluateOnNewDocument":
+            self._validate_page_init_result(result)
+        elif method == "Runtime.evaluate:egress-shim":
+            self._record_egress_evaluation(source, result)
+        elif method == "Runtime.evaluate:popup-guard":
+            self._record_popup_guard_evaluation(source, result)
         state.setup_pending.remove(method)
         if state.setup_pending:
             return
-        if method not in {"Target.setAutoAttach", "Target.getTargetInfo"}:
+        if method not in {
+            "Runtime.evaluate:egress-shim",
+            "Runtime.evaluate:popup-guard",
+            "Target.setAutoAttach",
+            "Target.getTargetInfo",
+        }:
+            state.setup_pending.add("Runtime.evaluate:egress-shim")
+            self._queue_command(
+                source,
+                *_egress_evaluate_command(state.target_type),
+                label=f"{state.target_type}:Runtime.evaluate:egress-shim",
+                on_success=lambda result, child=source: self._setup_ack(
+                    child, "Runtime.evaluate:egress-shim", result
+                ),
+            )
+            return
+        if method == "Runtime.evaluate:egress-shim" and source.target_type in _PAGE_TARGET_TYPES:
+            state.setup_pending.add("Runtime.evaluate:popup-guard")
+            self._queue_command(
+                source,
+                *_popup_guard_evaluate_command(),
+                label=f"{state.target_type}:Runtime.evaluate:popup-guard",
+                on_success=lambda result, child=source: self._setup_ack(
+                    child, "Runtime.evaluate:popup-guard", result
+                ),
+            )
+            return
+        if method in {"Runtime.evaluate:egress-shim", "Runtime.evaluate:popup-guard"}:
             state.setup_pending.add("Target.setAutoAttach")
             self._queue_command(
                 source,
@@ -610,14 +2044,7 @@ class RecursiveCdpTargetRouter:
                 ),
             )
             return
-        state.phase = "resuming"
-        self._queue_command(
-            source,
-            "Runtime.runIfWaitingForDebugger",
-            {},
-            label=f"{state.target_type}:Runtime.runIfWaitingForDebugger",
-            on_success=lambda _result, child=source: self._resume_ack(child),
-        )
+        self._resume_instrumented_child(source)
 
     def _resume_ack(self, source: CdpTargetSource) -> None:
         state = self._state(source.session_path)
@@ -627,9 +2054,7 @@ class RecursiveCdpTargetRouter:
 
     def _shutdown_resume_ack(self, source: CdpTargetSource) -> None:
         state = self._state(source.session_path)
-        if state.phase != "closing" or state.setup_pending != {
-            "Runtime.runIfWaitingForDebugger"
-        }:
+        if state.phase != "closing" or state.setup_pending != {"Runtime.runIfWaitingForDebugger"}:
             raise CdpTargetIntegrityError("CDP shutdown resume acknowledgement is out of sequence")
         state.setup_pending.clear()
 
@@ -642,6 +2067,24 @@ class RecursiveCdpTargetRouter:
         target_id = event.get("targetId")
         if target_id is not None and target_id != state.source.target_id:
             raise CdpTargetIntegrityError("related CDP target detach changed target identity")
+        bootstrap = self._worker_bootstraps.get(state.source)
+        if (
+            state.source.target_type == "shared_worker"
+            and bootstrap is not None
+            and bootstrap.fetch_policy_outcome is None
+            and not self._shutting_down
+        ):
+            raise CdpTargetIntegrityError(
+                "worker target detached before its exact bootstrap Fetch policy"
+            )
+        if (
+            state.source.target_type == "shared_worker"
+            and bootstrap is not None
+            and bootstrap.fetch_policy_outcome == "continue"
+            and not bootstrap.fetch_released
+            and not self._aborting
+        ):
+            raise CdpTargetIntegrityError("worker target detached with a held bootstrap request")
         descendants = [
             child
             for child_route, child in self._states.items()
@@ -650,36 +2093,48 @@ class RecursiveCdpTargetRouter:
             and child.phase not in {"destroyed", "detached"}
         ]
         route_pending = [key for key in self._pending if key[0][: len(route)] == route]
-        if state.phase == "configuring" and not state.active_request_ids:
+        if (
+            state.phase
+            in {
+                "configuring",
+                "awaiting-adoption-ack",
+                "awaiting-bootstrap-failure",
+                "awaiting-bootstrap-policy",
+                "awaiting-owner",
+            }
+            and not state.active_request_ids
+        ):
             for key in route_pending:
                 self._pending.pop(key, None)
             state.setup_pending.clear()
             state.phase = "detached"
+            self._pending_worker_sources.discard(state.source)
             self._target_routes.pop(state.source.target_id, None)
             self._session_routes.pop(session_id, None)
             self._notify_target_activity(state.source, "target-detached")
             return
         if self._shutting_down:
             for request_id in tuple(state.active_request_ids):
-                self._terminalise_request(state.source, request_id, synthetic_shutdown=True)
+                self._terminalise_request(
+                    state.source,
+                    request_id,
+                    synthetic_shutdown=not self._aborting,
+                )
             for key in route_pending:
                 self._pending.pop(key, None)
             state.phase = "detached"
+            self._pending_worker_sources.discard(state.source)
             self._target_routes.pop(state.source.target_id, None)
             self._session_routes.pop(session_id, None)
             self._notify_target_activity(state.source, "target-detached")
             return
-        if (
-            state.phase != "ready"
-            or state.active_request_ids
-            or descendants
-            or route_pending
-        ):
+        if state.phase != "ready" or state.active_request_ids or descendants or route_pending:
             raise CdpTargetIntegrityError(
                 "related CDP target detached with setup, request, descendant, or "
                 "command work pending"
             )
         state.phase = "detached"
+        self._pending_worker_sources.discard(state.source)
         self._target_routes.pop(state.source.target_id, None)
         self._session_routes.pop(session_id, None)
         self._notify_target_activity(state.source, "target-detached")
@@ -708,9 +2163,7 @@ class RecursiveCdpTargetRouter:
             raise CdpTargetIntegrityError("nested CDP message payload is not an object")
         self._handle_payload(state.source, payload)
 
-    def _handle_payload(
-        self, source: CdpTargetSource, payload: Mapping[str, Any]
-    ) -> None:
+    def _handle_payload(self, source: CdpTargetSource, payload: Mapping[str, Any]) -> None:
         if "id" in payload:
             command_id = payload["id"]
             if type(command_id) is not int:
@@ -719,9 +2172,17 @@ class RecursiveCdpTargetRouter:
             if pending is None:
                 raise CdpTargetIntegrityError("nested CDP response has no pending command")
             if payload.get("error") is not None:
-                raise CdpTargetIntegrityError(
-                    f"nested CDP command {pending.label} failed"
-                )
+                raise CdpTargetIntegrityError(f"nested CDP command {pending.label} failed")
+            if pending.policy_decision:
+                if "result" not in payload or type(payload["result"]) is not dict:
+                    raise CdpTargetIntegrityError(
+                        f"nested CDP policy command {pending.label} returned malformed data"
+                    )
+                if payload["result"] != {}:
+                    raise CdpTargetIntegrityError(
+                        f"nested CDP policy command {pending.label} did not return an exact "
+                        "empty result"
+                    )
             result = payload.get("result", {})
             if not isinstance(result, Mapping):
                 raise CdpTargetIntegrityError(
@@ -742,6 +2203,8 @@ class RecursiveCdpTargetRouter:
             self._received(source.session_path, params)
         elif method in _TARGET_LIFECYCLE_METHODS:
             self._target_lifecycle_event(method, params)
+        elif method in _NON_REPLAYABLE_EGRESS_EVENTS:
+            self._handle_non_replayable_egress(source, method, params)
         elif method in _FORWARDED_METHODS:
             self._handle_forwarded(source, method, params)
         elif method.startswith("Target."):
@@ -787,9 +2250,7 @@ class RecursiveCdpTargetRouter:
             )
             return
         wrapper_id = self._allocate_command_id()
-        self._pending[(parent_route, wrapper_id)] = _PendingCommand(
-            f"transport-forward:{label}"
-        )
+        self._pending[(parent_route, wrapper_id)] = _PendingCommand(f"transport-forward:{label}")
         self._send_raw(
             parent_route,
             {
@@ -810,7 +2271,7 @@ class RecursiveCdpTargetRouter:
         source: CdpTargetSource,
         request_id: str,
         *,
-        allow_oopif_migration: bool,
+        allow_target_migration: bool,
     ) -> _ActiveRequest | None:
         candidates = list(self._active_requests.get(request_id, ()))
         local = [item for item in candidates if item.source == source]
@@ -818,18 +2279,62 @@ class RecursiveCdpTargetRouter:
             return local[0]
         if len(local) > 1:
             raise CdpTargetIntegrityError("CDP request identity is ambiguous within one target")
-        if not allow_oopif_migration or source.target_type != "iframe":
+        if not allow_target_migration:
             return None
-        migrated = [
-            item
-            for item in candidates
-            if item.resource_type == "Document"
-            and item.loader_id == request_id
-            and item.frame_id == source.target_id
-        ]
+        if source.target_type == "iframe":
+            migrated = [
+                item
+                for item in candidates
+                if item.resource_type == "Document"
+                and item.loader_id == request_id
+                and item.frame_id == source.target_id
+            ]
+            label = "OOPIF"
+        elif source.target_type in {"worker", "shared_worker"}:
+            bootstrap = self._worker_bootstraps.get(source)
+            migrated = [
+                item
+                for item in candidates
+                if bootstrap is not None
+                and bootstrap.owner_source is not None
+                and item.source == bootstrap.owner_source
+                and item.request_id == source.target_id
+                and item.resource_type == "Script"
+                and item.method == "GET"
+            ]
+            label = "worker bootstrap"
+        else:
+            return None
         if len(migrated) > 1:
-            raise CdpTargetIntegrityError("OOPIF request migration is ambiguous")
+            raise CdpTargetIntegrityError(f"{label} request migration is ambiguous")
         return migrated[0] if migrated else None
+
+    def _resolve_worker_subresource_extra_info(
+        self,
+        source: CdpTargetSource,
+        request_id: str,
+    ) -> _ActiveRequest | None:
+        """Bind Chromium's owner-routed worker request-header evidence.
+
+        Chromium 143 reports a worker subresource's primary Network events on
+        the worker target, while ``requestWillBeSentExtraInfo`` is delivered
+        on the exact page or OOPIF session that created that worker.  The
+        ExtraInfo event carries no URL, loader, frame, or target identity, so
+        it is migrated only when one live worker occurrence with the same raw
+        request ID has that exact bootstrap owner.  Cross-owner or duplicate
+        candidates remain fail-closed.
+        """
+
+        candidates: list[_ActiveRequest] = []
+        for active in self._active_requests.get(request_id, ()):
+            if active.source.target_type not in {"worker", "shared_worker"}:
+                continue
+            bootstrap = self._worker_bootstraps.get(active.source)
+            if bootstrap is not None and bootstrap.owner_source == source:
+                candidates.append(active)
+        if len(candidates) > 1:
+            raise CdpTargetIntegrityError("worker subresource ExtraInfo migration is ambiguous")
+        return candidates[0] if candidates else None
 
     def _remove_active(self, active: _ActiveRequest) -> None:
         state = self._state(active.source.session_path)
@@ -847,9 +2352,7 @@ class RecursiveCdpTargetRouter:
         *,
         synthetic_shutdown: bool,
     ) -> None:
-        active = self._resolve_active_request(
-            source, request_id, allow_oopif_migration=False
-        )
+        active = self._resolve_active_request(source, request_id, allow_target_migration=False)
         if active is None:
             return
         self._remove_active(active)
@@ -859,3 +2362,433 @@ class RecursiveCdpTargetRouter:
                 "Network.loadingFailed",
                 {"requestId": request_id, "canceled": True, "qcsdShutdown": True},
             )
+
+
+@dataclass
+class _PopupTabTripwire:
+    """Browser-scope lifecycle of one synchronously rejected popup tab."""
+
+    session_id: str
+    target_id: str
+    close_requested: bool = False
+    close_acknowledged: bool = False
+    detached: bool = False
+    destroyed: bool = False
+
+
+class BrowserSharedWorkerGuard:
+    """Guard shared workers and tripwire root-context popup tabs.
+
+    Playwright's public browser CDP session exposes flattened attachment events
+    but cannot address those child sessions.  The flattened session is used
+    only as a debugger hold and lifecycle guardian.  The page router performs
+    a separately validated non-flat adoption, configures the target, and is the
+    sole component that resumes it. Browser-level ``tab`` auto-attachment
+    additionally closes and receipts any root-context popup before its paused
+    page is resumed. This is a post-creation tripwire: packet-level tests prove
+    that tab creation itself can perform I/O before the attachment event.
+    """
+
+    def __init__(
+        self,
+        session: _CdpSession,
+        router: RecursiveCdpTargetRouter,
+    ) -> None:
+        self._session = session
+        self._router = router
+        self._started = False
+        self._shutting_down = False
+        self._aborting = False
+        self._finished = False
+        self._page_discovery_started = False
+        self._root_tab_session_id: str | None = None
+        self._root_tab_target_id: str | None = None
+        self._root_tab_detached = False
+        self._popup_tabs: dict[str, _PopupTabTripwire] = {}
+        self._popup_target_by_session: dict[str, str] = {}
+
+    def start(self) -> None:
+        """Install shared-worker holds and popup-tab tripwires before navigation."""
+
+        if self._started:
+            raise CdpTargetIntegrityError("browser shared-worker guard started more than once")
+        self._router.register_shared_worker_guard()
+        self._session.on("Target.attachedToTarget", self._dispatch_attached)
+        self._session.on("Target.detachedFromTarget", self._dispatch_detached)
+        self._session.on("Inspector.targetCrashed", self._dispatch_crashed)
+        self._session.on("Target.targetCrashed", self._dispatch_crashed)
+        self._session.on(
+            "Target.targetCreated",
+            lambda event: self._dispatch_browser_target("Target.targetCreated", event),
+        )
+        self._session.on(
+            "Target.targetInfoChanged",
+            lambda event: self._dispatch_browser_target("Target.targetInfoChanged", event),
+        )
+        self._session.on("Target.targetDestroyed", self._dispatch_target_destroyed)
+        self._started = True
+        self._send(*_PAGE_DISCOVERY_COMMAND)
+        self._page_discovery_started = True
+        self._send(*_SHARED_WORKER_GUARD_COMMAND)
+        barrier = self._send(*_SHARED_WORKER_GUARD_BARRIER)
+        infos = barrier.get("targetInfos")
+        if not isinstance(infos, list) or not all(isinstance(info, Mapping) for info in infos):
+            raise CdpTargetIntegrityError(
+                "browser shared-worker guard barrier returned malformed targets"
+            )
+        root = self._router.root_source
+        matching_roots = [
+            info
+            for info in infos
+            if info.get("targetId") == root.target_id
+            and info.get("type") == "page"
+            and info.get("browserContextId") == self._router.root_browser_context_id
+        ]
+        if len(matching_roots) != 1:
+            raise CdpTargetIntegrityError(
+                "browser shared-worker guard barrier did not identify the root page"
+            )
+        if (
+            self._root_tab_target_id is None
+            or self._root_tab_session_id is None
+        ):
+            raise CdpTargetIntegrityError(
+                "browser popup-tab tripwire did not identify exactly one unpaused root tab"
+            )
+        for info in infos:
+            self._validate_page_target_info(info)
+        self._router.raise_if_failed()
+
+    def begin_shutdown(self) -> None:
+        """Declare that context disposal is the next operation."""
+
+        if not self._started or self._shutting_down or self._finished:
+            raise CdpTargetIntegrityError(
+                "browser shared-worker guard shutdown is missing or repeated"
+            )
+        self._router.begin_shared_worker_guard_shutdown()
+        self._shutting_down = True
+
+    def begin_abort(self) -> None:
+        """Declare rejected-observation disposal as the next operation."""
+
+        if not self._started or self._shutting_down or self._finished:
+            raise CdpTargetIntegrityError(
+                "browser shared-worker guard abort is missing or repeated"
+            )
+        self._router.begin_shared_worker_guard_abort()
+        self._aborting = True
+        self._shutting_down = True
+
+    def finish(self) -> None:
+        """Prove guardian detaches, disable auto-attach, and close the session."""
+
+        if not self._shutting_down or self._aborting or self._finished:
+            raise CdpTargetIntegrityError(
+                "browser shared-worker guard finished without deliberate shutdown"
+            )
+        if self._popup_tabs:
+            raise CdpTargetIntegrityError(
+                "browser popup-tab tripwire cannot produce successful evidence"
+            )
+        self._router.finish_shared_worker_guard()
+        self._disable_and_detach()
+        self._finished = True
+        self._router.raise_if_failed()
+
+    def finish_abort(self) -> None:
+        """Detach the browser guard after the rejected context was disposed."""
+
+        if not self._shutting_down or not self._aborting or self._finished:
+            raise CdpTargetIntegrityError(
+                "browser shared-worker guard abort finished without disposal"
+            )
+        self._prove_popup_tab_close_lifecycles()
+        self._router.finish_shared_worker_guard_abort()
+        self._disable_and_detach()
+        self._finished = True
+
+    def _prove_popup_tab_close_lifecycles(self) -> None:
+        """Drain ordered CDP barriers until every rejected tab has detached."""
+
+        if not self._popup_tabs:
+            return
+        if any(not popup.close_acknowledged for popup in self._popup_tabs.values()):
+            raise CdpTargetIntegrityError(
+                "browser popup-tab close acknowledgement remains unresolved"
+            )
+        for _ in range(_POPUP_TAB_LIFECYCLE_BARRIER_LIMIT):
+            barrier = self._send(*_SHARED_WORKER_GUARD_BARRIER)
+            infos = barrier.get("targetInfos")
+            if not isinstance(infos, list) or not all(
+                isinstance(info, Mapping) for info in infos
+            ):
+                raise CdpTargetIntegrityError(
+                    "browser popup-tab lifecycle barrier returned malformed targets"
+                )
+            live_target_ids = {
+                info.get("targetId")
+                for info in infos
+                if isinstance(info.get("targetId"), str)
+            }
+            if all(
+                popup.detached and popup.target_id not in live_target_ids
+                for popup in self._popup_tabs.values()
+            ):
+                return
+        raise CdpTargetIntegrityError(
+            "browser popup-tab close did not reach an exact detached lifecycle"
+        )
+
+    def _disable_and_detach(self) -> None:
+        if not self._page_discovery_started:
+            raise CdpTargetIntegrityError(
+                "browser page-target discovery was not active at guard finish"
+            )
+        self._send(
+            "Target.setAutoAttach",
+            {
+                "autoAttach": False,
+                "waitForDebuggerOnStart": False,
+                "flatten": True,
+            },
+        )
+        self._send(*_PAGE_DISCOVERY_DISABLE_COMMAND)
+        self._page_discovery_started = False
+        try:
+            self._session.detach()
+        except Exception as error:
+            raise CdpTargetIntegrityError(
+                "browser shared-worker guard session detach failed"
+            ) from error
+
+    def _validate_page_target_info(self, info: Mapping[str, Any]) -> None:
+        """Reject sibling pages and browser-scope service workers in the root context."""
+
+        target_type = info.get("type")
+        if target_type not in {"page", "service_worker"}:
+            return
+        target_id = info.get("targetId")
+        browser_context_id = info.get("browserContextId")
+        if (
+            not isinstance(target_id, str)
+            or not target_id
+            or not isinstance(browser_context_id, str)
+            or not browser_context_id
+        ):
+            raise CdpTargetIntegrityError(
+                "browser page-target discovery reported a malformed identity"
+            )
+        root = self._router.root_source
+        root_context = self._router.root_browser_context_id
+        if browser_context_id == root_context and target_type == "service_worker":
+            service_worker_url = info.get("url")
+            self._router.browser_service_worker_attempt(
+                service_worker_url
+                if isinstance(service_worker_url, str) and service_worker_url
+                else None
+            )
+            raise CdpTargetIntegrityError(
+                "service-worker target violated the blocked-worker policy"
+            )
+        if target_type != "page":
+            return
+        if target_id == root.target_id and browser_context_id != root_context:
+            raise CdpTargetIntegrityError("root browser page target changed its context identity")
+        if browser_context_id == root_context and target_id != root.target_id:
+            raise CdpTargetIntegrityError(
+                "sibling popup/page target escaped the recursive discovery graph"
+            )
+
+    def _send(self, method: str, params: Mapping[str, Any]) -> dict[str, Any]:
+        try:
+            result = self._session.send(method, dict(params))
+        except Exception as error:
+            raise CdpTargetIntegrityError(
+                f"browser shared-worker guard command {method} failed"
+            ) from error
+        if not isinstance(result, dict):
+            raise CdpTargetIntegrityError(
+                f"browser shared-worker guard command {method} returned malformed data"
+            )
+        return result
+
+    def _dispatch_attached(self, event: dict[str, Any]) -> None:
+        target_info = event.get("targetInfo")
+        if isinstance(target_info, Mapping) and target_info.get("type") == "tab":
+            # Closing a waiting popup remains important even when an earlier,
+            # later-stage page discovery event has already failed the router.
+            self._dispatch(lambda: self._attached_tab(event), allow_after_failure=True)
+            return
+        self._dispatch(lambda: self._router.adopt_guarded_shared_worker(event))
+
+    def _dispatch_detached(self, event: dict[str, Any]) -> None:
+        session_id = event.get("sessionId")
+        if session_id == self._root_tab_session_id or (
+            isinstance(session_id, str) and session_id in self._popup_target_by_session
+        ):
+            self._dispatch(lambda: self._detached_tab(event), allow_after_failure=True)
+            return
+        self._dispatch(lambda: self._router.guarded_shared_worker_detached(event))
+
+    def _attached_tab(self, event: Mapping[str, Any]) -> None:
+        """Track the existing tab or synchronously close a waiting popup tab."""
+
+        session_id = event.get("sessionId")
+        info = event.get("targetInfo")
+        waiting = event.get("waitingForDebugger")
+        if (
+            not isinstance(session_id, str)
+            or not session_id
+            or not isinstance(info, Mapping)
+            or info.get("type") != "tab"
+        ):
+            raise CdpTargetIntegrityError("browser tab attachment is malformed")
+        target_id = info.get("targetId")
+        browser_context_id = info.get("browserContextId")
+        if (
+            not isinstance(target_id, str)
+            or not target_id
+            or not isinstance(browser_context_id, str)
+            or not browser_context_id
+            or info.get("attached") is not True
+            or type(waiting) is not bool
+        ):
+            raise CdpTargetIntegrityError("browser tab attachment identity is malformed")
+        if waiting is False:
+            if browser_context_id != self._router.root_browser_context_id:
+                raise CdpTargetIntegrityError(
+                    "unpaused browser tab attachment escaped the root browser context"
+                )
+            if self._root_tab_target_id is not None or self._root_tab_session_id is not None:
+                raise CdpTargetIntegrityError(
+                    "browser popup-tab tripwire observed more than one unpaused root tab"
+                )
+            self._root_tab_target_id = target_id
+            self._root_tab_session_id = session_id
+            return
+        if (
+            target_id == self._root_tab_target_id
+            or target_id in self._popup_tabs
+            or session_id == self._root_tab_session_id
+            or session_id in self._popup_target_by_session
+        ):
+            raise CdpTargetIntegrityError(
+                "browser popup-tab tripwire reused a target or session identity"
+            )
+        popup = _PopupTabTripwire(session_id=session_id, target_id=target_id)
+        self._popup_tabs[target_id] = popup
+        self._popup_target_by_session[session_id] = target_id
+        callback_error: Exception | None = None
+        try:
+            popup_url = info.get("url")
+            self._router.browser_popup_tab_attempt(
+                popup_url if isinstance(popup_url, str) and popup_url else None
+            )
+        except Exception as error:  # noqa: BLE001 - close still must be attempted
+            callback_error = error
+        popup.close_requested = True
+        close_result = self._send("Target.closeTarget", {"targetId": target_id})
+        if set(close_result) != {"success"} or close_result.get("success") is not True:
+            raise CdpTargetIntegrityError(
+                "browser popup-tab tripwire close was not acknowledged"
+            )
+        popup.close_acknowledged = True
+        if callback_error is not None:
+            raise callback_error
+        if browser_context_id != self._router.root_browser_context_id:
+            raise CdpTargetIntegrityError(
+                "waiting browser tab attachment escaped the root browser context"
+            )
+
+    def _detached_tab(self, event: Mapping[str, Any]) -> None:
+        """Validate exact flattened-session termination for a browser tab."""
+
+        session_id = event.get("sessionId")
+        target_id = event.get("targetId")
+        if (
+            not isinstance(session_id, str)
+            or not session_id
+            or not isinstance(target_id, str)
+            or not target_id
+        ):
+            raise CdpTargetIntegrityError("browser tab detach identity is malformed")
+        if session_id == self._root_tab_session_id:
+            if target_id != self._root_tab_target_id or self._root_tab_detached:
+                raise CdpTargetIntegrityError("root browser tab detach changed identity")
+            self._root_tab_detached = True
+            if not self._shutting_down:
+                raise CdpTargetIntegrityError(
+                    "root browser tab detached before the disposal boundary"
+                )
+            return
+        expected_target = self._popup_target_by_session.get(session_id)
+        if expected_target != target_id or target_id not in self._popup_tabs:
+            raise CdpTargetIntegrityError("popup browser tab detach changed identity")
+        popup = self._popup_tabs[target_id]
+        if not popup.close_requested or popup.detached:
+            raise CdpTargetIntegrityError("popup browser tab detached outside its close lifecycle")
+        popup.detached = True
+
+    def _dispatch_browser_target(self, method: str, event: dict[str, Any]) -> None:
+        def validate() -> None:
+            info = event.get("targetInfo")
+            if not isinstance(info, Mapping):
+                raise CdpTargetIntegrityError("browser page-target discovery event is malformed")
+            self._validate_page_target_info(info)
+            if (
+                method == "Target.targetInfoChanged"
+                and info.get("targetId") == self._router.root_source.target_id
+            ):
+                self._router.browser_target_info_changed(info)
+
+        self._dispatch(validate)
+
+    def _dispatch_target_destroyed(self, event: dict[str, Any]) -> None:
+        def validate() -> None:
+            target_id = event.get("targetId")
+            if not isinstance(target_id, str) or not target_id:
+                raise CdpTargetIntegrityError(
+                    "browser page-target destruction event is malformed"
+                )
+            if target_id in self._popup_tabs:
+                popup = self._popup_tabs[target_id]
+                if not popup.close_requested or popup.destroyed:
+                    raise CdpTargetIntegrityError(
+                        "popup browser tab destruction violated its close lifecycle"
+                    )
+                popup.destroyed = True
+                return
+            if not self._shutting_down and target_id in {
+                self._router.root_source.target_id,
+                self._root_tab_target_id,
+            }:
+                raise CdpTargetIntegrityError(
+                    "root page/tab target was destroyed before the evidence cutoff"
+                )
+
+        self._dispatch(validate, allow_after_failure=True)
+
+    def _dispatch_crashed(self, _event: dict[str, Any]) -> None:
+        self._dispatch(self._raise_target_crashed)
+
+    @staticmethod
+    def _raise_target_crashed() -> None:
+        raise CdpTargetIntegrityError("browser-level shared-worker target crashed")
+
+    def _dispatch(
+        self,
+        operation: Callable[[], None],
+        *,
+        allow_after_failure: bool = False,
+    ) -> None:
+        if self._finished or (
+            self._router._failure is not None
+            and not self._router._aborting
+            and not allow_after_failure
+        ):
+            return
+        try:
+            operation()
+        except Exception as error:  # noqa: BLE001 - retained for fail-closed finish
+            self._router._record_failure(error)

@@ -6953,7 +6953,19 @@ def test_launcher_requires_clean_capture_image_and_no_cache_build() -> None:
     assert "windows_docker_storage_probe.ps1" in launcher
     assert '"schema_version": 3' in launcher
     assert '"host_storage_preflight": host_storage' in launcher
-    assert launcher.count('"${ROOT}/src/qcsd_lab/build_storage.py" receipt') == 3
+    build_receipt_invocation = '"${ROOT}/src/qcsd_lab/build_storage.py" receipt'
+    assert launcher.count(build_receipt_invocation) == 4
+    for admitted_fields in (
+        "study_build_fields",
+        "pinned_cdp_build_fields",
+        "browser_egress_build_fields",
+        "class_build_fields",
+    ):
+        assert re.search(
+            rf"mapfile -t {admitted_fields} < <\(\s+python3 -I "
+            rf'\"\$\{{ROOT\}}/src/qcsd_lab/build_storage\.py\" receipt',
+            launcher,
+        )
     assert "validate_build_execution_envelope" in launcher
     assert launcher.count('--iidfile "${') == 3
     assert "acquire_evidence_build_lock" in launcher

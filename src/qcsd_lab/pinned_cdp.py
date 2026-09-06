@@ -19,14 +19,32 @@ import socket
 import sys
 import threading
 import time
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from .buflo_study import validate_build_execution_receipt
-from .cdp_targets import CDP_TARGET_INSTRUMENTATION_POLICY, RecursiveCdpTargetRouter
+from .browser_egress import (
+    NON_REPLAYABLE_EGRESS_POLICY,
+    NonReplayableEgressGuard,
+    build_fail_closed_host_resolver_argument,
+    install_context_egress_guards,
+    launch_pinned_cdp_probe_browser,
+    validate_browser_egress_command_line_projection,
+    validate_fail_closed_host_resolver_argument,
+    validate_non_replayable_egress_success_summary,
+)
+from .cdp_targets import (
+    CDP_TARGET_INSTRUMENTATION_POLICY,
+    BrowserSharedWorkerGuard,
+    RecursiveCdpTargetRouter,
+    validate_bootstrap_prearm_summary,
+    validate_egress_prearm_summary,
+)
 from .class_study import (
     STUDY_ID,
     bind_receipt,
@@ -40,14 +58,42 @@ from .discover import (
     _RequestExtraInfoAssociator,
     _RequestObservationLedger,
 )
+from .playwright_driver import (
+    DEFAULT_CONFIGURED_EXECUTABLE,
+    EXPECTED_BROWSERS_JSON_SHA256,
+    EXPECTED_CHROMIUM_SHA256,
+    EXPECTED_CHROMIUM_VERSION,
+    EXPECTED_PLAYWRIGHT_DRIVER_BINDING,
+    OWNERSHIP_POLICY_RECEIPT,
+    PLAYWRIGHT_VERSION,
+    pinned_chromium_executable_path,
+    playwright_driver_session,
+    validate_default_playwright_driver_once,
+)
+from .playwright_driver import (
+    DEFAULT_RECEIPT as PLAYWRIGHT_DRIVER_RECEIPT,
+)
 from .util import load_json, require_disjoint_path, sha256_file, source_metadata
 
+_PINNED_CDP_APPROVED_ORIGINS = ("http://a.test", "http://b.test")
+_PINNED_CDP_ORIGIN_IP_PINS = {
+    "http://a.test": "127.0.0.1",
+    "http://b.test": "127.0.0.1",
+}
+_PINNED_CDP_RESOLVER_PROJECTION = validate_fail_closed_host_resolver_argument(
+    build_fail_closed_host_resolver_argument(
+        approved_origins=_PINNED_CDP_APPROVED_ORIGINS,
+        origin_ip_pins=_PINNED_CDP_ORIGIN_IP_PINS,
+    )
+)
+
 RECEIPT_TYPE = "qcsd-class-study-pinned-cdp-probe"
-PROBE_SCHEMA_VERSION = 1
-EXPECTED_PLAYWRIGHT_VERSION = "1.52.0"
-EXPECTED_CHROMIUM_EXECUTABLE = "/usr/bin/chromium"
+PROBE_SCHEMA_VERSION = 8
+EXPECTED_PLAYWRIGHT_VERSION = PLAYWRIGHT_VERSION
+EXPECTED_CHROMIUM_EXECUTABLE = str(DEFAULT_CONFIGURED_EXECUTABLE)
 PROBE_OBSERVATION_TIMEOUT_MS = 10_000
 PROBE_QUIET_INTERVAL_MS = 250
+TARGET_ACTIVITY_SCHEMA_VERSION = 1
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 _IMAGE_DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _COMMIT = re.compile(r"[0-9a-f]{40}\Z")
@@ -64,46 +110,219 @@ _SOURCE_KEYS = {
 }
 
 PROBE_CONTRACT: dict[str, Any] = {
-    "schema_version": 1,
-    "policy": "pinned-playwright-chromium-recursive-target-topology-v1",
+    "schema_version": 8,
+    "policy": "pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v8",
     "instrumentation_policy": CDP_TARGET_INSTRUMENTATION_POLICY,
     "playwright_version": EXPECTED_PLAYWRIGHT_VERSION,
     "chromium_executable": EXPECTED_CHROMIUM_EXECUTABLE,
+    "chromium_version": EXPECTED_CHROMIUM_VERSION,
+    "playwright_driver_ownership_policy": OWNERSHIP_POLICY_RECEIPT,
+    "playwright_driver_binding": EXPECTED_PLAYWRIGHT_DRIVER_BINDING,
+    "playwright_browsers_json_sha256": EXPECTED_BROWSERS_JSON_SHA256,
+    "chromium_executable_sha256": EXPECTED_CHROMIUM_SHA256,
     "network_scope": "docker-network-none-loopback-only",
     "observation_timeout_ms": PROBE_OBSERVATION_TIMEOUT_MS,
     "required_quiet_interval_ms": PROBE_QUIET_INTERVAL_MS,
+    "target_activity_schema_version": TARGET_ACTIVITY_SCHEMA_VERSION,
     "required_target_types": ["iframe", "shared_worker", "worker"],
     "required_observations": [
         "cross-site-iframe-network-request",
         "dedicated-and-shared-worker-network-requests",
-        "worker-fetch-paused-on-owning-page-session",
+        "dedicated-worker-fetch-paused-on-owning-page-session",
+        "shared-worker-fetch-paused-on-guarded-shared-worker-session",
+        "shared-worker-bootstrap-held-through-secondary-fetch-prearm",
+        "target-lifecycle-activity-resets-quiescence",
         "duplicate-url-occurrences-remain-distinct",
-        "redirect-terminal-request-observed",
+        "all-deterministic-http-responses-finished-successfully",
         "router-ledger-extra-info-and-server-shutdown-complete",
+        "all-runnable-targets-prearmed-against-non-urlloader-egress",
+        "context-websocket-route-installed-before-first-page",
+        "zero-service-worker-and-non-replayable-egress-attempts",
+        "required-effective-chromium-egress-switches",
+        "unprivileged-zero-capability-runtime",
     ],
+    "non_replayable_egress_policy": NON_REPLAYABLE_EGRESS_POLICY,
+    "packet_level_egress_completeness_claimed": False,
 }
 PROBE_CONTRACT_SHA256 = canonical_json_sha256(PROBE_CONTRACT)
 
+_TARGET_ACTIVITY_EVENTS = (
+    "target-attached",
+    "target-info-changed",
+    "target-detached",
+    "target-destroyed",
+)
+_TARGET_ACTIVITY_TYPES = ("iframe", "page", "shared_worker", "worker")
+
+_EXPECTED_HTTP_STATUS_COUNTS: dict[str, dict[str, int]] = {
+    "/": {"200": 1},
+    "/dedicated-data": {"200": 1},
+    "/dedicated-worker.js": {"200": 1},
+    "/duplicate": {"200": 2},
+    "/frame": {"200": 1},
+    "/frame-data": {"200": 1},
+    "/redirect": {"302": 1},
+    "/redirected": {"200": 1},
+    "/shared-data": {"200": 1},
+    "/shared-worker.js": {"200": 1},
+}
+_EXPECTED_SERVER_REQUEST_COUNTS = {
+    path: sum(statuses.values()) for path, statuses in _EXPECTED_HTTP_STATUS_COUNTS.items()
+}
+_EXPECTED_PINNED_BOOTSTRAP_PREARM_SUMMARY = {
+    "schema_version": 1,
+    "held_total": 1,
+    "released_total": 1,
+    "pending_total": 0,
+    "release_before_setup_envelopes_total": 0,
+    "by_worker_type": {
+        "worker": {
+            "held": 0,
+            "released": 0,
+            "pending": 0,
+            "released_after_setup_envelopes": 0,
+            "owner_target_types": {
+                "page": 0,
+                "iframe": 0,
+                "worker": 0,
+                "shared_worker": 0,
+            },
+        },
+        "shared_worker": {
+            "held": 1,
+            "released": 1,
+            "pending": 0,
+            "released_after_setup_envelopes": 1,
+            "owner_target_types": {
+                "page": 1,
+                "iframe": 0,
+                "worker": 0,
+                "shared_worker": 0,
+            },
+        },
+    },
+}
+_EVENT_METHODS = (
+    "Fetch.requestPaused",
+    "Network.loadingFailed",
+    "Network.loadingFinished",
+    "Network.requestServedFromCache",
+    "Network.requestWillBeSent",
+    "Network.requestWillBeSentExtraInfo",
+    "Network.responseReceived",
+)
+
+
+class _ProbeServer(ThreadingHTTPServer):
+    def __init__(self, server_address: tuple[str, int]) -> None:
+        super().__init__(server_address, _Handler)
+        self.request_counts: Counter[str] = Counter()
+        self.request_lock = threading.Lock()
+
+    def record_request(self, path: str) -> None:
+        with self.request_lock:
+            self.request_counts[path] += 1
+
+    def request_count_snapshot(self) -> dict[str, int]:
+        with self.request_lock:
+            return dict(sorted(self.request_counts.items()))
+
+
+class _TargetActivityLedger:
+    """Count target-only lifecycle work without retaining protocol identities."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._generation = 0
+        self._event_counts = {target_type: Counter[str]() for target_type in _TARGET_ACTIVITY_TYPES}
+        self._max_source_generation: dict[str, int | None] = {
+            target_type: None for target_type in _TARGET_ACTIVITY_TYPES
+        }
+
+    def record(self, source: Any, event: str) -> None:
+        target_type = getattr(source, "target_type", None)
+        source_generation = getattr(source, "generation", None)
+        if (
+            target_type not in _TARGET_ACTIVITY_TYPES
+            or event not in _TARGET_ACTIVITY_EVENTS
+            or type(source_generation) is not int
+            or source_generation < 0
+        ):
+            raise ValueError("pinned CDP target activity is malformed")
+        with self._lock:
+            self._generation += 1
+            self._event_counts[target_type][event] += 1
+            current = self._max_source_generation[target_type]
+            if current is None or source_generation > current:
+                self._max_source_generation[target_type] = source_generation
+
+    @property
+    def generation(self) -> int:
+        """Return a monotonic generation that changes on target-only activity."""
+
+        with self._lock:
+            return self._generation
+
+    def snapshot(self) -> dict[str, Any]:
+        """Return the identity-free activity aggregate at this evidence boundary."""
+
+        with self._lock:
+            value = {
+                "schema_version": TARGET_ACTIVITY_SCHEMA_VERSION,
+                "generation": self._generation,
+                "by_target_type": {
+                    target_type: {
+                        "total": sum(self._event_counts[target_type].values()),
+                        "max_source_generation": self._max_source_generation[target_type],
+                        "event_counts": {
+                            event: self._event_counts[target_type][event]
+                            for event in _TARGET_ACTIVITY_EVENTS
+                        },
+                    }
+                    for target_type in _TARGET_ACTIVITY_TYPES
+                },
+            }
+        return _validate_target_activity_summary(value)
+
 
 class _Handler(BaseHTTPRequestHandler):
-    def do_GET(self) -> None:  # noqa: N802 - stdlib callback name
-        if self.path == "/":
-            body = b"""<iframe src='http://b.test:PORT/frame'></iframe><script>
-            new Worker('/worker.js'); new SharedWorker('/worker.js');
+    def do_GET(self) -> None:
+        path = urlsplit(self.path).path
+        server = self.server
+        if not isinstance(server, _ProbeServer):
+            raise RuntimeError("pinned CDP probe server has an invalid type")
+        server.record_request(path)
+        if path == "/":
+            body = b"""<link rel='icon' href='data:,'>
+            <iframe src='http://b.test:PORT/frame'></iframe><script>
+            window.qcsdDedicatedWorker = new Worker('/dedicated-worker.js');
+            window.qcsdSharedWorker = new SharedWorker('/shared-worker.js');
+            window.qcsdSharedWorker.port.start();
             fetch('/duplicate'); fetch('/duplicate'); fetch('/redirect');
             </script>""".replace(b"PORT", str(self.server.server_port).encode())
             kind = "text/html"
-        elif self.path == "/redirect":
+        elif path == "/redirect":
             self.send_response(302)
             self.send_header("Location", "/redirected")
             self.end_headers()
             return
-        elif self.path == "/frame":
+        elif path == "/frame":
             body, kind = b"<script>fetch('/frame-data')</script>", "text/html"
-        elif self.path == "/worker.js":
-            body, kind = b"fetch('/worker-data')", "text/javascript"
-        else:
+        elif path == "/dedicated-worker.js":
+            body, kind = b"fetch('/dedicated-data')", "text/javascript"
+        elif path == "/shared-worker.js":
+            body, kind = b"fetch('/shared-data')", "text/javascript"
+        elif path in {
+            "/dedicated-data",
+            "/duplicate",
+            "/frame-data",
+            "/redirected",
+            "/shared-data",
+        }:
             body, kind = b"ok", "text/plain"
+        else:
+            self.send_error(404)
+            return
         self.send_response(200)
         self.send_header("Content-Type", kind)
         self.send_header("Content-Length", str(len(body)))
@@ -118,10 +337,11 @@ def run_pinned_cdp_probe(*, expected_uid: int, expected_gid: int) -> dict[str, A
     """Run the real topology probe and return its sanitised observation."""
 
     isolation = _observe_isolation(expected_uid=expected_uid, expected_gid=expected_gid)
+    driver_receipt = validate_default_playwright_driver_once()
     playwright_version = importlib.metadata.version("playwright")
     if playwright_version != EXPECTED_PLAYWRIGHT_VERSION:
         raise ValueError("pinned CDP probe Playwright version differs from the contract")
-    executable = os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH")
+    executable = pinned_chromium_executable_path()
     if executable != EXPECTED_CHROMIUM_EXECUTABLE:
         raise ValueError("pinned CDP probe Chromium executable differs from the contract")
     executable_path = Path(executable)
@@ -130,35 +350,43 @@ def run_pinned_cdp_probe(*, expected_uid: int, expected_gid: int) -> dict[str, A
 
     from playwright.sync_api import sync_playwright
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    server = _ProbeServer(("127.0.0.1", 0))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     observed_events: list[tuple[str, str, str]] = []
+    target_activity = _TargetActivityLedger()
+    http_status_counts: dict[str, Counter[str]] = {}
+    bootstrap_prearm_summary: dict[str, Any] | None = None
+    egress_prearm_summary: dict[str, Any] | None = None
+    non_replayable_egress_summary: dict[str, Any] | None = None
+    browser_egress_command_line: dict[str, object] | None = None
+    browser_context_service_worker_count: int | None = None
+    quiescent_target_activity: dict[str, Any] | None = None
     chromium_version = ""
     router_closed = False
+    browser_guard_closed = False
     ledger_closed = False
     extra_info_closed = False
     browser_closed = False
+    egress_guard: NonReplayableEgressGuard | None = None
+    router: RecursiveCdpTargetRouter | None = None
     try:
-        with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(
-                executable_path=executable,
-                headless=True,
-                args=[
-                    "--no-sandbox",
-                    "--no-proxy-server",
-                    "--site-per-process",
-                    "--host-resolver-rules=MAP a.test 127.0.0.1,MAP b.test 127.0.0.1",
-                ],
+        with playwright_driver_session(sync_playwright, exclusive=True) as playwright:
+            browser, browser_egress_command_line = launch_pinned_cdp_probe_browser(
+                playwright,
+                approved_origins=_PINNED_CDP_APPROVED_ORIGINS,
+                origin_ip_pins=_PINNED_CDP_ORIGIN_IP_PINS,
             )
-            chromium_version = browser.version
             try:
+                chromium_version = browser.version
                 context = browser.new_context(service_workers="block")
+                egress_guard = NonReplayableEgressGuard()
+                install_context_egress_guards(context, egress_guard)
                 page = context.new_page()
+                egress_guard.bind_root_page(page)
                 page.set_default_timeout(PROBE_OBSERVATION_TIMEOUT_MS)
                 page.set_default_navigation_timeout(PROBE_OBSERVATION_TIMEOUT_MS)
                 session = context.new_cdp_session(page)
-                router: RecursiveCdpTargetRouter
                 ledger = _RequestObservationLedger(
                     eligible=lambda method, url: method == "GET" and url.startswith("http://")
                 )
@@ -169,7 +397,10 @@ def run_pinned_cdp_probe(*, expected_uid: int, expected_gid: int) -> dict[str, A
                     url = str(request.get("url", "")) if isinstance(request, Mapping) else ""
                     observed_events.append((source.target_type, method, url))
                     if method == "Network.requestWillBeSent":
-                        redirected = payload.get("redirectResponse") is not None
+                        redirect_response = payload.get("redirectResponse")
+                        redirected = redirect_response is not None
+                        if isinstance(redirect_response, Mapping):
+                            _record_http_status(http_status_counts, redirect_response)
                         extra_info.add_request(
                             source.request_chain_key(str(payload["requestId"])),
                             DiscoveredRequest(url, str(payload.get("type", "Other")), {}),
@@ -190,6 +421,9 @@ def run_pinned_cdp_probe(*, expected_uid: int, expected_gid: int) -> dict[str, A
                             payload.get("headers"),
                         )
                     elif method == "Network.responseReceived":
+                        response = payload.get("response")
+                        if isinstance(response, Mapping):
+                            _record_http_status(http_status_counts, response)
                         extra_info.add_response(
                             source.request_chain_key(str(payload["requestId"])),
                             payload.get("hasExtraInfo"),
@@ -209,12 +443,63 @@ def run_pinned_cdp_probe(*, expected_uid: int, expected_gid: int) -> dict[str, A
                             label="probe-policy",
                         )
 
-                router = RecursiveCdpTargetRouter(session, on_event=event)
+                router = RecursiveCdpTargetRouter(
+                    session,
+                    on_event=event,
+                    on_target_activity=target_activity.record,
+                    on_non_replayable_egress=lambda source, api, mechanism, url: (
+                        egress_guard.record(
+                            source=source,
+                            api=api,
+                            mechanism=mechanism,
+                            url=url,
+                        )
+                    ),
+                )
                 router.start()
-                page.goto(f"http://a.test:{server.server_port}/", wait_until="load")
-                _wait_for_required_observations(page, router, observed_events)
+                browser_guard = BrowserSharedWorkerGuard(browser_session, router)
+                browser_guard.start()
+                load_seen = [False]
+                page.on("load", lambda: load_seen.__setitem__(0, True))
+                deadline = time.monotonic() + PROBE_OBSERVATION_TIMEOUT_MS / 1_000
+                page.goto(
+                    f"http://a.test:{server.server_port}/",
+                    wait_until="commit",
+                    timeout=max(1, round((deadline - time.monotonic()) * 1_000)),
+                )
+                _wait_for_page_load(
+                    page,
+                    router,
+                    load_seen,
+                    egress_guard,
+                    deadline=deadline,
+                )
+                convergence_generation = _wait_for_required_observations(
+                    page,
+                    router,
+                    observed_events,
+                    target_activity,
+                    egress_guard,
+                    deadline=deadline,
+                )
+                egress_guard.raise_if_failed()
+                browser_context_service_worker_count = len(context.service_workers)
+                if browser_context_service_worker_count:
+                    raise RuntimeError("pinned CDP probe observed a browser service worker")
                 router.begin_shutdown()
+                quiescent_target_activity = target_activity.snapshot()
+                if (
+                    quiescent_target_activity["generation"] != convergence_generation
+                    or target_activity.generation != convergence_generation
+                ):
+                    raise RuntimeError("pinned CDP target activity changed after quiescence")
+                bootstrap_prearm_summary = router.bootstrap_prearm_summary
+                egress_prearm_summary = router.egress_prearm_summary
+                non_replayable_egress_summary = egress_guard.success_summary()
+                browser_guard.begin_shutdown()
                 context.close()
+                browser_guard.finish()
+                browser_guard_closed = True
                 router.finish()
                 router_closed = True
                 ledger.finish()
@@ -222,8 +507,15 @@ def run_pinned_cdp_probe(*, expected_uid: int, expected_gid: int) -> dict[str, A
                 extra_info.finish()
                 extra_info_closed = True
             finally:
-                browser.close()
-                browser_closed = True
+                try:
+                    browser.close()
+                    browser_closed = True
+                finally:
+                    if egress_guard is not None:
+                        egress_guard.raise_if_failed()
+                    if router is not None:
+                        router.raise_if_failed()
+            non_replayable_egress_summary = egress_guard.success_summary()
     finally:
         server.shutdown()
         server.server_close()
@@ -231,7 +523,19 @@ def run_pinned_cdp_probe(*, expected_uid: int, expected_gid: int) -> dict[str, A
 
     topology = {
         **_event_topology(observed_events),
+        "http_status_counts": {
+            path: dict(sorted(counts.items()))
+            for path, counts in sorted(http_status_counts.items())
+        },
+        "server_request_counts": server.request_count_snapshot(),
+        "bootstrap_prearm_summary": bootstrap_prearm_summary,
+        "egress_prearm_summary": egress_prearm_summary,
+        "non_replayable_egress_summary": non_replayable_egress_summary,
+        "browser_egress_command_line": browser_egress_command_line,
+        "browser_context_service_worker_count": browser_context_service_worker_count,
+        "quiescent_target_activity": quiescent_target_activity,
         "router_closed": router_closed,
+        "browser_guard_closed": browser_guard_closed,
         "ledger_closed": ledger_closed,
         "extra_info_closed": extra_info_closed,
         "browser_closed": browser_closed,
@@ -241,18 +545,77 @@ def run_pinned_cdp_probe(*, expected_uid: int, expected_gid: int) -> dict[str, A
         "playwright_version": playwright_version,
         "chromium_version": chromium_version,
         "chromium_executable": executable,
+        "playwright_driver": _driver_binding(driver_receipt),
         "isolation": isolation,
         "topology": topology,
     }
     return _validate_observation(observation)
 
 
+def _record_http_status(
+    status_counts: dict[str, Counter[str]],
+    response: Mapping[str, Any],
+) -> None:
+    """Record only deterministic loopback response path/status aggregates."""
+
+    url = response.get("url")
+    status = response.get("status")
+    if not isinstance(url, str) or not url.startswith("http://"):
+        return
+    if type(status) not in {int, float} or int(status) != status:
+        raise ValueError("pinned CDP probe response status is malformed")
+    path = urlsplit(url).path
+    status_counts.setdefault(path, Counter())[str(int(status))] += 1
+
+
+def _driver_binding(receipt: Mapping[str, Any]) -> dict[str, Any]:
+    browser_manifest = receipt.get("browser_manifest")
+    executable = receipt.get("chromium_executable")
+    if not isinstance(browser_manifest, Mapping) or not isinstance(executable, Mapping):
+        raise ValueError("Playwright ownership receipt omitted its browser binding")
+    binding = {
+        "receipt_sha256": sha256_file(PLAYWRIGHT_DRIVER_RECEIPT),
+        "payload_sha256": receipt.get("payload_sha256"),
+        "content_sha256": receipt.get("content_sha256"),
+        "policy": receipt.get("policy"),
+        "browsers_json_sha256": browser_manifest.get("sha256"),
+        "chromium_executable_sha256": executable.get("sha256"),
+    }
+    if binding != EXPECTED_PLAYWRIGHT_DRIVER_BINDING:
+        raise ValueError("Playwright ownership receipt differs from the pinned default binding")
+    return json.loads(canonical_json_bytes(binding))
+
+
+def _wait_for_page_load(
+    page: Any,
+    router: RecursiveCdpTargetRouter,
+    load_seen: Sequence[bool],
+    egress_guard: NonReplayableEgressGuard,
+    *,
+    deadline: float,
+) -> None:
+    """Pump Playwright while surfacing instrumentation failure before timeout."""
+
+    while time.monotonic() < deadline:
+        egress_guard.raise_if_failed()
+        router.raise_if_failed()
+        if load_seen[0]:
+            if time.monotonic() >= deadline:
+                break
+            return
+        remaining_ms = max(1, round((deadline - time.monotonic()) * 1_000))
+        page.wait_for_timeout(min(25, remaining_ms))
+    egress_guard.raise_if_failed()
+    router.raise_if_failed()
+    raise RuntimeError("pinned CDP probe page did not reach its real load event")
+
+
 def _event_topology(events: Sequence[tuple[str, str, str]]) -> dict[str, Any]:
+    method_counts = Counter(method for _target_type, method, _url in events)
     return {
-        "observed_target_types": sorted(
-            {target_type for target_type, _method, _url in events}
-        ),
+        "observed_target_types": sorted({target_type for target_type, _method, _url in events}),
         "event_count": len(events),
+        "event_method_counts": {method: method_counts[method] for method in _EVENT_METHODS},
         "cross_site_iframe_request": any(
             target_type == "iframe"
             and method == "Network.requestWillBeSent"
@@ -263,7 +626,7 @@ def _event_topology(events: Sequence[tuple[str, str, str]]) -> dict[str, Any]:
             method == "Network.requestWillBeSent" and url.endswith("/duplicate")
             for _target_type, method, url in events
         ),
-        "redirect_terminal_request": any(
+        "redirect_target_request": any(
             method == "Network.requestWillBeSent" and url.endswith("/redirected")
             for _target_type, method, url in events
         ),
@@ -271,13 +634,32 @@ def _event_topology(events: Sequence[tuple[str, str, str]]) -> dict[str, Any]:
             {
                 target_type
                 for target_type, method, url in events
-                if method == "Network.requestWillBeSent" and url.endswith("/worker-data")
+                if method == "Network.requestWillBeSent"
+                and url.endswith(("/dedicated-data", "/shared-data"))
             }
         ),
-        "worker_fetch_paused_on_page": any(
+        "dedicated_worker_network_request": any(
+            target_type == "worker"
+            and method == "Network.requestWillBeSent"
+            and url.endswith("/dedicated-data")
+            for target_type, method, url in events
+        ),
+        "shared_worker_network_request": any(
+            target_type == "shared_worker"
+            and method == "Network.requestWillBeSent"
+            and url.endswith("/shared-data")
+            for target_type, method, url in events
+        ),
+        "dedicated_worker_fetch_paused_on_page": any(
             target_type == "page"
             and method == "Fetch.requestPaused"
-            and url.endswith("/worker-data")
+            and url.endswith("/dedicated-data")
+            for target_type, method, url in events
+        ),
+        "shared_worker_fetch_paused_on_shared_worker": any(
+            target_type == "shared_worker"
+            and method == "Fetch.requestPaused"
+            and url.endswith("/shared-data")
             for target_type, method, url in events
         ),
     }
@@ -286,13 +668,15 @@ def _event_topology(events: Sequence[tuple[str, str, str]]) -> dict[str, Any]:
 def _required_event_topology_observed(events: Sequence[tuple[str, str, str]]) -> bool:
     topology = _event_topology(events)
     return (
-        topology["observed_target_types"]
-        == ["iframe", "page", "shared_worker", "worker"]
+        topology["observed_target_types"] == ["iframe", "page", "shared_worker", "worker"]
         and topology["cross_site_iframe_request"] is True
         and topology["duplicate_request_occurrences"] == 2
-        and topology["redirect_terminal_request"] is True
+        and topology["redirect_target_request"] is True
         and topology["worker_network_target_types"] == ["shared_worker", "worker"]
-        and topology["worker_fetch_paused_on_page"] is True
+        and topology["dedicated_worker_network_request"] is True
+        and topology["shared_worker_network_request"] is True
+        and topology["dedicated_worker_fetch_paused_on_page"] is True
+        and topology["shared_worker_fetch_paused_on_shared_worker"] is True
     )
 
 
@@ -300,28 +684,97 @@ def _wait_for_required_observations(
     page: Any,
     router: RecursiveCdpTargetRouter,
     events: Sequence[tuple[str, str, str]],
-) -> None:
+    target_activity: _TargetActivityLedger,
+    egress_guard: NonReplayableEgressGuard,
+    *,
+    deadline: float,
+) -> int:
     """Wait for required topology and a quiet, request-free convergence interval."""
 
-    deadline = time.monotonic() + PROBE_OBSERVATION_TIMEOUT_MS / 1_000
     quiet_since: float | None = None
     previous_count = -1
+    previous_target_generation = -1
     while time.monotonic() < deadline:
-        page.wait_for_timeout(25)
+        egress_guard.raise_if_failed()
+        remaining_ms = max(1, round((deadline - time.monotonic()) * 1_000))
+        page.wait_for_timeout(min(25, remaining_ms))
+        egress_guard.raise_if_failed()
         router.raise_if_failed()
         now = time.monotonic()
         event_count = len(events)
-        if event_count != previous_count:
+        target_generation = target_activity.generation
+        if event_count != previous_count or target_generation != previous_target_generation:
             previous_count = event_count
+            previous_target_generation = target_generation
             quiet_since = None
-        elif _required_event_topology_observed(events) and not router.active_request_identities:
+        elif (
+            _required_event_topology_observed(events)
+            and not router.active_request_identities
+            and router.shutdown_ready
+        ):
             if quiet_since is None:
                 quiet_since = now
             elif (now - quiet_since) * 1_000 >= PROBE_QUIET_INTERVAL_MS:
-                return
+                if now >= deadline:
+                    break
+                return target_generation
         else:
             quiet_since = None
+    egress_guard.raise_if_failed()
+    router.raise_if_failed()
     raise RuntimeError("pinned CDP probe did not converge on its required topology")
+
+
+def _validate_target_activity_summary(value: object) -> dict[str, Any]:
+    """Validate the minimised lifecycle aggregate used by the quiet gate."""
+
+    if not isinstance(value, Mapping) or set(value) != {
+        "schema_version",
+        "generation",
+        "by_target_type",
+    }:
+        raise ValueError("pinned CDP target-activity fields are invalid")
+    generation = value.get("generation")
+    by_target_type = value.get("by_target_type")
+    if (
+        type(value.get("schema_version")) is not int
+        or value["schema_version"] != TARGET_ACTIVITY_SCHEMA_VERSION
+        or type(generation) is not int
+        or generation < 0
+        or not isinstance(by_target_type, Mapping)
+        or set(by_target_type) != set(_TARGET_ACTIVITY_TYPES)
+    ):
+        raise ValueError("pinned CDP target-activity aggregate is invalid")
+    observed_total = 0
+    for target_type in _TARGET_ACTIVITY_TYPES:
+        entry = by_target_type[target_type]
+        if not isinstance(entry, Mapping) or set(entry) != {
+            "total",
+            "max_source_generation",
+            "event_counts",
+        }:
+            raise ValueError("pinned CDP target-activity entry is invalid")
+        total = entry.get("total")
+        maximum = entry.get("max_source_generation")
+        event_counts = entry.get("event_counts")
+        if (
+            type(total) is not int
+            or total < 0
+            or not isinstance(event_counts, Mapping)
+            or set(event_counts) != set(_TARGET_ACTIVITY_EVENTS)
+            or any(
+                type(event_counts.get(event)) is not int or event_counts[event] < 0
+                for event in _TARGET_ACTIVITY_EVENTS
+            )
+            or sum(event_counts.values()) != total
+            or (total == 0 and maximum is not None)
+            or (total > 0 and (type(maximum) is not int or maximum < 0))
+        ):
+            raise ValueError("pinned CDP target-activity aggregate is invalid")
+        observed_total += total
+    if observed_total != generation:
+        raise ValueError("pinned CDP target-activity generation is inconsistent")
+    return json.loads(canonical_json_bytes(value))
 
 
 def create_pinned_cdp_receipt(
@@ -336,9 +789,9 @@ def create_pinned_cdp_receipt(
 
     if type(cohort_version) is not int or cohort_version < 1:
         raise ValueError("pinned CDP probe cohort version must be a positive integer")
-    if type(expected_uid) is not int or expected_uid < 0:
+    if type(expected_uid) is not int or expected_uid < 1:
         raise ValueError("pinned CDP probe expected UID is invalid")
-    if type(expected_gid) is not int or expected_gid < 0:
+    if type(expected_gid) is not int or expected_gid < 1:
         raise ValueError("pinned CDP probe expected GID is invalid")
     destination = require_disjoint_path(
         destination,
@@ -464,7 +917,8 @@ def _validate_payload(
         raise ValueError("pinned CDP probe payload fields differ from the contract")
     cohort_version = payload.get("cohort_version")
     if (
-        payload.get("probe_schema_version") != PROBE_SCHEMA_VERSION
+        type(payload.get("probe_schema_version")) is not int
+        or payload.get("probe_schema_version") != PROBE_SCHEMA_VERSION
         or payload.get("artifact_type") != RECEIPT_TYPE
         or payload.get("study_id") != STUDY_ID
         or type(cohort_version) is not int
@@ -523,13 +977,17 @@ def _validate_payload(
         raise ValueError("pinned CDP probe differs from its source/build/prepare image")
     if recorded_at < _timestamp(build["finished_at"], label="no-cache build finish"):
         raise ValueError("pinned CDP probe predates its no-cache build")
-    _validate_observation(payload.get("observation"))
+    observation = _validate_observation(payload.get("observation"))
     if runtime_role is not None:
         if runtime_role not in {"collection", "prepare"}:
             raise ValueError("pinned CDP probe runtime role is invalid")
         expected_source = prepare_source if runtime_role == "prepare" else collection_source
         if source_metadata() != expected_source:
             raise ValueError("pinned CDP probe validation runtime differs from its build")
+        if runtime_role == "prepare" and observation.get("playwright_driver") != _driver_binding(
+            validate_default_playwright_driver_once()
+        ):
+            raise ValueError("pinned CDP probe Playwright driver differs from the prepare runtime")
     return json.loads(canonical_json_bytes(payload))
 
 
@@ -538,29 +996,45 @@ def _validate_observation(value: object) -> dict[str, Any]:
         "playwright_version",
         "chromium_version",
         "chromium_executable",
+        "playwright_driver",
         "isolation",
         "topology",
     }:
         raise ValueError("pinned CDP probe observation fields are invalid")
     isolation = value.get("isolation")
     topology = value.get("topology")
+    driver = value.get("playwright_driver")
     if (
         value.get("playwright_version") != EXPECTED_PLAYWRIGHT_VERSION
-        or not isinstance(value.get("chromium_version"), str)
-        or not str(value["chromium_version"]).strip()
+        or value.get("chromium_version") != EXPECTED_CHROMIUM_VERSION
         or value.get("chromium_executable") != EXPECTED_CHROMIUM_EXECUTABLE
     ):
         raise ValueError("pinned CDP probe browser evidence is invalid")
+    if driver != EXPECTED_PLAYWRIGHT_DRIVER_BINDING:
+        raise ValueError("pinned CDP probe Playwright driver evidence is invalid")
     _validate_isolation(isolation)
     if not isinstance(topology, Mapping) or set(topology) != {
         "observed_target_types",
         "event_count",
+        "event_method_counts",
         "cross_site_iframe_request",
         "duplicate_request_occurrences",
-        "redirect_terminal_request",
+        "redirect_target_request",
         "worker_network_target_types",
-        "worker_fetch_paused_on_page",
+        "dedicated_worker_network_request",
+        "shared_worker_network_request",
+        "dedicated_worker_fetch_paused_on_page",
+        "shared_worker_fetch_paused_on_shared_worker",
+        "http_status_counts",
+        "server_request_counts",
+        "bootstrap_prearm_summary",
+        "egress_prearm_summary",
+            "non_replayable_egress_summary",
+            "browser_egress_command_line",
+        "browser_context_service_worker_count",
+        "quiescent_target_activity",
         "router_closed",
+        "browser_guard_closed",
         "ledger_closed",
         "extra_info_closed",
         "browser_closed",
@@ -571,22 +1045,90 @@ def _validate_observation(value: object) -> dict[str, Any]:
     expected_types = ["iframe", "page", "shared_worker", "worker"]
     boolean_fields = (
         "cross_site_iframe_request",
-        "redirect_terminal_request",
-        "worker_fetch_paused_on_page",
+        "redirect_target_request",
+        "dedicated_worker_network_request",
+        "shared_worker_network_request",
+        "dedicated_worker_fetch_paused_on_page",
+        "shared_worker_fetch_paused_on_shared_worker",
         "router_closed",
+        "browser_guard_closed",
         "ledger_closed",
         "extra_info_closed",
         "browser_closed",
         "server_thread_stopped",
     )
+    method_counts = topology.get("event_method_counts")
+    if (
+        not isinstance(method_counts, Mapping)
+        or set(method_counts) != set(_EVENT_METHODS)
+        or any(
+            type(method_counts.get(method)) is not int or method_counts[method] < 0
+            for method in _EVENT_METHODS
+        )
+        or sum(method_counts.values()) != topology.get("event_count")
+        or method_counts["Network.loadingFailed"] != 0
+        or method_counts["Network.requestServedFromCache"] != 0
+    ):
+        raise ValueError("pinned CDP probe event-method aggregate is invalid")
+    prearm = validate_bootstrap_prearm_summary(
+        topology.get("bootstrap_prearm_summary"),
+        require_terminal=True,
+    )
+    egress_prearm = validate_egress_prearm_summary(
+        topology.get("egress_prearm_summary"),
+        require_terminal=True,
+    )
+    validate_non_replayable_egress_success_summary(
+        topology.get("non_replayable_egress_summary")
+    )
+    browser_egress_projection = validate_browser_egress_command_line_projection(
+        topology.get("browser_egress_command_line")
+    )
+    if (
+        browser_egress_projection.get("host_resolver_policy")
+        != _PINNED_CDP_RESOLVER_PROJECTION
+    ):
+        raise ValueError("pinned CDP probe host-resolver policy is invalid")
+    target_activity = _validate_target_activity_summary(topology.get("quiescent_target_activity"))
+    activity_by_type = target_activity["by_target_type"]
+    http_status_counts = topology.get("http_status_counts")
+    server_request_counts = topology.get("server_request_counts")
+    if (
+        not isinstance(http_status_counts, Mapping)
+        or any(
+            not isinstance(statuses, Mapping)
+            or any(type(count) is not int for count in statuses.values())
+            for statuses in http_status_counts.values()
+        )
+        or not isinstance(server_request_counts, Mapping)
+        or any(type(count) is not int for count in server_request_counts.values())
+    ):
+        raise ValueError("pinned CDP probe topology evidence did not pass")
     if (
         not isinstance(target_types, list)
         or target_types != expected_types
         or any(not isinstance(item, str) or not item for item in target_types)
         or type(topology.get("event_count")) is not int
-        or topology["event_count"] < 1
+        or topology["event_count"] < sum(_EXPECTED_SERVER_REQUEST_COUNTS.values())
         or topology.get("duplicate_request_occurrences") != 2
         or topology.get("worker_network_target_types") != ["shared_worker", "worker"]
+        or http_status_counts != _EXPECTED_HTTP_STATUS_COUNTS
+        or server_request_counts != _EXPECTED_SERVER_REQUEST_COUNTS
+        or prearm != _EXPECTED_PINNED_BOOTSTRAP_PREARM_SUMMARY
+        or egress_prearm["target_total"] < 4
+        or egress_prearm["installed_total"] != egress_prearm["target_total"]
+        or egress_prearm["by_target_type"]["page"]["installed_count"] != 1
+        or any(
+            egress_prearm["by_target_type"][target_type]["installed_count"] < 1
+            for target_type in ("iframe", "shared_worker", "worker")
+        )
+        or type(topology.get("browser_context_service_worker_count")) is not int
+        or topology["browser_context_service_worker_count"] != 0
+        or activity_by_type["page"]["event_counts"]["target-attached"] != 0
+        or any(
+            activity_by_type[target_type]["event_counts"]["target-attached"] < 1
+            for target_type in ("iframe", "shared_worker", "worker")
+        )
         or any(topology.get(field) is not True for field in boolean_fields)
     ):
         raise ValueError("pinned CDP probe topology evidence did not pass")
@@ -600,30 +1142,61 @@ def _validate_isolation(value: object) -> dict[str, Any]:
         != {
             "real_uid",
             "effective_uid",
+            "saved_uid",
+            "filesystem_uid",
             "real_gid",
             "effective_gid",
+            "saved_gid",
+            "filesystem_gid",
             "expected_uid",
             "expected_gid",
+            "supplementary_groups",
+            "inheritable_capabilities",
+            "permitted_capabilities",
             "effective_capabilities",
+            "bounding_capabilities",
+            "ambient_capabilities",
             "no_new_privileges",
             "observed_interfaces",
         }
         or any(
-            type(value.get(field)) is not int or value[field] < 0
+            type(value.get(field)) is not int or value[field] < 1
             for field in (
                 "real_uid",
                 "effective_uid",
+                "saved_uid",
+                "filesystem_uid",
                 "real_gid",
                 "effective_gid",
+                "saved_gid",
+                "filesystem_gid",
                 "expected_uid",
                 "expected_gid",
             )
         )
-        or value["real_uid"] != value["expected_uid"]
-        or value["effective_uid"] != value["expected_uid"]
-        or value["real_gid"] != value["expected_gid"]
-        or value["effective_gid"] != value["expected_gid"]
-        or value.get("effective_capabilities") != "0000000000000000"
+        or any(
+            value[field] != value["expected_uid"]
+            for field in ("real_uid", "effective_uid", "saved_uid", "filesystem_uid")
+        )
+        or any(
+            value[field] != value["expected_gid"]
+            for field in ("real_gid", "effective_gid", "saved_gid", "filesystem_gid")
+        )
+        or not isinstance(value.get("supplementary_groups"), list)
+        or any(
+            type(group) is not int or group < 1 for group in value.get("supplementary_groups", [])
+        )
+        or value.get("supplementary_groups") != sorted(set(value.get("supplementary_groups", [])))
+        or any(
+            value.get(field) != "0000000000000000"
+            for field in (
+                "inheritable_capabilities",
+                "permitted_capabilities",
+                "effective_capabilities",
+                "bounding_capabilities",
+                "ambient_capabilities",
+            )
+        )
         or value.get("no_new_privileges") is not True
         or value.get("observed_interfaces") != ["lo"]
     ):
@@ -637,18 +1210,38 @@ def _observe_isolation(*, expected_uid: int, expected_gid: int) -> dict[str, Any
         name, separator, raw = line.partition(":")
         if separator:
             status[name] = raw.strip()
-    capabilities = status.get("CapEff", "").lower()
-    if not re.fullmatch(r"[0-9a-f]{16}", capabilities):
-        raise ValueError("pinned CDP probe cannot read effective capabilities")
+    uid_values = status.get("Uid", "").split()
+    gid_values = status.get("Gid", "").split()
+    if len(uid_values) != 4 or len(gid_values) != 4:
+        raise ValueError("pinned CDP probe cannot read complete process credentials")
+    capabilities = {
+        field: status.get(status_name, "").lower()
+        for field, status_name in (
+            ("inheritable_capabilities", "CapInh"),
+            ("permitted_capabilities", "CapPrm"),
+            ("effective_capabilities", "CapEff"),
+            ("bounding_capabilities", "CapBnd"),
+            ("ambient_capabilities", "CapAmb"),
+        )
+    }
+    if any(
+        re.fullmatch(r"[0-9a-f]{16}", capability) is None for capability in capabilities.values()
+    ):
+        raise ValueError("pinned CDP probe cannot read complete capability sets")
     interfaces = sorted(name for _index, name in socket.if_nameindex())
     value = {
-        "real_uid": os.getuid(),
-        "effective_uid": os.geteuid(),
-        "real_gid": os.getgid(),
-        "effective_gid": os.getegid(),
+        "real_uid": int(uid_values[0]),
+        "effective_uid": int(uid_values[1]),
+        "saved_uid": int(uid_values[2]),
+        "filesystem_uid": int(uid_values[3]),
+        "real_gid": int(gid_values[0]),
+        "effective_gid": int(gid_values[1]),
+        "saved_gid": int(gid_values[2]),
+        "filesystem_gid": int(gid_values[3]),
         "expected_uid": expected_uid,
         "expected_gid": expected_gid,
-        "effective_capabilities": capabilities,
+        "supplementary_groups": sorted(set(os.getgroups())),
+        **capabilities,
         "no_new_privileges": status.get("NoNewPrivs") == "1",
         "observed_interfaces": interfaces,
     }

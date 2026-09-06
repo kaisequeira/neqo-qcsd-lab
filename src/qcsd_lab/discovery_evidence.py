@@ -17,14 +17,23 @@ from copy import deepcopy
 from typing import Any
 from urllib.parse import urlsplit
 
-from .cdp_targets import CDP_TARGET_INSTRUMENTATION_POLICY
+from .cdp_targets import (
+    CDP_TARGET_INSTRUMENTATION_POLICY,
+    validate_bootstrap_prearm_summary,
+    validate_egress_prearm_summary,
+)
+from .browser_egress import (
+    NON_REPLAYABLE_EGRESS_POLICY,
+    validate_non_replayable_egress_success_summary,
+)
 
-PASSIVE_RENDER_CONTRACT_SCHEMA_VERSION = 1
-DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION = 2
+PASSIVE_RENDER_CONTRACT_SCHEMA_VERSION = 3
+RENDER_OBSERVATION_SCHEMA_VERSION = 3
+DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION = 4
 
 PASSIVE_RENDER_CONTRACT: dict[str, Any] = {
     "schema_version": PASSIVE_RENDER_CONTRACT_SCHEMA_VERSION,
-    "policy": "bounded-passive-render-quiescence-v1",
+    "policy": "bounded-passive-render-quiescence-v3",
     "viewport": {"width": 1365, "height": 768, "deviceScaleFactor": 1},
     "cache": "disabled",
     "service_workers": "bypassed-and-registration-blocked",
@@ -34,7 +43,22 @@ PASSIVE_RENDER_CONTRACT: dict[str, Any] = {
     "quiet_window_begins": "after-minimum-or-last-relevant-event-whichever-is-later",
     "hard_cap_after_load_ms": 30_000,
     "poll_interval_ms": 100,
-    "active_request_scope": "all-network-request-occurrences",
+    "active_request_scope": "all-instrumented-urlloader-request-occurrences",
+    "non_replayable_egress_policy": NON_REPLAYABLE_EGRESS_POLICY,
+    "non_replayable_egress_boundary": {
+        "page_frame_websocket": "playwright-route-before-page",
+        "paused_target_constructor_shim": True,
+        "cdp_network_events": "post-construction-tripwire-only",
+        "packet_level_completeness_claimed": False,
+    },
+    "quiescence_requires": [
+        "no-active-network-request-occurrences",
+        "recursive-target-router-shutdown-ready",
+        "no-pending-shared-worker-bootstrap-prearm",
+        "all-observed-target-egress-shims-prearmed",
+        "zero-non-replayable-egress-attempts",
+        "zero-browser-context-service-workers",
+    ],
     "relevant_events": [
         "network-request",
         "fetch-request",
@@ -43,6 +67,7 @@ PASSIVE_RENDER_CONTRACT: dict[str, Any] = {
         "target-detached",
         "target-destroyed",
         "target-info-changed",
+        "non-replayable-egress-attempt",
     ],
     "hard_cap_policy": "typed-candidate-rejection",
 }
@@ -85,11 +110,20 @@ def validate_render_observation(value: Any, *, allow_failure: bool = False) -> N
         "cutoff_ms",
         "active_request_ids",
         "active_request_count",
+        "router_shutdown_ready",
+        "bootstrap_prearm_summary",
+        "egress_prearm_summary",
+        "non_replayable_egress_summary",
+        "browser_context_service_worker_count",
         "cutoff_reason",
     }
     if not isinstance(value, Mapping) or set(value) != fields:
         raise ValueError("render observation fields differ from the contract")
-    if value["schema_version"] != 1 or value["clock"] != "monotonic-relative-ms":
+    if (
+        type(value["schema_version"]) is not int
+        or value["schema_version"] != RENDER_OBSERVATION_SCHEMA_VERSION
+        or value["clock"] != "monotonic-relative-ms"
+    ):
         raise ValueError("render observation schema or clock is invalid")
     timing_fields = (
         "navigation_started_ms",
@@ -125,20 +159,42 @@ def validate_render_observation(value: Any, *, allow_failure: bool = False) -> N
     elapsed = cutoff - load
     quiet_elapsed = cutoff - quiet
     reason = value["cutoff_reason"]
+    router_shutdown_ready = value["router_shutdown_ready"]
+    if type(router_shutdown_ready) is not bool:
+        raise ValueError("render observation router readiness is invalid")
+    validate_bootstrap_prearm_summary(
+        value["bootstrap_prearm_summary"],
+        require_terminal=reason == "quiescent",
+    )
+    validate_egress_prearm_summary(
+        value["egress_prearm_summary"],
+        require_terminal=reason == "quiescent",
+    )
+    validate_non_replayable_egress_success_summary(
+        value["non_replayable_egress_summary"]
+    )
+    service_worker_count = value["browser_context_service_worker_count"]
+    if type(service_worker_count) is not int or service_worker_count < 0:
+        raise ValueError("render observation service-worker count is invalid")
     if reason == "quiescent":
-        if active or elapsed < PASSIVE_RENDER_CONTRACT["minimum_after_load_ms"]:
+        if (
+            active
+            or not router_shutdown_ready
+            or service_worker_count != 0
+            or elapsed < PASSIVE_RENDER_CONTRACT["minimum_after_load_ms"]
+        ):
             raise ValueError("quiescent render cutoff is premature or retains active requests")
         if quiet_elapsed < PASSIVE_RENDER_CONTRACT["quiet_window_ms"]:
             raise ValueError("quiescent render cutoff lacks the required quiet interval")
-        if elapsed > PASSIVE_RENDER_CONTRACT["hard_cap_after_load_ms"]:
+        if elapsed >= PASSIVE_RENDER_CONTRACT["hard_cap_after_load_ms"]:
             raise ValueError("quiescent render cutoff exceeds its hard cap")
     elif reason == "hard-cap-non-quiescent" and allow_failure:
         hard_cap = PASSIVE_RENDER_CONTRACT["hard_cap_after_load_ms"]
-        poll = PASSIVE_RENDER_CONTRACT["poll_interval_ms"]
-        if not hard_cap <= elapsed <= hard_cap + poll:
+        if elapsed < hard_cap:
             raise ValueError("hard-cap render rejection was recorded outside its boundary")
-        if not active and quiet_elapsed >= PASSIVE_RENDER_CONTRACT["quiet_window_ms"]:
-            raise ValueError("hard-cap render rejection was already quiescent")
+        # The hard cap has strict precedence at the observation boundary.  A
+        # delayed scheduler wake-up must still preserve the typed hard-cap
+        # rejection even when quiescence also became true in the meantime.
     else:
         raise ValueError("render observation cutoff reason is invalid")
 
@@ -469,7 +525,10 @@ def verify_discovery_event_audit(
     }
     if not isinstance(value, Mapping) or set(value) != fields:
         raise ValueError("discovery event audit fields differ from the contract")
-    if value["schema_version"] != DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION:
+    if (
+        type(value["schema_version"]) is not int
+        or value["schema_version"] != DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION
+    ):
         raise ValueError("discovery event audit schema is invalid")
     validate_render_observation(render_observation)
     if (

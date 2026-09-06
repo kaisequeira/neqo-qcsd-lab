@@ -17,3 +17,7 @@ class TerminalAcquisitionPolicyError(ValueError):
 
 class PassiveRenderPolicyError(TerminalAcquisitionPolicyError):
     """The bounded passive-render observation could not reach quiescence."""
+
+
+class NonReplayableEgressPolicyError(TerminalAcquisitionPolicyError):
+    """Browser content attempted an egress API the prepared workload cannot replay."""

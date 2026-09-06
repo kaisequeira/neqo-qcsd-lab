@@ -22,6 +22,8 @@ from qcsd_lab.class_study import (
     PILOT_COUNT,
     RECEIPT_TYPE,
     RESERVE_COUNT,
+    STUDY_ID,
+    SUCCESSOR_GENERATION_MAX,
     TRANCO_RANK_STRATA,
     ClassCandidate,
     bind_receipt,
@@ -29,11 +31,19 @@ from qcsd_lab.class_study import (
     campaign_sample_counts,
     canonical_json_bytes,
     canonical_json_sha256,
+    class_study_id_from_campaign_name,
     deterministic_candidate_order,
     formal_split_counts,
+    is_class_study_campaign_name,
+    is_class_study_id,
+    is_successor_study_id,
     load_study_receipt,
+    parse_class_study_id,
+    parse_class_study_campaign_name,
     select_cohort,
+    successor_study_id,
     validate_evidence_role,
+    validate_hash_bound_receipt,
     validate_study_receipt,
     write_study_receipt,
 )
@@ -167,6 +177,88 @@ def test_contract_defines_exact_modes_roles_and_campaign_arithmetic() -> None:
     assert sum(split["samples"] for split in splits.values()) == 16_000
 
 
+def test_class_study_identity_grammar_is_exact_and_generator_bounded() -> None:
+    digest = "a" * 64
+    successor = "classifier-multiorigin100-v2-g01-aaaaaaaaaaaa"
+
+    assert successor_study_id(generation=1, identity_sha256=digest) == successor
+    assert parse_class_study_id(STUDY_ID).generation == 0
+    parsed = parse_class_study_id(successor)
+    assert parsed.successor is True
+    assert parsed.generation == 1
+    assert parsed.identity_prefix == "a" * 12
+    assert is_class_study_id(STUDY_ID)
+    assert is_class_study_id(successor)
+    assert is_successor_study_id(successor)
+    assert not is_successor_study_id(STUDY_ID)
+
+    maximum = successor_study_id(
+        generation=SUCCESSOR_GENERATION_MAX,
+        identity_sha256="f" * 64,
+    )
+    assert parse_class_study_id(maximum).generation == SUCCESSOR_GENERATION_MAX
+
+    invalid = (
+        "classifier-multiorigin100-v2-aaaaaaaaaaaa",
+        "classifier-multiorigin100-v2-g00-aaaaaaaaaaaa",
+        "classifier-multiorigin100-v2-g100-aaaaaaaaaaaa",
+        "classifier-multiorigin100-v2-g01-AAAAAAAAAAAA",
+        "classifier-multiorigin100-v2-g01-aaaaaaaaaaa",
+        "classifier-multiorigin100-v2-g01-aaaaaaaaaaaa-extra",
+        f"prefix-{STUDY_ID}",
+    )
+    for value in invalid:
+        assert not is_class_study_id(value)
+        with pytest.raises(ValueError, match="class-study"):
+            parse_class_study_id(value)
+
+    for generation in (True, 0, SUCCESSOR_GENERATION_MAX + 1):
+        with pytest.raises(ValueError, match="generation"):
+            successor_study_id(generation=generation, identity_sha256=digest)
+    for invalid_digest in ("a" * 63, "A" * 64, "not-a-digest"):
+        with pytest.raises(ValueError, match="digest"):
+            successor_study_id(generation=1, identity_sha256=invalid_digest)
+
+
+def test_class_study_campaign_name_grammar_binds_the_complete_study_id() -> None:
+    successor = "classifier-multiorigin100-v2-g01-0123456789ab"
+    accepted = {
+        f"{STUDY_ID}-pilot-fitting-1200": STUDY_ID,
+        f"{STUDY_ID}-pilot-compatibility-1080-1200": STUDY_ID,
+        f"{STUDY_ID}-authoritative-fitting-1200": STUDY_ID,
+        f"{STUDY_ID}-certification-900-1200": STUDY_ID,
+        f"{STUDY_ID}-canary-10-1200": STUDY_ID,
+        f"{STUDY_ID}-formal-01-1200": STUDY_ID,
+        f"{successor}-authoritative-fitting-2000-1200": successor,
+        f"{successor}-certification-900-1200": successor,
+        f"{successor}-canary-01-1200": successor,
+        f"{successor}-formal-10-1200": successor,
+    }
+    for name, expected in accepted.items():
+        assert class_study_id_from_campaign_name(name) == expected
+        assert is_class_study_campaign_name(name)
+    parsed = parse_class_study_campaign_name(f"{successor}-formal-10-1200")
+    assert (parsed.study_id, parsed.evidence_role, parsed.block) == (
+        successor,
+        "formal",
+        10,
+    )
+
+    invalid = (
+        f"{STUDY_ID}-authoritative-fitting-2000-1200",
+        f"{successor}-pilot-fitting-1200",
+        f"{successor}-authoritative-fitting-1200",
+        f"{successor}-formal-00-1200",
+        f"{successor}-formal-11-1200",
+        f"{successor}-formal-01-1200-extra",
+        "classifier-multiorigin100-v2-active-formal-01-1200",
+    )
+    for name in invalid:
+        assert not is_class_study_campaign_name(name)
+        with pytest.raises(ValueError, match="campaign name"):
+            class_study_id_from_campaign_name(name)
+
+
 def test_hash_order_and_unconstrained_selection_are_deterministic() -> None:
     candidates = _candidates()
     first = deterministic_candidate_order(candidates, tranco_list_sha256=LIST_SHA)
@@ -284,6 +376,30 @@ def test_study_receipt_is_self_contained_hash_bound_and_semantically_validated()
         validate_study_receipt(rehashed)
 
 
+@pytest.mark.parametrize("historical_schema", (1, 2, 3, 4))
+def test_hash_envelope_accepts_legitimate_historical_payload_schemas(
+    historical_schema: int,
+) -> None:
+    payload = {"acquisition_schema_version": historical_schema}
+    receipt = bind_receipt(payload, receipt_type="historical-acquisition")
+
+    assert validate_hash_bound_receipt(
+        receipt,
+        expected_type="historical-acquisition",
+    ) == payload
+
+
+@pytest.mark.parametrize("schema_alias", (True, 1.0, "1"))
+def test_hash_envelope_requires_an_exact_integer_schema_version(
+    schema_alias: object,
+) -> None:
+    receipt = bind_receipt({"historical_schema": 1}, receipt_type="test-receipt")
+    receipt["schema_version"] = schema_alias
+
+    with pytest.raises(ValueError, match="schema version"):
+        validate_hash_bound_receipt(receipt, expected_type="test-receipt")
+
+
 def test_canonical_receipt_writer_is_create_only_and_load_revalidates(tmp_path: Path) -> None:
     receipt = _receipt()
     destination = tmp_path / "cohort.json"
@@ -310,6 +426,15 @@ def test_receipt_rejects_candidate_and_envelope_tampering_even_when_rehashed() -
     payload["candidates"][0]["stratum"] = TRANCO_RANK_STRATA[-1].id
     forged = bind_receipt(payload, receipt_type=RECEIPT_TYPE)
     with pytest.raises(ValueError, match="incorrect rank stratum"):
+        validate_study_receipt(forged)
+
+    # Origin multiplicity is preserved in the prepared workload, not admitted
+    # as a cohort-selection field.  This prevents either a single-origin or a
+    # multi-origin preference from being smuggled into a rehashed receipt.
+    payload = json.loads(json.dumps(receipt["payload"]))
+    payload["candidates"][0]["origin_count"] = 2
+    forged = bind_receipt(payload, receipt_type=RECEIPT_TYPE)
+    with pytest.raises(ValueError, match="candidate fields"):
         validate_study_receipt(forged)
 
     payload = json.loads(json.dumps(receipt["payload"]))

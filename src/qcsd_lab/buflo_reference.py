@@ -1327,19 +1327,97 @@ _GATE_RELATIVE_BINDINGS = {
     ),
 }
 _GATE_REQUIRED_SOURCE_IDS = tuple(_GATE_RELATIVE_BINDINGS)
+_BUFLO_AUTHOR_SOURCE_MODULES = {
+    "Packet": ("dyer-packet-py", "Packet.py"),
+    "Webpage": ("dyer-webpage-py", "Webpage.py"),
+    "Trace": ("dyer-trace-py", "Trace.py"),
+    "Folklore": ("dyer-folklore-py", "countermeasures/Folklore.py"),
+}
 _BUFLO_GATE_PACKETS = tuple(
     [BufloSourcePacket(0, "outgoing", 100) for _ in range(20)]
     + [BufloSourcePacket(5, "incoming", 150) for _ in range(3)]
     + [BufloSourcePacket(85, "outgoing", 100)]
 )
 _BUFLO_AUTHOR_RUNNER = r"""
+import hashlib
 import json
+import os
+import stat
 import sys
 import types
 
-repo = sys.argv[1]
-sys.path.insert(0, repo)
-sys.path.insert(0, repo + "/countermeasures")
+repo = os.path.realpath(sys.argv[1])
+request = json.load(sys.stdin)
+expected_layout = {
+    "Packet": "Packet.py",
+    "Webpage": "Webpage.py",
+    "Trace": "Trace.py",
+    "Folklore": "countermeasures/Folklore.py",
+}
+sources = request.get("author_sources")
+if not isinstance(sources, dict) or set(sources) != set(expected_layout):
+    raise RuntimeError("BuFLO author source manifest is invalid")
+
+# Isolated mode excludes the working directory, and no author-tree path is ever
+# added.  Author modules are opened, hash-checked, compiled, and executed from
+# their receipted source bytes, so Python's import machinery cannot select a
+# timestamp-valid or hash-valid bytecode cache from the external tree.
+for entry in sys.path:
+    if not entry:
+        raise RuntimeError("isolated BuFLO author runner has an empty import path entry")
+    resolved_entry = os.path.realpath(entry)
+    try:
+        inside_repo = os.path.commonpath((repo, resolved_entry)) == repo
+    except ValueError:
+        inside_repo = False
+    if inside_repo:
+        raise RuntimeError("BuFLO author tree unexpectedly appears on sys.path")
+
+
+def load_receipted_source(module_name):
+    source = sources[module_name]
+    if not isinstance(source, dict) or set(source) != {"relative_path", "sha256"}:
+        raise RuntimeError("BuFLO author source binding is invalid: " + module_name)
+    relative_path = source["relative_path"]
+    digest = source["sha256"]
+    if relative_path != expected_layout[module_name]:
+        raise RuntimeError("BuFLO author source layout is invalid: " + module_name)
+    if (
+        not isinstance(digest, str)
+        or len(digest) != 64
+        or any(character not in "0123456789abcdef" for character in digest)
+    ):
+        raise RuntimeError("BuFLO author source digest is invalid: " + module_name)
+    source_path = os.path.normpath(os.path.join(repo, relative_path))
+    try:
+        inside_repo = os.path.commonpath((repo, source_path)) == repo
+    except ValueError:
+        inside_repo = False
+    if not inside_repo:
+        raise RuntimeError("BuFLO author source escaped its root: " + module_name)
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(source_path, flags)
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise RuntimeError("BuFLO author source is not regular: " + module_name)
+        with os.fdopen(descriptor, "rb", closefd=False) as handle:
+            source_bytes = handle.read()
+    finally:
+        os.close(descriptor)
+    if hashlib.sha256(source_bytes).hexdigest() != digest:
+        raise RuntimeError("BuFLO author source digest mismatch: " + module_name)
+    module = types.ModuleType(module_name)
+    module.__file__ = source_path
+    module.__package__ = ""
+    sys.modules[module_name] = module
+    try:
+        code = compile(source_bytes, source_path, "exec", dont_inherit=True)
+        exec(code, module.__dict__)
+    except BaseException:
+        sys.modules.pop(module_name, None)
+        raise
+    return module
 
 # The historical repository's configuration module contains Python 2 print
 # syntax.  The trace oracle reads only IGNORE_ACK, so provide that single
@@ -1348,11 +1426,11 @@ config = types.ModuleType("config")
 config.IGNORE_ACK = True
 sys.modules["config"] = config
 
-from Packet import Packet
-from Trace import Trace
-from Folklore import Folklore
+Packet = load_receipted_source("Packet").Packet
+load_receipted_source("Webpage")
+Trace = load_receipted_source("Trace").Trace
+Folklore = load_receipted_source("Folklore").Folklore
 
-request = json.load(sys.stdin)
 result = {}
 for profile in request["profiles"]:
     trace = Trace(1)
@@ -1479,8 +1557,22 @@ def _buflo_projection(
 
 
 def _run_buflo_author_gate(folklore_path: Path) -> tuple[list[dict[str, object]], str]:
+    """Run only hash-validated author source; never import author-tree bytecode."""
+
     author_root = folklore_path.resolve().parents[1]
+    receipt_sources = {
+        source["source_id"]: source
+        for sources in _RECEIPT_SOURCES.values()
+        for source in sources
+    }
     request = {
+        "author_sources": {
+            module_name: {
+                "relative_path": relative_path,
+                "sha256": receipt_sources[source_id]["sha256"],
+            }
+            for module_name, (source_id, relative_path) in _BUFLO_AUTHOR_SOURCE_MODULES.items()
+        },
         "packets": [
             [packet.monotonic_ms, packet.direction, packet.length_bytes]
             for packet in _BUFLO_GATE_PACKETS
@@ -1496,9 +1588,22 @@ def _run_buflo_author_gate(folklore_path: Path) -> tuple[list[dict[str, object]]
         ],
     }
     completed = subprocess.run(
-        [sys.executable, "-I", "-S", "-c", _BUFLO_AUTHOR_RUNNER, os.fspath(author_root)],
+        [
+            sys.executable,
+            "-I",
+            "-S",
+            "-B",
+            "-c",
+            _BUFLO_AUTHOR_RUNNER,
+            os.fspath(author_root),
+        ],
         cwd=author_root,
-        env={"LANG": "C", "LC_ALL": "C", "PATH": os.environ.get("PATH", "")},
+        env={
+            "LANG": "C",
+            "LC_ALL": "C",
+            "PATH": os.environ.get("PATH", ""),
+            "PYTHONDONTWRITEBYTECODE": "1",
+        },
         input=json.dumps(request, sort_keys=True, separators=(",", ":")),
         text=True,
         capture_output=True,

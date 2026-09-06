@@ -15,6 +15,7 @@ import socket
 import time
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -26,6 +27,13 @@ from .acquisition_errors import (
     RecoverableAcquisitionError,
     TerminalAcquisitionPolicyError,
 )
+from .browser_egress import (
+    NON_REPLAYABLE_EGRESS_CONTRACT,
+    NonReplayableEgressGuard,
+    install_context_egress_guards,
+    launch_production_browser,
+    validate_non_replayable_egress_failure_evidence,
+)
 from .acquisition_timing import (
     ACTION_TIMING_CONTRACT,
     BASELINE_SCHEDULING_CONTRACT,
@@ -36,7 +44,12 @@ from .acquisition_timing import (
     earliest_safe_baseline,
     validate_baseline_schedule,
 )
-from .cdp_targets import CDP_TARGET_INSTRUMENTATION_POLICY
+from .cdp_targets import (
+    CDP_TARGET_INSTRUMENTATION_POLICY,
+    BrowserSharedWorkerGuard,
+    CdpTargetSource,
+    RecursiveCdpTargetRouter,
+)
 from .class_catalogue import (
     HTML_MEDIA_TYPES,
     STABILITY_PROBE_WINDOWS,
@@ -49,7 +62,12 @@ from .class_catalogue import (
     validate_page_candidate,
 )
 from .class_study import bind_receipt, canonical_json_bytes, validate_hash_bound_receipt
-from .discover import DiscoveryResult, _host_resolver_rules, discover_page, origin
+from .discover import (
+    DiscoveryResult,
+    _abort_rejected_render,
+    discover_page,
+    origin,
+)
 from .discovery_evidence import (
     DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION,
     PASSIVE_RENDER_CONTRACT,
@@ -58,6 +76,11 @@ from .discovery_evidence import (
     validate_render_observation,
 )
 from .manifest import runtime_manifest, validate_research_preparation
+from .playwright_driver import (
+    expected_browser_tool_identity,
+    playwright_driver_session,
+    validate_default_playwright_driver_once,
+)
 from .prepare import PreparedWorkload, prepare_workload
 from .util import (
     ATOMIC_TEMP_MARKER,
@@ -70,7 +93,9 @@ from .util import (
     source_metadata,
 )
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
+HISTORICAL_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4})
+SUPPORTED_SCHEMA_VERSIONS = HISTORICAL_SCHEMA_VERSIONS | {SCHEMA_VERSION}
 PROVENANCE_TYPE = "qcsd-class-study-acquisition-provenance"
 TERMINAL_TYPE = "qcsd-class-study-acquisition-terminal"
 CHECKPOINT_SCHEMA_VERSION = 2
@@ -185,6 +210,7 @@ def validate_class_study_preparation(manifest: dict[str, Any], *, workload_id: s
     audit = preparation.get("discovery_event_audit")
     if (
         not isinstance(coverage, Mapping)
+        or type(coverage.get("schema_version")) is not int
         or coverage.get("schema_version") != 3
         or coverage.get("origin_ip_pins_sha256")
         != evidence_sha256(preparation.get("origin_ip_pins"))
@@ -196,6 +222,7 @@ def validate_class_study_preparation(manifest: dict[str, Any], *, workload_id: s
         or preparation.get("passive_render_contract_sha256") != PASSIVE_RENDER_CONTRACT_SHA256
         or preparation.get("settle_ms") != PASSIVE_RENDER_CONTRACT["minimum_after_load_ms"]
         or not isinstance(audit, Mapping)
+        or type(audit.get("schema_version")) is not int
         or audit.get("schema_version") != DISCOVERY_EVENT_AUDIT_SCHEMA_VERSION
         or audit.get("instrumentation_policy") != CDP_TARGET_INSTRUMENTATION_POLICY
     ):
@@ -287,6 +314,82 @@ DOMAIN_SAFETY_POLICY = {
         "xnxx.com",
     ],
 }
+
+NAVIGATION_IMPLEMENTATION = (
+    "playwright-public-cdp-recursive-catalogue-boundary-egress-guard-v4"
+)
+REGISTRABLE_DOMAIN_POLICY = "exact-frozen-tranco-candidate-domain"
+ELIGIBILITY_INPUTS = ["page-safety", "three-window-technical-stability"]
+PROHIBITED_INPUTS = ["classifier", "defence", "latency", "bandwidth", "privacy"]
+ORIGIN_POLICY = {
+    "max_passes": MAX_ORIGIN_PASSES,
+    "max_navigation_redirect_passes": MAX_ORIGIN_PASSES,
+    "max_origins": MAX_APPROVED_ORIGINS,
+    "max_observed_audit_origins": MAX_OBSERVED_AUDIT_ORIGINS,
+    "max_navigation_attempts": MAX_PROBE_ATTEMPTS,
+    "max_probe_attempts_per_window": MAX_PROBE_ATTEMPTS,
+    "navigation_seed_scope": "page-specific-in-boundary-https-get-origins",
+    "resource_graph_scope": "iteratively-converged-public-https-get-request-instances",
+    "request_instance_identity": (
+        "observation-order-resource-id-with-preceding-initiator-and-redirect-edges"
+    ),
+    "dns": "all-answers-global-and-browser-host-resolver-pinned",
+    "neqo": "QCSD_PUBLIC_ORIGIN_ONLY-resolve-once-connect-exact-address",
+}
+CURRENT_PROVENANCE_FIELDS = frozenset(
+    {
+        "study_id",
+        "acquisition_schema_version",
+        "candidate_catalogue_sha256",
+        "candidate_catalogue_payload_sha256",
+        "candidate_count",
+        "foundation_attestation",
+        "started_at",
+        "image_digest",
+        "source",
+        "browser_tool",
+        "navigation_implementation",
+        "cdp_target_instrumentation_policy",
+        "non_replayable_egress_contract",
+        "passive_render_contract",
+        "passive_render_contract_sha256",
+        "browser_navigation_timeout_ms",
+        "passive_render_hard_cap_after_load_ms",
+        "acquisition_action_timing_contract",
+        "baseline_scheduling_contract",
+        "registrable_domain_policy",
+        "domain_safety_policy",
+        "domain_safety_policy_sha256",
+        "origin_policy",
+        "eligibility_inputs",
+        "prohibited_inputs",
+    }
+)
+_SOURCE_FIELDS = frozenset(
+    {
+        "image_digest",
+        "lab_commit",
+        "lab_dirty",
+        "lab_patch_sha256",
+        "neqo_commit",
+        "neqo_pinned_commit",
+        "neqo_dirty",
+        "neqo_patch_sha256",
+    }
+)
+_SHA256_PATTERN = re.compile(r"[0-9a-f]{64}\Z")
+_IMAGE_DIGEST_PATTERN = re.compile(r"sha256:[0-9a-f]{64}\Z")
+_COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}\Z")
+_EMPTY_SHA256 = sha256_bytes(b"")
+
+
+def _matches_json_contract(value: object, expected: object) -> bool:
+    """Compare JSON values without Python's ``bool``/``int`` equality alias."""
+
+    try:
+        return canonical_json_bytes(value) == canonical_json_bytes(expected)
+    except (TypeError, ValueError):
+        return False
 
 
 @dataclass(frozen=True)
@@ -756,60 +859,98 @@ def _catalogue_boundary_navigation_pass(
         return max(0, round((deadline - time.monotonic()) * 1_000))
 
     try:
-        with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(
-                headless=True,
-                executable_path=os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH"),
-                args=[
-                    "--no-sandbox",
-                    "--host-resolver-rules=" + _host_resolver_rules(navigation_pins),
-                ],
+        validate_default_playwright_driver_once()
+        with playwright_driver_session(sync_playwright, exclusive=True) as playwright:
+            browser, _browser_egress_projection = launch_production_browser(
+                playwright,
+                approved_origins=tuple(sorted(navigation_pins)),
+                origin_ip_pins=navigation_pins,
             )
             try:
                 context = browser.new_context(ignore_https_errors=False, service_workers="block")
+                egress_guard = NonReplayableEgressGuard()
+                install_context_egress_guards(context, egress_guard)
                 unowned_document_urls: set[str] = set()
-
-                def route_request(route: Any) -> None:
-                    request = route.request
-                    is_primary_navigation = False
-                    if request.is_navigation_request():
-                        try:
-                            is_primary_navigation = request.frame == page.main_frame
-                        except playwright_error:
-                            # Playwright documents that Request.frame can throw
-                            # before Chromium has created/attached the frame.
-                            # Such a document is never admitted speculatively.
-                            unowned_document_urls.add(request.url)
-                            route.abort()
-                            return
-                    if not _navigation_request_allowed(request.method, request.url, domain):
-                        if is_primary_navigation:
-                            rejected_document_urls.add(request.url)
-                        route.abort()
-                        return
-                    request_origin = origin(request.url)
-                    if request_origin is None:
-                        if is_primary_navigation:
-                            rejected_document_urls.add(request.url)
-                        route.abort()
-                        return
-                    if request_origin not in navigation_pins:
-                        # Preliminary link extraction does not need unpinned
-                        # subresources.  Document origins, however, are retained
-                        # as an expansion request and retried only after public
-                        # resolution has been frozen into a fresh browser pass.
-                        if is_primary_navigation:
-                            unpinned_document_origins.add(request_origin)
-                        route.abort()
-                        return
-                    if is_primary_navigation:
-                        assert request_origin is not None
-                        observed_origins.add(request_origin)
-                        current_page_origins.add(request_origin)
-                    route.continue_()
-
-                context.route("**/*", route_request)
                 page = context.new_page()
+                egress_guard.bind_root_page(page)
+                session = context.new_cdp_session(page)
+                browser_session = browser.new_browser_cdp_session()
+                frame_tree = session.send("Page.getFrameTree")
+                frame = frame_tree.get("frameTree", {}).get("frame", {})
+                root_frame_id = frame.get("id")
+                if not isinstance(root_frame_id, str) or not root_frame_id:
+                    raise RuntimeError("catalogue navigation could not identify its root frame")
+
+                router: RecursiveCdpTargetRouter
+
+                def protocol_event(
+                    source: CdpTargetSource,
+                    method: str,
+                    event: Mapping[str, Any],
+                ) -> None:
+                    if method != "Fetch.requestPaused":
+                        return
+                    request_id = event.get("requestId")
+                    request = event.get("request")
+                    if (
+                        not isinstance(request_id, str)
+                        or not request_id
+                        or not isinstance(request, Mapping)
+                    ):
+                        raise RuntimeError("catalogue navigation Fetch event is malformed")
+                    request_url = str(request.get("url", ""))
+                    method_name = str(request.get("method", ""))
+                    frame_id = event.get("frameId")
+                    resource_type = event.get("resourceType")
+                    is_primary_navigation = (
+                        resource_type == "Document" and frame_id == root_frame_id
+                    )
+                    command = "Fetch.failRequest"
+                    parameters: dict[str, Any] = {
+                        "requestId": request_id,
+                        "errorReason": "BlockedByClient",
+                    }
+                    if not _navigation_request_allowed(method_name, request_url, domain):
+                        if is_primary_navigation:
+                            rejected_document_urls.add(request_url)
+                    else:
+                        request_origin = origin(request_url)
+                        if request_origin is None:
+                            if is_primary_navigation:
+                                rejected_document_urls.add(request_url)
+                        elif request_origin not in navigation_pins:
+                            # Preserve multi-origin page/worker behaviour: every
+                            # in-boundary HTTPS GET origin, not merely a primary
+                            # redirect, triggers a frozen-pin retry.
+                            unpinned_document_origins.add(request_origin)
+                        else:
+                            observed_origins.add(request_origin)
+                            current_page_origins.add(request_origin)
+                            command = "Fetch.continueRequest"
+                            parameters = {"requestId": request_id}
+                    router.send(
+                        source,
+                        command,
+                        parameters,
+                        label=f"catalogue-navigation-policy:{command}",
+                    )
+
+                router = RecursiveCdpTargetRouter(
+                    session,
+                    on_event=protocol_event,
+                    on_non_replayable_egress=lambda source, api, mechanism, request_url: (
+                        egress_guard.record(
+                            source=source,
+                            api=api,
+                            mechanism=mechanism,
+                            url=request_url,
+                        )
+                    ),
+                )
+                router.start()
+                browser_guard = BrowserSharedWorkerGuard(browser_session, router)
+                browser_guard.start()
+                graph_closed = False
                 homepage_budget = remaining_timeout()
                 if homepage_budget < 1:
                     raise RecoverableAcquisitionError(
@@ -822,6 +963,8 @@ def _catalogue_boundary_navigation_pass(
                         f"https://{domain}/", wait_until="load", timeout=homepage_budget
                     )
                 except playwright_error as error:
+                    egress_guard.raise_if_failed()
+                    router.raise_if_failed()
                     if unowned_document_urls:
                         raise TerminalProbePolicyError(
                             "document navigation ownership could not be established"
@@ -835,6 +978,8 @@ def _catalogue_boundary_navigation_pass(
                             + ", ".join(sorted(rejected_document_urls))
                         ) from error
                     raise
+                egress_guard.raise_if_failed()
+                router.raise_if_failed()
                 if unpinned_document_origins:
                     raise _NavigationPinExpansion(unpinned_document_origins)
                 if rejected_document_urls:
@@ -861,6 +1006,7 @@ def _catalogue_boundary_navigation_pass(
                     )
                 if challenge := browser_challenge_reason(page):
                     raise TerminalProbePolicyError(challenge)
+                egress_guard.raise_if_failed()
                 page_observed_origins.append(
                     (f"https://{domain}/", tuple(sorted(current_page_origins)))
                 )
@@ -870,6 +1016,8 @@ def _catalogue_boundary_navigation_pass(
                         "elements => elements.map(element => element.href)"
                     )
                 )
+                egress_guard.raise_if_failed()
+                router.raise_if_failed()
                 provisional = select_page_candidates(
                     domain,
                     registrable_domain=registrable,
@@ -899,6 +1047,8 @@ def _catalogue_boundary_navigation_pass(
                             timeout=link_budget,
                         )
                     except playwright_error as error:
+                        egress_guard.raise_if_failed()
+                        router.raise_if_failed()
                         if unpinned_document_origins:
                             raise _NavigationPinExpansion(unpinned_document_origins) from error
                         if rejected_document_urls:
@@ -924,6 +1074,8 @@ def _catalogue_boundary_navigation_pass(
                             )
                         )
                         continue
+                    egress_guard.raise_if_failed()
+                    router.raise_if_failed()
                     if unpinned_document_origins:
                         raise _NavigationPinExpansion(unpinned_document_origins)
                     if rejected_document_urls:
@@ -983,9 +1135,37 @@ def _catalogue_boundary_navigation_pass(
                         page_observed_origins.append(
                             (candidate.url, tuple(sorted(current_page_origins)))
                         )
-                page.close()
+                egress_guard.raise_if_failed()
+                if len(context.service_workers):
+                    raise TerminalProbePolicyError(
+                        "catalogue navigation observed a browser service worker"
+                    )
+                while not router.shutdown_ready:
+                    egress_guard.raise_if_failed()
+                    router.raise_if_failed()
+                    wait_budget = remaining_timeout()
+                    if wait_budget < 1:
+                        raise RecoverableAcquisitionError(
+                            "navigation target instrumentation did not quiesce"
+                        )
+                    page.wait_for_timeout(min(25, wait_budget))
+                router.begin_shutdown()
+                browser_guard.begin_shutdown()
+                context.close()
+                browser_guard.finish()
+                router.finish()
+                graph_closed = True
             finally:
-                browser.close()
+                if "graph_closed" in locals() and not graph_closed:
+                    cleanup_primary = RuntimeError("catalogue navigation graph disposal")
+                    _abort_rejected_render(context, router, browser_guard, cleanup_primary)
+                try:
+                    browser.close()
+                finally:
+                    if "egress_guard" in locals():
+                        egress_guard.raise_if_failed()
+                    if "router" in locals():
+                        router.raise_if_failed()
     except _NavigationPinExpansion:
         raise
     except RecoverableAcquisitionError as error:
@@ -1021,6 +1201,10 @@ def initialise_runner(
 ) -> Path:
     """Create the immutable provenance and initial resumable checkpoint."""
 
+    # ``browser_tool`` remains an input for command-line compatibility only.
+    # The foundation is deep-validated immediately below; evidence is derived
+    # from the exact pinned driver identity and never from caller-authored text.
+    del browser_tool
     catalogue, candidates = load_candidate_catalogue_receipt(candidate_catalogue_path)
     started = _timestamp(started_at)
     foundation = _foundation_attestation_binding(foundation_attestation)
@@ -1041,45 +1225,22 @@ def initialise_runner(
             "started_at": _format_time(started),
             "image_digest": os.environ.get("QCSD_LAB_IMAGE_DIGEST", "native"),
             "source": source_metadata(),
-            "browser_tool": browser_tool,
-            "navigation_implementation": (
-                "playwright-cdp-catalogue-domain-boundary-redirect-pin-convergence-v3"
-            ),
+            "browser_tool": expected_browser_tool_identity(),
+            "navigation_implementation": NAVIGATION_IMPLEMENTATION,
             "cdp_target_instrumentation_policy": CDP_TARGET_INSTRUMENTATION_POLICY,
+            "non_replayable_egress_contract": NON_REPLAYABLE_EGRESS_CONTRACT,
             "passive_render_contract": PASSIVE_RENDER_CONTRACT,
             "passive_render_contract_sha256": PASSIVE_RENDER_CONTRACT_SHA256,
             "browser_navigation_timeout_ms": MAX_ACQUISITION_BACKEND_TIMEOUT_MS,
             "passive_render_hard_cap_after_load_ms": (MAX_PASSIVE_RENDER_AFTER_LOAD_MS),
             "acquisition_action_timing_contract": ACTION_TIMING_CONTRACT,
             "baseline_scheduling_contract": BASELINE_SCHEDULING_CONTRACT,
-            "registrable_domain_policy": "exact-frozen-tranco-candidate-domain",
+            "registrable_domain_policy": REGISTRABLE_DOMAIN_POLICY,
             "domain_safety_policy": DOMAIN_SAFETY_POLICY,
             "domain_safety_policy_sha256": sha256_bytes(canonical_json_bytes(DOMAIN_SAFETY_POLICY)),
-            "origin_policy": {
-                "max_passes": MAX_ORIGIN_PASSES,
-                "max_navigation_redirect_passes": MAX_ORIGIN_PASSES,
-                "max_origins": MAX_APPROVED_ORIGINS,
-                "max_observed_audit_origins": MAX_OBSERVED_AUDIT_ORIGINS,
-                "max_navigation_attempts": MAX_PROBE_ATTEMPTS,
-                "max_probe_attempts_per_window": MAX_PROBE_ATTEMPTS,
-                "navigation_seed_scope": ("page-specific-document-navigation-origins-only"),
-                "resource_graph_scope": (
-                    "iteratively-converged-public-https-get-request-instances"
-                ),
-                "request_instance_identity": (
-                    "observation-order-resource-id-with-preceding-initiator-and-redirect-edges"
-                ),
-                "dns": "all-answers-global-and-browser-host-resolver-pinned",
-                "neqo": "QCSD_PUBLIC_ORIGIN_ONLY-resolve-once-connect-exact-address",
-            },
-            "eligibility_inputs": ["page-safety", "three-window-technical-stability"],
-            "prohibited_inputs": [
-                "classifier",
-                "defence",
-                "latency",
-                "bandwidth",
-                "privacy",
-            ],
+            "origin_policy": ORIGIN_POLICY,
+            "eligibility_inputs": ELIGIBILITY_INPUTS,
+            "prohibited_inputs": PROHIBITED_INPUTS,
         },
         receipt_type=PROVENANCE_TYPE,
     )
@@ -1598,23 +1759,35 @@ def _run_navigation_batch(
                     discovered_links=navigation.links,
                 )
                 origins_by_page = _navigation_origins_by_page(navigation, pages)
-            except TerminalProbePolicyError as error:
+            except TerminalAcquisitionPolicyError as error:
+                policy_evidence = (
+                    validate_non_replayable_egress_failure_evidence(error.evidence)
+                    if error.evidence is not None
+                    else None
+                )
                 result: dict[str, Any] = {
                     "outcome": "terminal-policy-rejection",
                     "reason": str(error),
+                    "policy_evidence": policy_evidence,
                 }
             except RecoverableAcquisitionError as error:
-                result = {"outcome": "recoverable-failure", "reason": str(error)}
+                result = {
+                    "outcome": "recoverable-failure",
+                    "reason": str(error),
+                    "policy_evidence": None,
+                }
             except Exception as error:  # noqa: BLE001 - coordinator records every result
                 result = {
                     "outcome": "internal-acquisition-error",
                     "reason": _exception_reason(error),
+                    "policy_evidence": None,
                     "internal_exception": error,
                 }
             else:
                 result = {
                     "outcome": "completed",
                     "reason": None,
+                    "policy_evidence": None,
                     "navigation": navigation,
                     "pages": pages,
                     "origins_by_page": origins_by_page,
@@ -1636,6 +1809,7 @@ def _run_navigation_batch(
                     "completed_at": outcome["completed_at"],
                     "outcome": outcome["outcome"],
                     "reason": outcome["reason"],
+                    "policy_evidence": outcome["policy_evidence"],
                 }
             )
             if outcome["outcome"] == "completed":
@@ -1924,7 +2098,14 @@ def _run_probe_batch(
                 result = {
                     "outcome": "terminal-policy-rejection",
                     "reason": str(error),
-                    "policy_evidence": error.evidence,
+                    "policy_evidence": (
+                        _validated_terminal_policy_evidence(
+                            error.evidence,
+                            allow_non_replayable_egress=True,
+                        )
+                        if error.evidence is not None
+                        else None
+                    ),
                 }
             except RecoverableAcquisitionError as error:
                 result = {
@@ -2228,7 +2409,7 @@ def acquisition_status(
     acquisition_schema_version = provenance["acquisition_schema_version"]
     baseline_starts = (
         _baseline_batch_starts(payload["baseline_batches"])
-        if acquisition_schema_version == SCHEMA_VERSION
+        if acquisition_schema_version in {4, SCHEMA_VERSION}
         else _checkpoint_baselines(states)
     )
     active = payload.get("active_batch")
@@ -2414,7 +2595,12 @@ def validate_acquisition_completion(
         "baseline_batches",
         "baseline_batches_sha256",
     }
-    if acquisition_schema_version == SCHEMA_VERSION:
+    if acquisition_schema_version in {4, SCHEMA_VERSION}:
+        if acquisition_schema_version == SCHEMA_VERSION:
+            _validate_current_provenance_contract(
+                provenance,
+                candidate_catalogue_path=candidate_catalogue_path,
+            )
         if (
             set(payload) != current_fields
             or type(payload["completion_schema_version"]) is not int
@@ -2444,7 +2630,7 @@ def validate_acquisition_completion(
     )
     if checkpoint_recoveries:
         raise ValueError("completion binds a checkpoint requiring recovery")
-    if acquisition_schema_version == SCHEMA_VERSION and (
+    if acquisition_schema_version in {4, SCHEMA_VERSION} and (
         checkpoint["payload"]["active_batch"] is not None
         or payload["baseline_batches"] != checkpoint["payload"]["baseline_batches"]
         or payload["baseline_batches_sha256"]
@@ -2581,29 +2767,118 @@ def browser_document_content_type(
             "content-type verification requires the discovery Docker image"
         ) from error
     try:
-        with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(
-                headless=True,
-                executable_path=os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH"),
-                args=[
-                    "--no-sandbox",
-                    "--host-resolver-rules=" + _host_resolver_rules(pins),
-                ],
+        validate_default_playwright_driver_once()
+        # JavaScript is disabled and only the root page CDP session is used;
+        # this response-only probe does not take recursive target ownership.
+        with playwright_driver_session(sync_playwright, exclusive=False) as playwright:
+            browser, _browser_egress_projection = launch_production_browser(
+                playwright,
+                approved_origins=canonical_approved,
+                origin_ip_pins=pins,
             )
             try:
                 chromium_version = str(browser.version)
-                context = browser.new_context(ignore_https_errors=False, service_workers="block")
+                # The probe needs only the primary HTTP response metadata.
+                # Disabling JavaScript before the first document removes every
+                # author-script worker and non-URLLoader egress surface without
+                # changing response status, final URL, or Content-Type semantics.
+                context = browser.new_context(
+                    ignore_https_errors=False,
+                    java_script_enabled=False,
+                    service_workers="block",
+                )
+
+                root_page: Any | None = None
 
                 def route_request(route: Any) -> None:
                     request = route.request
-                    if request.method != "GET" or origin(request.url) not in approved:
+                    try:
+                        root_navigation = (
+                            root_page is not None
+                            and request.is_navigation_request()
+                            and request.frame is root_page.main_frame
+                        )
+                    except Exception:  # noqa: BLE001 - unresolved ownership fails closed
+                        root_navigation = False
+                    if (
+                        request.method != "GET"
+                        or origin(request.url) not in approved
+                        or not root_navigation
+                    ):
                         route.abort()
                     else:
                         route.continue_()
 
                 context.route("**/*", route_request)
                 page = context.new_page()
+                root_page = page
+                session = context.new_cdp_session(page)
+                frame_tree = session.send("Page.getFrameTree")
+                root_frame = frame_tree.get("frameTree", {}).get("frame", {})
+                root_frame_id = root_frame.get("id")
+                if not isinstance(root_frame_id, str) or not root_frame_id:
+                    raise RuntimeError("content-type probe could not identify its root frame")
+                fetch_failure: list[Exception] = []
+
+                def request_paused(event: Mapping[str, Any]) -> None:
+                    request_id = event.get("requestId")
+                    try:
+                        request = event.get("request")
+                        if (
+                            not isinstance(request_id, str)
+                            or not request_id
+                            or not isinstance(request, Mapping)
+                        ):
+                            raise RuntimeError(
+                                "content-type probe Fetch event is malformed"
+                            )
+                        allowed = (
+                            request.get("method") == "GET"
+                            and isinstance(request.get("url"), str)
+                            and origin(request["url"]) in approved
+                            and event.get("resourceType") == "Document"
+                            and event.get("frameId") == root_frame_id
+                        )
+                        command = (
+                            "Fetch.continueRequest" if allowed else "Fetch.failRequest"
+                        )
+                        parameters = (
+                            {"requestId": request_id}
+                            if allowed
+                            else {
+                                "requestId": request_id,
+                                "errorReason": "BlockedByClient",
+                            }
+                        )
+                        result = session.send(command, parameters)
+                        if not isinstance(result, Mapping) or result:
+                            raise RuntimeError(
+                                "content-type probe Fetch decision was not acknowledged"
+                            )
+                    except Exception as error:  # noqa: BLE001 - callback failure is re-raised
+                        fetch_failure.append(error)
+                        if isinstance(request_id, str) and request_id:
+                            try:
+                                session.send(
+                                    "Fetch.failRequest",
+                                    {
+                                        "requestId": request_id,
+                                        "errorReason": "BlockedByClient",
+                                    },
+                                )
+                            except Exception:
+                                pass
+
+                session.on("Fetch.requestPaused", request_paused)
+                enabled = session.send(
+                    "Fetch.enable",
+                    {"patterns": [{"urlPattern": "*", "requestStage": "Request"}]},
+                )
+                if not isinstance(enabled, Mapping) or enabled:
+                    raise RuntimeError("content-type probe Fetch boundary was not enabled")
                 response = page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+                if fetch_failure:
+                    raise fetch_failure[0]
                 if response is None or origin(page.url) not in approved:
                     raise TerminalProbePolicyError(
                         "content-type probe did not finish on an approved origin"
@@ -2614,8 +2889,16 @@ def browser_document_content_type(
                 final_url = page.url
                 status = response.status
                 page.close()
+                if fetch_failure:
+                    raise fetch_failure[0]
             finally:
-                browser.close()
+                try:
+                    if "context" in locals():
+                        context.close()
+                finally:
+                    browser.close()
+                if "fetch_failure" in locals() and fetch_failure:
+                    raise fetch_failure[0]
     except PlaywrightError as error:
         raise RecoverableAcquisitionError(
             f"Playwright content-type probe failed: {error}"
@@ -3041,6 +3324,7 @@ def _validate_probing_terminal_state(
     state: Mapping[str, Any],
     *,
     candidate: Any,
+    acquisition_schema_version: int,
     terminalised_at: datetime,
     enforce_duration_limit: bool,
 ) -> tuple[
@@ -3134,6 +3418,7 @@ def _validate_probing_terminal_state(
         _validate_probe_attempts(
             page_state,
             candidate_id=candidate.candidate_id,
+            acquisition_schema_version=acquisition_schema_version,
             baseline_started_at=state["baseline_started_at"],
             enforce_duration_limit=enforce_duration_limit,
         )
@@ -3193,6 +3478,7 @@ def _validate_live_probing_state(
     _validate_probing_terminal_state(
         structural_state,
         candidate=candidate,
+        acquisition_schema_version=SCHEMA_VERSION,
         terminalised_at=datetime.max.replace(tzinfo=UTC),
         enforce_duration_limit=True,
     )
@@ -3225,6 +3511,7 @@ def _validate_current_terminal_state(
     state: Mapping[str, Any],
     *,
     candidate: Any,
+    acquisition_schema_version: int,
     kind: str,
     reason: str | None,
     terminalised_at: datetime,
@@ -3258,6 +3545,7 @@ def _validate_current_terminal_state(
     pages = _validate_probing_terminal_state(
         state,
         candidate=candidate,
+        acquisition_schema_version=acquisition_schema_version,
         terminalised_at=terminalised_at,
         enforce_duration_limit=enforce_duration_limit,
     )
@@ -3355,7 +3643,7 @@ def _validated_terminal_binding(
             or payload["terminal_schema_version"] != 2
         ):
             raise ValueError("terminal evidence schema differs from the current contract")
-    elif acquisition_schema_version == SCHEMA_VERSION:
+    elif acquisition_schema_version in {4, SCHEMA_VERSION}:
         if set(payload) != terminal_v3_fields:
             raise ValueError("terminal evidence fields differ from the contract")
         if (
@@ -3367,7 +3655,7 @@ def _validated_terminal_binding(
             raise ValueError("terminal evidence schema differs from the current contract")
     else:
         raise ValueError("terminal evidence belongs to an unsupported acquisition schema")
-    if acquisition_schema_version in {2, 3, SCHEMA_VERSION} and not isinstance(
+    if acquisition_schema_version in {2, 3, 4, SCHEMA_VERSION} and not isinstance(
         candidate_state, Mapping
     ):
         raise ValueError("terminal evidence fields differ from the contract")
@@ -3384,7 +3672,7 @@ def _validated_terminal_binding(
         kind != "eligible" and (not isinstance(reason, str) or not reason)
     ):
         raise ValueError("terminal evidence reason differs from its outcome kind")
-    if acquisition_schema_version == SCHEMA_VERSION:
+    if acquisition_schema_version in {4, SCHEMA_VERSION}:
         expected_baseline_batch = (
             None
             if kind == "pre-probe-rejection"
@@ -3395,7 +3683,7 @@ def _validated_terminal_binding(
         if payload["baseline_batch"] != expected_baseline_batch:
             raise ValueError("terminal evidence baseline-batch binding differs")
     selected_checkpoint = None
-    if acquisition_schema_version in {2, 3, SCHEMA_VERSION}:
+    if acquisition_schema_version in {2, 3, 4, SCHEMA_VERSION}:
         terminalised_raw = payload["terminalised_at"]
         if (
             not isinstance(terminalised_raw, str)
@@ -3409,10 +3697,11 @@ def _validated_terminal_binding(
         selected_checkpoint = _validate_current_terminal_state(
             candidate_state,
             candidate=candidate,
+            acquisition_schema_version=acquisition_schema_version,
             kind=kind,
             reason=reason,
             terminalised_at=_timestamp(terminalised_raw),
-            enforce_duration_limit=(acquisition_schema_version in {3, SCHEMA_VERSION}),
+            enforce_duration_limit=(acquisition_schema_version in {3, 4, SCHEMA_VERSION}),
         )
     stability_binding = payload["stability_receipt"]
     workload_binding = payload["admitted_workload"]
@@ -3435,7 +3724,7 @@ def _validated_terminal_binding(
             != sha256_file(workload_path)
         ):
             raise ValueError("eligible terminal stability/workload binding is invalid")
-        if acquisition_schema_version in {2, 3, SCHEMA_VERSION}:
+        if acquisition_schema_version in {2, 3, 4, SCHEMA_VERSION}:
             if selected_checkpoint is None:
                 raise ValueError("eligible terminal has no selected checkpoint page")
             page_state, page, observations = selected_checkpoint
@@ -3489,12 +3778,117 @@ def _foundation_attestation_binding(path: Path) -> dict[str, str]:
         runtime_role="prepare",
     )
     binding = {"path": str(source), "sha256": sha256_file(source)}
-    if (
-        validated.get("path") != binding["path"]
-        or validated.get("sha256") != binding["sha256"]
-    ):
+    if validated.get("path") != binding["path"] or validated.get("sha256") != binding["sha256"]:
         raise ValueError("class acquisition foundation validator returned another binding")
     return binding
+
+
+def _validate_current_provenance_contract(
+    provenance: Mapping[str, Any],
+    *,
+    candidate_catalogue_path: Path | None = None,
+) -> dict[str, Any]:
+    """Reconstruct schema-five provenance without consulting ambient runtime state.
+
+    Historical acquisition schemas remain readable under their original
+    contracts.  Current evidence, however, must retain every fixed acquisition
+    choice and the exact pinned browser identity even when it is verified from
+    a collection image or an exported evidence tree rather than the live
+    prepare process that created it.
+    """
+
+    if not isinstance(provenance, Mapping) or set(provenance) != CURRENT_PROVENANCE_FIELDS:
+        raise ValueError("schema-five acquisition provenance fields differ from the contract")
+    foundation = provenance.get("foundation_attestation")
+    source = provenance.get("source")
+    candidate_count = provenance.get("candidate_count")
+    image_digest = provenance.get("image_digest")
+    started_at = provenance.get("started_at")
+    if (
+        type(provenance.get("acquisition_schema_version")) is not int
+        or provenance["acquisition_schema_version"] != SCHEMA_VERSION
+        or provenance.get("study_id") != "classifier-multiorigin100-v1"
+        or type(candidate_count) is not int
+        or candidate_count < 1
+        or not isinstance(provenance.get("candidate_catalogue_sha256"), str)
+        or _SHA256_PATTERN.fullmatch(provenance["candidate_catalogue_sha256"]) is None
+        or not isinstance(provenance.get("candidate_catalogue_payload_sha256"), str)
+        or _SHA256_PATTERN.fullmatch(provenance["candidate_catalogue_payload_sha256"]) is None
+        or not isinstance(foundation, Mapping)
+        or set(foundation) != {"path", "sha256"}
+        or not isinstance(foundation.get("path"), str)
+        or not foundation["path"]
+        or not isinstance(foundation.get("sha256"), str)
+        or _SHA256_PATTERN.fullmatch(foundation["sha256"]) is None
+        or not isinstance(started_at, str)
+        or _format_time(_timestamp(started_at)) != started_at
+        or not isinstance(image_digest, str)
+        or image_digest != "native"
+        and _IMAGE_DIGEST_PATTERN.fullmatch(image_digest) is None
+        or not isinstance(source, Mapping)
+        or set(source) != _SOURCE_FIELDS
+    ):
+        raise ValueError("schema-five acquisition provenance identity is invalid")
+    expected_fixed = {
+        "browser_tool": expected_browser_tool_identity(),
+        "navigation_implementation": NAVIGATION_IMPLEMENTATION,
+        "cdp_target_instrumentation_policy": CDP_TARGET_INSTRUMENTATION_POLICY,
+        "non_replayable_egress_contract": NON_REPLAYABLE_EGRESS_CONTRACT,
+        "passive_render_contract": PASSIVE_RENDER_CONTRACT,
+        "passive_render_contract_sha256": PASSIVE_RENDER_CONTRACT_SHA256,
+        "browser_navigation_timeout_ms": MAX_ACQUISITION_BACKEND_TIMEOUT_MS,
+        "passive_render_hard_cap_after_load_ms": MAX_PASSIVE_RENDER_AFTER_LOAD_MS,
+        "acquisition_action_timing_contract": ACTION_TIMING_CONTRACT,
+        "baseline_scheduling_contract": BASELINE_SCHEDULING_CONTRACT,
+        "registrable_domain_policy": REGISTRABLE_DOMAIN_POLICY,
+        "domain_safety_policy": DOMAIN_SAFETY_POLICY,
+        "domain_safety_policy_sha256": sha256_bytes(canonical_json_bytes(DOMAIN_SAFETY_POLICY)),
+        "origin_policy": ORIGIN_POLICY,
+        "eligibility_inputs": ELIGIBILITY_INPUTS,
+        "prohibited_inputs": PROHIBITED_INPUTS,
+    }
+    if any(
+        not _matches_json_contract(provenance.get(field), expected)
+        for field, expected in expected_fixed.items()
+    ):
+        raise ValueError("schema-five acquisition provenance policy differs from the contract")
+    browser_tool = provenance["browser_tool"]
+    if (
+        not isinstance(browser_tool, Mapping)
+        or type(browser_tool.get("schema_version")) is not int
+        or browser_tool["schema_version"] != 1
+    ):
+        raise ValueError("schema-five acquisition browser identity is invalid")
+
+    # A native unit-test runner cannot claim immutable image provenance.  Any
+    # actual image-bound acquisition can and must carry one clean source.
+    if image_digest == "native":
+        if source.get("image_digest") not in {None, "native"}:
+            raise ValueError("native schema-five acquisition source is inconsistent")
+    elif (
+        source.get("image_digest") != image_digest
+        or not isinstance(source.get("lab_commit"), str)
+        or _COMMIT_PATTERN.fullmatch(source["lab_commit"]) is None
+        or not isinstance(source.get("neqo_commit"), str)
+        or _COMMIT_PATTERN.fullmatch(source["neqo_commit"]) is None
+        or source.get("neqo_pinned_commit") != source.get("neqo_commit")
+        or source.get("lab_dirty") is not False
+        or source.get("neqo_dirty") is not False
+        or source.get("lab_patch_sha256") != _EMPTY_SHA256
+        or source.get("neqo_patch_sha256") != _EMPTY_SHA256
+    ):
+        raise ValueError("schema-five acquisition source is not one clean immutable image")
+
+    if candidate_catalogue_path is not None:
+        catalogue_path = Path(candidate_catalogue_path)
+        catalogue, candidates = load_candidate_catalogue_receipt(catalogue_path)
+        if (
+            provenance["candidate_catalogue_sha256"] != sha256_file(catalogue_path)
+            or provenance["candidate_catalogue_payload_sha256"] != catalogue["payload_sha256"]
+            or candidate_count != len(candidates)
+        ):
+            raise ValueError("schema-five acquisition provenance binds another catalogue")
+    return dict(provenance)
 
 
 def _validate_runner_runtime(provenance: Mapping[str, Any]) -> None:
@@ -3509,22 +3903,13 @@ def _validate_runner_runtime(provenance: Mapping[str, Any]) -> None:
     current_image = os.environ.get("QCSD_LAB_IMAGE_DIGEST", "native")
     current_source = source_metadata()
     schema_version = provenance.get("acquisition_schema_version")
-    current_contract_invalid = schema_version == SCHEMA_VERSION and (
-        provenance.get("cdp_target_instrumentation_policy") != CDP_TARGET_INSTRUMENTATION_POLICY
-        or provenance.get("passive_render_contract") != PASSIVE_RENDER_CONTRACT
-        or provenance.get("passive_render_contract_sha256") != PASSIVE_RENDER_CONTRACT_SHA256
-        or provenance.get("browser_navigation_timeout_ms") != MAX_ACQUISITION_BACKEND_TIMEOUT_MS
-        or provenance.get("passive_render_hard_cap_after_load_ms")
-        != MAX_PASSIVE_RENDER_AFTER_LOAD_MS
-        or provenance.get("acquisition_action_timing_contract") != ACTION_TIMING_CONTRACT
-        or provenance.get("baseline_scheduling_contract") != BASELINE_SCHEDULING_CONTRACT
-    )
+    if type(schema_version) is int and schema_version == SCHEMA_VERSION:
+        _validate_current_provenance_contract(provenance)
     if (
         provenance.get("image_digest") != current_image
         or provenance.get("source") != current_source
         or type(schema_version) is not int
-        or schema_version not in {1, 2, 3, SCHEMA_VERSION}
-        or current_contract_invalid
+        or schema_version not in SUPPORTED_SCHEMA_VERSIONS
     ):
         raise ValueError("class acquisition runtime differs from its frozen source/prepare image")
 
@@ -3611,10 +3996,12 @@ def _validate_observation_provenance(
     require_instrumentation_evidence = acquisition_schema_version in {
         2,
         3,
+        4,
         SCHEMA_VERSION,
     }
     require_current_evidence = acquisition_schema_version in {
         3,
+        4,
         SCHEMA_VERSION,
     }
     prepared_root: Path | None = None
@@ -3888,9 +4275,12 @@ def _validate_pending_navigation(pending: object) -> tuple[int, datetime]:
 def _validate_navigation_attempts(
     state: Mapping[str, Any],
     *,
+    acquisition_schema_version: int = SCHEMA_VERSION,
     enforce_duration_limit: bool = False,
     require_canonical_timestamps: bool = False,
 ) -> None:
+    if acquisition_schema_version not in SUPPORTED_SCHEMA_VERSIONS:
+        raise ValueError("acquisition navigation-attempt schema is unsupported")
     attempts = state.get("navigation_attempts", [])
     if not isinstance(attempts, list) or len(attempts) > MAX_PROBE_ATTEMPTS:
         raise ValueError("acquisition navigation-attempt ledger is malformed")
@@ -3898,14 +4288,22 @@ def _validate_navigation_attempts(
     completed = 0
     finalised = False
     for item in attempts:
-        if not isinstance(item, Mapping) or set(item) != {
+        expected_fields = {
             "attempt",
             "started_at",
             "completed_at",
             "outcome",
             "reason",
-        }:
+        }
+        if acquisition_schema_version == SCHEMA_VERSION:
+            expected_fields.add("policy_evidence")
+        if not isinstance(item, Mapping) or set(item) != expected_fields:
             raise ValueError("acquisition navigation-attempt ledger is malformed")
+        policy_evidence = item.get("policy_evidence")
+        if policy_evidence is not None:
+            if item.get("outcome") != "terminal-policy-rejection":
+                raise ValueError("acquisition navigation policy evidence is misplaced")
+            validate_non_replayable_egress_failure_evidence(policy_evidence)
         started_at = (
             _timestamp(item["started_at"]) if isinstance(item.get("started_at"), str) else None
         )
@@ -3947,6 +4345,11 @@ def _validate_navigation_attempts(
                 item["outcome"] != "completed"
                 and (not isinstance(item["reason"], str) or not item["reason"])
             )
+            or (
+                acquisition_schema_version == SCHEMA_VERSION
+                and item["outcome"] != "terminal-policy-rejection"
+                and policy_evidence is not None
+            )
         ):
             raise ValueError("acquisition navigation-attempt ledger is malformed")
         completed += item["outcome"] == "completed"
@@ -3967,10 +4370,45 @@ def _validate_navigation_attempts(
             raise ValueError("pending acquisition navigation attempt is not sequential")
 
 
+def _validated_terminal_policy_evidence(
+    value: object,
+    *,
+    allow_non_replayable_egress: bool,
+) -> dict[str, Any]:
+    """Validate the closed union of content-minimised terminal-policy receipts."""
+
+    if not isinstance(value, Mapping):
+        raise ValueError("acquisition policy evidence is malformed")
+    if set(value) == {
+        "non_replayable_egress",
+        "non_replayable_egress_sha256",
+    }:
+        if not allow_non_replayable_egress:
+            raise ValueError("historical acquisition cannot contain egress policy evidence")
+        return validate_non_replayable_egress_failure_evidence(value)
+    expected_policy_fields = {
+        "passive_render_contract",
+        "passive_render_contract_sha256",
+        "render_observation",
+        "render_observation_sha256",
+    }
+    if (
+        set(value) != expected_policy_fields
+        or value["passive_render_contract"] != PASSIVE_RENDER_CONTRACT
+        or value["passive_render_contract_sha256"] != PASSIVE_RENDER_CONTRACT_SHA256
+        or evidence_sha256(value["render_observation"])
+        != value["render_observation_sha256"]
+    ):
+        raise ValueError("acquisition passive-render policy evidence does not verify")
+    validate_render_observation(value["render_observation"], allow_failure=True)
+    return deepcopy(dict(value))
+
+
 def _validate_probe_attempts(
     page: Mapping[str, Any],
     *,
     candidate_id: str,
+    acquisition_schema_version: int = SCHEMA_VERSION,
     baseline_started_at: str | None = None,
     enforce_duration_limit: bool = False,
     require_canonical_timestamps: bool = False,
@@ -3995,33 +4433,23 @@ def _validate_probe_attempts(
             "outcome",
             "reason",
         }
-        if not isinstance(item, Mapping) or set(item) not in {
-            frozenset(base_fields),
-            frozenset(base_fields | {"policy_evidence"}),
-        }:
+        expected_fields = (
+            base_fields | {"policy_evidence"}
+            if acquisition_schema_version == SCHEMA_VERSION
+            else base_fields
+        )
+        if not isinstance(item, Mapping) or set(item) != expected_fields:
             raise ValueError("acquisition probe-attempt ledger is malformed")
         policy_evidence = item.get("policy_evidence")
         if policy_evidence is not None:
-            if item.get("outcome") != "terminal-policy-rejection" or not isinstance(
-                policy_evidence, Mapping
-            ):
+            if item.get("outcome") != "terminal-policy-rejection":
                 raise ValueError("acquisition probe policy evidence is malformed")
-            expected_policy_fields = {
-                "passive_render_contract",
-                "passive_render_contract_sha256",
-                "render_observation",
-                "render_observation_sha256",
-            }
-            if (
-                set(policy_evidence) != expected_policy_fields
-                or policy_evidence["passive_render_contract"] != PASSIVE_RENDER_CONTRACT
-                or policy_evidence["passive_render_contract_sha256"]
-                != PASSIVE_RENDER_CONTRACT_SHA256
-                or evidence_sha256(policy_evidence["render_observation"])
-                != policy_evidence["render_observation_sha256"]
-            ):
-                raise ValueError("acquisition probe policy evidence does not verify")
-            validate_render_observation(policy_evidence["render_observation"], allow_failure=True)
+            _validated_terminal_policy_evidence(
+                policy_evidence,
+                allow_non_replayable_egress=(
+                    acquisition_schema_version == SCHEMA_VERSION
+                ),
+            )
         probe_id = item["probe_id"]
         attempt = item["attempt"]
         probe_index = probe_ids.index(probe_id) if probe_id in probe_ids else -1
@@ -4351,6 +4779,7 @@ def _record_pending_probe_interruptions(state: dict[str, Any], *, recovered_at: 
                 "completed_at": _format_time(recovery),
                 "outcome": "interrupted",
                 "reason": "prior invocation ended before recording an outcome",
+                "policy_evidence": None,
             }
         )
         page.pop("pending_probe")
@@ -4403,6 +4832,7 @@ def _recover_active_batch(
                     "completed_at": _format_time(recovery),
                     "outcome": "interrupted",
                     "reason": "prior invocation ended before recording an outcome",
+                    "policy_evidence": None,
                 }
             )
             continue
@@ -4416,6 +4846,7 @@ def _recover_active_batch(
                 "completed_at": _format_time(recovery),
                 "outcome": "interrupted",
                 "reason": "prior invocation ended before recording an outcome",
+                "policy_evidence": None,
             }
         )
 
@@ -4982,14 +5413,18 @@ def _load_checkpoint_state(
         load_json(provenance_path), expected_type=PROVENANCE_TYPE
     )
     acquisition_schema_version = provenance_payload.get("acquisition_schema_version")
-    if type(acquisition_schema_version) is not int or acquisition_schema_version not in {
-        1,
-        2,
-        3,
-        SCHEMA_VERSION,
-    }:
+    if (
+        type(acquisition_schema_version) is not int
+        or acquisition_schema_version not in SUPPORTED_SCHEMA_VERSIONS
+    ):
         raise ValueError("acquisition checkpoint uses an unsupported schema")
     current_schema = acquisition_schema_version == SCHEMA_VERSION
+    modern_checkpoint_schema = acquisition_schema_version in {4, SCHEMA_VERSION}
+    if current_schema:
+        _validate_current_provenance_contract(
+            provenance_payload,
+            candidate_catalogue_path=catalogue_path,
+        )
     legacy_fields = {
         "provenance_sha256",
         "candidate_catalogue_sha256",
@@ -5000,13 +5435,13 @@ def _load_checkpoint_state(
         "baseline_batches",
         "active_batch",
     }
-    if current_schema:
+    if modern_checkpoint_schema:
         if (
             set(payload) != current_fields
             or type(payload.get("checkpoint_schema_version")) is not int
             or payload.get("checkpoint_schema_version") != CHECKPOINT_SCHEMA_VERSION
         ):
-            raise ValueError("current acquisition checkpoint shape is invalid")
+            raise ValueError("modern acquisition checkpoint shape is invalid")
         baseline_batches = payload["baseline_batches"]
         active_batch = payload["active_batch"]
     else:
@@ -5054,16 +5489,17 @@ def _load_checkpoint_state(
     for candidate in candidates:
         state = states[candidate.candidate_id]
         permitted_states = {"pending", "probing", "terminal"}
-        if acquisition_schema_version in {3, SCHEMA_VERSION}:
+        if acquisition_schema_version in {3, 4, SCHEMA_VERSION}:
             permitted_states.add("baseline-ready")
         if not isinstance(state, dict) or state.get("state") not in permitted_states:
             raise ValueError("acquisition checkpoint candidate state is invalid")
-        if current_schema and "pending_navigation" in state and state["pending_navigation"] is None:
+        if modern_checkpoint_schema and "pending_navigation" in state and state["pending_navigation"] is None:
             raise ValueError("current acquisition pending navigation is null")
         _validate_navigation_attempts(
             state,
-            enforce_duration_limit=(acquisition_schema_version in {3, SCHEMA_VERSION}),
-            require_canonical_timestamps=current_schema,
+            acquisition_schema_version=acquisition_schema_version,
+            enforce_duration_limit=(acquisition_schema_version in {3, 4, SCHEMA_VERSION}),
+            require_canonical_timestamps=modern_checkpoint_schema,
         )
         if "navigation_rejections" in state:
             _validate_navigation_rejections(
@@ -5081,7 +5517,7 @@ def _load_checkpoint_state(
                 if not isinstance(page_state, Mapping):
                     raise TypeError("checkpoint page ledger contains a non-object")
                 if (
-                    current_schema
+                    modern_checkpoint_schema
                     and "pending_probe" in page_state
                     and page_state["pending_probe"] is None
                 ):
@@ -5089,10 +5525,11 @@ def _load_checkpoint_state(
                 _validate_probe_attempts(
                     page_state,
                     candidate_id=candidate.candidate_id,
+                    acquisition_schema_version=acquisition_schema_version,
                     baseline_started_at=state.get("baseline_started_at"),
-                    enforce_duration_limit=(acquisition_schema_version in {3, SCHEMA_VERSION}),
-                    require_canonical_timestamps=current_schema,
-                    require_observation_attempt_bindings=current_schema,
+                    enforce_duration_limit=(acquisition_schema_version in {3, 4, SCHEMA_VERSION}),
+                    require_canonical_timestamps=modern_checkpoint_schema,
+                    require_observation_attempt_bindings=modern_checkpoint_schema,
                 )
                 page_origins = _canonical_navigation_origins(
                     page_state.get("navigation_observed_origins"),
@@ -5104,9 +5541,9 @@ def _load_checkpoint_state(
                     )
         elif state["state"] in {"baseline-ready", "probing"} or state.get("pages"):
             raise ValueError("checkpoint lacks its navigation origin ledger")
-        if current_schema and state["state"] == "pending":
+        if modern_checkpoint_schema and state["state"] == "pending":
             _validate_current_pending_state(state)
-        if current_schema and state["state"] == "probing":
+        if modern_checkpoint_schema and state["state"] == "probing":
             _validate_live_probing_state(state, candidate=candidate)
         if state["state"] == "baseline-ready":
             _validate_baseline_ready_state(state, candidate=candidate)
@@ -5130,7 +5567,7 @@ def _load_checkpoint_state(
         elif binding is not None or state["state"] == "terminal":
             raise ValueError("checkpoint references missing terminal evidence")
     candidate_order = [candidate.candidate_id for candidate in candidates]
-    if current_schema:
+    if modern_checkpoint_schema:
         validated_baseline_batches = _validate_baseline_batches(
             baseline_batches,
             states=states,
@@ -5163,12 +5600,12 @@ def _load_checkpoint_state(
     _validate_document_response_receipt_namespace(
         path.parent,
         states,
-        required=(acquisition_schema_version in {2, 3, SCHEMA_VERSION}),
+        required=(acquisition_schema_version in {2, 3, 4, SCHEMA_VERSION}),
     )
     _validate_prepared_probe_namespace(
         path.parent,
         states,
-        required=(acquisition_schema_version in {2, 3, SCHEMA_VERSION}),
+        required=(acquisition_schema_version in {2, 3, 4, SCHEMA_VERSION}),
     )
     if internal_failures:
         raise InternalAcquisitionError(

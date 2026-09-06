@@ -25,7 +25,12 @@ import yaml
 
 from . import capture_session as capture_engine
 from .class_acquisition import validate_class_study_preparation
-from .class_study import STUDY_ID
+from .class_study import (
+    STUDY_ID,
+    is_class_study_campaign_name,
+    is_successor_study_id,
+    parse_class_study_campaign_name,
+)
 from .defenses import defense_from_runtime_identity
 from .experiment import (
     KERNEL_TX_EVIDENCE_DIRECTORY,
@@ -109,7 +114,6 @@ COORDINATOR_ONLY_CAPTURE_ROLES = frozenset(
         "formal",
     }
 )
-CLASS_STUDY_NAME_PREFIX = "classifier-multiorigin100-v1-"
 CLASS_STUDY_LAUNCH_ARTIFACT_TYPE = "qcsd-class-study-first-launch-claim"
 CLASS_STUDY_LAUNCH_SCHEMA_VERSION = 1
 CLASS_STUDY_LAUNCH_INPUT = "inputs/class-study-launch.json"
@@ -337,8 +341,7 @@ def _load_successor_campaign_context(
     namespace = restart.get("namespace")
     launch_namespace = namespace.get("launch_namespace") if isinstance(namespace, Mapping) else None
     if (
-        not isinstance(study_id, str)
-        or not study_id.startswith("classifier-multiorigin100-v2-")
+        not is_successor_study_id(study_id)
         or launch_namespace != f".{study_id}-launches"
     ):
         raise ValueError("successor restart has an invalid study/launch namespace")
@@ -1056,8 +1059,15 @@ def _validate_class_study_campaign_contract(campaign: Campaign) -> None:
             "certification": f"{study_id}-certification-900-1200",
         }.get(role)
     if role in {"canary", "formal"}:
-        expected_name_pattern = rf"{re.escape(study_id)}-{role}-[0-9]{{2}}-1200"
-        if re.fullmatch(expected_name_pattern, campaign.name) is None:
+        try:
+            campaign_identity = parse_class_study_campaign_name(campaign.name)
+        except ValueError as error:
+            raise ValueError(f"{role} campaign name is not canonical") from error
+        if (
+            campaign_identity.study_id != study_id
+            or campaign_identity.evidence_role != role
+            or campaign_identity.block is None
+        ):
             raise ValueError(f"{role} campaign name is not canonical")
     elif expected_name is not None and campaign.name != expected_name:
         raise ValueError(f"{role} campaign name is not canonical")
@@ -2797,11 +2807,15 @@ def _is_class_study_campaign(campaign: Campaign) -> bool:
     """Return whether a campaign carries the complete schema-two class identity."""
 
     study_id = campaign.class_study_id or STUDY_ID
+    try:
+        name_identity = parse_class_study_campaign_name(campaign.name)
+    except ValueError:
+        return False
     return bool(
         campaign.schema_version == CLASS_STUDY_SCHEMA_VERSION
         and campaign.evidence_role in EVIDENCE_ROLES
-        and isinstance(study_id, str)
-        and campaign.name.startswith(f"{study_id}-")
+        and name_identity.study_id == study_id
+        and name_identity.evidence_role == campaign.evidence_role
         and campaign.class_study_cohort_sha256 is not None
         and campaign.class_study_cohort_assembly_sha256 is not None
     )
@@ -2849,11 +2863,17 @@ def _class_study_coordinator_campaign_identity(
         cohort_sha256 = campaign_or_configuration.get("class_study_cohort_sha256")
         assembly_sha256 = campaign_or_configuration.get("class_study_cohort_assembly_sha256")
         successor_sha256 = campaign_or_configuration.get(CLASS_STUDY_SUCCESSOR_CONFIGURATION_KEY)
+    try:
+        name_identity = parse_class_study_campaign_name(name)
+    except ValueError:
+        name_identity = None
     if (
         not isinstance(name, str)
         or not isinstance(role, str)
         or not isinstance(study_id, str)
-        or not name.startswith(f"{study_id}-")
+        or name_identity is None
+        or name_identity.study_id != study_id
+        or name_identity.evidence_role != role
         or not isinstance(campaign_sha256, str)
         or _SHA256.fullmatch(campaign_sha256) is None
         or not isinstance(cohort_sha256, str)
@@ -3081,8 +3101,7 @@ def _has_terminal_strict_defense_fidelity_failure(
 def _has_durable_attempt_name(name: object) -> bool:
     return isinstance(name, str) and (
         name.startswith("buflo-study-v1-")
-        or name.startswith(CLASS_STUDY_NAME_PREFIX)
-        or name.startswith("classifier-multiorigin100-v2-")
+        or is_class_study_campaign_name(name)
     )
 
 
@@ -3090,11 +3109,7 @@ def _require_class_study_public_origin_policy(campaign_or_name: Campaign | objec
     is_class_study = (
         _is_class_study_campaign(campaign_or_name)
         if isinstance(campaign_or_name, Campaign)
-        else isinstance(campaign_or_name, str)
-        and (
-            campaign_or_name.startswith(CLASS_STUDY_NAME_PREFIX)
-            or campaign_or_name.startswith("classifier-multiorigin100-v2-")
-        )
+        else is_class_study_campaign_name(campaign_or_name)
     )
     if is_class_study and os.environ.get(CLASS_STUDY_PUBLIC_ORIGIN_ENV) != "1":
         raise ValueError("class-study capture requires QCSD_PUBLIC_ORIGIN_ONLY=1 before launch")
@@ -3103,6 +3118,8 @@ def _require_class_study_public_origin_policy(campaign_or_name: Campaign | objec
 def run_campaign(path: Path, results_root: Path = Path("/lab/results")) -> Path:
     campaign = load_campaign(path)
     _require_class_study_coordinator_capture_authority(campaign)
+    if _is_class_study_campaign(campaign):
+        results_root = _canonical_class_study_results_root(results_root)
     lock_held = (
         campaign.name.startswith("buflo-study-v1-")
         and os.environ.get("QCSD_BUFLO_CAPTURE_LOCK_HELD") == "1"
@@ -3128,6 +3145,17 @@ def _class_study_launch_key(campaign: Campaign) -> str:
         cohort_assembly_sha256=str(campaign.class_study_cohort_assembly_sha256),
     )
     return class_study_launch_key(**identity)
+
+
+def _class_study_launch_namespace(campaign: Campaign) -> str:
+    """Return the sole registry namespace admitted for this study identity."""
+
+    study_id = campaign.class_study_id or STUDY_ID
+    expected = f".{study_id}-launches"
+    declared = campaign.class_study_launch_namespace
+    if declared is not None and declared != expected:
+        raise ValueError("class-study launch namespace differs from its study identity")
+    return expected
 
 
 def _class_study_launch_payload(
@@ -3511,8 +3539,7 @@ def _revalidate_loaded_class_study_runtime_files(campaign: Campaign) -> None:
         if successor_study_id not in {None, STUDY_ID}:
             raise ValueError("class-study runtime has an unbound alternate study identity")
     elif (
-        not isinstance(successor_study_id, str)
-        or not successor_study_id.startswith("classifier-multiorigin100-v2-")
+        not is_successor_study_id(successor_study_id)
         or _SHA256.fullmatch(successor_restart_sha256) is None
     ):
         raise ValueError("class-study successor runtime identity is incomplete")
@@ -3584,53 +3611,26 @@ def _claim_class_study_launch(
 
     from .experiment import result_path
 
+    if not _is_class_study_campaign(campaign):
+        raise ValueError("first-launch claim requires a complete class-study campaign")
+    root = _canonical_class_study_results_root(results_root)
     _validate_class_study_preclaim_authority(
         campaign,
         source=source,
         started_at=started_at,
     )
-    root = results_root.absolute()
-    if root.is_symlink() or not root.is_dir():
-        raise ValueError("class-study results root must be a regular directory")
-    root = root.resolve()
-    namespace = campaign.class_study_launch_namespace or f".{STUDY_ID}-launches"
-    if not isinstance(namespace, str) or Path(namespace).name != namespace:
-        raise ValueError("class-study launch namespace is invalid")
-    registry = root / namespace
-    if registry.exists() or registry.is_symlink():
-        if registry.is_symlink() or not registry.is_dir():
-            raise ValueError("class-study launch registry is not a regular directory")
-    else:
-        registry.mkdir(mode=0o700)
-        fsync_directory(root)
+    namespace = _class_study_launch_namespace(campaign)
+    registry = _class_study_launch_registry(root, namespace)
     key = _class_study_launch_key(campaign)
     marker = registry / f"{key}.json"
-    if marker.is_symlink():
-        raise ValueError("class-study launch claim cannot be a symlink")
-    if marker.exists():
-        value = load_json(marker)
-        payload = value.get("payload") if isinstance(value, Mapping) else None
-        if not isinstance(payload, Mapping) or not isinstance(payload.get("result_root"), str):
-            raise ValueError("class-study launch claim is malformed")
-        claimed_root = Path(payload["result_root"])
-        _validate_class_study_launch_value(
-            value,
-            campaign=campaign,
-            result_root=claimed_root,
-            source=source,
-        )
-        run_id = claimed_root.name
-        if result_path(root, campaign.name, run_id) != claimed_root.resolve():
-            raise ValueError("class-study launch claim result path is not canonical")
-        if claimed_root.exists() or claimed_root.is_symlink():
-            if claimed_root.is_symlink() or not claimed_root.is_dir():
-                raise ValueError("class-study claimed result root is unsafe")
-            if (claimed_root / "experiment.json").is_file():
-                raise FileExistsError(
-                    "class-study campaign/cohort has already launched; resume its claimed result"
-                )
-            _discard_unlaunched_class_root(claimed_root)
-        return claimed_root, run_id, marker
+    recovered = _recover_class_study_launch_claim(
+        marker,
+        root=root,
+        campaign=campaign,
+        source=source,
+    )
+    if recovered is not None:
+        return recovered
 
     run_id = started_at.strftime("%Y%m%dT%H%M%S.%fZ")
     result_root = result_path(root, campaign.name, run_id)
@@ -3643,8 +3643,111 @@ def _claim_class_study_launch(
         )
     )
     encoded = (json.dumps(value, indent=2, sort_keys=True) + "\n").encode()
-    durable_create(marker, encoded)
+    try:
+        durable_create(marker, encoded)
+    except FileExistsError:
+        # Another direct-API process can win after our absence check.  The
+        # create-only link is the linearisation point: load and validate that
+        # winner rather than manufacturing another result identity.
+        recovered = _recover_class_study_launch_claim(
+            marker,
+            root=root,
+            campaign=campaign,
+            source=source,
+        )
+        if recovered is None:  # pragma: no cover - an unlinking adversary.
+            raise ValueError("class-study launch claim disappeared after collision")
+        return recovered
     return result_root, run_id, marker
+
+
+def _canonical_class_study_results_root(results_root: Path) -> Path:
+    """Bind every fresh class-study launch to this Lab's one results root.
+
+    Frozen-result resume and verification deliberately do not call this
+    helper: their already sealed claim is validated relative to the result's
+    own historical results ancestor.
+    """
+
+    from .class_layout import require_canonical_fresh_path
+
+    root = require_canonical_fresh_path(
+        results_root,
+        field="results_root",
+        label="class-study results root",
+    )
+    if not root.is_dir():
+        raise ValueError("class-study results root must be a regular directory")
+    return root
+
+
+def _class_study_launch_registry(root: Path, namespace: str) -> Path:
+    """Create or admit the single private registry beneath ``root`` safely."""
+
+    registry = root / namespace
+    created = False
+    try:
+        registry.mkdir(mode=0o700)
+        created = True
+    except FileExistsError:
+        pass
+    try:
+        metadata = registry.stat(follow_symlinks=False)
+    except FileNotFoundError as error:
+        raise ValueError("class-study launch registry disappeared") from error
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(metadata.st_mode) != 0o700
+    ):
+        raise ValueError(
+            "class-study launch registry must be an owner-owned mode-0700 directory"
+        )
+    if created:
+        fsync_directory(root)
+    return registry
+
+
+def _recover_class_study_launch_claim(
+    marker: Path,
+    *,
+    root: Path,
+    campaign: Campaign,
+    source: Mapping[str, Any],
+) -> tuple[Path, str, Path] | None:
+    """Load one complete winner or report that no claim has been published."""
+
+    from .experiment import result_path
+
+    try:
+        metadata = marker.stat(follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+    if not stat.S_ISREG(metadata.st_mode):
+        raise ValueError("class-study launch claim must be a regular file")
+    value = load_json(marker)
+    payload = value.get("payload") if isinstance(value, Mapping) else None
+    if not isinstance(payload, Mapping) or not isinstance(payload.get("result_root"), str):
+        raise ValueError("class-study launch claim is malformed")
+    claimed_root = Path(payload["result_root"])
+    _validate_class_study_launch_value(
+        value,
+        campaign=campaign,
+        result_root=claimed_root,
+        source=source,
+    )
+    run_id = claimed_root.name
+    if result_path(root, campaign.name, run_id) != claimed_root.resolve():
+        raise ValueError("class-study launch claim result path is not canonical")
+    if claimed_root.exists() or claimed_root.is_symlink():
+        if claimed_root.is_symlink() or not claimed_root.is_dir():
+            raise ValueError("class-study claimed result root is unsafe")
+        if (claimed_root / "experiment.json").is_file():
+            raise FileExistsError(
+                "class-study campaign/cohort has already launched; resume its claimed result"
+            )
+        _discard_unlaunched_class_root(claimed_root)
+    return claimed_root, run_id, marker
 
 
 def _discard_unlaunched_class_root(root: Path) -> None:
@@ -3686,10 +3789,10 @@ def _validate_class_study_launch(root: Path, campaign: Campaign) -> str:
         result_root=root,
         source=source,
     )
-    namespace = campaign.class_study_launch_namespace or f".{STUDY_ID}-launches"
-    if not isinstance(namespace, str) or Path(namespace).name != namespace:
-        raise ValueError("class-study launch namespace is invalid")
+    namespace = _class_study_launch_namespace(campaign)
     registry = root.parents[1] / namespace
+    if registry.is_symlink() or not registry.is_dir():
+        raise ValueError("class-study launch registry is not a regular directory")
     marker = registry / f"{payload['launch_key']}.json"
     if marker.is_symlink() or not marker.is_file() or sha256_file(marker) != sha256_file(frozen):
         raise ValueError("class-study global first-launch claim differs from the result")
@@ -5481,11 +5584,7 @@ def resume_campaign(root: Path) -> Path:
         and name.startswith("buflo-study-v1-")
         and os.environ.get("QCSD_BUFLO_CAPTURE_LOCK_HELD") == "1"
     ) or (
-        isinstance(name, str)
-        and (
-            name.startswith(CLASS_STUDY_NAME_PREFIX)
-            or name.startswith("classifier-multiorigin100-v2-")
-        )
+        is_class_study_campaign_name(name)
         and os.environ.get("QCSD_CLASS_CAPTURE_LOCK_HELD") == "1"
     )
     if _has_durable_attempt_name(name) and not lock_held:

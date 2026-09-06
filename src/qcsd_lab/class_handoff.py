@@ -54,6 +54,8 @@ from .class_study import (
     STUDY_ID,
     class_study_launch_identity,
     class_study_launch_key,
+    is_class_study_id,
+    is_successor_study_id,
     load_study_receipt,
 )
 from .discover import origin
@@ -250,7 +252,7 @@ _DIMENSIONS = _StudyDimensions(
 
 
 def _dimensions_for_study(study_id: str) -> _StudyDimensions:
-    if study_id != STUDY_ID and not study_id.startswith("classifier-multiorigin100-v2-"):
+    if not is_class_study_id(study_id):
         raise ValueError("formal class handoff study identity is invalid")
     return _StudyDimensions(
         study_id=study_id,
@@ -675,7 +677,7 @@ def _validate_source_results(
         ):
             raise ValueError("formal class source has no frozen chaff-qualification identity")
         current_successor_sha256 = configuration.get("class_study_successor_sha256")
-        if dimensions.study_id.startswith("classifier-multiorigin100-v2-"):
+        if is_successor_study_id(dimensions.study_id):
             if not _is_digest(current_successor_sha256):
                 raise ValueError("formal successor block has no restart authority")
         elif current_successor_sha256 is not None:
@@ -1054,7 +1056,7 @@ def _validate_class_study_launch_receipt(
     }
     successor_path = receipt.root / "inputs/class-study-successor.json"
     successor_key = "class_study_successor_sha256"
-    if dimensions.study_id.startswith("classifier-multiorigin100-v2-"):
+    if is_successor_study_id(dimensions.study_id):
         successor_sha256 = configuration.get(successor_key)
         successor_relative = successor_path.relative_to(receipt.root).as_posix()
         if (

@@ -441,7 +441,7 @@ def test_successor_policy_is_create_only_hash_bound_and_explicit(tmp_path: Path)
 def test_successor_readiness_public_create_and_validate_reconstruct(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    study_id = "classifier-multiorigin100-v2-123456789abc"
+    study_id = "classifier-multiorigin100-v2-g01-123456789abc"
     restart = tmp_path / "successor-restart.json"
     foundation = tmp_path / "foundation.json"
     restart.write_text("restart\n", encoding="utf-8")
@@ -1142,7 +1142,7 @@ def test_predecessor_lineage_reconstructs_immediate_restart_and_root_authority(
     prior_decision_path = tmp_path / "generation-one-decision.json"
     study_id = f"{successor.SUCCESSOR_STUDY_PREFIX}-g01-{'b' * 12}"
     prior_decision = {
-        "successor": {"study_id": study_id},
+        "successor": {"study_id": study_id, "identity_sha256": "b" * 64},
         "successor_selection": first.as_dict(),
         "selection_authority": selection_authority,
         "replacement_lineage": {
@@ -1162,6 +1162,7 @@ def test_predecessor_lineage_reconstructs_immediate_restart_and_root_authority(
     )
     restart_payload = {
         "study_id": study_id,
+        "replacement_generation": 1,
         "successor_decision": successor._file_binding(prior_decision_path),
         "immutable_plan_artifacts": {
             path.name: {"path": path.name, "sha256": sha256_file(path)}
@@ -1213,6 +1214,17 @@ def test_predecessor_lineage_reconstructs_immediate_restart_and_root_authority(
     assert lineage.cumulative_failed_class_ids == ("s0-00",)
     assert len(lineage.authority.feasible_pairs or ()) == 60
     assert len(lineage.current.feasible_pairs or ()) == 50
+
+    restart_payload["replacement_generation"] = 2
+    with pytest.raises(ValueError, match="successor identity is inconsistent"):
+        successor._predecessor_lineage(
+            policy_path=policy,
+            cohort_path=cohort,
+            cohort=incumbent,
+            assembly_path=assembly,
+            final_selection_path=final_selection,
+        )
+    restart_payload["replacement_generation"] = 1
 
     restart_payload["immutable_plan_artifacts"][cohort.name]["sha256"] = "0" * 64
     with pytest.raises(ValueError, match="plan binding differs"):

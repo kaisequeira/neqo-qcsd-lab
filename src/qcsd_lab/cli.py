@@ -269,20 +269,45 @@ def parser() -> argparse.ArgumentParser:
         default=[],
     )
     class_study.add_argument("--artifacts-root", type=Path)
-    class_study.add_argument("--numeric-bundle", type=Path)
-    class_study.add_argument("--prefix-spec-root", type=Path)
+    class_study.add_argument(
+        "--numeric-bundle",
+        dest="numeric_bundle_roots",
+        action="append",
+        type=Path,
+        default=[],
+    )
+    class_study.add_argument(
+        "--prefix-spec-root",
+        dest="prefix_spec_roots",
+        action="append",
+        type=Path,
+        default=[],
+    )
     class_study.add_argument("--qualification-checkpoint", type=Path)
     class_study.add_argument("--qualification-sidecar-root", type=Path)
     class_study.add_argument("--qualification-publication-root", type=Path)
-    class_study.add_argument("--qualification-manifest", type=Path)
+    class_study.add_argument(
+        "--qualification-manifest",
+        dest="qualification_manifests",
+        action="append",
+        type=Path,
+        default=[],
+    )
     class_study.add_argument("--qualification-workload")
     class_study.add_argument("--qualify-all-pending", action="store_true")
-    class_study.add_argument("--final-bundle", type=Path)
+    class_study.add_argument(
+        "--final-bundle",
+        dest="final_bundle_roots",
+        action="append",
+        type=Path,
+        default=[],
+    )
     class_study.add_argument("--handoff", type=Path)
     class_study.add_argument("--evaluation-receipt", type=Path)
     class_study.add_argument("--cohort-version", action=_SinglePositiveInteger)
     class_study.add_argument("--build-execution-receipt", type=Path)
     class_study.add_argument("--pinned-cdp-receipt", type=Path)
+    class_study.add_argument("--browser-egress-qualification-root", type=Path)
     class_study.add_argument("--reference-receipt", type=Path)
     class_study.add_argument("--code-gate-receipt", type=Path)
     class_study.add_argument("--controlled-qualification-receipt", type=Path)
@@ -642,6 +667,43 @@ def main(argv: list[str] | None = None) -> None:
             return path.absolute() if path is not None else None
 
         try:
+            status_artifacts = {
+                "numeric_bundle_roots": tuple(
+                    path.absolute() for path in args.numeric_bundle_roots
+                ),
+                "prefix_spec_roots": tuple(
+                    path.absolute() for path in args.prefix_spec_roots
+                ),
+                "qualification_manifests": tuple(
+                    path.absolute() for path in args.qualification_manifests
+                ),
+                "final_bundle_roots": tuple(
+                    path.absolute() for path in args.final_bundle_roots
+                ),
+            }
+            if args.action != "status":
+                repeated = [
+                    option
+                    for option, values in (
+                        ("--numeric-bundle", status_artifacts["numeric_bundle_roots"]),
+                        ("--prefix-spec-root", status_artifacts["prefix_spec_roots"]),
+                        (
+                            "--qualification-manifest",
+                            status_artifacts["qualification_manifests"],
+                        ),
+                        ("--final-bundle", status_artifacts["final_bundle_roots"]),
+                    )
+                    if len(values) > 1
+                ]
+                if repeated:
+                    raise ValueError(
+                        f"class-study {args.action} accepts {', '.join(repeated)} at most once"
+                    )
+
+            def singular(name: str) -> Path | None:
+                values = status_artifacts[name]
+                return values[0] if len(values) == 1 else None
+
             result = run_class_study_action(
                 args.action,
                 stage=args.stage,
@@ -680,22 +742,29 @@ def main(argv: list[str] | None = None) -> None:
                     path.absolute() for path in args.formal_result_roots
                 ),
                 artifacts_root=absolute(args.artifacts_root),
-                numeric_bundle_root=absolute(args.numeric_bundle),
-                prefix_spec_root=absolute(args.prefix_spec_root),
+                numeric_bundle_root=singular("numeric_bundle_roots"),
+                numeric_bundle_roots=status_artifacts["numeric_bundle_roots"],
+                prefix_spec_root=singular("prefix_spec_roots"),
+                prefix_spec_roots=status_artifacts["prefix_spec_roots"],
                 qualification_checkpoint=absolute(args.qualification_checkpoint),
                 qualification_sidecar_root=absolute(args.qualification_sidecar_root),
                 qualification_publication_root=absolute(
                     args.qualification_publication_root
                 ),
-                qualification_manifest=absolute(args.qualification_manifest),
+                qualification_manifest=singular("qualification_manifests"),
+                qualification_manifests=status_artifacts["qualification_manifests"],
                 qualification_workload=args.qualification_workload,
                 qualify_all_pending=args.qualify_all_pending,
-                final_bundle_root=absolute(args.final_bundle),
+                final_bundle_root=singular("final_bundle_roots"),
+                final_bundle_roots=status_artifacts["final_bundle_roots"],
                 handoff=absolute(args.handoff),
                 evaluation_receipt=absolute(args.evaluation_receipt),
                 cohort_version=args.cohort_version,
                 build_execution_receipt=absolute(args.build_execution_receipt),
                 pinned_cdp_receipt=absolute(args.pinned_cdp_receipt),
+                browser_egress_qualification_root=absolute(
+                    args.browser_egress_qualification_root
+                ),
                 reference_receipt=absolute(args.reference_receipt),
                 code_gate_receipt=absolute(args.code_gate_receipt),
                 controlled_qualification_receipt=absolute(

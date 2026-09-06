@@ -62,8 +62,14 @@ sample after the schema-3 runner rejected global TAI-minus-MONOTONIC drift.
 V58 subsequently bound the item-local clock-evidence repair through a clean
 build and isolated reference run, but it predates the mandatory pinned-CDP
 producer and cannot be completed under the strengthened foundation contract.
-The current post-v58 source therefore remains unreceipted until a fresh v59
-lineage passes the source-bound gates below.
+V59 then completed a fresh pull/no-cache three-image build for clean Lab
+`2cbbb61a59ad8011f2948919c14c3316ed3772a9` and unchanged Rust/gitlink
+`ce0d7a21756ce795d6f50d750a1c25e0fa006327`; its build receipt has whole-file
+SHA-256 `f8db5c8f0821a1b080135b130c82c78d2b4a930baf5c88d28870225b7b223590`.
+It has no browser-egress, pinned-CDP, reference, timing, regression, code,
+controlled, or class-study receipt. The Playwright/CDP and browser-supply
+hardening documented below postdates that build, so v59 cannot authorise
+current source. The next eligible fresh source lineage is v60.
 Summary schema 4 binds the typed schedule-stop policy, stop timestamp,
 sub-cell capacity, direction counts at stop, and exact post-stop advertised
 credit drain; historical summary schemas 2 and 3 remain readable but cannot
@@ -803,10 +809,10 @@ all corresponding Docker objects absent. It issued no Docker-object removal
 and left unrelated Docker inventory unchanged. This is operational recovery,
 not scientific evidence.
 
-For current source, fresh v59 build, pinned-CDP, reference, regression-bound
-code-gate, and foundation receipts are absent; timing stress is 0/12,
-regression is 0/18, and controlled qualification is 0/160. Real acquisition
-observations remain zero.
+For current source, fresh v60 build, browser-egress, pinned-CDP, reference,
+regression-bound code-gate, and foundation receipts are absent; timing stress
+is 0/12, regression is 0/18, and controlled qualification is 0/160. Real
+acquisition observations remain zero.
 Pilot fitting, qualification, and compatibility are 0/480, 0/720, and 0/1,080;
 authoritative fitting and final qualification are 0/2,000 and 0/600;
 certification and canaries are 0/900 and 0/1,000; formal capture is 0/16,000.
@@ -816,16 +822,21 @@ its clean pull/no-cache build and isolated reference execution for Lab
 `ce0d7a21756ce795d6f50d750a1c25e0fa006327`; the receipt SHA-256 values are
 `124ff428729db55ffe7bf2f024823d8db01ac48b46e5598a3fc4d749dc8d9223`
 and `e9a55c93e92c0cc2566984304e06a43ba3660df46828488055befa561c57c69d`.
-Its preparation image has no admissible pinned-CDP producer, so v58 cannot be
-retrofitted or resumed into the current six-gate foundation. Current Lab
-`a420d3240b43d92ee0fb1b063ab3c550bd4fbe6f` adds that probe and the
-authority/schema hardening but has no source-bound live receipt and therefore
-advances none of those numerators. The next fresh cohort is v59. It must pass
-the pull/no-cache build, isolated reference and pinned-CDP gates, 12/12 timing
-stress, 18/18 regression, regression-bound code gate, and 160/160 controlled
-qualification before expanded-class acquisition can begin. V55–v58 cannot be
-retried. The complete current status and earlier cohort chronology are retained
-in the authoritative workspace
+Its preparation image has no admissible browser-egress or pinned-CDP producer,
+so v58 cannot be retrofitted or resumed into the current seven-gate
+foundation. V59 completed only its clean pull/no-cache build for Lab
+`2cbbb61a59ad8011f2948919c14c3316ed3772a9`
+and unchanged Rust/gitlink `ce0d7a21756ce795d6f50d750a1c25e0fa006327`;
+the whole-file build-receipt SHA-256 is
+`f8db5c8f0821a1b080135b130c82c78d2b4a930baf5c88d28870225b7b223590`.
+No later v59 gate ran, and the current browser/CDP source postdates that clean
+identity. It therefore advances no current-source numerator. The next fresh
+cohort is v60. It must pass the pull/no-cache build, isolated reference,
+the 110/110 browser-egress gate, the pinned-CDP gate, 12/12 timing stress, 18/18
+regression, regression-bound code gate, and 160/160 controlled qualification
+before expanded-class acquisition can begin. V55–v59 cannot be retried. The
+complete current status and earlier cohort chronology are retained in the
+authoritative workspace
 [`PROJECT.md`](../PROJECT.md).
 
 The current Lab boundary additionally classifies typed client defence/QCSD
@@ -991,9 +1002,9 @@ guarded shell owns creation, signal handling, exact-object cleanup, handoff
 retirement, and finalisation; direct Python execution cannot mutate Docker.
 This implementation has synthetic test coverage. The passed live engineering
 probe cited above used the older v56 image plus dirty repaired source; there is
-no clean, current-source v59 capability or campaign-evidence result. V58's
-source-bound build/reference receipts do not convert that older probe into
-evidence for either v58 or current source.
+no clean capability or campaign-evidence result for current source. Neither
+v58's build/reference receipts nor v59's build-only receipt converts that older
+probe into evidence for current source.
 
 The schema-1 receipt is explicitly `evidentiary=false` and
 `authorizes_capture=false`. A passing receipt could demonstrate only that one
@@ -1058,27 +1069,55 @@ or after the last later event. A page still non-quiescent 30 seconds after
 `settle_ms=10000` field records only the minimum observation duration, never
 the actual cutoff; the hash-bound render receipt records navigation, load,
 last-event, quiet-start and cutoff monotonic times, active IDs/count, and the
-cutoff reason. Consequently, the admitted graph covers passive activity in
+cutoff reason, together with router shutdown readiness and the terminal
+shared-worker prearm summary. Passive-render and render-observation schema 2
+and discovery-event-audit schema 3 are required for fresh evidence.
+Consequently, the admitted graph covers passive activity in
 this exact bounded render, not resources requiring scrolling, interaction,
 account state, or activity beginning after the hard cap.
 
 Browser discovery is bound to
-`playwright-1.52-public-cdp-recursive-non-flat-paused-debugger-targets-v3`. It uses
-Chromium's public non-flat CDP transport to recursively auto-attach page-related
-iframe, dedicated-worker, and shared-worker targets while each child is paused.
-Every child acknowledges `Debugger`, `Network`, cache/service-worker bypass, recursive
-auto-attach, and an explicit target-information barrier before resume; the root
-page and iframe sessions also enable request-stage `Fetch`. Actual
-`Network.requestWillBeSent` occurrences alone create replay-resource ledger
-entries. `Fetch.requestPaused` remains the before-I/O policy gate and is
-reconciled against that Network evidence, including Chromium's page-owned
-interception of worker requests. Request identities include the
-session path, target ID and generation, Network request ID, and occurrence
-index; only unique page/iframe redirect migration is accepted. Target crashes,
+`playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v10`,
+Playwright 1.57.0, and the full Chromium revision 1200/version 143.0.7499.4
+distribution. A receipt-schema-6 image-build patch changes only the two pinned
+Playwright `crBrowser.js` and `crPage.js` auto-attach expressions, and activates
+their target filters only for an exclusive QCSD driver process. Driver starts
+hold a process-wide lock only until the Node driver has inherited the exact
+ownership marker; active and ordinary browser lifetimes may then overlap.
+Every Chromium launch uses the immutable `/usr/local/bin/qcsd-chromium` path
+and a fixed child environment. Node-driver overrides, a different executable
+environment value, altered package/browser trees, unsafe ownership or modes,
+and mutable default-image ancestors fail before acquisition.
+
+The root page then uses Chromium's public non-flat CDP transport to recursively
+adopt page-related iframe, dedicated-worker, and shared-worker targets while
+each child is paused. The separate public browser session holds only guarded
+shared workers, and uses page-only target discovery to reject any sibling
+popup/page in the root browser context. Dedicated workers retain their
+immediate policy path. A guarded shared-worker bootstrap request remains held
+until the non-flat adopter has issued every initial setup envelope; the
+terminal summary requires every hold to be released after setup and no hold to
+remain pending. Every child acknowledges `Debugger`, `Network`, cache/service-
+worker bypass, recursive auto-attach, and an explicit target-information
+barrier before resume; the root page and iframe sessions also enable request-
+stage `Fetch`. Actual `Network.requestWillBeSent` occurrences alone create
+replay-resource ledger entries. `Fetch.requestPaused` remains the before-I/O
+policy gate and is reconciled against that Network evidence, including
+Chromium's page-owned interception of dedicated-worker requests and the guarded
+shared-worker session's own interception.
+
+Request identities include the session path, target ID and generation, Network
+request ID, and occurrence index; only unique page/iframe redirect migration is
+accepted. Target attach, information-change, detach, and destruction activity
+resets render quiescence independently of network traffic. Acceptance requires
+zero active requests, router shutdown readiness, and zero pending shared-worker
+prearms for the complete quiet interval. Target crashes, sibling pages,
 unsupported related targets, ambiguous/cross-generation reuse, cache or
-service-worker responses, unmatched Network/Fetch or terminal events, and
-traffic emitted before setup acknowledgement or unresolved setup/policy work at
-the deliberate shutdown boundary fail closed.
+service-worker responses, unmatched Network/Fetch or terminal events, traffic
+emitted before setup acknowledgement, or unresolved setup/policy work at the
+deliberate shutdown boundary fail closed. A hard-cap rejection uses a separate
+abort-and-context-disposal lifecycle, preserving the original typed passive-
+render evidence even if cleanup itself encounters an error.
 
 Each accepted preparation seals a content-minimised, replayable event
 projection: sequence and relative time, target/session/frame/generation,
@@ -1099,19 +1138,25 @@ pinned instrumentation, not archival replay of Chromium's unsanitised protocol
 stream.
 
 The create-only `./qcsd-lab test pinned-cdp` command exercises the real pinned
-Playwright 1.52/Chromium topology in the exact preparation image named by a
-versioned no-cache build receipt. It runs as the host UID:GID with all
+Playwright 1.57.0/Chromium 143.0.7499.4 topology in the exact preparation image
+named by a versioned no-cache build receipt. Probe schema 8 binds the exact
+driver receipt and browser identity, public-CDP v10 policy, successful HTTP
+response inventory, shared-worker prearm terminal summary, and sanitised
+target-lifecycle generation/count evidence. It runs as the host UID:GID with all
 capabilities dropped and Docker networking disabled, while a local
 in-container server proves cross-site iframe, worker/shared-worker,
 duplicate-URL, redirect, and complete shutdown behaviour. Success publishes a
 canonical hash-bound receipt containing only minimised topology counts and
 booleans. The receipt binds its cohort, build receipt and payload hashes,
 collection source, exact preparation image/source, observed isolation, and
-probe contract. Mocked tests cannot substitute for that receipt. The receipt
-producer and corrected preparation-image interpreter postdate v58, so v58
-cannot acquire this evidence retroactively; the next attempt requires a new
-unused cohort and a fresh no-cache build. Pass the canonical receipt to the
-foundation command as `--pinned-cdp-receipt "$PINNED_CDP"`. It is the sixth
+probe contract. It also proves real/effective/saved/filesystem UID/GID identity,
+zero permitted/effective/inheritable/ambient capabilities, no-new-privileges,
+and a loopback-only interface inventory. Mocked tests and the deliberately
+non-evidentiary development-image diagnostics cannot substitute for that
+receipt. The receipt producer and current browser contract postdate v59, so no
+older cohort can acquire this evidence retroactively; the next attempt requires
+fresh unused cohort v60 and a fresh no-cache build. Pass the canonical receipt
+to the foundation command as `--pinned-cdp-receipt "$PINNED_CDP"`. It is the sixth
 explicit foundation hard gate: the foundation binds the receipt and payload
 hashes, its exact build binding, and the fixed probe-contract hash, and requires
 `build finish <= probe recorded_at <= foundation recorded_at`. Acquisition
@@ -1120,6 +1165,40 @@ image; the host acquisition watcher independently reopens the same frozen
 foundation, build, probe, contract, isolation, topology, and chronology on
 every start or recovery. No ambient or replacement probe path can be supplied
 after the foundation is created.
+
+Packet-observed browser-egress qualification is the seventh explicit
+foundation hard gate. Its current 110-vector inventory covers the ordinary
+full-Chromium production profile and isolated, non-production positive/negative
+control pairs for DNS prefetch, preconnect, speculation prefetch/prerender, and
+Reporting/NEL. The paired controls deliberately prove mechanism eligibility;
+only the fail-closed production profile is admitted to public class acquisition.
+The final receipt must bind the exact vector order and digest, fixed Chromium,
+wrapper, managed policy, fixture certificate, resolver topology, effective
+command-line projection, packet captures, build receipt, and preparation image.
+The checked-in
+[`browser-egress-qualification-v1.json`](config/class-study/v1/browser-egress-qualification-v1.json)
+manifest has SHA-256
+`d2990612f613fba7fa887c2f2677064fab3fbd7dc51977c0cfab9cb0dcaa3fc6`;
+its expanded 110-vector digest is
+`9fecbeb7988fcb28d82803026ef9f3948d1494b14cc5a0930585e6e51e3a4179`.
+The checked-in
+[`browser-egress-chromium-argv-v1.json`](config/class-study/v1/browser-egress-chromium-argv-v1.json)
+command-line contract has SHA-256
+`458f51042d64433c089e5c43ab1167bbfa337ed4b6bda5e9d0d4efc0edf99c36`.
+The checked-in TLS private key is deliberately public, non-production fixture
+material for `fixture.test`; it must never be trusted or reused outside this
+closed qualification topology. Its bytes are hash-bound by the qualification
+contract, and the image installs the fixture-only copy as root-owned mode
+`0400` while masking that configuration directory from every non-fixture role.
+Every production and qualification browser launch must contain exactly one bare
+`--disable-quic`, must reject `--enable-quic`, and must load the sole managed
+policy with `DnsOverHttpsMode=off`. These browser-preparation restrictions close
+Chromium alternative-destination paths; they do not alter the later Neqo replay,
+which remains ordinary HTTP/3 over QUIC. The gate proves the exact pinned switch,
+policy, resolver and packet-observation contract rather than claiming that a
+Chromium HTTP/3 mechanism was exercised.
+Development probes advance no numerator, and no such current-source receipt
+exists yet.
 
 The same complete graph is now independently rederived at every downstream
 evidence boundary. For each accepted fitting, pilot-compatibility,
@@ -1161,6 +1240,11 @@ captures. Before any formal block, all 100 classes must first pass a single-
 launch 900-cell certification under all nine selectable modes, including the
 non-defence `static` control. `static` is excluded from the efficacy corpus;
 CPSP CS-BuFLO remains a controlled ablation rather than a tenth mode.
+The campaign must not be called **ready** or **guaranteed** until all 100
+selected classes have passed acquisition and admission, every applicable
+fitting and qualification gate has verified, and all 900 certification cells
+have been accepted and independently verified. Unit tests, synthetic fixtures,
+or a partial certification do not satisfy that claim.
 Certification permits exactly one started attempt per class/mode cell. Each
 excluded canary sample and each authoritative formal sample permits at most
 three total attempts across resumes; every failed or interrupted attempt
@@ -1286,8 +1370,8 @@ from the host with:
 ./qcsd-lab class-study acquisition-watch
 ```
 
-The supervisor validates the catalogue, the foundation's exact pinned-CDP and
-no-cache-build authority, the prepare-image digest, provenance, and checkpoint
+The supervisor validates the catalogue, the foundation's exact browser-egress,
+pinned-CDP, and no-cache-build authority, the prepare-image digest, provenance, and checkpoint
 before doing any work. It invokes one
 bounded `acquisition-run` action only when work is due and resumes from the
 same `checkpoint.json` when the command is restarted. An action may advance a
@@ -2400,7 +2484,12 @@ PINNED_CDP="artifacts/buflo-study/pinned-cdp-execution-v${COHORT_VERSION}.json"
 ```
 
 Runs only the real-browser recursive-target probe in the preparation image
-bound by the exact cohort build receipt. The launcher rejects an alternate
+bound by the exact cohort build receipt. That image checksum-downloads only
+the pinned arm64 Chromium revision-1200 archive, safely extracts its fixed
+466-file distribution, and revalidates the archive, executable, browser
+manifest, complete Chromium distribution, complete Playwright package before
+and after its two-file conditional patch, and the create-only driver receipt.
+The launcher rejects an alternate
 build or destination path, a conflicting image override, a symlink, and an
 existing destination before the probe. It runs as the invoking UID:GID, drops
 every capability, and uses Docker network mode `none`. Its guarded writable
@@ -2411,8 +2500,37 @@ request-stage interception ownership, and deliberate context shutdown. A
 failure or interruption publishes no receipt. Before launch the wrapper also
 requires the exact clean Lab/Neqo checkout embedded in the preparation image,
 so dirty or alternate launcher/module bytes cannot claim the guarded execution
-contract. This is an environment and foundation gate, not a public-network
-acquisition or scientific sample.
+contract. The repository's separate opt-in Chromium integration tests exercise
+real sibling-popup rejection and five overlapping drivers (one exclusive and
+four ordinary), including marker isolation, native-worker behaviour, and clean
+teardown; these remain code-gate tests rather than acquisition samples. This is
+an environment and foundation gate, not a public-network acquisition or
+scientific sample.
+
+### `test browser-egress`
+
+```shell
+: "${COHORT_VERSION:?export an unused positive cohort version}"
+BUILD="artifacts/buflo-study/build-execution-v${COHORT_VERSION}.json"
+BROWSER_EGRESS="artifacts/buflo-study/browser-egress-qualification-v${COHORT_VERSION}"
+
+./qcsd-lab test browser-egress create \
+  --cohort-version "$COHORT_VERSION" \
+  --build-execution-receipt "$BUILD" \
+  --result-root "$BROWSER_EGRESS"
+./qcsd-lab test browser-egress verify \
+  --cohort-version "$COHORT_VERSION" \
+  --build-execution-receipt "$BUILD" \
+  --result-root "$BROWSER_EGRESS"
+```
+
+`create` admits the create-only root and begins the ordered 110-vector live
+chain. If and only if it is interrupted after that root has been published,
+continue with the same arguments and replace `create` with `resume`; never
+delete the root or invoke `create` again. `verify` is read-only and succeeds
+only after the final receipt and closed raw/projected inventory deep-verify.
+The resulting root is passed to `class-study foundation` as
+`--browser-egress-qualification-root "$BROWSER_EGRESS"`.
 
 ### `test live`
 
@@ -2878,10 +2996,12 @@ The collection image is Linux-native and explicitly requests dumpcap's
 `host` timestamp type on its container `eth0`. Packet evidence is compared
 only with the Rust runner's Linux monotonic timeline. Windows QPC, W32Time,
 PowerShell, WSL status flags, and any other outer-host clock are not capture
-inputs or admission requirements. The same contract therefore runs on native
-Linux and Linux container hosts; a different CPU architecture rebuilds the
-image from the pinned commits and then follows the normal qualification and
-rehearsal lineage.
+inputs or admission requirements. The timing contract applies on native Linux
+and Linux container hosts. The current image and pinned browser/toolchain
+receipts are AArch64-only and reject another target architecture. Supporting a
+different architecture requires a new, explicitly pinned image contract,
+architecture-specific binary receipts, validation, and cohort; it is not a
+transparent rebuild of the present image.
 
 An attempt is promoted only after direct-capture validation, endpoint-count
 validation, response completion, interface GRO/GSO/TSO/USO evidence,
@@ -2917,7 +3037,8 @@ The post-fit 14-sample evaluation and 120-sample fitting campaign definitions
 are checked in, and their completed results are sealed locally. The six-workload
 fitting cohort is frozen. The later classifier study is a separately authorized
 five-origin, three-condition closed-world proof of concept. The relevant exact
-expansions are:
+expansions below are a retained historical ledger; they do not define the
+current 100-class, 900-certification-cell, 16,000-capture endpoint:
 
 - fitting: six workloads × ten visits × two request policies × undefended =
   120 samples;
@@ -2933,10 +3054,10 @@ expansions are:
   undefended/FRONT/Tamaraw = 30 samples, all excluded from the formal corpus;
 - POC5 formal corpus: ten temporal blocks × five workloads ×
   (30 undefended + 10 FRONT + 10 Tamaraw visits) = 2,500 samples;
-- pre-final rehearsal: six workloads × one visit × one request policy × seven
-  modes = 42 samples;
-- final: six workloads × three visits × one request policy × seven modes =
-  126 samples.
+- superseded pre-final rehearsal: six workloads × one visit × one request
+  policy × seven modes = 42 samples;
+- superseded seven-mode final: six workloads × three visits × one request
+  policy × seven modes = 126 samples.
 
 The retained legacy POC5 workload/class bindings were exactly
 `getbootstrap-home-r3`/`getbootstrap.com`,

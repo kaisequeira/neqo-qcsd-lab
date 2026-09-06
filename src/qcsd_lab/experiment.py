@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, MutableMapping, Sequence
 
+from .class_study import STUDY_ID, is_class_study_id
 from .kernel_tx import observer_topology_receipt_valid
 from .util import atomic_json, load_json, sha256_file
 
@@ -90,7 +91,6 @@ TERMINAL_DEFENSE_FAILURE_TYPES = frozenset(
 _DIGEST = re.compile(r"[0-9a-f]{64}")
 _PATH_COMPONENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 _QUALIFICATION_SET = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
-_CLASS_STUDY_ID = re.compile(r"classifier-multiorigin100-v(?:1|2-[0-9a-f]{12})")
 _CLASS_STUDY_ROLES = frozenset(
     {
         "pilot-fitting",
@@ -1098,7 +1098,7 @@ def _validate_class_study_configuration(value: Mapping[str, Any]) -> None:
     if not isinstance(role, str) or role not in _CLASS_STUDY_ROLES:
         raise ValueError("configuration class-study evidence_role is invalid")
     study_id = value["class_study_id"]
-    if not isinstance(study_id, str) or _CLASS_STUDY_ID.fullmatch(study_id) is None:
+    if not is_class_study_id(study_id):
         raise ValueError("configuration class_study_id is invalid")
 
     for key in _CLASS_STUDY_DIGEST_CONFIGURATION_KEYS & set(value):
@@ -1110,8 +1110,8 @@ def _validate_class_study_configuration(value: Mapping[str, Any]) -> None:
         raise ValueError("configuration public_origin_policy is invalid")
 
     successor_present = "class_study_successor_sha256" in value
-    if (study_id == "classifier-multiorigin100-v1" and successor_present) or (
-        study_id != "classifier-multiorigin100-v1" and not successor_present
+    if (study_id == STUDY_ID and successor_present) or (
+        study_id != STUDY_ID and not successor_present
     ):
         raise ValueError("configuration class-study successor binding is inconsistent")
 
@@ -1345,8 +1345,7 @@ def _requires_durable_attempt_evidence(experiment: Mapping[str, Any]) -> bool:
     configuration = experiment.get("configuration")
     if not isinstance(configuration, Mapping):
         return False
-    study_id = configuration.get("class_study_id")
-    return isinstance(study_id, str) and _CLASS_STUDY_ID.fullmatch(study_id) is not None
+    return is_class_study_id(configuration.get("class_study_id"))
 
 
 def _regular_child_directory_names(directory: Path, *, label: str) -> set[str]:
