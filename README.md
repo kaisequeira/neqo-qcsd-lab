@@ -826,7 +826,7 @@ all corresponding Docker objects absent. It issued no Docker-object removal
 and left unrelated Docker inventory unchanged. This is operational recovery,
 not scientific evidence.
 
-For current source, fresh v61 build, browser-egress, pinned-CDP, reference,
+For current source, fresh v61 build, pinned-CDP, browser-egress, reference,
 regression-bound code-gate, and foundation receipts are absent; timing stress
 is 0/12, regression is 0/18, and controlled qualification is 0/160. Real
 acquisition observations remain zero.
@@ -855,9 +855,9 @@ tags stayed exact, its hash-audited runtime ledgers were retired, and
 Committed Lab `e719219…` repairs the failed configuration-isolation boundary;
 clean successor Lab `69a14ebe…` commits the schema-4 Buildx receipt integration.
 That source remains unexecuted. The next fresh cohort is v61. It must pass the
-pull/no-cache build, isolated reference,
-the 110/110 browser-egress gate, the pinned-CDP gate, 12/12 timing stress, 18/18
-regression, regression-bound code gate, and 160/160 controlled qualification
+pull/no-cache build, pinned-CDP gate, 110/110 browser-egress gate, isolated
+reference, 12/12 timing stress, 18/18 regression, regression-bound code gate,
+and 160/160 controlled qualification
 before expanded-class acquisition can begin. V55–v60 cannot be retried. The
 complete current status and earlier cohort chronology are retained in the
 authoritative workspace
@@ -1027,13 +1027,22 @@ timestamps must be strictly increasing within the enclosing build interval;
 any identity drift stops the sequence before the next image build and prevents
 a receipt.
 
+The same implementation bytes subsequently passed the exact
+`uv run pytest -q tests/test_browser_egress_qualification.py` run at 201/201 in
+2,619.33 seconds and an isolated
+`uv run pytest -q tests/test_buflo_study.py` run at 275/275 in 219.00 seconds.
+These are engineering-only, non-evidentiary test results: they create no build,
+browser-egress, candidate, or scientific receipt and advance no cohort
+numerator.
+
 The complete schema-4 envelope is revalidated against the clean source, Docker
 identity, no-cache commands, Dockerfile, lockfiles, checkout root, probe hash,
 and Buildx identity before its create-only write. Schemas 3 and 4 record every
 build as an explicit `docker --host <pinned-local-endpoint>` command; schema 2
 used the pinned Docker context. General build and campaign readers accept
 build-execution schemas 1–4, with schemas 1–3 retained only for immutable
-historical cohorts; current class-acquisition admission requires schema 4.
+historical cohorts; current class-acquisition admission requires build-execution
+receipt schema 4.
 Receipt loading rejects a final symlink, a file larger than 16 MiB, non-UTF-8
 or duplicate-key JSON, and hashes the same stable bytes that it validates.
 Missing, ambiguous, malformed, unhealthy,
@@ -1458,22 +1467,23 @@ completion receipt. The optional `--heartbeat-seconds` value controls
 signal-responsive host wait slices and must be a finite number from one
 through five seconds; it does not poll Docker at that frequency.
 
-The current acquisition uses provenance schema 4, checkpoint schema 2,
+The current acquisition uses provenance schema 5, checkpoint schema 2,
 active-batch schema 1, terminal schema 3, and completion schema 2. Its
 provenance embeds the exact action-timing contract at nested schema 2 and the
 baseline-scheduling contract at nested schema 2; the checkpoint carries the
 append-only `baseline_batches` ledger and nullable transactional
-`active_batch`. Genuine committed producers exist for acquisition schemas 1
-and 3; schema 2 is preserved against its declared intermediate verifier
-contract but has no committed producer or artefact. All three remain
-verification-only and cannot be resumed or used to publish new evidence. The
-immutable public limits are two candidates per action and five simultaneous
-live pages. The production watcher always invokes `acquisition-run` with two as
-its bound; the supported value one exists only for internal and deterministic
-test use, not as a production watcher tuning control.
+`active_batch`. Genuine committed producers exist for acquisition schemas 1,
+3, and 4; schema 2 is preserved against its declared intermediate verifier
+contract but has no committed producer or artefact. All acquisition schemas
+1–4 remain verification-only and cannot be resumed or used to publish new
+evidence. The immutable public limits are two candidates per action and five
+simultaneous live pages. The production watcher always invokes
+`acquisition-run` with two as its bound; the supported value one exists only
+for internal and deterministic test use, not as a production watcher tuning
+control.
 
 Status separates unfinished states from immediately actionable work.
-It reports `acquisition_schema_version=4`, `checkpoint_schema_version=2`,
+It reports `acquisition_schema_version=5`, `checkpoint_schema_version=2`,
 `maximum_candidates_per_action=2`, `global_live_page_cap=5`, and either a null
 `active_batch` or a summary with the exact `batch_id`, `stage`, `published_at`,
 `candidate_ids`, `live_page_count`, and `attempt_count` fields.
@@ -1518,13 +1528,24 @@ preparation, Docker, network, retries, and
 interruptions add real wall time. The configured cut-off is a policy bound,
 not a call-tree-derived guarantee of successful completion.
 
-### Retained focused candidate workflow
+### Retained focused candidate workflow — not the class-foundation bootstrap
 
 The following `buflo-study` workflow is retained as the command reference for
 the earlier focused three-mode, 1,500-sample design. It is not the
 `classifier-multiorigin100-v1` endpoint, and neither its receipts nor its
 versioned attestation can substitute for the class-study
 `validation-attestation.json`.
+
+Do not use the block below to bootstrap the current extended class study. The
+authoritative sequence is the
+[class-foundation and acquisition bootstrap](../CLASS-STUDY.md#27-foundation-and-acquisition-bootstrap):
+after its fresh build it runs the pinned-CDP probe, the 110-vector
+browser-egress `create`/`verify` gate, isolated reference conformance, the
+integrated 12-visit timing-stress and 18-cell regression gate, the
+regression-bound code gate, the 160-cell controlled gate and qualification,
+then creates and verifies the class-foundation attestation. The retained block
+below deliberately creates neither the pinned-CDP receipt, browser-egress
+qualification root, nor class-foundation attestation.
 
 The versioned coordinator exposes nine fail-closed actions: `reference`,
 `qualify`, `historical-snapshot`, `freeze-cohort`, `code-gate`, `capture`,
