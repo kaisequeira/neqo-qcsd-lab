@@ -26,6 +26,7 @@ from qcsd_lab.class_study import (
     CohortSelection,
     bind_receipt,
     canonical_json_bytes,
+    canonical_json_sha256,
     validate_hash_bound_receipt,
 )
 from qcsd_lab.parameters import ParameterArtifact
@@ -586,6 +587,28 @@ def _pilot_lineage_evidence() -> tuple[dict[str, Any], dict[str, Any]]:
         "wtf-pad": "f" * 64,
         "walkie-talkie": "0" * 64,
     }
+    collection_source = source_result["source_fingerprints"]
+    prepare_image = "sha256:" + "1" * 64
+    qualification_authority = {
+        "schema_version": 1,
+        "artifact_type": "qcsd-class-study-qualification-authority",
+        "foundation_attestation": {
+            "path": "/evidence/foundation.json",
+            "sha256": "2" * 64,
+            "payload_sha256": "3" * 64,
+        },
+        "build_execution": {"path": "/evidence/build.json", "sha256": "4" * 64},
+        "build_execution_identity": {
+            "cohort_version": 23,
+            "sha256": "4" * 64,
+            "collection_image": collection_source["image_digest"],
+            "started_at": "2026-08-28T00:00:00+00:00",
+            "finished_at": "2026-08-28T01:00:00+00:00",
+        },
+        "collection_source": collection_source,
+        "prepare_source": {**collection_source, "image_digest": prepare_image},
+        "prepare_image_digest": prepare_image,
+    }
     return (
         {
             "numeric_provenance_sha256": "1" * 64,
@@ -603,6 +626,10 @@ def _pilot_lineage_evidence() -> tuple[dict[str, Any], dict[str, Any]]:
                 "source": "frozen-pilot-compatibility-inputs",
                 "provenance_sha256": "5" * 64,
                 "artifact_sha256": parameters,
+                "qualification_authority": qualification_authority,
+                "qualification_authority_sha256": canonical_json_sha256(
+                    qualification_authority
+                ),
             },
         },
     )
@@ -614,7 +641,7 @@ def _final_selection_receipt(predecessor: CohortSelection) -> dict[str, Any]:
     possible_edges = 120 * 119 // 2
     payload = {
         "study_id": STUDY_ID,
-        "selection_schema_version": 1,
+        "selection_schema_version": pipeline.FINAL_SELECTION_SCHEMA_VERSION,
         "selection_policy": "tranco-bound-order-with-qualified-selected-wt6-pairs",
         "pilot_cohort": {"sha256": "1" * 64, "payload_sha256": "2" * 64},
         "pilot_cohort_assembly": {
@@ -1959,11 +1986,23 @@ def test_generated_successor_certification_and_formal_load_freeze_and_reload(
     )
 
     qualification_set = f"{study_id}-final-full"
+    qualification_authority = _pilot_lineage_evidence()[1]["finalized_bundle"][
+        "qualification_authority"
+    ]
     sidecar_root = restart_root / "qualification" / qualification_set
     prefix_root = sidecar_root / chaff_qualification.NAMED_QUALIFICATION_PREFIX_DIRECTORY
     prefix_root.mkdir(parents=True)
     set_manifest = sidecar_root / chaff_qualification.NAMED_QUALIFICATION_SET_MANIFEST
-    set_manifest.write_text("{}\n", encoding="utf-8")
+    set_manifest.write_bytes(
+        canonical_json_bytes(
+            {
+                "qualification_authority": qualification_authority,
+                "qualification_authority_sha256": canonical_json_sha256(
+                    qualification_authority
+                ),
+            }
+        )
+    )
     for workload_id in selected_ids:
         (sidecar_root / f"{workload_id}.json").write_text("{}\n", encoding="utf-8")
         (prefix_root / f"{workload_id}.json").write_text("{}\n", encoding="utf-8")
@@ -2011,6 +2050,8 @@ def test_generated_successor_certification_and_formal_load_freeze_and_reload(
                 ).resolve()
             )
             assert context.expected_qualification_set == qualification_set
+            assert context.qualification_authority == qualification_authority
+            assert kwargs["qualification_authority"] == qualification_authority
             live_contexts.append(context)
         return ParameterArtifact(
             path=path.resolve(),
@@ -2026,6 +2067,7 @@ def test_generated_successor_certification_and_formal_load_freeze_and_reload(
         provenance = Path(kwargs["provenance_path"])
         if path.parent.name == "class-study":
             assert kwargs["expected_qualification_set"] == qualification_set
+            assert kwargs["qualification_authority"] == qualification_authority
             policy = "sealed-class-study-fitting-v1"
         else:
             policy = "reviewed-config-v1"
@@ -2044,7 +2086,28 @@ def test_generated_successor_certification_and_formal_load_freeze_and_reload(
         frozen_parameter_artifact,
     )
     monkeypatch.setattr(orchestrator, "_materialize_study_environment", lambda *_args: None)
-    monkeypatch.setattr(orchestrator, "_materialize_class_study_authority", lambda *_args: None)
+
+    def materialize_foundation(inputs_root: Path, _campaign: object) -> None:
+        (inputs_root / "class-study-foundation.json").write_text(
+            "{}\n", encoding="utf-8"
+        )
+
+    monkeypatch.setattr(
+        orchestrator,
+        "_materialize_class_study_authority",
+        materialize_foundation,
+    )
+
+    def relocated_authority(path: Path, **_kwargs: object) -> dict[str, object]:
+        value = json.loads(json.dumps(qualification_authority))
+        value["foundation_attestation"]["path"] = str(path.resolve())
+        return value
+
+    monkeypatch.setattr(
+        class_attestation,
+        "class_qualification_authority",
+        relocated_authority,
+    )
     monkeypatch.setattr(orchestrator, "_frozen_configuration", lambda *_args: {})
 
     names = (
@@ -2056,6 +2119,7 @@ def test_generated_successor_certification_and_formal_load_freeze_and_reload(
         campaign = orchestrator._load_campaign(
             campaign_root / name,
             frozen_inputs=None,
+            expected_qualification_authority=qualification_authority,
         )
         expected_samples = 900 if campaign.evidence_role == "certification" else 1_600
         assert len(orchestrator.plan_campaign(campaign)) == expected_samples
@@ -2080,7 +2144,11 @@ def test_generated_successor_certification_and_formal_load_freeze_and_reload(
     for path in sorted(campaign_root.glob("*.yml")):
         if path.name in names or "-authoritative-fitting-" in path.name:
             continue
-        campaign = orchestrator._load_campaign(path, frozen_inputs=None)
+        campaign = orchestrator._load_campaign(
+            path,
+            frozen_inputs=None,
+            expected_qualification_authority=qualification_authority,
+        )
         if campaign.evidence_role not in downstream_counts:
             continue
         downstream_counts[campaign.evidence_role] += len(orchestrator.plan_campaign(campaign))

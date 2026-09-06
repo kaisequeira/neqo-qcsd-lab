@@ -1065,7 +1065,11 @@ def generated_stage_cells(
     return tuple(cells)
 
 
-def validate_controlled_campaign_receipt(value: Any) -> dict[str, Any]:
+def validate_controlled_campaign_receipt(
+    value: Any,
+    *,
+    _expected_collection_source: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """Validate the qdisc observations frozen into one local study campaign."""
 
     historical_keys = {
@@ -1178,7 +1182,10 @@ def validate_controlled_campaign_receipt(value: Any) -> dict[str, Any]:
     if schema_version == TIMING_STRESS_BOUND_REGRESSION_RECEIPT_SCHEMA_VERSION:
         if stage != "regression":
             raise ValueError("timing-stress binding is valid only for regression campaigns")
-        stress = _validate_timing_stress_binding(value["timing_stress"])
+        stress = _validate_timing_stress_binding(
+            value["timing_stress"],
+            expected_source=_expected_collection_source,
+        )
         if (
             stress["cohort_version"] != value["cohort_version"]
             or stress["network"] != value["network"]
@@ -4479,11 +4486,18 @@ def _regression_multi_origin_bound_path(
 
 
 def _regression_multi_origin_historical_candidate_source(
-    receipt_path: Path, source: Mapping[str, Any]
+    receipt_path: Path,
+    source: Mapping[str, Any],
+    *,
+    expected_source: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Select the one sealed schema-6 proof for read-only deep revalidation."""
 
-    if dict(source) == source_metadata():
+    current = _expected_clean_collection_source(
+        expected_source,
+        label="multi-origin compatibility collection image",
+    )
+    if dict(source) == current:
         return None
     if (
         receipt_path.parent.parent.name != "buflo-study-regression-v36"
@@ -4499,6 +4513,8 @@ def _regression_multi_origin_historical_candidate_source(
 def validate_regression_multi_origin_compatibility(
     receipt_path: Path,
     result_roots: Sequence[Path],
+    *,
+    _expected_collection_source: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Deep-verify the excluded all-nine live two-origin correctness proof."""
 
@@ -4551,7 +4567,9 @@ def validate_regression_multi_origin_compatibility(
         raise ValueError("multi-origin compatibility receipt contract is invalid")
     _validate_clean_source(value["source"], label="multi-origin compatibility")
     historical_candidate_source = _regression_multi_origin_historical_candidate_source(
-        receipt_path, value["source"]
+        receipt_path,
+        value["source"],
+        expected_source=_expected_collection_source,
     )
     checkpoint_path = _regression_multi_origin_bound_path(
         root,
@@ -4562,7 +4580,10 @@ def validate_regression_multi_origin_compatibility(
         load_json(checkpoint_path),
         require_complete=True,
     )
-    controlled = validate_controlled_campaign_receipt(value["controlled_receipt"])
+    controlled = validate_controlled_campaign_receipt(
+        value["controlled_receipt"],
+        _expected_collection_source=_expected_collection_source,
+    )
     if controlled["stage"] != "regression" or controlled["schema_version"] not in {
         LOCAL_CAMPAIGN_RECEIPT_SCHEMA_VERSION,
         TIMING_STRESS_BOUND_REGRESSION_RECEIPT_SCHEMA_VERSION,
@@ -4575,6 +4596,11 @@ def validate_regression_multi_origin_compatibility(
             [controlled] * len(LOCAL_STAGE_RESULT_NAMES["regression"]),
             destination=root.parent,
             lineage=value["source"],
+            expected_source=(
+                value["source"]
+                if historical_candidate_source is None
+                else historical_candidate_source
+            ),
         )
     expected_regression_results = _regression_result_bindings(result_roots)
     if value["regression_results"] != expected_regression_results:
@@ -7010,7 +7036,11 @@ def execute_buflo_timing_stress(
     return receipt_path
 
 
-def validate_buflo_timing_stress_receipt(receipt_path: Path) -> dict[str, Any]:
+def validate_buflo_timing_stress_receipt(
+    receipt_path: Path,
+    *,
+    _expected_collection_source: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """Deep-reconstruct the excluded 60,000-release prefix and audited drain suffix."""
 
     from .chaff_qualification import load_response_qualified_chaff
@@ -7059,7 +7089,11 @@ def validate_buflo_timing_stress_receipt(receipt_path: Path) -> dict[str, Any]:
         raise ValueError("timing-stress receipt contract is invalid")
     version = _cohort_version(value.get("cohort_version"))
     _validate_clean_source(value["source"], label="timing-stress receipt")
-    if dict(value["source"]) != source_metadata():
+    expected_source = _expected_clean_collection_source(
+        _expected_collection_source,
+        label="timing-stress collection image",
+    )
+    if dict(value["source"]) != expected_source:
         raise ValueError("timing-stress receipt does not bind the current source")
     if value["study_plan"] != _file_binding(STUDY_PLAN):
         raise ValueError("timing-stress study-plan binding changed")
@@ -7235,7 +7269,11 @@ def validate_buflo_timing_stress_receipt(receipt_path: Path) -> dict[str, Any]:
     }
 
 
-def _validate_timing_stress_binding(value: object) -> dict[str, Any]:
+def _validate_timing_stress_binding(
+    value: object,
+    *,
+    expected_source: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     if (
         not isinstance(value, Mapping)
         or set(value) != {"path", "sha256"}
@@ -7252,7 +7290,10 @@ def _validate_timing_stress_binding(value: object) -> dict[str, Any]:
         or sha256_file(path) != value["sha256"]
     ):
         raise ValueError("regression timing-stress receipt changed")
-    return validate_buflo_timing_stress_receipt(path)
+    return validate_buflo_timing_stress_receipt(
+        path,
+        _expected_collection_source=expected_source,
+    )
 
 
 def _validate_current_regression_timing_stress(
@@ -7260,6 +7301,7 @@ def _validate_current_regression_timing_stress(
     *,
     destination: Path,
     lineage: Mapping[str, Any],
+    expected_source: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Require one exact sibling stress gate across all current regression shards."""
 
@@ -7274,7 +7316,10 @@ def _validate_current_regression_timing_stress(
         raise ValueError("current regression shards lack one exact mandatory timing-stress binding")
     receipt = regression_receipts[0]
     timing_binding = receipt["timing_stress"]
-    timing_stress = _validate_timing_stress_binding(timing_binding)
+    timing_stress = _validate_timing_stress_binding(
+        timing_binding,
+        expected_source=expected_source,
+    )
     expected_path = destination.resolve() / "buflo-timing-stress/receipt.json"
     if Path(timing_binding["path"]).resolve() != expected_path:
         raise ValueError("regression timing-stress receipt is not its exact sibling gate")
@@ -8813,6 +8858,7 @@ def _qualification_receipt_value(
     *,
     explanation_receipt: Path | None = None,
     cohort_version: int = 1,
+    _expected_collection_source: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     version = _cohort_version(cohort_version)
     ready, status = qualification_status(
@@ -8824,6 +8870,7 @@ def _qualification_receipt_value(
     controlled = validate_controlled_results(
         controlled_result_roots,
         explanation_receipt=explanation_receipt,
+        _expected_collection_source=_expected_collection_source,
     )
     if (
         controlled.get("samples") != 160
@@ -8901,6 +8948,7 @@ def validate_qualification_receipt(
     controlled_result_roots: Sequence[Path] = (),
     explanation_receipt: Path | None = None,
     expected_cohort_version: int | None = None,
+    _expected_collection_source: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     binding = _file_binding(path)
     value = load_json(Path(binding["path"]))
@@ -8932,6 +8980,7 @@ def validate_qualification_receipt(
         controlled_result_roots,
         explanation_receipt=explanation_receipt,
         cohort_version=stored_version,
+        _expected_collection_source=_expected_collection_source,
     )
     if value != expected:
         raise ValueError("qualification receipt differs from independently derived evidence")
@@ -9021,9 +9070,15 @@ def _validate_embedded_json_receipt(
         raise ValueError(f"Rust code-gate {label} sidecar hash is invalid")
 
 
-def validate_rust_code_gate(root: Path = RUST_CODE_GATE_ROOT) -> dict[str, Any]:
+def validate_rust_code_gate(
+    root: Path | None = None,
+    *,
+    _expected_collection_source: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """Validate the immutable build-stage Rust command receipt and every log."""
 
+    if root is None:
+        root = RUST_CODE_GATE_ROOT
     unresolved = root.absolute()
     if unresolved.is_symlink():
         raise ValueError("Rust code-gate root cannot be a symlink")
@@ -9092,8 +9147,11 @@ def validate_rust_code_gate(root: Path = RUST_CODE_GATE_ROOT) -> dict[str, Any]:
             or not data.endswith(b"status=passed\n")
         ):
             raise ValueError(f"Rust code-gate log is invalid: {gate}")
-    current = source_metadata()
-    expected_build_source = {**current, "image_digest": None}
+    collection_source = _expected_clean_collection_source(
+        _expected_collection_source,
+        label="Rust code-gate collection image",
+    )
+    expected_build_source = {**collection_source, "image_digest": None}
     if value.get("source_metadata") != expected_build_source:
         raise ValueError("Rust code-gate source does not match the collection image")
     build_inputs = value.get("study_build_inputs")
@@ -9141,7 +9199,7 @@ def validate_rust_code_gate(root: Path = RUST_CODE_GATE_ROOT) -> dict[str, Any]:
         "root": str(root),
         "receipt_sha256": sha256_file(receipt_path),
         "self_hash": claimed,
-        "source": current,
+        "source": collection_source,
         "commands": commands,
         "passed": True,
     }
@@ -9241,9 +9299,14 @@ def validate_code_gate_receipt(
     regression_result_roots: Sequence[Path] = (),
     expected_cohort_version: int | None = None,
     deep: bool = True,
+    _expected_collection_source: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     binding = _file_binding(path)
     value = load_json(Path(binding["path"]))
+    collection_source = _expected_clean_collection_source(
+        _expected_collection_source,
+        label="study code-gate collection image",
+    )
     required = {
         "schema_version",
         "artifact_type",
@@ -9263,7 +9326,7 @@ def validate_code_gate_receipt(
         or value.get("schema_version") != 1
         or value.get("artifact_type") != CODE_GATE_ARTIFACT_TYPE
         or value.get("study_plan") != _file_binding(STUDY_PLAN)
-        or value.get("source") != source_metadata()
+        or value.get("source") != collection_source
         or value.get("passed") is not True
     ):
         raise ValueError("study code-gate receipt identity or source is invalid")
@@ -9283,8 +9346,12 @@ def validate_code_gate_receipt(
     }
     if value["build_execution_receipt"] != selected_build_binding:
         raise ValueError("study code gate does not bind the selected cohort build")
+    if selected_build["source"] != collection_source:
+        raise ValueError("study code gate differs from the selected cohort build source")
     _validate_clean_source(value["source"], label="study code gate")
-    rust = validate_rust_code_gate()
+    rust = validate_rust_code_gate(
+        _expected_collection_source=collection_source,
+    )
     if value.get("rust_code_gate") != rust:
         raise ValueError("study code gate does not bind the current Rust build gate")
     commands = value.get("lab_commands")
@@ -9322,7 +9389,10 @@ def validate_code_gate_receipt(
         if not isinstance(results, list):
             raise ValueError("study code-gate regression binding is invalid")
         regression_result_roots = tuple(Path(item["root"]) for item in results)
-    expected_regression = validate_regression_results(regression_result_roots)
+    expected_regression = validate_regression_results(
+        regression_result_roots,
+        _expected_collection_source=collection_source,
+    )
     if regression != expected_regression or expected_regression["source"] != value["source"]:
         raise ValueError("study code-gate regression18 evidence is invalid")
     expected_build_identity = {
@@ -9647,19 +9717,33 @@ def _validate_comparison_review_value(
 
 
 def validate_controlled_results(
-    result_roots: Sequence[Path], *, explanation_receipt: Path | None = None
+    result_roots: Sequence[Path],
+    *,
+    explanation_receipt: Path | None = None,
+    _expected_collection_source: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Deep-verify the exact generated 160-cell controlled qualification matrix."""
 
     return _validate_local_stage_results(
-        "controlled", result_roots, explanation_receipt=explanation_receipt
+        "controlled",
+        result_roots,
+        explanation_receipt=explanation_receipt,
+        _expected_collection_source=_expected_collection_source,
     )
 
 
-def validate_regression_results(result_roots: Sequence[Path]) -> dict[str, Any]:
+def validate_regression_results(
+    result_roots: Sequence[Path],
+    *,
+    _expected_collection_source: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """Verify the 18-cell matrix and its excluded all-nine two-origin proof."""
 
-    return _validate_local_stage_results("regression", result_roots)
+    return _validate_local_stage_results(
+        "regression",
+        result_roots,
+        _expected_collection_source=_expected_collection_source,
+    )
 
 
 def _validate_canonical_reference_receipt(path: Path) -> dict[str, Any]:
@@ -10877,6 +10961,7 @@ def _validate_local_stage_results(
     result_roots: Sequence[Path],
     *,
     explanation_receipt: Path | None = None,
+    _expected_collection_source: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     if stage not in {"controlled", "regression"}:
         raise ValueError("local stage result validation requires controlled or regression")
@@ -10926,7 +11011,12 @@ def _validate_local_stage_results(
                 raise ValueError("regression result lacks its frozen campaign")
             campaign = yaml.safe_load(campaign_path.read_text(encoding="utf-8"))
             controlled = campaign.get("study_controlled") if isinstance(campaign, Mapping) else None
-            regression_receipts.append(validate_controlled_campaign_receipt(controlled))
+            regression_receipts.append(
+                validate_controlled_campaign_receipt(
+                    controlled,
+                    _expected_collection_source=_expected_collection_source,
+                )
+            )
         result_bytes = _verified_result_bytes(verified)
         authoritative_bytes += result_bytes
         bindings.append(
@@ -10999,7 +11089,10 @@ def _validate_local_stage_results(
         raise ValueError(
             f"{stage} evidence does not exactly cover the frozen {expected_count} cells"
         )
-    lineage = _require_one_current_clean_source(sources)
+    lineage = _require_one_current_clean_source(
+        sources,
+        expected_source=_expected_collection_source,
+    )
     result = {
         "schema_version": 1,
         "samples": len(observed),
@@ -11027,10 +11120,12 @@ def _validate_local_stage_results(
             regression_receipts,
             destination=destination,
             lineage=lineage,
+            expected_source=lineage,
         )
         compatibility = validate_regression_multi_origin_compatibility(
             destination / "multi-origin-nine-mode-compatibility/receipt.json",
             result_roots,
+            _expected_collection_source=lineage,
         )
         if compatibility["source"] != lineage:
             raise ValueError("regression compatibility source differs from the 18-sample shards")
@@ -12023,15 +12118,38 @@ def _validate_clean_source(value: Any, *, label: str) -> None:
         raise ValueError(f"{label} was not produced by one concrete clean collection image")
 
 
-def _require_one_current_clean_source(values: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+def _expected_clean_collection_source(
+    expected_source: Mapping[str, Any] | None,
+    *,
+    label: str,
+) -> dict[str, Any]:
+    """Select the ambient source, or one foundation-bound collection source.
+
+    The private override exists only so a prepare-role process can reconstruct
+    collection evidence before the foundation validator separately proves that
+    the ambient process is the prepare image from the same no-cache build.
+    """
+
+    selected = source_metadata() if expected_source is None else expected_source
+    _validate_clean_source(selected, label=label)
+    return dict(selected)
+
+
+def _require_one_current_clean_source(
+    values: Sequence[Mapping[str, Any]],
+    *,
+    expected_source: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     if not values:
         raise ValueError("staged capture evidence has no source lineage")
     first = dict(values[0])
     _validate_clean_source(first, label="staged capture evidence")
     if any(dict(value) != first for value in values[1:]):
         raise ValueError("staged capture cohorts were not produced by one exact image/source")
-    current = source_metadata()
-    _validate_clean_source(current, label="current collection image")
+    current = _expected_clean_collection_source(
+        expected_source,
+        label="current collection image",
+    )
     if current != first:
         raise ValueError("staged capture evidence does not match the current collection image")
     return first

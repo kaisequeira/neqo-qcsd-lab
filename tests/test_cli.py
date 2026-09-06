@@ -5,6 +5,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -158,6 +159,77 @@ def test_class_acquisition_batch_size_defaults_to_two_and_is_bounded() -> None:
         assert exit_status.value.code == 2
 
 
+def test_class_foundation_cli_forwards_pinned_cdp_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    import qcsd_lab.class_pipeline as pipeline
+
+    pinned = tmp_path / "pinned-cdp-execution-v23.json"
+    observed: dict[str, object] = {}
+
+    def run(action: str, **kwargs: object) -> SimpleNamespace:
+        observed.update(action=action, **kwargs)
+        return SimpleNamespace(
+            status="complete",
+            as_dict=lambda: {"action": action, "status": "complete"},
+        )
+
+    monkeypatch.setattr(pipeline, "run_class_study_action", run)
+
+    cli.main(
+        [
+            "class-study",
+            "foundation",
+            "--pinned-cdp-receipt",
+            str(pinned),
+        ]
+    )
+
+    assert observed["action"] == "foundation"
+    assert observed["pinned_cdp_receipt"] == pinned.absolute()
+    capsys.readouterr()
+
+
+@pytest.mark.parametrize("action", ("prefix-specs", "qualify-prefix", "verify"))
+def test_class_fitting_consumers_forward_explicit_capture_result(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    action: str,
+) -> None:
+    import qcsd_lab.class_pipeline as pipeline
+
+    source = tmp_path / "fitting-result"
+    observed: dict[str, object] = {}
+
+    def run(selected_action: str, **kwargs: object) -> SimpleNamespace:
+        observed.update(action=selected_action, **kwargs)
+        return SimpleNamespace(
+            status="complete",
+            as_dict=lambda: {"action": selected_action, "status": "complete"},
+        )
+
+    monkeypatch.setattr(pipeline, "run_class_study_action", run)
+    arguments = [
+        "class-study",
+        action,
+        "--stage",
+        "pilot",
+        "--capture-result",
+        str(source),
+    ]
+    if action == "verify":
+        arguments.extend(("--target", str(tmp_path / "numeric")))
+    cli.main(arguments)
+
+    assert observed["action"] == action
+    assert observed["stage"] == "pilot"
+    assert observed["capture_result"] == source.absolute()
+    capsys.readouterr()
+
+
 def test_launcher_routes_only_consolidated_public_commands():
     launcher_path = Path(__file__).parents[1] / "qcsd-lab"
     launcher = launcher_path.read_text(encoding="utf-8")
@@ -188,9 +260,14 @@ def test_launcher_routes_only_consolidated_public_commands():
         'if [[ "${1:-}" == "test" && "${2:-}" == "pinned-cdp" ]]; then', 1
     )[-1].split("\nfi", 1)[0]
     assert 'image="${PREPARE_IMAGE}"' not in pinned_cdp
-    assert 'QCSD_RUN_PINNED_CDP_PROBE=1' in pinned_cdp
-    assert '--entrypoint /opt/qcsd-lab/.venv/bin/python' in pinned_cdp
-    assert 'tests/test_cdp_chromium_integration.py' in pinned_cdp
+    assert 'QCSD_PINNED_CDP_EXPECTED_UID=${qcsd_invoking_uid}' in pinned_cdp
+    assert 'QCSD_PINNED_CDP_EXPECTED_GID=${qcsd_invoking_gid}' in pinned_cdp
+    assert '--entrypoint /usr/bin/tini' in pinned_cdp
+    assert '/opt/qcsd-venv/bin/python3 -m qcsd_lab.pinned_cdp' in pinned_cdp
+    assert '/usr/bin/timeout --signal=TERM --kill-after=10s 120s' in pinned_cdp
+    assert '--build-execution-receipt "${pinned_cdp_build_container}"' in pinned_cdp
+    assert '--destination "${pinned_cdp_destination_container}"' in pinned_cdp
+    assert "pytest" not in pinned_cdp
     assert 'qcsd_run_attached_docker "${container[@]}"' in pinned_cdp
 
 

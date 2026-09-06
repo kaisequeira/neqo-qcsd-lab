@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from qcsd_lab import chaff_qualification as qualification
-from qcsd_lab.util import load_json, sha256_file
+from qcsd_lab.util import load_json, sha256_bytes, sha256_file
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKLOAD_ROOT = ROOT / "config/workloads"
@@ -22,6 +22,58 @@ RESPONSE_IDS = (
     "getbootstrap-home-r4",
 )
 FULL_IDS = ("getbootstrap-home-r3", "bootstrap-introduction-r3")
+
+
+def _class_qualification_authority(
+    sidecar: dict[str, object],
+    *,
+    foundation_sha256: str = "5" * 64,
+    foundation_path: str = "/evidence/foundation.json",
+) -> dict[str, object]:
+    prepare_source = dict(sidecar["qualification_source"])
+    collection_source = {
+        **prepare_source,
+        "image_digest": "sha256:" + "1" * 64,
+    }
+    authority: dict[str, object] = {
+        "schema_version": 1,
+        "artifact_type": "qcsd-class-study-qualification-authority",
+        "foundation_attestation": {
+            "path": foundation_path,
+            "sha256": foundation_sha256,
+            "payload_sha256": "6" * 64,
+        },
+        "build_execution": {
+            "path": "/evidence/build.json",
+            "sha256": "7" * 64,
+        },
+        "build_execution_identity": {
+            "cohort_version": 23,
+            "sha256": "7" * 64,
+            "collection_image": collection_source["image_digest"],
+            "started_at": "2026-08-28T00:00:00+00:00",
+            "finished_at": "2026-08-28T01:00:00+00:00",
+        },
+        "collection_source": collection_source,
+        "prepare_source": prepare_source,
+        "prepare_image_digest": prepare_source["image_digest"],
+    }
+    return qualification._validated_class_qualification_authority(authority)
+
+
+def _write_class_sidecar(
+    destination: Path,
+    *,
+    workload_id: str,
+    authority: dict[str, object],
+) -> None:
+    sidecar = load_json(FULL_SIDECAR_ROOT / f"{workload_id}.json")
+    sidecar["schema_version"] = qualification.CLASS_STUDY_QUALIFICATION_SCHEMA_VERSION
+    sidecar["qualification_authority"] = authority
+    sidecar["qualification_authority_sha256"] = sha256_bytes(
+        qualification.canonical_bytes(authority)
+    )
+    destination.write_bytes(qualification.canonical_bytes(sidecar))
 
 
 def test_named_response_manifest_accepts_arbitrary_ordered_cohort_without_network(
@@ -105,9 +157,9 @@ def test_named_full_manifest_binds_prefix_specs_and_full_sidecars() -> None:
         )
 
 
-def test_named_manifest_schema_two_binds_expected_qualification_authority() -> None:
+def test_legacy_named_manifest_schema_two_is_accepted_only_without_expected_authority() -> None:
     sidecar = load_json(FULL_SIDECAR_ROOT / f"{FULL_IDS[0]}.json")
-    authority = {
+    legacy_authority = {
         "schema_version": 1,
         "artifact_type": "fixture-authority",
         "prepare_source": sidecar["qualification_source"],
@@ -121,26 +173,44 @@ def test_named_manifest_schema_two_binds_expected_qualification_authority() -> N
         sidecar_root=FULL_SIDECAR_ROOT,
         prefix_spec_root=PREFIX_SPEC_ROOT,
         require_current_implementation=False,
-        qualification_authority=authority,
+    )
+    manifest["schema_version"] = (
+        qualification.SOURCE_BOUND_NAMED_QUALIFICATION_SET_SCHEMA_VERSION
+    )
+    manifest["qualification_authority"] = legacy_authority
+    manifest["bindings_sha256"] = qualification._named_qualification_bindings_sha256(
+        manifest
     )
     assert manifest["schema_version"] == 2
-    assert manifest["qualification_authority"] == authority
+    assert manifest["qualification_authority"] == legacy_authority
     assert qualification.validate_named_qualification_set_manifest(
         manifest,
         workload_root=WORKLOAD_ROOT,
         sidecar_root=FULL_SIDECAR_ROOT,
         prefix_spec_root=PREFIX_SPEC_ROOT,
         require_current_implementation=False,
-        expected_qualification_authority=authority,
     ) == manifest
-    with pytest.raises(ValueError, match="expected build"):
+    authority = _class_qualification_authority(sidecar)
+    with pytest.raises(ValueError, match="expected foundation"):
         qualification.validate_named_qualification_set_manifest(
             manifest,
             workload_root=WORKLOAD_ROOT,
             sidecar_root=FULL_SIDECAR_ROOT,
             prefix_spec_root=PREFIX_SPEC_ROOT,
             require_current_implementation=False,
-            expected_qualification_authority={**authority, "prepare_image_digest": "other"},
+            expected_qualification_authority=authority,
+        )
+    wrong_schema = copy.deepcopy(manifest)
+    wrong_schema["qualification_sidecar_schema_version"] = (
+        qualification.CLASS_STUDY_QUALIFICATION_SCHEMA_VERSION
+    )
+    with pytest.raises(ValueError, match="legacy qualification manifest"):
+        qualification.validate_named_qualification_set_manifest(
+            wrong_schema,
+            workload_root=WORKLOAD_ROOT,
+            sidecar_root=FULL_SIDECAR_ROOT,
+            prefix_spec_root=PREFIX_SPEC_ROOT,
+            require_current_implementation=False,
         )
 
 
@@ -274,21 +344,12 @@ def test_checkpoint_recovers_per_class_outputs_and_publishes_create_only(
         )
         == ()
     )
-    response_sidecar = load_json(RESPONSE_SIDECAR_ROOT / f"{RESPONSE_IDS[0]}.json")
-    authority = {
-        "schema_version": 1,
-        "artifact_type": "fixture-authority",
-        "prepare_source": response_sidecar["qualification_source"],
-        "prepare_image_digest": response_sidecar["qualification_image_digest"],
-    }
-
     output = qualification.publish_named_qualification_set_from_checkpoint(
         checkpoint_path,
         workload_root=WORKLOAD_ROOT,
         sidecar_root=sidecars,
         publication_root=publications,
         require_current_implementation=False,
-        qualification_authority=authority,
     )
     assert output.workload_ids == RESPONSE_IDS
     assert sorted(path.name for path in output.path.iterdir()) == sorted(
@@ -301,7 +362,6 @@ def test_checkpoint_recovers_per_class_outputs_and_publishes_create_only(
             workload_root=WORKLOAD_ROOT,
             expected_workload_ids=RESPONSE_IDS,
             require_current_implementation=False,
-            expected_qualification_authority=authority,
         )
         == output
     )
@@ -312,8 +372,129 @@ def test_checkpoint_recovers_per_class_outputs_and_publishes_create_only(
             sidecar_root=sidecars,
             publication_root=publications,
             require_current_implementation=False,
-            qualification_authority=authority,
         )
+
+
+def test_class_checkpoint_rejects_other_foundation_sidecar_resume(tmp_path: Path) -> None:
+    workload_id = FULL_IDS[0]
+    original = load_json(FULL_SIDECAR_ROOT / f"{workload_id}.json")
+    authority = _class_qualification_authority(original)
+    other_foundation = _class_qualification_authority(
+        original,
+        foundation_sha256="8" * 64,
+        foundation_path="/evidence/other-foundation.json",
+    )
+    checkpoint_path = tmp_path / "checkpoint.json"
+    sidecars = tmp_path / "sidecars"
+    sidecars.mkdir()
+    checkpoint = qualification.initialize_named_qualification_checkpoint(
+        checkpoint_path,
+        (workload_id,),
+        qualification_set="class-pilot-full-v1",
+        qualification_scope="full",
+        workload_root=WORKLOAD_ROOT,
+        prefix_spec_root=PREFIX_SPEC_ROOT,
+        qualification_authority=authority,
+    )
+    assert checkpoint["schema_version"] == 2
+    assert checkpoint["qualification_sidecar_schema_version"] == 3
+    assert checkpoint["qualification_authority"] == authority
+    assert checkpoint["qualification_authority_sha256"] == sha256_bytes(
+        qualification.canonical_bytes(authority)
+    )
+    _write_class_sidecar(
+        sidecars / f"{workload_id}.json",
+        workload_id=workload_id,
+        authority=other_foundation,
+    )
+
+    with pytest.raises(ValueError, match="another qualification authority"):
+        qualification.reconcile_named_qualification_checkpoint(
+            checkpoint_path,
+            workload_root=WORKLOAD_ROOT,
+            sidecar_root=sidecars,
+            prefix_spec_root=PREFIX_SPEC_ROOT,
+            require_current_implementation=False,
+            expected_qualification_authority=authority,
+        )
+    assert qualification.load_named_qualification_checkpoint(
+        checkpoint_path,
+        workload_root=WORKLOAD_ROOT,
+        sidecar_root=sidecars,
+        prefix_spec_root=PREFIX_SPEC_ROOT,
+        require_current_implementation=False,
+        expected_qualification_authority=authority,
+    )["workloads"][0]["status"] == "pending"
+
+
+def test_class_checkpoint_cannot_be_republished_under_other_foundation(
+    tmp_path: Path,
+) -> None:
+    workload_id = FULL_IDS[0]
+    original = load_json(FULL_SIDECAR_ROOT / f"{workload_id}.json")
+    authority = _class_qualification_authority(original)
+    other_foundation = _class_qualification_authority(
+        original,
+        foundation_sha256="8" * 64,
+        foundation_path="/evidence/other-foundation.json",
+    )
+    checkpoint_path = tmp_path / "checkpoint.json"
+    sidecars = tmp_path / "sidecars"
+    publications = tmp_path / "sets"
+    sidecars.mkdir()
+    publications.mkdir()
+    qualification.initialize_named_qualification_checkpoint(
+        checkpoint_path,
+        (workload_id,),
+        qualification_set="class-pilot-full-v1",
+        qualification_scope="full",
+        workload_root=WORKLOAD_ROOT,
+        prefix_spec_root=PREFIX_SPEC_ROOT,
+        qualification_authority=authority,
+    )
+    _write_class_sidecar(
+        sidecars / f"{workload_id}.json",
+        workload_id=workload_id,
+        authority=authority,
+    )
+    qualification.record_named_qualification_checkpoint(
+        checkpoint_path,
+        workload_id,
+        workload_root=WORKLOAD_ROOT,
+        sidecar_root=sidecars,
+        prefix_spec_root=PREFIX_SPEC_ROOT,
+        require_current_implementation=False,
+        expected_qualification_authority=authority,
+    )
+
+    with pytest.raises(ValueError, match="another foundation authority"):
+        qualification.publish_named_qualification_set_from_checkpoint(
+            checkpoint_path,
+            workload_root=WORKLOAD_ROOT,
+            sidecar_root=sidecars,
+            publication_root=publications,
+            prefix_spec_root=PREFIX_SPEC_ROOT,
+            require_current_implementation=False,
+            qualification_authority=other_foundation,
+        )
+    assert list(publications.iterdir()) == []
+
+    output = qualification.publish_named_qualification_set_from_checkpoint(
+        checkpoint_path,
+        workload_root=WORKLOAD_ROOT,
+        sidecar_root=sidecars,
+        publication_root=publications,
+        prefix_spec_root=PREFIX_SPEC_ROOT,
+        require_current_implementation=False,
+        qualification_authority=authority,
+    )
+    manifest = load_json(output.manifest_path)
+    assert manifest["schema_version"] == 3
+    assert manifest["qualification_sidecar_schema_version"] == 3
+    assert manifest["qualification_authority"] == authority
+    assert manifest["qualification_authority_sha256"] == sha256_bytes(
+        qualification.canonical_bytes(authority)
+    )
 
 
 def test_incomplete_checkpoint_cannot_publish_and_input_drift_is_detected(

@@ -34,6 +34,7 @@ from .util import (
 )
 
 QUALIFICATION_SCHEMA_VERSION = 2
+CLASS_STUDY_QUALIFICATION_SCHEMA_VERSION = 3
 # The published response-only v1 sidecars and their schema-three runtime
 # manifests are immutable verification inputs.  The stronger identity
 # qualification therefore advances both namespaces rather than changing the
@@ -56,9 +57,11 @@ RESPONSE_ONLY_SIDECAR_ARTIFACT_TYPE = "qcsd-chaff-response-only-qualification"
 RESPONSE_ONLY_QUALIFICATION_SCOPE = "response-only"
 FULL_QUALIFICATION_SCOPE = "full"
 LEGACY_NAMED_QUALIFICATION_SET_SCHEMA_VERSION = 1
-NAMED_QUALIFICATION_SET_SCHEMA_VERSION = 2
+SOURCE_BOUND_NAMED_QUALIFICATION_SET_SCHEMA_VERSION = 2
+NAMED_QUALIFICATION_SET_SCHEMA_VERSION = 3
 NAMED_QUALIFICATION_SET_ARTIFACT_TYPE = "qcsd-named-chaff-qualification-set"
-NAMED_QUALIFICATION_CHECKPOINT_SCHEMA_VERSION = 1
+LEGACY_NAMED_QUALIFICATION_CHECKPOINT_SCHEMA_VERSION = 1
+NAMED_QUALIFICATION_CHECKPOINT_SCHEMA_VERSION = 2
 NAMED_QUALIFICATION_CHECKPOINT_ARTIFACT_TYPE = "qcsd-named-chaff-qualification-checkpoint"
 NAMED_QUALIFICATION_SET_MANIFEST = "_qualification-set.json"
 NAMED_QUALIFICATION_PREFIX_DIRECTORY = "_prefix-specs"
@@ -179,6 +182,10 @@ SIDECAR_KEYS = {
     "prefix_pack_spec",
     "resource",
 }
+CLASS_STUDY_SIDECAR_KEYS = SIDECAR_KEYS | {
+    "qualification_authority",
+    "qualification_authority_sha256",
+}
 RESPONSE_ONLY_SIDECAR_KEYS = {
     "schema_version",
     "artifact_type",
@@ -233,6 +240,9 @@ NAMED_QUALIFICATION_SET_KEYS = {
 NAMED_QUALIFICATION_SET_AUTHORITY_KEYS = NAMED_QUALIFICATION_SET_KEYS | {
     "qualification_authority"
 }
+NAMED_QUALIFICATION_SET_EXACT_AUTHORITY_KEYS = NAMED_QUALIFICATION_SET_AUTHORITY_KEYS | {
+    "qualification_authority_sha256"
+}
 NAMED_QUALIFICATION_ENTRY_KEYS = {
     "index",
     "workload_id",
@@ -250,6 +260,10 @@ NAMED_QUALIFICATION_CHECKPOINT_KEYS = {
     "workload_count",
     "workload_ids",
     "workloads",
+}
+NAMED_QUALIFICATION_CHECKPOINT_AUTHORITY_KEYS = NAMED_QUALIFICATION_CHECKPOINT_KEYS | {
+    "qualification_authority",
+    "qualification_authority_sha256",
 }
 NAMED_QUALIFICATION_CHECKPOINT_ENTRY_KEYS = {
     "index",
@@ -1594,12 +1608,25 @@ def validate_sidecar(
     base_manifest_path: Path,
     prefix_spec_path: Path,
     require_current_implementation: bool = True,
+    expected_sidecar_schema_version: int | None = None,
+    expected_qualification_authority: Mapping[str, Any] | None = None,
 ) -> QualifiedChaffInput:
     """Validate a sidecar against exact base bytes and derive its final manifest."""
 
-    sidecar = _exact_mapping(value, SIDECAR_KEYS, "chaff qualification sidecar")
+    sidecar_schema = value.get("schema_version") if isinstance(value, Mapping) else None
+    sidecar = _exact_mapping(
+        value,
+        (
+            CLASS_STUDY_SIDECAR_KEYS
+            if sidecar_schema == CLASS_STUDY_QUALIFICATION_SCHEMA_VERSION
+            else SIDECAR_KEYS
+        ),
+        "chaff qualification sidecar",
+    )
     if (
-        sidecar["schema_version"] != SCHEMA_VERSION
+        type(sidecar["schema_version"]) is not int
+        or sidecar["schema_version"]
+        not in {SCHEMA_VERSION, CLASS_STUDY_QUALIFICATION_SCHEMA_VERSION}
         or sidecar["artifact_type"] != SIDECAR_ARTIFACT_TYPE
         or sidecar["workload_id"] != workload_id
         or sidecar["selection_policy"] != SELECTION_POLICY
@@ -1612,6 +1639,35 @@ def validate_sidecar(
         or sidecar["method"] != METHOD
     ):
         raise ValueError("chaff qualification sidecar policy binding is invalid")
+    if (
+        expected_sidecar_schema_version is not None
+        and (
+            type(expected_sidecar_schema_version) is not int
+            or sidecar["schema_version"] != expected_sidecar_schema_version
+        )
+    ):
+        raise ValueError("chaff qualification sidecar schema version is unexpected")
+    authority: dict[str, Any] | None = None
+    if sidecar["schema_version"] == CLASS_STUDY_QUALIFICATION_SCHEMA_VERSION:
+        authority = _validated_class_qualification_authority(
+            sidecar.get("qualification_authority")
+        )
+        if sidecar.get("qualification_authority_sha256") != _qualification_authority_sha256(
+            authority
+        ):
+            raise ValueError("chaff qualification sidecar authority digest is invalid")
+        if (
+            sidecar.get("qualification_source") != authority["prepare_source"]
+            or sidecar.get("qualification_image_digest")
+            != authority["prepare_image_digest"]
+        ):
+            raise ValueError("chaff qualification sidecar differs from its foundation authority")
+    if expected_qualification_authority is not None:
+        expected_authority = _validated_class_qualification_authority(
+            expected_qualification_authority
+        )
+        if authority != expected_authority:
+            raise ValueError("chaff qualification sidecar uses another qualification authority")
     base_receipt = _exact_mapping(sidecar["base_manifest"], BASE_MANIFEST_KEYS, "base manifest")
     if Path(str(base_receipt["path"])).name != base_manifest_path.name or base_receipt[
         "sha256"
@@ -1696,6 +1752,8 @@ def load_qualified_chaff(
     base_manifest_path: Path,
     prefix_spec_path: Path,
     require_current_implementation: bool = True,
+    expected_sidecar_schema_version: int | None = None,
+    expected_qualification_authority: Mapping[str, Any] | None = None,
 ) -> QualifiedChaffInput:
     if sidecar_path.is_symlink() or not sidecar_path.is_file():
         raise ValueError(f"chaff qualification sidecar is not a regular file: {sidecar_path}")
@@ -1710,6 +1768,8 @@ def load_qualified_chaff(
         base_manifest_path=base_manifest_path,
         prefix_spec_path=prefix_spec_path,
         require_current_implementation=require_current_implementation,
+        expected_sidecar_schema_version=expected_sidecar_schema_version,
+        expected_qualification_authority=expected_qualification_authority,
     )
     return QualifiedChaffInput(
         sidecar_path=sidecar_path.resolve(),
@@ -2588,6 +2648,18 @@ def validate_qualification_set(value: object) -> str:
     return value
 
 
+def _validated_class_qualification_authority(value: object) -> dict[str, Any]:
+    """Validate and detach the exact foundation/build authority for class evidence."""
+
+    from .class_attestation import validate_class_qualification_authority
+
+    return validate_class_qualification_authority(value)
+
+
+def _qualification_authority_sha256(value: Mapping[str, Any]) -> str:
+    return sha256_bytes(canonical_bytes(dict(value)))
+
+
 def build_named_qualification_set_manifest(
     workload_ids: Sequence[str],
     *,
@@ -2610,9 +2682,23 @@ def build_named_qualification_set_manifest(
     name = validate_qualification_set(qualification_set)
     scope = _named_qualification_scope(qualification_scope)
     cohort = _named_workload_ids(workload_ids)
+    authority = (
+        _validated_class_qualification_authority(qualification_authority)
+        if qualification_authority is not None
+        else None
+    )
+    if authority is not None and qualification_sidecar_schema_version is None:
+        qualification_sidecar_schema_version = CLASS_STUDY_QUALIFICATION_SCHEMA_VERSION
     schema_version = _named_qualification_sidecar_schema(
         scope, qualification_sidecar_schema_version
     )
+    if authority is not None and (
+        scope != FULL_QUALIFICATION_SCOPE
+        or schema_version != CLASS_STUDY_QUALIFICATION_SCHEMA_VERSION
+    ):
+        raise ValueError("authority-bound qualification requires full sidecar schema three")
+    if authority is None and schema_version == CLASS_STUDY_QUALIFICATION_SCHEMA_VERSION:
+        raise ValueError("full sidecar schema three requires a qualification authority")
     workloads = _regular_directory_without_symlinks(workload_root, "workload root")
     sidecars = _regular_directory_without_symlinks(sidecar_root, "qualification sidecar root")
     specs = _named_prefix_spec_root(scope, prefix_spec_root)
@@ -2626,13 +2712,14 @@ def build_named_qualification_set_manifest(
             sidecar_root=sidecars,
             prefix_spec_root=specs,
             require_current_implementation=require_current_implementation,
+            expected_qualification_authority=authority,
         )
         for index, workload_id in enumerate(cohort)
     ]
     manifest: dict[str, Any] = {
         "schema_version": (
             NAMED_QUALIFICATION_SET_SCHEMA_VERSION
-            if qualification_authority is not None
+            if authority is not None
             else LEGACY_NAMED_QUALIFICATION_SET_SCHEMA_VERSION
         ),
         "artifact_type": NAMED_QUALIFICATION_SET_ARTIFACT_TYPE,
@@ -2643,14 +2730,16 @@ def build_named_qualification_set_manifest(
         "workload_ids": list(cohort),
         "workloads": entries,
     }
-    if qualification_authority is not None:
-        if not isinstance(qualification_authority, Mapping):
-            raise TypeError("named qualification authority must be an object")
+    if authority is not None:
         _validate_named_qualification_sidecar_authority(
-            sidecars, cohort, qualification_authority
+            sidecars,
+            cohort,
+            authority,
+            require_exact_authority=True,
         )
-        manifest["qualification_authority"] = json.loads(
-            json.dumps(qualification_authority, sort_keys=True, separators=(",", ":"))
+        manifest["qualification_authority"] = authority
+        manifest["qualification_authority_sha256"] = _qualification_authority_sha256(
+            authority
         )
     manifest["bindings_sha256"] = _named_qualification_bindings_sha256(manifest)
     return manifest
@@ -2673,13 +2762,15 @@ def validate_named_qualification_set_manifest(
     if not isinstance(value, Mapping):
         raise TypeError("named chaff qualification-set manifest has an invalid exact schema")
     manifest_schema = value.get("schema_version")
+    if manifest_schema == NAMED_QUALIFICATION_SET_SCHEMA_VERSION:
+        manifest_keys = NAMED_QUALIFICATION_SET_EXACT_AUTHORITY_KEYS
+    elif manifest_schema == SOURCE_BOUND_NAMED_QUALIFICATION_SET_SCHEMA_VERSION:
+        manifest_keys = NAMED_QUALIFICATION_SET_AUTHORITY_KEYS
+    else:
+        manifest_keys = NAMED_QUALIFICATION_SET_KEYS
     manifest = _exact_mapping(
         value,
-        (
-            NAMED_QUALIFICATION_SET_AUTHORITY_KEYS
-            if manifest_schema == NAMED_QUALIFICATION_SET_SCHEMA_VERSION
-            else NAMED_QUALIFICATION_SET_KEYS
-        ),
+        manifest_keys,
         "named chaff qualification-set manifest",
     )
     name = validate_qualification_set(manifest["qualification_set"])
@@ -2693,6 +2784,7 @@ def validate_named_qualification_set_manifest(
         or manifest["schema_version"]
         not in {
             LEGACY_NAMED_QUALIFICATION_SET_SCHEMA_VERSION,
+            SOURCE_BOUND_NAMED_QUALIFICATION_SET_SCHEMA_VERSION,
             NAMED_QUALIFICATION_SET_SCHEMA_VERSION,
         }
         or manifest["artifact_type"] != NAMED_QUALIFICATION_SET_ARTIFACT_TYPE
@@ -2701,16 +2793,41 @@ def validate_named_qualification_set_manifest(
     ):
         raise ValueError("named chaff qualification-set manifest binding is invalid")
     if manifest["schema_version"] == NAMED_QUALIFICATION_SET_SCHEMA_VERSION:
-        authority = manifest.get("qualification_authority")
-        if not isinstance(authority, Mapping):
+        authority = _validated_class_qualification_authority(
+            manifest.get("qualification_authority")
+        )
+        if manifest.get("qualification_authority_sha256") != _qualification_authority_sha256(
+            authority
+        ):
+            raise ValueError("named qualification authority digest is invalid")
+    elif manifest["schema_version"] == SOURCE_BOUND_NAMED_QUALIFICATION_SET_SCHEMA_VERSION:
+        legacy_authority = manifest.get("qualification_authority")
+        if not isinstance(legacy_authority, Mapping):
             raise ValueError("named qualification authority is missing")
+        authority = dict(legacy_authority)
     else:
         authority = None
+    if manifest["schema_version"] == NAMED_QUALIFICATION_SET_SCHEMA_VERSION:
+        if (
+            scope != FULL_QUALIFICATION_SCOPE
+            or schema_version != CLASS_STUDY_QUALIFICATION_SCHEMA_VERSION
+        ):
+            raise ValueError(
+                "authority-bound qualification manifest does not require full sidecar schema three"
+            )
+    elif schema_version == CLASS_STUDY_QUALIFICATION_SCHEMA_VERSION:
+        raise ValueError(
+            "legacy qualification manifest cannot claim authority-bearing sidecar schema three"
+        )
     if expected_qualification_authority is not None:
-        if not isinstance(expected_qualification_authority, Mapping):
-            raise TypeError("expected named qualification authority must be an object")
-        if authority != expected_qualification_authority:
-            raise ValueError("named qualification authority differs from the expected build")
+        expected_authority = _validated_class_qualification_authority(
+            expected_qualification_authority
+        )
+        if (
+            manifest["schema_version"] != NAMED_QUALIFICATION_SET_SCHEMA_VERSION
+            or authority != expected_authority
+        ):
+            raise ValueError("named qualification authority differs from the expected foundation")
     if expected_qualification_set is not None and name != validate_qualification_set(
         expected_qualification_set
     ):
@@ -2724,7 +2841,14 @@ def validate_named_qualification_set_manifest(
     workloads = _regular_directory_without_symlinks(workload_root, "workload root")
     sidecars = _regular_directory_without_symlinks(sidecar_root, "qualification sidecar root")
     if authority is not None:
-        _validate_named_qualification_sidecar_authority(sidecars, cohort, authority)
+        _validate_named_qualification_sidecar_authority(
+            sidecars,
+            cohort,
+            authority,
+            require_exact_authority=(
+                manifest["schema_version"] == NAMED_QUALIFICATION_SET_SCHEMA_VERSION
+            ),
+        )
     specs = _named_prefix_spec_root(scope, prefix_spec_root)
     values = manifest["workloads"]
     if not isinstance(values, list) or len(values) != len(cohort):
@@ -2750,6 +2874,11 @@ def validate_named_qualification_set_manifest(
             sidecar_root=sidecars,
             prefix_spec_root=specs,
             require_current_implementation=require_current_implementation,
+            expected_qualification_authority=(
+                authority
+                if manifest["schema_version"] == NAMED_QUALIFICATION_SET_SCHEMA_VERSION
+                else None
+            ),
         )
         if entry != expected:
             raise ValueError("named chaff qualification workload binding is invalid")
@@ -2986,7 +3115,7 @@ def _named_qualification_sidecar_schema(qualification_scope: str, value: object 
             RESPONSE_ONLY_SIDECAR_V2_SCHEMA_VERSION,
         }:
             raise ValueError("named response-only qualification sidecar schema is unsupported")
-    elif value != SCHEMA_VERSION:
+    elif value not in {SCHEMA_VERSION, CLASS_STUDY_QUALIFICATION_SCHEMA_VERSION}:
         raise ValueError("named full qualification sidecar schema is unsupported")
     return value
 
@@ -3015,6 +3144,7 @@ def _named_qualification_sidecar_binding(
     sidecar_root: Path,
     prefix_spec_path: Path | None,
     require_current_implementation: bool,
+    expected_qualification_authority: Mapping[str, Any] | None = None,
 ) -> tuple[dict[str, str], str]:
     sidecar_path = _named_regular_file(sidecar_root, f"{workload_id}.json", "qualification sidecar")
     if qualification_scope == RESPONSE_ONLY_QUALIFICATION_SCOPE:
@@ -3034,6 +3164,8 @@ def _named_qualification_sidecar_binding(
             base_manifest_path=workload_path,
             prefix_spec_path=prefix_spec_path,
             require_current_implementation=require_current_implementation,
+            expected_sidecar_schema_version=qualification_sidecar_schema_version,
+            expected_qualification_authority=expected_qualification_authority,
         )
     return (
         {"path": sidecar_path.name, "sha256": qualified.sidecar_sha256},
@@ -3051,6 +3183,7 @@ def _named_qualification_entry(
     sidecar_root: Path,
     prefix_spec_root: Path | None,
     require_current_implementation: bool,
+    expected_qualification_authority: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     workload_path = _named_regular_file(workload_root, f"{workload_id}.json", "workload manifest")
     workload = load_json(workload_path)
@@ -3081,6 +3214,7 @@ def _named_qualification_entry(
         sidecar_root=sidecar_root,
         prefix_spec_path=prefix_spec_path,
         require_current_implementation=require_current_implementation,
+        expected_qualification_authority=expected_qualification_authority,
     )
     return {
         "index": index,
@@ -3105,9 +3239,16 @@ def _validate_named_qualification_sidecar_authority(
     sidecar_root: Path,
     workload_ids: Sequence[str],
     authority: Mapping[str, Any],
+    *,
+    require_exact_authority: bool,
 ) -> None:
-    source = authority.get("prepare_source")
-    image = authority.get("prepare_image_digest")
+    expected = (
+        _validated_class_qualification_authority(authority)
+        if require_exact_authority
+        else dict(authority)
+    )
+    source = expected.get("prepare_source")
+    image = expected.get("prepare_image_digest")
     if not isinstance(source, Mapping) or not _IMAGE_DIGEST.fullmatch(str(image)):
         raise ValueError("named qualification authority has no prepare source/image")
     if source.get("image_digest") != image:
@@ -3124,6 +3265,15 @@ def _validate_named_qualification_sidecar_authority(
         ):
             raise ValueError(
                 f"named qualification sidecar {workload_id} differs from its prepare authority"
+            )
+        if require_exact_authority and (
+            sidecar.get("schema_version") != CLASS_STUDY_QUALIFICATION_SCHEMA_VERSION
+            or sidecar.get("qualification_authority") != expected
+            or sidecar.get("qualification_authority_sha256")
+            != _qualification_authority_sha256(expected)
+        ):
+            raise ValueError(
+                f"named qualification sidecar {workload_id} uses another foundation authority"
             )
 
 
@@ -3144,6 +3294,7 @@ def initialize_named_qualification_checkpoint(
     workload_root: Path,
     prefix_spec_root: Path | None = None,
     qualification_sidecar_schema_version: int | None = None,
+    qualification_authority: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create the sole mutable per-workload qualification checkpoint.
 
@@ -3159,9 +3310,20 @@ def initialize_named_qualification_checkpoint(
     name = validate_qualification_set(qualification_set)
     scope = _named_qualification_scope(qualification_scope)
     cohort = _named_workload_ids(workload_ids)
+    authority = (
+        _validated_class_qualification_authority(qualification_authority)
+        if qualification_authority is not None
+        else None
+    )
+    if authority is not None and qualification_sidecar_schema_version is None:
+        qualification_sidecar_schema_version = CLASS_STUDY_QUALIFICATION_SCHEMA_VERSION
     schema_version = _named_qualification_sidecar_schema(
         scope, qualification_sidecar_schema_version
     )
+    if authority is not None and schema_version != CLASS_STUDY_QUALIFICATION_SCHEMA_VERSION:
+        raise ValueError("authority-bound qualification requires full sidecar schema three")
+    if authority is None and schema_version == CLASS_STUDY_QUALIFICATION_SCHEMA_VERSION:
+        raise ValueError("full sidecar schema three requires a qualification authority")
     workloads = _regular_directory_without_symlinks(workload_root, "workload root")
     specs = _named_prefix_spec_root(scope, prefix_spec_root)
     entries = [
@@ -3180,7 +3342,11 @@ def initialize_named_qualification_checkpoint(
         for index, workload_id in enumerate(cohort)
     ]
     checkpoint: dict[str, Any] = {
-        "schema_version": NAMED_QUALIFICATION_CHECKPOINT_SCHEMA_VERSION,
+        "schema_version": (
+            NAMED_QUALIFICATION_CHECKPOINT_SCHEMA_VERSION
+            if authority is not None
+            else LEGACY_NAMED_QUALIFICATION_CHECKPOINT_SCHEMA_VERSION
+        ),
         "artifact_type": NAMED_QUALIFICATION_CHECKPOINT_ARTIFACT_TYPE,
         "qualification_set": name,
         "qualification_scope": scope,
@@ -3189,6 +3355,11 @@ def initialize_named_qualification_checkpoint(
         "workload_ids": list(cohort),
         "workloads": entries,
     }
+    if authority is not None:
+        checkpoint["qualification_authority"] = authority
+        checkpoint["qualification_authority_sha256"] = _qualification_authority_sha256(
+            authority
+        )
     with path.open("xb") as output:
         output.write(canonical_bytes(checkpoint))
         output.flush()
@@ -3207,12 +3378,18 @@ def validate_named_qualification_checkpoint(
     expected_qualification_scope: str | None = None,
     expected_workload_ids: Sequence[str] | None = None,
     require_current_implementation: bool = True,
+    expected_qualification_authority: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Validate a checkpoint's frozen inputs and every completed class entry."""
 
+    checkpoint_schema = value.get("schema_version") if isinstance(value, Mapping) else None
     checkpoint = _exact_mapping(
         value,
-        NAMED_QUALIFICATION_CHECKPOINT_KEYS,
+        (
+            NAMED_QUALIFICATION_CHECKPOINT_AUTHORITY_KEYS
+            if checkpoint_schema == NAMED_QUALIFICATION_CHECKPOINT_SCHEMA_VERSION
+            else NAMED_QUALIFICATION_CHECKPOINT_KEYS
+        ),
         "named chaff qualification checkpoint",
     )
     name = validate_qualification_set(checkpoint["qualification_set"])
@@ -3223,12 +3400,35 @@ def validate_named_qualification_checkpoint(
     cohort = _named_workload_ids(checkpoint["workload_ids"])
     if (
         type(checkpoint["schema_version"]) is not int
-        or checkpoint["schema_version"] != NAMED_QUALIFICATION_CHECKPOINT_SCHEMA_VERSION
+        or checkpoint["schema_version"]
+        not in {
+            LEGACY_NAMED_QUALIFICATION_CHECKPOINT_SCHEMA_VERSION,
+            NAMED_QUALIFICATION_CHECKPOINT_SCHEMA_VERSION,
+        }
         or checkpoint["artifact_type"] != NAMED_QUALIFICATION_CHECKPOINT_ARTIFACT_TYPE
         or type(checkpoint["workload_count"]) is not int
         or checkpoint["workload_count"] != len(cohort)
     ):
         raise ValueError("named chaff qualification checkpoint binding is invalid")
+    authority: dict[str, Any] | None = None
+    if checkpoint["schema_version"] == NAMED_QUALIFICATION_CHECKPOINT_SCHEMA_VERSION:
+        authority = _validated_class_qualification_authority(
+            checkpoint.get("qualification_authority")
+        )
+        if checkpoint.get("qualification_authority_sha256") != _qualification_authority_sha256(
+            authority
+        ):
+            raise ValueError("qualification checkpoint authority digest is invalid")
+        if schema_version != CLASS_STUDY_QUALIFICATION_SCHEMA_VERSION:
+            raise ValueError("authority-bound checkpoint does not require sidecar schema three")
+    elif schema_version == CLASS_STUDY_QUALIFICATION_SCHEMA_VERSION:
+        raise ValueError("legacy checkpoint cannot claim authority-bearing sidecar schema three")
+    if expected_qualification_authority is not None:
+        expected_authority = _validated_class_qualification_authority(
+            expected_qualification_authority
+        )
+        if authority != expected_authority:
+            raise ValueError("qualification checkpoint uses another foundation authority")
     if expected_qualification_set is not None and name != validate_qualification_set(
         expected_qualification_set
     ):
@@ -3289,6 +3489,7 @@ def validate_named_qualification_checkpoint(
             sidecar_root=sidecars,
             prefix_spec_path=prefix_spec_path,
             require_current_implementation=require_current_implementation,
+            expected_qualification_authority=authority,
         )
         if (
             entry["qualification_sidecar"] != sidecar_receipt
@@ -3308,6 +3509,7 @@ def load_named_qualification_checkpoint(
     expected_qualification_scope: str | None = None,
     expected_workload_ids: Sequence[str] | None = None,
     require_current_implementation: bool = True,
+    expected_qualification_authority: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Load one checkpoint and validate its exact on-disk bindings."""
 
@@ -3323,6 +3525,7 @@ def load_named_qualification_checkpoint(
         expected_qualification_scope=expected_qualification_scope,
         expected_workload_ids=expected_workload_ids,
         require_current_implementation=require_current_implementation,
+        expected_qualification_authority=expected_qualification_authority,
     )
 
 
@@ -3334,6 +3537,7 @@ def record_named_qualification_checkpoint(
     sidecar_root: Path,
     prefix_spec_root: Path | None = None,
     require_current_implementation: bool = True,
+    expected_qualification_authority: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Index one already-created sidecar, idempotently, without network work."""
 
@@ -3343,7 +3547,9 @@ def record_named_qualification_checkpoint(
         sidecar_root=sidecar_root,
         prefix_spec_root=prefix_spec_root,
         require_current_implementation=require_current_implementation,
+        expected_qualification_authority=expected_qualification_authority,
     )
+    checkpoint_authority = checkpoint.get("qualification_authority")
     if workload_id not in checkpoint["workload_ids"]:
         raise ValueError("qualification checkpoint does not contain the workload ID")
     index = checkpoint["workload_ids"].index(workload_id)
@@ -3365,6 +3571,9 @@ def record_named_qualification_checkpoint(
         sidecar_root=sidecars,
         prefix_spec_path=prefix_spec_path,
         require_current_implementation=require_current_implementation,
+        expected_qualification_authority=(
+            checkpoint_authority if isinstance(checkpoint_authority, Mapping) else None
+        ),
     )
     if entry["status"] == "qualified":
         if (
@@ -3383,6 +3592,7 @@ def record_named_qualification_checkpoint(
         sidecar_root=sidecar_root,
         prefix_spec_root=prefix_spec_root,
         require_current_implementation=require_current_implementation,
+        expected_qualification_authority=expected_qualification_authority,
     )
 
 
@@ -3393,6 +3603,7 @@ def reconcile_named_qualification_checkpoint(
     sidecar_root: Path,
     prefix_spec_root: Path | None = None,
     require_current_implementation: bool = True,
+    expected_qualification_authority: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Recover valid sidecars left between durable creation and checkpointing."""
 
@@ -3402,7 +3613,9 @@ def reconcile_named_qualification_checkpoint(
         sidecar_root=sidecar_root,
         prefix_spec_root=prefix_spec_root,
         require_current_implementation=require_current_implementation,
+        expected_qualification_authority=expected_qualification_authority,
     )
+    checkpoint_authority = checkpoint.get("qualification_authority")
     workloads = _regular_directory_without_symlinks(workload_root, "workload root")
     sidecars = _regular_directory_without_symlinks(sidecar_root, "qualification sidecar root")
     specs = _named_prefix_spec_root(checkpoint["qualification_scope"], prefix_spec_root)
@@ -3427,6 +3640,9 @@ def reconcile_named_qualification_checkpoint(
             sidecar_root=sidecars,
             prefix_spec_path=prefix_spec_path,
             require_current_implementation=require_current_implementation,
+            expected_qualification_authority=(
+                checkpoint_authority if isinstance(checkpoint_authority, Mapping) else None
+            ),
         )
         entry["status"] = "qualified"
         entry["qualification_sidecar"] = sidecar_receipt
@@ -3440,6 +3656,7 @@ def reconcile_named_qualification_checkpoint(
         sidecar_root=sidecar_root,
         prefix_spec_root=prefix_spec_root,
         require_current_implementation=require_current_implementation,
+        expected_qualification_authority=expected_qualification_authority,
     )
 
 
@@ -3450,6 +3667,7 @@ def pending_named_qualification_workloads(
     sidecar_root: Path,
     prefix_spec_root: Path | None = None,
     require_current_implementation: bool = True,
+    expected_qualification_authority: Mapping[str, Any] | None = None,
 ) -> tuple[str, ...]:
     """Return pending workload IDs in the immutable caller-supplied order."""
 
@@ -3459,6 +3677,7 @@ def pending_named_qualification_workloads(
         sidecar_root=sidecar_root,
         prefix_spec_root=prefix_spec_root,
         require_current_implementation=require_current_implementation,
+        expected_qualification_authority=expected_qualification_authority,
     )
     return tuple(
         entry["workload_id"] for entry in checkpoint["workloads"] if entry["status"] == "pending"
@@ -3483,12 +3702,19 @@ def publish_named_qualification_set_from_checkpoint(
         sidecar_root=sidecar_root,
         prefix_spec_root=prefix_spec_root,
         require_current_implementation=require_current_implementation,
+        expected_qualification_authority=qualification_authority,
     )
     pending = [
         entry["workload_id"] for entry in checkpoint["workloads"] if entry["status"] != "qualified"
     ]
     if pending:
         raise ValueError("named qualification checkpoint is incomplete: " + ", ".join(pending))
+    checkpoint_authority = checkpoint.get("qualification_authority")
+    publication_authority = (
+        checkpoint_authority
+        if isinstance(checkpoint_authority, Mapping)
+        else qualification_authority
+    )
     return publish_named_qualification_set(
         checkpoint["workload_ids"],
         qualification_set=checkpoint["qualification_set"],
@@ -3499,7 +3725,7 @@ def publish_named_qualification_set_from_checkpoint(
         prefix_spec_root=prefix_spec_root,
         qualification_sidecar_schema_version=checkpoint["qualification_sidecar_schema_version"],
         require_current_implementation=require_current_implementation,
-        qualification_authority=qualification_authority,
+        qualification_authority=publication_authority,
     )
 
 
@@ -3557,6 +3783,7 @@ def qualify_chaff(
     timeout_seconds: int = 30,
     interval_seconds: int = 30,
     _execution_context: tuple[dict[str, Any], dict[str, Any], str] | None = None,
+    qualification_authority: Mapping[str, Any] | None = None,
 ) -> QualifiedChaffOutput:
     """Create one sidecar atomically after six independent H3 qualifications."""
 
@@ -3570,6 +3797,11 @@ def qualify_chaff(
     # sleeping, or any network-capable runner invocation.
     if destination.exists() or destination.is_symlink():
         raise FileExistsError(f"{destination} already exists; qualification is create-only")
+    authority = (
+        _validated_class_qualification_authority(qualification_authority)
+        if qualification_authority is not None
+        else None
+    )
     workloads = _regular_directory_without_symlinks(
         workload_root or LAB_ROOT / "config/workloads", "workload root"
     )
@@ -3585,6 +3817,11 @@ def qualify_chaff(
     executed_implementation, source, qualification_image = (
         _execution_context or _qualification_execution_context()
     )
+    if authority is not None and (
+        source != authority["prepare_source"]
+        or qualification_image != authority["prepare_image_digest"]
+    ):
+        raise ValueError("live qualification runtime differs from its foundation authority")
     neqo_client, neqo_client_sha256 = _bound_neqo_client(executed_implementation)
     base = load_json(base_path)
     validate_research_preparation(base, workload_id=workload_id)
@@ -3670,7 +3907,11 @@ def qualify_chaff(
         )
         neqo = _stable_neqo_provenance([*response_runs, *prefix_runs])
         sidecar = {
-            "schema_version": SCHEMA_VERSION,
+            "schema_version": (
+                CLASS_STUDY_QUALIFICATION_SCHEMA_VERSION
+                if authority is not None
+                else SCHEMA_VERSION
+            ),
             "artifact_type": SIDECAR_ARTIFACT_TYPE,
             "workload_id": workload_id,
             "base_manifest": {"path": base_path.name, "sha256": base_sha},
@@ -3722,11 +3963,17 @@ def qualify_chaff(
                 "prefix_pack_qualification_sha256": prefix_digest,
             },
         }
+        if authority is not None:
+            sidecar["qualification_authority"] = authority
+            sidecar["qualification_authority_sha256"] = _qualification_authority_sha256(
+                authority
+            )
         validated = validate_sidecar(
             sidecar,
             workload_id=workload_id,
             base_manifest_path=base_path,
             prefix_spec_path=spec_path,
+            expected_qualification_authority=authority,
         )
         try:
             with destination.open("xb") as output:

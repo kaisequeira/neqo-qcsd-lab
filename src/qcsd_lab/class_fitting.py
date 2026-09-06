@@ -21,6 +21,10 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Protocol
 
+from .chaff_qualification import (
+    CLASS_STUDY_QUALIFICATION_SCHEMA_VERSION,
+    NAMED_QUALIFICATION_SET_SCHEMA_VERSION,
+)
 from .class_acquisition import validate_class_study_preparation
 from .class_cohort import (
     cohort_workload_hashes,
@@ -50,6 +54,7 @@ from .util import SOURCE_METADATA_KEYS, load_json, sha256_bytes, sha256_file
 from .verification import VerifiedResult, verify_result
 
 SCHEMA_VERSION = 1
+FINAL_PROVENANCE_SCHEMA_VERSION = 2
 FITTER_VERSION = "qcsd_lab.class_fitting 1.0.0"
 NUMERIC_ARTIFACT_TYPE = "qcsd-class-study-numeric-fitting-bundle"
 FINAL_ARTIFACT_TYPE = "qcsd-class-study-research-defense-bundle"
@@ -102,6 +107,7 @@ _NAMED_SET_KEYS = {
     "workloads",
     "bindings_sha256",
     "qualification_authority",
+    "qualification_authority_sha256",
 }
 _NAMED_ENTRY_KEYS = {
     "index",
@@ -792,12 +798,16 @@ def validate_schema_six_prefix_spec_shape(
 def derive_schema_six_prefix_specs(
     numeric_bundle_root: Path,
     *,
+    source_result_root: Path,
     workload_root: Path,
     artifacts_root: Path,
 ) -> Path:
     """Create the exact per-workload WT6 prefix-spec directory."""
 
-    verified = verify_numeric_fitting_bundle(numeric_bundle_root)
+    verified = verify_numeric_fitting_bundle(
+        numeric_bundle_root,
+        source_result_root=source_result_root,
+    )
     workloads = _regular_directory(workload_root, "class-study workload root")
     parent = _regular_directory(artifacts_root, "class fitting artifact root")
     destination = parent / _prefix_directory(verified.stage)
@@ -832,13 +842,17 @@ def derive_schema_six_prefix_specs(
 def finalize_fitting_bundle(
     numeric_bundle_root: Path,
     *,
+    source_result_root: Path,
     qualification_manifest_path: Path,
     qualification_context: QualificationContext,
     artifacts_root: Path,
 ) -> Path:
     """Bind live full qualification and publish the exact four-file runtime bundle."""
 
-    numeric = verify_numeric_fitting_bundle(numeric_bundle_root)
+    numeric = verify_numeric_fitting_bundle(
+        numeric_bundle_root,
+        source_result_root=source_result_root,
+    )
     context = _normalise_qualification_context(qualification_context)
     qualification, bindings = _verify_qualification(
         qualification_manifest_path,
@@ -1131,7 +1145,7 @@ def _final_provenance(
 ) -> dict[str, Any]:
     stage = _stage(numeric["stage"])
     return {
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": FINAL_PROVENANCE_SCHEMA_VERSION,
         "artifact_type": FINAL_ARTIFACT_TYPE,
         "status": ("pilot-test-only" if stage == PILOT_STAGE else "authoritative-fitted-artifact"),
         "runtime_authorized": stage == AUTHORITATIVE_STAGE,
@@ -1216,10 +1230,19 @@ def _validate_final_provenance(provenance: Mapping[str, Any]) -> str:
     }
     if set(provenance) != expected:
         raise ValueError("final fitting provenance has an invalid exact schema")
+    final_schema_version = provenance.get("schema_version")
+    if type(final_schema_version) is int and final_schema_version == 1:
+        raise ValueError(
+            "final fitting provenance schema 1 is pre-publication and non-evidentiary"
+        )
+    if (
+        type(final_schema_version) is not int
+        or final_schema_version != FINAL_PROVENANCE_SCHEMA_VERSION
+    ):
+        raise ValueError("final fitting provenance schema version is invalid")
     stage = _stage(provenance["stage"])
     if (
-        provenance["schema_version"] != SCHEMA_VERSION
-        or provenance["artifact_type"] != FINAL_ARTIFACT_TYPE
+        provenance["artifact_type"] != FINAL_ARTIFACT_TYPE
         or provenance["status"]
         != ("pilot-test-only" if stage == PILOT_STAGE else "authoritative-fitted-artifact")
         or provenance["runtime_authorized"] is not (stage == AUTHORITATIVE_STAGE)
@@ -1572,20 +1595,24 @@ def _verify_qualification(
         PILOT_QUALIFICATION_SET if stage == PILOT_STAGE else AUTHORITATIVE_QUALIFICATION_SET
     )
     if (
-        manifest.get("schema_version") != 2
+        manifest.get("schema_version") != NAMED_QUALIFICATION_SET_SCHEMA_VERSION
         or manifest.get("artifact_type") != "qcsd-named-chaff-qualification-set"
         or manifest.get("qualification_set") != expected_set
         or manifest.get("qualification_scope") != "full"
-        or manifest.get("qualification_sidecar_schema_version") != 2
+        or manifest.get("qualification_sidecar_schema_version")
+        != CLASS_STUDY_QUALIFICATION_SCHEMA_VERSION
         or manifest.get("workload_count") != len(workload_ids)
         or manifest.get("workload_ids") != list(workload_ids)
     ):
         raise ValueError("named qualification set differs from the fitting cohort")
     authority = _validate_qualification_authority(manifest.get("qualification_authority"))
-    if (
-        context.qualification_authority is not None
-        and authority != _validate_qualification_authority(context.qualification_authority)
-    ):
+    authority_sha256 = canonical_json_sha256(authority)
+    if manifest.get("qualification_authority_sha256") != authority_sha256:
+        raise ValueError("named qualification authority digest is invalid")
+    expected_authority = _validate_qualification_authority(
+        context.qualification_authority
+    )
+    if authority != expected_authority:
         raise ValueError("named qualification authority differs from the expected foundation")
     expected_bindings_digest = _named_set_bindings_digest(manifest)
     if manifest.get("bindings_sha256") != expected_bindings_digest:
@@ -1620,8 +1647,12 @@ def _verify_qualification(
         sidecar = load_json(sidecar_path)
         if (
             not isinstance(sidecar, Mapping)
+            or sidecar.get("schema_version")
+            != CLASS_STUDY_QUALIFICATION_SCHEMA_VERSION
             or sidecar.get("qualification_source") != authority["prepare_source"]
             or sidecar.get("qualification_image_digest") != authority["prepare_image_digest"]
+            or sidecar.get("qualification_authority") != authority
+            or sidecar.get("qualification_authority_sha256") != authority_sha256
         ):
             raise ValueError(
                 f"qualification sidecar {workload_id} differs from the authorised prepare build"
@@ -1646,6 +1677,8 @@ def _verify_qualification(
             base_manifest_path=workload_path,
             prefix_spec_path=prefix_path,
             require_current_implementation=context.require_current_implementation,
+            expected_sidecar_schema_version=CLASS_STUDY_QUALIFICATION_SCHEMA_VERSION,
+            expected_qualification_authority=authority,
         )
         if getattr(qualified, "manifest_sha256", None) != raw_entry["runtime_manifest_sha256"]:
             raise ValueError("qualified runtime manifest hash differs from the named set")

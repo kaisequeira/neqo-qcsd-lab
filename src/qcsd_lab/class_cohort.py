@@ -43,6 +43,7 @@ from .util import load_json, sha256_bytes, sha256_file
 SCHEMA_VERSION = 3
 ASSEMBLY_RECEIPT_TYPE = "qcsd-class-study-cohort-assembly"
 FINAL_SELECTION_RECEIPT_TYPE = "qcsd-class-study-final-selection-input"
+FINAL_SELECTION_SCHEMA_VERSION = 2
 _PAGE_FILE = re.compile(r"page-([0-4][0-9])[.]json\Z")
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 
@@ -880,11 +881,19 @@ def _validate_final_selection_payload(
         "feasible_pair_graph",
         "selected_final_perfect_matching",
     }
+    selection_schema_version = payload.get("selection_schema_version")
+    if type(selection_schema_version) is int and selection_schema_version == 1:
+        raise ValueError(
+            "final-selection schema 1 is pre-publication and non-evidentiary"
+        )
+    if (
+        type(selection_schema_version) is not int
+        or selection_schema_version != FINAL_SELECTION_SCHEMA_VERSION
+    ):
+        raise ValueError("final-selection schema version is invalid")
     if (
         set(payload) != required
         or payload["study_id"] != STUDY_ID
-        or type(payload["selection_schema_version"]) is not int
-        or payload["selection_schema_version"] != 1
         or not isinstance(payload["selection_policy"], str)
         or payload["selection_policy"] not in {
             "tranco-bound-order-with-qualified-selected-wt6-pairs",
@@ -1076,12 +1085,25 @@ def _validate_pilot_compatibility(value: object) -> None:
             "source",
             "provenance_sha256",
             "artifact_sha256",
+            "qualification_authority",
+            "qualification_authority_sha256",
         }
         or finalized["source"] != "frozen-pilot-compatibility-inputs"
         or not _digest(finalized["provenance_sha256"])
         or finalized["artifact_sha256"] != parameter_hashes
     ):
         raise ValueError("final-selection finalized pilot bundle is invalid")
+    # Import lazily: class_attestation imports class_fitting, which imports this
+    # module for cohort validation.
+    from .class_attestation import validate_class_qualification_authority
+
+    authority = validate_class_qualification_authority(
+        finalized["qualification_authority"]
+    )
+    if finalized["qualification_authority_sha256"] != sha256_bytes(
+        canonical_json_bytes(authority)
+    ):
+        raise ValueError("final-selection qualification authority digest is invalid")
 
 
 def _validate_feasible_pair_rule(

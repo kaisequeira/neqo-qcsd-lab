@@ -282,6 +282,7 @@ def parser() -> argparse.ArgumentParser:
     class_study.add_argument("--evaluation-receipt", type=Path)
     class_study.add_argument("--cohort-version", action=_SinglePositiveInteger)
     class_study.add_argument("--build-execution-receipt", type=Path)
+    class_study.add_argument("--pinned-cdp-receipt", type=Path)
     class_study.add_argument("--reference-receipt", type=Path)
     class_study.add_argument("--code-gate-receipt", type=Path)
     class_study.add_argument("--controlled-qualification-receipt", type=Path)
@@ -694,6 +695,7 @@ def main(argv: list[str] | None = None) -> None:
                 evaluation_receipt=absolute(args.evaluation_receipt),
                 cohort_version=args.cohort_version,
                 build_execution_receipt=absolute(args.build_execution_receipt),
+                pinned_cdp_receipt=absolute(args.pinned_cdp_receipt),
                 reference_receipt=absolute(args.reference_receipt),
                 code_gate_receipt=absolute(args.code_gate_receipt),
                 controlled_qualification_receipt=absolute(

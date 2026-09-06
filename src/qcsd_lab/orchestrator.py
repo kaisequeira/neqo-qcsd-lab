@@ -25,6 +25,7 @@ import yaml
 
 from . import capture_session as capture_engine
 from .class_acquisition import validate_class_study_preparation
+from .class_study import STUDY_ID
 from .defenses import defense_from_runtime_identity
 from .experiment import (
     KERNEL_TX_EVIDENCE_DIRECTORY,
@@ -69,7 +70,6 @@ from .parameters import (
     validate_parameter_artifact,
 )
 from .profiles import UDP_PAYLOAD_CEILING_BY_PROFILE
-from .class_study import STUDY_ID
 from .util import (
     LAB_ROOT,
     SOURCE_METADATA_KEYS,
@@ -354,13 +354,171 @@ def _load_successor_campaign_context(
     }
 
 
-def load_campaign(path: Path) -> Campaign:
+_CLASS_FITTED_EVIDENCE_ROLES = frozenset(
+    {"pilot-compatibility", "certification", "formal"}
+)
+
+
+def _manifest_qualification_authority(path: Path, *, trust_root: Path) -> dict[str, Any]:
+    """Read the authority carried by one trusted named qualification manifest."""
+
+    from .class_attestation import validate_class_qualification_authority
+    from .class_study import canonical_json_sha256
+
+    manifest_path = _trusted_regular_input(
+        path,
+        root=trust_root,
+        label="class-study named qualification-set manifest",
+    )
+    manifest = load_json(manifest_path)
+    if not isinstance(manifest, Mapping):
+        raise TypeError("class-study named qualification-set manifest is malformed")
+    authority = validate_class_qualification_authority(
+        manifest.get("qualification_authority")
+    )
+    if manifest.get("qualification_authority_sha256") != canonical_json_sha256(authority):
+        raise ValueError("class-study named qualification authority digest is invalid")
+    return authority
+
+
+def _frozen_qualification_authority(
+    frozen_inputs: Path,
+    *,
+    manifest_authority: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Validate a manifest authority against its result-local foundation copy.
+
+    A captured manifest intentionally preserves the original canonical
+    foundation path.  The frozen copy has a result-local path, so reconstruct
+    the authority from that fully validated copy and permit only that one path
+    field to differ.  Every hash, payload hash, build identity and source field
+    must remain byte-for-byte identical.
+
+    This relocation allowance is deliberately limited to the foundation
+    receipt itself.  That receipt's hash-bound build, gate and result paths are
+    canonical external evidence prerequisites and must remain available for
+    every deep revalidation.  A copied result directory is therefore not a
+    standalone evidence archive; portability is provided by the separately
+    verified handoff product.
+    """
+
+    from .class_attestation import (
+        class_qualification_authority,
+        validate_class_qualification_authority,
+    )
+
+    candidate = validate_class_qualification_authority(manifest_authority)
+    foundation_path = _trusted_regular_input(
+        frozen_inputs / "class-study-foundation.json",
+        root=frozen_inputs,
+        label="frozen class-study foundation attestation",
+    )
+    local = class_qualification_authority(
+        foundation_path,
+        deep_code_gate=True,
+        runtime_role="collection",
+    )
+    relocated = {
+        **candidate,
+        "foundation_attestation": {
+            **candidate["foundation_attestation"],
+            "path": local["foundation_attestation"]["path"],
+        },
+    }
+    if relocated != local:
+        raise ValueError(
+            "frozen class qualification authority differs from its foundation/build/source"
+        )
+    return candidate
+
+
+def _class_fitted_qualification_authority(
+    *,
+    evidence_role: str | None,
+    qualification_set: str | None,
+    config_root: Path,
+    successor_context: Mapping[str, Any] | None,
+    frozen_inputs: Path | None,
+    expected_authority: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Resolve the mandatory external authority for fitted class defenses."""
+
+    if evidence_role not in _CLASS_FITTED_EVIDENCE_ROLES:
+        return None
+    if qualification_set is None:
+        raise ValueError("fitted class-study campaign has no qualification set")
+    from .chaff_qualification import NAMED_QUALIFICATION_SET_MANIFEST
+
+    if frozen_inputs is not None:
+        qualification_root = frozen_inputs / "chaff-qualifications"
+        trust_root = frozen_inputs
+    elif successor_context is not None:
+        qualification_root = Path(str(successor_context["qualification_set_root"]))
+        trust_root = Path(str(successor_context["restart_root"]))
+    else:
+        qualification_root = (
+            config_root / "chaff-qualification-store" / "sets" / qualification_set
+        )
+        trust_root = config_root
+    manifest_authority = _manifest_qualification_authority(
+        qualification_root / NAMED_QUALIFICATION_SET_MANIFEST,
+        trust_root=trust_root,
+    )
+
+    if frozen_inputs is not None:
+        manifest_authority = _frozen_qualification_authority(
+            frozen_inputs,
+            manifest_authority=manifest_authority,
+        )
+    if frozen_inputs is None:
+        from .class_attestation import class_qualification_authority
+
+        if expected_authority is None:
+            foundation_raw = os.environ.get(CLASS_STUDY_FOUNDATION_ENV)
+            if not foundation_raw:
+                raise ValueError(
+                    "fitted class-study campaign requires its foundation qualification authority"
+                )
+        else:
+            foundation = expected_authority.get("foundation_attestation")
+            foundation_raw = (
+                foundation.get("path") if isinstance(foundation, Mapping) else None
+            )
+            if not isinstance(foundation_raw, str) or not foundation_raw:
+                raise ValueError("expected class qualification authority has no foundation path")
+        reconstructed = class_qualification_authority(
+            Path(foundation_raw),
+            deep_code_gate=True,
+            runtime_role="collection",
+        )
+        if expected_authority is not None and reconstructed != expected_authority:
+            raise ValueError(
+                "expected class qualification authority differs from its foundation"
+            )
+        expected_authority = reconstructed
+    if expected_authority is not None:
+        from .class_attestation import validate_class_qualification_authority
+
+        expected = validate_class_qualification_authority(expected_authority)
+        if manifest_authority != expected:
+            raise ValueError(
+                "class fitting qualification authority differs from the expected foundation"
+            )
+    return manifest_authority
+
+
+def load_campaign(
+    path: Path,
+    *,
+    expected_qualification_authority: Mapping[str, Any] | None = None,
+) -> Campaign:
     """Load the single consolidated campaign schema."""
 
     return _load_campaign(
         path,
         frozen_inputs=None,
         allow_historical_research_bundle=False,
+        expected_qualification_authority=expected_qualification_authority,
     )
 
 
@@ -369,6 +527,7 @@ def _load_campaign(
     *,
     frozen_inputs: Path | None,
     allow_historical_research_bundle: bool = False,
+    expected_qualification_authority: Mapping[str, Any] | None = None,
 ) -> Campaign:
     path = Path(os.path.abspath(path))
     try:
@@ -501,6 +660,14 @@ def _load_campaign(
         workload_ids=tuple(workload.id for workload in workloads),
         workload_hashes={workload.id: workload.sha256 for workload in workloads},
     )
+    qualification_authority = _class_fitted_qualification_authority(
+        evidence_role=evidence_role,
+        qualification_set=qualification_set,
+        config_root=config_root,
+        successor_context=successor_context,
+        frozen_inputs=frozen_inputs,
+        expected_authority=expected_qualification_authority,
+    )
     class_qualification_context = None
     if successor_context is not None and frozen_inputs is None and qualification_set is not None:
         from .class_fitting import QualificationContext
@@ -512,6 +679,7 @@ def _load_campaign(
             prefix_spec_root=(
                 restart_root / "artifacts" / f"{STUDY_ID}-authoritative-fitting-prefix-specs"
             ),
+            qualification_authority=qualification_authority,
             expected_qualification_set=qualification_set,
         )
     defenses = _load_defenses(
@@ -528,6 +696,7 @@ def _load_campaign(
         allow_historical_research_bundle=allow_historical_research_bundle,
         evidence_role=evidence_role,
         class_qualification_context=class_qualification_context,
+        class_qualification_authority=qualification_authority,
         qualification_set=qualification_set,
         expected_successor_study_id=(
             str(successor_context["study_id"]) if successor_context is not None else None
@@ -1708,6 +1877,7 @@ def _load_defenses(
     allow_historical_research_bundle: bool = False,
     evidence_role: str | None = None,
     class_qualification_context: object | None = None,
+    class_qualification_authority: Mapping[str, Any] | None = None,
     qualification_set: str | None = None,
     expected_successor_study_id: str | None = None,
     expected_successor_restart_sha256: str | None = None,
@@ -1901,6 +2071,7 @@ def _load_defenses(
                         None if class_qualification_context is not None else base.parent
                     ),
                     qualification_context=class_qualification_context,
+                    qualification_authority=class_qualification_authority,
                     expected_qualification_set=qualification_set,
                     campaign_evidence_role=evidence_role,
                     expected_successor_study_id=expected_successor_study_id,
@@ -1922,6 +2093,7 @@ def _load_defenses(
                     allow_historical_research_bundle=allow_historical_research_bundle,
                     qualification_inputs_root=frozen_inputs,
                     qualification_context=None,
+                    qualification_authority=class_qualification_authority,
                     expected_qualification_set=qualification_set,
                     campaign_evidence_role=evidence_role,
                     expected_successor_study_id=expected_successor_study_id,
@@ -2438,6 +2610,7 @@ def _fitting_generation_json_bytes(value: Mapping[str, Any]) -> bytes:
 def verify_class_study_fitting_generation(
     *,
     source_result_root: Path,
+    expected_qualification_authority: Mapping[str, Any],
     campaign_path: Path | None = None,
     frozen_result_root: Path | None = None,
 ) -> dict[str, Any]:
@@ -2453,9 +2626,15 @@ def verify_class_study_fitting_generation(
         raise ValueError("fitting-generation verification requires one campaign or frozen result")
     frozen = frozen_result_root is not None
     campaign = (
-        _campaign_from_frozen_inputs(Path(frozen_result_root))
+        _campaign_from_frozen_inputs(
+            Path(frozen_result_root),
+            expected_qualification_authority=expected_qualification_authority,
+        )
         if frozen
-        else load_campaign(Path(campaign_path))
+        else load_campaign(
+            Path(campaign_path),
+            expected_qualification_authority=expected_qualification_authority,
+        )
     )
     role = campaign.evidence_role
     stage = _FITTING_GENERATION_STAGES.get(str(role))
@@ -2503,11 +2682,16 @@ def verify_class_study_fitting_generation(
     [sidecar_root] = sidecar_roots
     [prefix_spec_root] = prefix_roots
 
+    from .class_attestation import validate_class_qualification_authority
+    from .class_fitting import BUNDLE_FILES as CLASS_BUNDLE_FILES
+    from .class_fitting import PROVENANCE_FILE as CLASS_PROVENANCE_FILE
     from .class_fitting import (
-        BUNDLE_FILES as CLASS_BUNDLE_FILES,
-        PROVENANCE_FILE as CLASS_PROVENANCE_FILE,
         QualificationContext,
         verify_class_fitting_bundle,
+    )
+
+    qualification_authority = validate_class_qualification_authority(
+        expected_qualification_authority
     )
 
     source = Path(os.path.abspath(source_result_root))
@@ -2522,6 +2706,7 @@ def verify_class_study_fitting_generation(
             prefix_spec_root=prefix_spec_root,
             require_current_implementation=not frozen,
             expected_qualification_set=campaign.chaff_qualification_set,
+            qualification_authority=qualification_authority,
         ),
         source_result_root=source,
     )
@@ -3780,6 +3965,14 @@ def _materialize_inputs(
             expected_workload_ids=tuple(workload.id for workload in campaign.workloads),
             require_current_implementation=True,
         )
+    frozen_class_qualification_authority = _class_fitted_qualification_authority(
+        evidence_role=campaign.evidence_role,
+        qualification_set=campaign.chaff_qualification_set,
+        config_root=inputs,
+        successor_context=None,
+        frozen_inputs=inputs,
+        expected_authority=None,
+    )
     runtime_defenses: list[capture_engine.Defense] = []
     for defense in campaign.defenses:
         runtime = defense
@@ -3875,6 +4068,7 @@ def _materialize_inputs(
                     workload.id: workload.sha256 for workload in campaign.workloads
                 },
                 qualification_inputs_root=inputs,
+                qualification_authority=frozen_class_qualification_authority,
                 expected_qualification_set=campaign.chaff_qualification_set,
                 campaign_evidence_role=campaign.evidence_role,
                 expected_successor_study_id=(
@@ -5456,6 +5650,7 @@ def _campaign_from_frozen_inputs(
     root: Path,
     *,
     allow_historical_research_bundle: bool = False,
+    expected_qualification_authority: Mapping[str, Any] | None = None,
 ) -> Campaign:
     inputs = (root / "inputs").resolve()
     if inputs.is_symlink() or not inputs.is_dir():
@@ -5464,6 +5659,7 @@ def _campaign_from_frozen_inputs(
         inputs / "campaign.yml",
         frozen_inputs=inputs,
         allow_historical_research_bundle=allow_historical_research_bundle,
+        expected_qualification_authority=expected_qualification_authority,
     )
 
 

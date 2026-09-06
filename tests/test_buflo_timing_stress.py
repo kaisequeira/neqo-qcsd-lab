@@ -1378,7 +1378,7 @@ def test_schema_six_regression_receipt_binds_stress_rejects_aborted_five_and_pre
     monkeypatch.setattr(
         buflo_study,
         "_validate_timing_stress_binding",
-        lambda value: (
+        lambda value, **_kwargs: (
             called.append(value)
             or {
                 "passed": True,
@@ -1458,7 +1458,7 @@ def test_current_and_standalone_regression_stress_binding_rejects_every_identity
     monkeypatch.setattr(
         buflo_study,
         "_validate_timing_stress_binding",
-        lambda value: stress,
+        lambda value, **_kwargs: stress,
     )
 
     with pytest.raises(ValueError, match="timing-stress"):
@@ -1495,7 +1495,7 @@ def test_current_regression_stress_binding_accepts_exact_sibling(
     monkeypatch.setattr(
         buflo_study,
         "_validate_timing_stress_binding",
-        lambda value: stress,
+        lambda value, **_kwargs: stress,
     )
 
     assert (

@@ -223,6 +223,7 @@ def validate_parameter_artifact(
     expected_workloads: Mapping[str, object] | Collection[str] | None = None,
     qualification_inputs_root: Path | None = None,
     qualification_context: object | None = None,
+    qualification_authority: Mapping[str, Any] | None = None,
     expected_qualification_set: str | None = None,
     campaign_evidence_role: str | None = None,
     expected_successor_study_id: str | None = None,
@@ -250,6 +251,7 @@ def validate_parameter_artifact(
         allow_historical_research_bundle=False,
         qualification_inputs_root=qualification_inputs_root,
         qualification_context=qualification_context,
+        qualification_authority=qualification_authority,
         expected_qualification_set=expected_qualification_set,
         frozen_qualification_inputs=False,
         campaign_evidence_role=campaign_evidence_role,
@@ -272,6 +274,7 @@ def validate_frozen_parameter_artifact(
     allow_historical_research_bundle: bool = False,
     qualification_inputs_root: Path | None = None,
     qualification_context: object | None = None,
+    qualification_authority: Mapping[str, Any] | None = None,
     expected_qualification_set: str | None = None,
     campaign_evidence_role: str | None = None,
     expected_successor_study_id: str | None = None,
@@ -304,6 +307,7 @@ def validate_frozen_parameter_artifact(
         allow_historical_research_bundle=allow_historical_research_bundle,
         qualification_inputs_root=qualification_inputs_root,
         qualification_context=qualification_context,
+        qualification_authority=qualification_authority,
         expected_qualification_set=expected_qualification_set,
         frozen_qualification_inputs=True,
         campaign_evidence_role=campaign_evidence_role,
@@ -328,6 +332,7 @@ def _validate_parameter_artifact(
     allow_historical_research_bundle: bool,
     qualification_inputs_root: Path | None,
     qualification_context: object | None,
+    qualification_authority: Mapping[str, Any] | None,
     expected_qualification_set: str | None,
     frozen_qualification_inputs: bool,
     campaign_evidence_role: str | None,
@@ -367,8 +372,9 @@ def _validate_parameter_artifact(
             expected_workloads=expected_workloads,
         )
     if receipt.get("artifact_type") == "qcsd-class-study-research-defense-bundle":
+        from .class_attestation import validate_class_qualification_authority
+        from .class_fitting import BUNDLE_FILES as CLASS_BUNDLE_FILES
         from .class_fitting import (
-            BUNDLE_FILES as CLASS_BUNDLE_FILES,
             QualificationContext,
             class_research_parameter_record,
         )
@@ -394,6 +400,16 @@ def _validate_parameter_artifact(
         )
         if not isinstance(qualification_set, str) or not qualification_set:
             raise ValueError("class-study provenance has no qualification-set binding")
+        context_authority = (
+            qualification_context.qualification_authority
+            if isinstance(qualification_context, QualificationContext)
+            else None
+        )
+        authority = validate_class_qualification_authority(
+            qualification_authority
+            if qualification_authority is not None
+            else context_authority
+        )
         if qualification_context is not None:
             if frozen_qualification_inputs:
                 raise ValueError(
@@ -406,6 +422,10 @@ def _validate_parameter_artifact(
             if not isinstance(qualification_context, QualificationContext):
                 raise TypeError("class-study qualification context must be a QualificationContext")
             context = qualification_context
+            if context.qualification_authority != authority:
+                raise ValueError(
+                    "class-study qualification context has another foundation authority"
+                )
             if (
                 expected_qualification_set is not None
                 and context.expected_qualification_set != expected_qualification_set
@@ -418,6 +438,7 @@ def _validate_parameter_artifact(
                 sidecar_root=root / "chaff-qualifications",
                 prefix_spec_root=root / "chaff-prefix-specs",
                 require_current_implementation=False,
+                qualification_authority=authority,
                 expected_qualification_set=expected_qualification_set,
             )
         else:
@@ -427,6 +448,7 @@ def _validate_parameter_artifact(
                 sidecar_root=root / "chaff-qualification-store" / "sets" / qualification_set,
                 prefix_spec_root=root / "chaff-prefix-specs" / "sets" / qualification_set,
                 require_current_implementation=True,
+                qualification_authority=authority,
                 expected_qualification_set=expected_qualification_set,
             )
         expected_ids = tuple(expected_workloads or ())

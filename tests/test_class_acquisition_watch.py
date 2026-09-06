@@ -38,6 +38,14 @@ def _write_receipt(path: Path, receipt_type: str, payload: dict[str, Any]) -> No
     path.write_bytes(_canonical(_receipt(receipt_type, payload)))
 
 
+def _write_build_execution(path: Path, payload: dict[str, Any]) -> None:
+    value = copy.deepcopy(payload)
+    value["payload_sha256"] = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    path.write_bytes(_canonical(value))
+
+
 def _batch(prefix: str, body: dict[str, Any]) -> dict[str, Any]:
     value = copy.deepcopy(body)
     value["batch_id"] = f"{prefix}-{hashlib.sha256(_canonical(body)).hexdigest()}"
@@ -59,6 +67,9 @@ class Fixture:
     paths: watch.WatchPaths
     image: str
     candidate_ids: list[str]
+    foundation_path: Path
+    pinned_cdp_path: Path
+    build_execution_path: Path
 
     def advance_checkpoint(self) -> None:
         value = json.loads(self.paths.checkpoint.read_text(encoding="utf-8"))
@@ -81,6 +92,16 @@ def acquisition(tmp_path: Path) -> Fixture:
     paths.workload_root.mkdir(parents=True)
     paths.launcher.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     paths.launcher.chmod(0o755)
+    (paths.lab_root / "tools").mkdir()
+    (paths.lab_root / "tools/windows_docker_storage_probe.ps1").write_text(
+        "# exact fixture storage probe\n", encoding="utf-8"
+    )
+    (paths.lab_root / "neqo-qcsd").mkdir()
+    (paths.lab_root / "Dockerfile").write_text("FROM scratch\n", encoding="utf-8")
+    (paths.lab_root / "uv.lock").write_text("fixture uv lock\n", encoding="utf-8")
+    (paths.lab_root / "neqo-qcsd/Cargo.lock").write_text(
+        "fixture Cargo lock\n", encoding="utf-8"
+    )
 
     candidate_ids = [f"tranco-{rank:07d}" for rank in range(1, watch.CANDIDATE_COUNT + 1)]
     catalogue_payload = {
@@ -103,13 +124,292 @@ def acquisition(tmp_path: Path) -> Fixture:
     catalogue = json.loads(paths.candidate_catalogue.read_text(encoding="utf-8"))
     catalogue_sha256 = hashlib.sha256(paths.candidate_catalogue.read_bytes()).hexdigest()
 
+    image = "sha256:" + "a" * 64
+    collection_image = "sha256:" + "e" * 64
+    collection_source = {
+        "image_digest": collection_image,
+        "lab_commit": "b" * 40,
+        "lab_dirty": False,
+        "lab_patch_sha256": watch.EMPTY_SHA256,
+        "neqo_commit": "c" * 40,
+        "neqo_pinned_commit": "c" * 40,
+        "neqo_dirty": False,
+        "neqo_patch_sha256": watch.EMPTY_SHA256,
+    }
+    prepare_source = {**collection_source, "image_digest": image}
+    build_execution_path = (
+        paths.lab_root / "artifacts/buflo-study/build-execution-v23.json"
+    )
+    build_execution_path.parent.mkdir(parents=True)
+    reference_image = "sha256:" + "f" * 64
+    build_images = {
+        "collection": {
+            "tag": watch.BUILD_IMAGE_TAGS["collection"],
+            "id": collection_image,
+            "repo_digests": [],
+        },
+        "prepare": {
+            "tag": watch.BUILD_IMAGE_TAGS["prepare"],
+            "id": image,
+            "repo_digests": [],
+        },
+        "reference": {
+            "tag": watch.BUILD_IMAGE_TAGS["reference"],
+            "id": reference_image,
+            "repo_digests": [],
+        },
+    }
+    build_root = str(paths.lab_root.resolve())
+    build_commands = []
+    for target in ("collection", "prepare", "reference"):
+        build_commands.append(
+            {
+                "target": target,
+                "argv": [
+                    "docker",
+                    "--host",
+                    "unix:///var/run/docker.sock",
+                    "build",
+                    "--pull",
+                    "--no-cache",
+                    "--iidfile",
+                    (
+                        f"{build_root}/artifacts/buflo-study/"
+                        f".build-iids-v23.ABC123/{target}.iid"
+                    ),
+                    "--target",
+                    target,
+                    "--tag",
+                    build_images[target]["tag"],
+                    "--file",
+                    f"{build_root}/Dockerfile",
+                    build_root,
+                ],
+                "exit_code": 0,
+                "image_id": build_images[target]["id"],
+            }
+        )
+    build_inputs = {
+        "schema_version": 1,
+        "artifact_type": "qcsd-study-build-inputs",
+        "rust_base_image": watch.BUILD_RUST_BASE_IMAGE,
+        "debian_base_image": watch.BUILD_DEBIAN_BASE_IMAGE,
+        "uv_lock_sha256": hashlib.sha256(
+            (paths.lab_root / "uv.lock").read_bytes()
+        ).hexdigest(),
+        "cargo_lock_sha256": hashlib.sha256(
+            (paths.lab_root / "neqo-qcsd/Cargo.lock").read_bytes()
+        ).hexdigest(),
+    }
+    _write_build_execution(
+        build_execution_path,
+        {
+            "schema_version": 3,
+            "artifact_type": watch.BUILD_EXECUTION_TYPE,
+            "cohort_version": 23,
+            "started_at": "2026-08-28T00:00:00+00:00",
+            "finished_at": "2026-08-28T01:00:00+00:00",
+            "duration_seconds": 3600.0,
+            "docker": {
+                "client_version": "29.0.1",
+                "server_version": "29.0.1",
+                "context": "default",
+                "endpoint": "unix:///var/run/docker.sock",
+                "server_name": "fixture-docker",
+                "server_operating_system": "Ubuntu 24.04",
+                "server_os_type": "linux",
+                "server_architecture": "x86_64",
+                "server_id": "fixture-server-id",
+            },
+            "commands": build_commands,
+            "source": collection_source,
+            "images": build_images,
+            "build_inputs": build_inputs,
+            "dockerfile_sha256": hashlib.sha256(
+                (paths.lab_root / "Dockerfile").read_bytes()
+            ).hexdigest(),
+            "cache_policy": {
+                "pull": True,
+                "no_cache": True,
+                "scope": (
+                    "Docker-layer-cache-disabled;"
+                    "declared-BuildKit-dependency-cache-mounts-only"
+                ),
+            },
+            "host_storage_preflight": {
+                "schema_version": 1,
+                "applicable": False,
+                "platform": "other-host",
+                "platform_detection": {
+                    "schema_version": 1,
+                    "probe": "wsl-multi-signal-v1",
+                    "kernel_release": "6.8.0-fixture",
+                    "proc_version": "Linux version 6.8.0-fixture",
+                    "wsl_interop_env_present": False,
+                    "wsl_distro_name_env_present": False,
+                    "run_wsl_directory_present": False,
+                },
+                "policy": watch.BUILD_HOST_STORAGE_POLICY,
+                "required_available_bytes": watch.BUILD_WSL_HOST_MIN_AVAILABLE_BYTES,
+                "observations": [],
+                "minimum_available_bytes": None,
+                "passed": True,
+            },
+            "role_provenance": {
+                "schema_version": 1,
+                "sources": {
+                    target: {
+                        **collection_source,
+                        "image_digest": build_images[target]["id"],
+                    }
+                    for target in ("collection", "prepare", "reference")
+                },
+                "build_inputs": {
+                    "collection": copy.deepcopy(build_inputs),
+                    "prepare": copy.deepcopy(build_inputs),
+                    "reference": None,
+                },
+            },
+        },
+    )
+    build = json.loads(build_execution_path.read_text(encoding="utf-8"))
+    build_sha256 = hashlib.sha256(build_execution_path.read_bytes()).hexdigest()
+    build_binding = {
+        "path": "/lab/artifacts/buflo-study/build-execution-v23.json",
+        "sha256": build_sha256,
+        "payload_sha256": build["payload_sha256"],
+    }
+    build_identity = {
+        "cohort_version": 23,
+        "sha256": build_sha256,
+        "collection_image": collection_image,
+        "started_at": build["started_at"],
+        "finished_at": build["finished_at"],
+    }
+    pinned_cdp_path = (
+        paths.lab_root / "artifacts/buflo-study/pinned-cdp-execution-v23.json"
+    )
+    contract_sha256 = hashlib.sha256(
+        _canonical(watch._PINNED_CDP_CONTRACT)
+    ).hexdigest()
+    pinned_payload = {
+        "probe_schema_version": 1,
+        "artifact_type": watch.PINNED_CDP_TYPE,
+        "study_id": watch.STUDY_ID,
+        "cohort_version": 23,
+        "recorded_at": "2026-08-28T02:00:00+00:00",
+        "result": "pass",
+        "build_execution": build_binding,
+        "build_execution_identity": build_identity,
+        "collection_source": collection_source,
+        "prepare_source": prepare_source,
+        "prepare_image_digest": image,
+        "probe_contract": copy.deepcopy(watch._PINNED_CDP_CONTRACT),
+        "probe_contract_sha256": contract_sha256,
+        "observation": {
+            "playwright_version": "1.52.0",
+            "chromium_version": "136.0.7103.113",
+            "chromium_executable": "/usr/bin/chromium",
+            "isolation": {
+                "real_uid": 1000,
+                "effective_uid": 1000,
+                "real_gid": 1000,
+                "effective_gid": 1000,
+                "expected_uid": 1000,
+                "expected_gid": 1000,
+                "effective_capabilities": "0000000000000000",
+                "no_new_privileges": True,
+                "observed_interfaces": ["lo"],
+            },
+            "topology": {
+                "observed_target_types": ["iframe", "page", "shared_worker", "worker"],
+                "event_count": 20,
+                "cross_site_iframe_request": True,
+                "duplicate_request_occurrences": 2,
+                "redirect_terminal_request": True,
+                "worker_network_target_types": ["shared_worker", "worker"],
+                "worker_fetch_paused_on_page": True,
+                "router_closed": True,
+                "ledger_closed": True,
+                "extra_info_closed": True,
+                "browser_closed": True,
+                "server_thread_stopped": True,
+            },
+        },
+    }
+    _write_receipt(pinned_cdp_path, watch.PINNED_CDP_TYPE, pinned_payload)
+    pinned = json.loads(pinned_cdp_path.read_text(encoding="utf-8"))
+    pinned_sha256 = hashlib.sha256(pinned_cdp_path.read_bytes()).hexdigest()
+    pinned_binding = {
+        "path": "/lab/artifacts/buflo-study/pinned-cdp-execution-v23.json",
+        "sha256": pinned_sha256,
+        "payload_sha256": pinned["payload_sha256"],
+        "build_execution": build_binding,
+        "probe_contract_sha256": contract_sha256,
+    }
     foundation_path = paths.lab_root / "artifacts/class-study-foundation-v23.json"
+    hard_gates = []
+    for ordinal, gate in enumerate(watch._FOUNDATION_GATES, 1):
+        evidence_sha256s = [str(ordinal) * 64]
+        if gate == "pinned-cdp-integration-probe":
+            evidence_sha256s = sorted(
+                {
+                    pinned_sha256,
+                    pinned["payload_sha256"],
+                    build_sha256,
+                    build["payload_sha256"],
+                    contract_sha256,
+                }
+            )
+        hard_gates.append(
+            {
+                "ordinal": ordinal,
+                "gate": gate,
+                "gate_identity_sha256": hashlib.sha256(
+                    _canonical({"ordinal": ordinal, "gate": gate})
+                ).hexdigest(),
+                "result": "pass",
+                "evidence_sha256s": evidence_sha256s,
+            }
+        )
     _write_receipt(
         foundation_path,
         watch.FOUNDATION_TYPE,
-        {"study_id": watch.STUDY_ID, "gate": "passed"},
+        {
+            "attestation_schema_version": watch.FOUNDATION_SCHEMA_VERSION,
+            "artifact_type": watch.FOUNDATION_TYPE,
+            "study_id": watch.STUDY_ID,
+            "cohort_version": 23,
+            "recorded_at": "2026-08-28T03:00:00+00:00",
+            "implementation_status": "foundation-ready-for-class-acquisition",
+            "promotion_authority": False,
+            "implementation_scope": "client_only_quic",
+            "paper_equivalent": False,
+            "no_waivers": True,
+            "source": collection_source,
+            "build_execution_identity": build_identity,
+            "evidence": {
+                "build_execution": {
+                    "path": build_binding["path"],
+                    "sha256": build_binding["sha256"],
+                },
+                "pinned_cdp_probe": pinned_binding,
+                "reference": {},
+                "code_gate": {},
+                "controlled_qualification": {},
+                "regression_results": [],
+                "controlled_results": [],
+            },
+            "summary": {
+                "reference_profiles": 8,
+                "regression_samples": 18,
+                "controlled_samples": 160,
+                "pinned_cdp_probe": "pass",
+            },
+            "hard_gates": hard_gates,
+            "all_foundation_gates_passed": True,
+        },
     )
-    image = "sha256:" + "a" * 64
     provenance_payload = {
         "study_id": watch.STUDY_ID,
         "acquisition_schema_version": watch.ACQUISITION_SCHEMA_VERSION,
@@ -122,16 +422,7 @@ def acquisition(tmp_path: Path) -> Fixture:
         },
         "started_at": "2026-08-29T00:00:00Z",
         "image_digest": image,
-        "source": {
-            "image_digest": image,
-            "lab_commit": "b" * 40,
-            "lab_dirty": False,
-            "lab_patch_sha256": watch.EMPTY_SHA256,
-            "neqo_commit": "c" * 40,
-            "neqo_pinned_commit": "c" * 40,
-            "neqo_dirty": False,
-            "neqo_patch_sha256": watch.EMPTY_SHA256,
-        },
+        "source": prepare_source,
         "browser_tool": "playwright-chromium",
         "navigation_implementation": (
             "playwright-cdp-catalogue-domain-boundary-redirect-pin-convergence-v3"
@@ -169,7 +460,14 @@ def acquisition(tmp_path: Path) -> Fixture:
     }
     _write_receipt(paths.checkpoint, watch.CHECKPOINT_TYPE, checkpoint_payload)
     watch._ensure_state_namespace(paths)
-    return Fixture(paths, image, candidate_ids)
+    return Fixture(
+        paths,
+        image,
+        candidate_ids,
+        foundation_path,
+        pinned_cdp_path,
+        build_execution_path,
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -1042,6 +1340,195 @@ def _restore_provenance_binding(acquisition: Fixture) -> Fixture:
     ).hexdigest()
     _write_receipt(acquisition.paths.checkpoint, watch.CHECKPOINT_TYPE, checkpoint_payload)
     return acquisition
+
+
+def _replace_foundation_and_rebind_provenance(
+    acquisition: Fixture, payload: dict[str, Any]
+) -> None:
+    _write_receipt(acquisition.foundation_path, watch.FOUNDATION_TYPE, payload)
+    provenance = json.loads(acquisition.paths.provenance.read_text(encoding="utf-8"))
+    provenance_payload = copy.deepcopy(provenance["payload"])
+    provenance_payload["foundation_attestation"]["sha256"] = hashlib.sha256(
+        acquisition.foundation_path.read_bytes()
+    ).hexdigest()
+    _write_receipt(acquisition.paths.provenance, watch.PROVENANCE_TYPE, provenance_payload)
+
+
+def _replace_pinned_and_rebind_foundation(
+    acquisition: Fixture, payload: dict[str, Any]
+) -> None:
+    _write_receipt(acquisition.pinned_cdp_path, watch.PINNED_CDP_TYPE, payload)
+    pinned = json.loads(acquisition.pinned_cdp_path.read_text(encoding="utf-8"))
+    foundation = json.loads(acquisition.foundation_path.read_text(encoding="utf-8"))
+    foundation_payload = copy.deepcopy(foundation["payload"])
+    binding = foundation_payload["evidence"]["pinned_cdp_probe"]
+    binding["sha256"] = hashlib.sha256(acquisition.pinned_cdp_path.read_bytes()).hexdigest()
+    binding["payload_sha256"] = pinned["payload_sha256"]
+    binding["build_execution"] = copy.deepcopy(payload["build_execution"])
+    binding["probe_contract_sha256"] = payload["probe_contract_sha256"]
+    foundation_payload["hard_gates"][-1]["evidence_sha256s"] = sorted(
+        {
+            binding["sha256"],
+            binding["payload_sha256"],
+            binding["build_execution"]["sha256"],
+            binding["build_execution"]["payload_sha256"],
+            binding["probe_contract_sha256"],
+        }
+    )
+    _replace_foundation_and_rebind_provenance(acquisition, foundation_payload)
+
+
+def _replace_build_and_rebind_foundation(
+    acquisition: Fixture, payload: dict[str, Any]
+) -> None:
+    """Reseal every outer digest so build semantics are the only rejection."""
+
+    _write_build_execution(acquisition.build_execution_path, payload)
+    build = json.loads(acquisition.build_execution_path.read_text(encoding="utf-8"))
+    build_sha256 = hashlib.sha256(acquisition.build_execution_path.read_bytes()).hexdigest()
+    build_binding = {
+        "path": "/lab/artifacts/buflo-study/build-execution-v23.json",
+        "sha256": build_sha256,
+        "payload_sha256": build["payload_sha256"],
+    }
+
+    pinned = json.loads(acquisition.pinned_cdp_path.read_text(encoding="utf-8"))
+    pinned_payload = copy.deepcopy(pinned["payload"])
+    pinned_payload["build_execution"] = copy.deepcopy(build_binding)
+    pinned_payload["build_execution_identity"]["sha256"] = build_sha256
+    _write_receipt(acquisition.pinned_cdp_path, watch.PINNED_CDP_TYPE, pinned_payload)
+    pinned = json.loads(acquisition.pinned_cdp_path.read_text(encoding="utf-8"))
+    pinned_sha256 = hashlib.sha256(acquisition.pinned_cdp_path.read_bytes()).hexdigest()
+
+    foundation = json.loads(acquisition.foundation_path.read_text(encoding="utf-8"))
+    foundation_payload = copy.deepcopy(foundation["payload"])
+    foundation_payload["build_execution_identity"]["sha256"] = build_sha256
+    foundation_payload["evidence"]["build_execution"]["sha256"] = build_sha256
+    pinned_binding = foundation_payload["evidence"]["pinned_cdp_probe"]
+    pinned_binding["sha256"] = pinned_sha256
+    pinned_binding["payload_sha256"] = pinned["payload_sha256"]
+    pinned_binding["build_execution"] = copy.deepcopy(build_binding)
+    foundation_payload["hard_gates"][-1]["evidence_sha256s"] = sorted(
+        {
+            pinned_sha256,
+            pinned["payload_sha256"],
+            build_sha256,
+            build["payload_sha256"],
+            pinned_binding["probe_contract_sha256"],
+        }
+    )
+    _replace_foundation_and_rebind_provenance(acquisition, foundation_payload)
+
+
+@pytest.mark.parametrize(
+    ("field_path", "replacement", "message"),
+    (
+        (("schema_version",), 2, "execution schema"),
+        (("duration_seconds",), 60.0, "build duration"),
+        (("commands", 0, "argv", 5), "--cache", "--pull --no-cache"),
+        (("cache_policy", "no_cache"), False, "cache policy"),
+        (("build_inputs", "uv_lock_sha256"), "1" * 64, "checkout binding"),
+        (
+            ("role_provenance", "sources", "reference", "lab_commit"),
+            "1" * 40,
+            "different source snapshots",
+        ),
+        (("host_storage_preflight", "passed"), False, "storage preflight schema"),
+    ),
+)
+def test_watcher_rejects_fully_resealed_schema3_build_tampering(
+    acquisition: Fixture,
+    field_path: tuple[str | int, ...],
+    replacement: Any,
+    message: str,
+) -> None:
+    build = json.loads(acquisition.build_execution_path.read_text(encoding="utf-8"))
+    payload = copy.deepcopy(build)
+    payload.pop("payload_sha256")
+    target: Any = payload
+    for component in field_path[:-1]:
+        target = target[component]
+    target[field_path[-1]] = replacement
+
+    _replace_build_and_rebind_foundation(acquisition, payload)
+
+    with pytest.raises(watch.WatchError, match=message):
+        watch._validate_immutable_binding(acquisition.paths)
+
+
+def test_watcher_rejects_fully_resealed_relocated_build_root(
+    acquisition: Fixture,
+) -> None:
+    build = json.loads(acquisition.build_execution_path.read_text(encoding="utf-8"))
+    payload = copy.deepcopy(build)
+    payload.pop("payload_sha256")
+    replacement_root = "/unrelated/neqo-qcsd-lab"
+    for command in payload["commands"]:
+        target = command["target"]
+        iid_index = command["argv"].index("--iidfile") + 1
+        command["argv"][iid_index] = (
+            f"{replacement_root}/artifacts/buflo-study/"
+            f".build-iids-v23.ABC123/{target}.iid"
+        )
+        command["argv"][-2] = f"{replacement_root}/Dockerfile"
+        command["argv"][-1] = replacement_root
+
+    _replace_build_and_rebind_foundation(acquisition, payload)
+
+    with pytest.raises(watch.WatchError, match="command root differs"):
+        watch._validate_immutable_binding(acquisition.paths)
+
+
+def test_watcher_rejects_resealed_foundation_without_pinned_cdp_gate(
+    acquisition: Fixture,
+) -> None:
+    foundation = json.loads(acquisition.foundation_path.read_text(encoding="utf-8"))
+    payload = copy.deepcopy(foundation["payload"])
+    payload["evidence"].pop("pinned_cdp_probe")
+
+    _replace_foundation_and_rebind_provenance(acquisition, payload)
+
+    with pytest.raises(watch.WatchError, match="evidence inventory"):
+        watch._validate_immutable_binding(acquisition.paths)
+
+
+def test_watcher_rejects_resealed_pinned_cdp_topology_tamper(
+    acquisition: Fixture,
+) -> None:
+    pinned = json.loads(acquisition.pinned_cdp_path.read_text(encoding="utf-8"))
+    payload = copy.deepcopy(pinned["payload"])
+    payload["observation"]["topology"]["worker_fetch_paused_on_page"] = False
+
+    _replace_pinned_and_rebind_foundation(acquisition, payload)
+
+    with pytest.raises(watch.WatchError, match="topology observation"):
+        watch._validate_immutable_binding(acquisition.paths)
+
+
+def test_watcher_rejects_resealed_pinned_cdp_wrong_build(
+    acquisition: Fixture,
+) -> None:
+    pinned = json.loads(acquisition.pinned_cdp_path.read_text(encoding="utf-8"))
+    payload = copy.deepcopy(pinned["payload"])
+    payload["build_execution"]["sha256"] = "f" * 64
+
+    _replace_pinned_and_rebind_foundation(acquisition, payload)
+
+    with pytest.raises(watch.WatchError, match="source/build/contract"):
+        watch._validate_immutable_binding(acquisition.paths)
+
+
+def test_watcher_rejects_resealed_pinned_cdp_wrong_cohort(
+    acquisition: Fixture,
+) -> None:
+    pinned = json.loads(acquisition.pinned_cdp_path.read_text(encoding="utf-8"))
+    payload = copy.deepcopy(pinned["payload"])
+    payload["cohort_version"] = 24
+
+    _replace_pinned_and_rebind_foundation(acquisition, payload)
+
+    with pytest.raises(watch.WatchError, match="source/build/contract"):
+        watch._validate_immutable_binding(acquisition.paths)
 
 
 def test_due_run_must_advance_checkpoint(acquisition: Fixture) -> None:
@@ -2892,9 +3379,21 @@ def test_internal_scope_accepts_each_current_canonical_action_binding(
 ) -> None:
     paths = watch.WatchPaths.from_lab_root(tmp_path, state_base=tmp_path / "state")
     binding = watch.AcquisitionBinding(
-        "image@sha256:" + "1" * 64, "2" * 64, "3" * 64, frozenset(),
-        (),
-        {"lab_commit": "4" * 40, "neqo_commit": "5" * 40, "neqo_pinned_commit": "5" * 40},
+        prepare_image="image@sha256:" + "1" * 64,
+        catalogue_sha256="2" * 64,
+        provenance_sha256="3" * 64,
+        foundation_sha256="6" * 64,
+        pinned_cdp_sha256="7" * 64,
+        pinned_cdp_payload_sha256="8" * 64,
+        pinned_cdp_contract_sha256="9" * 64,
+        build_execution_sha256="a" * 64,
+        candidate_ids=frozenset(),
+        candidate_order=(),
+        source={
+            "lab_commit": "4" * 40,
+            "neqo_commit": "5" * 40,
+            "neqo_pinned_commit": "5" * 40,
+        },
     )
     action = watch._sha256_bytes(
         watch._canonical_json_bytes(list(command_factory(paths)))

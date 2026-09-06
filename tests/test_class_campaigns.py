@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+import shutil
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 import yaml
 
-from qcsd_lab import chaff_qualification, orchestrator, util
+from qcsd_lab import chaff_qualification, class_attestation, orchestrator, util
 from qcsd_lab.capture_session import Defense
 from qcsd_lab.class_campaigns import (
     FINAL_QUALIFICATION_SET,
@@ -16,13 +17,13 @@ from qcsd_lab.class_campaigns import (
     validate_campaign_document,
     write_campaign_documents,
 )
+from qcsd_lab.class_cohort import ASSEMBLY_RECEIPT_TYPE
 from qcsd_lab.class_layout import (
     AUTHORITATIVE_COHORT_ASSEMBLY_FILENAME,
     AUTHORITATIVE_COHORT_FILENAME,
     PILOT_COHORT_ASSEMBLY_FILENAME,
     PILOT_COHORT_FILENAME,
 )
-from qcsd_lab.class_cohort import ASSEMBLY_RECEIPT_TYPE
 from qcsd_lab.class_study import (
     CANDIDATE_COUNT,
     CANDIDATES_PER_STRATUM,
@@ -300,6 +301,11 @@ def test_generated_pilot_compatibility_preflight_uses_copublished_prefix_set(
     )
     monkeypatch.setattr(
         orchestrator,
+        "_class_fitted_qualification_authority",
+        lambda **_kwargs: {"fixture": True},
+    )
+    monkeypatch.setattr(
+        orchestrator,
         "_validate_loaded_qualification_bindings",
         lambda *_args, **_kwargs: None,
     )
@@ -571,3 +577,105 @@ def test_campaign_writer_rejects_alternate_root_before_publication(
             cohort_assembly_receipt=assembly,
         )
     assert list(alternate.iterdir()) == []
+
+
+def test_frozen_authority_relocation_requires_canonical_transitive_evidence(
+    tmp_path: Path,
+) -> None:
+    """A copied result is not the portable handoff and retains deep prerequisites."""
+
+    original = tmp_path / "original"
+    external = original / "evidence"
+    inputs = original / "result/inputs"
+    external.mkdir(parents=True)
+    inputs.mkdir(parents=True)
+    build = external / "build-execution.json"
+    build.write_text("{}\n", encoding="utf-8")
+    build_sha256 = sha256_file(build)
+    empty_sha256 = hashlib.sha256(b"").hexdigest()
+    collection_source = {
+        "image_digest": "sha256:" + "1" * 64,
+        "lab_commit": "2" * 40,
+        "lab_dirty": False,
+        "lab_patch_sha256": empty_sha256,
+        "neqo_commit": "3" * 40,
+        "neqo_pinned_commit": "3" * 40,
+        "neqo_dirty": False,
+        "neqo_patch_sha256": empty_sha256,
+    }
+    prepare_image = "sha256:" + "4" * 64
+    build_identity = {
+        "cohort_version": 59,
+        "sha256": build_sha256,
+        "collection_image": collection_source["image_digest"],
+        "started_at": "2026-09-06T00:00:00+00:00",
+        "finished_at": "2026-09-06T00:01:00+00:00",
+    }
+    binding = {"path": str(build.resolve()), "sha256": build_sha256}
+    gate_evidence = {
+        gate: [build_sha256] for gate in class_attestation._FOUNDATION_GATES
+    }
+    foundation_payload = {
+        "attestation_schema_version": class_attestation.FOUNDATION_SCHEMA_VERSION,
+        "artifact_type": class_attestation.FOUNDATION_RECEIPT_TYPE,
+        "study_id": class_attestation.STUDY_ID,
+        "cohort_version": 59,
+        "recorded_at": "2026-09-06T00:02:00+00:00",
+        "implementation_status": "foundation-ready-for-class-acquisition",
+        "promotion_authority": False,
+        "implementation_scope": class_attestation.IMPLEMENTATION_SCOPE,
+        "paper_equivalent": False,
+        "no_waivers": True,
+        "source": collection_source,
+        "build_execution_identity": build_identity,
+        "evidence": {
+            "build_execution": binding,
+            "pinned_cdp_probe": {},
+            "reference": binding,
+            "code_gate": binding,
+            "controlled_qualification": binding,
+            "regression_results": [],
+            "controlled_results": [],
+        },
+        "summary": {},
+        "hard_gates": class_attestation._hard_gate_records(
+            class_attestation._FOUNDATION_GATES,
+            gate_evidence,
+        ),
+        "all_foundation_gates_passed": True,
+    }
+    foundation_value = bind_receipt(
+        foundation_payload,
+        receipt_type=class_attestation.FOUNDATION_RECEIPT_TYPE,
+    )
+    class_attestation._validate_foundation_envelope(foundation_payload)
+    foundation = inputs / "class-study-foundation.json"
+    foundation.write_bytes(canonical_json_bytes(foundation_value))
+    authority = {
+        "schema_version": 1,
+        "artifact_type": class_attestation.QUALIFICATION_AUTHORITY_TYPE,
+        "foundation_attestation": {
+            "path": str(foundation.resolve()),
+            "sha256": sha256_file(foundation),
+            "payload_sha256": foundation_value["payload_sha256"],
+        },
+        "build_execution": binding,
+        "build_execution_identity": build_identity,
+        "collection_source": collection_source,
+        "prepare_source": {
+            **collection_source,
+            "image_digest": prepare_image,
+        },
+        "prepare_image_digest": prepare_image,
+    }
+    assert class_attestation.validate_class_qualification_authority(authority) == authority
+
+    relocated = tmp_path / "relocated-result"
+    shutil.copytree(original / "result", relocated)
+    original.rename(tmp_path / "offline-original")
+
+    with pytest.raises(ValueError, match="build execution is not a regular file"):
+        orchestrator._frozen_qualification_authority(
+            relocated / "inputs",
+            manifest_authority=authority,
+        )

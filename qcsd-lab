@@ -203,9 +203,126 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   exit 0
 fi
 
-if [[ "${1:-}" == "test" && "${2:-}" == "pinned-cdp" && $# != 2 ]]; then
-  echo "test pinned-cdp accepts no additional arguments" >&2
-  exit 2
+pinned_cdp_cohort_version=""
+pinned_cdp_build_host=""
+pinned_cdp_build_container=""
+pinned_cdp_destination_host=""
+pinned_cdp_destination_container=""
+pinned_cdp_destination_parent=""
+pinned_cdp_destination_parent_container=""
+if [[ "${1:-}" == "test" && "${2:-}" == "pinned-cdp" ]]; then
+  if (( $# == 3 )) && [[ "${3:-}" == "-h" || "${3:-}" == "--help" ]]; then
+    echo "Usage: qcsd-lab test pinned-cdp --cohort-version N --build-execution-receipt PATH --destination PATH"
+    exit 0
+  fi
+  pinned_cdp_build_raw=""
+  pinned_cdp_destination_raw=""
+  pinned_cdp_seen_cohort=0
+  pinned_cdp_seen_build=0
+  pinned_cdp_seen_destination=0
+  pinned_cdp_index=3
+  while (( pinned_cdp_index <= $# )); do
+    pinned_cdp_argument="${!pinned_cdp_index}"
+    pinned_cdp_value=""
+    case "${pinned_cdp_argument}" in
+      --cohort-version|--build-execution-receipt|--destination)
+        pinned_cdp_next=$((pinned_cdp_index + 1))
+        if (( pinned_cdp_next > $# )); then
+          echo "${pinned_cdp_argument} requires a value" >&2
+          exit 2
+        fi
+        pinned_cdp_value="${!pinned_cdp_next}"
+        pinned_cdp_index=$((pinned_cdp_index + 2))
+        ;;
+      --cohort-version=*|--build-execution-receipt=*|--destination=*)
+        pinned_cdp_value="${pinned_cdp_argument#*=}"
+        if [[ -z "${pinned_cdp_value}" ]]; then
+          echo "${pinned_cdp_argument%%=*} requires a value" >&2
+          exit 2
+        fi
+        pinned_cdp_index=$((pinned_cdp_index + 1))
+        ;;
+      *)
+        echo "test pinned-cdp rejects unknown argument: ${pinned_cdp_argument}" >&2
+        exit 2
+        ;;
+    esac
+    case "${pinned_cdp_argument%%=*}" in
+      --cohort-version)
+        if (( pinned_cdp_seen_cohort )); then
+          echo "test pinned-cdp accepts exactly one --cohort-version" >&2
+          exit 2
+        fi
+        pinned_cdp_seen_cohort=1
+        pinned_cdp_cohort_version="${pinned_cdp_value}"
+        ;;
+      --build-execution-receipt)
+        if (( pinned_cdp_seen_build )); then
+          echo "test pinned-cdp accepts exactly one --build-execution-receipt" >&2
+          exit 2
+        fi
+        pinned_cdp_seen_build=1
+        pinned_cdp_build_raw="${pinned_cdp_value}"
+        ;;
+      --destination)
+        if (( pinned_cdp_seen_destination )); then
+          echo "test pinned-cdp accepts exactly one --destination" >&2
+          exit 2
+        fi
+        pinned_cdp_seen_destination=1
+        pinned_cdp_destination_raw="${pinned_cdp_value}"
+        ;;
+    esac
+  done
+  if (( ! pinned_cdp_seen_cohort || ! pinned_cdp_seen_build ||
+        ! pinned_cdp_seen_destination )); then
+    echo "test pinned-cdp requires --cohort-version, --build-execution-receipt, and --destination" >&2
+    exit 2
+  fi
+  if [[ ! "${pinned_cdp_cohort_version}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "test pinned-cdp cohort version must be a positive integer" >&2
+    exit 2
+  fi
+  pinned_cdp_build_relative="artifacts/buflo-study/build-execution-v${pinned_cdp_cohort_version}.json"
+  pinned_cdp_destination_relative="artifacts/buflo-study/pinned-cdp-execution-v${pinned_cdp_cohort_version}.json"
+  case "${pinned_cdp_build_raw}" in
+    "${pinned_cdp_build_relative}"|"/lab/${pinned_cdp_build_relative}"|"${ROOT}/${pinned_cdp_build_relative}")
+      pinned_cdp_build_host="${ROOT}/${pinned_cdp_build_relative}"
+      ;;
+    *)
+      echo "test pinned-cdp build receipt must be ${pinned_cdp_build_relative}" >&2
+      exit 2
+      ;;
+  esac
+  case "${pinned_cdp_destination_raw}" in
+    "${pinned_cdp_destination_relative}"|"/lab/${pinned_cdp_destination_relative}"|"${ROOT}/${pinned_cdp_destination_relative}")
+      pinned_cdp_destination_host="${ROOT}/${pinned_cdp_destination_relative}"
+      ;;
+    *)
+      echo "test pinned-cdp destination must be ${pinned_cdp_destination_relative}" >&2
+      exit 2
+      ;;
+  esac
+  pinned_cdp_destination_parent="${ROOT}/artifacts/buflo-study"
+  if [[ -L "${ROOT}/artifacts" || -L "${pinned_cdp_destination_parent}" ||
+        ! -d "${pinned_cdp_destination_parent}" ||
+        "$(realpath -e -- "${pinned_cdp_destination_parent}" 2>/dev/null)" != "${pinned_cdp_destination_parent}" ]]; then
+    echo "test pinned-cdp requires the canonical non-symlink artifacts/buflo-study directory" >&2
+    exit 1
+  fi
+  if [[ -L "${pinned_cdp_build_host}" || ! -f "${pinned_cdp_build_host}" ||
+        "$(realpath -e -- "${pinned_cdp_build_host}" 2>/dev/null)" != "${pinned_cdp_build_host}" ]]; then
+    echo "test pinned-cdp requires its exact regular no-cache build receipt" >&2
+    exit 1
+  fi
+  if [[ -e "${pinned_cdp_destination_host}" ||
+        -L "${pinned_cdp_destination_host}" ]]; then
+    echo "test pinned-cdp requires an absent create-only destination" >&2
+    exit 1
+  fi
+  pinned_cdp_build_container="/lab/${pinned_cdp_build_relative}"
+  pinned_cdp_destination_container="/lab/${pinned_cdp_destination_relative}"
+  pinned_cdp_destination_parent_container="/lab/artifacts/buflo-study"
 fi
 
 if [[ "${1:-}" == "lifecycle-recover" && $# != 1 ]]; then
@@ -3753,7 +3870,7 @@ print(GLOBAL_LIVE_PAGE_CAP)
         class_index=$((class_index + 1))
         continue
         ;;
-      --candidate-catalogue|--acquisition-root|--stability-root|--stability-input|--workload-root|--acquisition-completion|--pilot-cohort|--pilot-cohort-assembly|--final-cohort|--final-cohort-assembly|--cohort|--cohort-assembly|--final-selection|--campaign-root|--campaign|--results-root|--capture-result|--result|--regression-result|--controlled-result|--canary-result|--formal-result|--artifacts-root|--numeric-bundle|--prefix-spec-root|--qualification-checkpoint|--qualification-sidecar-root|--qualification-publication-root|--qualification-manifest|--final-bundle|--handoff|--evaluation-receipt|--build-execution-receipt|--reference-receipt|--code-gate-receipt|--controlled-qualification-receipt|--pilot-fitting-result|--pilot-compatibility-result|--authoritative-fitting-result|--certification-result|--foundation-attestation|--readiness-attestation|--historical-pre-snapshot|--historical-post-snapshot|--comparison-review|--comparison-review-input|--validation-attestation|--successor-policy|--successor-decision|--successor-restart|--destination|--target|--dlsvm-cache-directory)
+      --candidate-catalogue|--acquisition-root|--stability-root|--stability-input|--workload-root|--acquisition-completion|--pilot-cohort|--pilot-cohort-assembly|--final-cohort|--final-cohort-assembly|--cohort|--cohort-assembly|--final-selection|--campaign-root|--campaign|--results-root|--capture-result|--result|--regression-result|--controlled-result|--canary-result|--formal-result|--artifacts-root|--numeric-bundle|--prefix-spec-root|--qualification-checkpoint|--qualification-sidecar-root|--qualification-publication-root|--qualification-manifest|--final-bundle|--handoff|--evaluation-receipt|--build-execution-receipt|--pinned-cdp-receipt|--reference-receipt|--code-gate-receipt|--controlled-qualification-receipt|--pilot-fitting-result|--pilot-compatibility-result|--authoritative-fitting-result|--certification-result|--foundation-attestation|--readiness-attestation|--historical-pre-snapshot|--historical-post-snapshot|--comparison-review|--comparison-review-input|--validation-attestation|--successor-policy|--successor-decision|--successor-restart|--destination|--target|--dlsvm-cache-directory)
         if (( ! class_inline )); then
           class_next=$((class_index + 1))
           if (( class_next > $# )); then
@@ -4281,6 +4398,27 @@ if [[ "${1:-}" == "class-study" ]]; then
     unset QCSD_CLASS_WATCH_SOURCE_BINDING_SHA256
   fi
   require_submodule
+fi
+
+if [[ "${1:-}" == "test" && "${2:-}" == "pinned-cdp" ]]; then
+  mapfile -t pinned_cdp_build_fields < <(
+    python3 -I "${ROOT}/src/qcsd_lab/build_storage.py" receipt \
+      "${pinned_cdp_build_host}" \
+      --expected-cohort "${pinned_cdp_cohort_version}" \
+      --probe-path "${ROOT}/tools/windows_docker_storage_probe.ps1"
+  )
+  if (( ${#pinned_cdp_build_fields[@]} != 4 )); then
+    echo "test pinned-cdp no-cache build receipt is invalid" >&2
+    exit 1
+  fi
+  pinned_cdp_build_sha256="${pinned_cdp_build_fields[0]}"
+  pinned_cdp_prepare_image="${pinned_cdp_build_fields[2]}"
+  if [[ -n "${QCSD_LAB_PREPARE_IMAGE:-}" &&
+        "${QCSD_LAB_PREPARE_IMAGE}" != "${pinned_cdp_prepare_image}" ]]; then
+    echo "test pinned-cdp rejects QCSD_LAB_PREPARE_IMAGE that differs from its build receipt" >&2
+    exit 2
+  fi
+  PREPARE_IMAGE="${pinned_cdp_prepare_image}"
 fi
 
 class_resume_environment=""
@@ -5071,6 +5209,9 @@ fi
 if [[ "${1:-}" == "buflo-study" && "${2:-}" == "qualify" ]]; then
   verify_qualification_checkout "buflo-study qualify"
 fi
+if [[ "${1:-}" == "test" && "${2:-}" == "pinned-cdp" ]]; then
+  verify_qualification_checkout "test pinned-cdp"
+fi
 if [[ "${1:-}" == "fit" ]]; then
   verify_fit_neqo_checkout
 fi
@@ -5331,6 +5472,48 @@ container=(
   --env "QCSD_LAB_IMAGE_DIGEST=${image_id}"
   --volume "${ROOT}:/lab:ro"
 )
+if [[ "${1:-}" == "test" && "${2:-}" == "pinned-cdp" ]]; then
+  if [[ -L "${pinned_cdp_destination_parent}" ||
+        ! -d "${pinned_cdp_destination_parent}" ||
+        "$(realpath -e -- "${pinned_cdp_destination_parent}" 2>/dev/null)" != "${pinned_cdp_destination_parent}" ||
+        -L "${pinned_cdp_build_host}" || ! -f "${pinned_cdp_build_host}" ||
+        -e "${pinned_cdp_destination_host}" ||
+        -L "${pinned_cdp_destination_host}" ]]; then
+    echo "test pinned-cdp lost its create-only receipt paths before launch" >&2
+    exit 1
+  fi
+  # The parent overlay grants only the ability to create the requested new
+  # receipt.  Every pre-existing child, including the exact build input, is
+  # over-mounted read-only so no earlier evidence can be replaced or removed.
+  container+=(
+    --volume "${pinned_cdp_destination_parent}:${pinned_cdp_destination_parent_container}:rw"
+  )
+  pinned_cdp_build_overlay=0
+  while IFS= read -r -d '' pinned_cdp_existing_child; do
+    if [[ -L "${pinned_cdp_existing_child}" ||
+          ( ! -f "${pinned_cdp_existing_child}" &&
+            ! -d "${pinned_cdp_existing_child}" ) ]]; then
+      echo "test pinned-cdp output parent contains an unsafe existing child" >&2
+      exit 1
+    fi
+    pinned_cdp_existing_name="${pinned_cdp_existing_child##*/}"
+    if [[ ! "${pinned_cdp_existing_name}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+      echo "test pinned-cdp rejects unsafe existing output name: ${pinned_cdp_existing_name}" >&2
+      exit 1
+    fi
+    pinned_cdp_existing_container="${pinned_cdp_destination_parent_container}/${pinned_cdp_existing_name}"
+    container+=(
+      --volume "${pinned_cdp_existing_child}:${pinned_cdp_existing_container}:ro"
+    )
+    if [[ "${pinned_cdp_existing_child}" == "${pinned_cdp_build_host}" ]]; then
+      pinned_cdp_build_overlay=1
+    fi
+  done < <(find "${pinned_cdp_destination_parent}" -mindepth 1 -maxdepth 1 -print0)
+  if (( ! pinned_cdp_build_overlay )); then
+    echo "test pinned-cdp could not mount its exact build input read-only" >&2
+    exit 1
+  fi
+fi
 if [[ "${1:-}" == "class-study" &&
       "${class_study_action}" == "acquisition-run" ]]; then
   container+=(
@@ -7238,9 +7421,14 @@ fi
 if [[ "${1:-}" == "test" && "${2:-}" == "pinned-cdp" ]]; then
   set +e
   qcsd_run_attached_docker "${container[@]}" \
-    --env "QCSD_RUN_PINNED_CDP_PROBE=1" \
-    --entrypoint /opt/qcsd-lab/.venv/bin/python \
-    "${image_id}" -m pytest -q tests/test_cdp_chromium_integration.py
+    --env "QCSD_PINNED_CDP_EXPECTED_UID=${qcsd_invoking_uid}" \
+    --env "QCSD_PINNED_CDP_EXPECTED_GID=${qcsd_invoking_gid}" \
+    --entrypoint /usr/bin/tini \
+    "${image_id}" -- /usr/bin/timeout --signal=TERM --kill-after=10s 120s \
+    /opt/qcsd-venv/bin/python3 -m qcsd_lab.pinned_cdp \
+    --cohort-version "${pinned_cdp_cohort_version}" \
+    --build-execution-receipt "${pinned_cdp_build_container}" \
+    --destination "${pinned_cdp_destination_container}"
   status=$?
   set -e
   exit "${status}"

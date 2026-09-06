@@ -27,7 +27,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from itertools import pairwise
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 
 STUDY_ID = "classifier-multiorigin100-v1"
@@ -35,10 +35,40 @@ CANDIDATE_COUNT = 600
 SCHEMA_VERSION = 1
 ACQUISITION_SCHEMA_VERSION = 4
 CHECKPOINT_SCHEMA_VERSION = 2
+FOUNDATION_SCHEMA_VERSION = 2
 CATALOGUE_TYPE = "qcsd-class-study-candidate-catalogue"
 PROVENANCE_TYPE = "qcsd-class-study-acquisition-provenance"
 CHECKPOINT_TYPE = "qcsd-class-study-acquisition-checkpoint"
 FOUNDATION_TYPE = "qcsd-class-study-foundation-attestation"
+PINNED_CDP_TYPE = "qcsd-class-study-pinned-cdp-probe"
+BUILD_EXECUTION_TYPE = "qcsd-buflo-study-no-cache-build-execution"
+BUILD_WSL_HOST_MIN_AVAILABLE_BYTES = 64 * 1024**3
+BUILD_HOST_STORAGE_POLICY = "docker-data-vhdx-backing-volume-minimum-v1"
+BUILD_HOST_STORAGE_PROBE = "powershell-get-volume-docker-data-vhdx-v1"
+BUILD_HOST_STORAGE_BOUNDARIES = (
+    "before-collection",
+    "before-prepare",
+    "before-reference",
+    "after-reference",
+)
+BUILD_HOST_STORAGE_LOCATION_SOURCES = {
+    "wsl-lxss-docker-desktop-data",
+    "docker-settings-store",
+    "docker-legacy-settings",
+}
+BUILD_RUST_BASE_IMAGE = (
+    "docker.io/library/rust:1.90-bookworm@"
+    "sha256:3914072ca0c3b8aad871db9169a651ccfce30cf58303e5d6f2db16d1d8a7e58f"
+)
+BUILD_DEBIAN_BASE_IMAGE = (
+    "docker.io/library/debian:bookworm-slim@"
+    "sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818"
+)
+BUILD_IMAGE_TAGS = {
+    "collection": "neqo-qcsd-lab-collection:local",
+    "prepare": "neqo-qcsd-lab-prepare:local",
+    "reference": "neqo-qcsd-lab-reference:local",
+}
 ACTION_RESULT_TYPE = "qcsd-class-study-coordinator-result"
 DOCKER_ADMISSION_TYPE = "qcsd-class-study-docker-admission"
 SCOPE_SUPERVISION_TYPE = "qcsd-class-watch-scope-supervision"
@@ -101,6 +131,12 @@ SCOPE_SOURCE_ENV = "QCSD_CLASS_WATCH_SOURCE_BINDING_SHA256"
 EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 _SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 _IMAGE_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
+_REPO_DIGEST_RE = re.compile(r"[^\s@]+@sha256:[0-9a-f]{64}\Z")
+_VOLUME_ID_RE = re.compile(
+    r"\\\\\?\\Volume\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-"
+    r"[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}\\\Z"
+)
+_WINDOWS_VHD_RE = re.compile(r"[A-Za-z]:\\[^\r\n]+[.]vhdx\Z", re.IGNORECASE)
 _CANDIDATE_ID_RE = re.compile(r"tranco-[0-9]{7}\Z")
 _BOOT_ID_RE = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\Z"
@@ -168,8 +204,89 @@ _SOURCE_KEYS = {
     "neqo_dirty",
     "neqo_patch_sha256",
 }
+_BUILD_EXECUTION_KEYS = {
+    "schema_version",
+    "artifact_type",
+    "cohort_version",
+    "started_at",
+    "finished_at",
+    "duration_seconds",
+    "docker",
+    "commands",
+    "images",
+    "source",
+    "build_inputs",
+    "dockerfile_sha256",
+    "cache_policy",
+    "payload_sha256",
+    "host_storage_preflight",
+    "role_provenance",
+}
+_BUILD_INPUT_KEYS = {
+    "schema_version",
+    "artifact_type",
+    "rust_base_image",
+    "debian_base_image",
+    "uv_lock_sha256",
+    "cargo_lock_sha256",
+}
+_BUILD_STORAGE_OBSERVATION_KEYS = {
+    "schema_version",
+    "probe",
+    "probe_sha256",
+    "boundary",
+    "observed_at",
+    "location_source",
+    "data_vhd_path",
+    "data_vhd_file_length_bytes",
+    "backing_volume_unique_id",
+    "drive_letter",
+    "file_system",
+    "health_status",
+    "operational_status",
+    "total_bytes",
+    "available_bytes",
+}
+_BUILD_STORAGE_PREFLIGHT_KEYS = {
+    "schema_version",
+    "applicable",
+    "platform",
+    "platform_detection",
+    "policy",
+    "required_available_bytes",
+    "observations",
+    "minimum_available_bytes",
+    "passed",
+}
 _CDP_TARGET_INSTRUMENTATION_POLICY = (
     "playwright-1.52-public-cdp-recursive-non-flat-paused-debugger-targets-v3"
+)
+_PINNED_CDP_CONTRACT = {
+    "schema_version": 1,
+    "policy": "pinned-playwright-chromium-recursive-target-topology-v1",
+    "instrumentation_policy": _CDP_TARGET_INSTRUMENTATION_POLICY,
+    "playwright_version": "1.52.0",
+    "chromium_executable": "/usr/bin/chromium",
+    "network_scope": "docker-network-none-loopback-only",
+    "observation_timeout_ms": 10_000,
+    "required_quiet_interval_ms": 250,
+    "required_target_types": ["iframe", "shared_worker", "worker"],
+    "required_observations": [
+        "cross-site-iframe-network-request",
+        "dedicated-and-shared-worker-network-requests",
+        "worker-fetch-paused-on-owning-page-session",
+        "duplicate-url-occurrences-remain-distinct",
+        "redirect-terminal-request-observed",
+        "router-ledger-extra-info-and-server-shutdown-complete",
+    ],
+}
+_FOUNDATION_GATES = (
+    "current-clean-source-and-no-cache-build",
+    "independent-reference-conformance",
+    "complete-code-gate",
+    "nine-mode-regression-18-of-18",
+    "controlled-qualification-160-of-160",
+    "pinned-cdp-integration-probe",
 )
 _PASSIVE_RENDER_CONTRACT = {
     "schema_version": 1,
@@ -458,6 +575,11 @@ class AcquisitionBinding:
     prepare_image: str
     catalogue_sha256: str
     provenance_sha256: str
+    foundation_sha256: str
+    pinned_cdp_sha256: str
+    pinned_cdp_payload_sha256: str
+    pinned_cdp_contract_sha256: str
+    build_execution_sha256: str
     candidate_ids: frozenset[str]
     candidate_order: tuple[str, ...]
     source: Mapping[str, Any]
@@ -527,6 +649,11 @@ def _source_binding_sha256(binding: AcquisitionBinding) -> str:
         _canonical_json_bytes(
             {
                 "candidate_catalogue_sha256": binding.catalogue_sha256,
+                "build_execution_sha256": binding.build_execution_sha256,
+                "foundation_sha256": binding.foundation_sha256,
+                "pinned_cdp_contract_sha256": binding.pinned_cdp_contract_sha256,
+                "pinned_cdp_payload_sha256": binding.pinned_cdp_payload_sha256,
+                "pinned_cdp_sha256": binding.pinned_cdp_sha256,
                 "prepare_image": binding.prepare_image,
                 "provenance_sha256": binding.provenance_sha256,
                 "source": dict(binding.source),
@@ -775,7 +902,632 @@ def _validate_catalogue(paths: WatchPaths) -> tuple[Mapping[str, Any], tuple[str
     return catalogue, tuple(candidate_ids), snapshot.sha256
 
 
-def _validate_foundation(binding: Any, *, paths: WatchPaths) -> None:
+def _validate_clean_source(value: Any, *, image: str, label: str) -> None:
+    if (
+        not isinstance(value, dict)
+        or set(value) != _SOURCE_KEYS
+        or value.get("image_digest") != image
+        or _IMAGE_RE.fullmatch(str(image)) is None
+        or not isinstance(value.get("lab_commit"), str)
+        or re.fullmatch(r"[0-9a-f]{40}", value["lab_commit"]) is None
+        or value.get("lab_dirty") is not False
+        or value.get("lab_patch_sha256") != EMPTY_SHA256
+        or not isinstance(value.get("neqo_commit"), str)
+        or re.fullmatch(r"[0-9a-f]{40}", value["neqo_commit"]) is None
+        or value.get("neqo_pinned_commit") != value.get("neqo_commit")
+        or value.get("neqo_dirty") is not False
+        or value.get("neqo_patch_sha256") != EMPTY_SHA256
+    ):
+        raise WatchError(f"{label} does not bind one exact clean image source")
+
+
+def _evidence_timestamp(value: Any, *, label: str) -> datetime:
+    if not isinstance(value, str) or not value:
+        raise WatchError(f"{label} timestamp is missing")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise WatchError(f"{label} timestamp is invalid") from error
+    if parsed.tzinfo is None:
+        raise WatchError(f"{label} timestamp is not timezone-aware")
+    return parsed.astimezone(UTC)
+
+
+def _validate_build_inputs(value: Any, *, label: str) -> dict[str, Any]:
+    if (
+        not isinstance(value, dict)
+        or set(value) != _BUILD_INPUT_KEYS
+        or type(value.get("schema_version")) is not int
+        or value["schema_version"] != 1
+        or value.get("artifact_type") != "qcsd-study-build-inputs"
+        or value.get("rust_base_image") != BUILD_RUST_BASE_IMAGE
+        or value.get("debian_base_image") != BUILD_DEBIAN_BASE_IMAGE
+        or not isinstance(value.get("uv_lock_sha256"), str)
+        or _SHA256_RE.fullmatch(value["uv_lock_sha256"]) is None
+        or not isinstance(value.get("cargo_lock_sha256"), str)
+        or _SHA256_RE.fullmatch(value["cargo_lock_sha256"]) is None
+    ):
+        raise WatchError(f"{label} are invalid")
+    return dict(value)
+
+
+def _validate_build_role_provenance(
+    value: Any,
+    *,
+    image_ids: Mapping[str, str],
+    source: Mapping[str, Any],
+    build_inputs: Mapping[str, Any],
+) -> None:
+    targets = ("collection", "prepare", "reference")
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"schema_version", "sources", "build_inputs"}
+        or type(value.get("schema_version")) is not int
+        or value["schema_version"] != 1
+        or not isinstance(value.get("sources"), dict)
+        or set(value["sources"]) != set(targets)
+        or not isinstance(value.get("build_inputs"), dict)
+        or set(value["build_inputs"]) != set(targets)
+    ):
+        raise WatchError("foundation no-cache build role provenance is invalid")
+    sources = value["sources"]
+    for target in targets:
+        _validate_clean_source(
+            sources[target],
+            image=image_ids[target],
+            label=f"foundation no-cache build {target} role provenance",
+        )
+    source_identities = []
+    for target in targets:
+        identity = dict(sources[target])
+        identity.pop("image_digest")
+        source_identities.append(identity)
+    if (
+        any(identity != source_identities[0] for identity in source_identities[1:])
+        or sources["collection"] != dict(source)
+    ):
+        raise WatchError(
+            "foundation no-cache build image roles used different source snapshots"
+        )
+    collection_inputs = _validate_build_inputs(
+        value["build_inputs"]["collection"],
+        label="foundation no-cache build collection role inputs",
+    )
+    prepare_inputs = _validate_build_inputs(
+        value["build_inputs"]["prepare"],
+        label="foundation no-cache build prepare role inputs",
+    )
+    if (
+        value["build_inputs"]["reference"] is not None
+        or collection_inputs != prepare_inputs
+        or collection_inputs != dict(build_inputs)
+    ):
+        raise WatchError("foundation no-cache build image roles used different inputs")
+
+
+def _validate_build_storage_observation(
+    value: Any,
+    *,
+    boundary: str,
+    probe_sha256: str,
+) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != _BUILD_STORAGE_OBSERVATION_KEYS:
+        raise WatchError("foundation no-cache build storage observation schema is invalid")
+    data_vhd_path = value["data_vhd_path"]
+    path_parts = data_vhd_path.split("\\") if isinstance(data_vhd_path, str) else []
+    total_bytes = value["total_bytes"]
+    available_bytes = value["available_bytes"]
+    file_length = value["data_vhd_file_length_bytes"]
+    integers = (total_bytes, available_bytes, file_length)
+    if (
+        type(value["schema_version"]) is not int
+        or value["schema_version"] != 1
+        or value["probe"] != BUILD_HOST_STORAGE_PROBE
+        or not isinstance(value["probe_sha256"], str)
+        or _SHA256_RE.fullmatch(value["probe_sha256"]) is None
+        or value["probe_sha256"] != probe_sha256
+        or value["boundary"] != boundary
+        or value["location_source"] not in BUILD_HOST_STORAGE_LOCATION_SOURCES
+        or not isinstance(data_vhd_path, str)
+        or _WINDOWS_VHD_RE.fullmatch(data_vhd_path) is None
+        or any(part in {"", ".", ".."} for part in path_parts[1:])
+        or not isinstance(value["backing_volume_unique_id"], str)
+        or _VOLUME_ID_RE.fullmatch(value["backing_volume_unique_id"]) is None
+        or (
+            value["drive_letter"] is not None
+            and (
+                not isinstance(value["drive_letter"], str)
+                or re.fullmatch(r"[A-Z]", value["drive_letter"]) is None
+                or value["drive_letter"] != data_vhd_path[0].upper()
+            )
+        )
+        or not isinstance(value["file_system"], str)
+        or not value["file_system"]
+        or value["health_status"] != "Healthy"
+        or value["operational_status"] != ["OK"]
+        or any(not isinstance(item, int) or isinstance(item, bool) for item in integers)
+        or file_length <= 0
+        or total_bytes <= 0
+        or not 0 <= available_bytes <= total_bytes
+    ):
+        raise WatchError("foundation no-cache build storage observation is invalid")
+    _evidence_timestamp(
+        value["observed_at"], label="foundation no-cache build storage observation"
+    )
+    if available_bytes < BUILD_WSL_HOST_MIN_AVAILABLE_BYTES:
+        raise WatchError(
+            "foundation no-cache build storage observation falls below the 64 GiB minimum"
+        )
+    return dict(value)
+
+
+def _validate_build_storage_preflight(
+    value: Any, *, probe_sha256: str
+) -> dict[str, Any]:
+    if (
+        not isinstance(value, dict)
+        or set(value) != _BUILD_STORAGE_PREFLIGHT_KEYS
+        or type(value.get("schema_version")) is not int
+        or value["schema_version"] != 1
+        or not isinstance(value.get("applicable"), bool)
+        or value.get("policy") != BUILD_HOST_STORAGE_POLICY
+        or value.get("required_available_bytes")
+        != BUILD_WSL_HOST_MIN_AVAILABLE_BYTES
+        or value.get("passed") is not True
+    ):
+        raise WatchError("foundation no-cache build storage preflight schema is invalid")
+    detection = value["platform_detection"]
+    detection_keys = {
+        "schema_version",
+        "probe",
+        "kernel_release",
+        "proc_version",
+        "wsl_interop_env_present",
+        "wsl_distro_name_env_present",
+        "run_wsl_directory_present",
+    }
+    if (
+        not isinstance(detection, dict)
+        or set(detection) != detection_keys
+        or type(detection.get("schema_version")) is not int
+        or detection["schema_version"] != 1
+        or detection.get("probe") != "wsl-multi-signal-v1"
+        or not isinstance(detection.get("kernel_release"), str)
+        or not detection["kernel_release"].strip()
+        or not isinstance(detection.get("proc_version"), str)
+        or not detection["proc_version"].strip()
+        or any(
+            not isinstance(detection.get(key), bool)
+            for key in (
+                "wsl_interop_env_present",
+                "wsl_distro_name_env_present",
+                "run_wsl_directory_present",
+            )
+        )
+    ):
+        raise WatchError("foundation no-cache build platform detection is invalid")
+    detected_wsl = any(
+        (
+            "microsoft" in detection["kernel_release"].lower(),
+            "microsoft" in detection["proc_version"].lower(),
+            detection["wsl_interop_env_present"],
+            detection["wsl_distro_name_env_present"],
+            detection["run_wsl_directory_present"],
+        )
+    )
+    if not value["applicable"]:
+        if (
+            detected_wsl
+            or value["platform"] != "other-host"
+            or value["observations"] != []
+            or value["minimum_available_bytes"] is not None
+        ):
+            raise WatchError("foundation no-cache build non-WSL preflight is invalid")
+        return dict(value)
+    if (
+        not detected_wsl
+        or value["platform"] != "windows-wsl2"
+        or not isinstance(value["observations"], list)
+        or len(value["observations"]) != len(BUILD_HOST_STORAGE_BOUNDARIES)
+    ):
+        raise WatchError("foundation no-cache build WSL preflight is invalid")
+    observations = [
+        _validate_build_storage_observation(
+            observation,
+            boundary=boundary,
+            probe_sha256=probe_sha256,
+        )
+        for observation, boundary in zip(
+            value["observations"], BUILD_HOST_STORAGE_BOUNDARIES, strict=True
+        )
+    ]
+    stable_identities = {
+        (
+            observation["probe_sha256"],
+            observation["location_source"],
+            observation["data_vhd_path"],
+            observation["backing_volume_unique_id"],
+            observation["drive_letter"],
+            observation["file_system"],
+        )
+        for observation in observations
+    }
+    observed_times = [
+        _evidence_timestamp(
+            observation["observed_at"],
+            label="foundation no-cache build storage observation",
+        )
+        for observation in observations
+    ]
+    minimum_available_bytes = min(
+        observation["available_bytes"] for observation in observations
+    )
+    if (
+        len(stable_identities) != 1
+        or observed_times != sorted(observed_times)
+        or any(left >= right for left, right in pairwise(observed_times))
+        or type(value["minimum_available_bytes"]) is not int
+        or value["minimum_available_bytes"] != minimum_available_bytes
+    ):
+        raise WatchError("foundation no-cache build WSL preflight is inconsistent")
+    return dict(value)
+
+
+def _validate_build_execution_schema3(value: Any, *, paths: WatchPaths) -> None:
+    if (
+        not isinstance(value, dict)
+        or set(value) != _BUILD_EXECUTION_KEYS
+        or type(value.get("schema_version")) is not int
+        or value["schema_version"] != 3
+        or value.get("artifact_type") != BUILD_EXECUTION_TYPE
+        or type(value.get("cohort_version")) is not int
+        or value["cohort_version"] <= 0
+    ):
+        raise WatchError("foundation no-cache build execution schema is invalid")
+    payload = dict(value)
+    claimed = payload.pop("payload_sha256")
+    if (
+        not isinstance(claimed, str)
+        or _SHA256_RE.fullmatch(claimed) is None
+        or claimed
+        != _sha256_bytes(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        )
+    ):
+        raise WatchError("foundation no-cache build execution payload hash is invalid")
+    started = _evidence_timestamp(value["started_at"], label="no-cache build start")
+    finished = _evidence_timestamp(value["finished_at"], label="no-cache build finish")
+    duration = value["duration_seconds"]
+    if (
+        finished < started
+        or not isinstance(duration, (int, float))
+        or isinstance(duration, bool)
+        or not math.isfinite(duration)
+        or duration <= 0
+        or abs(float(duration) - (finished - started).total_seconds()) > 2.0
+    ):
+        raise WatchError("foundation no-cache build duration is invalid")
+
+    docker = value["docker"]
+    docker_keys = {
+        "client_version",
+        "server_version",
+        "context",
+        "endpoint",
+        "server_name",
+        "server_operating_system",
+        "server_os_type",
+        "server_architecture",
+        "server_id",
+    }
+    if (
+        not isinstance(docker, dict)
+        or set(docker) != docker_keys
+        or any(not isinstance(docker[key], str) or not docker[key] for key in docker)
+    ):
+        raise WatchError("foundation no-cache build Docker identity is invalid")
+    if (
+        docker["context"] not in {"default", "desktop-linux"}
+        or docker["endpoint"]
+        not in {
+            "unix:///var/run/docker.sock",
+            "npipe:////./pipe/dockerDesktopLinuxEngine",
+        }
+        or docker["server_os_type"] != "linux"
+    ):
+        raise WatchError("foundation no-cache build Docker endpoint is unsupported")
+
+    targets = ("collection", "prepare", "reference")
+    images = value["images"]
+    if not isinstance(images, dict) or set(images) != set(targets):
+        raise WatchError("foundation no-cache build image inventory is invalid")
+    image_ids: dict[str, str] = {}
+    for target in targets:
+        record = images[target]
+        if (
+            not isinstance(record, dict)
+            or set(record) != {"tag", "id", "repo_digests"}
+            or record.get("tag") != BUILD_IMAGE_TAGS[target]
+            or not isinstance(record.get("id"), str)
+            or _IMAGE_RE.fullmatch(record["id"]) is None
+            or not isinstance(record.get("repo_digests"), list)
+            or any(
+                not isinstance(digest, str)
+                or _REPO_DIGEST_RE.fullmatch(digest) is None
+                for digest in record["repo_digests"]
+            )
+        ):
+            raise WatchError(
+                f"foundation no-cache build {target} image binding is invalid"
+            )
+        image_ids[target] = record["id"]
+    if len(set(image_ids.values())) != len(image_ids):
+        raise WatchError(
+            "foundation no-cache build image roles lack distinct immutable IDs"
+        )
+
+    commands = value["commands"]
+    if not isinstance(commands, list) or len(commands) != len(targets):
+        raise WatchError("foundation no-cache build command inventory is incomplete")
+    recorded_build_root: PurePosixPath | None = None
+    for target, command in zip(targets, commands, strict=True):
+        prefix = [
+            "docker",
+            "--host",
+            docker["endpoint"],
+            "build",
+            "--pull",
+            "--no-cache",
+        ]
+        argv = command.get("argv") if isinstance(command, dict) else None
+        iidfile_value: str | None = None
+        iidfile: PurePosixPath | None = None
+        if isinstance(argv, list) and len(argv) >= len(prefix) + 2:
+            iidfile_value = argv[len(prefix) + 1] if argv[len(prefix)] == "--iidfile" else None
+            if isinstance(iidfile_value, str):
+                iidfile = PurePosixPath(iidfile_value)
+                prefix.extend(["--iidfile", iidfile_value])
+        prefix.extend(
+            ["--target", target, "--tag", images[target]["tag"], "--file"]
+        )
+        paths_valid = (
+            isinstance(argv, list)
+            and len(argv) == len(prefix) + 2
+            and all(isinstance(argument, str) for argument in argv)
+        )
+        dockerfile = PurePosixPath(argv[-2]) if paths_valid else None
+        build_root = PurePosixPath(argv[-1]) if paths_valid else None
+        if (
+            not isinstance(command, dict)
+            or set(command) != {"target", "argv", "exit_code", "image_id"}
+            or command.get("target") != target
+            or not isinstance(argv, list)
+            or argv[:-2] != prefix
+            or dockerfile is None
+            or build_root is None
+            or not dockerfile.is_absolute()
+            or not build_root.is_absolute()
+            or argv[-2].startswith("//")
+            or argv[-1].startswith("//")
+            or str(dockerfile) != argv[-2]
+            or str(build_root) != argv[-1]
+            or ".." in dockerfile.parts
+            or ".." in build_root.parts
+            or dockerfile.name != "Dockerfile"
+            or dockerfile.parent != build_root
+            or build_root.parent == build_root
+            or iidfile is None
+            or not iidfile.is_absolute()
+            or str(iidfile) != iidfile_value
+            or str(iidfile).startswith("//")
+            or ".." in iidfile.parts
+            or iidfile.name != f"{target}.iid"
+            or iidfile.parent.parent != build_root / "artifacts" / "buflo-study"
+            or re.fullmatch(
+                rf"[.]build-iids-v{value['cohort_version']}[.][A-Za-z0-9]{{6}}",
+                iidfile.parent.name,
+            )
+            is None
+            or (recorded_build_root is not None and build_root != recorded_build_root)
+            or type(command.get("exit_code")) is not int
+            or command["exit_code"] != 0
+            or command.get("image_id") != image_ids[target]
+        ):
+            raise WatchError(
+                "foundation no-cache build commands do not prove --pull --no-cache execution"
+            )
+        recorded_build_root = build_root
+    expected_build_root = PurePosixPath(str(paths.lab_root.resolve()))
+    if recorded_build_root != expected_build_root:
+        raise WatchError(
+            "foundation no-cache build command root differs from the canonical Lab checkout"
+        )
+
+    if value["cache_policy"] != {
+        "pull": True,
+        "no_cache": True,
+        "scope": "Docker-layer-cache-disabled;declared-BuildKit-dependency-cache-mounts-only",
+    }:
+        raise WatchError("foundation no-cache build cache policy is invalid")
+    source = value["source"]
+    _validate_clean_source(
+        source,
+        image=image_ids["collection"],
+        label="foundation no-cache build source",
+    )
+    build_inputs = _validate_build_inputs(
+        value["build_inputs"], label="foundation no-cache build inputs"
+    )
+    checkout_files = {
+        "dockerfile_sha256": (paths.lab_root / "Dockerfile", "Dockerfile"),
+        "uv_lock_sha256": (paths.lab_root / "uv.lock", "uv.lock"),
+        "cargo_lock_sha256": (
+            paths.lab_root / "neqo-qcsd/Cargo.lock",
+            "Neqo Cargo.lock",
+        ),
+    }
+    checkout_sha256s: dict[str, str] = {}
+    for key, (checkout_path, label) in checkout_files.items():
+        _, checkout_sha256s[key] = _read_stable_file(
+            checkout_path,
+            root=paths.lab_root,
+            label=f"foundation no-cache build {label}",
+        )
+    if (
+        not isinstance(value["dockerfile_sha256"], str)
+        or _SHA256_RE.fullmatch(value["dockerfile_sha256"]) is None
+        or value["dockerfile_sha256"] != checkout_sha256s["dockerfile_sha256"]
+        or build_inputs["uv_lock_sha256"] != checkout_sha256s["uv_lock_sha256"]
+        or build_inputs["cargo_lock_sha256"] != checkout_sha256s["cargo_lock_sha256"]
+    ):
+        raise WatchError("foundation no-cache build checkout binding is stale")
+    _validate_build_role_provenance(
+        value["role_provenance"],
+        image_ids=image_ids,
+        source=source,
+        build_inputs=build_inputs,
+    )
+    _, probe_sha256 = _read_stable_file(
+        paths.lab_root / "tools/windows_docker_storage_probe.ps1",
+        root=paths.lab_root,
+        label="foundation no-cache build storage probe",
+    )
+    preflight = _validate_build_storage_preflight(
+        value["host_storage_preflight"], probe_sha256=probe_sha256
+    )
+    if preflight["applicable"]:
+        observation_times = [
+            _evidence_timestamp(
+                observation["observed_at"],
+                label="foundation no-cache build storage observation",
+            )
+            for observation in preflight["observations"]
+        ]
+        if not (
+            observation_times[0]
+            <= started
+            < observation_times[1]
+            < observation_times[2]
+            < observation_times[3]
+            <= finished
+        ):
+            raise WatchError("foundation no-cache build storage timing is invalid")
+        if "docker desktop" not in docker["server_operating_system"].lower():
+            raise WatchError(
+                "foundation no-cache WSL build did not use Docker Desktop"
+            )
+
+
+def _load_build_execution(path: Path, *, paths: WatchPaths) -> ReceiptSnapshot:
+    try:
+        raw, sha256 = _read_stable_file(
+            path,
+            root=paths.lab_root,
+            label="foundation no-cache build execution",
+        )
+        value = json.loads(raw.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as error:
+        raise WatchError("foundation no-cache build execution is not valid JSON") from error
+    if not isinstance(value, dict) or raw != _canonical_json_bytes(value):
+        raise WatchError("foundation no-cache build execution is not canonical")
+    _validate_build_execution_schema3(value, paths=paths)
+    return ReceiptSnapshot(value=value, sha256=sha256)
+
+
+def _validate_pinned_cdp_observation(value: Any) -> None:
+    if not isinstance(value, dict) or set(value) != {
+        "playwright_version",
+        "chromium_version",
+        "chromium_executable",
+        "isolation",
+        "topology",
+    }:
+        raise WatchError("pinned CDP observation fields are invalid")
+    if (
+        value.get("playwright_version") != "1.52.0"
+        or not isinstance(value.get("chromium_version"), str)
+        or not value["chromium_version"].strip()
+        or value.get("chromium_executable") != "/usr/bin/chromium"
+    ):
+        raise WatchError("pinned CDP browser observation is invalid")
+    isolation = value.get("isolation")
+    integer_fields = (
+        "real_uid",
+        "effective_uid",
+        "real_gid",
+        "effective_gid",
+        "expected_uid",
+        "expected_gid",
+    )
+    if (
+        not isinstance(isolation, dict)
+        or set(isolation)
+        != {
+            *integer_fields,
+            "effective_capabilities",
+            "no_new_privileges",
+            "observed_interfaces",
+        }
+        or any(
+            type(isolation.get(field)) is not int or isolation[field] < 0
+            for field in integer_fields
+        )
+        or isolation["real_uid"] != isolation["expected_uid"]
+        or isolation["effective_uid"] != isolation["expected_uid"]
+        or isolation["real_gid"] != isolation["expected_gid"]
+        or isolation["effective_gid"] != isolation["expected_gid"]
+        or isolation.get("effective_capabilities") != "0000000000000000"
+        or isolation.get("no_new_privileges") is not True
+        or isolation.get("observed_interfaces") != ["lo"]
+    ):
+        raise WatchError("pinned CDP isolation observation is invalid")
+    topology = value.get("topology")
+    topology_booleans = (
+        "cross_site_iframe_request",
+        "redirect_terminal_request",
+        "worker_fetch_paused_on_page",
+        "router_closed",
+        "ledger_closed",
+        "extra_info_closed",
+        "browser_closed",
+        "server_thread_stopped",
+    )
+    if (
+        not isinstance(topology, dict)
+        or set(topology)
+        != {
+            "observed_target_types",
+            "event_count",
+            "cross_site_iframe_request",
+            "duplicate_request_occurrences",
+            "redirect_terminal_request",
+            "worker_network_target_types",
+            "worker_fetch_paused_on_page",
+            "router_closed",
+            "ledger_closed",
+            "extra_info_closed",
+            "browser_closed",
+            "server_thread_stopped",
+        }
+        or topology.get("observed_target_types")
+        != ["iframe", "page", "shared_worker", "worker"]
+        or type(topology.get("event_count")) is not int
+        or topology["event_count"] < 1
+        or topology.get("duplicate_request_occurrences") != 2
+        or topology.get("worker_network_target_types") != ["shared_worker", "worker"]
+        or any(topology.get(field) is not True for field in topology_booleans)
+    ):
+        raise WatchError("pinned CDP topology observation did not pass")
+
+
+def _validate_foundation(
+    binding: Any,
+    *,
+    paths: WatchPaths,
+    prepare_source: Mapping[str, Any],
+    prepare_image: str,
+    acquisition_started_at: Any,
+) -> dict[str, str]:
     if not isinstance(binding, dict) or set(binding) != {"path", "sha256"}:
         raise WatchError("acquisition foundation binding is malformed")
     claimed = binding["sha256"]
@@ -792,6 +1544,231 @@ def _validate_foundation(binding: Any, *, paths: WatchPaths) -> None:
     )
     if snapshot.sha256 != claimed:
         raise WatchError("acquisition foundation binding does not verify")
+    payload = snapshot.value["payload"]
+    expected_foundation_keys = {
+        "attestation_schema_version",
+        "artifact_type",
+        "study_id",
+        "cohort_version",
+        "recorded_at",
+        "implementation_status",
+        "promotion_authority",
+        "implementation_scope",
+        "paper_equivalent",
+        "no_waivers",
+        "source",
+        "build_execution_identity",
+        "evidence",
+        "summary",
+        "hard_gates",
+        "all_foundation_gates_passed",
+    }
+    cohort = payload.get("cohort_version")
+    if (
+        set(payload) != expected_foundation_keys
+        or payload.get("attestation_schema_version") != FOUNDATION_SCHEMA_VERSION
+        or payload.get("artifact_type") != FOUNDATION_TYPE
+        or payload.get("study_id") != STUDY_ID
+        or type(cohort) is not int
+        or cohort < 1
+        or payload.get("implementation_status")
+        != "foundation-ready-for-class-acquisition"
+        or payload.get("promotion_authority") is not False
+        or payload.get("implementation_scope") != "client_only_quic"
+        or payload.get("paper_equivalent") is not False
+        or payload.get("no_waivers") is not True
+        or payload.get("all_foundation_gates_passed") is not True
+        or binding["path"] != f"/lab/artifacts/class-study-foundation-v{cohort}.json"
+    ):
+        raise WatchError("acquisition foundation authority envelope is invalid")
+    collection_source = payload.get("source")
+    if not isinstance(collection_source, dict):
+        raise WatchError("acquisition foundation collection source is missing")
+    collection_image = collection_source.get("image_digest")
+    _validate_clean_source(
+        collection_source,
+        image=str(collection_image),
+        label="acquisition foundation collection source",
+    )
+    evidence = payload.get("evidence")
+    if not isinstance(evidence, dict) or set(evidence) != {
+        "build_execution",
+        "pinned_cdp_probe",
+        "reference",
+        "code_gate",
+        "controlled_qualification",
+        "regression_results",
+        "controlled_results",
+    }:
+        raise WatchError("acquisition foundation evidence inventory is incomplete")
+    build_binding = evidence.get("build_execution")
+    if (
+        not isinstance(build_binding, dict)
+        or set(build_binding) != {"path", "sha256"}
+        or build_binding.get("path")
+        != f"/lab/artifacts/buflo-study/build-execution-v{cohort}.json"
+        or _SHA256_RE.fullmatch(str(build_binding.get("sha256"))) is None
+    ):
+        raise WatchError("acquisition foundation build binding is invalid")
+    build_path = _container_binding_path(
+        build_binding["path"], paths=paths, label="foundation no-cache build execution"
+    )
+    build_snapshot = _load_build_execution(build_path, paths=paths)
+    build = build_snapshot.value
+    images = build.get("images")
+    collection_role = images.get("collection") if isinstance(images, dict) else None
+    prepare_role = images.get("prepare") if isinstance(images, dict) else None
+    if (
+        build_snapshot.sha256 != build_binding["sha256"]
+        or build.get("cohort_version") != cohort
+        or build.get("source") != collection_source
+        or not isinstance(collection_role, dict)
+        or collection_role.get("id") != collection_image
+        or not isinstance(prepare_role, dict)
+        or prepare_role.get("id") != prepare_image
+    ):
+        raise WatchError("acquisition foundation build/source/image binding differs")
+    expected_identity = {
+        "cohort_version": cohort,
+        "sha256": build_snapshot.sha256,
+        "collection_image": collection_image,
+        "started_at": build.get("started_at"),
+        "finished_at": build.get("finished_at"),
+    }
+    if payload.get("build_execution_identity") != expected_identity:
+        raise WatchError("acquisition foundation build identity is invalid")
+
+    pinned_binding = evidence.get("pinned_cdp_probe")
+    if not isinstance(pinned_binding, dict) or set(pinned_binding) != {
+        "path",
+        "sha256",
+        "payload_sha256",
+        "build_execution",
+        "probe_contract_sha256",
+    }:
+        raise WatchError("acquisition foundation pinned CDP binding is missing")
+    for key in ("sha256", "payload_sha256", "probe_contract_sha256"):
+        if _SHA256_RE.fullmatch(str(pinned_binding.get(key))) is None:
+            raise WatchError("acquisition foundation pinned CDP digest is invalid")
+    expected_pinned_path = (
+        f"/lab/artifacts/buflo-study/pinned-cdp-execution-v{cohort}.json"
+    )
+    if pinned_binding.get("path") != expected_pinned_path:
+        raise WatchError("acquisition foundation pinned CDP path is not canonical")
+    pinned_path = _container_binding_path(
+        pinned_binding["path"], paths=paths, label="foundation pinned CDP probe"
+    )
+    pinned_snapshot = _load_canonical_receipt(
+        pinned_path,
+        root=paths.lab_root,
+        receipt_type=PINNED_CDP_TYPE,
+        label="foundation pinned CDP probe",
+    )
+    pinned = pinned_snapshot.value["payload"]
+    if set(pinned) != {
+        "probe_schema_version",
+        "artifact_type",
+        "study_id",
+        "cohort_version",
+        "recorded_at",
+        "result",
+        "build_execution",
+        "build_execution_identity",
+        "collection_source",
+        "prepare_source",
+        "prepare_image_digest",
+        "probe_contract",
+        "probe_contract_sha256",
+        "observation",
+    }:
+        raise WatchError("foundation pinned CDP payload fields differ from the contract")
+    contract_sha256 = _sha256_bytes(_canonical_json_bytes(_PINNED_CDP_CONTRACT))
+    pinned_build = pinned.get("build_execution")
+    expected_pinned_build = {
+        "path": build_binding["path"],
+        "sha256": build_snapshot.sha256,
+        "payload_sha256": build.get("payload_sha256"),
+    }
+    expected_prepare_source = {**collection_source, "image_digest": prepare_image}
+    if (
+        pinned_snapshot.sha256 != pinned_binding["sha256"]
+        or pinned_snapshot.value["payload_sha256"] != pinned_binding["payload_sha256"]
+        or pinned.get("probe_schema_version") != 1
+        or pinned.get("artifact_type") != PINNED_CDP_TYPE
+        or pinned.get("study_id") != STUDY_ID
+        or pinned.get("cohort_version") != cohort
+        or pinned.get("result") != "pass"
+        or pinned_build != expected_pinned_build
+        or pinned_binding.get("build_execution") != expected_pinned_build
+        or pinned.get("build_execution_identity") != expected_identity
+        or pinned.get("collection_source") != collection_source
+        or pinned.get("prepare_source") != expected_prepare_source
+        or dict(prepare_source) != expected_prepare_source
+        or pinned.get("prepare_image_digest") != prepare_image
+        or pinned.get("probe_contract") != _PINNED_CDP_CONTRACT
+        or pinned.get("probe_contract_sha256") != contract_sha256
+        or pinned_binding.get("probe_contract_sha256") != contract_sha256
+    ):
+        raise WatchError("foundation pinned CDP source/build/contract binding differs")
+    _validate_pinned_cdp_observation(pinned.get("observation"))
+    build_finished = _evidence_timestamp(build.get("finished_at"), label="no-cache build finish")
+    probe_recorded = _evidence_timestamp(pinned.get("recorded_at"), label="pinned CDP probe")
+    foundation_recorded = _evidence_timestamp(
+        payload.get("recorded_at"), label="class foundation"
+    )
+    acquisition_started = _evidence_timestamp(
+        acquisition_started_at, label="class acquisition start"
+    )
+    if not build_finished <= probe_recorded <= foundation_recorded <= acquisition_started:
+        raise WatchError("acquisition foundation/pinned CDP chronology is invalid")
+
+    summary = payload.get("summary")
+    if not isinstance(summary, dict) or summary.get("pinned_cdp_probe") != "pass":
+        raise WatchError("acquisition foundation pinned CDP summary is invalid")
+    gates = payload.get("hard_gates")
+    if not isinstance(gates, list) or len(gates) != len(_FOUNDATION_GATES):
+        raise WatchError("acquisition foundation hard-gate inventory is incomplete")
+    for ordinal, (gate, identity) in enumerate(zip(gates, _FOUNDATION_GATES, strict=True), 1):
+        evidence_sha256s = gate.get("evidence_sha256s") if isinstance(gate, dict) else None
+        if (
+            not isinstance(gate, dict)
+            or set(gate)
+            != {
+                "ordinal",
+                "gate",
+                "gate_identity_sha256",
+                "result",
+                "evidence_sha256s",
+            }
+            or gate.get("ordinal") != ordinal
+            or gate.get("gate") != identity
+            or gate.get("gate_identity_sha256")
+            != _sha256_bytes(_canonical_json_bytes({"ordinal": ordinal, "gate": identity}))
+            or gate.get("result") != "pass"
+            or not isinstance(evidence_sha256s, list)
+            or not evidence_sha256s
+            or evidence_sha256s != sorted(set(evidence_sha256s))
+            or any(_SHA256_RE.fullmatch(str(item)) is None for item in evidence_sha256s)
+        ):
+            raise WatchError("acquisition foundation hard-gate evidence is invalid")
+    expected_probe_gate = sorted(
+        {
+            pinned_snapshot.sha256,
+            pinned_snapshot.value["payload_sha256"],
+            build_snapshot.sha256,
+            str(build.get("payload_sha256")),
+            contract_sha256,
+        }
+    )
+    if gates[-1]["evidence_sha256s"] != expected_probe_gate:
+        raise WatchError("acquisition foundation pinned CDP hard gate is not exact")
+    return {
+        "foundation_sha256": snapshot.sha256,
+        "pinned_cdp_sha256": pinned_snapshot.sha256,
+        "pinned_cdp_payload_sha256": pinned_snapshot.value["payload_sha256"],
+        "pinned_cdp_contract_sha256": contract_sha256,
+        "build_execution_sha256": build_snapshot.sha256,
+    }
 
 
 def _validate_immutable_binding(paths: WatchPaths) -> AcquisitionBinding:
@@ -883,11 +1860,26 @@ def _validate_immutable_binding(paths: WatchPaths) -> AcquisitionBinding:
         or source.get("neqo_patch_sha256") != EMPTY_SHA256
     ):
         raise WatchError("acquisition provenance does not bind an exact clean source checkout")
-    _validate_foundation(payload["foundation_attestation"], paths=paths)
+    foundation_authority = _validate_foundation(
+        payload["foundation_attestation"],
+        paths=paths,
+        prepare_source=source,
+        prepare_image=image,
+        acquisition_started_at=payload["started_at"],
+    )
     binding = AcquisitionBinding(
         prepare_image=image,
         catalogue_sha256=catalogue_sha256,
         provenance_sha256=provenance_snapshot.sha256,
+        foundation_sha256=foundation_authority["foundation_sha256"],
+        pinned_cdp_sha256=foundation_authority["pinned_cdp_sha256"],
+        pinned_cdp_payload_sha256=foundation_authority[
+            "pinned_cdp_payload_sha256"
+        ],
+        pinned_cdp_contract_sha256=foundation_authority[
+            "pinned_cdp_contract_sha256"
+        ],
+        build_execution_sha256=foundation_authority["build_execution_sha256"],
         candidate_ids=candidate_ids,
         candidate_order=candidate_order,
         source=dict(source),

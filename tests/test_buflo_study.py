@@ -6953,7 +6953,7 @@ def test_launcher_requires_clean_capture_image_and_no_cache_build() -> None:
     assert "windows_docker_storage_probe.ps1" in launcher
     assert '"schema_version": 3' in launcher
     assert '"host_storage_preflight": host_storage' in launcher
-    assert launcher.count('"${ROOT}/src/qcsd_lab/build_storage.py" receipt') == 2
+    assert launcher.count('"${ROOT}/src/qcsd_lab/build_storage.py" receipt') == 3
     assert "validate_build_execution_envelope" in launcher
     assert launcher.count('--iidfile "${') == 3
     assert "acquire_evidence_build_lock" in launcher

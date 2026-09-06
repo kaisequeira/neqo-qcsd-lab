@@ -6,7 +6,8 @@ create-only, hash-bound foundation, readiness, historical, comparison, and
 final-validation receipts:
 
 * a *foundation* receipt after fresh source/build/reference/code/regression/
-  controlled gates reverify, before any class acquisition or pilot fitting;
+  controlled and pinned-CDP gates reverify, before any class acquisition or
+  pilot fitting;
 * a *readiness* receipt after the final cohort, authoritative fit, full live
   qualification, and the 900-cell first-launch certification all reverify;
 * a final validation attestation after all ten canaries and formal blocks, the
@@ -42,9 +43,9 @@ from .buflo_study import (
 )
 from .class_acquisition import (
     COMPLETION_TYPE,
-    PROVENANCE_TYPE as ACQUISITION_PROVENANCE_TYPE,
     validate_acquisition_completion,
 )
+from .class_acquisition import PROVENANCE_TYPE as ACQUISITION_PROVENANCE_TYPE
 from .class_fitting import (
     AUTHORITATIVE_STAGE,
     NUMERIC_PROVENANCE_FILE,
@@ -73,10 +74,12 @@ from .class_study import (
     validate_hash_bound_receipt,
     write_create_only_json,
 )
+from .pinned_cdp import validate_pinned_cdp_receipt
 from .util import LAB_ROOT, load_json, require_disjoint_path, sha256_file, source_metadata
 from .verification import verify_result
 
 SCHEMA_VERSION = 1
+FOUNDATION_SCHEMA_VERSION = 2
 FOUNDATION_RECEIPT_TYPE = "qcsd-class-study-foundation-attestation"
 READINESS_RECEIPT_TYPE = "qcsd-class-study-readiness-attestation"
 READINESS_IMPLEMENTATION_STATUS = "candidate-ready-for-pre-formal-snapshot"
@@ -135,7 +138,14 @@ _READINESS_GATES = (
     "full-live-final-qualification-600-of-600",
     "first-launch-certification-900-of-900",
 )
-_FOUNDATION_GATES = _READINESS_GATES[:5]
+_FOUNDATION_GATES = (
+    "current-clean-source-and-no-cache-build",
+    "independent-reference-conformance",
+    "complete-code-gate",
+    "nine-mode-regression-18-of-18",
+    "controlled-qualification-160-of-160",
+    "pinned-cdp-integration-probe",
+)
 
 _FINAL_GATES = (
     "class-readiness-attestation",
@@ -166,6 +176,7 @@ def create_class_foundation_attestation(destination: Path, **inputs: Any) -> Pat
         recorded_at=None,
         deep_code_gate=True,
         evidence_source=None,
+        pinned_runtime_role="collection",
     )
     output = write_create_only_json(
         destination,
@@ -181,7 +192,7 @@ def validate_class_foundation_attestation(
     deep_code_gate: bool = True,
     runtime_role: str = "collection",
 ) -> dict[str, Any]:
-    """Reconstruct the five prerequisite gates from immutable evidence."""
+    """Reconstruct the six prerequisite gates from immutable evidence."""
 
     receipt_path, value, payload = _load_bound_receipt(path, expected_type=FOUNDATION_RECEIPT_TYPE)
     _validate_foundation_envelope(payload)
@@ -199,11 +210,15 @@ def validate_class_foundation_attestation(
             evidence.get("controlled_qualification"),
             label="controlled qualification",
         ),
+        pinned_cdp_receipt=_pinned_cdp_path_from_binding(
+            evidence.get("pinned_cdp_probe")
+        ),
         regression_result_roots=_roots_from_bindings(evidence.get("regression_results")),
         controlled_result_roots=_roots_from_bindings(evidence.get("controlled_results")),
         recorded_at=payload.get("recorded_at"),
         deep_code_gate=deep_code_gate,
         evidence_source=payload.get("source"),
+        pinned_runtime_role=runtime_role,
     )
     if payload != expected:
         raise ValueError("class foundation attestation differs from reconstructed evidence")
@@ -619,11 +634,13 @@ def _foundation_value(
     reference_receipt: Path,
     code_gate_receipt: Path,
     controlled_qualification_receipt: Path,
+    pinned_cdp_receipt: Path,
     regression_result_roots: Sequence[Path],
     controlled_result_roots: Sequence[Path],
     recorded_at: object,
     deep_code_gate: bool,
     evidence_source: object,
+    pinned_runtime_role: str,
 ) -> dict[str, Any]:
     if type(cohort_version) is not int or cohort_version < 1:
         raise ValueError("class foundation cohort version must be a positive integer")
@@ -642,10 +659,19 @@ def _foundation_value(
     if build["source"] != current_source:
         raise ValueError("class foundation build differs from current source")
     build_identity = _build_identity(build)
+    pinned_cdp = validate_pinned_cdp_receipt(
+        pinned_cdp_receipt,
+        build_execution_receipt=build_execution_receipt,
+        expected_cohort_version=cohort_version,
+        runtime_role=pinned_runtime_role,
+    )
     reference = validate_reference_gate_receipt(
         reference_receipt, expected_cohort_version=cohort_version
     )
-    regression = validate_regression_results(regression_result_roots)
+    regression = validate_regression_results(
+        regression_result_roots,
+        _expected_collection_source=current_source,
+    )
     if regression.get("samples") != REGRESSION_SAMPLE_COUNT:
         raise ValueError("class foundation regression is not exactly 18/18")
     code = validate_code_gate_receipt(
@@ -653,11 +679,13 @@ def _foundation_value(
         regression_result_roots=regression_result_roots,
         expected_cohort_version=cohort_version,
         deep=deep_code_gate,
+        _expected_collection_source=current_source,
     )
     controlled = validate_qualification_receipt(
         controlled_qualification_receipt,
         controlled_result_roots=controlled_result_roots,
         expected_cohort_version=cohort_version,
+        _expected_collection_source=current_source,
     )
     controlled_results = controlled.get("controlled_results")
     build_binding = {"path": build["path"], "sha256": build["sha256"]}
@@ -683,8 +711,19 @@ def _foundation_value(
     if recorded_at is None:
         recorded_at = datetime.now(UTC).isoformat()
     timestamp = _aware_timestamp(recorded_at, label="foundation attestation")
+    probe_timestamp = _aware_timestamp(
+        pinned_cdp.get("recorded_at"), label="pinned CDP probe"
+    )
+    build_finished = _aware_timestamp(
+        build.get("finished_at"), label="no-cache build finish"
+    )
+    if not build_finished <= probe_timestamp <= timestamp:
+        raise ValueError(
+            "class foundation requires build finish <= pinned CDP probe <= foundation"
+        )
     evidence = {
         "build_execution": _file_binding(build_execution_receipt),
+        "pinned_cdp_probe": _pinned_cdp_binding(pinned_cdp),
         "reference": _file_binding(reference_receipt),
         "code_gate": _file_binding(code_gate_receipt),
         "controlled_qualification": _file_binding(controlled_qualification_receipt),
@@ -702,9 +741,16 @@ def _foundation_value(
             controlled["sha256"],
             *(item["evidence_sha256"] for item in evidence["controlled_results"]),
         ],
+        "pinned-cdp-integration-probe": [
+            pinned_cdp["sha256"],
+            pinned_cdp["payload_sha256"],
+            pinned_cdp["build_execution"]["sha256"],
+            pinned_cdp["build_execution"]["payload_sha256"],
+            pinned_cdp["probe_contract_sha256"],
+        ],
     }
     return {
-        "attestation_schema_version": SCHEMA_VERSION,
+        "attestation_schema_version": FOUNDATION_SCHEMA_VERSION,
         "artifact_type": FOUNDATION_RECEIPT_TYPE,
         "study_id": STUDY_ID,
         "cohort_version": cohort_version,
@@ -721,6 +767,7 @@ def _foundation_value(
             "reference_profiles": reference["profiles_checked"],
             "regression_samples": REGRESSION_SAMPLE_COUNT,
             "controlled_samples": CONTROLLED_SAMPLE_COUNT,
+            "pinned_cdp_probe": "pass",
         },
         "hard_gates": _hard_gate_records(_FOUNDATION_GATES, gate_evidence),
         "all_foundation_gates_passed": True,
@@ -886,8 +933,20 @@ def _readiness_value(
     ):
         raise ValueError("class readiness live prerequisite gates use a different build")
     foundation_evidence = foundation.get("evidence")
+    if not isinstance(foundation_evidence, Mapping):
+        raise TypeError("class readiness foundation typed evidence is missing")
+    pinned_cdp_path = _pinned_cdp_path_from_binding(
+        foundation_evidence.get("pinned_cdp_probe")
+    )
+    pinned_cdp = validate_pinned_cdp_receipt(
+        pinned_cdp_path,
+        build_execution_receipt=build_execution_receipt,
+        expected_cohort_version=cohort_version,
+        runtime_role="collection",
+    )
     expected_foundation_evidence = {
         "build_execution": _file_binding(build_execution_receipt),
+        "pinned_cdp_probe": _pinned_cdp_binding(pinned_cdp),
         "reference": _file_binding(reference_receipt),
         "code_gate": _file_binding(code_gate_receipt),
         "controlled_qualification": _file_binding(controlled_qualification_receipt),
@@ -964,20 +1023,38 @@ def _readiness_value(
         admission=pilot_admission,
         expected_role="pilot-compatibility",
     )
-    _selection_path, selection_value, _selection_payload = _load_bound_receipt(
+    _selection_path, selection_value, selection_payload = _load_bound_receipt(
         final_selection_receipt,
         expected_type="qcsd-class-study-final-selection-input",
     )
+    selection_compatibility = selection_payload.get("pilot_compatibility")
+    selection_bundle = (
+        selection_compatibility.get("finalized_bundle")
+        if isinstance(selection_compatibility, Mapping)
+        else None
+    )
+    qualification_authority_sha256 = canonical_json_sha256(qualification_authority)
+    if (
+        not isinstance(selection_bundle, Mapping)
+        or selection_bundle.get("qualification_authority") != qualification_authority
+        or selection_bundle.get("qualification_authority_sha256")
+        != qualification_authority_sha256
+    ):
+        raise ValueError("class readiness final selection uses another qualification authority")
     validate_final_selection_input(
         selection_value,
         pilot_admission=pilot_admission,
+        pilot_fitting_result_root=pilot_fitting_result_root,
         pilot_numeric_bundle_root=pilot_numeric_bundle_root,
         pilot_compatibility_result_root=pilot_compatibility_result_root,
+        qualification_authority=qualification_authority,
     )
     if selection_value != build_final_selection_input(
         pilot_admission,
+        pilot_fitting_result_root=pilot_fitting_result_root,
         pilot_numeric_bundle_root=pilot_numeric_bundle_root,
         pilot_compatibility_result_root=pilot_compatibility_result_root,
+        qualification_authority=qualification_authority,
     ):
         raise ValueError("class readiness final selection was not independently reproduced")
 
@@ -1148,6 +1225,7 @@ def _readiness_value(
             "sidecar_root": _directory_binding(qualification_context.sidecar_root),
             "prefix_spec_root": _directory_binding(qualification_context.prefix_spec_root),
             "qualification_authority": qualification_authority,
+            "qualification_authority_sha256": qualification_authority_sha256,
         },
         "certification_result": _class_result_binding(certification_result_root),
     }
@@ -1178,6 +1256,7 @@ def _readiness_value(
             evidence["final_cohort_assembly"]["sha256"],
             evidence["pilot_numeric_bundle"]["provenance_sha256"],
             evidence["pilot_compatibility_result"]["evidence_sha256"],
+            qualification_authority_sha256,
         ],
         "authoritative-fitting-2000-of-2000": [
             evidence["authoritative_fitting_result"]["evidence_sha256"],
@@ -1223,6 +1302,7 @@ def _readiness_value(
             "certification_defense_parameter_sha256": dict(certification_parameters),
             "certification_defense_runtime_inputs": certification_runtime_inputs,
             "final_qualification_set_manifest_sha256": (final_qualification_manifest_sha256),
+            "qualification_authority_sha256": qualification_authority_sha256,
         },
         "hard_gates": _hard_gate_records(_READINESS_GATES, gate_evidence),
         "all_readiness_gates_passed": True,
@@ -2630,7 +2710,7 @@ def _validate_readiness_envelope(payload: Mapping[str, Any]) -> None:
 
 def _validate_foundation_envelope(payload: Mapping[str, Any]) -> None:
     if (
-        payload.get("attestation_schema_version") != SCHEMA_VERSION
+        payload.get("attestation_schema_version") != FOUNDATION_SCHEMA_VERSION
         or payload.get("artifact_type") != FOUNDATION_RECEIPT_TYPE
         or payload.get("study_id") != STUDY_ID
         or payload.get("implementation_status") != "foundation-ready-for-class-acquisition"
@@ -2960,6 +3040,21 @@ def _file_binding(path: Path) -> dict[str, str]:
     return {"path": str(resolved), "sha256": sha256_file(resolved)}
 
 
+def _pinned_cdp_binding(receipt: Mapping[str, Any]) -> dict[str, Any]:
+    """Project the exact receipt/build/contract authority into foundation evidence."""
+
+    build = receipt.get("build_execution")
+    if not isinstance(build, Mapping):
+        raise TypeError("pinned CDP probe has no build binding")
+    return {
+        "path": str(receipt["path"]),
+        "sha256": str(receipt["sha256"]),
+        "payload_sha256": str(receipt["payload_sha256"]),
+        "build_execution": dict(build),
+        "probe_contract_sha256": str(receipt["probe_contract_sha256"]),
+    }
+
+
 def _result_binding(path: Path) -> dict[str, str]:
     root = _regular_directory(path, "evidence result")
     evidence = _regular_file(root / "evidence.sha256", "result evidence seal")
@@ -3100,6 +3195,30 @@ def _path_from_binding(value: object, *, label: str) -> Path:
     return path
 
 
+def _pinned_cdp_path_from_binding(value: object) -> Path:
+    if (
+        not isinstance(value, Mapping)
+        or set(value)
+        != {
+            "path",
+            "sha256",
+            "payload_sha256",
+            "build_execution",
+            "probe_contract_sha256",
+        }
+        or not isinstance(value.get("path"), str)
+        or _DIGEST.fullmatch(str(value.get("sha256"))) is None
+        or _DIGEST.fullmatch(str(value.get("payload_sha256"))) is None
+        or _DIGEST.fullmatch(str(value.get("probe_contract_sha256"))) is None
+        or not isinstance(value.get("build_execution"), Mapping)
+    ):
+        raise ValueError("class attestation pinned CDP probe binding is invalid")
+    path = _regular_file(Path(value["path"]), "pinned CDP probe")
+    if sha256_file(path) != value["sha256"]:
+        raise ValueError("class attestation pinned CDP probe digest changed")
+    return path
+
+
 def _root_from_result_binding(value: object, *, label: str) -> Path:
     if (
         not isinstance(value, Mapping)
@@ -3195,6 +3314,7 @@ def _protected_foundation_inputs(inputs: Mapping[str, Any]) -> tuple[Path, ...]:
         protected.extend(Path(path) for path in inputs.get(key, ()))
     for key in (
         "build_execution_receipt",
+        "pinned_cdp_receipt",
         "reference_receipt",
         "code_gate_receipt",
         "controlled_qualification_receipt",

@@ -493,7 +493,11 @@ def test_final_review_and_attestation_actions_validate_once_after_publication(
     ]
 
 
-def _qualification_authority() -> dict[str, object]:
+def _qualification_authority(
+    *,
+    foundation_sha256: str = "5" * 64,
+    foundation_path: str = "/evidence/foundation.json",
+) -> dict[str, object]:
     source = {
         "image_digest": "sha256:" + "1" * 64,
         "lab_commit": "2" * 40,
@@ -509,8 +513,8 @@ def _qualification_authority() -> dict[str, object]:
         "schema_version": 1,
         "artifact_type": "qcsd-class-study-qualification-authority",
         "foundation_attestation": {
-            "path": "/evidence/foundation.json",
-            "sha256": "5" * 64,
+            "path": foundation_path,
+            "sha256": foundation_sha256,
             "payload_sha256": "6" * 64,
         },
         "build_execution": {"path": "/evidence/build.json", "sha256": "7" * 64},
@@ -525,6 +529,184 @@ def _qualification_authority() -> dict[str, object]:
         "prepare_source": {**source, "image_digest": prepare},
         "prepare_image_digest": prepare,
     }
+
+
+@pytest.mark.parametrize(
+    ("role", "frozen"),
+    (
+        ("pilot-compatibility", False),
+        ("certification", True),
+    ),
+)
+def test_class_parameter_fallback_requires_and_threads_foundation_authority(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    role: str,
+    frozen: bool,
+) -> None:
+    import qcsd_lab.class_fitting as class_fitting
+    import qcsd_lab.parameters as parameters
+
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    parameter = bundle / "traffic-morphing.json"
+    provenance = bundle / "provenance.json"
+    parameter.write_text("{}\n", encoding="utf-8")
+    provenance.write_text(
+        json.dumps(
+            {
+                "artifact_type": "qcsd-class-study-research-defense-bundle",
+                "qualification_inputs": {"qualification_set": "qualified-v1"},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    qualification_root = tmp_path / "qualification-inputs"
+    authority = _qualification_authority()
+    observed: dict[str, object] = {}
+
+    def record(
+        parameter_path: Path,
+        provenance_path: Path,
+        **kwargs: object,
+    ) -> tuple[str, str, str]:
+        observed.update(kwargs)
+        return (
+            util.sha256_file(parameter_path),
+            util.sha256_file(provenance_path),
+            (
+                "sealed-class-study-pilot-fitting-v1"
+                if role == "pilot-compatibility"
+                else "sealed-class-study-fitting-v1"
+            ),
+        )
+
+    monkeypatch.setattr(class_fitting, "class_research_parameter_record", record)
+    common = {
+        "provenance_path": provenance,
+        "expected_kind": "traffic_morphing",
+        "expected_qcsd_profile": "research-1200",
+        "expected_udp_payload_ceiling": 1_200,
+        "expected_workloads": ("class-000",),
+        "qualification_inputs_root": qualification_root,
+        "expected_qualification_set": "qualified-v1",
+        "campaign_evidence_role": role,
+    }
+    if frozen:
+        validate = parameters.validate_frozen_parameter_artifact
+        common.update(
+            original_parameter_name="traffic-morphing.json",
+            allow_reviewed_fixture=False,
+        )
+    else:
+        validate = parameters.validate_parameter_artifact
+
+    with pytest.raises(ValueError, match="qualification authority"):
+        validate(parameter, **common)
+    artifact = validate(parameter, **common, qualification_authority=authority)
+
+    context = observed["qualification_context"]
+    assert isinstance(context, class_fitting.QualificationContext)
+    assert context.qualification_authority == authority
+    assert context.require_current_implementation is not frozen
+    assert artifact.sha256 == util.sha256_file(parameter)
+
+
+def test_class_parameter_context_rejects_same_build_other_foundation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import qcsd_lab.class_fitting as class_fitting
+    import qcsd_lab.parameters as parameters
+
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    parameter = bundle / "traffic-morphing.json"
+    provenance = bundle / "provenance.json"
+    parameter.write_text("{}\n", encoding="utf-8")
+    provenance.write_text(
+        json.dumps(
+            {
+                "artifact_type": "qcsd-class-study-research-defense-bundle",
+                "qualification_inputs": {"qualification_set": "qualified-v1"},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    for name in ("workloads", "sidecars", "prefixes"):
+        (tmp_path / name).mkdir()
+    expected = _qualification_authority()
+    substituted = json.loads(json.dumps(expected))
+    substituted["foundation_attestation"] = {
+        "path": "/evidence/same-build-other-foundation.json",
+        "sha256": "8" * 64,
+        "payload_sha256": "9" * 64,
+    }
+    context = class_fitting.QualificationContext(
+        workload_root=tmp_path / "workloads",
+        sidecar_root=tmp_path / "sidecars",
+        prefix_spec_root=tmp_path / "prefixes",
+        qualification_authority=substituted,
+        expected_qualification_set="qualified-v1",
+    )
+    monkeypatch.setattr(
+        class_fitting,
+        "class_research_parameter_record",
+        lambda *_args, **_kwargs: pytest.fail("substituted authority reached fitting verifier"),
+    )
+
+    with pytest.raises(ValueError, match="another foundation authority"):
+        parameters.validate_parameter_artifact(
+            parameter,
+            provenance_path=provenance,
+            expected_kind="traffic_morphing",
+            expected_qcsd_profile="research-1200",
+            expected_udp_payload_ceiling=1_200,
+            expected_workloads=("class-000",),
+            qualification_context=context,
+            qualification_authority=expected,
+            expected_qualification_set="qualified-v1",
+            campaign_evidence_role="certification",
+        )
+
+
+def test_frozen_authority_permits_only_foundation_path_relocation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import qcsd_lab.class_attestation as class_attestation
+
+    frozen_inputs = tmp_path / "result/inputs"
+    frozen_inputs.mkdir(parents=True)
+    frozen_foundation = frozen_inputs / "class-study-foundation.json"
+    frozen_foundation.write_text("{}\n", encoding="utf-8")
+    original = _qualification_authority(
+        foundation_path="/lab/artifacts/class-study-foundation-v23.json"
+    )
+
+    def derive(path: Path, **_kwargs: object) -> dict[str, object]:
+        relocated = json.loads(json.dumps(original))
+        relocated["foundation_attestation"]["path"] = str(path.resolve())
+        return relocated
+
+    monkeypatch.setattr(class_attestation, "class_qualification_authority", derive)
+    assert (
+        orchestrator._frozen_qualification_authority(
+            frozen_inputs,
+            manifest_authority=original,
+        )
+        == original
+    )
+
+    other_foundation = json.loads(json.dumps(original))
+    other_foundation["foundation_attestation"]["sha256"] = "8" * 64
+    with pytest.raises(ValueError, match="foundation/build/source"):
+        orchestrator._frozen_qualification_authority(
+            frozen_inputs,
+            manifest_authority=other_foundation,
+        )
 
 
 def test_status_exposes_stability_and_certification_contracts():
@@ -599,6 +781,95 @@ def test_status_verifies_supplied_promotion_receipts(
     assert status["stages"]["historical_post_snapshot"]["phase"] == "post-formal"
     assert status["stages"]["comparison_review"]["passed"] is True
     assert status["attestation_generated"] is True
+
+
+def test_foundation_action_requires_and_forwards_canonical_pinned_cdp_receipt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import qcsd_lab.class_attestation as attestation
+
+    evidence_root = tmp_path / "artifacts/buflo-study"
+    evidence_root.mkdir(parents=True)
+    build = evidence_root / "build-execution-v23.json"
+    pinned = evidence_root / "pinned-cdp-execution-v23.json"
+    destination = tmp_path / "artifacts/class-study-foundation-v23.json"
+    other = tmp_path / "other.json"
+    for path in (build, pinned, other):
+        path.write_text("{}\n", encoding="utf-8")
+    monkeypatch.setattr(pipeline, "_validate_fresh_layout_arguments", lambda **_kwargs: None)
+    observed: dict[str, object] = {}
+
+    def create(path: Path, **kwargs: object) -> Path:
+        observed["destination"] = path
+        observed.update(kwargs)
+        return path
+
+    monkeypatch.setattr(attestation, "create_class_foundation_attestation", create)
+    monkeypatch.setattr(
+        attestation,
+        "validate_class_foundation_attestation",
+        lambda path, **_kwargs: {"path": str(path), "valid": True},
+    )
+    kwargs = {
+        "cohort_version": 23,
+        "build_execution_receipt": build,
+        "reference_receipt": other,
+        "code_gate_receipt": other,
+        "controlled_qualification_receipt": other,
+        "destination": destination,
+    }
+
+    with pytest.raises(ValueError, match="--pinned-cdp-receipt"):
+        pipeline.run_class_study_action("foundation", **kwargs)
+    with pytest.raises(ValueError, match="wrong canonical filename"):
+        pipeline.run_class_study_action(
+            "foundation",
+            **kwargs,
+            pinned_cdp_receipt=tmp_path / "copied-probe.json",
+        )
+
+    result = pipeline.run_class_study_action(
+        "foundation", **kwargs, pinned_cdp_receipt=pinned
+    )
+
+    assert result.status == "complete"
+    assert observed["pinned_cdp_receipt"] == pinned
+    assert observed["build_execution_receipt"] == build
+    assert observed["destination"] == destination
+
+
+def test_acquisition_init_rejects_invalid_pinned_foundation_before_runner(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import qcsd_lab.class_acquisition as acquisition
+    import qcsd_lab.class_attestation as attestation
+
+    monkeypatch.setattr(pipeline, "_validate_fresh_layout_arguments", lambda **_kwargs: None)
+    observed: dict[str, object] = {}
+
+    def reject_foundation(_path: Path, **kwargs: object) -> dict[str, object]:
+        observed.update(kwargs)
+        raise ValueError("foundation pinned CDP probe binding is invalid")
+
+    monkeypatch.setattr(
+        attestation, "validate_class_foundation_attestation", reject_foundation
+    )
+    monkeypatch.setattr(
+        acquisition,
+        "initialise_runner",
+        lambda *_a, **_k: pytest.fail("invalid foundation reached acquisition mutation"),
+    )
+
+    with pytest.raises(ValueError, match="pinned CDP probe"):
+        pipeline.run_class_study_action(
+            "acquisition-init",
+            candidate_catalogue_path=tmp_path / "catalogue.json",
+            acquisition_root=tmp_path / "acquisition",
+            acquisition_started_at="2026-08-28T04:00:00+00:00",
+            foundation_attestation=tmp_path / "foundation.json",
+        )
+
+    assert observed == {"deep_code_gate": True, "runtime_role": "prepare"}
 
 
 def test_status_refits_numeric_and_final_bundles_against_unique_stage_result(
@@ -722,6 +993,239 @@ def test_status_rejects_numeric_bundle_from_another_fitting_result(
             result_roots=(source,),
             numeric_bundle_roots=(numeric_root,),
         )
+
+
+def test_status_final_selection_forwards_exact_pilot_fitting_result(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import qcsd_lab.class_attestation as attestation
+
+    pilot_fitting = tmp_path / "selected-pilot-fitting-result"
+    pilot_compatibility = tmp_path / "pilot-compatibility-result"
+    numeric_root = tmp_path / "pilot-numeric"
+    for root in (pilot_fitting, pilot_compatibility, numeric_root):
+        root.mkdir()
+    final_selection = tmp_path / "final-selection.json"
+    final_selection.write_text("{}\n", encoding="utf-8")
+    foundation = tmp_path / "foundation.json"
+    foundation.write_text("{}\n", encoding="utf-8")
+    admission = _admission(tmp_path / "admission")
+    records = [
+        {**_record("pilot-fitting"), "root": str(pilot_fitting)},
+        {**_record("pilot-compatibility"), "root": str(pilot_compatibility)},
+    ]
+    authority = _qualification_authority()
+    numeric_calls: list[Path | None] = []
+    selection_calls: list[Path] = []
+
+    def verify_numeric(_path: Path, *, source_result_root: Path | None = None):
+        numeric_calls.append(source_result_root)
+        return SimpleNamespace(
+            stage="pilot",
+            as_dict=lambda: {"valid": True, "stage": "pilot"},
+        )
+
+    def validate_selection(*_args: object, **kwargs: object):
+        selection_calls.append(kwargs["pilot_fitting_result_root"])
+        return (("pilot-000", "pilot-001"),)
+
+    monkeypatch.setattr(
+        attestation,
+        "validate_class_foundation_attestation",
+        lambda *_args, **_kwargs: {"valid": True},
+    )
+    monkeypatch.setattr(
+        attestation,
+        "class_qualification_authority",
+        lambda *_args, **_kwargs: authority,
+    )
+    monkeypatch.setattr(pipeline, "_optional_admission", lambda *_args, **_kwargs: admission)
+    monkeypatch.setattr(pipeline, "_result_index", lambda *_args, **_kwargs: records)
+    monkeypatch.setattr(pipeline, "verify_numeric_fitting_bundle", verify_numeric)
+    monkeypatch.setattr(pipeline, "validate_final_selection_input", validate_selection)
+
+    status = pipeline.class_study_status(
+        final_selection_path=final_selection,
+        result_roots=(pilot_fitting, pilot_compatibility),
+        numeric_bundle_roots=(numeric_root,),
+        foundation_attestation=foundation,
+    )
+
+    assert numeric_calls == [None, pilot_fitting]
+    assert selection_calls == [pilot_fitting]
+    assert status["stages"]["final_selection"]["state"] == "verified"
+
+
+def test_verify_fitting_target_refits_exact_source_and_enforces_admission(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    target = tmp_path / "numeric"
+    target.mkdir()
+    source = tmp_path / "pilot-fitting-result"
+    source.mkdir()
+    admission = object()
+    verified = SimpleNamespace(
+        stage="pilot",
+        as_dict=lambda: {"valid": True, "stage": "pilot"},
+    )
+    observed: dict[str, object] = {}
+
+    def require_source(path: Path, stage: str, selected_admission: object):
+        observed["source"] = (path, stage, selected_admission)
+        return _record("pilot-fitting")
+
+    def verify_artifact(path: Path, **kwargs: object):
+        observed["artifact"] = (path, kwargs)
+        return verified
+
+    def require_admission(artifact: object, selected_admission: object) -> None:
+        observed["admission"] = (artifact, selected_admission)
+
+    monkeypatch.setattr(pipeline, "_require_fitting_source", require_source)
+    monkeypatch.setattr(pipeline, "verify_class_fitting_artifact_root", verify_artifact)
+    monkeypatch.setattr(pipeline, "_require_numeric_admission", require_admission)
+
+    result = pipeline._verify_target(
+        target,
+        admission=admission,
+        fitting_stage="pilot",
+        fitting_source_result_root=source,
+        workload_root=tmp_path,
+        numeric_bundle_root=None,
+        prefix_spec_root=None,
+        qualification_manifest=None,
+        foundation_attestation=None,
+        handoff=None,
+        deep=True,
+    )
+
+    assert result == {"valid": True, "stage": "pilot"}
+    assert observed["source"] == (source, "pilot", admission)
+    artifact_path, artifact_kwargs = observed["artifact"]
+    assert artifact_path == target
+    assert artifact_kwargs["source_result_root"] == source
+    assert observed["admission"] == (verified, admission)
+
+
+@pytest.mark.parametrize("mismatch", ("source", "stage", "cohort"))
+def test_verify_fitting_target_rejects_wrong_source_stage_or_cohort(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    mismatch: str,
+) -> None:
+    target = tmp_path / "numeric"
+    target.mkdir()
+    source = tmp_path / "pilot-fitting-result"
+    source.mkdir()
+    admission = object()
+    verified = SimpleNamespace(
+        stage="authoritative" if mismatch == "stage" else "pilot",
+        as_dict=lambda: pytest.fail("mismatched fitting artifact was accepted"),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_require_fitting_source",
+        lambda *_args, **_kwargs: _record("pilot-fitting"),
+    )
+    def verify_artifact(*_args: object, **kwargs: object) -> object:
+        if mismatch == "source":
+            assert kwargs["source_result_root"] == source
+            raise ValueError("fitting artifact belongs to another fitting rerun")
+        return verified
+
+    monkeypatch.setattr(pipeline, "verify_class_fitting_artifact_root", verify_artifact)
+
+    def require_admission(*_args: object) -> None:
+        if mismatch == "cohort":
+            raise ValueError("fitting bundle is bound to a different cohort admission")
+        pytest.fail("cohort admission was checked after an earlier fitting mismatch")
+
+    monkeypatch.setattr(pipeline, "_require_numeric_admission", require_admission)
+    message = {
+        "source": "another fitting rerun",
+        "stage": "wrong requested stage",
+        "cohort": "different cohort admission",
+    }[mismatch]
+    with pytest.raises(ValueError, match=message):
+        pipeline._verify_target(
+            target,
+            admission=admission,
+            fitting_stage="pilot",
+            fitting_source_result_root=source,
+            workload_root=tmp_path,
+            numeric_bundle_root=None,
+            prefix_spec_root=None,
+            qualification_manifest=None,
+            foundation_attestation=None,
+            handoff=None,
+            deep=True,
+        )
+
+
+@pytest.mark.parametrize("action", ("prefix-specs", "qualify-prefix"))
+def test_fitting_consumers_reject_another_rerun_before_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    action: str,
+) -> None:
+    source = tmp_path / "selected-fitting-result"
+    source.mkdir()
+    numeric = tmp_path / "numeric"
+    numeric.mkdir()
+    admission = object()
+    observed: list[Path | None] = []
+    monkeypatch.setattr(pipeline, "_validate_fresh_layout_arguments", lambda **_kwargs: None)
+    monkeypatch.setattr(pipeline, "_optional_admission", lambda *_args, **_kwargs: admission)
+    monkeypatch.setattr(
+        pipeline,
+        "_require_fitting_source",
+        lambda path, stage, selected: (
+            _record("pilot-fitting")
+            if (path, stage, selected) == (source, "pilot", admission)
+            else pytest.fail("consumer selected another fitting source")
+        ),
+    )
+
+    def reject_rerun(
+        _path: Path,
+        *,
+        source_result_root: Path | None = None,
+    ) -> object:
+        observed.append(source_result_root)
+        raise ValueError("numeric bundle belongs to another fitting rerun")
+
+    monkeypatch.setattr(pipeline, "verify_numeric_fitting_bundle", reject_rerun)
+    monkeypatch.setattr(
+        pipeline,
+        "derive_schema_six_prefix_specs",
+        lambda *_args, **_kwargs: pytest.fail("prefix specifications were published"),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_qualification_authority_for_action",
+        lambda *_args, **_kwargs: {},
+    )
+
+    kwargs: dict[str, object] = {}
+    if action == "qualify-prefix":
+        kwargs = {
+            "prefix_spec_root": tmp_path / "prefix",
+            "workload_root": tmp_path / "workloads",
+            "qualification_checkpoint": tmp_path / "checkpoint.json",
+            "qualification_sidecar_root": tmp_path / "sidecars",
+            "qualification_publication_root": tmp_path / "sets",
+            "foundation_attestation": tmp_path / "foundation.json",
+        }
+    with pytest.raises(ValueError, match="another fitting rerun"):
+        pipeline.run_class_study_action(
+            action,
+            stage="pilot",
+            capture_result=source,
+            numeric_bundle_root=numeric,
+            **kwargs,
+        )
+    assert observed == [source]
 
 
 def test_finalize_fitting_deep_verifies_the_unique_stage_result(
@@ -1586,6 +2090,15 @@ def test_every_capture_role_requires_and_binds_one_foundation_before_launch(
             "source": {"identity": "fixture"},
         },
     )
+    expected_qualification_authority = _qualification_authority(
+        foundation_sha256=pipeline.sha256_file(foundation),
+        foundation_path=str(foundation.resolve()),
+    )
+    monkeypatch.setattr(
+        attestation,
+        "class_qualification_authority",
+        lambda *_args, **_kwargs: expected_qualification_authority,
+    )
     with pytest.raises(ValueError, match="--foundation-attestation"):
         pipeline._validate_capture_foundation(
             role,
@@ -1604,6 +2117,10 @@ def test_every_capture_role_requires_and_binds_one_foundation_before_launch(
     )
     assert authority is not None
     assert authority["foundation_attestation"]["sha256"] == pipeline.sha256_file(foundation)
+    assert authority["qualification_authority"] == expected_qualification_authority
+    assert authority["qualification_authority_sha256"] == pipeline.canonical_json_sha256(
+        expected_qualification_authority
+    )
 
 
 def test_capture_foundation_rejects_resume_or_prerequisite_drift(
@@ -1620,6 +2137,14 @@ def test_capture_foundation_rejects_resume_or_prerequisite_drift(
             "recorded_at": "2026-08-28T00:00:00+00:00",
             "source": {"identity": "fixture"},
         },
+    )
+    monkeypatch.setattr(
+        attestation,
+        "class_qualification_authority",
+        lambda *_args, **_kwargs: _qualification_authority(
+            foundation_sha256=pipeline.sha256_file(foundation),
+            foundation_path=str(foundation.resolve()),
+        ),
     )
     with pytest.raises(ValueError, match="different foundation attestation"):
         pipeline._validate_capture_foundation(
@@ -1748,6 +2273,85 @@ def test_capture_guidance_does_not_launch(monkeypatch, tmp_path):
 
     assert result.status == "ready"
     assert result.details["will_create_result"] is False
+
+
+@pytest.mark.parametrize(
+    "role",
+    ("pilot-compatibility", "certification"),
+)
+def test_fitted_capture_preflight_receives_scoped_foundation_binding(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    role: str,
+) -> None:
+    admission = _admission(tmp_path / "admission")
+    campaign = tmp_path / f"{role}.yml"
+    campaign.write_text("schema: 2\n", encoding="utf-8")
+    foundation = tmp_path / "foundation.json"
+    foundation.write_text("{}\n", encoding="utf-8")
+    monkeypatch.delenv("QCSD_CLASS_FOUNDATION_ATTESTATION", raising=False)
+    observed: list[str | None] = []
+
+    def preflight(_path: Path) -> dict[str, object]:
+        observed.append(pipeline.os.environ.get("QCSD_CLASS_FOUNDATION_ATTESTATION"))
+        return {
+            "name": f"{STUDY_ID}-{role}-1200",
+            "evidence_role": role,
+            "sample_count": 1,
+        }
+
+    monkeypatch.setattr(pipeline, "preflight_campaign", preflight)
+    monkeypatch.setattr(pipeline, "_result_index", lambda *_args, **_kwargs: ())
+    monkeypatch.setattr(
+        pipeline,
+        "_require_capture_admission_binding",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_validate_capture_prerequisites",
+        lambda *_args, **_kwargs: (),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_validate_capture_foundation",
+        lambda *_args, **_kwargs: {
+            "qualification_authority": _qualification_authority()
+        },
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_validate_capture_fitting_generation",
+        lambda *_args, **_kwargs: {"valid": True},
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_validate_formal_capture_authority",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_formal_capacity_preflight",
+        lambda *_args, **_kwargs: None,
+    )
+
+    result = pipeline._coordinate_capture(
+        "capture",
+        pilot_admission=admission,
+        final_admission=admission,
+        campaign=campaign,
+        results_root=tmp_path,
+        capture_result=None,
+        prerequisite_roots=(),
+        foundation_attestation=foundation,
+        readiness_attestation=None,
+        historical_pre_snapshot=None,
+        execute=False,
+    )
+
+    assert result.status == "ready"
+    assert observed == [str(foundation.resolve())]
+    assert pipeline.os.environ.get("QCSD_CLASS_FOUNDATION_ATTESTATION") is None
 
 
 def test_capture_delegates_only_after_prerequisites(monkeypatch, tmp_path):
@@ -2004,11 +2608,13 @@ def test_fitted_capture_preflight_rejects_stale_same_cohort_stage_result(
     campaign_path = None if resume else tmp_path / f"{role}.yml"
     frozen_result_root = tmp_path / "capture-result" if resume else None
     observed: list[Path] = []
+    qualification_authority = _qualification_authority()
 
     def stale_generation(**kwargs):
         observed.append(kwargs["source_result_root"])
         assert kwargs["campaign_path"] == campaign_path
         assert kwargs["frozen_result_root"] == frozen_result_root
+        assert kwargs["expected_qualification_authority"] == qualification_authority
         value = _fitting_generation_authority(role, selected)
         value["source_result"] = {
             "root": str(stale_root),
@@ -2027,6 +2633,7 @@ def test_fitted_capture_preflight_rejects_stale_same_cohort_stage_result(
             prerequisite_records=(selected,),
             campaign_path=campaign_path,
             frozen_result_root=frozen_result_root,
+            qualification_authority=qualification_authority,
         )
     assert observed == [Path(str(selected["root"]))]
 
@@ -2053,6 +2660,7 @@ def test_generation_verifier_independently_refits_exact_prerequisite_result(
     source.mkdir()
     (source / "evidence.sha256").write_text("sealed\n", encoding="utf-8")
     calls: list[tuple[Path, Path]] = []
+    qualification_authority = _qualification_authority()
 
     def verify_bundle(root: Path, *, qualification_context, source_result_root: Path):
         calls.append((root, source_result_root))
@@ -2064,6 +2672,7 @@ def test_generation_verifier_independently_refits_exact_prerequisite_result(
             campaign.workloads[0].chaff_prefix_spec_path.parent
         )
         assert qualification_context.require_current_implementation is not resume
+        assert qualification_context.qualification_authority == qualification_authority
         return SimpleNamespace(
             stage=stage,
             artifact_hashes={
@@ -2079,13 +2688,26 @@ def test_generation_verifier_independently_refits_exact_prerequisite_result(
         monkeypatch.setattr(
             orchestrator,
             "_campaign_from_frozen_inputs",
-            lambda _path: campaign,
+            lambda _path, *, expected_qualification_authority: (
+                campaign
+                if expected_qualification_authority == qualification_authority
+                else pytest.fail("frozen loader received another qualification authority")
+            ),
         )
     else:
-        monkeypatch.setattr(orchestrator, "load_campaign", lambda _path: campaign)
+        monkeypatch.setattr(
+            orchestrator,
+            "load_campaign",
+            lambda _path, *, expected_qualification_authority: (
+                campaign
+                if expected_qualification_authority == qualification_authority
+                else pytest.fail("live loader received another qualification authority")
+            ),
+        )
     monkeypatch.setattr(class_fitting, "verify_class_fitting_bundle", verify_bundle)
     generation = orchestrator.verify_class_study_fitting_generation(
         source_result_root=source,
+        expected_qualification_authority=qualification_authority,
         campaign_path=None if resume else campaign.path,
         frozen_result_root=frozen_result if resume else None,
     )
@@ -2098,6 +2720,68 @@ def test_generation_verifier_independently_refits_exact_prerequisite_result(
     assert generation["capture_runtime"]["qualification_set_manifest_sha256"] == (
         campaign.workloads[0].qualification_set_manifest_sha256
     )
+
+
+def test_generation_verifier_rejects_same_cohort_bundle_from_other_foundation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import qcsd_lab.class_attestation as class_attestation
+    import qcsd_lab.class_fitting as class_fitting
+
+    campaign = _loaded_fitting_generation_campaign(
+        tmp_path / "campaign",
+        "pilot-compatibility",
+    )
+    source = tmp_path / "selected-fitting-result"
+    source.mkdir()
+    (source / "evidence.sha256").write_text("sealed\n", encoding="utf-8")
+    expected = _qualification_authority()
+    substituted = json.loads(json.dumps(expected))
+    substituted["foundation_attestation"] = {
+        "path": "/evidence/other-foundation.json",
+        "sha256": "8" * 64,
+        "payload_sha256": "9" * 64,
+    }
+    substituted["build_execution"] = {
+        "path": "/evidence/other-build.json",
+        "sha256": "a" * 64,
+    }
+    substituted["build_execution_identity"]["sha256"] = "a" * 64
+    substituted["prepare_image_digest"] = "sha256:" + "b" * 64
+    substituted["prepare_source"]["image_digest"] = substituted[
+        "prepare_image_digest"
+    ]
+    class_attestation.validate_class_qualification_authority(substituted)
+
+    def reject_substituted_bundle(
+        _root: Path,
+        *,
+        qualification_context,
+        source_result_root: Path,
+    ) -> object:
+        assert source_result_root == source.resolve()
+        assert qualification_context.qualification_authority == expected
+        if qualification_context.qualification_authority != substituted:
+            raise ValueError("named qualification authority differs from the expected foundation")
+        return SimpleNamespace(stage="pilot", artifact_hashes={})
+
+    monkeypatch.setattr(
+        orchestrator,
+        "load_campaign",
+        lambda _path, *, expected_qualification_authority: (
+            campaign
+            if expected_qualification_authority == expected
+            else pytest.fail("loader received another qualification authority")
+        ),
+    )
+    monkeypatch.setattr(class_fitting, "verify_class_fitting_bundle", reject_substituted_bundle)
+    with pytest.raises(ValueError, match="expected foundation"):
+        orchestrator.verify_class_study_fitting_generation(
+            source_result_root=source,
+            expected_qualification_authority=expected,
+            campaign_path=campaign.path,
+        )
 
 
 @pytest.mark.parametrize(
@@ -2414,7 +3098,7 @@ def test_qualification_defaults_to_resumable_guidance(monkeypatch, tmp_path):
     monkeypatch.setattr(
         pipeline,
         "verify_numeric_fitting_bundle",
-        lambda path: SimpleNamespace(stage="pilot"),
+        lambda path, **_kwargs: SimpleNamespace(stage="pilot"),
     )
     monkeypatch.setattr(
         pipeline,
@@ -2454,6 +3138,7 @@ def test_qualification_defaults_to_resumable_guidance(monkeypatch, tmp_path):
     result = pipeline._coordinate_qualification(
         "pilot",
         admission=admission,
+        source_result_root=tmp_path / "fitting-result",
         numeric_bundle_root=numeric,
         prefix_spec_root=prefix,
         workload_root=workloads,
@@ -2470,6 +3155,111 @@ def test_qualification_defaults_to_resumable_guidance(monkeypatch, tmp_path):
     assert result.details["next_workload"] == "pilot-000"
 
 
+def test_class_qualification_threads_exact_authority_through_resume_and_publish(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    admission, roots, checkpoint = _qualification_coordinator_inputs(monkeypatch, tmp_path)
+    authority = _qualification_authority()
+    observed: list[str] = []
+    pending_calls = 0
+    monkeypatch.setattr(
+        pipeline,
+        "_qualification_execution_context",
+        lambda: (
+            {},
+            authority["prepare_source"],
+            authority["prepare_image_digest"],
+        ),
+    )
+
+    def initialize(*_args: object, **kwargs: object) -> None:
+        assert kwargs["qualification_authority"] == authority
+        observed.append("initialize")
+        checkpoint.write_text("{}\n", encoding="utf-8")
+
+    def reconcile(*_args: object, **kwargs: object) -> dict[str, object]:
+        assert kwargs["expected_qualification_authority"] == authority
+        observed.append("reconcile")
+        return {}
+
+    def pending(*_args: object, **kwargs: object) -> tuple[str, ...]:
+        nonlocal pending_calls
+        assert kwargs["expected_qualification_authority"] == authority
+        pending_calls += 1
+        observed.append("pending")
+        return ("pilot-000",) if pending_calls == 1 else ()
+
+    def qualify(workload_id: str, **kwargs: object) -> None:
+        assert workload_id == "pilot-000"
+        assert kwargs["qualification_authority"] == authority
+        observed.append("qualify")
+        (roots["sidecars"] / f"{workload_id}.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": pipeline.CLASS_STUDY_QUALIFICATION_SCHEMA_VERSION,
+                    "qualification_source": authority["prepare_source"],
+                    "qualification_image_digest": authority["prepare_image_digest"],
+                    "qualification_authority": authority,
+                    "qualification_authority_sha256": pipeline.canonical_json_sha256(
+                        authority
+                    ),
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+    def record(*_args: object, **kwargs: object) -> dict[str, object]:
+        assert kwargs["expected_qualification_authority"] == authority
+        observed.append("record")
+        return {}
+
+    def publish(*_args: object, **kwargs: object) -> object:
+        assert kwargs["qualification_authority"] == authority
+        observed.append("publish")
+        return SimpleNamespace(
+            qualification_set="classifier-multiorigin100-v1-pilot120-full-v1",
+            manifest_path=tmp_path / "published/_qualification-set.json",
+            manifest_sha256="f" * 64,
+            workload_ids=tuple(f"pilot-{index:03d}" for index in range(120)),
+            path=tmp_path / "published",
+        )
+
+    monkeypatch.setattr(pipeline, "initialize_named_qualification_checkpoint", initialize)
+    monkeypatch.setattr(pipeline, "reconcile_named_qualification_checkpoint", reconcile)
+    monkeypatch.setattr(pipeline, "pending_named_qualification_workloads", pending)
+    monkeypatch.setattr(pipeline, "qualify_chaff", qualify)
+    monkeypatch.setattr(pipeline, "record_named_qualification_checkpoint", record)
+    monkeypatch.setattr(pipeline, "publish_named_qualification_set_from_checkpoint", publish)
+
+    result = pipeline._coordinate_qualification(
+        "pilot",
+        admission=admission,
+        source_result_root=tmp_path / "fitting-result",
+        numeric_bundle_root=roots["numeric"],
+        prefix_spec_root=roots["prefix"],
+        workload_root=roots["workloads"],
+        checkpoint_path=checkpoint,
+        sidecar_root=roots["sidecars"],
+        publication_root=roots["sets"],
+        workload_id="pilot-000",
+        qualify_all_pending=False,
+        qualification_authority=authority,
+    )
+
+    assert result.status == "complete"
+    assert observed == [
+        "initialize",
+        "reconcile",
+        "pending",
+        "qualify",
+        "record",
+        "pending",
+        "publish",
+    ]
+
+
 def _qualification_coordinator_inputs(monkeypatch, tmp_path):
     admission = _admission(tmp_path)
     roots = {
@@ -2481,7 +3271,7 @@ def _qualification_coordinator_inputs(monkeypatch, tmp_path):
     monkeypatch.setattr(
         pipeline,
         "verify_numeric_fitting_bundle",
-        lambda _path: SimpleNamespace(stage="pilot"),
+        lambda _path, **_kwargs: SimpleNamespace(stage="pilot"),
     )
     monkeypatch.setattr(pipeline, "_require_numeric_admission", lambda *_args: None)
     monkeypatch.setattr(
@@ -2514,7 +3304,7 @@ def test_successor_qualification_rejects_wrong_numeric_lineage_before_mutation(
     monkeypatch.setattr(
         pipeline,
         "verify_numeric_fitting_bundle",
-        lambda _path: SimpleNamespace(
+        lambda _path, **_kwargs: SimpleNamespace(
             stage="authoritative",
             provenance={"source_result": source_result},
         ),
@@ -2534,6 +3324,7 @@ def test_successor_qualification_rejects_wrong_numeric_lineage_before_mutation(
         pipeline._coordinate_qualification(
             "authoritative",
             admission=admission,
+            source_result_root=tmp_path / "fitting-result",
             numeric_bundle_root=roots["numeric"],
             prefix_spec_root=roots["prefix"],
             workload_root=roots["workloads"],
@@ -2597,6 +3388,14 @@ def test_successor_numeric_publishers_reject_wrong_restart_before_mutation(
         "verify_numeric_fitting_bundle",
         lambda *_args, **_kwargs: wrong_numeric,
     )
+    monkeypatch.setattr(
+        pipeline,
+        "_require_fitting_source",
+        lambda *_args, **_kwargs: {
+            "evidence_role": "authoritative-fitting",
+            "root": str(tmp_path / "result"),
+        },
+    )
     monkeypatch.setattr(pipeline, "_require_numeric_admission", lambda *_args: None)
     monkeypatch.setattr(
         pipeline,
@@ -2633,6 +3432,7 @@ def test_successor_numeric_publishers_reject_wrong_restart_before_mutation(
             action,
             stage="authoritative",
             successor_restart=restart,
+            capture_result=tmp_path / "result",
             result_roots=(tmp_path / "result",),
             workload_root=tmp_path / "workloads",
         )
@@ -2663,6 +3463,7 @@ def test_qualification_runtime_mismatch_fails_before_checkpoint_mutation(
         pipeline._coordinate_qualification(
             "pilot",
             admission=admission,
+            source_result_root=tmp_path / "fitting-result",
             numeric_bundle_root=roots["numeric"],
             prefix_spec_root=roots["prefix"],
             workload_root=roots["workloads"],
@@ -2714,10 +3515,74 @@ def test_stale_qualification_sidecar_fails_before_checkpoint_or_publication(
         lambda *_args, **_kwargs: pytest.fail("checkpoint mutated before stale-sidecar gate"),
     )
 
-    with pytest.raises(ValueError, match="foundation prepare build"):
+    with pytest.raises(ValueError, match="foundation authority"):
         pipeline._coordinate_qualification(
             "pilot",
             admission=admission,
+            source_result_root=tmp_path / "fitting-result",
+            numeric_bundle_root=roots["numeric"],
+            prefix_spec_root=roots["prefix"],
+            workload_root=roots["workloads"],
+            checkpoint_path=checkpoint,
+            sidecar_root=roots["sidecars"],
+            publication_root=roots["sets"],
+            workload_id=None,
+            qualify_all_pending=False,
+            qualification_authority=authority,
+        )
+    assert not checkpoint.exists()
+    assert list(roots["sets"].iterdir()) == []
+
+
+def test_same_build_other_foundation_sidecar_fails_before_checkpoint_resume(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    admission, roots, checkpoint = _qualification_coordinator_inputs(monkeypatch, tmp_path)
+    authority = _qualification_authority()
+    other_foundation = json.loads(json.dumps(authority))
+    other_foundation["foundation_attestation"] = {
+        "path": "/evidence/other-foundation.json",
+        "sha256": "8" * 64,
+        "payload_sha256": "9" * 64,
+    }
+    (roots["sidecars"] / "pilot-000.json").write_text(
+        json.dumps(
+            {
+                "schema_version": pipeline.CLASS_STUDY_QUALIFICATION_SCHEMA_VERSION,
+                "qualification_source": authority["prepare_source"],
+                "qualification_image_digest": authority["prepare_image_digest"],
+                "qualification_authority": other_foundation,
+                "qualification_authority_sha256": pipeline.canonical_json_sha256(
+                    other_foundation
+                ),
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_qualification_execution_context",
+        lambda: (
+            {},
+            authority["prepare_source"],
+            authority["prepare_image_digest"],
+        ),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "initialize_named_qualification_checkpoint",
+        lambda *_args, **_kwargs: pytest.fail(
+            "checkpoint mutated before exact foundation-sidecar gate"
+        ),
+    )
+
+    with pytest.raises(ValueError, match="foundation authority"):
+        pipeline._coordinate_qualification(
+            "pilot",
+            admission=admission,
+            source_result_root=tmp_path / "fitting-result",
             numeric_bundle_root=roots["numeric"],
             prefix_spec_root=roots["prefix"],
             workload_root=roots["workloads"],
@@ -2761,6 +3626,7 @@ def test_new_wrong_image_sidecar_fails_before_checkpoint_record_or_publication(
     )
 
     def qualify(workload_id: str, **_kwargs) -> None:
+        assert _kwargs["qualification_authority"] == authority
         (roots["sidecars"] / f"{workload_id}.json").write_text(
             json.dumps(
                 {
@@ -2784,10 +3650,11 @@ def test_new_wrong_image_sidecar_fails_before_checkpoint_record_or_publication(
         lambda *_args, **_kwargs: pytest.fail("wrong-image sidecar was published"),
     )
 
-    with pytest.raises(ValueError, match="foundation prepare build"):
+    with pytest.raises(ValueError, match="foundation authority"):
         pipeline._coordinate_qualification(
             "pilot",
             admission=admission,
+            source_result_root=tmp_path / "fitting-result",
             numeric_bundle_root=roots["numeric"],
             prefix_spec_root=roots["prefix"],
             workload_root=roots["workloads"],
@@ -2812,6 +3679,17 @@ def test_qualify_prefix_rejects_wrong_foundation_before_coordinator_mutation(
     layout = pipeline.class_study_layout()
     admission = object()
     monkeypatch.setattr(pipeline, "_optional_admission", lambda *_args, **_kwargs: admission)
+    monkeypatch.setattr(
+        pipeline,
+        "_require_fitting_source",
+        lambda *_args, **_kwargs: _record("pilot-fitting"),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "verify_numeric_fitting_bundle",
+        lambda *_args, **_kwargs: SimpleNamespace(stage="pilot"),
+    )
+    monkeypatch.setattr(pipeline, "_require_numeric_admission", lambda *_args: None)
     observed: dict[str, object] = {}
 
     def reject(_path: Path, **kwargs):
@@ -2829,6 +3707,7 @@ def test_qualify_prefix_rejects_wrong_foundation_before_coordinator_mutation(
         pipeline.run_class_study_action(
             "qualify-prefix",
             stage="pilot",
+            capture_result=tmp_path / "pilot-fitting-result",
             numeric_bundle_root=layout.pilot_numeric_root,
             prefix_spec_root=layout.pilot_prefix_root,
             workload_root=layout.workload_root,
@@ -2893,6 +3772,7 @@ def test_final_selection_is_recomputed_from_pilot_fit_and_compatibility(monkeypa
     numeric_root = layout.pilot_numeric_root
     numeric_root.mkdir(parents=True)
     (numeric_root / "numeric-provenance.json").write_text("{}\n", encoding="utf-8")
+    qualification_authority = _qualification_authority()
     pilot_ids = tuple(item.candidate_id for item in admission.selection.pilot)
     selected_pairs = [
         {
@@ -2921,7 +3801,15 @@ def test_final_selection_is_recomputed_from_pilot_fit_and_compatibility(monkeypa
             "algorithms": {"walkie_talkie": {"selected_pairs": selected_pairs}},
         },
     )
-    monkeypatch.setattr(pipeline, "verify_numeric_fitting_bundle", lambda path: numeric)
+    pilot_fitting_result = tmp_path / "pilot-fitting-result"
+    pilot_fitting_result.mkdir()
+
+    def verify_numeric(path: Path, *, source_result_root: Path | None = None):
+        assert path == numeric_root
+        assert source_result_root == pilot_fitting_result
+        return numeric
+
+    monkeypatch.setattr(pipeline, "verify_numeric_fitting_bundle", verify_numeric)
     finalized_root = tmp_path / "compatibility/inputs/defense-parameters/class-study"
     finalized_root.mkdir(parents=True)
     (finalized_root / "provenance.json").write_text("{}\n", encoding="utf-8")
@@ -2982,6 +3870,9 @@ def test_final_selection_is_recomputed_from_pilot_fit_and_compatibility(monkeypa
         "experiment_sha256": "f" * 64,
         "accepted": 1080,
         "unique_class_mode_pairs": 1080,
+        "class_study_foundation_sha256": qualification_authority[
+            "foundation_attestation"
+        ]["sha256"],
         "defense_parameter_sha256": {
             "traffic-morphing": finalized.artifact_hashes["traffic_morphing"],
             "wtf-pad": finalized.artifact_hashes["wtf_pad"],
@@ -3007,15 +3898,23 @@ def test_final_selection_is_recomputed_from_pilot_fit_and_compatibility(monkeypa
     pipeline.write_final_selection_input(
         destination,
         pilot_admission=admission,
+        pilot_fitting_result_root=pilot_fitting_result,
         pilot_numeric_bundle_root=numeric_root,
         pilot_compatibility_result_root=tmp_path / "compatibility",
+        qualification_authority=qualification_authority,
     )
     value = json.loads(destination.read_text(encoding="utf-8"))
+    assert (
+        value["payload"]["selection_schema_version"]
+        == pipeline.FINAL_SELECTION_SCHEMA_VERSION
+    )
     pairs = pipeline.validate_final_selection_input(
         value,
         pilot_admission=admission,
+        pilot_fitting_result_root=pilot_fitting_result,
         pilot_numeric_bundle_root=numeric_root,
         pilot_compatibility_result_root=tmp_path / "compatibility",
+        qualification_authority=qualification_authority,
     )
     assert len(pairs) == 60
     assert {item for pair in pairs for item in pair} == set(pilot_ids)
@@ -3028,6 +3927,12 @@ def test_final_selection_is_recomputed_from_pilot_fit_and_compatibility(monkeypa
     assert value["payload"]["pilot_compatibility"]["finalized_bundle"][
         "provenance_sha256"
     ] == pipeline.sha256_file(finalized_root / "provenance.json")
+    assert value["payload"]["pilot_compatibility"]["finalized_bundle"][
+        "qualification_authority"
+    ] == qualification_authority
+    assert value["payload"]["pilot_compatibility"]["finalized_bundle"][
+        "qualification_authority_sha256"
+    ] == pipeline.canonical_json_sha256(qualification_authority)
 
     graph = {frozenset(pair) for pair in pairs}
     assert frozenset((pilot_ids[0], pilot_ids[2])) not in graph
@@ -3037,13 +3942,31 @@ def test_final_selection_is_recomputed_from_pilot_fit_and_compatibility(monkeypa
     assert rule["unselected_pairs_inferred_from_endpoint_compatibility"] is False
     assert len(value["payload"]["selected_final_perfect_matching"]) == 50
 
+    legacy_payload = json.loads(json.dumps(value["payload"]))
+    legacy_payload["selection_schema_version"] = 1
+    legacy = pipeline.bind_receipt(
+        legacy_payload,
+        receipt_type=pipeline.FINAL_SELECTION_RECEIPT_TYPE,
+    )
+    with pytest.raises(ValueError, match="pre-publication and non-evidentiary"):
+        pipeline.validate_final_selection_input(
+            legacy,
+            pilot_admission=admission,
+            pilot_fitting_result_root=pilot_fitting_result,
+            pilot_numeric_bundle_root=numeric_root,
+            pilot_compatibility_result_root=tmp_path / "compatibility",
+            qualification_authority=qualification_authority,
+        )
+
     compatibility["defense_parameter_sha256"]["walkie-talkie"] = "0" * 64
     with pytest.raises(ValueError, match="exact pilot fitted parameters"):
         pipeline.validate_final_selection_input(
             json.loads(destination.read_text(encoding="utf-8")),
             pilot_admission=admission,
+            pilot_fitting_result_root=pilot_fitting_result,
             pilot_numeric_bundle_root=numeric_root,
             pilot_compatibility_result_root=tmp_path / "compatibility",
+            qualification_authority=qualification_authority,
         )
     compatibility["defense_parameter_sha256"]["walkie-talkie"] = "9" * 64
 
@@ -3052,9 +3975,159 @@ def test_final_selection_is_recomputed_from_pilot_fit_and_compatibility(monkeypa
         pipeline.validate_final_selection_input(
             value,
             pilot_admission=admission,
+            pilot_fitting_result_root=pilot_fitting_result,
             pilot_numeric_bundle_root=numeric_root,
             pilot_compatibility_result_root=tmp_path / "compatibility",
+            qualification_authority=qualification_authority,
         )
+
+
+def test_authoritative_cohort_forwards_exact_pilot_fitting_result(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    pilot = _admission(tmp_path / "pilot")
+    pilot_fitting = tmp_path / "selected-pilot-fitting-result"
+    compatibility = tmp_path / "pilot-compatibility-result"
+    selection_path = tmp_path / "final-selection.json"
+    selection_path.write_text("{}\n", encoding="utf-8")
+    feasible_pairs = (("pilot-000", "pilot-001"),)
+    final = replace(
+        pilot,
+        selection=SimpleNamespace(
+            pilot=pilot.selection.pilot,
+            final=pilot.selection.final,
+            reserves=pilot.selection.reserves,
+            feasible_pairs=feasible_pairs,
+            matching=feasible_pairs,
+        ),
+    )
+    records = [
+        {**_record("pilot-fitting"), "root": str(pilot_fitting)},
+        {**_record("pilot-compatibility"), "root": str(compatibility)},
+    ]
+    forwarded: list[tuple[str, Path]] = []
+
+    def write_selection(_path: Path, **kwargs: object) -> Path:
+        forwarded.append(("write", kwargs["pilot_fitting_result_root"]))
+        return selection_path
+
+    def validate_selection(*_args: object, **kwargs: object):
+        forwarded.append(("validate", kwargs["pilot_fitting_result_root"]))
+        return feasible_pairs
+
+    monkeypatch.setattr(pipeline, "_validate_fresh_layout_arguments", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        pipeline,
+        "_qualification_authority_for_action",
+        lambda *_args, **_kwargs: _qualification_authority(),
+    )
+    monkeypatch.setattr(pipeline, "_required_admission", lambda *_args, **_kwargs: pilot)
+    monkeypatch.setattr(pipeline, "_result_index", lambda *_args, **_kwargs: records)
+    monkeypatch.setattr(pipeline, "write_final_selection_input", write_selection)
+    monkeypatch.setattr(pipeline, "validate_final_selection_input", validate_selection)
+    monkeypatch.setattr(
+        pipeline,
+        "publish_evidenced_cohort",
+        lambda cohort, assembly, **_kwargs: (cohort, assembly),
+    )
+    monkeypatch.setattr(pipeline, "verify_cohort_admission", lambda *_args, **_kwargs: final)
+
+    result = pipeline.run_class_study_action(
+        "cohort",
+        stage="authoritative",
+        candidate_catalogue_path=tmp_path / "candidates.json",
+        stability_root=tmp_path / "stability",
+        workload_root=tmp_path / "workloads",
+        acquisition_completion_path=tmp_path / "completion.json",
+        pilot_cohort_receipt_path=pilot.cohort_path,
+        pilot_cohort_assembly_path=pilot.assembly_path,
+        cohort_receipt_path=tmp_path / "final-cohort.json",
+        cohort_assembly_path=tmp_path / "final-cohort-assembly.json",
+        final_selection_path=selection_path,
+        numeric_bundle_root=tmp_path / "pilot-numeric",
+        result_roots=(pilot_fitting, compatibility),
+        foundation_attestation=tmp_path / "foundation.json",
+    )
+
+    assert result.status == "complete"
+    assert forwarded == [
+        ("write", pilot_fitting),
+        ("validate", pilot_fitting),
+    ]
+
+
+def test_authoritative_campaigns_forward_exact_pilot_fitting_result(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    pilot = _admission(tmp_path / "pilot")
+    pilot_fitting = tmp_path / "selected-pilot-fitting-result"
+    compatibility = tmp_path / "pilot-compatibility-result"
+    selection_path = tmp_path / "final-selection.json"
+    selection_path.write_text("{}\n", encoding="utf-8")
+    campaign_root = tmp_path / "campaigns"
+    campaign_root.mkdir()
+    feasible_pairs = (("pilot-000", "pilot-001"),)
+    final = replace(
+        pilot,
+        selection=SimpleNamespace(
+            pilot=pilot.selection.pilot,
+            final=pilot.selection.final,
+            reserves=pilot.selection.reserves,
+            feasible_pairs=feasible_pairs,
+            matching=feasible_pairs,
+        ),
+    )
+    records = [
+        {**_record("pilot-fitting"), "root": str(pilot_fitting)},
+        {**_record("pilot-compatibility"), "root": str(compatibility)},
+    ]
+    forwarded: list[Path] = []
+
+    def optional_admission(*_args: object, **kwargs: object):
+        return final if kwargs["final_selection_receipt_path"] is not None else pilot
+
+    def validate_selection(*_args: object, **kwargs: object):
+        forwarded.append(kwargs["pilot_fitting_result_root"])
+        return feasible_pairs
+
+    monkeypatch.setattr(pipeline, "_validate_fresh_layout_arguments", lambda **_kwargs: None)
+    monkeypatch.setattr(pipeline, "_optional_admission", optional_admission)
+    monkeypatch.setattr(
+        pipeline,
+        "_qualification_authority_for_action",
+        lambda *_args, **_kwargs: _qualification_authority(),
+    )
+    monkeypatch.setattr(pipeline, "_result_index", lambda *_args, **_kwargs: records)
+    monkeypatch.setattr(pipeline, "validate_final_selection_input", validate_selection)
+    monkeypatch.setattr(
+        pipeline,
+        "publish_campaign_set",
+        lambda *_args, **_kwargs: (campaign_root / "campaign.yml",),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "verify_campaign_set",
+        lambda *_args, **_kwargs: {"valid": True},
+    )
+
+    result = pipeline.run_class_study_action(
+        "campaigns",
+        stage="authoritative",
+        pilot_cohort_receipt_path=pilot.cohort_path,
+        pilot_cohort_assembly_path=pilot.assembly_path,
+        final_cohort_receipt_path=final.cohort_path,
+        final_cohort_assembly_path=final.assembly_path,
+        final_selection_path=selection_path,
+        campaign_root=campaign_root,
+        numeric_bundle_root=tmp_path / "pilot-numeric",
+        result_roots=(pilot_fitting, compatibility),
+        foundation_attestation=tmp_path / "foundation.json",
+    )
+
+    assert result.status == "complete"
+    assert forwarded == [pilot_fitting]
 
 
 def test_campaign_publication_is_two_stage_and_never_reuses_pilot_for_final(monkeypatch, tmp_path):
@@ -3129,8 +4202,10 @@ def test_receipt_and_campaign_publishers_reject_alternate_lineage_before_mutatio
         pipeline.write_final_selection_input(
             final_selection,
             pilot_admission=alternate_admission,
+            pilot_fitting_result_root=tmp_path / "pilot-fitting-result",
             pilot_numeric_bundle_root=layout.pilot_numeric_root,
             pilot_compatibility_result_root=tmp_path / "compatibility",
+            qualification_authority=_qualification_authority(),
         )
     assert not final_selection.exists()
 

@@ -33,6 +33,7 @@ from .acquisition_timing import (
     RUN_WAIT_POLICY,
 )
 from .chaff_qualification import (
+    CLASS_STUDY_QUALIFICATION_SCHEMA_VERSION,
     FULL_QUALIFICATION_SCOPE,
     NAMED_QUALIFICATION_PREFIX_DIRECTORY,
     NAMED_QUALIFICATION_SET_MANIFEST,
@@ -59,7 +60,11 @@ from .class_catalogue import (
     validate_hash_bound_receipt,
     write_stability_receipt,
 )
-from .class_cohort import publish_evidenced_cohort, validate_cohort_assembly
+from .class_cohort import (
+    FINAL_SELECTION_SCHEMA_VERSION,
+    publish_evidenced_cohort,
+    validate_cohort_assembly,
+)
 from .class_fitting import (
     AUTHORITATIVE_QUALIFICATION_SET,
     AUTHORITATIVE_STAGE,
@@ -82,11 +87,6 @@ from .class_fitting import (
     verify_numeric_fitting_bundle,
 )
 from .class_handoff import export_class_handoff, verify_class_handoff
-from .class_run_binding import (
-    resolve_class_sample_run_binding,
-    validate_class_sample_run_binding,
-)
-from .defenses import defense_from_runtime_identity
 from .class_layout import (
     AUTHORITATIVE_COHORT_ASSEMBLY_FILENAME,
     AUTHORITATIVE_COHORT_FILENAME,
@@ -102,6 +102,10 @@ from .class_layout import (
     require_canonical_campaign_reference,
     require_canonical_fresh_child,
     require_canonical_fresh_path,
+)
+from .class_run_binding import (
+    resolve_class_sample_run_binding,
+    validate_class_sample_run_binding,
 )
 from .class_study import (
     COMPATIBILITY_MODES,
@@ -123,6 +127,7 @@ from .class_study import (
 from .class_study import (
     validate_hash_bound_receipt as validate_study_bound_receipt,
 )
+from .defenses import defense_from_runtime_identity
 from .experiment import ACCEPTED_ARTIFACTS, resolved_sample_directory
 from .fidelity import (
     _schedule_realization_metrics_from_path,
@@ -641,8 +646,10 @@ def verify_successor_cohort_admission(restart_receipt: Path) -> CohortAdmission:
 def build_final_selection_input(
     pilot_admission: CohortAdmission,
     *,
+    pilot_fitting_result_root: Path,
     pilot_numeric_bundle_root: Path,
     pilot_compatibility_result_root: Path,
+    qualification_authority: Mapping[str, Any],
 ) -> dict[str, Any]:
     """Build the only accepted input to final/reserve cohort selection.
 
@@ -652,7 +659,11 @@ def build_final_selection_input(
     other pairing is deliberately not extrapolated to an alternate edge.
     """
 
-    numeric = verify_numeric_fitting_bundle(pilot_numeric_bundle_root)
+    authority = _validated_qualification_authority(qualification_authority)
+    numeric = verify_numeric_fitting_bundle(
+        pilot_numeric_bundle_root,
+        source_result_root=pilot_fitting_result_root,
+    )
     if numeric.stage != PILOT_STAGE:
         raise ValueError("final selection requires the verified pilot numeric fitting bundle")
     workload_order = tuple(numeric.provenance["fitting_contract"]["workload_order"])
@@ -672,8 +683,13 @@ def build_final_selection_input(
         admission=pilot_admission,
         expected_role="pilot-compatibility",
     )
+    foundation = authority["foundation_attestation"]
+    if compatibility.get("class_study_foundation_sha256") != foundation["sha256"]:
+        raise ValueError("pilot compatibility uses a different qualification foundation")
     finalized = _verify_pilot_compatibility_fitting_bundle(
-        Path(compatibility["root"]), numeric=numeric
+        Path(compatibility["root"]),
+        numeric=numeric,
+        qualification_authority=authority,
     )
     compatibility_parameters = compatibility.get("defense_parameter_sha256")
     expected_parameters = {
@@ -698,7 +714,7 @@ def build_final_selection_input(
     possible_pair_count = len(pilot_ids) * (len(pilot_ids) - 1) // 2
     payload = {
         "study_id": STUDY_ID,
-        "selection_schema_version": SCHEMA_VERSION,
+        "selection_schema_version": FINAL_SELECTION_SCHEMA_VERSION,
         "selection_policy": "tranco-bound-order-with-qualified-selected-wt6-pairs",
         "pilot_cohort": {
             "sha256": pilot_admission.cohort_sha256,
@@ -724,6 +740,8 @@ def build_final_selection_input(
                 "source": "frozen-pilot-compatibility-inputs",
                 "provenance_sha256": sha256_file(finalized.root / PROVENANCE_FILE),
                 "artifact_sha256": expected_parameters,
+                "qualification_authority": authority,
+                "qualification_authority_sha256": canonical_json_sha256(authority),
             },
         },
         "feasible_pair_rule": {
@@ -750,6 +768,7 @@ def _verify_pilot_compatibility_fitting_bundle(
     compatibility_result_root: Path,
     *,
     numeric: VerifiedNumericFittingBundle,
+    qualification_authority: Mapping[str, Any],
 ) -> VerifiedClassFittingBundle:
     """Verify the finalized pilot bundle frozen by compatibility capture.
 
@@ -760,6 +779,7 @@ def _verify_pilot_compatibility_fitting_bundle(
     optimiser receipts came from the supplied pilot staging bundle.
     """
 
+    authority = _validated_qualification_authority(qualification_authority)
     result = _regular_directory(compatibility_result_root, "pilot compatibility result root")
     inputs = _regular_directory(result / "inputs", "pilot compatibility inputs")
     context = QualificationContext(
@@ -767,6 +787,7 @@ def _verify_pilot_compatibility_fitting_bundle(
         sidecar_root=inputs / "chaff-qualifications",
         prefix_spec_root=inputs / "chaff-prefix-specs",
         require_current_implementation=False,
+        qualification_authority=authority,
     )
     finalized = verify_class_fitting_bundle(
         inputs / "defense-parameters" / "class-study",
@@ -774,6 +795,12 @@ def _verify_pilot_compatibility_fitting_bundle(
     )
     if finalized.stage != PILOT_STAGE:
         raise ValueError("pilot compatibility froze a non-pilot fitting bundle")
+    qualification_inputs = finalized.provenance.get("qualification_inputs")
+    if (
+        not isinstance(qualification_inputs, Mapping)
+        or qualification_inputs.get("qualification_authority") != authority
+    ):
+        raise ValueError("pilot compatibility finalized bundle uses another foundation")
 
     lineage_fields = (
         "source_result",
@@ -945,20 +972,35 @@ def validate_final_selection_input(
     value: Mapping[str, Any],
     *,
     pilot_admission: CohortAdmission,
+    pilot_fitting_result_root: Path,
     pilot_numeric_bundle_root: Path,
     pilot_compatibility_result_root: Path,
+    qualification_authority: Mapping[str, Any],
 ) -> tuple[tuple[str, str], ...]:
     """Recompute and return the exact pilot-bound feasible-pair graph."""
 
-    validate_study_bound_receipt(value, expected_type=FINAL_SELECTION_RECEIPT_TYPE)
+    payload = validate_study_bound_receipt(
+        value, expected_type=FINAL_SELECTION_RECEIPT_TYPE
+    )
+    selection_schema_version = payload.get("selection_schema_version")
+    if type(selection_schema_version) is int and selection_schema_version == 1:
+        raise ValueError(
+            "final-selection schema 1 is pre-publication and non-evidentiary"
+        )
+    if (
+        type(selection_schema_version) is not int
+        or selection_schema_version != FINAL_SELECTION_SCHEMA_VERSION
+    ):
+        raise ValueError("final-selection schema version is invalid")
     expected = build_final_selection_input(
         pilot_admission,
+        pilot_fitting_result_root=pilot_fitting_result_root,
         pilot_numeric_bundle_root=pilot_numeric_bundle_root,
         pilot_compatibility_result_root=pilot_compatibility_result_root,
+        qualification_authority=qualification_authority,
     )
     if canonical_json_bytes(value) != canonical_json_bytes(expected):
         raise ValueError("final-selection input differs from verified pilot evidence")
-    payload = validate_study_bound_receipt(value, expected_type=FINAL_SELECTION_RECEIPT_TYPE)
     return tuple(tuple(pair) for pair in payload["feasible_pair_graph"])  # type: ignore[misc]
 
 
@@ -966,8 +1008,10 @@ def write_final_selection_input(
     destination: Path,
     *,
     pilot_admission: CohortAdmission,
+    pilot_fitting_result_root: Path,
     pilot_numeric_bundle_root: Path,
     pilot_compatibility_result_root: Path,
+    qualification_authority: Mapping[str, Any],
 ) -> Path:
     """Create or byte-verify one immutable final-selection input receipt."""
 
@@ -985,8 +1029,10 @@ def write_final_selection_input(
     )
     receipt = build_final_selection_input(
         pilot_admission,
+        pilot_fitting_result_root=pilot_fitting_result_root,
         pilot_numeric_bundle_root=pilot_numeric_bundle_root,
         pilot_compatibility_result_root=pilot_compatibility_result_root,
+        qualification_authority=qualification_authority,
     )
     _write_or_verify_bytes(
         path,
@@ -996,8 +1042,10 @@ def write_final_selection_input(
     validate_final_selection_input(
         _load_json_object(path, "final-selection input"),
         pilot_admission=pilot_admission,
+        pilot_fitting_result_root=pilot_fitting_result_root,
         pilot_numeric_bundle_root=pilot_numeric_bundle_root,
         pilot_compatibility_result_root=pilot_compatibility_result_root,
+        qualification_authority=qualification_authority,
     )
     return path.resolve()
 
@@ -1295,9 +1343,11 @@ def class_study_status(
         else {"state": "absent"}
     )
     qualification_authority: dict[str, Any] | None = None
-    if qualification_manifests or final_bundle_roots:
+    if qualification_manifests or final_bundle_roots or final_selection_path is not None:
         if foundation_attestation is None:
-            raise ValueError("qualification/final fitting status requires --foundation-attestation")
+            raise ValueError(
+                "qualification/final fitting/selection status requires --foundation-attestation"
+            )
         qualification_authority = class_qualification_authority(
             foundation_attestation,
             deep_code_gate=deep,
@@ -1474,15 +1524,18 @@ def class_study_status(
             if (verified := verified_numeric_roots.get(Path(path).resolve())) is not None
             and verified.stage == PILOT_STAGE
         ]
+        pilot_fitting = [
+            record for record in result_records if record["evidence_role"] == "pilot-fitting"
+        ]
         compatibility = [
             record for record in result_records if record["evidence_role"] == "pilot-compatibility"
         ]
-        if len(pilot_numeric) != 1 or len(compatibility) != 1:
+        if len(pilot_numeric) != 1 or len(pilot_fitting) != 1 or len(compatibility) != 1:
             stages["final_selection"] = {
                 "state": "unverified",
                 "reason": (
-                    "final selection requires one pilot numeric bundle and one "
-                    "pilot-compatibility result"
+                    "final selection requires one pilot fitting result, one pilot "
+                    "numeric bundle, and one pilot-compatibility result"
                 ),
             }
         else:
@@ -1490,8 +1543,10 @@ def class_study_status(
             pairs = validate_final_selection_input(
                 value,
                 pilot_admission=pilot_admission,
+                pilot_fitting_result_root=Path(pilot_fitting[0]["root"]),
                 pilot_numeric_bundle_root=pilot_numeric[0],
                 pilot_compatibility_result_root=Path(compatibility[0]["root"]),
+                qualification_authority=qualification_authority,
             )
             stages["final_selection"] = {
                 "state": "verified",
@@ -1766,6 +1821,7 @@ def run_class_study_action(
     evaluation_receipt: Path | None = None,
     cohort_version: int | None = None,
     build_execution_receipt: Path | None = None,
+    pinned_cdp_receipt: Path | None = None,
     reference_receipt: Path | None = None,
     code_gate_receipt: Path | None = None,
     controlled_qualification_receipt: Path | None = None,
@@ -2057,6 +2113,12 @@ def run_class_study_action(
         cohort_stage = _required_stage(stage)
         feasible_pairs: tuple[tuple[str, str], ...] | None = None
         if cohort_stage == AUTHORITATIVE_STAGE:
+            qualification_authority = _qualification_authority_for_action(
+                _required(foundation_attestation, "--foundation-attestation"),
+                deep_code_gate=deep,
+                runtime_role="collection",
+                successor_context=successor_context,
+            )
             pilot_admission = _required_admission(
                 pilot_cohort_receipt_path,
                 pilot_cohort_assembly_path,
@@ -2072,18 +2134,23 @@ def run_class_study_action(
                 pilot_admission=pilot_admission,
                 final_admission=None,
             )
+            pilot_fitting = _require_role(records, "pilot-fitting")
             compatibility = _require_role(records, "pilot-compatibility")
             selection_path = write_final_selection_input(
                 _required(final_selection_path, "--final-selection"),
                 pilot_admission=pilot_admission,
+                pilot_fitting_result_root=Path(pilot_fitting["root"]),
                 pilot_numeric_bundle_root=_required(numeric_bundle_root, "--numeric-bundle"),
                 pilot_compatibility_result_root=Path(compatibility["root"]),
+                qualification_authority=qualification_authority,
             )
             feasible_pairs = validate_final_selection_input(
                 _load_json_object(selection_path, "final-selection input"),
                 pilot_admission=pilot_admission,
+                pilot_fitting_result_root=Path(pilot_fitting["root"]),
                 pilot_numeric_bundle_root=_required(numeric_bundle_root, "--numeric-bundle"),
                 pilot_compatibility_result_root=Path(compatibility["root"]),
+                qualification_authority=qualification_authority,
             )
         paths = publish_evidenced_cohort(
             cohort,
@@ -2189,10 +2256,30 @@ def run_class_study_action(
 
         if type(cohort_version) is not int or cohort_version < 1:
             raise ValueError("class-study foundation requires --cohort-version")
+        build_path = _required(build_execution_receipt, "--build-execution-receipt")
+        pinned_path = _required(pinned_cdp_receipt, "--pinned-cdp-receipt")
+        expected_pinned_path = (
+            Path(build_path).absolute().parent
+            / f"pinned-cdp-execution-v{cohort_version}.json"
+        )
+        if Path(pinned_path).absolute() != expected_pinned_path:
+            raise ValueError(
+                "class-study foundation pinned CDP receipt has the wrong canonical filename"
+            )
+        foundation_destination = _required(destination, "--destination")
+        expected_foundation_destination = (
+            Path(build_path).absolute().parent.parent
+            / f"class-study-foundation-v{cohort_version}.json"
+        )
+        if Path(foundation_destination).absolute() != expected_foundation_destination:
+            raise ValueError(
+                "class-study foundation destination has the wrong canonical filename"
+            )
         output = create_class_foundation_attestation(
-            _required(destination, "--destination"),
+            foundation_destination,
             cohort_version=cohort_version,
-            build_execution_receipt=_required(build_execution_receipt, "--build-execution-receipt"),
+            build_execution_receipt=build_path,
+            pinned_cdp_receipt=pinned_path,
             reference_receipt=_required(reference_receipt, "--reference-receipt"),
             code_gate_receipt=_required(code_gate_receipt, "--code-gate-receipt"),
             controlled_qualification_receipt=_required(
@@ -2469,6 +2556,12 @@ def run_class_study_action(
         if pilot_admission is None:
             raise ValueError("campaign generation requires the pilot cohort admission")
         if campaign_stage == AUTHORITATIVE_STAGE:
+            qualification_authority = _qualification_authority_for_action(
+                _required(foundation_attestation, "--foundation-attestation"),
+                deep_code_gate=deep,
+                runtime_role="collection",
+                successor_context=successor_context,
+            )
             if final_admission is None:
                 raise ValueError(
                     "authoritative campaign generation requires final cohort admission"
@@ -2478,6 +2571,7 @@ def run_class_study_action(
                 pilot_admission=pilot_admission,
                 final_admission=final_admission,
             )
+            pilot_fitting = _require_role(records, "pilot-fitting")
             compatibility = _require_role(records, "pilot-compatibility")
             pairs = validate_final_selection_input(
                 _load_json_object(
@@ -2485,8 +2579,10 @@ def run_class_study_action(
                     "final-selection input",
                 ),
                 pilot_admission=pilot_admission,
+                pilot_fitting_result_root=Path(pilot_fitting["root"]),
                 pilot_numeric_bundle_root=_required(numeric_bundle_root, "--numeric-bundle"),
                 pilot_compatibility_result_root=Path(compatibility["root"]),
+                qualification_authority=qualification_authority,
             )
             if final_admission.selection.feasible_pairs != pairs:
                 raise ValueError("final cohort is not bound to the verified final-selection input")
@@ -2559,8 +2655,19 @@ def run_class_study_action(
     if action == "prefix-specs":
         fitted_stage = _required_stage(stage)
         admission = _admission_for_stage(fitted_stage, pilot_admission, final_admission)
+        source = _required(capture_result, "--capture-result")
+        source_record = _require_fitting_source(source, fitted_stage, admission)
+        if successor_context is not None:
+            _require_successor_result_records(
+                (source_record,),
+                restart_sha256=sha256_file(successor_context["restart_path"]),
+                study_id=successor_context["study_id"],
+            )
         numeric = _required(numeric_bundle_root, "--numeric-bundle")
-        verified_numeric = verify_numeric_fitting_bundle(numeric)
+        verified_numeric = verify_numeric_fitting_bundle(
+            numeric,
+            source_result_root=source,
+        )
         if verified_numeric.stage != fitted_stage:
             raise ValueError("numeric fitting bundle has the wrong requested stage")
         _require_numeric_admission(verified_numeric, admission)
@@ -2571,6 +2678,7 @@ def run_class_study_action(
             )
         output = derive_schema_six_prefix_specs(
             numeric,
+            source_result_root=source,
             workload_root=_required(workload_root, "--workload-root"),
             artifacts_root=_required(artifacts_root, "--artifacts-root"),
         )
@@ -2584,10 +2692,20 @@ def run_class_study_action(
     if action == "qualify-prefix":
         fitted_stage = _required_stage(stage)
         admission = _admission_for_stage(fitted_stage, pilot_admission, final_admission)
+        source = _required(capture_result, "--capture-result")
+        source_record = _require_fitting_source(source, fitted_stage, admission)
+        if successor_context is not None:
+            _require_successor_result_records(
+                (source_record,),
+                restart_sha256=sha256_file(successor_context["restart_path"]),
+                study_id=successor_context["study_id"],
+            )
+        numeric = _required(numeric_bundle_root, "--numeric-bundle")
         return _coordinate_qualification(
             fitted_stage,
             admission=admission,
-            numeric_bundle_root=_required(numeric_bundle_root, "--numeric-bundle"),
+            source_result_root=source,
+            numeric_bundle_root=numeric,
             prefix_spec_root=_required(prefix_spec_root, "--prefix-spec-root"),
             workload_root=_required(workload_root, "--workload-root"),
             checkpoint_path=_required(qualification_checkpoint, "--qualification-checkpoint"),
@@ -2669,6 +2787,7 @@ def run_class_study_action(
         )
         output = finalize_fitting_bundle(
             numeric,
+            source_result_root=fitting_result_root,
             qualification_manifest_path=qualification,
             qualification_context=context,
             artifacts_root=_required(artifacts_root, "--artifacts-root"),
@@ -2781,6 +2900,8 @@ def run_class_study_action(
         details = _verify_target(
             _required(target, "--target"),
             admission=admission,
+            fitting_stage=verification_stage,
+            fitting_source_result_root=capture_result,
             workload_root=_required(workload_root, "--workload-root"),
             numeric_bundle_root=numeric_bundle_root,
             prefix_spec_root=prefix_spec_root,
@@ -2798,6 +2919,7 @@ def _coordinate_qualification(
     stage: str,
     *,
     admission: CohortAdmission,
+    source_result_root: Path,
     numeric_bundle_root: Path,
     prefix_spec_root: Path,
     workload_root: Path,
@@ -2811,7 +2933,10 @@ def _coordinate_qualification(
     expected_successor_study_id: str | None = None,
     expected_successor_restart_sha256: str | None = None,
 ) -> ClassStudyActionResult:
-    numeric = verify_numeric_fitting_bundle(numeric_bundle_root)
+    numeric = verify_numeric_fitting_bundle(
+        numeric_bundle_root,
+        source_result_root=source_result_root,
+    )
     if numeric.stage != stage:
         raise ValueError("numeric fitting bundle has the wrong qualification stage")
     _require_numeric_admission(numeric, admission)
@@ -2883,18 +3008,21 @@ def _coordinate_qualification(
             qualification_scope=FULL_QUALIFICATION_SCOPE,
             workload_root=workload_root,
             prefix_spec_root=prefix_spec_root,
+            qualification_authority=authority,
         )
     reconcile_named_qualification_checkpoint(
         checkpoint,
         workload_root=workload_root,
         sidecar_root=sidecars,
         prefix_spec_root=prefix_spec_root,
+        expected_qualification_authority=authority,
     )
     pending = pending_named_qualification_workloads(
         checkpoint,
         workload_root=workload_root,
         sidecar_root=sidecars,
         prefix_spec_root=prefix_spec_root,
+        expected_qualification_authority=authority,
     )
     requested: tuple[str, ...]
     if workload_id is not None:
@@ -2912,6 +3040,7 @@ def _coordinate_qualification(
             workload_root=workload_root,
             prefix_spec_root=prefix_spec_root,
             _execution_context=execution_context,
+            qualification_authority=authority,
         )
         _validate_qualification_sidecars(sidecars, (current,), authority)
         record_named_qualification_checkpoint(
@@ -2920,12 +3049,14 @@ def _coordinate_qualification(
             workload_root=workload_root,
             sidecar_root=sidecars,
             prefix_spec_root=prefix_spec_root,
+            expected_qualification_authority=authority,
         )
     pending = pending_named_qualification_workloads(
         checkpoint,
         workload_root=workload_root,
         sidecar_root=sidecars,
         prefix_spec_root=prefix_spec_root,
+        expected_qualification_authority=authority,
     )
     if not pending:
         _validate_qualification_sidecars(sidecars, workloads, authority)
@@ -2980,7 +3111,7 @@ def _validate_qualification_sidecars(
     workload_ids: Sequence[str],
     authority: Mapping[str, Any],
 ) -> None:
-    """Require exact prepare source/image identity for each present sidecar."""
+    """Require each present sidecar to carry the exact foundation authority."""
 
     root = _regular_directory(sidecar_root, "qualification sidecar root")
     expected = _validated_qualification_authority(authority)
@@ -2992,11 +3123,15 @@ def _validate_qualification_sidecars(
             raise ValueError(f"qualification sidecar is not a regular file: {path}")
         value = _load_json_object(path, f"qualification sidecar {workload_id}")
         if (
-            value.get("qualification_source") != expected["prepare_source"]
+            value.get("schema_version") != CLASS_STUDY_QUALIFICATION_SCHEMA_VERSION
+            or value.get("qualification_source") != expected["prepare_source"]
             or value.get("qualification_image_digest") != expected["prepare_image_digest"]
+            or value.get("qualification_authority") != expected
+            or value.get("qualification_authority_sha256")
+            != canonical_json_sha256(expected)
         ):
             raise ValueError(
-                f"qualification sidecar {workload_id} differs from the foundation prepare build"
+                f"qualification sidecar {workload_id} differs from the foundation authority"
             )
 
 
@@ -3071,7 +3206,20 @@ def _coordinate_capture(
         )
     if action == "capture":
         campaign_path = _required(campaign, "--campaign")
-        preflight = preflight_campaign(campaign_path)
+        preflight_foundation = None
+        if foundation_attestation is not None:
+            preflight_foundation = {
+                "required_environment": {
+                    "QCSD_CLASS_FOUNDATION_ATTESTATION": str(
+                        _regular_file(
+                            foundation_attestation,
+                            "class foundation attestation",
+                        )
+                    )
+                }
+            }
+        with _capture_authority_environment(preflight_foundation):
+            preflight = preflight_campaign(campaign_path)
         role = _campaign_role(preflight)
         block = _campaign_block(preflight)
         if successor_restart_sha256 is not None and (
@@ -3084,18 +3232,23 @@ def _coordinate_capture(
         prerequisite_ledger: tuple[Mapping[str, Any], ...] = ()
         if not (successor_restart_sha256 is not None and role == "authoritative-fitting"):
             prerequisite_ledger = _validate_capture_prerequisites(role, block, records)
-        fitting_generation = _validate_capture_fitting_generation(
-            role,
-            prerequisite_records=prerequisite_ledger,
-            campaign_path=campaign_path,
-            frozen_result_root=None,
-        )
         foundation_authority = _validate_capture_foundation(
             role,
             foundation_attestation=foundation_attestation,
             capture_started_at=None,
             expected_sha256=None,
             prerequisite_records=records,
+        )
+        fitting_generation = _validate_capture_fitting_generation(
+            role,
+            prerequisite_records=prerequisite_ledger,
+            campaign_path=campaign_path,
+            frozen_result_root=None,
+            qualification_authority=(
+                foundation_authority.get("qualification_authority")
+                if isinstance(foundation_authority, Mapping)
+                else None
+            ),
         )
         authority = _validate_formal_capture_authority(
             role,
@@ -3178,18 +3331,23 @@ def _coordinate_capture(
         prerequisite_ledger = ()
         if not (successor_restart_sha256 is not None and role == "authoritative-fitting"):
             prerequisite_ledger = _validate_capture_prerequisites(role, block, records)
-        fitting_generation = _validate_capture_fitting_generation(
-            role,
-            prerequisite_records=prerequisite_ledger,
-            campaign_path=None,
-            frozen_result_root=source,
-        )
         foundation_authority = _validate_capture_foundation(
             role,
             foundation_attestation=foundation_attestation,
             capture_started_at=experiment.get("started_at"),
             expected_sha256=configuration.get(CLASS_STUDY_FOUNDATION_CONFIGURATION_KEY),
             prerequisite_records=records,
+        )
+        fitting_generation = _validate_capture_fitting_generation(
+            role,
+            prerequisite_records=prerequisite_ledger,
+            campaign_path=None,
+            frozen_result_root=source,
+            qualification_authority=(
+                foundation_authority.get("qualification_authority")
+                if isinstance(foundation_authority, Mapping)
+                else None
+            ),
         )
         authority = _validate_formal_capture_authority(
             role,
@@ -3257,7 +3415,7 @@ def _validate_capture_foundation(
     capture_started_at: object,
     expected_sha256: object,
     prerequisite_records: Sequence[Mapping[str, Any]],
-) -> dict[str, Any] | None:
+) -> dict[str, Any]:
     if role not in {
         "pilot-fitting",
         "pilot-compatibility",
@@ -3268,7 +3426,10 @@ def _validate_capture_foundation(
     }:
         raise ValueError("capture campaign has an unsupported class-study evidence role")
     path = _required(foundation_attestation, "--foundation-attestation")
-    from .class_attestation import validate_class_foundation_attestation
+    from .class_attestation import (
+        class_qualification_authority,
+        validate_class_foundation_attestation,
+    )
 
     foundation = validate_class_foundation_attestation(
         path,
@@ -3294,9 +3455,18 @@ def _validate_capture_foundation(
         for record in prerequisite_records
     ):
         raise ValueError("class capture prerequisites use a different foundation")
+    qualification_authority = class_qualification_authority(
+        path,
+        deep_code_gate=True,
+        runtime_role="collection",
+    )
+    if qualification_authority["foundation_attestation"]["sha256"] != binding["sha256"]:
+        raise ValueError("class qualification authority uses a different foundation")
     return {
         "foundation_attestation": binding,
         "source_sha256": canonical_json_sha256(foundation["source"]),
+        "qualification_authority": qualification_authority,
+        "qualification_authority_sha256": canonical_json_sha256(qualification_authority),
         "required_environment": {
             "QCSD_CLASS_FOUNDATION_ATTESTATION": binding["path"],
         },
@@ -3757,6 +3927,7 @@ def _validate_capture_fitting_generation(
     prerequisite_records: Sequence[Mapping[str, Any]],
     campaign_path: Path | None,
     frozen_result_root: Path | None,
+    qualification_authority: Mapping[str, Any] | None,
 ) -> dict[str, Any] | None:
     """Bind a fitted capture to the exact fitting result that precedes it."""
 
@@ -3779,6 +3950,9 @@ def _validate_capture_fitting_generation(
         source_result_root=Path(source_root),
         campaign_path=campaign_path,
         frozen_result_root=frozen_result_root,
+        expected_qualification_authority=_validated_qualification_authority(
+            qualification_authority
+        ),
     )
     source = generation.get("source_result")
     if (
@@ -4634,6 +4808,8 @@ def _verify_target(
     target: Path,
     *,
     admission: CohortAdmission,
+    fitting_stage: str,
+    fitting_source_result_root: Path | None,
     workload_root: Path,
     numeric_bundle_root: Path | None,
     prefix_spec_root: Path | None,
@@ -4698,6 +4874,14 @@ def _verify_target(
             "manifest_sha256": output.manifest_sha256,
         }
     if path.is_dir():
+        source = _required(fitting_source_result_root, "--capture-result")
+        source_record = _require_fitting_source(source, fitting_stage, admission)
+        if successor_context is not None:
+            _require_successor_result_records(
+                (source_record,),
+                restart_sha256=sha256_file(successor_context["restart_path"]),
+                study_id=successor_context["study_id"],
+            )
         context: QualificationContext | None = None
         if qualification_manifest is not None and prefix_spec_root is not None:
             context = QualificationContext(
@@ -4719,10 +4903,13 @@ def _verify_target(
         verified = verify_class_fitting_artifact_root(
             path,
             qualification_context=context,
+            source_result_root=source,
         )
+        if verified.stage != fitting_stage:
+            raise ValueError("fitting artifact has the wrong requested stage")
+        _require_numeric_admission(verified, admission)
         if successor_context is not None:
             _require_successor_fitting_artifact(verified, successor_context)
-            _require_numeric_admission(verified, admission)
         return verified.as_dict()
     value = _load_json_object(path, "class-study verification target")
     if value.get("receipt_type") == COHORT_RECEIPT_TYPE:

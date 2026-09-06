@@ -3474,19 +3474,27 @@ def _validated_terminal_binding(
 
 
 def _foundation_attestation_binding(path: Path) -> dict[str, str]:
+    """Deep-validate the exact foundation authority used by a live runner."""
+
     source = Path(os.path.abspath(path))
     if source.is_symlink() or not source.is_file():
         raise ValueError("class acquisition foundation must be a regular file")
-    value = load_json(source)
-    if not isinstance(value, Mapping):
-        raise TypeError("class acquisition foundation is not an object")
-    if source.read_bytes() != canonical_json_bytes(value):
-        raise ValueError("class acquisition foundation is not canonically encoded")
-    validate_hash_bound_receipt(
-        value,
-        expected_type="qcsd-class-study-foundation-attestation",
+    # Keep this import lazy: class_attestation validates acquisition completion
+    # evidence and therefore imports this module.
+    from .class_attestation import validate_class_foundation_attestation
+
+    validated = validate_class_foundation_attestation(
+        source,
+        deep_code_gate=True,
+        runtime_role="prepare",
     )
-    return {"path": str(source), "sha256": sha256_file(source)}
+    binding = {"path": str(source), "sha256": sha256_file(source)}
+    if (
+        validated.get("path") != binding["path"]
+        or validated.get("sha256") != binding["sha256"]
+    ):
+        raise ValueError("class acquisition foundation validator returned another binding")
+    return binding
 
 
 def _validate_runner_runtime(provenance: Mapping[str, Any]) -> None:

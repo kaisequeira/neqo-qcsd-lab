@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
 import sys
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
@@ -11,6 +12,7 @@ from types import ModuleType, SimpleNamespace
 import pytest
 
 import qcsd_lab.class_acquisition as acquisition_module
+from qcsd_lab import buflo_study, class_attestation, pinned_cdp
 from qcsd_lab.acquisition_errors import RecoverableAcquisitionError
 from qcsd_lab.cdp_targets import CDP_TARGET_INSTRUMENTATION_POLICY
 from qcsd_lab.class_acquisition import (
@@ -24,11 +26,11 @@ from qcsd_lab.class_acquisition import (
     MAX_ORIGIN_PASSES,
     MAX_PASSIVE_RENDER_AFTER_LOAD_MS,
     PENDING_BASELINE_GUARD_MS,
+    TERMINAL_SCHEMA_VERSION,
     ExistingAcquisitionBackend,
     InternalAcquisitionError,
     NavigationDiscovery,
     PreparedProbe,
-    TERMINAL_SCHEMA_VERSION,
     TerminalProbePolicyError,
     _converge_origins,
     _is_public_network_address,
@@ -72,6 +74,12 @@ from qcsd_lab.discovery_evidence import (
 )
 from qcsd_lab.prepare import PreparationError, PreparedWorkload, RecoverablePreparationError
 from qcsd_lab.util import load_json
+from tests.test_buflo_study import _build_execution_value
+from tests.test_pinned_cdp import _observation as _pinned_cdp_observation
+
+_PRODUCTION_FOUNDATION_ATTESTATION_BINDING = (
+    acquisition_module._foundation_attestation_binding
+)
 
 
 @pytest.fixture(autouse=True)
@@ -94,6 +102,31 @@ def _clean_acquisition_source(monkeypatch: pytest.MonkeyPatch):
         }
 
     monkeypatch.setattr(acquisition_module, "source_metadata", clean_source)
+
+    # Most tests exercise acquisition state transitions with a deliberately
+    # minimal hash-bound foundation fixture. Tests for the production boundary
+    # explicitly restore the deep typed validator captured above.
+    def fixture_foundation_binding(path: Path) -> dict[str, str]:
+        source = path.absolute()
+        if source.is_symlink() or not source.is_file():
+            raise ValueError("class acquisition foundation must be a regular file")
+        value = load_json(source)
+        if source.read_bytes() != canonical_json_bytes(value):
+            raise ValueError("class acquisition foundation is not canonically encoded")
+        acquisition_module.validate_hash_bound_receipt(
+            value,
+            expected_type="qcsd-class-study-foundation-attestation",
+        )
+        return {
+            "path": str(source),
+            "sha256": acquisition_module.sha256_file(source),
+        }
+
+    monkeypatch.setattr(
+        acquisition_module,
+        "_foundation_attestation_binding",
+        fixture_foundation_binding,
+    )
 
 
 def _foundation(path: Path) -> Path:
@@ -146,6 +179,303 @@ def _catalogue(path: Path) -> Path:
     )
     path.write_bytes(canonical_json_bytes(value))
     return path
+
+
+def _write_rust_code_gate_fixture(
+    root: Path,
+    *,
+    collection_source: dict[str, object],
+) -> dict[str, object]:
+    """Materialise the real Rust-gate reader's complete immutable input."""
+
+    logs_root = root / "logs"
+    logs_root.mkdir(parents=True)
+    build_inputs = {
+        "schema_version": 1,
+        "artifact_type": "qcsd-study-build-inputs",
+        "rust_base_image": buflo_study.RUST_BASE_IMAGE,
+        "debian_base_image": buflo_study.DEBIAN_BASE_IMAGE,
+        "uv_lock_sha256": buflo_study.sha256_file(buflo_study.LAB_ROOT / "uv.lock"),
+        "cargo_lock_sha256": buflo_study.sha256_file(
+            buflo_study.LAB_ROOT / "neqo-qcsd/Cargo.lock"
+        ),
+    }
+    build_source = {**collection_source, "image_digest": None}
+    source_bytes = (json.dumps(build_source, indent=2, sort_keys=True) + "\n").encode()
+    build_bytes = (json.dumps(build_inputs, indent=2, sort_keys=True) + "\n").encode()
+    (root.parent / "source.json").write_bytes(source_bytes)
+    (root.parent / "study-build-inputs.json").write_bytes(build_bytes)
+    logs: dict[str, dict[str, object]] = {}
+    for gate, _argv in buflo_study._RUST_CODE_GATE_COMMANDS:
+        data = b"status=passed\n"
+        (logs_root / f"{gate}.log").write_bytes(data)
+        logs[gate] = {
+            "path": f"logs/{gate}.log",
+            "bytes": len(data),
+            "sha256": hashlib.sha256(data).hexdigest(),
+        }
+    value: dict[str, object] = {
+        "schema_version": 1,
+        "artifact_type": "qcsd-rust-code-gate",
+        "domain": "qcsd-rust-code-gate-v1",
+        "passed": True,
+        "target_arch": "amd64",
+        "dockerfile_frontend": (
+            "docker/dockerfile:1.7@sha256:"
+            "a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e"
+        ),
+        "rust_base_image": buflo_study.RUST_BASE_IMAGE,
+        "uv_image": (
+            "ghcr.io/astral-sh/uv:0.10.7@sha256:"
+            "edd1fd89f3e5b005814cc8f777610445d7b7e3ed05361f9ddfae67bebfe8456a"
+        ),
+        "source_metadata": build_source,
+        "source_metadata_sha256": hashlib.sha256(source_bytes).hexdigest(),
+        "study_build_inputs": build_inputs,
+        "study_build_inputs_sha256": hashlib.sha256(build_bytes).hexdigest(),
+        "commands": [
+            {"gate": gate, "argv": list(argv)}
+            for gate, argv in buflo_study._RUST_CODE_GATE_COMMANDS
+        ],
+        "logs": logs,
+        "tool_versions": {
+            "cargo": "cargo 1.89.0",
+            "clippy": "clippy 0.1.89",
+            "rustc": "rustc 1.89.0",
+            "rustfmt": "rustfmt 1.8.0",
+        },
+    }
+    unsigned = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    value["sha256"] = hashlib.sha256(
+        b"qcsd-rust-code-gate-v1\0" + unsigned
+    ).hexdigest()
+    (root / "receipt.json").write_text(
+        json.dumps(value, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return value
+
+
+def _real_prepare_runtime_foundation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[Path, Path, dict[str, object], dict[str, object]]:
+    """Create a real schema-2 foundation around deterministic gate fixtures.
+
+    Expensive packet/result parsing and the browser launch are replaced by
+    deterministic gate outputs, but the build, reference, pinned-CDP, code,
+    qualification, foundation and acquisition readers themselves all run.
+    """
+
+    cohort_version = 59
+    collection_image = "sha256:" + "a" * 64
+    build_value = _build_execution_value(
+        collection_image,
+        cohort_version=cohort_version,
+        schema_version=3,
+    )
+    build_path = tmp_path / "build-execution-v59.json"
+    build_path.write_text(
+        json.dumps(build_value, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    collection_source = dict(build_value["source"])
+    prepare_source = {
+        **collection_source,
+        "image_digest": build_value["images"]["prepare"]["id"],
+    }
+    active_source: dict[str, dict[str, object]] = {"value": collection_source}
+
+    def runtime_source() -> dict[str, object]:
+        return copy.deepcopy(active_source["value"])
+
+    for module in (buflo_study, class_attestation, pinned_cdp, acquisition_module):
+        monkeypatch.setattr(module, "source_metadata", runtime_source)
+    monkeypatch.setattr(
+        buflo_study,
+        "build_execution_receipt_path",
+        lambda _version=1: build_path.resolve(),
+    )
+    monkeypatch.setenv("QCSD_LAB_IMAGE_DIGEST", str(collection_source["image_digest"]))
+
+    rust_root = tmp_path / "rust-code-gate"
+    _write_rust_code_gate_fixture(rust_root, collection_source=collection_source)
+    monkeypatch.setattr(buflo_study, "RUST_CODE_GATE_ROOT", rust_root)
+
+    build = buflo_study.validate_build_execution_receipt(
+        build_path,
+        expected_collection_image=str(collection_source["image_digest"]),
+        expected_cohort_version=cohort_version,
+    )
+    build_identity = {
+        "cohort_version": cohort_version,
+        "sha256": build["sha256"],
+        "collection_image": build["collection_image"],
+        "started_at": build["started_at"],
+        "finished_at": build["finished_at"],
+    }
+    regression_roots = tuple(tmp_path / f"regression-{index}" for index in range(3))
+    controlled_roots = tuple(tmp_path / f"controlled-{index}" for index in range(4))
+    for root in (*regression_roots, *controlled_roots):
+        root.mkdir()
+        (root / "evidence.sha256").write_text(f"{root.name}\n", encoding="utf-8")
+
+    def local_stage(
+        stage: str,
+        result_roots,
+        *,
+        explanation_receipt=None,
+        _expected_collection_source=None,
+    ):
+        assert explanation_receipt is None
+        selected_source = buflo_study._expected_clean_collection_source(
+            _expected_collection_source,
+            label=f"test {stage} source",
+        )
+        assert selected_source == collection_source
+        roots = tuple(Path(root).resolve() for root in result_roots)
+        expected_roots = controlled_roots if stage == "controlled" else regression_roots
+        assert roots == tuple(root.resolve() for root in expected_roots)
+        result = {
+            "schema_version": 1,
+            "samples": 160 if stage == "controlled" else 18,
+            "authoritative_bytes": 1,
+            "source": collection_source,
+            "results": [
+                {
+                    "root": str(root),
+                    "name": root.name,
+                    "evidence_sha256": acquisition_module.sha256_file(
+                        root / "evidence.sha256"
+                    ),
+                    "samples": 40 if stage == "controlled" else 6,
+                    "campaign_sha256": "1" * 64,
+                    "authoritative_bytes": 1,
+                    "environment": {"build_execution": build_identity},
+                }
+                for root in roots
+            ],
+        }
+        if stage == "controlled":
+            result.update(
+                sustained_cell_capacity={"passed": True},
+                multiple_endpoint_coverage={"passed": True},
+                ctsp_cpsp_ordering={"passed": True},
+            )
+        else:
+            result.update(
+                established_seven_baseline=buflo_study.validate_established_seven_baseline(),
+                buflo_timing_stress={"passed": True},
+                multi_origin_nine_mode_compatibility={"passed": True},
+            )
+        return result
+
+    monkeypatch.setattr(buflo_study, "_validate_local_stage_results", local_stage)
+
+    def lab_commands() -> list[dict[str, object]]:
+        records = []
+        for gate, template in buflo_study._LAB_CODE_GATE_COMMANDS:
+            argv = [
+                str(Path(sys.executable)) if item == "python" else item
+                for item in template
+            ]
+            output = "fixture passed\n"
+            records.append(
+                {
+                    "gate": gate,
+                    "argv": argv,
+                    "cwd": str(buflo_study.LAB_ROOT),
+                    "exit_code": 0,
+                    "stdout_bytes": len(output.encode()),
+                    "stdout_sha256": hashlib.sha256(output.encode()).hexdigest(),
+                    "stdout": output,
+                }
+            )
+        return records
+
+    monkeypatch.setattr(buflo_study, "_run_lab_code_gate_commands", lab_commands)
+    code_path = buflo_study.create_code_gate_receipt(
+        tmp_path / "code-gate-v59.json",
+        regression_result_roots=regression_roots,
+        cohort_version=cohort_version,
+    )
+
+    qualification_root = tmp_path / "qualification-sets"
+    monkeypatch.setattr(buflo_study, "QUALIFICATION_SET_ROOT", qualification_root)
+    set_root = qualification_root / buflo_study.qualification_set_for_cohort(cohort_version)
+    set_root.mkdir(parents=True)
+    for workload in buflo_study.WORKLOADS:
+        (set_root / f"{workload}.json").write_text("{}\n", encoding="utf-8")
+    monkeypatch.setattr(
+        buflo_study,
+        "qualification_status",
+        lambda *_args, **_kwargs: (True, "deterministic sustained set verified"),
+    )
+    qualification_path = buflo_study.create_qualification_receipt(
+        tmp_path / "qualification-v59.json",
+        controlled_roots,
+        cohort_version=cohort_version,
+    )
+
+    reference_source = {
+        **collection_source,
+        "image_digest": build_value["images"]["reference"]["id"],
+    }
+    reference_value = buflo_study._reference_execution_value(
+        source=reference_source,
+        build_execution={"sha256": build["sha256"], "receipt": build_value},
+        isolation={
+            "environment_marker": "QCSD_REFERENCE_ISOLATED=1",
+            "docker_network_mode": "none",
+            "observed_interfaces": ["lo"],
+            "reference_inputs_read_only": True,
+            "output_mount_writable": True,
+            "output_create_only": True,
+            "ordinary_collection_contains_author_code": False,
+        },
+        execution_id="d" * 32,
+        started_at="2026-08-27T00:00:01+00:00",
+        finished_at="2026-08-27T00:00:01+00:00",
+        duration_seconds=0.0,
+    )
+    reference_path = tmp_path / "reference-execution-v59.json"
+    reference_path.write_text(
+        json.dumps(reference_value, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    active_source["value"] = prepare_source
+    monkeypatch.setenv("QCSD_LAB_IMAGE_DIGEST", str(prepare_source["image_digest"]))
+    monkeypatch.setattr(
+        pinned_cdp,
+        "run_pinned_cdp_probe",
+        lambda **_kwargs: _pinned_cdp_observation(),
+    )
+    pinned_path = pinned_cdp.create_pinned_cdp_receipt(
+        tmp_path / "pinned-cdp-execution-v59.json",
+        build_execution_receipt=build_path,
+        cohort_version=cohort_version,
+        expected_uid=1000,
+        expected_gid=1000,
+    )
+
+    active_source["value"] = collection_source
+    monkeypatch.setenv("QCSD_LAB_IMAGE_DIGEST", str(collection_source["image_digest"]))
+    foundation_path = class_attestation.create_class_foundation_attestation(
+        tmp_path / "class-study-foundation-v59.json",
+        cohort_version=cohort_version,
+        build_execution_receipt=build_path,
+        pinned_cdp_receipt=pinned_path,
+        reference_receipt=reference_path,
+        code_gate_receipt=code_path,
+        controlled_qualification_receipt=qualification_path,
+        regression_result_roots=regression_roots,
+        controlled_result_roots=controlled_roots,
+    )
+
+    active_source["value"] = prepare_source
+    monkeypatch.setenv("QCSD_LAB_IMAGE_DIGEST", str(prepare_source["image_digest"]))
+    return foundation_path, build_path, collection_source, active_source
 
 
 def _replace_receipt_payload(path: Path, payload: dict) -> None:
@@ -911,6 +1241,208 @@ class NoNetworkBackend:
 
     def prepare(self, workload_id, url, approved_origins, output_root, *, origin_ip_pins=None):
         return self._called("preparation", workload_id)
+
+
+def test_direct_runner_initialisation_rejects_generic_hash_bound_foundation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    catalogue = _catalogue(tmp_path / "catalogue.json")
+    foundation = _foundation(tmp_path / "generic-foundation.json")
+    destination = tmp_path / "runner"
+    monkeypatch.setattr(
+        acquisition_module,
+        "_foundation_attestation_binding",
+        _PRODUCTION_FOUNDATION_ATTESTATION_BINDING,
+    )
+
+    with pytest.raises(ValueError, match="foundation"):
+        initialise_runner(
+            destination,
+            candidate_catalogue_path=catalogue,
+            foundation_attestation=foundation,
+            started_at="2026-08-28T00:00:00Z",
+            browser_tool="test-browser@1",
+        )
+    assert not destination.exists()
+
+
+def test_prepare_runtime_deep_foundation_supports_acquisition_and_authority(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Exercise the production foundation boundary in the prepare image role."""
+
+    foundation, build_path, collection_source, active_source = (
+        _real_prepare_runtime_foundation(tmp_path, monkeypatch)
+    )
+    catalogue_path = _catalogue(tmp_path / "catalogue.json")
+    catalogue, candidates = acquisition_module.load_candidate_catalogue_receipt(
+        catalogue_path
+    )
+    candidates = candidates[:2]
+    monkeypatch.setattr(
+        acquisition_module,
+        "load_candidate_catalogue_receipt",
+        lambda _path: (copy.deepcopy(catalogue), candidates),
+    )
+    monkeypatch.setattr(
+        acquisition_module,
+        "_foundation_attestation_binding",
+        _PRODUCTION_FOUNDATION_ATTESTATION_BINDING,
+    )
+
+    foundation_payload = load_json(foundation)["payload"]
+    code_gate_path = Path(foundation_payload["evidence"]["code_gate"]["path"])
+    with pytest.raises(ValueError, match="identity or source"):
+        buflo_study.validate_code_gate_receipt(code_gate_path, deep=False)
+    with pytest.raises(ValueError, match="runtime differs"):
+        class_attestation.validate_class_foundation_attestation(
+            foundation,
+            deep_code_gate=True,
+            runtime_role="collection",
+        )
+    validated = class_attestation.validate_class_foundation_attestation(
+        foundation,
+        deep_code_gate=True,
+        runtime_role="prepare",
+    )
+    authority = class_attestation.class_qualification_authority(
+        foundation,
+        deep_code_gate=True,
+        runtime_role="prepare",
+    )
+    assert validated["source"] == collection_source
+    assert authority["collection_source"] == collection_source
+    assert authority["prepare_source"] == active_source["value"]
+
+    prepare_source = dict(active_source["value"])
+    active_source["value"] = {
+        **prepare_source,
+        "image_digest": "sha256:" + "9" * 64,
+    }
+    monkeypatch.setenv(
+        "QCSD_LAB_IMAGE_DIGEST",
+        str(active_source["value"]["image_digest"]),
+    )
+    rejected_runner = tmp_path / "wrong-runtime-runner"
+    with pytest.raises(ValueError, match="runtime differs"):
+        initialise_runner(
+            rejected_runner,
+            candidate_catalogue_path=catalogue_path,
+            foundation_attestation=foundation,
+            started_at="2027-01-01T00:00:00Z",
+            browser_tool="playwright@1.52.0+/usr/bin/chromium",
+        )
+    assert not rejected_runner.exists()
+    active_source["value"] = prepare_source
+    monkeypatch.setenv("QCSD_LAB_IMAGE_DIGEST", str(prepare_source["image_digest"]))
+
+    runner = initialise_runner(
+        tmp_path / "runner",
+        candidate_catalogue_path=catalogue_path,
+        foundation_attestation=foundation,
+        started_at="2027-01-01T00:00:00Z",
+        browser_tool="playwright@1.52.0+/usr/bin/chromium",
+    )
+    status = run_due_acquisition(
+        runner,
+        candidate_catalogue_path=catalogue_path,
+        stability_root=tmp_path / "stability",
+        workload_root=tmp_path / "workloads",
+        backend=RejectingBackend(),
+        now=datetime(2027, 1, 1, tzinfo=UTC),
+    )
+    assert status["terminal_count"] == 2
+    assert status["complete"] is True
+    completion = write_acquisition_completion(
+        runner,
+        candidate_catalogue_path=catalogue_path,
+    )
+    assert completion.is_file()
+    validate_acquisition_completion(
+        load_json(completion),
+        candidate_catalogue_path=catalogue_path,
+        runner_root=runner,
+    )
+
+    active_source["value"] = {
+        **prepare_source,
+        "image_digest": "sha256:" + "9" * 64,
+    }
+    monkeypatch.setenv(
+        "QCSD_LAB_IMAGE_DIGEST",
+        str(active_source["value"]["image_digest"]),
+    )
+    with pytest.raises(ValueError, match="runtime differs"):
+        class_attestation.class_qualification_authority(
+            foundation,
+            deep_code_gate=True,
+            runtime_role="prepare",
+        )
+
+    active_source["value"] = prepare_source
+    monkeypatch.setenv("QCSD_LAB_IMAGE_DIGEST", str(prepare_source["image_digest"]))
+    build_bytes = build_path.read_bytes()
+    build_path.write_bytes(build_bytes + b" ")
+    with pytest.raises(ValueError, match="build|digest|hash"):
+        run_due_acquisition(
+            runner,
+            candidate_catalogue_path=catalogue_path,
+            stability_root=tmp_path / "stability",
+            workload_root=tmp_path / "workloads",
+            backend=NoNetworkBackend(),
+            now=datetime(2027, 1, 1, tzinfo=UTC),
+        )
+    with pytest.raises(ValueError, match="build|digest|hash"):
+        class_attestation.class_qualification_authority(
+            foundation,
+            deep_code_gate=True,
+            runtime_role="prepare",
+        )
+    build_path.write_bytes(build_bytes)
+
+
+@pytest.mark.parametrize("operation", ("run", "completion"))
+def test_direct_runner_mutators_reject_generic_foundation_on_resume(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    operation: str,
+) -> None:
+    catalogue = _catalogue(tmp_path / "catalogue.json")
+    runner = initialise_runner(
+        tmp_path / "runner",
+        candidate_catalogue_path=catalogue,
+        foundation_attestation=_foundation(tmp_path / "generic-foundation.json"),
+        started_at="2026-08-28T00:00:00Z",
+        browser_tool="test-browser@1",
+    )
+    checkpoint_before = (runner / "checkpoint.json").read_bytes()
+    backend = NoNetworkBackend()
+    monkeypatch.setattr(
+        acquisition_module,
+        "_foundation_attestation_binding",
+        _PRODUCTION_FOUNDATION_ATTESTATION_BINDING,
+    )
+
+    with pytest.raises(ValueError, match="foundation"):
+        if operation == "run":
+            run_due_acquisition(
+                runner,
+                candidate_catalogue_path=catalogue,
+                stability_root=tmp_path / "stability",
+                workload_root=tmp_path / "workloads",
+                backend=backend,
+                now=datetime(2026, 8, 28, tzinfo=UTC),
+            )
+        else:
+            write_acquisition_completion(
+                runner,
+                candidate_catalogue_path=catalogue,
+            )
+    assert backend.calls == []
+    assert (runner / "checkpoint.json").read_bytes() == checkpoint_before
+    assert not (runner / "completion.json").exists()
 
 
 def _catalogue_candidate_identities(catalogue: Path, count: int) -> list[tuple[str, str]]:

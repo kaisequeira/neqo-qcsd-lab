@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 
+import qcsd_lab.class_fitting as class_fitting
 import qcsd_lab.class_pipeline as class_pipeline
 from qcsd_lab.class_cohort import ASSEMBLY_RECEIPT_TYPE
 from qcsd_lab.class_fitting import (
@@ -19,6 +20,7 @@ from qcsd_lab.class_fitting import (
     BUNDLE_FILES,
     FINAL_ARTIFACT_TYPE,
     FINAL_FILES,
+    FINAL_PROVENANCE_SCHEMA_VERSION,
     NUMERIC_ARTIFACT_TYPE,
     NUMERIC_FILES,
     PILOT_PARAMETER_INPUT_POLICY,
@@ -48,6 +50,7 @@ from qcsd_lab.class_study import (
     bind_receipt,
     build_study_receipt,
     canonical_json_bytes,
+    canonical_json_sha256,
     validate_study_receipt,
 )
 from qcsd_lab.fitting_morphing import minimum_cost_derangement
@@ -400,6 +403,39 @@ def _numeric_bundle(
     return bundle, inputs
 
 
+def _bind_numeric_publication_source(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    inputs: ClassFittingInputs,
+) -> tuple[Path, list[tuple[Path, Path | None]]]:
+    """Make compact numeric fixtures exercise the production source-bound verifier."""
+
+    source_result_root = tmp_path / f"source-{inputs.stage}"
+    source_result_root.mkdir()
+    calls: list[tuple[Path, Path | None]] = []
+    real_verifier = verify_numeric_fitting_bundle
+
+    def verify_bound_numeric(
+        root: Path,
+        *,
+        source_result_root: Path | None = None,
+    ):
+        calls.append((root, source_result_root))
+        return real_verifier(
+            root,
+            source_result_root=source_result_root,
+            fitting_inputs_loader=lambda *_args, **_kwargs: inputs,
+            fitters=_fitters(),
+        )
+
+    monkeypatch.setattr(
+        class_fitting,
+        "verify_numeric_fitting_bundle",
+        verify_bound_numeric,
+    )
+    return source_result_root, calls
+
+
 @pytest.mark.parametrize(
     ("stage", "expected_samples"),
     [(PILOT_STAGE, 480), (AUTHORITATIVE_STAGE, 2000)],
@@ -627,9 +663,12 @@ def _qualification_context(
         sidecar_path.write_text(
             json.dumps(
                 {
+                    "schema_version": 3,
                     "workload_id": workload_id,
                     "qualification_source": authority["prepare_source"],
                     "qualification_image_digest": authority["prepare_image_digest"],
+                    "qualification_authority": authority,
+                    "qualification_authority_sha256": canonical_json_sha256(authority),
                 }
             )
             + "\n",
@@ -661,21 +700,24 @@ def _qualification_context(
         PILOT_QUALIFICATION_SET if stage == PILOT_STAGE else AUTHORITATIVE_QUALIFICATION_SET
     )
     named: dict[str, Any] = {
-        "schema_version": 2,
+        "schema_version": 3,
         "artifact_type": "qcsd-named-chaff-qualification-set",
         "qualification_set": qualification_set,
         "qualification_scope": "full",
-        "qualification_sidecar_schema_version": 2,
+        "qualification_sidecar_schema_version": 3,
         "workload_count": len(workload_ids),
         "workload_ids": list(workload_ids),
         "workloads": entries,
         "qualification_authority": authority,
+        "qualification_authority_sha256": canonical_json_sha256(authority),
     }
     named["bindings_sha256"] = _named_set_bindings_digest(named)
     (sidecar_root / "_qualification-set.json").write_bytes(canonical_json_bytes(named))
 
     def loader(sidecar_path: Path, **kwargs: Any) -> Any:
         workload_id = kwargs["workload_id"]
+        assert kwargs["expected_sidecar_schema_version"] == 3
+        assert kwargs["expected_qualification_authority"] == authority
         return SimpleNamespace(
             sidecar_sha256=sha256_file(sidecar_path),
             manifest_sha256=runtime_hashes[workload_id],
@@ -701,10 +743,80 @@ def _qualification_context(
     )
 
 
-def test_prefix_derivation_rejects_incomplete_class_coverage(tmp_path: Path) -> None:
+def test_create_only_publishers_recheck_the_exact_source_before_output(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A post-precheck source substitution must not poison either final path."""
+
+    numeric, inputs = _numeric_bundle(tmp_path, PILOT_STAGE, _cohort_receipt())
+    source_result_root, calls = _bind_numeric_publication_source(
+        monkeypatch,
+        tmp_path,
+        inputs,
+    )
+    verify_numeric_fitting_bundle(
+        numeric,
+        source_result_root=source_result_root,
+        fitting_inputs_loader=lambda *_args, **_kwargs: inputs,
+        fitters=_fitters(),
+    )
+
+    provenance_path = numeric / "numeric-provenance.json"
+    provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+    provenance["source_result"]["evidence_sha256"] = "f" * 64
+    provenance_path.write_bytes(canonical_json_bytes(provenance))
+    assert (
+        verify_numeric_fitting_bundle(numeric).provenance["source_result"]["evidence_sha256"]
+        == "f" * 64
+    )
+
+    prefix_artifacts = tmp_path / "prefix-publication"
+    final_artifacts = tmp_path / "final-publication"
+    prefix_artifacts.mkdir()
+    final_artifacts.mkdir()
+    context = _qualification_context(
+        tmp_path,
+        stage=PILOT_STAGE,
+        workload_ids=inputs.workload_ids,
+    )
+
+    with pytest.raises(ValueError, match="sealed source result"):
+        derive_schema_six_prefix_specs(
+            numeric,
+            source_result_root=source_result_root,
+            workload_root=context.workload_root,
+            artifacts_root=prefix_artifacts,
+        )
+    with pytest.raises(ValueError, match="sealed source result"):
+        finalize_fitting_bundle(
+            numeric,
+            source_result_root=source_result_root,
+            qualification_manifest_path=context.sidecar_root / "_qualification-set.json",
+            qualification_context=context,
+            artifacts_root=final_artifacts,
+        )
+
+    assert calls == [
+        (numeric, source_result_root),
+        (numeric, source_result_root),
+    ]
+    assert list(prefix_artifacts.iterdir()) == []
+    assert list(final_artifacts.iterdir()) == []
+
+
+def test_prefix_derivation_rejects_incomplete_class_coverage(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     from tests.test_manifest import class_study_prepared_manifest
 
     numeric, inputs = _numeric_bundle(tmp_path, PILOT_STAGE, _cohort_receipt())
+    source_result_root, _calls = _bind_numeric_publication_source(
+        monkeypatch,
+        tmp_path,
+        inputs,
+    )
     workload_root = tmp_path / "prefix-workloads"
     artifact_root = tmp_path / "prefix-artifacts"
     workload_root.mkdir()
@@ -716,6 +828,7 @@ def test_prefix_derivation_rejects_incomplete_class_coverage(tmp_path: Path) -> 
     with pytest.raises(ValueError, match="requires a complete-coverage admission"):
         derive_schema_six_prefix_specs(
             numeric,
+            source_result_root=source_result_root,
             workload_root=workload_root,
             artifacts_root=artifact_root,
         )
@@ -723,11 +836,17 @@ def test_prefix_derivation_rejects_incomplete_class_coverage(tmp_path: Path) -> 
 
 
 def test_finalization_default_context_rejects_incomplete_class_coverage(
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     from tests.test_manifest import class_study_prepared_manifest
 
     numeric, inputs = _numeric_bundle(tmp_path, PILOT_STAGE, _cohort_receipt())
+    source_result_root, _calls = _bind_numeric_publication_source(
+        monkeypatch,
+        tmp_path,
+        inputs,
+    )
     context = _qualification_context(
         tmp_path,
         stage=PILOT_STAGE,
@@ -758,6 +877,7 @@ def test_finalization_default_context_rejects_incomplete_class_coverage(
     with pytest.raises(ValueError, match="requires a complete-coverage admission"):
         finalize_fitting_bundle(
             numeric,
+            source_result_root=source_result_root,
             qualification_manifest_path=qualification_path,
             qualification_context=strict_context,
             artifacts_root=final_root,
@@ -765,9 +885,17 @@ def test_finalization_default_context_rejects_incomplete_class_coverage(
     assert list(final_root.iterdir()) == []
 
 
-def test_final_bundle_policy_qualification_binding_and_tamper_rejection(tmp_path: Path) -> None:
+def test_final_bundle_policy_qualification_binding_and_tamper_rejection(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     receipt = _cohort_receipt()
     numeric, inputs = _numeric_bundle(tmp_path, PILOT_STAGE, receipt)
+    source_result_root, calls = _bind_numeric_publication_source(
+        monkeypatch,
+        tmp_path,
+        inputs,
+    )
     context = _qualification_context(
         tmp_path,
         stage=PILOT_STAGE,
@@ -777,13 +905,16 @@ def test_final_bundle_policy_qualification_binding_and_tamper_rejection(tmp_path
     final_root.mkdir()
     bundle = finalize_fitting_bundle(
         numeric,
+        source_result_root=source_result_root,
         qualification_manifest_path=context.sidecar_root / "_qualification-set.json",
         qualification_context=context,
         artifacts_root=final_root,
     )
+    assert calls == [(numeric, source_result_root)]
     verified = verify_class_fitting_bundle(bundle, qualification_context=context)
     assert {path.name for path in bundle.iterdir()} == FINAL_FILES
     assert verified.provenance["artifact_type"] == FINAL_ARTIFACT_TYPE
+    assert verified.provenance["schema_version"] == FINAL_PROVENANCE_SCHEMA_VERSION
     assert verified.parameter_input_policy == PILOT_PARAMETER_INPUT_POLICY
     assert verified.provenance["runtime_authorized"] is False
     assert (
@@ -795,6 +926,11 @@ def test_final_bundle_policy_qualification_binding_and_tamper_rejection(tmp_path
         == 120
     )
     assert class_fitting_artifact_type(verified.provenance) == FINAL_ARTIFACT_TYPE
+
+    legacy_provenance = json.loads(json.dumps(verified.provenance))
+    legacy_provenance["schema_version"] = 1
+    with pytest.raises(ValueError, match="pre-publication and non-evidentiary"):
+        class_fitting._validate_final_provenance(legacy_provenance)
 
     parameter = bundle / BUNDLE_FILES["traffic_morphing"]
     provenance = bundle / "provenance.json"
@@ -824,10 +960,16 @@ def test_final_bundle_policy_qualification_binding_and_tamper_rejection(tmp_path
 
 
 def test_finalization_rejects_named_set_from_another_prepare_build_before_publication(
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     receipt = _cohort_receipt()
     numeric, inputs = _numeric_bundle(tmp_path, PILOT_STAGE, receipt)
+    source_result_root, _calls = _bind_numeric_publication_source(
+        monkeypatch,
+        tmp_path,
+        inputs,
+    )
     context = _qualification_context(
         tmp_path,
         stage=PILOT_STAGE,
@@ -853,6 +995,7 @@ def test_finalization_rejects_named_set_from_another_prepare_build_before_public
     with pytest.raises(ValueError, match="expected foundation"):
         finalize_fitting_bundle(
             numeric,
+            source_result_root=source_result_root,
             qualification_manifest_path=context.sidecar_root / "_qualification-set.json",
             qualification_context=wrong_context,
             artifacts_root=final_root,
@@ -868,6 +1011,11 @@ def test_final_selection_binds_the_qualification_finalized_pilot_bundle(
     receipt = _cohort_receipt()
     numeric_root, inputs = _numeric_bundle(tmp_path, PILOT_STAGE, receipt)
     numeric = verify_numeric_fitting_bundle(numeric_root)
+    source_result_root, _calls = _bind_numeric_publication_source(
+        monkeypatch,
+        tmp_path,
+        inputs,
+    )
     context = _qualification_context(
         tmp_path,
         stage=PILOT_STAGE,
@@ -877,6 +1025,7 @@ def test_final_selection_binds_the_qualification_finalized_pilot_bundle(
     final_parent.mkdir()
     final_root = finalize_fitting_bundle(
         numeric_root,
+        source_result_root=source_result_root,
         qualification_manifest_path=context.sidecar_root / "_qualification-set.json",
         qualification_context=context,
         artifacts_root=final_parent,
@@ -912,6 +1061,7 @@ def test_final_selection_binds_the_qualification_finalized_pilot_bundle(
                 prefix_validator=context.prefix_validator,
                 preparation_validator=context.preparation_validator,
                 require_current_implementation=False,
+                qualification_authority=qualification_context.qualification_authority,
             ),
         )
 
@@ -923,6 +1073,9 @@ def test_final_selection_binds_the_qualification_finalized_pilot_bundle(
         "experiment_sha256": "9" * 64,
         "accepted": 1_080,
         "unique_class_mode_pairs": 1_080,
+        "class_study_foundation_sha256": context.qualification_authority[
+            "foundation_attestation"
+        ]["sha256"],
         "defense_parameter_sha256": {
             "traffic-morphing": finalized.artifact_hashes["traffic_morphing"],
             "wtf-pad": finalized.artifact_hashes["wtf_pad"],
@@ -947,10 +1100,29 @@ def test_final_selection_binds_the_qualification_finalized_pilot_bundle(
         assembly_sha256=sha256_file(assembly_path),
         prepared_workload_sha256={workload_id: "a" * 64 for workload_id in inputs.workload_ids},
     )
+    pilot_fitting_result = tmp_path / "pilot-fitting-result"
+    pilot_fitting_result.mkdir()
+
+    def verify_bound_numeric(
+        root: Path,
+        *,
+        source_result_root: Path | None = None,
+    ):
+        assert root == numeric_root
+        assert source_result_root == pilot_fitting_result
+        return numeric
+
+    monkeypatch.setattr(
+        class_pipeline,
+        "verify_numeric_fitting_bundle",
+        verify_bound_numeric,
+    )
     selection = class_pipeline.build_final_selection_input(
         admission,
+        pilot_fitting_result_root=pilot_fitting_result,
         pilot_numeric_bundle_root=numeric_root,
         pilot_compatibility_result_root=compatibility_root,
+        qualification_authority=context.qualification_authority,
     )
     bound = selection["payload"]["pilot_compatibility"]
     assert bound["fitted_parameter_sha256"] == compatibility["defense_parameter_sha256"]
@@ -958,6 +1130,10 @@ def test_final_selection_binds_the_qualification_finalized_pilot_bundle(
         "source": "frozen-pilot-compatibility-inputs",
         "provenance_sha256": sha256_file(final_root / "provenance.json"),
         "artifact_sha256": compatibility["defense_parameter_sha256"],
+        "qualification_authority": context.qualification_authority,
+        "qualification_authority_sha256": canonical_json_sha256(
+            context.qualification_authority
+        ),
     }
     graph = tuple(tuple(pair) for pair in selection["payload"]["feasible_pair_graph"])
     assert len(graph) == len(inputs.workload_ids) // 2
@@ -980,6 +1156,36 @@ def test_final_selection_binds_the_qualification_finalized_pilot_bundle(
             feasible_pairs=(),
         )
 
+    wrong_authority = json.loads(json.dumps(context.qualification_authority))
+    wrong_authority["foundation_attestation"] = {
+        "path": "/evidence/other-foundation.json",
+        "sha256": "8" * 64,
+        "payload_sha256": "9" * 64,
+    }
+    wrong_authority["build_execution"] = {
+        "path": "/evidence/other-build.json",
+        "sha256": "a" * 64,
+    }
+    wrong_authority["build_execution_identity"]["sha256"] = "a" * 64
+    wrong_authority["prepare_image_digest"] = "sha256:" + "b" * 64
+    wrong_authority["prepare_source"]["image_digest"] = wrong_authority[
+        "prepare_image_digest"
+    ]
+    compatibility["class_study_foundation_sha256"] = wrong_authority[
+        "foundation_attestation"
+    ]["sha256"]
+    with pytest.raises(ValueError, match="expected foundation"):
+        class_pipeline.build_final_selection_input(
+            admission,
+            pilot_fitting_result_root=pilot_fitting_result,
+            pilot_numeric_bundle_root=numeric_root,
+            pilot_compatibility_result_root=compatibility_root,
+            qualification_authority=wrong_authority,
+        )
+    compatibility["class_study_foundation_sha256"] = context.qualification_authority[
+        "foundation_attestation"
+    ]["sha256"]
+
     compatibility["defense_parameter_sha256"] = {
         **compatibility["defense_parameter_sha256"],
         "walkie-talkie": numeric.artifact_hashes["walkie_talkie"],
@@ -987,9 +1193,100 @@ def test_final_selection_binds_the_qualification_finalized_pilot_bundle(
     with pytest.raises(ValueError, match="exact pilot fitted parameters"):
         class_pipeline.build_final_selection_input(
             admission,
+            pilot_fitting_result_root=pilot_fitting_result,
             pilot_numeric_bundle_root=numeric_root,
             pilot_compatibility_result_root=compatibility_root,
+            qualification_authority=context.qualification_authority,
         )
+
+
+def test_final_selection_rejects_self_consistent_numeric_source_substitution_before_write(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """An internally valid bundle cannot replace the selected fitting result."""
+
+    receipt = _cohort_receipt()
+    numeric_root, inputs = _numeric_bundle(tmp_path, PILOT_STAGE, receipt)
+    provenance_path = numeric_root / "numeric-provenance.json"
+    provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+    provenance["source_result"]["evidence_sha256"] = "f" * 64
+    provenance_path.write_bytes(canonical_json_bytes(provenance))
+
+    # The substitution is deliberately self-consistent within the numeric
+    # directory.  Only reopening the selected source result exposes it.
+    unbound = verify_numeric_fitting_bundle(numeric_root)
+    assert unbound.provenance["source_result"]["evidence_sha256"] == "f" * 64
+
+    cohort_path = tmp_path / "pilot-cohort.json"
+    assembly_path = tmp_path / "pilot-cohort-assembly.json"
+    cohort_path.write_bytes(canonical_json_bytes(receipt))
+    assembly_path.write_bytes(canonical_json_bytes(inputs.cohort_assembly_receipt))
+    admission = class_pipeline.CohortAdmission(
+        cohort_path=cohort_path,
+        assembly_path=assembly_path,
+        selection=validate_study_receipt(receipt),
+        cohort_sha256=sha256_file(cohort_path),
+        assembly_sha256=sha256_file(assembly_path),
+        prepared_workload_sha256={workload_id: "a" * 64 for workload_id in inputs.workload_ids},
+    )
+    selected_result = tmp_path / "selected-pilot-fitting-result"
+    selected_result.mkdir()
+    destination = tmp_path / "final-selection.json"
+    numeric_calls: list[tuple[Path, Path | None]] = []
+
+    def verify_bound_numeric(
+        root: Path,
+        *,
+        source_result_root: Path | None = None,
+    ):
+        numeric_calls.append((root, source_result_root))
+        return verify_numeric_fitting_bundle(
+            root,
+            source_result_root=source_result_root,
+            fitting_inputs_loader=lambda *_args, **_kwargs: inputs,
+            fitters=_fitters(),
+        )
+
+    monkeypatch.setattr(
+        class_pipeline,
+        "require_canonical_fresh_child",
+        lambda *_args, **_kwargs: destination,
+    )
+    monkeypatch.setattr(class_pipeline, "_require_fresh_admission_paths", lambda *_a, **_k: None)
+    monkeypatch.setattr(class_pipeline, "require_canonical_fresh_path", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        class_pipeline,
+        "verify_numeric_fitting_bundle",
+        verify_bound_numeric,
+    )
+    monkeypatch.setattr(
+        class_pipeline,
+        "verify_class_study_result",
+        lambda *_args, **_kwargs: pytest.fail(
+            "pilot compatibility was read after numeric source substitution"
+        ),
+    )
+    monkeypatch.setattr(
+        class_pipeline,
+        "_write_or_verify_bytes",
+        lambda *_args, **_kwargs: pytest.fail(
+            "final-selection destination was written after numeric source substitution"
+        ),
+    )
+
+    with pytest.raises(ValueError, match="sealed source result"):
+        class_pipeline.write_final_selection_input(
+            destination,
+            pilot_admission=admission,
+            pilot_fitting_result_root=selected_result,
+            pilot_numeric_bundle_root=numeric_root,
+            pilot_compatibility_result_root=tmp_path / "pilot-compatibility-result",
+            qualification_authority=_qualification_authority(),
+        )
+
+    assert numeric_calls == [(numeric_root, selected_result)]
+    assert not destination.exists()
 
 
 def test_authoritative_policy_is_separate_from_pilot_policy() -> None:

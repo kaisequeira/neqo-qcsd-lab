@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import qcsd_lab.class_acquisition as acquisition_module
 import qcsd_lab.class_cohort as cohort_module
 from qcsd_lab.acquisition_errors import RecoverableAcquisitionError
 from qcsd_lab.acquisition_timing import MAX_CANDIDATES_PER_ACTION
@@ -25,6 +26,7 @@ from qcsd_lab.class_catalogue import (
 from qcsd_lab.class_cohort import (
     ASSEMBLY_RECEIPT_TYPE,
     FINAL_SELECTION_RECEIPT_TYPE,
+    FINAL_SELECTION_SCHEMA_VERSION,
     _candidate_evidence,
     _final_selection_binding,
     _reconcile_acquisition_terminal,
@@ -40,11 +42,27 @@ from qcsd_lab.class_study import (
     ClassCandidate,
     bind_receipt,
     canonical_json_bytes,
+    canonical_json_sha256,
     deterministic_candidate_order,
 )
 from qcsd_lab.util import sha256_file
 
 LIST_SHA = "a" * 64
+
+
+@pytest.fixture(autouse=True)
+def _minimal_foundation_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep cohort tests focused on acquisition/cohort reconciliation."""
+
+    def binding(path: Path) -> dict[str, str]:
+        source = path.absolute()
+        return {"path": str(source), "sha256": sha256_file(source)}
+
+    monkeypatch.setattr(
+        acquisition_module,
+        "_foundation_attestation_binding",
+        binding,
+    )
 
 
 class _RejectingBackend:
@@ -333,6 +351,37 @@ def _pilot_selection_lineage() -> tuple[dict[str, object], dict[str, object]]:
         "wtf-pad": "b" * 64,
         "walkie-talkie": "c" * 64,
     }
+    collection_source = {
+        "image_digest": "sha256:" + "5" * 64,
+        "lab_commit": "6" * 40,
+        "lab_dirty": False,
+        "lab_patch_sha256": empty,
+        "neqo_commit": "7" * 40,
+        "neqo_pinned_commit": "7" * 40,
+        "neqo_dirty": False,
+        "neqo_patch_sha256": empty,
+    }
+    prepare_image = "sha256:" + "8" * 64
+    authority = {
+        "schema_version": 1,
+        "artifact_type": "qcsd-class-study-qualification-authority",
+        "foundation_attestation": {
+            "path": "/evidence/foundation.json",
+            "sha256": "9" * 64,
+            "payload_sha256": "0" * 64,
+        },
+        "build_execution": {"path": "/evidence/build.json", "sha256": "1" * 64},
+        "build_execution_identity": {
+            "cohort_version": 23,
+            "sha256": "1" * 64,
+            "collection_image": collection_source["image_digest"],
+            "started_at": "2026-08-28T00:00:00+00:00",
+            "finished_at": "2026-08-28T01:00:00+00:00",
+        },
+        "collection_source": collection_source,
+        "prepare_source": {**collection_source, "image_digest": prepare_image},
+        "prepare_image_digest": prepare_image,
+    }
     return (
         {
             "numeric_provenance_sha256": "d" * 64,
@@ -343,16 +392,7 @@ def _pilot_selection_lineage() -> tuple[dict[str, object], dict[str, object]]:
                 "experiment_sha256": "2" * 64,
                 "input_digest": "3" * 64,
                 "campaign_sha256": "4" * 64,
-                "source_fingerprints": {
-                    "image_digest": "sha256:" + "5" * 64,
-                    "lab_commit": "6" * 40,
-                    "lab_dirty": False,
-                    "lab_patch_sha256": empty,
-                    "neqo_commit": "7" * 40,
-                    "neqo_pinned_commit": "7" * 40,
-                    "neqo_dirty": False,
-                    "neqo_patch_sha256": empty,
-                },
+                "source_fingerprints": collection_source,
             },
         },
         {
@@ -366,6 +406,8 @@ def _pilot_selection_lineage() -> tuple[dict[str, object], dict[str, object]]:
                 "source": "frozen-pilot-compatibility-inputs",
                 "provenance_sha256": "f" * 64,
                 "artifact_sha256": parameters,
+                "qualification_authority": authority,
+                "qualification_authority_sha256": canonical_json_sha256(authority),
             },
         },
     )
@@ -377,7 +419,7 @@ def test_final_selection_binding_rejects_graph_substitution(tmp_path: Path) -> N
     possible_edges = 120 * 119 // 2
     payload = {
         "study_id": STUDY_ID,
-        "selection_schema_version": 1,
+        "selection_schema_version": FINAL_SELECTION_SCHEMA_VERSION,
         "selection_policy": "tranco-bound-order-with-qualified-selected-wt6-pairs",
         "pilot_cohort": {"sha256": "1" * 64, "payload_sha256": "2" * 64},
         "pilot_cohort_assembly": {
@@ -584,7 +626,17 @@ def test_final_selection_binding_rejects_graph_substitution(tmp_path: Path) -> N
     boolean_schema = copy.deepcopy(payload)
     boolean_schema["selection_schema_version"] = True
     write(boolean_schema)
-    with pytest.raises(ValueError, match="fields differ from the contract"):
+    with pytest.raises(ValueError, match="schema version is invalid"):
+        _final_selection_binding(
+            path,
+            feasible_pairs=graph,
+            selected_matching=graph,
+        )
+
+    legacy_schema = copy.deepcopy(payload)
+    legacy_schema["selection_schema_version"] = 1
+    write(legacy_schema)
+    with pytest.raises(ValueError, match="pre-publication and non-evidentiary"):
         _final_selection_binding(
             path,
             feasible_pairs=graph,
