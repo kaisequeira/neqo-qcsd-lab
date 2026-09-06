@@ -7,6 +7,7 @@ import json
 import os
 import re
 import signal
+import stat
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -190,6 +191,75 @@ def _write_build_execution(path: Path, payload: dict[str, Any]) -> None:
     path.write_bytes(_canonical(value))
 
 
+def _buildx_provenance() -> dict[str, Any]:
+    reported_path = "/usr/local/lib/docker/cli-plugins/docker-buildx"
+    symlink_target = (
+        "/mnt/wsl/docker-desktop/cli-tools/usr/local/lib/docker/cli-plugins/docker-buildx"
+    )
+    version = "v0.29.1-desktop.1"
+    commit = "28f6246ff24e2c05095e8741e48c48dcb2d3b4bc"
+    identity = {
+        "selection_source": "docker-info-client-plugin-metadata-v1",
+        "plugin_name": "buildx",
+        "plugin_vendor": "Docker Inc.",
+        "metadata_schema_version": "0.1.0",
+        "short_description": "Docker Buildx",
+        "reported_plugin_version": version,
+        "reported_plugin_path": reported_path,
+        "plugin": {
+            "path": reported_path,
+            "symlink_target": symlink_target,
+            "dev": 2096,
+            "inode": 280747,
+            "uid": 0,
+            "gid": 0,
+            "mode": stat.S_IFLNK | 0o777,
+            "nlink": 1,
+            "size": len(symlink_target.encode()),
+            "mtime_ns": 1_788_582_497_670_041_680,
+            "ctime_ns": 1_788_582_497_670_041_680,
+        },
+        "resolved": {
+            "path": symlink_target,
+            "dev": 1792,
+            "inode": 2122,
+            "uid": 0,
+            "gid": 0,
+            "mode": stat.S_IFREG | 0o755,
+            "nlink": 1,
+            "size": 65_994_936,
+            "mtime_ns": 1_763_156_518_000_000_000,
+            "ctime_ns": 1_763_166_552_000_000_000,
+            "sha256": "9" * 64,
+        },
+        "version_output": f"github.com/docker/buildx {version} {commit}",
+        "version": version,
+        "commit": commit,
+    }
+    identity_sha256 = hashlib.sha256(
+        json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    return {
+        "schema_version": 1,
+        "policy": "docker-selected-buildx-binary-stability-v1",
+        "identity": identity,
+        "observations": [
+            {
+                "boundary": boundary,
+                "observed_at": observed_at,
+                "identity_sha256": identity_sha256,
+            }
+            for boundary, observed_at in (
+                ("before-collection", "2026-08-28T00:00:01+00:00"),
+                ("after-collection", "2026-08-28T00:15:00+00:00"),
+                ("after-prepare", "2026-08-28T00:30:00+00:00"),
+                ("after-reference", "2026-08-28T00:59:59+00:00"),
+            )
+        ],
+        "passed": True,
+    }
+
+
 def _batch(prefix: str, body: dict[str, Any]) -> dict[str, Any]:
     value = copy.deepcopy(body)
     value["batch_id"] = f"{prefix}-{hashlib.sha256(_canonical(body)).hexdigest()}"
@@ -349,7 +419,7 @@ def acquisition(tmp_path: Path) -> Fixture:
     _write_build_execution(
         build_execution_path,
         {
-            "schema_version": 3,
+            "schema_version": 4,
             "artifact_type": watch.BUILD_EXECUTION_TYPE,
             "cohort_version": 23,
             "started_at": "2026-08-28T00:00:00+00:00",
@@ -414,6 +484,7 @@ def acquisition(tmp_path: Path) -> Fixture:
                     "reference": None,
                 },
             },
+            "buildx": _buildx_provenance(),
         },
     )
     build = json.loads(build_execution_path.read_text(encoding="utf-8"))
@@ -1917,14 +1988,46 @@ def _replace_build_and_rebind_foundation(acquisition: Fixture, payload: dict[str
     _replace_foundation_and_rebind_provenance(acquisition, foundation_payload)
 
 
+def test_current_foundation_watcher_accepts_exact_schema4_buildx_receipt(
+    acquisition: Fixture,
+) -> None:
+    snapshot = watch._load_build_execution(
+        acquisition.build_execution_path,
+        paths=acquisition.paths,
+    )
+
+    assert snapshot.value["schema_version"] == 4
+    assert snapshot.value["buildx"]["passed"] is True
+
+
+def test_current_foundation_watcher_bounds_the_build_receipt_before_parsing(
+    acquisition: Fixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(watch, "BUILD_EXECUTION_MAX_BYTES", 1)
+
+    with pytest.raises(watch.WatchError, match="exceeds its maximum byte count"):
+        watch._load_build_execution(
+            acquisition.build_execution_path,
+            paths=acquisition.paths,
+        )
+
+
 @pytest.mark.parametrize(
     ("field_path", "replacement", "message"),
     (
-        (("schema_version",), 2, "execution schema"),
+        (("schema_version",), 3, "execution schema"),
         (("duration_seconds",), 60.0, "build duration"),
         (("commands", 0, "argv", 5), "--cache", "--pull --no-cache"),
         (("cache_policy", "no_cache"), False, "cache policy"),
         (("build_inputs", "uv_lock_sha256"), "1" * 64, "checkout binding"),
+        (("buildx", "schema_version"), True, "buildx provenance schema"),
+        (("buildx", "identity", "plugin", "mode"), True, "stat identity"),
+        (
+            ("buildx", "identity", "resolved", "mode"),
+            stat.S_IFREG | 0o777,
+            "safe root-owned executable",
+        ),
+        (("buildx", "observations", 2, "identity_sha256"), "1" * 64, "observation"),
         (
             ("role_provenance", "sources", "reference", "lab_commit"),
             "1" * 40,
@@ -1933,7 +2036,7 @@ def _replace_build_and_rebind_foundation(acquisition: Fixture, payload: dict[str
         (("host_storage_preflight", "passed"), False, "storage preflight schema"),
     ),
 )
-def test_watcher_rejects_fully_resealed_schema3_build_tampering(
+def test_watcher_rejects_fully_resealed_schema4_build_tampering(
     acquisition: Fixture,
     field_path: tuple[str | int, ...],
     replacement: Any,
@@ -1950,6 +2053,20 @@ def test_watcher_rejects_fully_resealed_schema3_build_tampering(
     _replace_build_and_rebind_foundation(acquisition, payload)
 
     with pytest.raises(watch.WatchError, match=message):
+        watch._validate_immutable_binding(acquisition.paths)
+
+
+def test_current_foundation_watcher_rejects_a_fully_valid_historical_schema3_build(
+    acquisition: Fixture,
+) -> None:
+    build = json.loads(acquisition.build_execution_path.read_text(encoding="utf-8"))
+    payload = copy.deepcopy(build)
+    payload.pop("payload_sha256")
+    payload["schema_version"] = 3
+    payload.pop("buildx")
+    _replace_build_and_rebind_foundation(acquisition, payload)
+
+    with pytest.raises(watch.WatchError, match="execution schema"):
         watch._validate_immutable_binding(acquisition.paths)
 
 
@@ -2129,9 +2246,7 @@ def test_watcher_pinned_cdp_contract_matches_runtime_contract() -> None:
     )
 
     lab_root = Path(__file__).resolve().parents[1]
-    study = json.loads(
-        (lab_root / "config/class-study/v1/study.json").read_text(encoding="utf-8")
-    )
+    study = json.loads((lab_root / "config/class-study/v1/study.json").read_text(encoding="utf-8"))
     manifest_path = lab_root / watch.BROWSER_EGRESS_MANIFEST_RELATIVE_PATH
     argv_path = lab_root / watch.BROWSER_EGRESS_ARGV_RELATIVE_PATH
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -2140,15 +2255,11 @@ def test_watcher_pinned_cdp_contract_matches_runtime_contract() -> None:
     assert hashlib.sha256(manifest_path.read_bytes()).hexdigest() == (
         watch.BROWSER_EGRESS_MANIFEST_SHA256
     )
-    assert hashlib.sha256(argv_path.read_bytes()).hexdigest() == (
-        watch.BROWSER_EGRESS_ARGV_SHA256
-    )
+    assert hashlib.sha256(argv_path.read_bytes()).hexdigest() == (watch.BROWSER_EGRESS_ARGV_SHA256)
     assert manifest == browser_egress_qualification.expected_manifest_config()
     assert argv == browser_egress_qualification.expected_argv_config()
     assert manifest["vector_count"] == watch.BROWSER_EGRESS_VECTOR_COUNT
-    assert manifest["expanded_vectors_sha256"] == (
-        watch.BROWSER_EGRESS_EXPANDED_VECTORS_SHA256
-    )
+    assert manifest["expanded_vectors_sha256"] == (watch.BROWSER_EGRESS_EXPANDED_VECTORS_SHA256)
     assert manifest["execution_contract"]["browser"]["quic"] == {
         "disable_switch": "--disable-quic",
         "disable_switch_bare_and_unique": True,
@@ -2219,9 +2330,7 @@ def test_watcher_pinned_cdp_contract_matches_runtime_contract() -> None:
     assert watch._BROWSER_EGRESS_SUBPROCESS_WRAPPER_ARGUMENT == (
         browser_egress.BROWSER_EGRESS_SUBPROCESS_WRAPPER_ARGUMENT
     )
-    assert watch._PINNED_CDP_RESOLVER_PROJECTION == (
-        pinned_cdp._PINNED_CDP_RESOLVER_PROJECTION
-    )
+    assert watch._PINNED_CDP_RESOLVER_PROJECTION == (pinned_cdp._PINNED_CDP_RESOLVER_PROJECTION)
     assert watch.BROWSER_EGRESS_FINAL_TYPE == (browser_egress_qualification.FINAL_RECEIPT_TYPE)
     assert watch.BROWSER_EGRESS_QUALIFICATION_ID == (browser_egress_fixture.QUALIFICATION_ID)
     assert watch.BROWSER_EGRESS_VECTOR_COUNT == (browser_egress_fixture.VECTOR_COUNT)
@@ -3030,6 +3139,73 @@ def test_stable_receipt_read_detects_path_replacement(
             root=acquisition.paths.lab_root,
             label="checkpoint",
         )
+
+
+@pytest.mark.parametrize("replacement_kind", ("directory", "symlink"))
+def test_stable_receipt_read_detects_parent_directory_replacement(
+    acquisition: Fixture,
+    monkeypatch: pytest.MonkeyPatch,
+    replacement_kind: str,
+) -> None:
+    parent = acquisition.paths.lab_root / "race-evidence"
+    parent.mkdir()
+    receipt = parent / "receipt.json"
+    raw = b"{}"
+    receipt.write_bytes(raw)
+    detached = acquisition.paths.lab_root / "detached-race-evidence"
+    real_read = watch.os.read
+    replaced = False
+
+    def racing_read(descriptor: int, length: int) -> bytes:
+        nonlocal replaced
+        content = real_read(descriptor, length)
+        if content and not replaced:
+            replaced = True
+            parent.rename(detached)
+            if replacement_kind == "symlink":
+                parent.symlink_to(detached, target_is_directory=True)
+            else:
+                parent.mkdir()
+                (parent / receipt.name).write_bytes(raw)
+        return content
+
+    monkeypatch.setattr(watch.os, "read", racing_read)
+
+    with pytest.raises(watch.WatchError, match="changed while it was read"):
+        watch._read_stable_file(
+            receipt,
+            root=acquisition.paths.lab_root,
+            label="receipt",
+        )
+
+
+def test_stable_receipt_read_opens_the_final_component_nonblocking(
+    acquisition: Fixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_open = watch.os.open
+    final_flags: list[int] = []
+
+    def recording_open(
+        path: str | os.PathLike[str],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        if not flags & getattr(os, "O_DIRECTORY", 0):
+            final_flags.append(flags)
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(watch.os, "open", recording_open)
+
+    watch._read_stable_file(
+        acquisition.paths.checkpoint,
+        root=acquisition.paths.lab_root,
+        label="checkpoint",
+    )
+
+    assert len(final_flags) == 1
+    assert final_flags[0] & os.O_NONBLOCK
 
 
 @pytest.mark.parametrize("schema_alias", (True, 2.0))

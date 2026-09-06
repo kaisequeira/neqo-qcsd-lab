@@ -38,6 +38,7 @@ from .build_storage import (
     BUILD_EXECUTION_ARTIFACT_TYPE as _BUILD_EXECUTION_ARTIFACT_TYPE,
     BUILD_IMAGE_TAGS,
     BUILD_WSL_HOST_MIN_AVAILABLE_BYTES as _BUILD_WSL_HOST_MIN_AVAILABLE_BYTES,
+    load_stable_build_execution,
     validate_build_execution_envelope,
 )
 from .fidelity import (
@@ -93,9 +94,7 @@ TIMING_STRESS_ATTEMPT_ERROR_SCHEMA_VERSION = 1
 ABORTED_TIMING_STRESS_BOUND_REGRESSION_RECEIPT_SCHEMA_VERSION = 5
 TIMING_STRESS_BOUND_REGRESSION_RECEIPT_SCHEMA_VERSION = 6
 CONTROLLED_NETWORK_RECEIPT_SCHEMA_VERSION = 2
-KERNEL_TX_CONTROLLED_NETWORK_RECEIPT_ENV = (
-    "QCSD_KERNEL_TX_CONTROLLED_NETWORK_RECEIPT_B64"
-)
+KERNEL_TX_CONTROLLED_NETWORK_RECEIPT_ENV = "QCSD_KERNEL_TX_CONTROLLED_NETWORK_RECEIPT_B64"
 STUDY_ROOT = LAB_ROOT / "config/buflo-study/v1"
 STUDY_PLAN = STUDY_ROOT / "study.json"
 TIMING_STRESS_PARAMETERS = STUDY_ROOT / "buflo-timing-stress-v4.json"
@@ -2358,14 +2357,10 @@ def execute_local_controlled_profile(
         try:
             verified = verify_result(result)
         except (OSError, ValueError):
-            result = _with_kernel_tx_network_receipt(
-                network_receipt, resume_campaign, result
-            )
+            result = _with_kernel_tx_network_receipt(network_receipt, resume_campaign, result)
         else:
             if verified.experiment["status"] != "complete":
-                result = _with_kernel_tx_network_receipt(
-                    network_receipt, resume_campaign, result
-                )
+                result = _with_kernel_tx_network_receipt(network_receipt, resume_campaign, result)
     else:
         candidates = sorted(
             (destination / "results" / document["name"]).glob("*"),
@@ -5291,8 +5286,7 @@ def _timing_stress_kernel_tx_evidence(
         evidence.get("controlled_network_receipt") != dict(network_receipt)
         or evidence.get("controlled_network_receipt_sha256")
         != topology.get("network_receipt_sha256")
-        or evidence.get("controlled_observer_binding")
-        != topology.get("observer_binding")
+        or evidence.get("controlled_observer_binding") != topology.get("observer_binding")
     ):
         raise ValueError("timing-stress kernel-TX sidecar substituted its observer topology")
 
@@ -5340,9 +5334,7 @@ def _timing_stress_kernel_tx_evidence(
         "item_count": raw_aggregate["item_count"],
         "etf_item_count": raw_aggregate["etf_item_count"],
         "ordered_item_count": raw_aggregate["ordered_item_count"],
-        "captured_credit_identity_count": raw_aggregate[
-            "captured_credit_identity_count"
-        ],
+        "captured_credit_identity_count": raw_aggregate["captured_credit_identity_count"],
         "matched_item_count": evidence_aggregate["matched_item_count"],
         "runner_failed_item_count": raw_aggregate["failed_item_count"],
         "runner_unresolved_item_count": raw_aggregate["unresolved_item_count"],
@@ -5353,9 +5345,7 @@ def _timing_stress_kernel_tx_evidence(
         "capture_drop_count": evidence_aggregate["capture_drop_count"],
         "max_tx_software_lateness_ns": raw_aggregate["max_tx_software_lateness_ns"],
         "max_tx_to_capture_delta_ns": evidence_aggregate["max_tx_to_capture_delta_ns"],
-        "max_post_veth_outgoing_release_lateness_ns": max(
-            exact_release_lateness, default=0
-        ),
+        "max_post_veth_outgoing_release_lateness_ns": max(exact_release_lateness, default=0),
         "kernel_timed_release_lateness_histogram_after_tick_zero": {
             "upper_bounds_nanoseconds": list(RUNNER_WAKEUP_V7_HISTOGRAM_UPPER_BOUNDS),
             "counts": histogram_counts,
@@ -6228,13 +6218,11 @@ def _timing_stress_aggregate(samples: Sequence[Mapping[str, Any]]) -> dict[str, 
         timing.get("contract_schema_version") != TIMING_STRESS_SCHEMA_VERSION
         or timing.get("realization_backend") != "linux-etf-so-txtime-post-veth-v1"
         or timing.get("runner_wakeup_schema_version") != 11
-        or timing.get("legacy_userspace_exact_release_projection")
-        != expected_projection
+        or timing.get("legacy_userspace_exact_release_projection") != expected_projection
         or not isinstance(kernel, Mapping)
         or kernel.get("realization_backend") != "linux-etf-so-txtime-post-veth-v1"
         or kernel.get("runner_wakeup_schema_version") != 11
-        or kernel.get("legacy_userspace_exact_release_projection")
-        != expected_projection
+        or kernel.get("legacy_userspace_exact_release_projection") != expected_projection
         or kernel.get("runner_receipt_schema_version") != 2
         or kernel.get("evidence_schema_version") != 1
         or kernel.get("observer_topology_schema_version") != 1
@@ -6243,8 +6231,7 @@ def _timing_stress_aggregate(samples: Sequence[Mapping[str, Any]]) -> dict[str, 
         raise ValueError("timing-stress sample does not use the current kernel-TX contract")
     typed_kernels = [dict(kernel) for kernel in kernels if isinstance(kernel, Mapping)]
     observed_total_releases = sum(
-        int(timing["kernel_timed_outgoing_releases_after_tick_zero"])
-        for timing in typed_timings
+        int(timing["kernel_timed_outgoing_releases_after_tick_zero"]) for timing in typed_timings
     )
 
     def aggregate_histograms(values: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
@@ -6275,12 +6262,8 @@ def _timing_stress_aggregate(samples: Sequence[Mapping[str, Any]]) -> dict[str, 
         timing["kernel_timed_release_lateness_histogram_after_tick_zero"]
         for timing in typed_timings
     ]
-    outgoing = sum(
-        int(timing["scheduled_outgoing_opportunities"]) for timing in typed_timings
-    )
-    incoming = sum(
-        int(timing["scheduled_incoming_opportunities"]) for timing in typed_timings
-    )
+    outgoing = sum(int(timing["scheduled_outgoing_opportunities"]) for timing in typed_timings)
+    incoming = sum(int(timing["scheduled_incoming_opportunities"]) for timing in typed_timings)
     return {
         "contract_schema_version": TIMING_STRESS_SCHEMA_VERSION,
         "visits": TIMING_STRESS_VISITS,
@@ -6302,30 +6285,21 @@ def _timing_stress_aggregate(samples: Sequence[Mapping[str, Any]]) -> dict[str, 
         "kernel_timed_outgoing_releases_after_tick_zero": observed_total_releases,
         "release_outcomes": {
             "tick_zero_observed": sum(
-                int(timing["release_outcomes"]["tick_zero_observed"])
-                for timing in typed_timings
+                int(timing["release_outcomes"]["tick_zero_observed"]) for timing in typed_timings
             ),
             "kernel_timed_after_tick_zero": sum(
                 int(timing["release_outcomes"]["kernel_timed_after_tick_zero"])
                 for timing in typed_timings
             ),
             "post_veth_matched": sum(
-                int(timing["release_outcomes"]["post_veth_matched"])
-                for timing in typed_timings
+                int(timing["release_outcomes"]["post_veth_matched"]) for timing in typed_timings
             ),
-            "failed": sum(
-                int(timing["release_outcomes"]["failed"])
-                for timing in typed_timings
-            ),
+            "failed": sum(int(timing["release_outcomes"]["failed"]) for timing in typed_timings),
         },
         "outgoing_opportunities": outgoing,
         "incoming_opportunities": incoming,
-        "directional_events": sum(
-            int(timing["directional_events"]) for timing in typed_timings
-        ),
-        "full_outgoing_cells": sum(
-            int(timing["full_outgoing_cells"]) for timing in typed_timings
-        ),
+        "directional_events": sum(int(timing["directional_events"]) for timing in typed_timings),
+        "full_outgoing_cells": sum(int(timing["full_outgoing_cells"]) for timing in typed_timings),
         "terminal_drain_opportunities_per_direction": sum(
             int(timing["cadence"]["terminal_drain_opportunities_per_direction"])
             for timing in typed_timings
@@ -6345,12 +6319,10 @@ def _timing_stress_aggregate(samples: Sequence[Mapping[str, Any]]) -> dict[str, 
             for key in ("requested", "advertised", "consumed", "retired", "unresolved")
         },
         "max_schedule_outgoing_terminal_lateness_us": max(
-            int(timing["max_schedule_outgoing_terminal_lateness_us"])
-            for timing in typed_timings
+            int(timing["max_schedule_outgoing_terminal_lateness_us"]) for timing in typed_timings
         ),
         "max_incoming_credit_advertisement_delay_us": max(
-            int(timing["max_incoming_credit_advertisement_delay_us"])
-            for timing in typed_timings
+            int(timing["max_incoming_credit_advertisement_delay_us"]) for timing in typed_timings
         ),
         "realization_backend": "linux-etf-so-txtime-post-veth-v1",
         "runner_wakeup_schema_version": 11,
@@ -6365,15 +6337,12 @@ def _timing_stress_aggregate(samples: Sequence[Mapping[str, Any]]) -> dict[str, 
             "observer_topology_schema_version": 1,
             "job_count": sum(int(kernel["job_count"]) for kernel in typed_kernels),
             "item_count": sum(int(kernel["item_count"]) for kernel in typed_kernels),
-            "etf_item_count": sum(
-                int(kernel["etf_item_count"]) for kernel in typed_kernels
-            ),
+            "etf_item_count": sum(int(kernel["etf_item_count"]) for kernel in typed_kernels),
             "ordered_item_count": sum(
                 int(kernel["ordered_item_count"]) for kernel in typed_kernels
             ),
             "captured_credit_identity_count": sum(
-                int(kernel["captured_credit_identity_count"])
-                for kernel in typed_kernels
+                int(kernel["captured_credit_identity_count"]) for kernel in typed_kernels
             ),
             "matched_item_count": sum(
                 int(kernel["matched_item_count"]) for kernel in typed_kernels
@@ -6385,12 +6354,9 @@ def _timing_stress_aggregate(samples: Sequence[Mapping[str, Any]]) -> dict[str, 
                 int(kernel["runner_unresolved_item_count"]) for kernel in typed_kernels
             ),
             "evidence_unresolved_item_count": sum(
-                int(kernel["evidence_unresolved_item_count"])
-                for kernel in typed_kernels
+                int(kernel["evidence_unresolved_item_count"]) for kernel in typed_kernels
             ),
-            "qdisc_drop_count": sum(
-                int(kernel["qdisc_drop_count"]) for kernel in typed_kernels
-            ),
+            "qdisc_drop_count": sum(int(kernel["qdisc_drop_count"]) for kernel in typed_kernels),
             "qdisc_overlimit_count": sum(
                 int(kernel["qdisc_overlimit_count"]) for kernel in typed_kernels
             ),
@@ -6401,8 +6367,7 @@ def _timing_stress_aggregate(samples: Sequence[Mapping[str, Any]]) -> dict[str, 
                 int(kernel["capture_drop_count"]) for kernel in typed_kernels
             ),
             "max_tx_software_lateness_ns": max(
-                int(kernel["max_tx_software_lateness_ns"])
-                for kernel in typed_kernels
+                int(kernel["max_tx_software_lateness_ns"]) for kernel in typed_kernels
             ),
             "max_tx_to_capture_delta_ns": max(
                 int(kernel["max_tx_to_capture_delta_ns"]) for kernel in typed_kernels
@@ -6437,9 +6402,7 @@ def _timing_stress_aggregate(samples: Sequence[Mapping[str, Any]]) -> dict[str, 
             "qdisc_requeues": 0,
             "capture_drops": 0,
         },
-        "observed_sensitivity": _timing_stress_kernel_sensitivity(
-            observed_total_releases
-        ),
+        "observed_sensitivity": _timing_stress_kernel_sensitivity(observed_total_releases),
         "passed": True,
     }
 
@@ -6557,9 +6520,7 @@ def _validate_timing_stress_aggregate(aggregate: Mapping[str, Any]) -> None:
         or aggregate.get("visits") != TIMING_STRESS_VISITS
         or aggregate.get("physical_attempts") != TIMING_STRESS_VISITS
         or aggregate.get("rejected_attempts") != 0
-        or not TIMING_STRESS_MINIMUM_TOTAL_GUARDS
-        <= releases
-        <= TIMING_STRESS_MAXIMUM_TOTAL_GUARDS
+        or not TIMING_STRESS_MINIMUM_TOTAL_GUARDS <= releases <= TIMING_STRESS_MAXIMUM_TOTAL_GUARDS
         or any(
             not TIMING_STRESS_MANDATORY_OPPORTUNITIES_PER_DIRECTION
             <= value
@@ -6573,13 +6534,9 @@ def _validate_timing_stress_aggregate(aggregate: Mapping[str, Any]) -> None:
             value - TIMING_STRESS_MANDATORY_OPPORTUNITIES_PER_DIRECTION
             for value in opportunities_by_visit
         ]
-        or aggregate.get(
-            "mandatory_prefix_kernel_timed_outgoing_releases_after_tick_zero"
-        )
+        or aggregate.get("mandatory_prefix_kernel_timed_outgoing_releases_after_tick_zero")
         != TIMING_STRESS_MINIMUM_TOTAL_GUARDS
-        or aggregate.get(
-            "terminal_drain_kernel_timed_outgoing_releases_after_tick_zero"
-        )
+        or aggregate.get("terminal_drain_kernel_timed_outgoing_releases_after_tick_zero")
         != releases - TIMING_STRESS_MINIMUM_TOTAL_GUARDS
         or aggregate.get("release_outcomes") != expected_release_outcomes
         or not TIMING_STRESS_MINIMUM_TOTAL_OPPORTUNITIES_PER_DIRECTION
@@ -6656,16 +6613,14 @@ def _validate_timing_stress_aggregate(aggregate: Mapping[str, Any]) -> None:
         )
         or not isinstance(kernel.get("network_receipt_sha256"), str)
         or re.fullmatch(r"[0-9a-f]{64}", kernel["network_receipt_sha256"]) is None
-        or histogram.get("upper_bounds_nanoseconds")
-        != RUNNER_WAKEUP_V7_HISTOGRAM_UPPER_BOUNDS
+        or histogram.get("upper_bounds_nanoseconds") != RUNNER_WAKEUP_V7_HISTOGRAM_UPPER_BOUNDS
         or not isinstance(histogram_counts, list)
         or len(histogram_counts) != len(RUNNER_WAKEUP_V7_HISTOGRAM_UPPER_BOUNDS) + 1
         or any(type(count) is not int or count < 0 for count in histogram_counts)
         or sum(histogram_counts) != releases
         or histogram_counts[-1] != 0
         or aggregate.get("zero_failure_counts") != zero_failure_counts
-        or aggregate.get("observed_sensitivity")
-        != _timing_stress_kernel_sensitivity(releases)
+        or aggregate.get("observed_sensitivity") != _timing_stress_kernel_sensitivity(releases)
         or aggregate.get("passed") is not True
     ):
         raise ValueError("timing-stress aggregate zero-failure gate did not pass")
@@ -6753,11 +6708,8 @@ def _timing_stress_kernel_sensitivity(
     return {
         "kernel_timed_outgoing_release_population_after_tick_zero": release_population,
         "iid_sensitivity_target_failures_per_release": 1 / 20_000,
-        "iid_detection_probability_at_target": 1
-        - (1 - 1 / 20_000) ** release_population,
-        "zero_failure_one_sided_95_percent_upper_rate": (
-            1 - 0.05 ** (1 / release_population)
-        ),
+        "iid_detection_probability_at_target": 1 - (1 - 1 / 20_000) ** release_population,
+        "zero_failure_one_sided_95_percent_upper_rate": (1 - 0.05 ** (1 / release_population)),
         "interpretation": (
             "descriptive-iid-sensitivity-only;temporally-correlated-kernel-releases-"
             "make-zero-observed-failures-the-actual-gate"
@@ -7522,9 +7474,7 @@ def _run_local_campaign_set(
             try:
                 verified = verify_result(result)
             except (OSError, ValueError):
-                result = _with_kernel_tx_network_receipt(
-                    network_receipt, resume_campaign, result
-                )
+                result = _with_kernel_tx_network_receipt(network_receipt, resume_campaign, result)
             else:
                 if verified.experiment["status"] != "complete":
                     result = _with_kernel_tx_network_receipt(
@@ -10224,7 +10174,7 @@ def _validate_build_execution_value(
     expected_collection_image: str | None = None,
     expected_cohort_version: int | None = None,
 ) -> dict[str, Any]:
-    validate_build_execution_envelope(
+    envelope = validate_build_execution_envelope(
         value,
         expected_cohort_version=expected_cohort_version,
         expected_probe_sha256=sha256_file(LAB_ROOT / "tools/windows_docker_storage_probe.ps1"),
@@ -10258,7 +10208,7 @@ def _validate_build_execution_value(
         raise ValueError("study no-cache build duration is invalid")
     docker = value["docker"]
     expected_docker_keys = {"client_version", "server_version"}
-    if value["schema_version"] in {2, 3}:
+    if value["schema_version"] in {2, 3, 4}:
         expected_docker_keys |= {
             "context",
             "endpoint",
@@ -10292,12 +10242,9 @@ def _validate_build_execution_value(
             )
         ):
             raise ValueError(f"study no-cache build {target} image binding is invalid")
-        if (
-            value["schema_version"] in {2, 3}
-            and record["tag"] != BUILD_IMAGE_TAGS[target]
-        ):
+        if value["schema_version"] in {2, 3, 4} and record["tag"] != BUILD_IMAGE_TAGS[target]:
             raise ValueError(f"study no-cache build {target} image role tag is invalid")
-    if value["schema_version"] in {2, 3} and len(
+    if value["schema_version"] in {2, 3, 4} and len(
         {record["id"] for record in images.values()}
     ) != len(images):
         raise ValueError("study no-cache build image roles do not have distinct immutable IDs")
@@ -10313,14 +10260,14 @@ def _validate_build_execution_value(
         expected_prefix = ["docker"]
         if value["schema_version"] == 2:
             expected_prefix.extend(["--context", docker["context"]])
-        elif value["schema_version"] == 3:
+        elif value["schema_version"] in {3, 4}:
             expected_prefix.extend(["--host", docker["endpoint"]])
         expected_prefix.extend(["build", "--pull", "--no-cache"])
         argv = command.get("argv") if isinstance(command, Mapping) else None
         iidfile_value: str | None = None
         iidfile: Path | None = None
         if (
-            value["schema_version"] in {2, 3}
+            value["schema_version"] in {2, 3, 4}
             and isinstance(argv, list)
             and len(argv) >= len(expected_prefix) + 2
             and argv[len(expected_prefix)] == "--iidfile"
@@ -10358,7 +10305,7 @@ def _validate_build_execution_value(
             or dockerfile.name != "Dockerfile"
             or dockerfile.parent != build_root
             or (
-                value["schema_version"] in {2, 3}
+                value["schema_version"] in {2, 3, 4}
                 and (
                     iidfile is None
                     or not iidfile.is_absolute()
@@ -10403,7 +10350,7 @@ def _validate_build_execution_value(
         raise ValueError("study no-cache build inputs are invalid")
     if value["dockerfile_sha256"] != sha256_file(LAB_ROOT / "Dockerfile"):
         raise ValueError("study no-cache build Dockerfile binding is stale")
-    return {
+    validated = {
         "cohort_version": cohort_version,
         "collection_image": collection_id,
         "images": {target: dict(record) for target, record in images.items()},
@@ -10412,6 +10359,10 @@ def _validate_build_execution_value(
         "finished_at": value["finished_at"],
         "passed": True,
     }
+    if value["schema_version"] == 4:
+        validated["schema_version"] = 4
+        validated["buildx"] = envelope["buildx"]
+    return validated
 
 
 def validate_build_execution_receipt(
@@ -10420,9 +10371,13 @@ def validate_build_execution_receipt(
     expected_collection_image: str | None = None,
     expected_cohort_version: int | None = None,
 ) -> dict[str, Any]:
-    binding = _file_binding(path)
+    resolved, raw, value = load_stable_build_execution(path)
+    binding = {
+        "path": str(resolved),
+        "sha256": hashlib.sha256(raw).hexdigest(),
+    }
     validated = _validate_build_execution_value(
-        load_json(Path(binding["path"])),
+        value,
         expected_collection_image=expected_collection_image,
         expected_cohort_version=expected_cohort_version,
     )

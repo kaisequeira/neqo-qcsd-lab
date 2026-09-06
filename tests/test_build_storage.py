@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-from pathlib import Path
+import os
+import stat
+from datetime import datetime
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import pytest
@@ -31,6 +34,13 @@ def _rehash(value: dict[str, Any]) -> dict[str, Any]:
     value.pop("payload_sha256", None)
     value["payload_sha256"] = _canonical_digest(value)
     return value
+
+
+def _rehash_buildx_receipt(value: dict[str, Any]) -> dict[str, Any]:
+    identity_sha256 = _canonical_digest(value["buildx"]["identity"])
+    for observation in value["buildx"]["observations"]:
+        observation["identity_sha256"] = identity_sha256
+    return _rehash(value)
 
 
 def _observation(
@@ -106,6 +116,84 @@ def _non_wsl_preflight() -> dict[str, Any]:
     }
 
 
+def _buildx_provenance() -> dict[str, Any]:
+    reported_path = "/usr/local/lib/docker/cli-plugins/docker-buildx"
+    symlink_target = (
+        "/mnt/wsl/docker-desktop/cli-tools/usr/local/lib/docker/cli-plugins/docker-buildx"
+    )
+    version = "v0.29.1-desktop.1"
+    commit = "28f6246ff24e2c05095e8741e48c48dcb2d3b4bc"
+    identity = {
+        "selection_source": "docker-info-client-plugin-metadata-v1",
+        "plugin_name": "buildx",
+        "plugin_vendor": "Docker Inc.",
+        "metadata_schema_version": "0.1.0",
+        "short_description": "Docker Buildx",
+        "reported_plugin_version": version,
+        "reported_plugin_path": reported_path,
+        "plugin": {
+            "path": reported_path,
+            "symlink_target": symlink_target,
+            "dev": 2096,
+            "inode": 280747,
+            "uid": 0,
+            "gid": 0,
+            "mode": stat.S_IFLNK | 0o777,
+            "nlink": 1,
+            "size": len(symlink_target.encode()),
+            "mtime_ns": 1_788_582_497_670_041_680,
+            "ctime_ns": 1_788_582_497_670_041_680,
+        },
+        "resolved": {
+            "path": symlink_target,
+            "dev": 1792,
+            "inode": 2122,
+            "uid": 0,
+            "gid": 0,
+            "mode": stat.S_IFREG | 0o755,
+            "nlink": 1,
+            "size": 65_994_936,
+            "mtime_ns": 1_763_156_518_000_000_000,
+            "ctime_ns": 1_763_166_552_000_000_000,
+            "sha256": "9" * 64,
+        },
+        "version_output": f"github.com/docker/buildx {version} {commit}",
+        "version": version,
+        "commit": commit,
+    }
+    identity_sha256 = _canonical_digest(identity)
+    return {
+        "schema_version": 1,
+        "policy": "docker-selected-buildx-binary-stability-v1",
+        "identity": identity,
+        "observations": [
+            {
+                "boundary": boundary,
+                "observed_at": observed_at,
+                "identity_sha256": identity_sha256,
+            }
+            for boundary, observed_at in (
+                ("before-collection", "2026-09-01T00:00:01.100000+00:00"),
+                ("after-collection", "2026-09-01T00:00:02+00:00"),
+                ("after-prepare", "2026-09-01T00:00:03+00:00"),
+                ("after-reference", "2026-09-01T00:00:04.900000+00:00"),
+            )
+        ],
+        "passed": True,
+    }
+
+
+def _docker_buildx_metadata(path: str) -> dict[str, str]:
+    return {
+        "Name": "buildx",
+        "Path": path,
+        "SchemaVersion": "0.1.0",
+        "ShortDescription": "Docker Buildx",
+        "Vendor": "Docker Inc.",
+        "Version": "v0.29.1-desktop.1",
+    }
+
+
 def _build_receipt(
     *,
     schema_version: int,
@@ -120,7 +208,7 @@ def _build_receipt(
         "client_version": "29.0.1",
         "server_version": "29.0.1",
     }
-    if schema_version in {2, 3}:
+    if schema_version in {2, 3, 4}:
         docker.update(
             {
                 "context": "default",
@@ -141,16 +229,16 @@ def _build_receipt(
     for target in ("collection", "prepare", "reference"):
         tag = (
             build_storage.BUILD_IMAGE_TAGS[target]
-            if schema_version in {2, 3}
+            if schema_version in {2, 3, 4}
             else f"neqo-qcsd-lab-{target}:test"
         )
         argv = ["docker"]
         if schema_version == 2:
             argv.extend(["--context", docker["context"]])
-        elif schema_version == 3:
+        elif schema_version in {3, 4}:
             argv.extend(["--host", docker["endpoint"]])
         argv.extend(["build", "--pull", "--no-cache"])
-        if schema_version in {2, 3}:
+        if schema_version in {2, 3, 4}:
             argv.extend(
                 [
                     "--iidfile",
@@ -189,7 +277,7 @@ def _build_receipt(
             target: {
                 "tag": (
                     build_storage.BUILD_IMAGE_TAGS[target]
-                    if schema_version in {2, 3}
+                    if schema_version in {2, 3, 4}
                     else f"neqo-qcsd-lab-{target}:test"
                 ),
                 "id": image_ids[target],
@@ -222,7 +310,7 @@ def _build_receipt(
             "scope": ("Docker-layer-cache-disabled;declared-BuildKit-dependency-cache-mounts-only"),
         },
     }
-    if schema_version in {2, 3}:
+    if schema_version in {2, 3, 4}:
         assert host_storage_preflight is not None
         value["host_storage_preflight"] = host_storage_preflight
         value["role_provenance"] = {
@@ -237,6 +325,8 @@ def _build_receipt(
                 "reference": None,
             },
         }
+    if schema_version == 4:
+        value["buildx"] = _buildx_provenance()
     return _rehash(value)
 
 
@@ -391,16 +481,562 @@ def test_valid_schema_3_binds_the_executed_pinned_host_build_argv() -> None:
 
     assert validated["schema_version"] == 3
     assert all(
-        command["argv"][:3]
-        == ["docker", "--host", "unix:///var/run/docker.sock"]
+        command["argv"][:3] == ["docker", "--host", "unix:///var/run/docker.sock"]
         for command in value["commands"]
     )
 
 
-def test_schema_3_rejects_context_argv_even_when_rehashed() -> None:
-    value = _build_receipt(
-        schema_version=3, host_storage_preflight=_non_wsl_preflight()
+def test_valid_schema_4_projects_exact_four_boundary_buildx_provenance() -> None:
+    value = _build_receipt(schema_version=4, host_storage_preflight=_non_wsl_preflight())
+
+    validated = build_storage.validate_build_execution_envelope(
+        value,
+        expected_cohort_version=34,
+        expected_probe_sha256=PROBE_SHA256,
     )
+
+    assert validated["schema_version"] == 4
+    assert validated["buildx"] == value["buildx"]
+    assert validated["buildx"] is not value["buildx"]
+    assert [row["boundary"] for row in validated["buildx"]["observations"]] == [
+        "before-collection",
+        "after-collection",
+        "after-prepare",
+        "after-reference",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("field_path", "replacement", "message"),
+    (
+        (("buildx", "identity", "plugin", "mode"), True, "stat identity"),
+        (("buildx", "identity", "resolved", "sha256"), "A" * 64, "safe root-owned"),
+        (("buildx", "identity", "reported_plugin_path"), "docker-buildx", "canonical path"),
+        (("buildx", "identity", "reported_plugin_version"), "v0.29.0", "version binding"),
+        (("buildx", "observations", 2, "boundary"), "after-reference", "observation"),
+        (("buildx", "observations", 1, "observed_at"), True, "observation"),
+    ),
+)
+def test_schema_4_rejects_rehashed_malformed_buildx_data(
+    field_path: tuple[str | int, ...], replacement: Any, message: str
+) -> None:
+    value = _build_receipt(schema_version=4, host_storage_preflight=_non_wsl_preflight())
+    target: Any = value
+    for component in field_path[:-1]:
+        target = target[component]
+    target[field_path[-1]] = replacement
+    _rehash_buildx_receipt(value)
+
+    with pytest.raises(ValueError, match=message):
+        build_storage.validate_build_execution_envelope(value)
+
+
+def test_schema_4_rejects_extra_buildx_field_and_boundary_reordering() -> None:
+    value = _build_receipt(schema_version=4, host_storage_preflight=_non_wsl_preflight())
+    value["buildx"]["unexpected"] = None
+    _rehash(value)
+    with pytest.raises(ValueError, match="provenance schema"):
+        build_storage.validate_build_execution_envelope(value)
+
+    value = _build_receipt(schema_version=4, host_storage_preflight=_non_wsl_preflight())
+    value["buildx"]["identity"]["unexpected"] = None
+    _rehash_buildx_receipt(value)
+    with pytest.raises(ValueError, match="identity schema"):
+        build_storage.validate_build_execution_envelope(value)
+
+    value = _build_receipt(schema_version=4, host_storage_preflight=_non_wsl_preflight())
+    value["buildx"]["observations"][1]["observed_at"] = value["buildx"]["observations"][0][
+        "observed_at"
+    ]
+    _rehash(value)
+    with pytest.raises(ValueError, match="strictly increasing"):
+        build_storage.validate_build_execution_envelope(value)
+
+    value = _build_receipt(schema_version=4, host_storage_preflight=_non_wsl_preflight())
+    value["buildx"]["observations"][2]["identity_sha256"] = "1" * 64
+    _rehash(value)
+    with pytest.raises(ValueError, match="observation"):
+        build_storage.validate_build_execution_envelope(value)
+
+
+def test_schema_4_accepts_a_direct_regular_system_plugin() -> None:
+    value = _build_receipt(schema_version=4, host_storage_preflight=_non_wsl_preflight())
+    identity = value["buildx"]["identity"]
+    identity["resolved"]["path"] = identity["reported_plugin_path"]
+    identity["plugin"] = {
+        "path": identity["reported_plugin_path"],
+        "symlink_target": None,
+        **{key: identity["resolved"][key] for key in build_storage._BUILDX_STAT_KEYS},
+    }
+    _rehash_buildx_receipt(value)
+
+    validated = build_storage.validate_build_execution_envelope(value)
+
+    assert validated["buildx"]["identity"]["plugin"]["symlink_target"] is None
+
+
+def test_build_receipt_schema_selection_is_validation_order_independent() -> None:
+    values = (
+        _build_receipt(schema_version=4, host_storage_preflight=_non_wsl_preflight()),
+        _build_receipt(schema_version=1),
+        _build_receipt(schema_version=3, host_storage_preflight=_non_wsl_preflight()),
+        _build_receipt(schema_version=4, host_storage_preflight=_non_wsl_preflight()),
+    )
+
+    assert [
+        build_storage.validate_build_execution_envelope(value)["schema_version"] for value in values
+    ] == [4, 1, 3, 4]
+
+
+def test_build_receipt_schema4_requires_buildx_and_schema3_forbids_it() -> None:
+    value = _build_receipt(schema_version=4, host_storage_preflight=_non_wsl_preflight())
+    value.pop("buildx")
+    _rehash(value)
+    with pytest.raises(ValueError, match="receipt schema"):
+        build_storage.validate_build_execution_envelope(value)
+
+    value = _build_receipt(schema_version=3, host_storage_preflight=_non_wsl_preflight())
+    value["buildx"] = _buildx_provenance()
+    _rehash(value)
+    with pytest.raises(ValueError, match="receipt schema"):
+        build_storage.validate_build_execution_envelope(value)
+
+
+@pytest.mark.parametrize("schema_version", ([], {}))
+def test_build_receipt_rejects_unhashable_schema_values_as_invalid(
+    schema_version: object,
+) -> None:
+    value = _build_receipt(schema_version=1)
+    value["schema_version"] = schema_version
+    _rehash(value)
+
+    with pytest.raises(ValueError, match="receipt schema"):
+        build_storage.validate_build_execution_envelope(value)
+
+
+@pytest.mark.parametrize(
+    ("section", "field", "replacement"),
+    (
+        ("plugin", "uid", 1),
+        ("plugin", "gid", 1),
+        ("plugin", "nlink", 2),
+        ("resolved", "uid", 1),
+        ("resolved", "gid", 1),
+        ("resolved", "nlink", 2),
+        ("resolved", "mode", stat.S_IFREG | 0o644),
+        ("resolved", "mode", stat.S_IFREG | stat.S_ISUID | 0o755),
+        ("resolved", "mode", stat.S_IFREG | stat.S_ISGID | 0o755),
+        ("resolved", "mode", stat.S_IFREG | 0o775),
+        ("resolved", "mode", stat.S_IFREG | 0o757),
+    ),
+)
+def test_schema4_rejects_unsafe_buildx_stat_and_mode_data(
+    section: str, field: str, replacement: int
+) -> None:
+    value = _build_receipt(schema_version=4, host_storage_preflight=_non_wsl_preflight())
+    value["buildx"]["identity"][section][field] = replacement
+    _rehash_buildx_receipt(value)
+
+    with pytest.raises(ValueError, match="safe root-owned executable"):
+        build_storage.validate_build_execution_envelope(value)
+
+
+@pytest.mark.parametrize("mutation", ("plugin-path", "symlink-target", "resolved-path"))
+def test_schema4_rejects_buildx_lexical_and_resolved_path_mismatch(mutation: str) -> None:
+    value = _build_receipt(schema_version=4, host_storage_preflight=_non_wsl_preflight())
+    identity = value["buildx"]["identity"]
+    if mutation == "plugin-path":
+        identity["plugin"]["path"] = "/usr/lib/docker/cli-plugins/docker-buildx"
+        message = "path binding"
+    elif mutation == "symlink-target":
+        replacement = "/opt/docker/buildx-v0.29.1"
+        identity["plugin"]["symlink_target"] = replacement
+        identity["plugin"]["size"] = len(replacement.encode())
+        message = "symlink target differs"
+    else:
+        identity["resolved"]["path"] = "/opt/docker/buildx-v0.29.1"
+        message = "symlink target differs"
+    _rehash_buildx_receipt(value)
+
+    with pytest.raises(ValueError, match=message):
+        build_storage.validate_build_execution_envelope(value)
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    (
+        (
+            "version_output",
+            "github.com/docker/buildx v0.29.1-desktop.1 28f6246ff24e2c05095e8741e48c48dcb2d3b4bc\r",
+        ),
+        (
+            "version_output",
+            "github.com/docker/buildx v0.29.1-desktop.1 "
+            "28f6246ff24e2c05095e8741e48c48dcb2d3b4bc\nsecond line",
+        ),
+        ("version", "v0.29.0"),
+        ("commit", "F" * 40),
+    ),
+)
+def test_schema4_rejects_nonexact_or_mismatched_buildx_version(
+    field: str, replacement: str
+) -> None:
+    value = _build_receipt(schema_version=4, host_storage_preflight=_non_wsl_preflight())
+    value["buildx"]["identity"][field] = replacement
+    _rehash_buildx_receipt(value)
+
+    with pytest.raises(ValueError, match="version binding"):
+        build_storage.validate_build_execution_envelope(value)
+
+
+@pytest.mark.parametrize(
+    ("index", "observed_at"),
+    (
+        (0, "2026-09-01T00:00:00.900000+00:00"),
+        (3, "2026-09-01T00:00:05.100000+00:00"),
+    ),
+)
+def test_schema4_rejects_buildx_observation_outside_build(index: int, observed_at: str) -> None:
+    value = _build_receipt(schema_version=4, host_storage_preflight=_non_wsl_preflight())
+    value["buildx"]["observations"][index]["observed_at"] = observed_at
+    _rehash(value)
+
+    with pytest.raises(ValueError, match="outside the build"):
+        build_storage.validate_build_execution_envelope(value)
+
+
+def test_buildx_provenance_timing_endpoints_are_both_or_neither() -> None:
+    provenance = _buildx_provenance()
+    started = datetime.fromisoformat("2026-09-01T00:00:01+00:00")
+    finished = datetime.fromisoformat("2026-09-01T00:00:05+00:00")
+
+    assert build_storage.validate_buildx_provenance(provenance) == provenance
+    assert (
+        build_storage.validate_buildx_provenance(
+            provenance,
+            started_at=started,
+            finished_at=finished,
+        )
+        == provenance
+    )
+    with pytest.raises(ValueError, match="both build endpoints"):
+        build_storage.validate_buildx_provenance(provenance, started_at=started)
+    with pytest.raises(ValueError, match="both build endpoints"):
+        build_storage.validate_buildx_provenance(provenance, finished_at=finished)
+
+
+@pytest.mark.parametrize("mutation", ("missing", "extra", "duplicate", "absent"))
+def test_capture_rejects_nonexact_or_nonunique_docker_buildx_metadata(
+    mutation: str,
+) -> None:
+    metadata = _docker_buildx_metadata("/usr/local/lib/docker/cli-plugins/docker-buildx")
+    plugins = [metadata]
+    if mutation == "missing":
+        metadata.pop("Vendor")
+        message = "exact healthy schema"
+    elif mutation == "extra":
+        metadata["Err"] = "plugin failed"
+        message = "exact healthy schema"
+    elif mutation == "duplicate":
+        plugins.append(dict(metadata))
+        message = "exactly one buildx"
+    else:
+        metadata["Name"] = "compose"
+        message = "exactly one buildx"
+
+    with pytest.raises(ValueError, match=message):
+        build_storage.capture_buildx_observation(
+            plugins,
+            version_output=(
+                "github.com/docker/buildx v0.29.1-desktop.1 "
+                "28f6246ff24e2c05095e8741e48c48dcb2d3b4bc"
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    "raw",
+    (
+        b"github.com/docker/buildx v0.29.1 deadbeef\r\n",
+        b"github.com/docker/buildx v0.29.1 deadbeef\nsecond line\n",
+    ),
+)
+def test_buildx_version_file_requires_one_lf_terminated_or_unterminated_line(
+    raw: bytes,
+) -> None:
+    with pytest.raises(ValueError, match="exactly one line"):
+        build_storage._one_version_output_line(raw)
+
+
+def test_capture_buildx_observation_records_one_stable_symlink_identity(
+    tmp_path: Path,
+) -> None:
+    plugin_root = tmp_path / "cli-plugins"
+    target_root = tmp_path / "docker-desktop"
+    plugin_root.mkdir()
+    target_root.mkdir()
+    target = target_root / "buildx-v0.29.1"
+    target.write_bytes(b"fixture buildx\n")
+    target.chmod(0o755)
+    plugin = plugin_root / "docker-buildx"
+    plugin.symlink_to(target)
+    version = "v0.29.1-desktop.1"
+    commit = "28f6246ff24e2c05095e8741e48c48dcb2d3b4bc"
+    metadata = [_docker_buildx_metadata(str(plugin))]
+
+    observation = build_storage.capture_buildx_observation(
+        metadata,
+        version_output=f"github.com/docker/buildx {version} {commit}",
+        allowed_plugin_directories=frozenset({PurePosixPath(str(plugin_root))}),
+        required_uid=os.getuid(),
+        required_gid=os.getgid(),
+    )
+
+    assert observation["identity"]["reported_plugin_path"] == str(plugin)
+    assert observation["identity"]["plugin"]["symlink_target"] == str(target)
+    assert (
+        observation["identity"]["resolved"]["sha256"]
+        == hashlib.sha256(target.read_bytes()).hexdigest()
+    )
+    assert observation["identity_sha256"] == _canonical_digest(observation["identity"])
+    assert observation["observed_at"].endswith("+00:00")
+
+
+def test_buildx_observation_cli_reads_exact_regular_inputs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    plugins = tmp_path / "plugins.json"
+    version = tmp_path / "version.txt"
+    metadata = [_docker_buildx_metadata("/usr/local/lib/docker/cli-plugins/docker-buildx")]
+    plugins.write_text(json.dumps(metadata), encoding="utf-8")
+    version_output = (
+        "github.com/docker/buildx v0.29.1-desktop.1 28f6246ff24e2c05095e8741e48c48dcb2d3b4bc"
+    )
+    version.write_text(version_output + "\n", encoding="utf-8")
+    observed = {
+        "observed_at": "2026-09-01T00:00:00+00:00",
+        "identity": {},
+        "identity_sha256": "1" * 64,
+    }
+
+    def capture(value: Any, *, version_output: str) -> dict[str, Any]:
+        assert value == metadata
+        assert version_output == (
+            "github.com/docker/buildx v0.29.1-desktop.1 28f6246ff24e2c05095e8741e48c48dcb2d3b4bc"
+        )
+        return observed
+
+    monkeypatch.setattr(build_storage, "capture_buildx_observation", capture)
+
+    assert (
+        build_storage._main(
+            [
+                "buildx-observation",
+                "--plugins-json",
+                str(plugins),
+                "--version-output",
+                str(version),
+            ]
+        )
+        == 0
+    )
+    assert json.loads(capsys.readouterr().out) == observed
+
+
+def test_buildx_observation_cli_rejects_duplicate_json_keys(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    plugins = tmp_path / "plugins.json"
+    version = tmp_path / "version.txt"
+    plugins.write_text(
+        "["
+        '{"Name":"buildx","Name":"buildx",'
+        '"Path":"/usr/local/lib/docker/cli-plugins/docker-buildx",'
+        '"SchemaVersion":"0.1.0","ShortDescription":"Docker Buildx",'
+        '"Vendor":"Docker Inc.","Version":"v0.29.1-desktop.1"}'
+        "]",
+        encoding="utf-8",
+    )
+    version.write_text(
+        "github.com/docker/buildx v0.29.1-desktop.1 28f6246ff24e2c05095e8741e48c48dcb2d3b4bc\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit) as error:
+        build_storage._main(
+            [
+                "buildx-observation",
+                "--plugins-json",
+                str(plugins),
+                "--version-output",
+                str(version),
+            ]
+        )
+
+    assert error.value.code == 1
+    assert "duplicate key: Name" in capsys.readouterr().err
+
+
+def test_load_stable_build_execution_returns_the_exact_bytes_it_parsed(
+    tmp_path: Path,
+) -> None:
+    receipt = tmp_path / "build-execution.json"
+    raw = b'{\n  "schema_version": 1,\n  "label": "\\u0061"\n}\n'
+    receipt.write_bytes(raw)
+
+    resolved, observed_raw, value = build_storage.load_stable_build_execution(receipt)
+
+    assert resolved == receipt.resolve()
+    assert observed_raw == raw
+    assert hashlib.sha256(observed_raw).hexdigest() == hashlib.sha256(raw).hexdigest()
+    assert value == {"schema_version": 1, "label": "a"}
+
+
+def test_load_stable_build_execution_rejects_a_final_path_symlink(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "target.json"
+    target.write_text("{}", encoding="utf-8")
+    receipt = tmp_path / "build-execution.json"
+    receipt.symlink_to(target)
+
+    with pytest.raises(ValueError, match="cannot be a symlink"):
+        build_storage.load_stable_build_execution(receipt)
+
+
+def test_load_stable_build_execution_rejects_a_parent_path_symlink(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "build-execution.json").write_text("{}", encoding="utf-8")
+    alias = tmp_path / "alias"
+    alias.symlink_to(target, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="path contains a symlink"):
+        build_storage.load_stable_build_execution(alias / "build-execution.json")
+
+
+def test_load_stable_build_execution_rejects_duplicate_keys_at_any_depth(
+    tmp_path: Path,
+) -> None:
+    receipt = tmp_path / "build-execution.json"
+    receipt.write_text(
+        '{"schema_version":1,"nested":{"digest":"a","digest":"b"}}',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="duplicate key: digest"):
+        build_storage.load_stable_build_execution(receipt)
+
+
+@pytest.mark.parametrize("constant", ("NaN", "Infinity", "-Infinity"))
+def test_load_stable_build_execution_rejects_non_json_numeric_constants(
+    tmp_path: Path,
+    constant: str,
+) -> None:
+    receipt = tmp_path / "build-execution.json"
+    receipt.write_text(f'{{"value":{constant}}}', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="invalid constant"):
+        build_storage.load_stable_build_execution(receipt)
+
+
+def test_load_stable_build_execution_rejects_non_utf8_input(tmp_path: Path) -> None:
+    receipt = tmp_path / "build-execution.json"
+    receipt.write_bytes(b'{"value":"\xff"}')
+
+    with pytest.raises(ValueError, match="not unique-key UTF-8 JSON"):
+        build_storage.load_stable_build_execution(receipt)
+
+
+def test_load_stable_build_execution_enforces_the_size_bound(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    receipt = tmp_path / "build-execution.json"
+    receipt.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(build_storage, "BUILD_EXECUTION_MAX_BYTES", 1)
+
+    with pytest.raises(ValueError, match="not a stable single regular file"):
+        build_storage.load_stable_build_execution(receipt)
+
+
+@pytest.mark.parametrize("kind", ("directory", "hard-link"))
+def test_load_stable_build_execution_requires_one_regular_link(
+    tmp_path: Path,
+    kind: str,
+) -> None:
+    receipt = tmp_path / "build-execution.json"
+    if kind == "directory":
+        receipt.mkdir()
+    else:
+        source = tmp_path / "source.json"
+        source.write_text("{}", encoding="utf-8")
+        os.link(source, receipt)
+
+    with pytest.raises(ValueError, match="not a stable single regular file"):
+        build_storage.load_stable_build_execution(receipt)
+
+
+def test_load_stable_build_execution_rejects_a_change_during_its_single_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    receipt = tmp_path / "build-execution.json"
+    receipt.write_text('{"schema_version":1}', encoding="utf-8")
+    real_read = os.read
+    changed = False
+
+    def read_then_change(descriptor: int, count: int) -> bytes:
+        nonlocal changed
+        chunk = real_read(descriptor, count)
+        if not changed:
+            changed = True
+            with receipt.open("ab") as stream:
+                stream.write(b" ")
+        return chunk
+
+    monkeypatch.setattr(build_storage.os, "read", read_then_change)
+
+    with pytest.raises(ValueError, match="changed while it was read"):
+        build_storage.load_stable_build_execution(receipt)
+
+
+def test_load_stable_build_execution_rejects_parent_directory_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parent = tmp_path / "evidence"
+    parent.mkdir()
+    receipt = parent / "build-execution.json"
+    raw = b'{"schema_version":1}'
+    receipt.write_bytes(raw)
+    detached = tmp_path / "detached-evidence"
+    real_read = os.read
+    replaced = False
+
+    def read_then_replace_parent(descriptor: int, count: int) -> bytes:
+        nonlocal replaced
+        chunk = real_read(descriptor, count)
+        if chunk and not replaced:
+            replaced = True
+            parent.rename(detached)
+            parent.mkdir()
+            (parent / receipt.name).write_bytes(raw)
+        return chunk
+
+    monkeypatch.setattr(build_storage.os, "read", read_then_replace_parent)
+
+    with pytest.raises(ValueError, match="changed while it was read"):
+        build_storage.load_stable_build_execution(receipt)
+
+
+def test_schema_3_rejects_context_argv_even_when_rehashed() -> None:
+    value = _build_receipt(schema_version=3, host_storage_preflight=_non_wsl_preflight())
     for command in value["commands"]:
         command["argv"][1:3] = ["--context", value["docker"]["context"]]
     _rehash(value)

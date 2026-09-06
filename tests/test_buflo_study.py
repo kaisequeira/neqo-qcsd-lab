@@ -112,8 +112,7 @@ def _remove_test_checkout_build_taints(tmp_path: Path):
             if (candidate := root / name).is_file() and not candidate.is_symlink()
         ]
         if not records or not any(
-            f"working_directory={expected_directory}\n"
-            in record.read_text(encoding="utf-8")
+            f"working_directory={expected_directory}\n" in record.read_text(encoding="utf-8")
             for record in records
         ):
             continue
@@ -227,6 +226,73 @@ def _reference_execution_fixture(tmp_path: Path, *, build_schema_version: int = 
     return destination
 
 
+def _buildx_provenance() -> dict[str, object]:
+    reported_path = "/usr/local/lib/docker/cli-plugins/docker-buildx"
+    symlink_target = (
+        "/mnt/wsl/docker-desktop/cli-tools/usr/local/lib/docker/cli-plugins/docker-buildx"
+    )
+    version = "v0.29.1-desktop.1"
+    commit = "28f6246ff24e2c05095e8741e48c48dcb2d3b4bc"
+    identity: dict[str, object] = {
+        "selection_source": "docker-info-client-plugin-metadata-v1",
+        "plugin_name": "buildx",
+        "plugin_vendor": "Docker Inc.",
+        "metadata_schema_version": "0.1.0",
+        "short_description": "Docker Buildx",
+        "reported_plugin_version": version,
+        "reported_plugin_path": reported_path,
+        "plugin": {
+            "path": reported_path,
+            "symlink_target": symlink_target,
+            "dev": 2096,
+            "inode": 280747,
+            "uid": 0,
+            "gid": 0,
+            "mode": stat.S_IFLNK | 0o777,
+            "nlink": 1,
+            "size": len(symlink_target.encode()),
+            "mtime_ns": 1_788_582_497_670_041_680,
+            "ctime_ns": 1_788_582_497_670_041_680,
+        },
+        "resolved": {
+            "path": symlink_target,
+            "dev": 1792,
+            "inode": 2122,
+            "uid": 0,
+            "gid": 0,
+            "mode": stat.S_IFREG | 0o755,
+            "nlink": 1,
+            "size": 65_994_936,
+            "mtime_ns": 1_763_156_518_000_000_000,
+            "ctime_ns": 1_763_166_552_000_000_000,
+            "sha256": "9" * 64,
+        },
+        "version_output": f"github.com/docker/buildx {version} {commit}",
+        "version": version,
+        "commit": commit,
+    }
+    identity_sha256 = buflo_study._canonical_digest(identity)
+    return {
+        "schema_version": 1,
+        "policy": "docker-selected-buildx-binary-stability-v1",
+        "identity": identity,
+        "observations": [
+            {
+                "boundary": boundary,
+                "observed_at": observed_at,
+                "identity_sha256": identity_sha256,
+            }
+            for boundary, observed_at in (
+                ("before-collection", "2026-08-27T00:00:00.100000+00:00"),
+                ("after-collection", "2026-08-27T00:00:00.300000+00:00"),
+                ("after-prepare", "2026-08-27T00:00:00.600000+00:00"),
+                ("after-reference", "2026-08-27T00:00:00.900000+00:00"),
+            )
+        ],
+        "passed": True,
+    }
+
+
 def _build_execution_value(
     image_id: str = "sha256:" + "a" * 64,
     *,
@@ -247,7 +313,7 @@ def _build_execution_value(
         target: {
             "tag": (
                 build_storage.BUILD_IMAGE_TAGS[target]
-                if schema_version in {2, 3}
+                if schema_version in {2, 3, 4}
                 else f"neqo-qcsd-lab-{target}:test"
             ),
             "id": image_id if target == "collection" else "sha256:" + digest * 64,
@@ -264,7 +330,7 @@ def _build_execution_value(
                     ["--context", "default"]
                     if schema_version == 2
                     else ["--host", "unix:///var/run/docker.sock"]
-                    if schema_version == 3
+                    if schema_version in {3, 4}
                     else []
                 ),
                 "build",
@@ -279,7 +345,7 @@ def _build_execution_value(
                             / f"{target}.iid"
                         ),
                     ]
-                    if schema_version in {2, 3}
+                    if schema_version in {2, 3, 4}
                     else []
                 ),
                 "--target",
@@ -321,7 +387,7 @@ def _build_execution_value(
             "scope": "Docker-layer-cache-disabled;declared-BuildKit-dependency-cache-mounts-only",
         },
     }
-    if schema_version in {2, 3}:
+    if schema_version in {2, 3, 4}:
         value["docker"] = {
             **value["docker"],
             "context": "default",
@@ -392,11 +458,13 @@ def _build_execution_value(
                 "reference": None,
             },
         }
+    if schema_version == 4:
+        value["buildx"] = _buildx_provenance()
     value["payload_sha256"] = buflo_study._canonical_digest(value)
     return value
 
 
-def _install_fake_wsl_storage_probe(root: Path, binary_root: Path) -> None:
+def _install_fake_wsl_storage_probe(root: Path, binary_root: Path) -> tuple[Path, Path]:
     tools = root / "tools"
     tools.mkdir(exist_ok=True)
     (tools / "windows_docker_storage_probe.ps1").write_bytes(
@@ -405,8 +473,29 @@ def _install_fake_wsl_storage_probe(root: Path, binary_root: Path) -> None:
     package = root / "src/qcsd_lab"
     package.mkdir(parents=True, exist_ok=True)
     (package / "__init__.py").write_bytes((LAB_ROOT / "src/qcsd_lab/__init__.py").read_bytes())
-    (package / "build_storage.py").write_bytes(
-        (LAB_ROOT / "src/qcsd_lab/build_storage.py").read_bytes()
+    buildx_plugin_root = root / "test-system-docker-cli-plugins"
+    buildx_target_root = root / "test-docker-desktop-cli-tools"
+    buildx_plugin_root.mkdir()
+    buildx_target_root.mkdir()
+    buildx_target = buildx_target_root / "buildx-v0.29.1-test.1"
+    buildx_target.write_bytes(b"test buildx executable\n")
+    buildx_target.chmod(0o755)
+    buildx_plugin = buildx_plugin_root / "docker-buildx"
+    buildx_plugin.symlink_to(buildx_target)
+    build_storage_source = (LAB_ROOT / "src/qcsd_lab/build_storage.py").read_text(encoding="utf-8")
+    build_storage_policy_marker = "_BUILDX_REQUIRED_GID = 0\n"
+    assert build_storage_source.count(build_storage_policy_marker) == 1
+    build_storage_source = build_storage_source.replace(
+        build_storage_policy_marker,
+        build_storage_policy_marker
+        + "# Test-only policy injected into this copied validator.\n"
+        + f"_BUILDX_PLUGIN_DIRECTORIES = frozenset({{PurePosixPath({str(buildx_plugin_root)!r})}})\n"
+        + f"_BUILDX_REQUIRED_UID = {os.getuid()}\n"
+        + f"_BUILDX_REQUIRED_GID = {os.getgid()}\n",
+    )
+    (package / "build_storage.py").write_text(
+        build_storage_source,
+        encoding="utf-8",
     )
     uname = binary_root / "uname"
     uname.write_text(
@@ -481,11 +570,44 @@ print(json.dumps(value, separators=(",", ":")))
         encoding="utf-8",
     )
     powershell.chmod(0o755)
+    return buildx_plugin, buildx_target
 
 
-def _install_fake_boundary_docker(binary_root: Path, build_marker: Path) -> None:
+def _install_fake_boundary_docker(
+    binary_root: Path,
+    build_marker: Path,
+    *,
+    buildx_plugin: Path,
+    buildx_target: Path,
+) -> None:
     docker = binary_root / "docker"
     inventory_marker = build_marker.with_name(f"{build_marker.name}-inventory")
+    buildx_mutation_marker = build_marker.with_name(f"{build_marker.name}-buildx-mutated")
+    buildx_version = "v0.29.1-test.1"
+    buildx_commit = "28f6246ff24e2c05095e8741e48c48dcb2d3b4bc"
+    buildx_metadata = json.dumps(
+        [
+            {
+                "Name": "buildx",
+                "Path": str(buildx_plugin),
+                "SchemaVersion": "0.1.0",
+                "ShortDescription": "Docker Buildx",
+                "Vendor": "Docker Inc.",
+                "Version": buildx_version,
+            }
+        ],
+        separators=(",", ":"),
+    )
+    duplicate_buildx_metadata = json.dumps(
+        json.loads(buildx_metadata) * 2,
+        separators=(",", ":"),
+    )
+    extra_buildx_metadata = json.loads(buildx_metadata)
+    extra_buildx_metadata[0]["Unexpected"] = True
+    extra_buildx_metadata_json = json.dumps(
+        extra_buildx_metadata,
+        separators=(",", ":"),
+    )
     docker.write_text(
         f"""#!/bin/sh
 set -eu
@@ -550,10 +672,30 @@ case "$command" in
     if [ -f {str(inventory_marker)!r} ]; then
       server_id="87654321-4321-4321-4321-cba987654321"
     fi
+    if [ -n "${{QCSD_TEST_BUILDX_MUTATE_AFTER_BUILDS:-}}" ] &&
+       [ "$build_count" -ge "${{QCSD_TEST_BUILDX_MUTATE_AFTER_BUILDS}}" ] &&
+       [ ! -e {str(buildx_mutation_marker)!r} ]; then
+      printf '%s\\n' 'mutated buildx fixture' > {str(buildx_target)!r}
+      chmod 0755 {str(buildx_target)!r}
+      : > {str(buildx_mutation_marker)!r}
+    fi
     case "$2" in
       '{{{{json .}}}}')
         printf '{{"Name":"%s","OperatingSystem":"%s","OSType":"linux","Architecture":"x86_64","ID":"%s"}}\\n' \
           "$server_name" "${{QCSD_TEST_DOCKER_OPERATING_SYSTEM:-Docker Desktop}}" "$server_id"
+        ;;
+      '{{{{json .ClientInfo.Plugins}}}}')
+        case "${{QCSD_TEST_BUILDX_METADATA_MODE:-valid}}" in
+          valid) printf '%s\\n' {buildx_metadata!r} ;;
+          missing) printf '%s\\n' '[]' ;;
+          duplicate) printf '%s\\n' {duplicate_buildx_metadata!r} ;;
+          extra) printf '%s\\n' {extra_buildx_metadata_json!r} ;;
+          malformed) printf '%s\\n' '[{{"Name":' ;;
+          unsafe-path)
+            printf '%s\\n' '[{{"Name":"buildx","Path":"/tmp/docker-buildx","SchemaVersion":"0.1.0","ShortDescription":"Docker Buildx","Vendor":"Docker Inc.","Version":"{buildx_version}"}}]'
+            ;;
+          *) exit 1 ;;
+        esac
         ;;
       '{{{{.Name}}}}') printf '%s\\n' "$server_name" ;;
       '{{{{.OperatingSystem}}}}') printf '%s\\n' "${{QCSD_TEST_DOCKER_OPERATING_SYSTEM:-Docker Desktop}}" ;;
@@ -568,6 +710,23 @@ case "$command" in
       : > {str(inventory_marker)!r}
     fi
     printf '%s\\n' '{{"Client":{{"Version":"29.0.1"}},"Server":{{"Version":"29.0.1"}}}}'
+    ;;
+  buildx)
+    [ "${{1:-}}" = "version" ] || exit 1
+    case "${{QCSD_TEST_BUILDX_VERSION_MODE:-valid}}" in
+      valid)
+        printf '%s\\n' 'github.com/docker/buildx {buildx_version} {buildx_commit}'
+        ;;
+      mismatch)
+        printf '%s\\n' 'github.com/docker/buildx v0.29.0 {buildx_commit}'
+        ;;
+      malformed) printf '%s\\n' 'not-buildx-version-output' ;;
+      multiline)
+        printf '%s\\n%s\\n' \
+          'github.com/docker/buildx {buildx_version} {buildx_commit}' extra
+        ;;
+      *) exit 1 ;;
+    esac
     ;;
   image)
     shift
@@ -598,7 +757,7 @@ case "$command" in
       previous="$argument"
     done
     [ -n "$cidfile" ] || exit 1
-    printf '%s\n' {('a' * 64)!r} > "$cidfile"
+    printf '%s\n' {("a" * 64)!r} > "$cidfile"
     case "$*" in
       */source.json)
         if [ -n "${{QCSD_TEST_SOURCE_CHANGE_IMAGE_ID:-}}" ] &&
@@ -651,25 +810,25 @@ def _launcher_boundary_fixture(
     supervisor = tmp_path / "tools/docker_signal_supervisor.sh"
     supervisor.write_bytes(
         (LAB_ROOT / "tools/docker_signal_supervisor.sh").read_bytes()
-        + b'''\n# Test-only exact lifecycle namespace; production has no environment override.\n_qcsd_secure_lifecycle_base() {\n  local entry canonical metadata\n  _qcsd_lifecycle_base="${QCSD_TEST_LIFECYCLE_BASE:?}"\n  [[ "${_qcsd_lifecycle_base}" == /* && ! -L "${_qcsd_lifecycle_base}" &&\n      -d "${_qcsd_lifecycle_base}" ]] || return 1\n  canonical="$(readlink -f -- "${_qcsd_lifecycle_base}")" || return 1\n  [[ "${canonical}" == "${_qcsd_lifecycle_base}" ]] || return 1\n  metadata="$(stat -Lc '%u:%a:%F' -- "${_qcsd_lifecycle_base}")" || return 1\n  [[ "${metadata}" == "$(id -u):700:directory" ]] || return 1\n  for entry in "${_qcsd_lifecycle_base}"/*; do\n    [[ -e "${entry}" || -L "${entry}" ]] || continue\n    [[ "${entry##*/}" =~ ^(run|network|build|transaction)[.][0-9a-f]{32}$ &&\n        ! -L "${entry}" && -d "${entry}" ]] || return 1\n    _qcsd_validate_lifecycle_root_contents "${entry}" || return 1\n  done\n}\n_qcsd_lifecycle_lock_path() {\n  printf '%s.lock\\n' "${QCSD_TEST_LIFECYCLE_BASE:?}"\n}\n# This copied fixture keeps fake Docker calls local and fast. The production\n# leased transient-service boundary is covered by the guardian/native suite.\n_qcsd_docker_api_service_with_timeout() {\n  local duration="${1:?}"\n  shift\n  /usr/bin/timeout --signal=KILL --kill-after=1 "${duration}s" "$@"\n}\n_qcsd_launcher_birth_bound_hook() {\n  local kind="$1" launcher_pid="$2" root="$3"\n  if [[ "${QCSD_TEST_KILL_GUARDIAN_AFTER_BIRTH_KIND:-}" == "$kind" &&\n        ! -e "${QCSD_TEST_HANDOVER_DISABLE:-/nonexistent}" ]]; then\n    printf '%s %s\\n' "$launcher_pid" "$root" >"$QCSD_TEST_HANDOVER_MARKER"\n    kill -KILL "$_QCSD_LIFECYCLE_GUARD_PID"\n    while :; do sleep 1; done\n  fi\n}\n'''
+        + b"""\n# Test-only exact lifecycle namespace; production has no environment override.\n_qcsd_secure_lifecycle_base() {\n  local entry canonical metadata\n  _qcsd_lifecycle_base="${QCSD_TEST_LIFECYCLE_BASE:?}"\n  [[ "${_qcsd_lifecycle_base}" == /* && ! -L "${_qcsd_lifecycle_base}" &&\n      -d "${_qcsd_lifecycle_base}" ]] || return 1\n  canonical="$(readlink -f -- "${_qcsd_lifecycle_base}")" || return 1\n  [[ "${canonical}" == "${_qcsd_lifecycle_base}" ]] || return 1\n  metadata="$(stat -Lc '%u:%a:%F' -- "${_qcsd_lifecycle_base}")" || return 1\n  [[ "${metadata}" == "$(id -u):700:directory" ]] || return 1\n  for entry in "${_qcsd_lifecycle_base}"/*; do\n    [[ -e "${entry}" || -L "${entry}" ]] || continue\n    [[ "${entry##*/}" =~ ^(run|network|build|transaction)[.][0-9a-f]{32}$ &&\n        ! -L "${entry}" && -d "${entry}" ]] || return 1\n    _qcsd_validate_lifecycle_root_contents "${entry}" || return 1\n  done\n}\n_qcsd_lifecycle_lock_path() {\n  printf '%s.lock\\n' "${QCSD_TEST_LIFECYCLE_BASE:?}"\n}\n# This copied fixture keeps fake Docker calls local and fast. The production\n# leased transient-service boundary is covered by the guardian/native suite.\n_qcsd_docker_api_service_with_timeout() {\n  local duration="${1:?}"\n  shift\n  /usr/bin/timeout --signal=KILL --kill-after=1 "${duration}s" "$@"\n}\n_qcsd_launcher_birth_bound_hook() {\n  local kind="$1" launcher_pid="$2" root="$3"\n  if [[ "${QCSD_TEST_KILL_GUARDIAN_AFTER_BIRTH_KIND:-}" == "$kind" &&\n        ! -e "${QCSD_TEST_HANDOVER_DISABLE:-/nonexistent}" ]]; then\n    printf '%s %s\\n' "$launcher_pid" "$root" >"$QCSD_TEST_HANDOVER_MARKER"\n    kill -KILL "$_QCSD_LIFECYCLE_GUARD_PID"\n    while :; do sleep 1; done\n  fi\n}\n"""
     )
     supervisor.chmod(0o755)
     native = tmp_path / "tools/docker_lifecycle_native.py"
     native.write_bytes((LAB_ROOT / "tools/docker_lifecycle_native.py").read_bytes())
     native.chmod(0o644)
     guardian = tmp_path / "tools/docker_lifecycle_lock_guardian.py"
-    guardian_source = (
-        LAB_ROOT / "tools/docker_lifecycle_lock_guardian.py"
-    ).read_text(encoding="utf-8")
+    guardian_source = (LAB_ROOT / "tools/docker_lifecycle_lock_guardian.py").read_text(
+        encoding="utf-8"
+    )
     guardian_source = guardian_source.replace(
         "            source_descriptor=source_descriptor,\n        )",
         "            source_descriptor=source_descriptor,\n"
-        "            lock_parent=Path(os.environ[\"QCSD_TEST_GUARDIAN_LOCK_PARENT\"]),\n"
+        '            lock_parent=Path(os.environ["QCSD_TEST_GUARDIAN_LOCK_PARENT"]),\n'
         "        )",
     )
     guardian_source = guardian_source.replace(
         '\nif __name__ == "__main__":',
-        '\n# Test-only fixed roots; this copied guardian is never production code.\n'
+        "\n# Test-only fixed roots; this copied guardian is never production code.\n"
         '_SAFE_PATH = os.environ["QCSD_TEST_BINARY_ROOT"] + ":" + _SAFE_PATH\n\n'
         'if __name__ == "__main__":',
     )
@@ -681,9 +840,14 @@ def _launcher_boundary_fixture(
     (tmp_path / "Dockerfile").write_text("FROM scratch\n", encoding="utf-8")
     binary_root = tmp_path / "bin"
     binary_root.mkdir()
-    _install_fake_wsl_storage_probe(tmp_path, binary_root)
+    buildx_plugin, buildx_target = _install_fake_wsl_storage_probe(tmp_path, binary_root)
     build_marker = tmp_path / "docker-builds"
-    _install_fake_boundary_docker(binary_root, build_marker)
+    _install_fake_boundary_docker(
+        binary_root,
+        build_marker,
+        buildx_plugin=buildx_plugin,
+        buildx_target=buildx_target,
+    )
     environment = dict(os.environ)
     environment["PATH"] = f"{binary_root}:{environment['PATH']}"
     identity = hashlib.sha256(str(tmp_path).encode()).hexdigest()[:32]
@@ -695,9 +859,7 @@ def _launcher_boundary_fixture(
     guardian_lock_parent = tmp_path / "guardian-locks"
     guardian_lock_parent.mkdir(mode=0o700)
     environment["QCSD_TEST_LIFECYCLE_BASE"] = str(lifecycle_base.resolve())
-    environment["QCSD_TEST_GUARDIAN_LOCK_PARENT"] = str(
-        guardian_lock_parent.resolve()
-    )
+    environment["QCSD_TEST_GUARDIAN_LOCK_PARENT"] = str(guardian_lock_parent.resolve())
     environment["QCSD_TEST_BINARY_ROOT"] = str(binary_root.resolve())
     return launcher, build_marker, environment
 
@@ -1482,21 +1644,13 @@ def _runner_wakeup_v10_typed_failure(
                 "buflo_exact_release_active_wait_nanoseconds"
             ]
             - (retained_worst["active_wait_monotonic_nanoseconds"] if retained_worst else 0),
-            "active_spin_interruptions": receipt[
-                "buflo_exact_release_active_spin_interruptions"
-            ]
+            "active_spin_interruptions": receipt["buflo_exact_release_active_spin_interruptions"]
             - (retained_worst["active_spin_interruptions"] if retained_worst else 0),
             "active_spin_interruption_nanoseconds": receipt[
                 "buflo_exact_release_active_spin_interruption_nanoseconds"
             ]
-            - (
-                retained_worst["active_spin_interruption_nanoseconds"]
-                if retained_worst
-                else 0
-            ),
-            "max_active_spin_gap_nanoseconds": (
-                failure.get("max_counter_gap_nanoseconds") or 0
-            ),
+            - (retained_worst["active_spin_interruption_nanoseconds"] if retained_worst else 0),
+            "max_active_spin_gap_nanoseconds": (failure.get("max_counter_gap_nanoseconds") or 0),
             "authoritative_watchdog_checks": 0,
             "authoritative_watchdog_dispatches": 0,
             "max_authoritative_sample_gap_nanoseconds": 0,
@@ -1654,9 +1808,7 @@ def test_runner_wakeup_schema_ten_semantics_exactly_match_rust_producer() -> Non
 def test_runner_wakeup_schema_eleven_semantics_exactly_match_rust_producer() -> None:
     source = (LAB_ROOT / "neqo-qcsd/neqo-bin/src/qcsd/mod.rs").read_text(encoding="utf-8")
     kernel_prefix = 'const BUFLO_KERNEL_TX_SEMANTICS: &str = "'
-    kernel_line = next(
-        line for line in source.splitlines() if line.startswith(kernel_prefix)
-    )
+    kernel_line = next(line for line in source.splitlines() if line.startswith(kernel_prefix))
     assert kernel_line.endswith('";')
     assert KERNEL_TX_RUNNER_SEMANTICS == kernel_line[len(kernel_prefix) : -2]
     expected = (
@@ -2077,16 +2229,12 @@ def test_runner_wakeup_schema_ten_binds_first_calibration_target_error_state() -
     assert _fidelity_runner_wakeup_metrics_valid(two_successes_and_failure)
     maximum_success_active_wait = (
         5_000_000
-        + two_successes_and_failure[
-            "buflo_exact_release_max_guard_exit_lateness_nanoseconds"
-        ]
+        + two_successes_and_failure["buflo_exact_release_max_guard_exit_lateness_nanoseconds"]
     )
-    retained_failure_active_wait = two_successes_and_failure[
-        "buflo_exact_release_last_failure"
-    ]["active_wait_monotonic_nanoseconds"]
-    mixed_duration_ceiling = (
-        2 * maximum_success_active_wait + retained_failure_active_wait
-    )
+    retained_failure_active_wait = two_successes_and_failure["buflo_exact_release_last_failure"][
+        "active_wait_monotonic_nanoseconds"
+    ]
+    mixed_duration_ceiling = 2 * maximum_success_active_wait + retained_failure_active_wait
     inflated_mixed_duration = json.loads(json.dumps(two_successes_and_failure))
     inflated_mixed_duration.update(
         {
@@ -2107,9 +2255,7 @@ def test_runner_wakeup_schema_ten_binds_first_calibration_target_error_state() -
 
     long_failure = json.loads(json.dumps(two_successes_and_failure))
     retained_long_failure = long_failure["buflo_exact_release_last_failure"]
-    previous_failure_duration = retained_long_failure[
-        "active_wait_monotonic_nanoseconds"
-    ]
+    previous_failure_duration = retained_long_failure["active_wait_monotonic_nanoseconds"]
     retained_long_failure.update(
         {
             "active_wait_monotonic_nanoseconds": 100_000_000,
@@ -2139,9 +2285,7 @@ def test_runner_wakeup_schema_ten_binds_first_calibration_target_error_state() -
         impossible_long_failure_maximum = json.loads(json.dumps(long_failure))
         impossible_long_failure_maximum[key] = 50_000_000
         assert not _runner_wakeup_metrics_valid(impossible_long_failure_maximum), key
-        assert not _fidelity_runner_wakeup_metrics_valid(
-            impossible_long_failure_maximum
-        ), key
+        assert not _fidelity_runner_wakeup_metrics_valid(impossible_long_failure_maximum), key
 
     u64_max = 2**64 - 1
     per_success_capacity = u64_max // 2 + 1
@@ -2154,15 +2298,9 @@ def test_runner_wakeup_schema_ten_binds_first_calibration_target_error_state() -
         {
             "buflo_exact_release_guard_wait_nanoseconds": u64_max,
             "buflo_exact_release_active_wait_nanoseconds": u64_max,
-            "buflo_exact_release_max_passive_wake_lateness_nanoseconds": (
-                per_success_capacity - 1
-            ),
-            "buflo_exact_release_max_guard_entry_lateness_nanoseconds": (
-                per_success_capacity - 1
-            ),
-            "buflo_exact_release_active_wait_poll_source": (
-                "instant-authoritative-fallback-v1"
-            ),
+            "buflo_exact_release_max_passive_wake_lateness_nanoseconds": (per_success_capacity - 1),
+            "buflo_exact_release_max_guard_entry_lateness_nanoseconds": (per_success_capacity - 1),
+            "buflo_exact_release_active_wait_poll_source": ("instant-authoritative-fallback-v1"),
             "buflo_exact_release_active_wait_counter_frequency_hz": None,
             "buflo_exact_release_active_wait_counter_guards": 0,
             "buflo_exact_release_active_wait_counter_unavailable_guards": 3,
@@ -2175,9 +2313,7 @@ def test_runner_wakeup_schema_ten_binds_first_calibration_target_error_state() -
             "buflo_exact_release_max_authoritative_sample_gap_nanoseconds": 0,
         }
     )
-    saturated_worst = saturated_before_hidden_entry_subtraction[
-        "buflo_exact_release_worst_guard"
-    ]
+    saturated_worst = saturated_before_hidden_entry_subtraction["buflo_exact_release_worst_guard"]
     saturated_worst.update(
         {
             "guard_entry_lateness_nanoseconds": per_success_capacity - 2,
@@ -2205,9 +2341,7 @@ def test_runner_wakeup_schema_ten_binds_first_calibration_target_error_state() -
     ):
         saturated_worst[key] = None
     assert not _runner_wakeup_metrics_valid(saturated_before_hidden_entry_subtraction)
-    assert not _fidelity_runner_wakeup_metrics_valid(
-        saturated_before_hidden_entry_subtraction
-    )
+    assert not _fidelity_runner_wakeup_metrics_valid(saturated_before_hidden_entry_subtraction)
 
     saturated_success_lateness = u64_max - 4_999_000
     saturated_per_success_sum = _runner_wakeup_receipt_v10(
@@ -2220,9 +2354,7 @@ def test_runner_wakeup_schema_ten_binds_first_calibration_target_error_state() -
             "buflo_exact_release_active_wait_nanoseconds": 2_000,
             "buflo_exact_release_max_passive_wake_lateness_nanoseconds": u64_max,
             "buflo_exact_release_max_guard_entry_lateness_nanoseconds": u64_max,
-            "buflo_exact_release_max_guard_exit_lateness_nanoseconds": (
-                saturated_success_lateness
-            ),
+            "buflo_exact_release_max_guard_exit_lateness_nanoseconds": (saturated_success_lateness),
             "buflo_exact_release_active_wait_counter_nanoseconds": 2_000,
             "buflo_exact_release_dispatch_at_or_after_deadline_guards": 2,
             "buflo_exact_release_max_authoritative_sample_gap_nanoseconds": 1_000,
@@ -2232,9 +2364,7 @@ def test_runner_wakeup_schema_ten_binds_first_calibration_target_error_state() -
             },
         }
     )
-    saturated_success_worst = saturated_per_success_sum[
-        "buflo_exact_release_worst_guard"
-    ]
+    saturated_success_worst = saturated_per_success_sum["buflo_exact_release_worst_guard"]
     saturated_success_worst.update(
         {
             "guard_entry_lateness_nanoseconds": u64_max - 1_000,
@@ -2242,9 +2372,7 @@ def test_runner_wakeup_schema_ten_binds_first_calibration_target_error_state() -
             "active_wait_counter_nanoseconds": 1_000,
             "dispatch_lateness_nanoseconds": saturated_success_lateness,
             "dispatch_at_or_after_deadline": True,
-            "dispatch_after_deadline_nanoseconds": (
-                saturated_success_lateness - 4_999_000
-            ),
+            "dispatch_after_deadline_nanoseconds": (saturated_success_lateness - 4_999_000),
             "max_authoritative_sample_gap_nanoseconds": 1_000,
         }
     )
@@ -2463,9 +2591,7 @@ def test_runner_wakeup_schema_ten_binds_nullable_duration_and_buflo_retry_latene
     invalid_success = json.loads(json.dumps(success))
     invalid_success["buflo_exact_release_active_wait_nanoseconds"] += 1
     invalid_success["buflo_exact_release_guard_wait_nanoseconds"] += 1
-    invalid_success["buflo_exact_release_worst_guard"][
-        "active_wait_monotonic_nanoseconds"
-    ] += 1
+    invalid_success["buflo_exact_release_worst_guard"]["active_wait_monotonic_nanoseconds"] += 1
     assert not _runner_wakeup_metrics_valid(invalid_success)
     assert not _fidelity_runner_wakeup_metrics_valid(invalid_success)
 
@@ -2475,9 +2601,7 @@ def test_runner_wakeup_schema_ten_binds_nullable_duration_and_buflo_retry_latene
     invalid_failure = json.loads(json.dumps(failure))
     invalid_failure["buflo_exact_release_active_wait_nanoseconds"] += 1
     invalid_failure["buflo_exact_release_guard_wait_nanoseconds"] += 1
-    invalid_failure["buflo_exact_release_last_failure"][
-        "active_wait_monotonic_nanoseconds"
-    ] += 1
+    invalid_failure["buflo_exact_release_last_failure"]["active_wait_monotonic_nanoseconds"] += 1
     assert not _runner_wakeup_metrics_valid(invalid_failure)
     assert not _fidelity_runner_wakeup_metrics_valid(invalid_failure)
 
@@ -2815,8 +2939,8 @@ def test_runner_wakeup_schema_ten_binds_predictive_interruption_reachability() -
     )
     failure["buflo_exact_release_last_failure"].update(
         {
-                "active_wait_monotonic_nanoseconds": 1_000_000,
-                "exit_before_release_nanoseconds": 4_000_000,
+            "active_wait_monotonic_nanoseconds": 1_000_000,
+            "exit_before_release_nanoseconds": 4_000_000,
             "active_spin_interruptions": 1,
             "active_spin_interruption_nanoseconds": 100_000,
             "max_active_spin_gap_nanoseconds": 100_000,
@@ -2865,9 +2989,9 @@ def test_runner_wakeup_schema_ten_binds_predictive_interruption_reachability() -
     nonmonotonic["buflo_exact_release_last_failure"].update(
         {
             "active_wait_iterations": 3,
-                "active_wait_monotonic_nanoseconds": 1_000_000,
-                "exit_before_release_nanoseconds": 4_000_000,
-                "active_spin_interruptions": 1,
+            "active_wait_monotonic_nanoseconds": 1_000_000,
+            "exit_before_release_nanoseconds": 4_000_000,
+            "active_spin_interruptions": 1,
             "active_spin_interruption_nanoseconds": 100_000,
             "max_active_spin_gap_nanoseconds": 100_000,
             "counter_calibrations": 1,
@@ -4905,9 +5029,9 @@ def test_attestation_create_publishes_validated_value_without_rederivation(
 
     assert output == destination
     assert buflo_study.load_json(output) == value
-    assert output.read_bytes() == (
-        json.dumps(value, indent=2, sort_keys=True) + "\n"
-    ).encode("utf-8")
+    assert output.read_bytes() == (json.dumps(value, indent=2, sort_keys=True) + "\n").encode(
+        "utf-8"
+    )
     assert len(derivations) == 1
     assert derivations[0]["deep_code_gate"] is True
     assert derivations[0]["dlsvm_available_wall_seconds"] == 987.0
@@ -6939,8 +7063,7 @@ def test_launcher_requires_clean_capture_image_and_no_cache_build() -> None:
     assert "buflo-study-v1-(smoke|rehearsal|formal-[0-9]{2})" in direct_run_guard
     assert '"${1:-}" == "resume"' not in direct_run_guard
     supervised_build = (
-        'qcsd_run_docker_build docker --context "${build_docker_context}" '
-        "build --pull --no-cache"
+        'qcsd_run_docker_build docker --context "${build_docker_context}" build --pull --no-cache'
     )
     assert launcher.count(supervised_build) == 3
     assert not re.search(
@@ -6951,8 +7074,18 @@ def test_launcher_requires_clean_capture_image_and_no_cache_build() -> None:
     assert "WSL_HOST_BUILD_MIN_AVAILABLE_BYTES=68719476736" in launcher
     assert launcher.count('wsl_host_build_storage_probe "') == 4
     assert "windows_docker_storage_probe.ps1" in launcher
-    assert '"schema_version": 3' in launcher
+    assert '"schema_version": 4' in launcher
     assert '"host_storage_preflight": host_storage' in launcher
+    assert '"buildx": buildx' in launcher
+    assert launcher.count('capture_buildx_observation "') == 4
+    assert launcher.count("buildx-observation") == 1
+    for boundary in (
+        "before-collection",
+        "after-collection",
+        "after-prepare",
+        "after-reference",
+    ):
+        assert f'capture_buildx_observation "{boundary}"' in launcher
     build_receipt_invocation = '"${ROOT}/src/qcsd_lab/build_storage.py" receipt'
     assert launcher.count(build_receipt_invocation) == 4
     for admitted_fields in (
@@ -6963,7 +7096,7 @@ def test_launcher_requires_clean_capture_image_and_no_cache_build() -> None:
     ):
         assert re.search(
             rf"mapfile -t {admitted_fields} < <\(\s+python3 -I "
-            rf'\"\$\{{ROOT\}}/src/qcsd_lab/build_storage\.py\" receipt',
+            rf"\"\$\{{ROOT\}}/src/qcsd_lab/build_storage\.py\" receipt",
             launcher,
         )
     assert "validate_build_execution_envelope" in launcher
@@ -6985,8 +7118,7 @@ def test_launcher_applies_least_privilege_rr1_capture_partition() -> None:
     )[0]
 
     assert (
-        'study_capture_scheduler_contract="qcsd-client-rr1-cpu10-etf-helper-cpu11-v1"'
-        in launcher
+        'study_capture_scheduler_contract="qcsd-client-rr1-cpu10-etf-helper-cpu11-v1"' in launcher
     )
     assert 'runtime+=(--cpuset-cpus "10-11" --ulimit "rtprio=1:1")' in launcher
     assert "--cpuset-cpus 10-11" in launcher
@@ -6994,7 +7126,7 @@ def test_launcher_applies_least_privilege_rr1_capture_partition() -> None:
     assert "_qcsd_docker_api ps --format '{{.ID}}'" in launcher
     assert "docker-inspect-all-running-containers-prelaunch-v1" in launcher
     assert "docker-inspect-all-running-containers-prelaunch-v2" in launcher
-    assert 'QCSD_CAPTURE_ETF_INTERFACE=eth0' in launcher
+    assert "QCSD_CAPTURE_ETF_INTERFACE=eth0" in launcher
     assert "QCSD_KERNEL_TX_POST_VETH_CAPTURE_ENDPOINT" in launcher
     assert "buflo_kernel_tx_observer_binding_base64()" in launcher
     assert "QCSD_KERNEL_TX_CONTROLLED_OBSERVER_BINDING_B64" in launcher
@@ -7020,9 +7152,13 @@ def test_launcher_applies_least_privilege_rr1_capture_partition() -> None:
 
 def test_capture_scheduler_rejects_swapped_name_to_exact_id_binding() -> None:
     launcher = (LAB_ROOT / "qcsd-lab").read_text(encoding="utf-8")
-    scheduler_function = "capture_scheduler_host_partition_b64() {" + launcher.split(
-        "capture_scheduler_host_partition_b64() {", 1
-    )[1].split("\n}\n\nscheduler_host_partition_b64=", 1)[0] + "\n}\n"
+    scheduler_function = (
+        "capture_scheduler_host_partition_b64() {"
+        + launcher.split("capture_scheduler_host_partition_b64() {", 1)[1].split(
+            "\n}\n\nscheduler_host_partition_b64=", 1
+        )[0]
+        + "\n}\n"
+    )
     first_id = "a" * 64
     second_id = "b" * 64
     inspected = json.dumps(
@@ -7084,24 +7220,46 @@ def test_controlled_topology_cleanup_is_fail_closed_and_state_aware(
     tmp_path: Path,
 ) -> None:
     launcher = (LAB_ROOT / "qcsd-lab").read_text(encoding="utf-8")
-    capture_root_helper = "prepare_kernel_tx_capture_root() {" + launcher.split(
-        "prepare_kernel_tx_capture_root() {", 1
-    )[1].split("\n}\n\nstart_buflo_controlled_router()", 1)[0] + "\n}\n"
-    controlled_router_launcher = "start_buflo_controlled_router() {" + launcher.split(
-        "start_buflo_controlled_router() {", 1
-    )[1].split("\n}\n\nconfigure_buflo_router()", 1)[0]
-    lifetime_signal_helpers = "_QCSD_LIFETIME_SIGNAL_STATUS=0" + launcher.split(
-        "_QCSD_LIFETIME_SIGNAL_STATUS=0", 1
-    )[1].split("\n\nrequire_submodule()", 1)[0]
-    cleanup_signal_helpers = "_qcsd_latch_cleanup_signal() {" + launcher.split(
-        "_qcsd_latch_cleanup_signal() {", 1
-    )[1].split("\ncleanup_kernel_tx_public_topology() {", 1)[0] + "\n"
-    sidecar_cleanup = "cleanup_sidecars() {" + launcher.split(
-        "cleanup_sidecars() {", 1
-    )[1].split("\n}\n\nstart_capture_acceptance_server", 1)[0] + "\n}\n"
-    controlled_cleanup = "cleanup_buflo_controlled() {" + launcher.split(
-        "    cleanup_buflo_controlled() {", 1
-    )[1].split("\n    }\n    trap 'cleanup_buflo_controlled", 1)[0] + "\n}\n"
+    capture_root_helper = (
+        "prepare_kernel_tx_capture_root() {"
+        + launcher.split("prepare_kernel_tx_capture_root() {", 1)[1].split(
+            "\n}\n\nstart_buflo_controlled_router()", 1
+        )[0]
+        + "\n}\n"
+    )
+    controlled_router_launcher = (
+        "start_buflo_controlled_router() {"
+        + launcher.split("start_buflo_controlled_router() {", 1)[1].split(
+            "\n}\n\nconfigure_buflo_router()", 1
+        )[0]
+    )
+    lifetime_signal_helpers = (
+        "_QCSD_LIFETIME_SIGNAL_STATUS=0"
+        + launcher.split("_QCSD_LIFETIME_SIGNAL_STATUS=0", 1)[1].split(
+            "\n\nrequire_submodule()", 1
+        )[0]
+    )
+    cleanup_signal_helpers = (
+        "_qcsd_latch_cleanup_signal() {"
+        + launcher.split("_qcsd_latch_cleanup_signal() {", 1)[1].split(
+            "\ncleanup_kernel_tx_public_topology() {", 1
+        )[0]
+        + "\n"
+    )
+    sidecar_cleanup = (
+        "cleanup_sidecars() {"
+        + launcher.split("cleanup_sidecars() {", 1)[1].split(
+            "\n}\n\nstart_capture_acceptance_server", 1
+        )[0]
+        + "\n}\n"
+    )
+    controlled_cleanup = (
+        "cleanup_buflo_controlled() {"
+        + launcher.split("    cleanup_buflo_controlled() {", 1)[1].split(
+            "\n    }\n    trap 'cleanup_buflo_controlled", 1
+        )[0]
+        + "\n}\n"
+    )
 
     router_id = "a" * 64
     first_server_id = "b" * 64
@@ -7259,13 +7417,13 @@ cleanup_buflo_controlled {original_status}
     assert '_qcsd_docker_exact_id_presence "${cid}"' in sidecar_cleanup
     assert '_qcsd_docker_api rm --force "${cid}"' in sidecar_cleanup
     assert '[[ ! "${cid}" =~ ^[0-9a-f]{64}$ ]]' in sidecar_cleanup
-    assert 'if ! cleanup_sidecars; then' in controlled_cleanup
+    assert "if ! cleanup_sidecars; then" in controlled_cleanup
     assert 'docker network rm "${controlled_server_network}"' not in controlled_cleanup
     assert 'docker network rm "${controlled_client_network}"' not in controlled_cleanup
     assert "QCSD_DOCKER_IDS_CONTROLLED_SERVER_NETWORKS" in controlled_cleanup
     assert "QCSD_DOCKER_IDS_CONTROLLED_CLIENT_NETWORKS" in controlled_cleanup
-    assert '_qcsd_docker_exact_network_presence' in controlled_cleanup
-    assert '_qcsd_docker_api network rm' in controlled_cleanup
+    assert "_qcsd_docker_exact_network_presence" in controlled_cleanup
+    assert "_qcsd_docker_api network rm" in controlled_cleanup
     assert "_qcsd_begin_latched_cleanup" in controlled_cleanup
     assert "_qcsd_finish_latched_cleanup" in controlled_cleanup
     assert "trap '' HUP INT QUIT TERM" not in controlled_cleanup
@@ -7275,12 +7433,10 @@ cleanup_buflo_controlled {original_status}
         'if [[ "${1:-}" == "buflo-study" && "${2:-}" == "capture" ]]', 1
     )[1].split("# Every remaining ETF launch is a public campaign.", 1)[0]
     assert (
-        "qcsd_create_docker_network QCSD_DOCKER_IDS_CONTROLLED_CLIENT_NETWORKS"
-        in controlled_branch
+        "qcsd_create_docker_network QCSD_DOCKER_IDS_CONTROLLED_CLIENT_NETWORKS" in controlled_branch
     )
     assert (
-        "qcsd_create_docker_network QCSD_DOCKER_IDS_CONTROLLED_SERVER_NETWORKS"
-        in controlled_branch
+        "qcsd_create_docker_network QCSD_DOCKER_IDS_CONTROLLED_SERVER_NETWORKS" in controlled_branch
     )
     assert 'controlled_client_network_id="${QCSD_DOCKER_IDS_CONTROLLED_CLIENT_NETWORKS[-1]}"' in (
         controlled_branch
@@ -7288,13 +7444,10 @@ cleanup_buflo_controlled {original_status}
     assert 'controlled_server_network_id="${QCSD_DOCKER_IDS_CONTROLLED_SERVER_NETWORKS[-1]}"' in (
         controlled_branch
     )
-    assert (
-        '--volume "${capture_root}:/lab/results/${capture_root##*/}:ro"'
-        in controlled_branch
-    )
+    assert '--volume "${capture_root}:/lab/results/${capture_root##*/}:ro"' in controlled_branch
     assert '--volume "${capture_root}:/kernel-tx:rw"' in launcher
     assert '--group-add "${qcsd_invoking_gid}"' in controlled_router_launcher
-    assert '--cap-add DAC_OVERRIDE' not in controlled_router_launcher
+    assert "--cap-add DAC_OVERRIDE" not in controlled_router_launcher
     assert controlled_router_launcher.count("--cap-add ") == 2
     assert "dac_override" not in controlled_router_launcher.lower()
     assert "dac_read_search" not in controlled_router_launcher.lower()
@@ -7302,23 +7455,18 @@ cleanup_buflo_controlled {original_status}
     assert launcher.count('--group-add "${qcsd_invoking_gid}"') == 2
     assert 'if ! capture_root_first_entry="$(' in capture_root_helper
     assert "cannot inspect the kernel-TX capture root" in capture_root_helper
-    assert 'verify_kernel_tx_router_capture_access "${result_ref}"' in (
-        controlled_router_launcher
-    )
+    assert 'verify_kernel_tx_router_capture_access "${result_ref}"' in (controlled_router_launcher)
     assert "{{json .HostConfig.GroupAdd}}" in launcher
     assert 'Path("/proc/1/status")' in launcher
     assert 'root = Path("/kernel-tx")' in launcher
-    assert 'stat.S_IMODE(root_status.st_mode) != 0o2770' in launcher
+    assert "stat.S_IMODE(root_status.st_mode) != 0o2770" in launcher
     assert 'probe = root / ".qcsd-router-access-probe"' in launcher
     assert '"${kernel_tx_capture_root}" initialize' in controlled_branch
     assert '"${kernel_tx_capture_root}" verify' in controlled_branch
     assert "qcsd_run_detached_docker QCSD_DOCKER_IDS_SIDECARS" in launcher
-    assert '--entrypoint /opt/qcsd-venv/bin/python3' in controlled_router_launcher
-    assert (
-        '"${image_id}" -m qcsd_lab.kernel_capture_router'
-        in controlled_router_launcher
-    )
-    assert '--entrypoint /usr/bin/python3' not in controlled_router_launcher
+    assert "--entrypoint /opt/qcsd-venv/bin/python3" in controlled_router_launcher
+    assert '"${image_id}" -m qcsd_lab.kernel_capture_router' in controlled_router_launcher
+    assert "--entrypoint /usr/bin/python3" not in controlled_router_launcher
     assert 'sidecars+=("${first_server}")' not in controlled_branch
     assert 'sidecars+=("${second_server}")' not in controlled_branch
 
@@ -7457,35 +7605,32 @@ cleanup_buflo_controlled {original_status}
 def test_launcher_routes_every_public_etf_campaign_through_post_veth_observer() -> None:
     launcher = (LAB_ROOT / "qcsd-lab").read_text(encoding="utf-8")
     entrypoint = (LAB_ROOT / "docker/collection-entrypoint").read_text(encoding="utf-8")
-    public_router_launcher = "start_kernel_tx_public_router() {" + launcher.split(
-        "start_kernel_tx_public_router() {", 1
-    )[1].split("\n}\n\nreplace_container_option_value()", 1)[0]
-    public = launcher.split(
-        "# Every remaining ETF launch is a public campaign.", 1
-    )[1].split('if [[ "${1:-}" == "test"', 1)[0]
+    public_router_launcher = (
+        "start_kernel_tx_public_router() {"
+        + launcher.split("start_kernel_tx_public_router() {", 1)[1].split(
+            "\n}\n\nreplace_container_option_value()", 1
+        )[0]
+    )
+    public = launcher.split("# Every remaining ETF launch is a public campaign.", 1)[1].split(
+        'if [[ "${1:-}" == "test"', 1
+    )[0]
 
-    assert 'docker network create --driver bridge --internal' in public
-    assert '_qcsd_docker_api network connect --gw-priority 1' in launcher
+    assert "docker network create --driver bridge --internal" in public
+    assert "_qcsd_docker_api network connect --gw-priority 1" in launcher
     assert 'bridge "${kernel_tx_public_router_id}"' in launcher
-    assert 'QCSD_KERNEL_TX_ROUTER_TOPOLOGY_KIND=routed-public-egress' in launcher
-    assert 'QCSD_KERNEL_TX_ROUTER_REQUIRE_MASQUERADE=1' in launcher
-    assert (
-        'iptables -t nat -A POSTROUTING -s "${client_subnet}" '
-        '-o eth1 -j MASQUERADE' in launcher
-    )
-    assert (
-        'replace_container_option_value --network '
-        '"${kernel_tx_public_network_id}"' in public
-    )
+    assert "QCSD_KERNEL_TX_ROUTER_TOPOLOGY_KIND=routed-public-egress" in launcher
+    assert "QCSD_KERNEL_TX_ROUTER_REQUIRE_MASQUERADE=1" in launcher
+    assert 'iptables -t nat -A POSTROUTING -s "${client_subnet}" -o eth1 -j MASQUERADE' in launcher
+    assert 'replace_container_option_value --network "${kernel_tx_public_network_id}"' in public
     assert "capture_scheduler_host_partition_b64" in public
     assert '"${kernel_tx_public_router_name}"' in public
-    assert 'QCSD_KERNEL_TX_CONTROLLED_NETWORK_RECEIPT_B64' in public
-    assert 'QCSD_KERNEL_TX_CONTROLLED_OBSERVER_BINDING_B64' in public
-    assert 'QCSD_KERNEL_TX_POST_VETH_CAPTURE_ROOT=/kernel-tx' in public
+    assert "QCSD_KERNEL_TX_CONTROLLED_NETWORK_RECEIPT_B64" in public
+    assert "QCSD_KERNEL_TX_CONTROLLED_OBSERVER_BINDING_B64" in public
+    assert "QCSD_KERNEL_TX_POST_VETH_CAPTURE_ROOT=/kernel-tx" in public
     assert '--volume "${kernel_tx_public_capture_root}:/kernel-tx:ro"' in public
     assert '--volume "${capture_root}:/kernel-tx:rw"' in launcher
     assert '--group-add "${qcsd_invoking_gid}"' in public_router_launcher
-    assert '--cap-add DAC_OVERRIDE' not in public_router_launcher
+    assert "--cap-add DAC_OVERRIDE" not in public_router_launcher
     assert public_router_launcher.count("--cap-add ") == 2
     assert "dac_override" not in public_router_launcher.lower()
     assert "dac_read_search" not in public_router_launcher.lower()
@@ -7494,21 +7639,18 @@ def test_launcher_routes_every_public_etf_campaign_through_post_veth_observer() 
         'verify_kernel_tx_router_capture_access "${kernel_tx_public_router_id}"'
         in public_router_launcher
     )
-    assert (
-        'prepare_kernel_tx_capture_root "${kernel_tx_public_capture_root}" initialize'
-        in public
-    )
+    assert 'prepare_kernel_tx_capture_root "${kernel_tx_public_capture_root}" initialize' in public
     assert public.index("trap 'cleanup_kernel_tx_public_topology") < public.index(
         'prepare_kernel_tx_capture_root "${kernel_tx_public_capture_root}" initialize'
     )
-    assert '--entrypoint /opt/qcsd-venv/bin/python3' in public_router_launcher
+    assert "--entrypoint /opt/qcsd-venv/bin/python3" in public_router_launcher
     assert '"${image_id}" -m qcsd_lab.kernel_capture_router' in public_router_launcher
-    assert '--entrypoint /usr/bin/python3' not in public_router_launcher
+    assert "--entrypoint /usr/bin/python3" not in public_router_launcher
     assert 'cleanup_kernel_tx_public_topology "$?"' in public
-    assert 'public kernel-TX router did not reach the idle end state' in launcher
-    assert 'preserving it and failing closed' in launcher
-    assert 'ip -4 route flush default' in entrypoint
-    assert 'public kernel-TX client default route is not exclusive' in entrypoint
+    assert "public kernel-TX router did not reach the idle end state" in launcher
+    assert "preserving it and failing closed" in launcher
+    assert "ip -4 route flush default" in entrypoint
+    assert "public kernel-TX client default route is not exclusive" in entrypoint
     assert r"{64}\\Z" not in launcher
     assert r"{64}\Z" in launcher
 
@@ -7592,9 +7734,88 @@ def test_schema_three_build_receipt_validates_through_study_reader(
 
     assert validated["cohort_version"] == 47
     assert validated["collection_image"] == "sha256:" + "a" * 64
-    assert validated["images"]["collection"]["tag"] == build_storage.BUILD_IMAGE_TAGS[
-        "collection"
-    ]
+    assert validated["images"]["collection"]["tag"] == build_storage.BUILD_IMAGE_TAGS["collection"]
+
+
+def test_schema_four_buildx_receipt_validates_through_historical_study_reader(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "build-execution-v47.json"
+    monkeypatch.setattr(
+        buflo_study,
+        "build_execution_receipt_path",
+        lambda cohort_version=1: path,
+    )
+    value = _build_execution_value(cohort_version=47, schema_version=4)
+    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    validated = buflo_study.validate_build_execution_receipt(
+        path,
+        expected_collection_image="sha256:" + "a" * 64,
+        expected_cohort_version=47,
+    )
+
+    assert validated["schema_version"] == 4
+    assert validated["buildx"] == value["buildx"]
+
+
+def test_study_reader_hashes_the_same_stable_receipt_bytes_it_validates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "build-execution-v47.json"
+    value = _build_execution_value(cohort_version=47, schema_version=4)
+    raw = json.dumps(value, separators=(",", ":"), sort_keys=True).encode()
+    monkeypatch.setattr(
+        buflo_study,
+        "build_execution_receipt_path",
+        lambda cohort_version=1: path,
+    )
+    monkeypatch.setattr(
+        buflo_study,
+        "load_stable_build_execution",
+        lambda observed_path: (observed_path.resolve(), raw, value),
+    )
+
+    validated = buflo_study.validate_build_execution_receipt(
+        path,
+        expected_collection_image="sha256:" + "a" * 64,
+        expected_cohort_version=47,
+    )
+
+    assert validated["path"] == str(path.resolve())
+    assert validated["sha256"] == hashlib.sha256(raw).hexdigest()
+
+
+def test_study_reader_rejects_duplicate_keys_before_receipt_validation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "build-execution-v47.json"
+    path.write_text('{"schema_version":4,"schema_version":4}\n', encoding="utf-8")
+    monkeypatch.setattr(
+        buflo_study,
+        "build_execution_receipt_path",
+        lambda cohort_version=1: path,
+    )
+
+    with pytest.raises(ValueError, match="duplicate key"):
+        buflo_study.validate_build_execution_receipt(
+            path,
+            expected_cohort_version=47,
+        )
+
+
+def test_schema_four_study_reader_rejects_resealed_buildx_identity_tampering() -> None:
+    value = _build_execution_value(schema_version=4)
+    value["buildx"]["identity"]["resolved"]["mode"] = stat.S_IFREG | 0o777
+    identity_sha256 = buflo_study._canonical_digest(value["buildx"]["identity"])
+    for observation in value["buildx"]["observations"]:
+        observation["identity_sha256"] = identity_sha256
+    payload = dict(value)
+    payload.pop("payload_sha256")
+    value["payload_sha256"] = buflo_study._canonical_digest(payload)
+
+    with pytest.raises(ValueError, match="safe root-owned executable"):
+        buflo_study._validate_build_execution_value(value)
 
 
 def test_schema_three_study_reader_rejects_context_argv_even_when_rehashed(
@@ -7679,6 +7900,102 @@ def test_launcher_selects_exact_versioned_build_images_and_frozen_resume_admissi
         '--volume "${reference_cohort_inputs}:'
         '/lab/artifacts/buflo-study/cohort-inputs:rw"' in launcher
     )
+
+
+def test_build_emits_schema4_with_four_stable_buildx_observations(
+    tmp_path: Path,
+) -> None:
+    launcher, build_marker, environment = _launcher_boundary_fixture(tmp_path)
+
+    result = subprocess.run(
+        [str(launcher), "build", "--cohort-version", "90"],
+        cwd=tmp_path,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert _marked_build_count(build_marker) == 3
+    receipt = json.loads(
+        (tmp_path / "artifacts/buflo-study/build-execution-v90.json").read_text(encoding="utf-8")
+    )
+    assert receipt["schema_version"] == 4
+    buildx = receipt["buildx"]
+    assert buildx["schema_version"] == 1
+    assert buildx["policy"] == "docker-selected-buildx-binary-stability-v1"
+    assert buildx["passed"] is True
+    assert [row["boundary"] for row in buildx["observations"]] == [
+        "before-collection",
+        "after-collection",
+        "after-prepare",
+        "after-reference",
+    ]
+    assert len({row["identity_sha256"] for row in buildx["observations"]}) == 1
+    identity = buildx["identity"]
+    assert identity["plugin_name"] == "buildx"
+    assert identity["plugin"]["path"] == identity["reported_plugin_path"]
+    resolved = Path(identity["resolved"]["path"])
+    assert identity["resolved"]["sha256"] == hashlib.sha256(resolved.read_bytes()).hexdigest()
+    assert not tuple((tmp_path / "artifacts/buflo-study").glob(".build-iids-v90.*"))
+
+
+@pytest.mark.parametrize(
+    ("variable", "value"),
+    (
+        ("QCSD_TEST_BUILDX_METADATA_MODE", "missing"),
+        ("QCSD_TEST_BUILDX_METADATA_MODE", "duplicate"),
+        ("QCSD_TEST_BUILDX_METADATA_MODE", "extra"),
+        ("QCSD_TEST_BUILDX_METADATA_MODE", "malformed"),
+        ("QCSD_TEST_BUILDX_METADATA_MODE", "unsafe-path"),
+        ("QCSD_TEST_BUILDX_VERSION_MODE", "mismatch"),
+        ("QCSD_TEST_BUILDX_VERSION_MODE", "malformed"),
+        ("QCSD_TEST_BUILDX_VERSION_MODE", "multiline"),
+    ),
+)
+def test_buildx_preflight_failure_prevents_any_image_build_or_receipt(
+    tmp_path: Path,
+    variable: str,
+    value: str,
+) -> None:
+    launcher, build_marker, environment = _launcher_boundary_fixture(tmp_path)
+    environment[variable] = value
+
+    result = subprocess.run(
+        [str(launcher), "build", "--cohort-version", "91"],
+        cwd=tmp_path,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "cannot validate the Buildx identity at before-collection" in result.stderr
+    assert _marked_build_count(build_marker) == 0
+    assert not (tmp_path / "artifacts/buflo-study/build-execution-v91.json").exists()
+
+
+def test_buildx_identity_change_stops_before_the_next_image_and_creates_no_receipt(
+    tmp_path: Path,
+) -> None:
+    launcher, build_marker, environment = _launcher_boundary_fixture(tmp_path)
+    environment["QCSD_TEST_BUILDX_MUTATE_AFTER_BUILDS"] = "1"
+
+    result = subprocess.run(
+        [str(launcher), "build", "--cohort-version", "92"],
+        cwd=tmp_path,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "Buildx identity changed at after-collection" in result.stderr
+    assert _marked_build_count(build_marker) == 1
+    assert not (tmp_path / "artifacts/buflo-study/build-execution-v92.json").exists()
 
 
 @pytest.mark.parametrize(
@@ -7789,9 +8106,9 @@ def test_build_final_daemon_recheck_catches_post_inventory_id_change(
     (
         ("DOCKER_HOST", "tcp://example.invalid:2375", "rejects Docker endpoint"),
         (
-                "QCSD_TEST_DOCKER_ENDPOINT",
-                "tcp://example.invalid:2375",
-                "requires one local Docker endpoint",
+            "QCSD_TEST_DOCKER_ENDPOINT",
+            "tcp://example.invalid:2375",
+            "requires one local Docker endpoint",
         ),
         (
             "QCSD_TEST_DOCKER_OPERATING_SYSTEM",
@@ -7891,9 +8208,7 @@ def test_build_rejects_prior_supervisor_taint_from_another_caller_directory(
     launcher, build_marker, environment = _launcher_boundary_fixture(tmp_path)
     caller = tmp_path / "caller"
     caller.mkdir()
-    supervisor_root = Path(
-        tempfile.mkdtemp(prefix="qcsd-docker-build-supervisor.", dir="/tmp")
-    )
+    supervisor_root = Path(tempfile.mkdtemp(prefix="qcsd-docker-build-supervisor.", dir="/tmp"))
     record = supervisor_root / record_name
     record.write_text(
         _build_cli_taint(
@@ -7926,9 +8241,7 @@ def test_build_rejects_prior_supervisor_taint_from_same_daemon_in_another_checko
     tmp_path: Path,
 ) -> None:
     launcher, build_marker, environment = _launcher_boundary_fixture(tmp_path)
-    supervisor_root = Path(
-        tempfile.mkdtemp(prefix="qcsd-docker-build-supervisor.", dir="/tmp")
-    )
+    supervisor_root = Path(tempfile.mkdtemp(prefix="qcsd-docker-build-supervisor.", dir="/tmp"))
     record = supervisor_root / "RECOVERY"
     record.write_text(
         _build_cli_taint(
@@ -7973,9 +8286,7 @@ def test_build_rejects_valid_scope_launcher_taint_from_same_daemon(
     recovery_late_signal: bool,
 ) -> None:
     launcher, build_marker, environment = _launcher_boundary_fixture(tmp_path)
-    supervisor_root = Path(
-        tempfile.mkdtemp(prefix="qcsd-docker-build-supervisor.", dir="/tmp")
-    )
+    supervisor_root = Path(tempfile.mkdtemp(prefix="qcsd-docker-build-supervisor.", dir="/tmp"))
     record = supervisor_root / record_name
     record.write_text(
         _build_scope_launcher_taint(
@@ -8034,9 +8345,7 @@ def test_build_rejects_malformed_scope_launcher_taint(
     value: str,
 ) -> None:
     launcher, build_marker, environment = _launcher_boundary_fixture(tmp_path)
-    supervisor_root = Path(
-        tempfile.mkdtemp(prefix="qcsd-docker-build-supervisor.", dir="/tmp")
-    )
+    supervisor_root = Path(tempfile.mkdtemp(prefix="qcsd-docker-build-supervisor.", dir="/tmp"))
     record = supervisor_root / record_name
     taint = _build_scope_launcher_taint(
         supervisor_root=supervisor_root,
@@ -8047,9 +8356,7 @@ def test_build_rejects_malformed_scope_launcher_taint(
     if mutation == "replace":
         taint = _replace_taint_field(taint, key, value)
     elif mutation == "missing":
-        taint = re.sub(
-            rf"^{re.escape(key)}=.*\n", "", taint, count=1, flags=re.MULTILINE
-        )
+        taint = re.sub(rf"^{re.escape(key)}=.*\n", "", taint, count=1, flags=re.MULTILINE)
     elif mutation in {"duplicate", "extra"}:
         taint += f"{key}={value}\n"
     else:
@@ -8079,9 +8386,7 @@ def test_build_rejects_late_signal_scope_taint_without_terminal_scope(
     tmp_path: Path,
 ) -> None:
     launcher, build_marker, environment = _launcher_boundary_fixture(tmp_path)
-    supervisor_root = Path(
-        tempfile.mkdtemp(prefix="qcsd-docker-build-supervisor.", dir="/tmp")
-    )
+    supervisor_root = Path(tempfile.mkdtemp(prefix="qcsd-docker-build-supervisor.", dir="/tmp"))
     record = supervisor_root / "RECOVERY"
     taint = _build_scope_launcher_taint(
         supervisor_root=supervisor_root,
@@ -8114,13 +8419,9 @@ def test_build_rejects_late_signal_scope_taint_without_terminal_scope(
 
 
 @pytest.mark.parametrize("symlink_kind", ("supervisor-root", "record"))
-def test_build_rejects_symlinked_prior_supervisor_state(
-    tmp_path: Path, symlink_kind: str
-) -> None:
+def test_build_rejects_symlinked_prior_supervisor_state(tmp_path: Path, symlink_kind: str) -> None:
     launcher, build_marker, environment = _launcher_boundary_fixture(tmp_path)
-    reserved_root = Path(
-        tempfile.mkdtemp(prefix="qcsd-docker-build-supervisor.", dir="/tmp")
-    )
+    reserved_root = Path(tempfile.mkdtemp(prefix="qcsd-docker-build-supervisor.", dir="/tmp"))
     taint = _build_cli_taint(
         working_directory=Path("/another/qcsd/checkout"),
         daemon_id=environment["QCSD_TEST_DOCKER_SERVER_ID"],
@@ -8164,9 +8465,7 @@ def test_build_rejects_symlinked_prior_supervisor_state(
 
 def test_build_retains_historical_transaction_taint_support(tmp_path: Path) -> None:
     launcher, build_marker, environment = _launcher_boundary_fixture(tmp_path)
-    supervisor_root = Path(
-        tempfile.mkdtemp(prefix="qcsd-docker-build-supervisor.", dir="/tmp")
-    )
+    supervisor_root = Path(tempfile.mkdtemp(prefix="qcsd-docker-build-supervisor.", dir="/tmp"))
     record = supervisor_root / "SUPERVISION"
     receipt = tmp_path / "artifacts/buflo-study/build-execution-v86.json"
     record.write_text(
@@ -8505,12 +8804,18 @@ def test_build_iid_cleanup_latches_terminal_signals_and_preserves_taint(
     signal_status: int,
 ) -> None:
     launcher = (LAB_ROOT / "qcsd-lab").read_text(encoding="utf-8")
-    lifetime_signal_helpers = "_QCSD_LIFETIME_SIGNAL_STATUS=0" + launcher.split(
-        "_QCSD_LIFETIME_SIGNAL_STATUS=0", 1
-    )[1].split("\n\nrequire_submodule()", 1)[0]
-    cleanup_functions = "build_iid_cleanup_entry_status=0" + launcher.split(
-        "build_iid_cleanup_entry_status=0", 1
-    )[1].split("\n  trap 'cleanup_build_iids", 1)[0]
+    lifetime_signal_helpers = (
+        "_QCSD_LIFETIME_SIGNAL_STATUS=0"
+        + launcher.split("_QCSD_LIFETIME_SIGNAL_STATUS=0", 1)[1].split(
+            "\n\nrequire_submodule()", 1
+        )[0]
+    )
+    cleanup_functions = (
+        "build_iid_cleanup_entry_status=0"
+        + launcher.split("build_iid_cleanup_entry_status=0", 1)[1].split(
+            "\n  trap 'cleanup_build_iids", 1
+        )[0]
+    )
 
     def run_cleanup(case: str, *, original_status: int, signal_phase: str):
         case_root = tmp_path / case
@@ -8518,7 +8823,13 @@ def test_build_iid_cleanup_latches_terminal_signals_and_preserves_taint(
         iid_root.mkdir(parents=True)
         iid_paths = [
             iid_root / name
-            for name in ("collection.iid", "prepare.iid", "reference.iid")
+            for name in (
+                "collection.iid",
+                "prepare.iid",
+                "reference.iid",
+                ".buildx-plugins.fixture",
+                ".buildx-version.fixture",
+            )
         ]
         for iid_path in iid_paths:
             iid_path.write_text("sha256:" + "a" * 64 + "\n", encoding="utf-8")
@@ -8526,8 +8837,7 @@ def test_build_iid_cleanup_latches_terminal_signals_and_preserves_taint(
         transaction_root.mkdir()
         transaction_record = transaction_root / "SUPERVISION"
         transaction_record.write_text(
-            "object=docker-build-transaction\n"
-            "transaction_state=uncommitted-static-tag-mutation\n",
+            "object=docker-build-transaction\ntransaction_state=uncommitted-static-tag-mutation\n",
             encoding="utf-8",
         )
         harness = f"""
@@ -8549,6 +8859,8 @@ rm() {{
 collection_iid_path="$IID_ROOT/collection.iid"
 prepare_iid_path="$IID_ROOT/prepare.iid"
 reference_iid_path="$IID_ROOT/reference.iid"
+buildx_plugins_json_path="$IID_ROOT/.buildx-plugins.fixture"
+buildx_version_output_path="$IID_ROOT/.buildx-version.fixture"
 build_iid_dir="$IID_ROOT"
 SIGNAL_SENT=0
 trap '_qcsd_latch_build_iid_cleanup_signal 129' HUP
@@ -8601,20 +8913,31 @@ def test_build_iid_cleanup_preserves_original_failure_over_latched_signal(
     tmp_path: Path,
 ) -> None:
     launcher = (LAB_ROOT / "qcsd-lab").read_text(encoding="utf-8")
-    lifetime_signal_helpers = "_QCSD_LIFETIME_SIGNAL_STATUS=0" + launcher.split(
-        "_QCSD_LIFETIME_SIGNAL_STATUS=0", 1
-    )[1].split("\n\nrequire_submodule()", 1)[0]
-    cleanup_functions = "build_iid_cleanup_entry_status=0" + launcher.split(
-        "build_iid_cleanup_entry_status=0", 1
-    )[1].split("\n  trap 'cleanup_build_iids", 1)[0]
+    lifetime_signal_helpers = (
+        "_QCSD_LIFETIME_SIGNAL_STATUS=0"
+        + launcher.split("_QCSD_LIFETIME_SIGNAL_STATUS=0", 1)[1].split(
+            "\n\nrequire_submodule()", 1
+        )[0]
+    )
+    cleanup_functions = (
+        "build_iid_cleanup_entry_status=0"
+        + launcher.split("build_iid_cleanup_entry_status=0", 1)[1].split(
+            "\n  trap 'cleanup_build_iids", 1
+        )[0]
+    )
     iid_root = tmp_path / "iids"
     iid_root.mkdir()
-    for name in ("collection.iid", "prepare.iid", "reference.iid"):
+    for name in (
+        "collection.iid",
+        "prepare.iid",
+        "reference.iid",
+        ".buildx-plugins.fixture",
+        ".buildx-version.fixture",
+    ):
         (iid_root / name).touch()
     transaction_record = tmp_path / "SUPERVISION"
     transaction_record.write_text(
-        "object=docker-build-transaction\n"
-        "transaction_state=uncommitted-static-tag-mutation\n",
+        "object=docker-build-transaction\ntransaction_state=uncommitted-static-tag-mutation\n",
         encoding="utf-8",
     )
     harness = f"""
@@ -8629,6 +8952,8 @@ rm() {{
 collection_iid_path="$IID_ROOT/collection.iid"
 prepare_iid_path="$IID_ROOT/prepare.iid"
 reference_iid_path="$IID_ROOT/reference.iid"
+buildx_plugins_json_path="$IID_ROOT/.buildx-plugins.fixture"
+buildx_version_output_path="$IID_ROOT/.buildx-version.fixture"
 build_iid_dir="$IID_ROOT"
 trap '_qcsd_latch_build_iid_cleanup_signal 129' HUP
 trap '_qcsd_latch_build_iid_cleanup_signal 130' INT
@@ -8649,116 +8974,9 @@ cleanup_build_iids 37
     assert transaction_record.exists()
 
 
-def test_launcher_build_v3_is_create_only_and_preserves_v1(tmp_path: Path) -> None:
-    launcher, _build_marker, environment = _launcher_boundary_fixture(tmp_path)
-    binary_root = tmp_path / "bin"
-    docker = binary_root / "docker"
-    docker.write_text(
-        """#!/bin/sh
-set -eu
-if [ "${1:-}" = "--context" ] || [ "${1:-}" = "--host" ]; then
-  shift 2
-fi
-command="$1"
-shift
-case "$command" in
-  build)
-    iidfile=""
-    target=""
-    while [ "$#" -gt 0 ]; do
-      case "$1" in
-        --iidfile) iidfile="$2"; shift 2 ;;
-        --target) target="$2"; shift 2 ;;
-        *) shift ;;
-      esac
-    done
-    case "$target" in
-      collection) image_number=1 ;;
-      prepare) image_number=2 ;;
-      reference) image_number=3 ;;
-      *) exit 1 ;;
-    esac
-    [ -n "$iidfile" ] || exit 1
-    printf 'sha256:%064d\n' "$image_number" > "$iidfile"
-    ;;
-  context)
-    case "$1" in
-      show) printf '%s\n' 'default' ;;
-      inspect) printf '%s\n' 'unix:///var/run/docker.sock' ;;
-      *) exit 1 ;;
-    esac
-    ;;
-  info)
-    if [ "$#" -eq 0 ]; then exit 0; fi
-    case "$2" in
-      '{{json .}}') printf '%s\n' '{"Name":"docker-desktop","OperatingSystem":"Docker Desktop","OSType":"linux","Architecture":"x86_64","ID":"12345678-1234-1234-1234-123456789abc"}' ;;
-      '{{.Name}}') printf '%s\n' 'docker-desktop' ;;
-      '{{.OperatingSystem}}') printf '%s\n' 'Docker Desktop' ;;
-      '{{.OSType}}') printf '%s\n' 'linux' ;;
-      '{{.Architecture}}') printf '%s\n' 'x86_64' ;;
-      '{{.ID}}') printf '%s\n' '12345678-1234-1234-1234-123456789abc' ;;
-      *) exit 1 ;;
-    esac
-    ;;
-  version)
-    printf '%s\n' '{"Client":{"Version":"29.0.1"},"Server":{"Version":"29.0.1"}}'
-    ;;
-  image)
-    shift
-    format=""
-    last=""
-    while [ "$#" -gt 0 ]; do
-      if [ "$1" = "--format" ]; then format="$2"; shift 2; continue; fi
-      last="$1"; shift
-    done
-    case "$format" in
-      '{{.Id}}')
-        case "$last" in
-          *collection*) printf 'sha256:%064d\n' 1 ;;
-          *prepare*) printf 'sha256:%064d\n' 2 ;;
-          *reference*) printf 'sha256:%064d\n' 3 ;;
-          *) printf '%s\n' "$last" ;;
-        esac
-        ;;
-      '{{json .RepoDigests}}') printf '%s\n' '[]' ;;
-      *) exit 0 ;;
-    esac
-    ;;
-  run)
-    cidfile=""
-    previous=""
-    for argument in "$@"; do
-      if [ "$previous" = "--cidfile" ]; then cidfile="$argument"; fi
-      previous="$argument"
-    done
-    [ -n "$cidfile" ] || exit 1
-    printf '%s\n' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' > "$cidfile"
-    case "$*" in
-      */source.json)
-        printf '%s\n' '{"lab_commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","lab_dirty":false,"lab_patch_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","neqo_commit":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","neqo_pinned_commit":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","neqo_dirty":false,"neqo_patch_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}'
-        ;;
-      */study-build-inputs.json)
-        printf '%s\n' '{"artifact_type":"qcsd-study-build-inputs","cargo_lock_sha256":"d8c9f2728aa278ebcd33ccedf3ad309a866870ad5fb93a03526b4b7655c9e911","debian_base_image":"docker.io/library/debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818","rust_base_image":"docker.io/library/rust:1.90-bookworm@sha256:3914072ca0c3b8aad871db9169a651ccfce30cf58303e5d6f2db16d1d8a7e58f","schema_version":1,"uv_lock_sha256":"d8c9f2728aa278ebcd33ccedf3ad309a866870ad5fb93a03526b4b7655c9e911"}'
-        ;;
-      *) exit 1 ;;
-    esac
-    ;;
-  container)
-    case "$1" in
-      ls) exit 0 ;;
-      inspect) exit 1 ;;
-      *) exit 1 ;;
-    esac
-    ;;
-  *) exit 1 ;;
-esac
-""",
-        encoding="utf-8",
-    )
-    docker.chmod(0o755)
-    environment["QCSD_TEST_DOCKER_SERVER_ID"] = (
-        "12345678-1234-1234-1234-123456789abc"
-    )
+def test_launcher_build_v4_is_create_only_and_preserves_v1(tmp_path: Path) -> None:
+    launcher, build_marker, environment = _launcher_boundary_fixture(tmp_path)
+    environment["QCSD_TEST_DOCKER_SERVER_ID"] = "12345678-1234-1234-1234-123456789abc"
     environment["QCSD_TEST_WSL_AVAILABLE_BYTES"] = str(64 * 1024**3)
     environment["QCSD_TEST_WSL_DATA_PATH"] = r"D:\DockerData\disk\docker_data.vhdx"
     powershell_marker = tmp_path / "powershell-boundaries"
@@ -8788,11 +9006,17 @@ esac
     assert json.loads(v1.read_text(encoding="utf-8"))["cohort_version"] == 1
     v2_value = json.loads(v2.read_text(encoding="utf-8"))
     assert v2_value["cohort_version"] == 2
-    assert v2_value["schema_version"] == 3
+    assert v2_value["schema_version"] == 4
+    assert [observation["boundary"] for observation in v2_value["buildx"]["observations"]] == [
+        "before-collection",
+        "after-collection",
+        "after-prepare",
+        "after-reference",
+    ]
+    assert v2_value["buildx"]["passed"] is True
     assert v2_value["docker"]["context"] == "default"
     assert all(
-        command["argv"][:3]
-        == ["docker", "--host", "unix:///var/run/docker.sock"]
+        command["argv"][:3] == ["docker", "--host", "unix:///var/run/docker.sock"]
         for command in v2_value["commands"]
     )
     preflight = v2_value["host_storage_preflight"]
@@ -8808,6 +9032,7 @@ esac
     }
     assert {item["drive_letter"] for item in preflight["observations"]} == {"D"}
     assert len(powershell_marker.read_text(encoding="utf-8").splitlines()) == 8
+    assert _marked_build_count(build_marker) == 6
     assert hashlib.sha256(v1.read_bytes()).hexdigest() == v1_sha256
 
     duplicate = subprocess.run(
@@ -8821,6 +9046,7 @@ esac
     assert duplicate.returncode == 1
     assert "absent create-only receipt" in duplicate.stderr
     assert len(powershell_marker.read_text(encoding="utf-8").splitlines()) == 8
+    assert _marked_build_count(build_marker) == 6
 
 
 def test_build_execution_receipt_rejects_semantically_rehashed_cache_enabled_command() -> None:

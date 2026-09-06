@@ -6,14 +6,18 @@ import argparse
 import hashlib
 import json
 import math
+import os
+import posixpath
 import re
+import stat
 import sys
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 BUILD_EXECUTION_ARTIFACT_TYPE = "qcsd-buflo-study-no-cache-build-execution"
+BUILD_EXECUTION_MAX_BYTES = 16 * 1024 * 1024
 BUILD_WSL_HOST_MIN_AVAILABLE_BYTES = 64 * 1024**3
 BUILD_HOST_STORAGE_POLICY = "docker-data-vhdx-backing-volume-minimum-v1"
 BUILD_HOST_STORAGE_PROBE = "powershell-get-volume-docker-data-vhdx-v1"
@@ -87,11 +91,74 @@ _BUILD_V1_KEYS = {
     "cache_policy",
     "payload_sha256",
 }
+_BUILDX_IDENTITY_KEYS = {
+    "selection_source",
+    "plugin_name",
+    "plugin_vendor",
+    "metadata_schema_version",
+    "short_description",
+    "reported_plugin_version",
+    "reported_plugin_path",
+    "plugin",
+    "resolved",
+    "version_output",
+    "version",
+    "commit",
+}
+_BUILDX_KEYS = {"schema_version", "policy", "identity", "observations", "passed"}
+_BUILDX_OBSERVATION_KEYS = {"boundary", "observed_at", "identity_sha256"}
+_BUILDX_BOUNDARIES = (
+    "before-collection",
+    "after-collection",
+    "after-prepare",
+    "after-reference",
+)
+_BUILDX_STAT_KEYS = {
+    "dev",
+    "inode",
+    "uid",
+    "gid",
+    "mode",
+    "nlink",
+    "size",
+    "mtime_ns",
+    "ctime_ns",
+}
+_BUILDX_PLUGIN_KEYS = {"path", "symlink_target"} | _BUILDX_STAT_KEYS
+_BUILDX_RESOLVED_KEYS = {"path", "sha256"} | _BUILDX_STAT_KEYS
+_BUILDX_DOCKER_METADATA_KEYS = {
+    "Name",
+    "Path",
+    "SchemaVersion",
+    "ShortDescription",
+    "Vendor",
+    "Version",
+}
+_BUILDX_PLUGIN_DIRECTORIES = frozenset(
+    PurePosixPath(path)
+    for path in (
+        "/usr/local/lib/docker/cli-plugins",
+        "/usr/local/libexec/docker/cli-plugins",
+        "/usr/lib/docker/cli-plugins",
+        "/usr/libexec/docker/cli-plugins",
+    )
+)
+_BUILDX_SELECTION_SOURCE = "docker-info-client-plugin-metadata-v1"
+_BUILDX_POLICY = "docker-selected-buildx-binary-stability-v1"
+_BUILDX_REQUIRED_UID = 0
+_BUILDX_REQUIRED_GID = 0
 _ROLE_PROVENANCE_KEYS = {"schema_version", "sources", "build_inputs"}
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
 _IMAGE_ID_RE = re.compile(r"sha256:[0-9a-f]{64}")
 _COMMIT_RE = re.compile(r"[0-9a-f]{40}")
 _REPO_DIGEST_RE = re.compile(r"[^\s@]+@sha256:[0-9a-f]{64}")
+_BUILDX_VERSION_OUTPUT_RE = re.compile(
+    r"github[.]com/docker/buildx "
+    r"(?P<version>v(?:0|[1-9][0-9]*)[.](?:0|[1-9][0-9]*)[.]"
+    r"(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?"
+    r"(?:\+[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?) "
+    r"(?P<commit>[0-9a-f]{40})"
+)
 _VOLUME_ID_RE = re.compile(
     r"\\\\\?\\Volume\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-"
     r"[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}\\"
@@ -128,6 +195,585 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _stat_identity(value: os.stat_result) -> tuple[int, ...]:
+    return (
+        value.st_dev,
+        value.st_ino,
+        value.st_uid,
+        value.st_gid,
+        value.st_mode,
+        value.st_nlink,
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+    )
+
+
+def _stat_record(value: os.stat_result) -> dict[str, int]:
+    return {
+        "dev": value.st_dev,
+        "inode": value.st_ino,
+        "uid": value.st_uid,
+        "gid": value.st_gid,
+        "mode": value.st_mode,
+        "nlink": value.st_nlink,
+        "size": value.st_size,
+        "mtime_ns": value.st_mtime_ns,
+        "ctime_ns": value.st_ctime_ns,
+    }
+
+
+def _read_stable_regular_file(
+    path: Path,
+    *,
+    label: str,
+    maximum_bytes: int | None = None,
+) -> bytes:
+    """Read one regular file through a no-symlink component walk."""
+
+    if maximum_bytes is not None and (type(maximum_bytes) is not int or maximum_bytes < 0):
+        raise ValueError(f"{label} maximum byte count is invalid")
+    candidate = Path(os.path.abspath(path))
+    if candidate == Path(candidate.anchor):
+        raise ValueError(f"{label} is not a stable single regular file")
+    file_flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
+    directory_flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_DIRECTORY", 0)
+    )
+    directory_descriptors: list[int] = []
+    directory_links: list[tuple[int, str, int]] = []
+    descriptor: int | None = None
+    try:
+        root_descriptor = os.open(candidate.anchor, directory_flags)
+        directory_descriptors.append(root_descriptor)
+        for component in candidate.parts[1:-1]:
+            parent_descriptor = directory_descriptors[-1]
+            child_descriptor = os.open(
+                component,
+                directory_flags,
+                dir_fd=parent_descriptor,
+            )
+            child_stat = os.fstat(child_descriptor)
+            if not stat.S_ISDIR(child_stat.st_mode):
+                os.close(child_descriptor)
+                raise ValueError(f"{label} path contains a non-directory component")
+            directory_descriptors.append(child_descriptor)
+            directory_links.append((parent_descriptor, component, child_descriptor))
+        directory_descriptor = directory_descriptors[-1]
+        filename = candidate.parts[-1]
+        pathname_before = os.stat(
+            filename,
+            dir_fd=directory_descriptor,
+            follow_symlinks=False,
+        )
+        if (
+            not stat.S_ISREG(pathname_before.st_mode)
+            or pathname_before.st_nlink != 1
+            or (maximum_bytes is not None and pathname_before.st_size > maximum_bytes)
+        ):
+            raise ValueError(f"{label} is not a stable single regular file")
+        descriptor = os.open(filename, file_flags, dir_fd=directory_descriptor)
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_nlink != 1
+            or _stat_identity(pathname_before) != _stat_identity(before)
+            or (maximum_bytes is not None and before.st_size > maximum_bytes)
+        ):
+            raise ValueError(f"{label} is not a stable single regular file")
+        chunks: list[bytes] = []
+        remaining = before.st_size
+        while remaining:
+            chunk = os.read(descriptor, min(1024 * 1024, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        grew_while_reading = bool(os.read(descriptor, 1))
+        after = os.fstat(descriptor)
+        pathname_after = os.stat(
+            filename,
+            dir_fd=directory_descriptor,
+            follow_symlinks=False,
+        )
+        root_after = os.fstat(root_descriptor)
+        root_path_after = os.stat(candidate.anchor, follow_symlinks=False)
+        directory_path_stable = _stat_identity(root_after) == _stat_identity(
+            root_path_after
+        ) and all(
+            _stat_identity(os.fstat(child_descriptor))
+            == _stat_identity(
+                os.stat(
+                    component,
+                    dir_fd=parent_descriptor,
+                    follow_symlinks=False,
+                )
+            )
+            for parent_descriptor, component, child_descriptor in directory_links
+        )
+    except OSError as error:
+        raise ValueError(f"{label} cannot be read safely") from error
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        for directory_descriptor in reversed(directory_descriptors):
+            os.close(directory_descriptor)
+    raw = b"".join(chunks)
+    if (
+        not directory_path_stable
+        or _stat_identity(before) != _stat_identity(after)
+        or _stat_identity(after) != _stat_identity(pathname_after)
+        or len(raw) != before.st_size
+        or grew_while_reading
+    ):
+        raise ValueError(f"{label} changed while it was read")
+    return raw
+
+
+def _nonempty_buildx_string(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and bool(value)
+        and value == value.strip()
+        and all(ord(character) >= 0x20 and ord(character) != 0x7F for character in value)
+    )
+
+
+def _canonical_buildx_path(value: Any, *, label: str) -> PurePosixPath:
+    if not _nonempty_buildx_string(value) or "\0" in value or value.startswith("//"):
+        raise ValueError(f"{label} is not an absolute canonical path")
+    path = PurePosixPath(value)
+    if not path.is_absolute() or path.parent == path or str(path) != value or ".." in path.parts:
+        raise ValueError(f"{label} is not an absolute canonical path")
+    return path
+
+
+def _validate_buildx_stat(value: Mapping[str, Any], *, label: str) -> dict[str, int]:
+    if set(value) != _BUILDX_STAT_KEYS or any(type(value.get(key)) is not int for key in value):
+        raise ValueError(f"{label} stat identity is invalid")
+    record = {key: value[key] for key in _BUILDX_STAT_KEYS}
+    if (
+        record["dev"] < 0
+        or record["inode"] <= 0
+        or record["uid"] < 0
+        or record["gid"] < 0
+        or record["mode"] <= 0
+        or record["mode"] > 0o177777
+        or record["nlink"] <= 0
+        or record["size"] < 0
+        or record["mtime_ns"] < 0
+        or record["ctime_ns"] < 0
+    ):
+        raise ValueError(f"{label} stat identity is invalid")
+    return record
+
+
+def _validate_buildx_identity(
+    value: Any,
+    *,
+    allowed_plugin_directories: frozenset[PurePosixPath] = _BUILDX_PLUGIN_DIRECTORIES,
+    required_uid: int = _BUILDX_REQUIRED_UID,
+    required_gid: int = _BUILDX_REQUIRED_GID,
+) -> dict[str, Any]:
+    """Validate one Docker-selected buildx binary identity."""
+
+    if not isinstance(value, Mapping) or set(value) != _BUILDX_IDENTITY_KEYS:
+        raise ValueError("no-cache build buildx identity schema is invalid")
+    if (
+        value.get("selection_source") != _BUILDX_SELECTION_SOURCE
+        or value.get("plugin_name") != "buildx"
+        or not _nonempty_buildx_string(value.get("plugin_vendor"))
+        or not _nonempty_buildx_string(value.get("metadata_schema_version"))
+        or not _nonempty_buildx_string(value.get("short_description"))
+        or not _nonempty_buildx_string(value.get("reported_plugin_version"))
+    ):
+        raise ValueError("no-cache build Docker buildx metadata is invalid")
+    reported_path = _canonical_buildx_path(
+        value.get("reported_plugin_path"),
+        label="Docker-reported buildx plugin path",
+    )
+    if (
+        reported_path.name != "docker-buildx"
+        or reported_path.parent not in allowed_plugin_directories
+    ):
+        raise ValueError("Docker-reported buildx plugin path is outside fixed system directories")
+
+    plugin = value.get("plugin")
+    resolved = value.get("resolved")
+    if not isinstance(plugin, Mapping) or set(plugin) != _BUILDX_PLUGIN_KEYS:
+        raise ValueError("no-cache build buildx plugin identity is invalid")
+    if not isinstance(resolved, Mapping) or set(resolved) != _BUILDX_RESOLVED_KEYS:
+        raise ValueError("no-cache build resolved buildx identity is invalid")
+    plugin_path = _canonical_buildx_path(plugin.get("path"), label="buildx plugin lexical path")
+    resolved_path = _canonical_buildx_path(
+        resolved.get("path"), label="resolved buildx target path"
+    )
+    if plugin_path != reported_path:
+        raise ValueError("no-cache build buildx path binding is invalid")
+
+    plugin_stat = _validate_buildx_stat(
+        {key: plugin[key] for key in _BUILDX_STAT_KEYS}, label="buildx plugin"
+    )
+    resolved_stat = _validate_buildx_stat(
+        {key: resolved[key] for key in _BUILDX_STAT_KEYS}, label="resolved buildx target"
+    )
+    symlink_target = plugin.get("symlink_target")
+    if symlink_target is None:
+        if (
+            not stat.S_ISREG(plugin_stat["mode"])
+            or plugin_path != resolved_path
+            or plugin_stat != resolved_stat
+        ):
+            raise ValueError("direct buildx plugin identity does not bind its resolved target")
+    else:
+        if (
+            not _nonempty_buildx_string(symlink_target)
+            or "\0" in symlink_target
+            or symlink_target.startswith("//")
+            or not stat.S_ISLNK(plugin_stat["mode"])
+        ):
+            raise ValueError("buildx plugin symlink identity is invalid")
+        target_path = PurePosixPath(symlink_target)
+        if str(target_path) != symlink_target:
+            raise ValueError("buildx plugin symlink target is not canonical")
+        target_from_parent = (
+            target_path if target_path.is_absolute() else plugin_path.parent / target_path
+        )
+        normalized_target = PurePosixPath(posixpath.normpath(str(target_from_parent)))
+        if normalized_target != resolved_path or plugin_stat["size"] != len(
+            os.fsencode(symlink_target)
+        ):
+            raise ValueError("buildx plugin symlink target differs from the resolved target")
+    if (
+        plugin_stat["uid"] != required_uid
+        or plugin_stat["gid"] != required_gid
+        or plugin_stat["nlink"] != 1
+        or not stat.S_ISREG(resolved_stat["mode"])
+        or resolved_stat["uid"] != required_uid
+        or resolved_stat["gid"] != required_gid
+        or resolved_stat["nlink"] != 1
+        or resolved_stat["size"] <= 0
+        or not resolved_stat["mode"] & 0o111
+        or resolved_stat["mode"] & (stat.S_ISUID | stat.S_ISGID | stat.S_IWGRP | stat.S_IWOTH)
+        or not isinstance(resolved.get("sha256"), str)
+        or _SHA256_RE.fullmatch(resolved["sha256"]) is None
+    ):
+        raise ValueError("resolved buildx target is not a safe root-owned executable")
+
+    version_output = value.get("version_output")
+    match = (
+        _BUILDX_VERSION_OUTPUT_RE.fullmatch(version_output)
+        if isinstance(version_output, str)
+        else None
+    )
+    if (
+        match is None
+        or value.get("version") != match.group("version")
+        or value.get("commit") != match.group("commit")
+        or value.get("reported_plugin_version") != match.group("version")
+    ):
+        raise ValueError("no-cache build buildx version binding is invalid")
+    return {
+        "selection_source": value["selection_source"],
+        "plugin_name": value["plugin_name"],
+        "plugin_vendor": value["plugin_vendor"],
+        "metadata_schema_version": value["metadata_schema_version"],
+        "short_description": value["short_description"],
+        "reported_plugin_version": value["reported_plugin_version"],
+        "reported_plugin_path": value["reported_plugin_path"],
+        "plugin": dict(plugin),
+        "resolved": dict(resolved),
+        "version_output": version_output,
+        "version": value["version"],
+        "commit": value["commit"],
+    }
+
+
+def validate_buildx_provenance(
+    value: Any,
+    *,
+    started_at: datetime | None = None,
+    finished_at: datetime | None = None,
+) -> dict[str, Any]:
+    """Validate the schema-1 four-boundary buildx stability proof."""
+
+    if (started_at is None) != (finished_at is None):
+        raise ValueError("buildx timing validation requires both build endpoints")
+    if (
+        not isinstance(value, Mapping)
+        or set(value) != _BUILDX_KEYS
+        or type(value.get("schema_version")) is not int
+        or value["schema_version"] != 1
+        or value.get("policy") != _BUILDX_POLICY
+        or value.get("passed") is not True
+    ):
+        raise ValueError("no-cache build buildx provenance schema is invalid")
+    identity = _validate_buildx_identity(value.get("identity"))
+    identity_sha256 = _canonical_digest(identity)
+    observations = value.get("observations")
+    if not isinstance(observations, list) or len(observations) != len(_BUILDX_BOUNDARIES):
+        raise ValueError("no-cache build buildx observation inventory is invalid")
+    projected_observations: list[dict[str, Any]] = []
+    observed_times: list[datetime] = []
+    for observation, boundary in zip(observations, _BUILDX_BOUNDARIES, strict=True):
+        if (
+            not isinstance(observation, Mapping)
+            or set(observation) != _BUILDX_OBSERVATION_KEYS
+            or observation.get("boundary") != boundary
+            or not isinstance(observation.get("observed_at"), str)
+            or not isinstance(observation.get("identity_sha256"), str)
+            or _SHA256_RE.fullmatch(observation["identity_sha256"]) is None
+            or observation["identity_sha256"] != identity_sha256
+        ):
+            raise ValueError("no-cache build buildx observation is invalid")
+        observed_times.append(
+            _aware_timestamp(observation.get("observed_at"), label="buildx observation")
+        )
+        projected_observations.append(dict(observation))
+    if any(left >= right for left, right in zip(observed_times, observed_times[1:])):
+        raise ValueError("no-cache build buildx observations are not strictly increasing")
+    if started_at is not None and finished_at is not None:
+        if (
+            not isinstance(started_at, datetime)
+            or not isinstance(finished_at, datetime)
+            or started_at.tzinfo is None
+            or finished_at.tzinfo is None
+        ):
+            raise ValueError("buildx timing endpoints are not timezone-aware")
+        first, second, third, fourth = observed_times
+        if not started_at <= first < second < third < fourth <= finished_at:
+            raise ValueError("no-cache build buildx observations fall outside the build")
+    return {
+        "schema_version": 1,
+        "policy": _BUILDX_POLICY,
+        "identity": identity,
+        "observations": projected_observations,
+        "passed": True,
+    }
+
+
+def capture_buildx_observation(
+    plugin_metadata: Any,
+    *,
+    version_output: str,
+    allowed_plugin_directories: frozenset[PurePosixPath] | None = None,
+    required_uid: int = _BUILDX_REQUIRED_UID,
+    required_gid: int = _BUILDX_REQUIRED_GID,
+) -> dict[str, Any]:
+    """Capture the one healthy Docker-reported buildx plugin and its stable target."""
+
+    if not isinstance(plugin_metadata, list):
+        raise ValueError("Docker client plugin metadata is not a list")
+    matches = [
+        item
+        for item in plugin_metadata
+        if isinstance(item, Mapping) and item.get("Name") == "buildx"
+    ]
+    if len(matches) != 1:
+        raise ValueError("Docker did not report exactly one buildx client plugin")
+    metadata = matches[0]
+    if set(metadata) != _BUILDX_DOCKER_METADATA_KEYS or any(
+        not _nonempty_buildx_string(metadata.get(key)) for key in metadata
+    ):
+        raise ValueError("Docker buildx client plugin metadata is not the exact healthy schema")
+    reported = _canonical_buildx_path(metadata["Path"], label="Docker-reported buildx plugin path")
+    configured_directories = (
+        _BUILDX_PLUGIN_DIRECTORIES
+        if allowed_plugin_directories is None
+        else allowed_plugin_directories
+    )
+    allowed_directories = frozenset(
+        _canonical_buildx_path(str(path), label="allowed buildx plugin directory")
+        for path in configured_directories
+    )
+    if (
+        not allowed_directories
+        or type(required_uid) is not int
+        or required_uid < 0
+        or type(required_gid) is not int
+        or required_gid < 0
+    ):
+        raise ValueError("buildx capture ownership policy is invalid")
+    if reported.name != "docker-buildx" or reported.parent not in allowed_directories:
+        raise ValueError("Docker-reported buildx plugin path is outside fixed system directories")
+    match = (
+        _BUILDX_VERSION_OUTPUT_RE.fullmatch(version_output)
+        if isinstance(version_output, str)
+        else None
+    )
+    if match is None:
+        raise ValueError("Docker buildx version output is invalid")
+    lexical_path = Path(str(reported))
+    try:
+        lexical_before = lexical_path.lstat()
+        if stat.S_ISLNK(lexical_before.st_mode):
+            symlink_target: str | None = os.readlink(lexical_path)
+        elif stat.S_ISREG(lexical_before.st_mode):
+            symlink_target = None
+        else:
+            raise ValueError("Docker-reported buildx plugin is neither a symlink nor regular file")
+        resolved_path = lexical_path.resolve(strict=True)
+        resolved_canonical = _canonical_buildx_path(
+            str(resolved_path), label="resolved buildx target path"
+        )
+        flags = (
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0)
+        )
+        descriptor = os.open(resolved_path, flags)
+    except OSError as error:
+        raise ValueError("Docker-reported buildx plugin cannot be resolved safely") from error
+    digest = hashlib.sha256()
+    total = 0
+    try:
+        resolved_before = os.fstat(descriptor)
+        if (
+            lexical_before.st_uid != required_uid
+            or lexical_before.st_gid != required_gid
+            or lexical_before.st_nlink != 1
+            or not stat.S_ISREG(resolved_before.st_mode)
+            or resolved_before.st_uid != required_uid
+            or resolved_before.st_gid != required_gid
+            or resolved_before.st_nlink != 1
+            or resolved_before.st_size <= 0
+            or not resolved_before.st_mode & 0o111
+            or resolved_before.st_mode & (stat.S_ISUID | stat.S_ISGID | stat.S_IWGRP | stat.S_IWOTH)
+        ):
+            raise ValueError("Docker-reported buildx plugin is not a safe executable")
+        remaining = resolved_before.st_size
+        while remaining:
+            chunk = os.read(descriptor, min(1024 * 1024, remaining))
+            if not chunk:
+                break
+            digest.update(chunk)
+            total += len(chunk)
+            remaining -= len(chunk)
+        grew_while_reading = bool(os.read(descriptor, 1))
+        resolved_after = os.fstat(descriptor)
+        resolved_path_after = resolved_path.stat(follow_symlinks=False)
+        lexical_after = lexical_path.lstat()
+        symlink_target_after = (
+            os.readlink(lexical_path) if stat.S_ISLNK(lexical_after.st_mode) else None
+        )
+        resolved_from_lexical_after = lexical_path.resolve(strict=True)
+    except OSError as error:
+        raise ValueError("Docker-reported buildx plugin changed while it was read") from error
+    finally:
+        os.close(descriptor)
+    if (
+        _stat_identity(lexical_before) != _stat_identity(lexical_after)
+        or symlink_target_after != symlink_target
+        or resolved_from_lexical_after != resolved_path
+        or _stat_identity(resolved_before) != _stat_identity(resolved_after)
+        or _stat_identity(resolved_after) != _stat_identity(resolved_path_after)
+        or total != resolved_before.st_size
+        or grew_while_reading
+    ):
+        raise ValueError("Docker-reported buildx plugin changed while it was read")
+    record = {
+        "selection_source": _BUILDX_SELECTION_SOURCE,
+        "plugin_name": metadata["Name"],
+        "plugin_vendor": metadata["Vendor"],
+        "metadata_schema_version": metadata["SchemaVersion"],
+        "short_description": metadata["ShortDescription"],
+        "reported_plugin_version": metadata["Version"],
+        "reported_plugin_path": metadata["Path"],
+        "plugin": {
+            "path": metadata["Path"],
+            "symlink_target": symlink_target,
+            **_stat_record(lexical_before),
+        },
+        "resolved": {
+            "path": str(resolved_canonical),
+            "sha256": digest.hexdigest(),
+            **_stat_record(resolved_before),
+        },
+        "version_output": version_output,
+        "version": match.group("version"),
+        "commit": match.group("commit"),
+    }
+    identity = _validate_buildx_identity(
+        record,
+        allowed_plugin_directories=allowed_directories,
+        required_uid=required_uid,
+        required_gid=required_gid,
+    )
+    observed_at = datetime.now(UTC).isoformat()
+    return {
+        "observed_at": observed_at,
+        "identity": identity,
+        "identity_sha256": _canonical_digest(identity),
+    }
+
+
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError(f"JSON object contains duplicate key: {key}")
+        value[key] = item
+    return value
+
+
+def load_stable_build_execution(path: Path) -> tuple[Path, bytes, Any]:
+    """Read one build receipt once, rejecting symlinks and duplicate JSON keys."""
+
+    candidate = Path(os.path.abspath(path))
+    if candidate.is_symlink():
+        raise ValueError("build execution receipt cannot be a symlink")
+    try:
+        resolved_before = candidate.resolve(strict=True)
+    except OSError as error:
+        raise ValueError("build execution receipt path cannot be resolved") from error
+    if resolved_before != candidate:
+        raise ValueError("build execution receipt path contains a symlink")
+    raw = _read_stable_regular_file(
+        candidate,
+        label="build execution receipt",
+        maximum_bytes=BUILD_EXECUTION_MAX_BYTES,
+    )
+    try:
+        resolved_after = candidate.resolve(strict=True)
+    except OSError as error:
+        raise ValueError("build execution receipt path cannot be resolved") from error
+    if resolved_after != resolved_before:
+        raise ValueError("build execution receipt path changed while it was read")
+    try:
+        value = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=_unique_json_object,
+            parse_constant=_invalid_json_constant,
+        )
+    except (UnicodeError, json.JSONDecodeError) as error:
+        raise ValueError("build execution receipt is not unique-key UTF-8 JSON") from error
+    return resolved_after, raw, value
+
+
+def _invalid_json_constant(value: str) -> Any:
+    raise ValueError(f"JSON contains invalid constant: {value}")
+
+
+def _one_version_output_line(raw: bytes) -> str:
+    if raw.endswith(b"\n"):
+        raw = raw[:-1]
+    if not raw or b"\n" in raw or b"\r" in raw:
+        raise ValueError("Docker buildx version observation is not exactly one line")
+    try:
+        return raw.decode("utf-8")
+    except UnicodeError as error:
+        raise ValueError("Docker buildx version observation is not UTF-8") from error
 
 
 def _aware_timestamp(value: Any, *, label: str) -> datetime:
@@ -436,16 +1082,16 @@ def validate_build_execution_envelope(
     """Validate the build receipt envelope used by every launcher reader."""
 
     schema_version = value.get("schema_version") if isinstance(value, Mapping) else None
-    required = _BUILD_V1_KEYS | (
-        {"host_storage_preflight", "role_provenance"}
-        if schema_version in {2, 3}
-        else set()
-    )
+    required = set(_BUILD_V1_KEYS)
+    if type(schema_version) is int and schema_version in {2, 3, 4}:
+        required |= {"host_storage_preflight", "role_provenance"}
+    if schema_version == 4:
+        required |= {"buildx"}
     if (
         not isinstance(value, Mapping)
         or set(value) != required
         or type(schema_version) is not int
-        or schema_version not in {1, 2, 3}
+        or schema_version not in {1, 2, 3, 4}
         or value.get("artifact_type") != BUILD_EXECUTION_ARTIFACT_TYPE
     ):
         raise ValueError("no-cache build execution receipt schema is invalid")
@@ -477,7 +1123,7 @@ def validate_build_execution_envelope(
 
     docker = value["docker"]
     docker_keys = {"client_version", "server_version"}
-    if schema_version in {2, 3}:
+    if schema_version in {2, 3, 4}:
         docker_keys |= {
             "context",
             "endpoint",
@@ -493,7 +1139,7 @@ def validate_build_execution_envelope(
         or any(not isinstance(docker[key], str) or not docker[key] for key in docker)
     ):
         raise ValueError("no-cache build Docker identity is invalid")
-    if schema_version in {2, 3} and (
+    if schema_version in {2, 3, 4} and (
         docker["context"] not in {"default", "desktop-linux"}
         or docker["endpoint"]
         not in {
@@ -528,10 +1174,10 @@ def validate_build_execution_envelope(
             )
         ):
             raise ValueError(f"no-cache build {target} image binding is invalid")
-        if schema_version in {2, 3} and record["tag"] != BUILD_IMAGE_TAGS[target]:
+        if schema_version in {2, 3, 4} and record["tag"] != BUILD_IMAGE_TAGS[target]:
             raise ValueError(f"no-cache build {target} image role tag is invalid")
         image_ids[target] = record["id"]
-    if schema_version in {2, 3} and len(set(image_ids.values())) != len(image_ids):
+    if schema_version in {2, 3, 4} and len(set(image_ids.values())) != len(image_ids):
         raise ValueError("no-cache build image roles do not have distinct immutable IDs")
 
     commands = value["commands"]
@@ -542,13 +1188,13 @@ def validate_build_execution_envelope(
         prefix = ["docker"]
         if schema_version == 2:
             prefix.extend(["--context", docker["context"]])
-        elif schema_version == 3:
+        elif schema_version in {3, 4}:
             prefix.extend(["--host", docker["endpoint"]])
         prefix.extend(["build", "--pull", "--no-cache"])
         argv = command.get("argv") if isinstance(command, Mapping) else None
         iidfile_value: str | None = None
         iidfile: PurePosixPath | None = None
-        if schema_version in {2, 3} and isinstance(argv, list) and len(argv) >= len(prefix) + 2:
+        if schema_version in {2, 3, 4} and isinstance(argv, list) and len(argv) >= len(prefix) + 2:
             iidfile_value = argv[len(prefix) + 1] if argv[len(prefix)] == "--iidfile" else None
             if isinstance(iidfile_value, str):
                 iidfile = PurePosixPath(iidfile_value)
@@ -581,7 +1227,7 @@ def validate_build_execution_envelope(
             or dockerfile.parent != build_root
             or build_root.parent == build_root
             or (
-                schema_version in {2, 3}
+                schema_version in {2, 3, 4}
                 and (
                     iidfile is None
                     or not iidfile.is_absolute()
@@ -606,7 +1252,7 @@ def validate_build_execution_envelope(
         recorded_build_root = build_root
 
     if (
-        schema_version in {2, 3}
+        schema_version in {2, 3, 4}
         and expected_build_root is not None
         and recorded_build_root != PurePosixPath(str(Path(expected_build_root).resolve()))
     ):
@@ -629,7 +1275,7 @@ def validate_build_execution_envelope(
 
     host_storage_preflight = None
     role_provenance = None
-    if schema_version in {2, 3}:
+    if schema_version in {2, 3, 4}:
         role_provenance = _validate_role_provenance(
             value["role_provenance"],
             image_ids=image_ids,
@@ -656,7 +1302,7 @@ def validate_build_execution_envelope(
                 raise ValueError("no-cache build host-storage timing is invalid")
             if "docker desktop" not in docker["server_operating_system"].lower():
                 raise ValueError("WSL build did not use the local Docker Desktop engine")
-    return {
+    validated = {
         "schema_version": schema_version,
         "cohort_version": cohort_version,
         "image_ids": image_ids,
@@ -664,6 +1310,11 @@ def validate_build_execution_envelope(
         "role_provenance": role_provenance,
         "host_storage_preflight": host_storage_preflight,
     }
+    if schema_version == 4:
+        validated["buildx"] = validate_buildx_provenance(
+            value["buildx"], started_at=started, finished_at=finished
+        )
+    return validated
 
 
 def _regular_file(path: Path, *, label: str) -> Path:
@@ -675,6 +1326,9 @@ def _regular_file(path: Path, *, label: str) -> Path:
 def _main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="qcsd-build-storage")
     actions = parser.add_subparsers(dest="action", required=True)
+    buildx_observation = actions.add_parser("buildx-observation")
+    buildx_observation.add_argument("--plugins-json", type=Path, required=True)
+    buildx_observation.add_argument("--version-output", type=Path, required=True)
     observation = actions.add_parser("observation")
     observation.add_argument("--boundary", choices=BUILD_HOST_STORAGE_BOUNDARIES, required=True)
     observation.add_argument("--probe-path", type=Path, required=True)
@@ -684,6 +1338,31 @@ def _main(argv: list[str] | None = None) -> int:
     receipt.add_argument("--probe-path", type=Path, required=True)
     arguments = parser.parse_args(argv)
     try:
+        if arguments.action == "buildx-observation":
+            metadata_raw = _read_stable_regular_file(
+                arguments.plugins_json,
+                label="Docker client plugin metadata",
+                maximum_bytes=1024 * 1024,
+            )
+            version_raw = _read_stable_regular_file(
+                arguments.version_output,
+                label="Docker buildx version output",
+                maximum_bytes=4096,
+            )
+            try:
+                plugin_metadata = json.loads(
+                    metadata_raw.decode("utf-8"),
+                    object_pairs_hook=_unique_json_object,
+                    parse_constant=_invalid_json_constant,
+                )
+            except (UnicodeError, json.JSONDecodeError) as error:
+                raise ValueError("Docker client plugin metadata is not valid JSON") from error
+            captured = capture_buildx_observation(
+                plugin_metadata,
+                version_output=_one_version_output_line(version_raw),
+            )
+            print(json.dumps(captured, sort_keys=True, separators=(",", ":")))
+            return 0
         probe_path = _regular_file(arguments.probe_path, label="storage probe")
         probe_sha256 = _sha256_file(probe_path)
         if arguments.action == "observation":
@@ -713,10 +1392,9 @@ def _main(argv: list[str] | None = None) -> int:
                 )
             )
             return 0
-        receipt_path = _regular_file(arguments.path, label="build execution receipt")
-        raw = receipt_path.read_bytes()
+        receipt_path, raw, receipt_value = load_stable_build_execution(arguments.path)
         validated = validate_build_execution_envelope(
-            json.loads(raw),
+            receipt_value,
             expected_cohort_version=arguments.expected_cohort,
             expected_probe_sha256=probe_sha256,
             checkout_root=probe_path.parents[1],
