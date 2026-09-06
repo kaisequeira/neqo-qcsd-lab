@@ -77,9 +77,10 @@ foundation checkpoint `e719219b42826126fdc7771c2dec0463d425a83d` repairs that
 Docker-configuration boundary. Its clean successor
 `69a14ebe48f78d08a8b36d3e573955ec64f00ff9` commits the schema-4 Buildx receipt
 integration against the unchanged Rust/gitlink. Neither commit is an executed
-cohort receipt. The current checkout differs from 69a14eb only by this README
-status update, so its final clean v61 identity does not yet exist. The next
-eligible fresh source lineage remains v61.
+cohort receipt. The current clean checkout adds only README status updates on
+top of the 69a14eb implementation and is eligible to become v61's exact source
+identity; only v61's create-only build receipt may establish that binding. The
+next eligible fresh source lineage remains v61.
 Summary schema 4 binds the typed schedule-stop policy, stop timestamp,
 sub-cell capacity, direction counts at stop, and exact post-stop advertised
 credit drain; historical summary schemas 2 and 3 remain readable but cannot
