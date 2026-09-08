@@ -40,6 +40,10 @@ def test_pinned_chromium_recursive_topology_and_shutdown() -> None:
     assert topology["shared_worker_network_request"] is True
     assert topology["dedicated_worker_fetch_paused_on_page"] is True
     assert topology["shared_worker_fetch_paused_on_shared_worker"] is True
+    assert topology["worker_response_consumption"] == {
+        "dedicated_worker": "qcsd-dedicated-response-consumed",
+        "shared_worker": "qcsd-shared-response-consumed",
+    }
     assert topology["router_closed"] is True
     assert topology["browser_guard_closed"] is True
     assert topology["ledger_closed"] is True

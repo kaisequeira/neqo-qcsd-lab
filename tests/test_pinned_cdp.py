@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import http.client
 import json
 import subprocess
+import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -49,13 +51,10 @@ def _browser_egress_command_line_projection() -> dict[str, object]:
                 str(DEFAULT_CONFIGURED_EXECUTABLE),
                 *BROWSER_EGRESS_REQUIRED_CHROMIUM_SWITCHES,
                 BROWSER_EGRESS_SUBPROCESS_WRAPPER_ARGUMENT,
-                "--disable-features="
-                + ",".join(BROWSER_EGRESS_PLAYWRIGHT_DISABLED_FEATURES),
+                "--disable-features=" + ",".join(BROWSER_EGRESS_PLAYWRIGHT_DISABLED_FEATURES),
                 "--disable-features=" + ",".join(BROWSER_EGRESS_DISABLED_BASE_FEATURES),
-                "--disable-blink-features="
-                + ",".join(BROWSER_EGRESS_DISABLED_BLINK_FEATURES),
-                "--enable-features="
-                + ",".join(BROWSER_EGRESS_PLAYWRIGHT_ENABLED_FEATURES),
+                "--disable-blink-features=" + ",".join(BROWSER_EGRESS_DISABLED_BLINK_FEATURES),
+                "--enable-features=" + ",".join(BROWSER_EGRESS_PLAYWRIGHT_ENABLED_FEATURES),
                 build_fail_closed_host_resolver_argument(
                     approved_origins=pinned_cdp._PINNED_CDP_APPROVED_ORIGINS,
                     origin_ip_pins=pinned_cdp._PINNED_CDP_ORIGIN_IP_PINS,
@@ -190,6 +189,9 @@ def _observation(uid: int = 1000, gid: int = 1000) -> dict[str, object]:
             "non_replayable_egress_summary": _non_replayable_egress_summary(),
             "browser_egress_command_line": _browser_egress_command_line_projection(),
             "browser_context_service_worker_count": 0,
+            "worker_response_consumption": copy.deepcopy(
+                pinned_cdp._EXPECTED_WORKER_RESPONSE_CONSUMPTION
+            ),
             "quiescent_target_activity": _target_activity(),
             "router_closed": True,
             "browser_guard_closed": True,
@@ -209,9 +211,7 @@ def fake_build(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         "path": str(path.resolve()),
         "sha256": BUILD_SHA256,
         "cohort_version": 59,
-        "completion_path": str(
-            (tmp_path / "build-completion-v59.json").resolve()
-        ),
+        "completion_path": str((tmp_path / "build-completion-v59.json").resolve()),
         "completion_sha256": BUILD_COMPLETION_SHA256,
         "collection_image": COLLECTION_IMAGE,
         "images": {
@@ -225,9 +225,7 @@ def fake_build(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         "passed": True,
     }
 
-    def validate(
-        path_arg, *, expected_cohort_version=None, allow_historical=None, **_kwargs
-    ):
+    def validate(path_arg, *, expected_cohort_version=None, allow_historical=None, **_kwargs):
         assert Path(path_arg).resolve() == path.resolve()
         assert expected_cohort_version in {None, 59}
         assert allow_historical is False
@@ -289,9 +287,7 @@ def test_receipt_is_create_only_and_binds_build_source_prepare_image_and_cohort(
     assert validated["build_execution_identity"]["completion_path"] == (
         "/lab/artifacts/buflo-study/build-completion-v59.json"
     )
-    assert validated["build_execution_identity"]["completion_sha256"] == (
-        BUILD_COMPLETION_SHA256
-    )
+    assert validated["build_execution_identity"]["completion_sha256"] == (BUILD_COMPLETION_SHA256)
     assert output.read_bytes() == canonical_json_bytes(json.loads(output.read_text()))
 
     with pytest.raises(FileExistsError, match="create-only"):
@@ -307,8 +303,14 @@ def test_schema8_receipt_is_historical_only_and_round_trips(
     envelope = json.loads(current.read_text(encoding="utf-8"))
     payload = copy.deepcopy(envelope["payload"])
     payload["probe_schema_version"] = pinned_cdp.HISTORICAL_PROBE_SCHEMA_VERSION
+    payload["probe_contract"] = copy.deepcopy(pinned_cdp._HISTORICAL_PROBE_CONTRACT)
+    payload["probe_contract_sha256"] = pinned_cdp._HISTORICAL_PROBE_CONTRACT_SHA256
+    payload["observation"]["playwright_driver"] = copy.deepcopy(
+        pinned_cdp.LEGACY_EXPECTED_PLAYWRIGHT_DRIVER_BINDING
+    )
     payload["build_execution_identity"].pop("completion_path")
     payload["build_execution_identity"].pop("completion_sha256")
+    payload["observation"]["topology"].pop("worker_response_consumption")
     historical = tmp_path / "pinned-cdp-schema8.json"
     historical.write_bytes(
         canonical_json_bytes(bind_receipt(payload, receipt_type=pinned_cdp.RECEIPT_TYPE))
@@ -331,9 +333,7 @@ def test_schema8_receipt_is_historical_only_and_round_trips(
         assert kwargs["allow_historical"] is True
         return copy.deepcopy(build)
 
-    monkeypatch.setattr(
-        pinned_cdp, "validate_build_execution_receipt", validate_historical
-    )
+    monkeypatch.setattr(pinned_cdp, "validate_build_execution_receipt", validate_historical)
     validated = pinned_cdp.validate_pinned_cdp_receipt(
         historical,
         build_execution_receipt=fake_build,
@@ -348,6 +348,52 @@ def test_schema8_receipt_is_historical_only_and_round_trips(
         "started_at",
         "finished_at",
     }
+    assert "worker_response_consumption" not in validated["observation"]["topology"]
+
+
+def test_schema9_receipt_is_historical_only_and_keeps_current_build_identity(
+    tmp_path: Path,
+    fake_build: Path,
+) -> None:
+    current = _create(tmp_path, fake_build)
+    envelope = json.loads(current.read_text(encoding="utf-8"))
+    payload = copy.deepcopy(envelope["payload"])
+    payload["probe_schema_version"] = 9
+    payload["probe_contract"] = copy.deepcopy(pinned_cdp._HISTORICAL_PROBE_CONTRACT)
+    payload["probe_contract_sha256"] = pinned_cdp._HISTORICAL_PROBE_CONTRACT_SHA256
+    payload["observation"]["playwright_driver"] = copy.deepcopy(
+        pinned_cdp.LEGACY_EXPECTED_PLAYWRIGHT_DRIVER_BINDING
+    )
+    payload["observation"]["topology"].pop("worker_response_consumption")
+    historical = tmp_path / "pinned-cdp-schema9.json"
+    historical.write_bytes(
+        canonical_json_bytes(bind_receipt(payload, receipt_type=pinned_cdp.RECEIPT_TYPE))
+    )
+
+    with pytest.raises(ValueError, match="identity or result"):
+        pinned_cdp.validate_pinned_cdp_receipt(
+            historical,
+            build_execution_receipt=fake_build,
+            expected_cohort_version=59,
+        )
+
+    validated = pinned_cdp.validate_pinned_cdp_receipt(
+        historical,
+        build_execution_receipt=fake_build,
+        expected_cohort_version=59,
+        allow_historical=True,
+    )
+    assert validated["probe_schema_version"] == 9
+    assert set(validated["build_execution_identity"]) == {
+        "cohort_version",
+        "sha256",
+        "completion_path",
+        "completion_sha256",
+        "collection_image",
+        "started_at",
+        "finished_at",
+    }
+    assert "worker_response_consumption" not in validated["observation"]["topology"]
 
 
 @pytest.mark.parametrize(
@@ -363,9 +409,7 @@ def test_schema8_receipt_is_historical_only_and_round_trips(
             "source/build/prepare image",
         ),
         (
-            lambda payload: payload["build_execution_identity"].update(
-                completion_sha256="a" * 64
-            ),
+            lambda payload: payload["build_execution_identity"].update(completion_sha256="a" * 64),
             "source/build/prepare image",
         ),
         (
@@ -561,6 +605,19 @@ def test_prepare_role_revalidates_playwright_driver_binding(
             "topology evidence",
         ),
         (
+            lambda observation: observation["topology"].update(
+                worker_response_consumption={
+                    "dedicated_worker": "qcsd-dedicated-response-consumed",
+                    "shared_worker": "qcsd-shared-response-error",
+                }
+            ),
+            "topology evidence",
+        ),
+        (
+            lambda observation: observation["topology"].pop("worker_response_consumption"),
+            "topology fields",
+        ),
+        (
             lambda observation: observation["topology"]["http_status_counts"]["/"].update(
                 {"200": 2}
             ),
@@ -645,22 +702,96 @@ def test_observation_validator_rejects_resealed_isolation_and_topology_claims(
         pinned_cdp._validate_observation(observation)
 
 
-def test_required_topology_wait_condition_is_event_driven() -> None:
-    events = [
+def _required_topology_events() -> list[tuple[str, str, str]]:
+    return [
         ("page", "Network.requestWillBeSent", "http://a.test/"),
         ("iframe", "Network.requestWillBeSent", "http://b.test/frame-data"),
         ("page", "Network.requestWillBeSent", "http://a.test/duplicate"),
         ("page", "Network.requestWillBeSent", "http://a.test/duplicate"),
         ("page", "Network.requestWillBeSent", "http://a.test/redirected"),
         ("worker", "Network.requestWillBeSent", "http://a.test/dedicated-data"),
-        (
-            "shared_worker",
-            "Network.requestWillBeSent",
-            "http://a.test/shared-data",
-        ),
+        ("shared_worker", "Network.requestWillBeSent", "http://a.test/shared-data"),
         ("page", "Fetch.requestPaused", "http://a.test/dedicated-data"),
         ("shared_worker", "Fetch.requestPaused", "http://a.test/shared-data"),
     ]
+
+
+def _required_target_activity() -> pinned_cdp._TargetActivityLedger:
+    activity = pinned_cdp._TargetActivityLedger()
+    for target_type in ("iframe", "shared_worker", "worker"):
+        activity.record(
+            SimpleNamespace(target_type=target_type, generation=0),
+            "target-attached",
+        )
+    return activity
+
+
+def test_worker_fixtures_consume_exact_success_responses_and_emit_exact_sentinels() -> None:
+    server = pinned_cdp._ProbeServer(("127.0.0.1", 0))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=2)
+    fixtures = (
+        (
+            "/dedicated-worker.js",
+            "/dedicated-data",
+            "self.postMessage",
+            "dedicated_worker",
+            "qcsd-dedicated-response-consumed",
+            "qcsd-dedicated-response-invalid",
+            "qcsd-dedicated-response-error",
+        ),
+        (
+            "/shared-worker.js",
+            "/shared-data",
+            "port.postMessage",
+            "shared_worker",
+            "qcsd-shared-response-consumed",
+            "qcsd-shared-response-invalid",
+            "qcsd-shared-response-error",
+        ),
+    )
+    try:
+        for (
+            script_path,
+            data_path,
+            emitter,
+            worker_type,
+            success_sentinel,
+            invalid_sentinel,
+            error_sentinel,
+        ) in fixtures:
+            connection.request("GET", script_path)
+            response = connection.getresponse()
+            script = response.read().decode("utf-8")
+            assert response.status == 200
+            assert response.getheader("Content-Type") == "text/javascript"
+            assert f"await fetch('{data_path}')" in script
+            assert script.count("await response.text()") == 1
+            assert "response.status === 200 && value === 'ok'" in script
+            assert script.count(success_sentinel) == 1
+            assert script.count(invalid_sentinel) == 1
+            assert script.count(error_sentinel) == 1
+            assert script.count(emitter) == 2
+            assert pinned_cdp._EXPECTED_WORKER_RESPONSE_CONSUMPTION[worker_type] == (
+                success_sentinel
+            )
+
+            connection.request("GET", data_path)
+            response = connection.getresponse()
+            assert response.status == 200
+            assert response.read() == b"ok"
+    finally:
+        connection.close()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+    assert not thread.is_alive()
+
+
+def test_required_topology_wait_condition_is_event_driven() -> None:
+    events = _required_topology_events()
 
     assert pinned_cdp._required_event_topology_observed(events) is True
     assert pinned_cdp._required_event_topology_observed(events[:-1]) is False
@@ -685,13 +816,14 @@ def test_required_topology_wait_condition_is_event_driven() -> None:
         "dedicated_worker_fetch_paused_on_page": True,
         "shared_worker_fetch_paused_on_shared_worker": True,
     }
-    assert pinned_cdp.PROBE_SCHEMA_VERSION == 9
-    assert pinned_cdp.PROBE_CONTRACT["schema_version"] == 8
+    assert pinned_cdp.PROBE_SCHEMA_VERSION == 11
+    assert pinned_cdp.HISTORICAL_PROBE_SCHEMA_VERSIONS == frozenset({8, 9})
+    assert pinned_cdp.PROBE_CONTRACT["schema_version"] == 10
     assert pinned_cdp.PROBE_CONTRACT["policy"] == (
-        "pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v8"
+        "pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v10"
     )
     assert pinned_cdp.PROBE_CONTRACT["instrumentation_policy"] == (
-        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v10"
+        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v12"
     )
     assert pinned_cdp.PROBE_CONTRACT["chromium_version"] == "143.0.7499.4"
     assert pinned_cdp.PROBE_CONTRACT["chromium_executable"] == ("/usr/local/bin/qcsd-chromium")
@@ -701,28 +833,24 @@ def test_required_topology_wait_condition_is_event_driven() -> None:
     assert pinned_cdp.PROBE_CONTRACT["playwright_driver_binding"] == (
         pinned_cdp.EXPECTED_PLAYWRIGHT_DRIVER_BINDING
     )
+    assert pinned_cdp._HISTORICAL_PROBE_CONTRACT["playwright_driver_binding"] == (
+        pinned_cdp.LEGACY_EXPECTED_PLAYWRIGHT_DRIVER_BINDING
+    )
+    assert (
+        "document-only-playwright-route-with-recursive-cdp-subresource-ownership"
+        in pinned_cdp.PROBE_CONTRACT["required_observations"]
+    )
+    assert (
+        "shared-worker-guardian-real-detach-ordered-before-final-proof"
+        in pinned_cdp.PROBE_CONTRACT["required_observations"]
+    )
 
 
 def test_target_only_activity_resets_probe_quiescence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    events = [
-        ("page", "Network.requestWillBeSent", "http://a.test/"),
-        ("iframe", "Network.requestWillBeSent", "http://b.test/frame-data"),
-        ("page", "Network.requestWillBeSent", "http://a.test/duplicate"),
-        ("page", "Network.requestWillBeSent", "http://a.test/duplicate"),
-        ("page", "Network.requestWillBeSent", "http://a.test/redirected"),
-        ("worker", "Network.requestWillBeSent", "http://a.test/dedicated-data"),
-        ("shared_worker", "Network.requestWillBeSent", "http://a.test/shared-data"),
-        ("page", "Fetch.requestPaused", "http://a.test/dedicated-data"),
-        ("shared_worker", "Fetch.requestPaused", "http://a.test/shared-data"),
-    ]
-    activity = pinned_cdp._TargetActivityLedger()
-    for target_type in ("iframe", "shared_worker", "worker"):
-        activity.record(
-            SimpleNamespace(target_type=target_type, generation=0),
-            "target-attached",
-        )
+    events = _required_topology_events()
+    activity = _required_target_activity()
 
     class Router:
         active_request_identities: tuple[object, ...] = ()
@@ -746,9 +874,14 @@ def test_target_only_activity_resets_probe_quiescence(
                     "target-info-changed",
                 )
 
+        def evaluate(self, _expression: str) -> dict[str, str | None]:
+            if self.waits < 10:
+                return {"dedicated_worker": None, "shared_worker": None}
+            return copy.deepcopy(pinned_cdp._EXPECTED_WORKER_RESPONSE_CONSUMPTION)
+
     monkeypatch.setattr(pinned_cdp.time, "monotonic", lambda: clock[0])
     page = Page()
-    generation = pinned_cdp._wait_for_required_observations(
+    generation, worker_responses = pinned_cdp._wait_for_required_observations(
         page,
         Router(),
         events,
@@ -758,8 +891,9 @@ def test_target_only_activity_resets_probe_quiescence(
     )
 
     assert generation == 4
-    assert page.waits >= 17
-    assert clock[0] >= 0.425
+    assert worker_responses == pinned_cdp._EXPECTED_WORKER_RESPONSE_CONSUMPTION
+    assert page.waits >= 20
+    assert clock[0] >= 0.5
     assert activity.snapshot()["by_target_type"]["worker"] == {
         "total": 2,
         "max_source_generation": 0,
@@ -770,6 +904,161 @@ def test_target_only_activity_resets_probe_quiescence(
             "target-destroyed": 0,
         },
     }
+
+
+@pytest.mark.parametrize(
+    ("worker_responses", "active_requests", "shutdown_ready"),
+    [
+        (
+            {"dedicated_worker": None, "shared_worker": "qcsd-shared-response-consumed"},
+            (),
+            True,
+        ),
+        (
+            {"dedicated_worker": "qcsd-dedicated-response-consumed", "shared_worker": None},
+            (),
+            True,
+        ),
+        (copy.deepcopy(pinned_cdp._EXPECTED_WORKER_RESPONSE_CONSUMPTION), (object(),), True),
+        (copy.deepcopy(pinned_cdp._EXPECTED_WORKER_RESPONSE_CONSUMPTION), (), False),
+    ],
+)
+def test_convergence_requires_both_worker_sentinels_and_router_terminal_state(
+    monkeypatch: pytest.MonkeyPatch,
+    worker_responses: dict[str, str | None],
+    active_requests: tuple[object, ...],
+    shutdown_ready: bool,
+) -> None:
+    clock = [0.0]
+
+    class Page:
+        evaluations = 0
+
+        def wait_for_timeout(self, milliseconds: int) -> None:
+            clock[0] += milliseconds / 1_000
+
+        def evaluate(self, expression: str) -> dict[str, str | None]:
+            assert expression == "() => window.qcsdWorkerResponses"
+            self.evaluations += 1
+            return copy.deepcopy(worker_responses)
+
+    class Router:
+        def __init__(self) -> None:
+            self.active_request_identities = active_requests
+            self.shutdown_ready = shutdown_ready
+
+        def raise_if_failed(self) -> None:
+            return None
+
+    monkeypatch.setattr(pinned_cdp.time, "monotonic", lambda: clock[0])
+    page = Page()
+
+    with pytest.raises(RuntimeError, match="did not converge"):
+        pinned_cdp._wait_for_required_observations(
+            page,
+            Router(),
+            _required_topology_events(),
+            _required_target_activity(),
+            _successful_egress_guard(),
+            deadline=0.4,
+        )
+
+    if active_requests or not shutdown_ready:
+        assert page.evaluations == 0
+    else:
+        assert page.evaluations > 0
+
+
+@pytest.mark.parametrize("router_gate", ["active_request", "shutdown_ready"])
+def test_convergence_quiet_interval_starts_only_after_router_is_terminal(
+    monkeypatch: pytest.MonkeyPatch,
+    router_gate: str,
+) -> None:
+    clock = [0.0]
+
+    class Page:
+        waits = 0
+        evaluation_waits: list[int] = []
+
+        def wait_for_timeout(self, milliseconds: int) -> None:
+            self.waits += 1
+            clock[0] += milliseconds / 1_000
+
+        def evaluate(self, expression: str) -> dict[str, str]:
+            assert expression == "() => window.qcsdWorkerResponses"
+            self.evaluation_waits.append(self.waits)
+            return copy.deepcopy(pinned_cdp._EXPECTED_WORKER_RESPONSE_CONSUMPTION)
+
+    page = Page()
+
+    class Router:
+        @property
+        def active_request_identities(self) -> tuple[object, ...]:
+            if router_gate == "active_request" and page.waits < 5:
+                return (object(),)
+            return ()
+
+        @property
+        def shutdown_ready(self) -> bool:
+            return router_gate != "shutdown_ready" or page.waits >= 5
+
+        def raise_if_failed(self) -> None:
+            return None
+
+    monkeypatch.setattr(pinned_cdp.time, "monotonic", lambda: clock[0])
+    generation, worker_responses = pinned_cdp._wait_for_required_observations(
+        page,
+        Router(),
+        _required_topology_events(),
+        _required_target_activity(),
+        _successful_egress_guard(),
+        deadline=1.0,
+    )
+
+    assert generation == 3
+    assert worker_responses == pinned_cdp._EXPECTED_WORKER_RESPONSE_CONSUMPTION
+    assert page.evaluation_waits[0] == 5
+    assert page.waits >= 15
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        None,
+        {},
+        {"dedicated_worker": None, "shared_worker": None, "extra": None},
+    ],
+)
+def test_worker_response_consumption_fails_closed_on_malformed_state(value: object) -> None:
+    page = SimpleNamespace(evaluate=lambda _expression: value)
+
+    with pytest.raises(RuntimeError, match="worker-response state is malformed"):
+        pinned_cdp._worker_response_consumption(page)
+
+
+@pytest.mark.parametrize(
+    ("worker_type", "sentinel"),
+    [
+        ("dedicated_worker", "qcsd-dedicated-response-invalid"),
+        ("dedicated_worker", "qcsd-dedicated-response-error"),
+        ("shared_worker", "qcsd-shared-response-invalid"),
+        ("shared_worker", "qcsd-shared-response-error"),
+        ("shared_worker", 1),
+    ],
+)
+def test_worker_response_consumption_fails_closed_on_noncompletion_sentinel(
+    worker_type: str,
+    sentinel: object,
+) -> None:
+    value: dict[str, object] = {
+        "dedicated_worker": None,
+        "shared_worker": None,
+    }
+    value[worker_type] = sentinel
+    page = SimpleNamespace(evaluate=lambda _expression: value)
+
+    with pytest.raises(RuntimeError, match="failed to consume its exact response"):
+        pinned_cdp._worker_response_consumption(page)
 
 
 def test_http_status_aggregate_records_redirect_and_terminal_responses() -> None:

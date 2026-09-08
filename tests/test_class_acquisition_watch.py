@@ -983,6 +983,9 @@ def acquisition(tmp_path: Path) -> Fixture:
                 "shared_worker_network_request": True,
                 "dedicated_worker_fetch_paused_on_page": True,
                 "shared_worker_fetch_paused_on_shared_worker": True,
+                "worker_response_consumption": copy.deepcopy(
+                    watch._PINNED_CDP_WORKER_RESPONSE_CONSUMPTION
+                ),
                 "http_status_counts": copy.deepcopy(watch._PINNED_CDP_HTTP_STATUS_COUNTS),
                 "server_request_counts": copy.deepcopy(watch._PINNED_CDP_SERVER_REQUEST_COUNTS),
                 "bootstrap_prearm_summary": copy.deepcopy(
@@ -2374,9 +2377,7 @@ def _replace_pinned_and_rebind_foundation(acquisition: Fixture, payload: dict[st
     binding["sha256"] = hashlib.sha256(acquisition.pinned_cdp_path.read_bytes()).hexdigest()
     binding["payload_sha256"] = pinned["payload_sha256"]
     binding["build_execution"] = copy.deepcopy(payload["build_execution"])
-    binding["build_execution_identity"] = copy.deepcopy(
-        payload["build_execution_identity"]
-    )
+    binding["build_execution_identity"] = copy.deepcopy(payload["build_execution_identity"])
     binding["probe_contract_sha256"] = payload["probe_contract_sha256"]
     foundation_payload["hard_gates"][-2]["evidence_sha256s"] = sorted(
         {
@@ -2769,9 +2770,7 @@ def test_source_binding_preimage_versions_the_build_completion_identity(
         "prepare_image": binding.prepare_image,
         "provenance_sha256": binding.provenance_sha256,
         "source": dict(binding.source),
-        "source_binding_preimage_schema_version": (
-            watch.SOURCE_BINDING_PREIMAGE_SCHEMA_VERSION
-        ),
+        "source_binding_preimage_schema_version": (watch.SOURCE_BINDING_PREIMAGE_SCHEMA_VERSION),
     }
     assert watch.SOURCE_BINDING_PREIMAGE_SCHEMA_VERSION == 2
     assert watch._source_binding_sha256(binding) == watch._sha256_bytes(
@@ -2970,9 +2969,7 @@ def test_current_watcher_rejects_historical_browser_egress_build_projection(
 ) -> None:
     foundation = json.loads(acquisition.foundation_path.read_text(encoding="utf-8"))
     payload = copy.deepcopy(foundation["payload"])
-    browser_build = payload["evidence"]["browser_egress_qualification"][
-        "build_execution"
-    ]
+    browser_build = payload["evidence"]["browser_egress_qualification"]["build_execution"]
     browser_build.pop("completion_path")
     browser_build.pop("completion_sha256")
     _replace_foundation_and_rebind_provenance(acquisition, payload)
@@ -3104,24 +3101,35 @@ def test_watcher_pinned_cdp_contract_matches_runtime_contract() -> None:
     assert watch._HISTORICAL_PINNED_CDP_SCHEMA_VERSION == (
         pinned_cdp.HISTORICAL_PROBE_SCHEMA_VERSION
     )
-    assert watch._PINNED_CDP_CONTRACT_SCHEMA_VERSION == pinned_cdp.PROBE_CONTRACT[
-        "schema_version"
-    ]
+    assert watch._HISTORICAL_PINNED_CDP_SCHEMA_VERSIONS == (
+        pinned_cdp.HISTORICAL_PROBE_SCHEMA_VERSIONS
+    )
+    assert watch._PINNED_CDP_CONTRACT_SCHEMA_VERSION == pinned_cdp.PROBE_CONTRACT["schema_version"]
     assert watch._PINNED_CDP_TARGET_ACTIVITY_SCHEMA_VERSION == (
         pinned_cdp.TARGET_ACTIVITY_SCHEMA_VERSION
     )
     assert watch._PINNED_CDP_TARGET_ACTIVITY_EVENTS == (pinned_cdp._TARGET_ACTIVITY_EVENTS)
     assert watch._PINNED_CDP_TARGET_ACTIVITY_TYPES == (pinned_cdp._TARGET_ACTIVITY_TYPES)
     assert watch._PINNED_CDP_CONTRACT == pinned_cdp.PROBE_CONTRACT
+    assert watch._HISTORICAL_PINNED_CDP_CONTRACT == (pinned_cdp._HISTORICAL_PROBE_CONTRACT)
     assert watch._PINNED_CDP_EVENT_METHODS == pinned_cdp._EVENT_METHODS
     assert watch._PINNED_CDP_HTTP_STATUS_COUNTS == (pinned_cdp._EXPECTED_HTTP_STATUS_COUNTS)
     assert watch._PINNED_CDP_SERVER_REQUEST_COUNTS == (pinned_cdp._EXPECTED_SERVER_REQUEST_COUNTS)
+    assert watch._PINNED_CDP_WORKER_RESPONSE_CONSUMPTION == (
+        pinned_cdp._EXPECTED_WORKER_RESPONSE_CONSUMPTION
+    )
     assert watch._PINNED_CDP_BOOTSTRAP_PREARM_SUMMARY == (
         pinned_cdp._EXPECTED_PINNED_BOOTSTRAP_PREARM_SUMMARY
     )
     assert watch._PLAYWRIGHT_DRIVER_OWNERSHIP_POLICY == (playwright_driver.OWNERSHIP_POLICY_RECEIPT)
     assert watch._EXPECTED_PLAYWRIGHT_DRIVER_BINDING == (
         playwright_driver.EXPECTED_PLAYWRIGHT_DRIVER_BINDING
+    )
+    assert watch._LEGACY_PLAYWRIGHT_DRIVER_OWNERSHIP_POLICY == (
+        playwright_driver.LEGACY_OWNERSHIP_POLICY_RECEIPT
+    )
+    assert watch._LEGACY_EXPECTED_PLAYWRIGHT_DRIVER_BINDING == (
+        playwright_driver.LEGACY_EXPECTED_PLAYWRIGHT_DRIVER_BINDING
     )
     assert watch._EXPECTED_BROWSER_TOOL_IDENTITY == (
         playwright_driver.expected_browser_tool_identity()
@@ -3326,6 +3334,11 @@ def test_watcher_rejects_resealed_pinned_cdp_egress_tamper(
         (("http_status_counts", "/shared-data", "200"), True, "topology observation"),
         (("server_request_counts", "/shared-data"), 2, "topology observation"),
         (("server_request_counts", "/shared-data"), True, "topology observation"),
+        (
+            ("worker_response_consumption", "shared_worker"),
+            "failed",
+            "topology observation",
+        ),
         (("bootstrap_prearm_summary", "schema_version"), True, "bootstrap-prearm summary schema"),
         (
             ("bootstrap_prearm_summary", "pending_total"),
@@ -3503,12 +3516,17 @@ def test_watcher_rejects_resealed_legacy_pinned_cdp_schema(
         watch._validate_immutable_binding(acquisition.paths)
 
 
+@pytest.mark.parametrize(
+    "historical_schema_version",
+    sorted(watch._HISTORICAL_PINNED_CDP_SCHEMA_VERSIONS),
+)
 def test_current_watcher_rejects_historical_pinned_cdp_schema(
     acquisition: Fixture,
+    historical_schema_version: int,
 ) -> None:
     pinned = json.loads(acquisition.pinned_cdp_path.read_text(encoding="utf-8"))
     payload = copy.deepcopy(pinned["payload"])
-    payload["probe_schema_version"] = watch._HISTORICAL_PINNED_CDP_SCHEMA_VERSION
+    payload["probe_schema_version"] = historical_schema_version
     _replace_pinned_and_rebind_foundation(acquisition, payload)
 
     with pytest.raises(watch.WatchError, match="source/build/contract"):
@@ -3520,9 +3538,9 @@ def test_watcher_rejects_resealed_foundation_pinned_completion_projection_tamper
 ) -> None:
     foundation = json.loads(acquisition.foundation_path.read_text(encoding="utf-8"))
     payload = copy.deepcopy(foundation["payload"])
-    payload["evidence"]["pinned_cdp_probe"]["build_execution_identity"][
-        "completion_sha256"
-    ] = "f" * 64
+    payload["evidence"]["pinned_cdp_probe"]["build_execution_identity"]["completion_sha256"] = (
+        "f" * 64
+    )
     _replace_foundation_and_rebind_provenance(acquisition, payload)
 
     with pytest.raises(watch.WatchError, match="source/build/contract"):

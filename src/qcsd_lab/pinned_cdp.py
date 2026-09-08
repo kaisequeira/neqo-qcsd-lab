@@ -64,6 +64,8 @@ from .playwright_driver import (
     EXPECTED_CHROMIUM_SHA256,
     EXPECTED_CHROMIUM_VERSION,
     EXPECTED_PLAYWRIGHT_DRIVER_BINDING,
+    LEGACY_EXPECTED_PLAYWRIGHT_DRIVER_BINDING,
+    LEGACY_OWNERSHIP_POLICY_RECEIPT,
     OWNERSHIP_POLICY_RECEIPT,
     PLAYWRIGHT_VERSION,
     pinned_chromium_executable_path,
@@ -88,8 +90,9 @@ _PINNED_CDP_RESOLVER_PROJECTION = validate_fail_closed_host_resolver_argument(
 )
 
 RECEIPT_TYPE = "qcsd-class-study-pinned-cdp-probe"
-PROBE_SCHEMA_VERSION = 9
+PROBE_SCHEMA_VERSION = 11
 HISTORICAL_PROBE_SCHEMA_VERSION = 8
+HISTORICAL_PROBE_SCHEMA_VERSIONS = frozenset({8, 9})
 EXPECTED_PLAYWRIGHT_VERSION = PLAYWRIGHT_VERSION
 EXPECTED_CHROMIUM_EXECUTABLE = str(DEFAULT_CONFIGURED_EXECUTABLE)
 PROBE_OBSERVATION_TIMEOUT_MS = 10_000
@@ -110,41 +113,78 @@ _SOURCE_KEYS = {
     "neqo_patch_sha256",
 }
 
-PROBE_CONTRACT: dict[str, Any] = {
-    "schema_version": 8,
-    "policy": "pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v8",
-    "instrumentation_policy": CDP_TARGET_INSTRUMENTATION_POLICY,
-    "playwright_version": EXPECTED_PLAYWRIGHT_VERSION,
-    "chromium_executable": EXPECTED_CHROMIUM_EXECUTABLE,
-    "chromium_version": EXPECTED_CHROMIUM_VERSION,
-    "playwright_driver_ownership_policy": OWNERSHIP_POLICY_RECEIPT,
-    "playwright_driver_binding": EXPECTED_PLAYWRIGHT_DRIVER_BINDING,
-    "playwright_browsers_json_sha256": EXPECTED_BROWSERS_JSON_SHA256,
-    "chromium_executable_sha256": EXPECTED_CHROMIUM_SHA256,
-    "network_scope": "docker-network-none-loopback-only",
-    "observation_timeout_ms": PROBE_OBSERVATION_TIMEOUT_MS,
-    "required_quiet_interval_ms": PROBE_QUIET_INTERVAL_MS,
-    "target_activity_schema_version": TARGET_ACTIVITY_SCHEMA_VERSION,
-    "required_target_types": ["iframe", "shared_worker", "worker"],
-    "required_observations": [
-        "cross-site-iframe-network-request",
-        "dedicated-and-shared-worker-network-requests",
-        "dedicated-worker-fetch-paused-on-owning-page-session",
-        "shared-worker-fetch-paused-on-guarded-shared-worker-session",
-        "shared-worker-bootstrap-held-through-secondary-fetch-prearm",
-        "target-lifecycle-activity-resets-quiescence",
-        "duplicate-url-occurrences-remain-distinct",
-        "all-deterministic-http-responses-finished-successfully",
-        "router-ledger-extra-info-and-server-shutdown-complete",
-        "all-runnable-targets-prearmed-against-non-urlloader-egress",
-        "context-websocket-route-installed-before-first-page",
-        "zero-service-worker-and-non-replayable-egress-attempts",
-        "required-effective-chromium-egress-switches",
-        "unprivileged-zero-capability-runtime",
-    ],
-    "non_replayable_egress_policy": NON_REPLAYABLE_EGRESS_POLICY,
-    "packet_level_egress_completeness_claimed": False,
-}
+
+def _probe_contract(
+    *,
+    schema_version: int,
+    policy: str,
+    instrumentation_policy: str,
+    playwright_driver_ownership_policy: Mapping[str, Any],
+    playwright_driver_binding: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "schema_version": schema_version,
+        "policy": policy,
+        "instrumentation_policy": instrumentation_policy,
+        "playwright_version": EXPECTED_PLAYWRIGHT_VERSION,
+        "chromium_executable": EXPECTED_CHROMIUM_EXECUTABLE,
+        "chromium_version": EXPECTED_CHROMIUM_VERSION,
+        "playwright_driver_ownership_policy": dict(playwright_driver_ownership_policy),
+        "playwright_driver_binding": dict(playwright_driver_binding),
+        "playwright_browsers_json_sha256": EXPECTED_BROWSERS_JSON_SHA256,
+        "chromium_executable_sha256": EXPECTED_CHROMIUM_SHA256,
+        "network_scope": "docker-network-none-loopback-only",
+        "observation_timeout_ms": PROBE_OBSERVATION_TIMEOUT_MS,
+        "required_quiet_interval_ms": PROBE_QUIET_INTERVAL_MS,
+        "target_activity_schema_version": TARGET_ACTIVITY_SCHEMA_VERSION,
+        "required_target_types": ["iframe", "shared_worker", "worker"],
+        "required_observations": [
+            "cross-site-iframe-network-request",
+            "dedicated-and-shared-worker-network-requests",
+            "dedicated-worker-fetch-paused-on-owning-page-session",
+            "shared-worker-fetch-paused-on-guarded-shared-worker-session",
+            "shared-worker-bootstrap-held-through-secondary-fetch-prearm",
+            "target-lifecycle-activity-resets-quiescence",
+            "duplicate-url-occurrences-remain-distinct",
+            "all-deterministic-http-responses-finished-successfully",
+            "router-ledger-extra-info-and-server-shutdown-complete",
+            "all-runnable-targets-prearmed-against-non-urlloader-egress",
+            "context-websocket-route-installed-before-first-page",
+            "zero-service-worker-and-non-replayable-egress-attempts",
+            "required-effective-chromium-egress-switches",
+            "unprivileged-zero-capability-runtime",
+        ],
+        "non_replayable_egress_policy": NON_REPLAYABLE_EGRESS_POLICY,
+        "packet_level_egress_completeness_claimed": False,
+    }
+
+
+_HISTORICAL_PROBE_CONTRACT = _probe_contract(
+    schema_version=8,
+    policy="pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v8",
+    instrumentation_policy=(
+        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v10"
+    ),
+    playwright_driver_ownership_policy=LEGACY_OWNERSHIP_POLICY_RECEIPT,
+    playwright_driver_binding=LEGACY_EXPECTED_PLAYWRIGHT_DRIVER_BINDING,
+)
+_HISTORICAL_PROBE_CONTRACT_SHA256 = canonical_json_sha256(_HISTORICAL_PROBE_CONTRACT)
+
+PROBE_CONTRACT: dict[str, Any] = _probe_contract(
+    schema_version=10,
+    policy="pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v10",
+    instrumentation_policy=CDP_TARGET_INSTRUMENTATION_POLICY,
+    playwright_driver_ownership_policy=OWNERSHIP_POLICY_RECEIPT,
+    playwright_driver_binding=EXPECTED_PLAYWRIGHT_DRIVER_BINDING,
+)
+PROBE_CONTRACT["required_observations"].extend(
+    [
+        "paused-runnable-target-first-script-prearmed-before-execution",
+        "dedicated-and-shared-worker-response-bodies-consumed",
+        "document-only-playwright-route-with-recursive-cdp-subresource-ownership",
+        "shared-worker-guardian-real-detach-ordered-before-final-proof",
+    ]
+)
 PROBE_CONTRACT_SHA256 = canonical_json_sha256(PROBE_CONTRACT)
 
 _TARGET_ACTIVITY_EVENTS = (
@@ -169,6 +209,10 @@ _EXPECTED_HTTP_STATUS_COUNTS: dict[str, dict[str, int]] = {
 }
 _EXPECTED_SERVER_REQUEST_COUNTS = {
     path: sum(statuses.values()) for path, statuses in _EXPECTED_HTTP_STATUS_COUNTS.items()
+}
+_EXPECTED_WORKER_RESPONSE_CONSUMPTION = {
+    "dedicated_worker": "qcsd-dedicated-response-consumed",
+    "shared_worker": "qcsd-shared-response-consumed",
 }
 _EXPECTED_PINNED_BOOTSTRAP_PREARM_SUMMARY = {
     "schema_version": 1,
@@ -296,8 +340,18 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/":
             body = b"""<link rel='icon' href='data:,'>
             <iframe src='http://b.test:PORT/frame'></iframe><script>
+            window.qcsdWorkerResponses = {
+                dedicated_worker: null,
+                shared_worker: null,
+            };
             window.qcsdDedicatedWorker = new Worker('/dedicated-worker.js');
+            window.qcsdDedicatedWorker.onmessage = event => {
+                window.qcsdWorkerResponses.dedicated_worker = event.data;
+            };
             window.qcsdSharedWorker = new SharedWorker('/shared-worker.js');
+            window.qcsdSharedWorker.port.onmessage = event => {
+                window.qcsdWorkerResponses.shared_worker = event.data;
+            };
             window.qcsdSharedWorker.port.start();
             fetch('/duplicate'); fetch('/duplicate'); fetch('/redirect');
             </script>""".replace(b"PORT", str(self.server.server_port).encode())
@@ -310,9 +364,31 @@ class _Handler(BaseHTTPRequestHandler):
         elif path == "/frame":
             body, kind = b"<script>fetch('/frame-data')</script>", "text/html"
         elif path == "/dedicated-worker.js":
-            body, kind = b"fetch('/dedicated-data')", "text/javascript"
+            body = b"""(async () => {
+                const response = await fetch('/dedicated-data');
+                const value = await response.text();
+                self.postMessage(
+                    response.status === 200 && value === 'ok'
+                        ? 'qcsd-dedicated-response-consumed'
+                        : 'qcsd-dedicated-response-invalid'
+                );
+            })().catch(() => self.postMessage('qcsd-dedicated-response-error'));"""
+            kind = "text/javascript"
         elif path == "/shared-worker.js":
-            body, kind = b"fetch('/shared-data')", "text/javascript"
+            body = b"""self.onconnect = event => {
+                const port = event.ports[0];
+                port.start();
+                (async () => {
+                    const response = await fetch('/shared-data');
+                    const value = await response.text();
+                    port.postMessage(
+                        response.status === 200 && value === 'ok'
+                            ? 'qcsd-shared-response-consumed'
+                            : 'qcsd-shared-response-invalid'
+                    );
+                })().catch(() => port.postMessage('qcsd-shared-response-error'));
+            };"""
+            kind = "text/javascript"
         elif path in {
             "/dedicated-data",
             "/duplicate",
@@ -363,6 +439,7 @@ def run_pinned_cdp_probe(*, expected_uid: int, expected_gid: int) -> dict[str, A
     browser_egress_command_line: dict[str, object] | None = None
     browser_context_service_worker_count: int | None = None
     quiescent_target_activity: dict[str, Any] | None = None
+    worker_response_consumption: dict[str, str | None] | None = None
     chromium_version = ""
     router_closed = False
     browser_guard_closed = False
@@ -476,7 +553,10 @@ def run_pinned_cdp_probe(*, expected_uid: int, expected_gid: int) -> dict[str, A
                     egress_guard,
                     deadline=deadline,
                 )
-                convergence_generation = _wait_for_required_observations(
+                (
+                    convergence_generation,
+                    worker_response_consumption,
+                ) = _wait_for_required_observations(
                     page,
                     router,
                     observed_events,
@@ -535,6 +615,7 @@ def run_pinned_cdp_probe(*, expected_uid: int, expected_gid: int) -> dict[str, A
         "non_replayable_egress_summary": non_replayable_egress_summary,
         "browser_egress_command_line": browser_egress_command_line,
         "browser_context_service_worker_count": browser_context_service_worker_count,
+        "worker_response_consumption": worker_response_consumption,
         "quiescent_target_activity": quiescent_target_activity,
         "router_closed": router_closed,
         "browser_guard_closed": browser_guard_closed,
@@ -690,7 +771,7 @@ def _wait_for_required_observations(
     egress_guard: NonReplayableEgressGuard,
     *,
     deadline: float,
-) -> int:
+) -> tuple[int, dict[str, str | None]]:
     """Wait for required topology and a quiet, request-free convergence interval."""
 
     quiet_since: float | None = None
@@ -714,17 +795,36 @@ def _wait_for_required_observations(
             and not router.active_request_identities
             and router.shutdown_ready
         ):
-            if quiet_since is None:
-                quiet_since = now
-            elif (now - quiet_since) * 1_000 >= PROBE_QUIET_INTERVAL_MS:
-                if now >= deadline:
-                    break
-                return target_generation
+            worker_responses = _worker_response_consumption(page)
+            if worker_responses == _EXPECTED_WORKER_RESPONSE_CONSUMPTION:
+                if quiet_since is None:
+                    quiet_since = now
+                elif (now - quiet_since) * 1_000 >= PROBE_QUIET_INTERVAL_MS:
+                    if now >= deadline:
+                        break
+                    return target_generation, worker_responses
+            else:
+                quiet_since = None
         else:
             quiet_since = None
     egress_guard.raise_if_failed()
     router.raise_if_failed()
     raise RuntimeError("pinned CDP probe did not converge on its required topology")
+
+
+def _worker_response_consumption(page: Any) -> dict[str, str | None]:
+    """Read the exact body-consumption acknowledgements from both probe workers."""
+
+    value = page.evaluate("() => window.qcsdWorkerResponses")
+    if not isinstance(value, Mapping) or set(value) != set(_EXPECTED_WORKER_RESPONSE_CONSUMPTION):
+        raise RuntimeError("pinned CDP worker-response state is malformed")
+    result: dict[str, str | None] = {}
+    for worker_type, expected in _EXPECTED_WORKER_RESPONSE_CONSUMPTION.items():
+        observed = value.get(worker_type)
+        if observed is not None and observed != expected:
+            raise RuntimeError("pinned CDP worker failed to consume its exact response")
+        result[worker_type] = observed
+    return result
 
 
 def _validate_target_activity_summary(value: object) -> dict[str, Any]:
@@ -918,14 +1018,14 @@ def _validate_payload(
         raise ValueError("pinned CDP probe payload fields differ from the contract")
     cohort_version = payload.get("cohort_version")
     probe_schema_version = payload.get("probe_schema_version")
+    historical_probe = (
+        type(probe_schema_version) is int
+        and probe_schema_version in HISTORICAL_PROBE_SCHEMA_VERSIONS
+    )
     if (
         type(probe_schema_version) is not int
-        or probe_schema_version
-        not in {HISTORICAL_PROBE_SCHEMA_VERSION, PROBE_SCHEMA_VERSION}
-        or (
-            probe_schema_version == HISTORICAL_PROBE_SCHEMA_VERSION
-            and not allow_historical
-        )
+        or probe_schema_version not in {*HISTORICAL_PROBE_SCHEMA_VERSIONS, PROBE_SCHEMA_VERSION}
+        or (historical_probe and not allow_historical)
         or payload.get("artifact_type") != RECEIPT_TYPE
         or payload.get("study_id") != STUDY_ID
         or type(cohort_version) is not int
@@ -954,8 +1054,7 @@ def _validate_payload(
         build_path,
         expected_cohort_version=cohort_version,
         allow_historical=(
-            allow_historical
-            and probe_schema_version == HISTORICAL_PROBE_SCHEMA_VERSION
+            allow_historical and probe_schema_version == HISTORICAL_PROBE_SCHEMA_VERSION
         ),
     )
     build_value = load_json(Path(build["path"]))
@@ -969,6 +1068,10 @@ def _validate_payload(
         if probe_schema_version == HISTORICAL_PROBE_SCHEMA_VERSION
         else _current_build_identity(build)
     )
+    expected_contract = _HISTORICAL_PROBE_CONTRACT if historical_probe else PROBE_CONTRACT
+    expected_contract_sha256 = (
+        _HISTORICAL_PROBE_CONTRACT_SHA256 if historical_probe else PROBE_CONTRACT_SHA256
+    )
     prepare_image = build["images"]["prepare"]["id"]
     collection_source = build["source"]
     prepare_source = {**collection_source, "image_digest": prepare_image}
@@ -980,13 +1083,21 @@ def _validate_payload(
         or payload.get("collection_source") != collection_source
         or payload.get("prepare_source") != prepare_source
         or payload.get("prepare_image_digest") != prepare_image
-        or payload.get("probe_contract") != PROBE_CONTRACT
-        or payload.get("probe_contract_sha256") != PROBE_CONTRACT_SHA256
+        or payload.get("probe_contract") != expected_contract
+        or payload.get("probe_contract_sha256") != expected_contract_sha256
     ):
         raise ValueError("pinned CDP probe differs from its source/build/prepare image")
     if recorded_at < _timestamp(build["finished_at"], label="no-cache build finish"):
         raise ValueError("pinned CDP probe predates its no-cache build")
-    observation = _validate_observation(payload.get("observation"))
+    observation = _validate_observation(
+        payload.get("observation"),
+        require_worker_response_consumption=not historical_probe,
+        expected_playwright_driver_binding=(
+            LEGACY_EXPECTED_PLAYWRIGHT_DRIVER_BINDING
+            if historical_probe
+            else EXPECTED_PLAYWRIGHT_DRIVER_BINDING
+        ),
+    )
     if runtime_role is not None:
         if runtime_role not in {"collection", "prepare"}:
             raise ValueError("pinned CDP probe runtime role is invalid")
@@ -1000,7 +1111,12 @@ def _validate_payload(
     return json.loads(canonical_json_bytes(payload))
 
 
-def _validate_observation(value: object) -> dict[str, Any]:
+def _validate_observation(
+    value: object,
+    *,
+    require_worker_response_consumption: bool = True,
+    expected_playwright_driver_binding: Mapping[str, Any] = (EXPECTED_PLAYWRIGHT_DRIVER_BINDING),
+) -> dict[str, Any]:
     if not isinstance(value, Mapping) or set(value) != {
         "playwright_version",
         "chromium_version",
@@ -1019,10 +1135,10 @@ def _validate_observation(value: object) -> dict[str, Any]:
         or value.get("chromium_executable") != EXPECTED_CHROMIUM_EXECUTABLE
     ):
         raise ValueError("pinned CDP probe browser evidence is invalid")
-    if driver != EXPECTED_PLAYWRIGHT_DRIVER_BINDING:
+    if driver != expected_playwright_driver_binding:
         raise ValueError("pinned CDP probe Playwright driver evidence is invalid")
     _validate_isolation(isolation)
-    if not isinstance(topology, Mapping) or set(topology) != {
+    expected_topology_fields = {
         "observed_target_types",
         "event_count",
         "event_method_counts",
@@ -1038,8 +1154,8 @@ def _validate_observation(value: object) -> dict[str, Any]:
         "server_request_counts",
         "bootstrap_prearm_summary",
         "egress_prearm_summary",
-            "non_replayable_egress_summary",
-            "browser_egress_command_line",
+        "non_replayable_egress_summary",
+        "browser_egress_command_line",
         "browser_context_service_worker_count",
         "quiescent_target_activity",
         "router_closed",
@@ -1048,7 +1164,10 @@ def _validate_observation(value: object) -> dict[str, Any]:
         "extra_info_closed",
         "browser_closed",
         "server_thread_stopped",
-    }:
+    }
+    if require_worker_response_consumption:
+        expected_topology_fields.add("worker_response_consumption")
+    if not isinstance(topology, Mapping) or set(topology) != expected_topology_fields:
         raise ValueError("pinned CDP probe topology fields are invalid")
     target_types = topology.get("observed_target_types")
     expected_types = ["iframe", "page", "shared_worker", "worker"]
@@ -1087,16 +1206,11 @@ def _validate_observation(value: object) -> dict[str, Any]:
         topology.get("egress_prearm_summary"),
         require_terminal=True,
     )
-    validate_non_replayable_egress_success_summary(
-        topology.get("non_replayable_egress_summary")
-    )
+    validate_non_replayable_egress_success_summary(topology.get("non_replayable_egress_summary"))
     browser_egress_projection = validate_browser_egress_command_line_projection(
         topology.get("browser_egress_command_line")
     )
-    if (
-        browser_egress_projection.get("host_resolver_policy")
-        != _PINNED_CDP_RESOLVER_PROJECTION
-    ):
+    if browser_egress_projection.get("host_resolver_policy") != _PINNED_CDP_RESOLVER_PROJECTION:
         raise ValueError("pinned CDP probe host-resolver policy is invalid")
     target_activity = _validate_target_activity_summary(topology.get("quiescent_target_activity"))
     activity_by_type = target_activity["by_target_type"]
@@ -1133,6 +1247,10 @@ def _validate_observation(value: object) -> dict[str, Any]:
         )
         or type(topology.get("browser_context_service_worker_count")) is not int
         or topology["browser_context_service_worker_count"] != 0
+        or (
+            require_worker_response_consumption
+            and topology.get("worker_response_consumption") != _EXPECTED_WORKER_RESPONSE_CONSUMPTION
+        )
         or activity_by_type["page"]["event_counts"]["target-attached"] != 0
         or any(
             activity_by_type[target_type]["event_counts"]["target-attached"] < 1
@@ -1311,9 +1429,7 @@ def _current_build_identity(build: Mapping[str, Any]) -> dict[str, Any]:
         or not isinstance(completion_path, str)
         or not Path(completion_path).is_absolute()
         or Path(completion_path).resolve()
-        != Path(build_path).resolve().with_name(
-            f"build-completion-v{cohort_version}.json"
-        )
+        != Path(build_path).resolve().with_name(f"build-completion-v{cohort_version}.json")
         or not isinstance(completion_sha256, str)
         or _DIGEST.fullmatch(completion_sha256) is None
     ):

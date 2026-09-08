@@ -133,3 +133,57 @@ def test_five_overlapping_mixed_ownership_browser_lifetimes() -> None:
         (3, False, "native", True, True),
         (4, False, "native", True, True),
     ]
+
+
+def test_http_credentials_are_rejected_only_by_exclusive_driver() -> None:
+    """Bind the v7 credentials fail-close without changing inactive Playwright."""
+
+    from playwright.sync_api import Error as PlaywrightError
+    from playwright.sync_api import sync_playwright
+
+    validate_default_playwright_driver_once()
+    credentials = {"username": "qcsd-user", "password": "qcsd-password"}
+
+    with playwright_driver_session(sync_playwright, exclusive=True) as playwright:
+        browser = playwright.chromium.launch(
+            executable_path=pinned_chromium_executable_path(),
+            headless=True,
+            args=["--no-sandbox", "--no-proxy-server", "--site-per-process"],
+            env=chromium_child_environment(),
+        )
+        try:
+            context = browser.new_context(
+                http_credentials=credentials,
+                service_workers="block",
+            )
+            try:
+                with pytest.raises(
+                    PlaywrightError,
+                    match="QCSD exclusive CDP ownership forbids HTTP credentials",
+                ):
+                    context.new_page()
+            finally:
+                context.close()
+        finally:
+            browser.close()
+
+    with playwright_driver_session(sync_playwright, exclusive=False) as playwright:
+        browser = playwright.chromium.launch(
+            executable_path=pinned_chromium_executable_path(),
+            headless=True,
+            args=["--no-sandbox", "--no-proxy-server", "--site-per-process"],
+            env=chromium_child_environment(),
+        )
+        try:
+            context = browser.new_context(
+                http_credentials=credentials,
+                service_workers="block",
+            )
+            try:
+                page = context.new_page()
+                page.set_content("<title>native-credentials</title>")
+                assert page.title() == "native-credentials"
+            finally:
+                context.close()
+        finally:
+            browser.close()

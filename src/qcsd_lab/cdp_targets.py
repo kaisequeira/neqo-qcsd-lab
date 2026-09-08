@@ -24,13 +24,14 @@ from .browser_egress import (
     POPUP_NAVIGATION_API,
     TARGET_EGRESS_BINDING,
     TARGET_EGRESS_SHIM_SCHEMA_VERSION,
+    popup_navigation_guard_source,
     target_egress_apis,
     target_egress_shim_source,
     validate_target_egress_shim_result,
 )
 
 CDP_TARGET_INSTRUMENTATION_POLICY = (
-    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v10"
+    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v12"
 )
 BOOTSTRAP_PREARM_SUMMARY_SCHEMA_VERSION = 1
 EGRESS_PREARM_SUMMARY_SCHEMA_VERSION = 2
@@ -65,9 +66,7 @@ _NON_REPLAYABLE_NETWORK_EVENTS = frozenset(
     }
 )
 _NON_REPLAYABLE_RUNTIME_EVENTS = frozenset({"Runtime.bindingCalled"})
-_NON_REPLAYABLE_EGRESS_EVENTS = (
-    _NON_REPLAYABLE_NETWORK_EVENTS | _NON_REPLAYABLE_RUNTIME_EVENTS
-)
+_NON_REPLAYABLE_EGRESS_EVENTS = _NON_REPLAYABLE_NETWORK_EVENTS | _NON_REPLAYABLE_RUNTIME_EVENTS
 _TARGET_LIFECYCLE_METHODS = frozenset(
     {
         "Inspector.targetCrashed",
@@ -98,6 +97,23 @@ _AUTO_ATTACH_COMMAND = (
 )
 _TARGET_BARRIER_COMMAND = ("Target.getTargetInfo", {})
 _PAGE_TARGET_TYPES = frozenset({"page", "iframe"})
+_IFRAME_INSTRUMENTATION = "beforeScriptExecution"
+_IFRAME_INSTALLATION_KIND = "iframe-pre-author-installation"
+_IFRAME_SYNTHETIC_EXPRESSION = "true"
+_IFRAME_INSTRUMENTATION_COMMAND = (
+    "Debugger.setInstrumentationBreakpoint",
+    {"instrumentation": _IFRAME_INSTRUMENTATION},
+)
+_IFRAME_CONTEXT_EVENTS = frozenset(
+    {
+        "Runtime.executionContextCreated",
+        "Runtime.executionContextDestroyed",
+        "Runtime.executionContextsCleared",
+    }
+)
+_CDP_PROTOCOL_ERROR_CODE_MIN = -(2**31)
+_CDP_PROTOCOL_ERROR_CODE_MAX = 2**31 - 1
+_CDP_PROTOCOL_ERROR_MESSAGE_MAX_CHARS = 240
 
 
 def _egress_evaluate_command(target_type: str) -> tuple[str, dict[str, Any]]:
@@ -131,6 +147,65 @@ def _popup_guard_evaluate_command() -> tuple[str, dict[str, Any]]:
     )
 
 
+def _iframe_breakpoint_condition() -> str:
+    """Install both iframe guards synchronously before the paused script runs."""
+
+    binding = json.dumps(TARGET_EGRESS_BINDING)
+    policy = json.dumps(NON_REPLAYABLE_EGRESS_POLICY)
+    kind = json.dumps(_IFRAME_INSTALLATION_KIND)
+    return f"""
+(() => {{
+  const egressShim = ({target_egress_shim_source("iframe")});
+  const popupGuardInstalled = ({popup_navigation_guard_source()});
+  globalThis[{binding}](JSON.stringify({{
+    schema_version: {TARGET_EGRESS_SHIM_SCHEMA_VERSION},
+    policy: {policy},
+    kind: {kind},
+    target_type: 'iframe',
+    egress_shim: egressShim,
+    popup_guard_installed: popupGuardInstalled,
+  }}));
+  return false;
+}})()
+""".strip()
+
+
+def _iframe_synthetic_trigger_command(unique_context_id: str) -> tuple[str, dict[str, Any]]:
+    """Force the armed before-script barrier even when a frame has no author script."""
+
+    if not isinstance(unique_context_id, str) or not unique_context_id:
+        raise ValueError("iframe synthetic trigger requires an exact execution context")
+    return (
+        "Runtime.evaluate",
+        {
+            "expression": _IFRAME_SYNTHETIC_EXPRESSION,
+            "uniqueContextId": unique_context_id,
+            "returnByValue": True,
+            "awaitPromise": False,
+        },
+    )
+
+
+def _sanitised_protocol_error(error: object) -> str:
+    """Return bounded CDP error evidence without reflecting arbitrary payload data."""
+
+    if not isinstance(error, Mapping) or not {"code", "message"}.issubset(error):
+        raise CdpTargetIntegrityError("nested CDP command returned a malformed error")
+    code = error.get("code")
+    message = error.get("message")
+    if (
+        type(code) is not int
+        or not _CDP_PROTOCOL_ERROR_CODE_MIN <= code <= _CDP_PROTOCOL_ERROR_CODE_MAX
+        or not isinstance(message, str)
+    ):
+        raise CdpTargetIntegrityError("nested CDP command returned a malformed error")
+    message = " ".join(message.split())
+    message = "".join(character if character.isprintable() else "?" for character in message)
+    if not message:
+        raise CdpTargetIntegrityError("nested CDP command returned a malformed error")
+    return f"code={code}, message={message[:_CDP_PROTOCOL_ERROR_MESSAGE_MAX_CHARS]}"
+
+
 _SHARED_WORKER_GUARD_FILTER = [
     {"type": "shared_worker", "exclude": False},
     # Browser-scope ``tab`` targets expose a paused creation tripwire for a
@@ -152,7 +227,7 @@ _SHARED_WORKER_GUARD_COMMAND = (
     },
 )
 _SHARED_WORKER_GUARD_BARRIER = ("Target.getTargets", {})
-_POPUP_TAB_LIFECYCLE_BARRIER_LIMIT = 3
+_BROWSER_TARGET_LIFECYCLE_BARRIER_LIMIT = 3
 _PAGE_DISCOVERY_FILTER = [
     {"type": "page", "exclude": False},
     {"type": "service_worker", "exclude": False},
@@ -343,8 +418,7 @@ def validate_egress_prearm_summary(
         if (
             item["installed_count"] > item["target_count"]
             or item["pending_count"] != item["target_count"] - item["installed_count"]
-            or item["protected_api_observations"]
-            + item["unavailable_api_observations"]
+            or item["protected_api_observations"] + item["unavailable_api_observations"]
             != item["installed_count"] * len(target_egress_apis(target_type))
             or item["popup_guard_required_count"]
             != (item["target_count"] if target_type in _PAGE_TARGET_TYPES else 0)
@@ -415,6 +489,21 @@ class _TargetState:
     phase: str
     setup_pending: set[str] = field(default_factory=set)
     active_request_ids: set[str] = field(default_factory=set)
+    iframe_instrumentation_breakpoint_id: str | None = None
+    iframe_regular_breakpoint_id: str | None = None
+    iframe_pause_location: dict[str, Any] | None = None
+    iframe_default_context_id: int | None = None
+    iframe_default_context_unique_id: str | None = None
+    iframe_initial_resume_acknowledged: bool = False
+    iframe_synthetic_issued: bool = False
+    iframe_synthetic_completed: bool = False
+    iframe_pause_seen: bool = False
+    iframe_debugger_paused: bool = False
+    iframe_instrumentation_removed: bool = False
+    iframe_debugger_resume_acknowledged: bool = False
+    iframe_installation_received: bool = False
+    iframe_regular_remove_issued: bool = False
+    iframe_regular_removed: bool = False
 
 
 @dataclass(frozen=True)
@@ -783,6 +872,8 @@ class RecursiveCdpTargetRouter:
         self,
         source: CdpTargetSource,
         result: Mapping[str, Any],
+        *,
+        expected_already_installed: bool | None = None,
     ) -> None:
         if result.get("exceptionDetails") is not None:
             raise CdpTargetIntegrityError("CDP target egress shim evaluation threw")
@@ -800,7 +891,8 @@ class RecursiveCdpTargetRouter:
         # CDP evaluation must therefore observe that exact idempotent receipt;
         # workers have no context init script and must be first-installed while
         # still paused for debugging.
-        expected_already_installed = source.target_type in _PAGE_TARGET_TYPES
+        if expected_already_installed is None:
+            expected_already_installed = source.target_type in _PAGE_TARGET_TYPES
         if receipt["already_installed"] is not expected_already_installed:
             raise CdpTargetIntegrityError(
                 "CDP target egress shim installation order differs from policy"
@@ -825,10 +917,59 @@ class RecursiveCdpTargetRouter:
             or remote.get("value") is not True
             or source in self._popup_guard_receipts
         ):
-            raise CdpTargetIntegrityError(
-                "CDP target did not prove its context-init popup guard"
-            )
+            raise CdpTargetIntegrityError("CDP target did not prove its context-init popup guard")
         self._popup_guard_receipts.add(source)
+
+    def _record_iframe_installation_receipt(
+        self,
+        source: CdpTargetSource,
+        event: Mapping[str, Any],
+        decoded: Mapping[str, Any],
+    ) -> None:
+        """Bind the conditional-breakpoint receipt to its exact iframe realm."""
+
+        state = self._state(source.session_path)
+        expected_fields = {
+            "schema_version",
+            "policy",
+            "kind",
+            "target_type",
+            "egress_shim",
+            "popup_guard_installed",
+        }
+        execution_context_id = event.get("executionContextId")
+        if (
+            source.target_type != "iframe"
+            or state.phase != "resuming"
+            or not state.iframe_pause_seen
+            or state.iframe_installation_received
+            or set(decoded) != expected_fields
+            or type(decoded.get("schema_version")) is not int
+            or decoded.get("schema_version") != TARGET_EGRESS_SHIM_SCHEMA_VERSION
+            or decoded.get("policy") != NON_REPLAYABLE_EGRESS_POLICY
+            or decoded.get("kind") != _IFRAME_INSTALLATION_KIND
+            or decoded.get("target_type") != "iframe"
+            or type(execution_context_id) is not int
+            or execution_context_id != state.iframe_default_context_id
+            or decoded.get("popup_guard_installed") is not True
+        ):
+            raise CdpTargetIntegrityError("CDP iframe pre-author installation receipt is invalid")
+        self._record_egress_evaluation(
+            source,
+            {
+                "result": {
+                    "type": "object",
+                    "value": decoded.get("egress_shim"),
+                }
+            },
+            expected_already_installed=False,
+        )
+        if source in self._popup_guard_receipts:
+            raise CdpTargetIntegrityError("CDP iframe popup-guard receipt was reused")
+        self._popup_guard_receipts.add(source)
+        state.iframe_installation_received = True
+        self._maybe_remove_iframe_regular_breakpoint(source)
+        self._maybe_finish_iframe_prearm(source)
 
     def _handle_non_replayable_egress(
         self,
@@ -848,7 +989,12 @@ class RecursiveCdpTargetRouter:
                 decoded = json.loads(payload)
             except (TypeError, ValueError, json.JSONDecodeError) as error:
                 raise CdpTargetIntegrityError("CDP egress binding payload is not JSON") from error
-            if not isinstance(decoded, Mapping) or set(decoded) != {
+            if not isinstance(decoded, Mapping):
+                raise CdpTargetIntegrityError("CDP egress binding payload fields are invalid")
+            if decoded.get("kind") == _IFRAME_INSTALLATION_KIND:
+                self._record_iframe_installation_receipt(source, event, decoded)
+                return
+            if set(decoded) != {
                 "schema_version",
                 "policy",
                 "kind",
@@ -919,9 +1065,7 @@ class RecursiveCdpTargetRouter:
         """Send a popup-tab tripwire through the content-minimising callback."""
 
         if self._on_non_replayable_egress is None:
-            raise CdpTargetIntegrityError(
-                "popup tab reached an unguarded browser context"
-            )
+            raise CdpTargetIntegrityError("popup tab reached an unguarded browser context")
         self._on_non_replayable_egress(
             None,
             POPUP_NAVIGATION_API,
@@ -1087,6 +1231,26 @@ class RecursiveCdpTargetRouter:
                 "browser shared-worker guardian sessions remain unresolved"
             )
         self._shared_guard_finished = True
+
+    def shared_worker_guard_lifecycle_state(
+        self,
+    ) -> tuple[tuple[str, ...], tuple[str, ...], int]:
+        """Return the strict internal guardian state for ordered shutdown barriers."""
+
+        self.raise_if_failed()
+        if not self._shared_guard_shutdown or self._shared_guard_finished or self._aborting:
+            raise CdpTargetIntegrityError(
+                "shared-worker guardian lifecycle was queried outside normal shutdown"
+            )
+        guarded = tuple(sorted(self._guarded_shared_workers))
+        unresolved = tuple(
+            sorted(
+                target_id
+                for target_id, bootstrap in self._guarded_shared_workers.items()
+                if not bootstrap.guardian_detached
+            )
+        )
+        return guarded, unresolved, len(self._guardian_target_by_session)
 
     def finish_shared_worker_guard_abort(self) -> None:
         """Retire guardian sessions after the complete context was disposed.
@@ -1848,9 +2012,7 @@ class RecursiveCdpTargetRouter:
                 browser_context_id is not None
                 and browser_context_id != self.root_browser_context_id
             ):
-                raise CdpTargetIntegrityError(
-                    "iframe target named a foreign browser context"
-                )
+                raise CdpTargetIntegrityError("iframe target named a foreign browser context")
         route = (*parent_route, session_id)
         if (
             route in self._states
@@ -1988,12 +2150,64 @@ class RecursiveCdpTargetRouter:
                     )
         elif method == "Page.addScriptToEvaluateOnNewDocument":
             self._validate_page_init_result(result)
+        elif method == "Debugger.setInstrumentationBreakpoint":
+            breakpoint_id = result.get("breakpointId")
+            if (
+                state.target_type != "iframe"
+                or not isinstance(breakpoint_id, str)
+                or not breakpoint_id
+                or state.iframe_instrumentation_breakpoint_id is not None
+            ):
+                raise CdpTargetIntegrityError(
+                    "CDP iframe instrumentation breakpoint acknowledgement is invalid"
+                )
+            state.iframe_instrumentation_breakpoint_id = breakpoint_id
         elif method == "Runtime.evaluate:egress-shim":
             self._record_egress_evaluation(source, result)
         elif method == "Runtime.evaluate:popup-guard":
             self._record_popup_guard_evaluation(source, result)
         state.setup_pending.remove(method)
         if state.setup_pending:
+            return
+        if state.target_type == "iframe":
+            if method not in {
+                "Debugger.setInstrumentationBreakpoint",
+                "Target.setAutoAttach",
+                "Target.getTargetInfo",
+            }:
+                state.setup_pending.add("Debugger.setInstrumentationBreakpoint")
+                self._queue_command(
+                    source,
+                    *_IFRAME_INSTRUMENTATION_COMMAND,
+                    label="iframe:Debugger.setInstrumentationBreakpoint",
+                    on_success=lambda result, child=source: self._setup_ack(
+                        child, "Debugger.setInstrumentationBreakpoint", result
+                    ),
+                )
+                return
+            if method == "Debugger.setInstrumentationBreakpoint":
+                state.setup_pending.add("Target.setAutoAttach")
+                self._queue_command(
+                    source,
+                    *_AUTO_ATTACH_COMMAND,
+                    label="iframe:Target.setAutoAttach",
+                    on_success=lambda result, child=source: self._setup_ack(
+                        child, "Target.setAutoAttach", result
+                    ),
+                )
+                return
+            if method == "Target.setAutoAttach":
+                state.setup_pending.add("Target.getTargetInfo")
+                self._queue_command(
+                    source,
+                    *_TARGET_BARRIER_COMMAND,
+                    label="iframe:Target.getTargetInfo",
+                    on_success=lambda result, child=source: self._setup_ack(
+                        child, "Target.getTargetInfo", result
+                    ),
+                )
+                return
+            self._resume_instrumented_child(source)
             return
         if method not in {
             "Runtime.evaluate:egress-shim",
@@ -2046,10 +2260,361 @@ class RecursiveCdpTargetRouter:
             return
         self._resume_instrumented_child(source)
 
+    def _handle_iframe_context_event(
+        self,
+        source: CdpTargetSource,
+        method: str,
+        event: Mapping[str, Any],
+    ) -> None:
+        """Track the one default realm used by the iframe pre-author barrier."""
+
+        state = self._state(source.session_path)
+        if source.target_type != "iframe":
+            return
+        if state.phase == "ready":
+            # The pre-document script registered during setup protects later
+            # document realms.  This barrier receipts the initial runnable realm.
+            return
+        if state.phase not in {"configuring", "resuming"}:
+            raise CdpTargetIntegrityError(
+                "CDP iframe execution-context event arrived outside prearm"
+            )
+        if method == "Runtime.executionContextCreated":
+            context = event.get("context")
+            if not isinstance(context, Mapping):
+                raise CdpTargetIntegrityError("CDP iframe execution context is malformed")
+            context_id = context.get("id")
+            unique_context_id = context.get("uniqueId")
+            aux_data = context.get("auxData")
+            if (
+                type(context_id) is not int
+                or context_id < 0
+                or not isinstance(unique_context_id, str)
+                or not unique_context_id
+                or not isinstance(aux_data, Mapping)
+                or type(aux_data.get("isDefault")) is not bool
+                or not isinstance(aux_data.get("type"), str)
+                or not aux_data.get("type")
+                or not isinstance(aux_data.get("frameId"), str)
+                or aux_data.get("frameId") != source.target_id
+            ):
+                raise CdpTargetIntegrityError("CDP iframe execution context is malformed")
+            is_default = aux_data["isDefault"]
+            context_type = aux_data["type"]
+            if (is_default is True) != (context_type == "default"):
+                raise CdpTargetIntegrityError(
+                    "CDP iframe default execution-context identity is inconsistent"
+                )
+            if not is_default:
+                return
+            if (
+                state.iframe_default_context_id is not None
+                or state.iframe_default_context_unique_id is not None
+            ):
+                raise CdpTargetIntegrityError(
+                    "CDP iframe reported more than one default execution context during prearm"
+                )
+            state.iframe_default_context_id = context_id
+            state.iframe_default_context_unique_id = unique_context_id
+            self._maybe_trigger_iframe_synthetic(source)
+            return
+        if method == "Runtime.executionContextDestroyed":
+            context_id = event.get("executionContextId")
+            unique_context_id = event.get("executionContextUniqueId")
+            if (
+                type(context_id) is not int
+                or context_id < 0
+                or not isinstance(unique_context_id, str)
+                or not unique_context_id
+            ):
+                raise CdpTargetIntegrityError(
+                    "CDP iframe execution-context destruction is malformed"
+                )
+            selected_by_id = context_id == state.iframe_default_context_id
+            selected_by_unique_id = unique_context_id == state.iframe_default_context_unique_id
+            if selected_by_id != selected_by_unique_id:
+                raise CdpTargetIntegrityError(
+                    "CDP iframe execution-context destruction changed identity"
+                )
+            if selected_by_id:
+                raise CdpTargetIntegrityError(
+                    "CDP iframe default execution context was destroyed before prearm completed"
+                )
+            return
+        if method != "Runtime.executionContextsCleared" or event:
+            raise CdpTargetIntegrityError("CDP iframe execution-context event is malformed")
+        if (
+            state.iframe_default_context_id is None
+            and state.iframe_default_context_unique_id is None
+            and not state.iframe_synthetic_issued
+            and not state.iframe_pause_seen
+            and not state.iframe_installation_received
+        ):
+            # Chromium clears the provisional empty-document realm while the
+            # held OOPIF commits.  No selected realm or barrier obligation has
+            # been invalidated, and the instrumentation breakpoint remains armed.
+            return
+        raise CdpTargetIntegrityError(
+            "CDP iframe execution contexts were cleared before prearm completed"
+        )
+
+    def _handle_debugger_paused(
+        self,
+        source: CdpTargetSource,
+        event: Mapping[str, Any],
+    ) -> None:
+        """Turn the first iframe instrumentation pause into an exact conditional barrier."""
+
+        state = self._state(source.session_path)
+        instrumentation_id = state.iframe_instrumentation_breakpoint_id
+        call_frames = event.get("callFrames")
+        hit_breakpoints = event.get("hitBreakpoints", [])
+        if (
+            source.target_type != "iframe"
+            or state.phase != "resuming"
+            or not isinstance(instrumentation_id, str)
+            or not instrumentation_id
+            or state.iframe_pause_seen
+            or state.iframe_debugger_paused
+            or event.get("reason") != "instrumentation"
+            or not isinstance(call_frames, list)
+            or not call_frames
+            or not isinstance(hit_breakpoints, list)
+            or any(not isinstance(item, str) or not item for item in hit_breakpoints)
+            or (hit_breakpoints and instrumentation_id not in hit_breakpoints)
+        ):
+            raise CdpTargetIntegrityError("CDP iframe debugger pause is invalid")
+        first_frame = call_frames[0]
+        location = first_frame.get("location") if isinstance(first_frame, Mapping) else None
+        if not isinstance(location, Mapping):
+            raise CdpTargetIntegrityError("CDP iframe debugger call-frame location is malformed")
+        exact_location = {
+            "scriptId": location.get("scriptId"),
+            "lineNumber": location.get("lineNumber"),
+            "columnNumber": location.get("columnNumber"),
+        }
+        if (
+            not isinstance(exact_location["scriptId"], str)
+            or not exact_location["scriptId"]
+            or type(exact_location["lineNumber"]) is not int
+            or exact_location["lineNumber"] < 0
+            or type(exact_location["columnNumber"]) is not int
+            or exact_location["columnNumber"] < 0
+        ):
+            raise CdpTargetIntegrityError("CDP iframe debugger call-frame location is malformed")
+        state.iframe_pause_seen = True
+        state.iframe_debugger_paused = True
+        state.iframe_pause_location = exact_location
+        self._queue_command(
+            source,
+            "Debugger.setBreakpoint",
+            {
+                "location": dict(exact_location),
+                "condition": _iframe_breakpoint_condition(),
+            },
+            label="iframe:Debugger.setBreakpoint:pre-author-installation",
+            on_success=lambda result, child=source: self._iframe_regular_breakpoint_ack(
+                child, result
+            ),
+        )
+
+    def _iframe_regular_breakpoint_ack(
+        self,
+        source: CdpTargetSource,
+        result: Mapping[str, Any],
+    ) -> None:
+        state = self._state(source.session_path)
+        breakpoint_id = result.get("breakpointId")
+        actual_location = result.get("actualLocation")
+        expected_location = state.iframe_pause_location
+        if (
+            state.phase != "resuming"
+            or not state.iframe_debugger_paused
+            or not isinstance(breakpoint_id, str)
+            or not breakpoint_id
+            or breakpoint_id == state.iframe_instrumentation_breakpoint_id
+            or state.iframe_regular_breakpoint_id is not None
+            or not isinstance(actual_location, Mapping)
+            or not isinstance(expected_location, Mapping)
+            or any(
+                actual_location.get(field) != expected_location[field]
+                for field in ("scriptId", "lineNumber", "columnNumber")
+            )
+        ):
+            raise CdpTargetIntegrityError(
+                "CDP iframe exact conditional breakpoint acknowledgement is invalid"
+            )
+        state.iframe_regular_breakpoint_id = breakpoint_id
+        self._queue_command(
+            source,
+            "Debugger.removeBreakpoint",
+            {"breakpointId": state.iframe_instrumentation_breakpoint_id},
+            label="iframe:Debugger.removeBreakpoint:instrumentation",
+            on_success=lambda response, child=source: (
+                self._iframe_instrumentation_remove_ack(child, response)
+            ),
+        )
+
+    def _iframe_instrumentation_remove_ack(
+        self,
+        source: CdpTargetSource,
+        result: Mapping[str, Any],
+    ) -> None:
+        state = self._state(source.session_path)
+        if (
+            state.phase != "resuming"
+            or not state.iframe_debugger_paused
+            or state.iframe_instrumentation_removed
+            or result != {}
+        ):
+            raise CdpTargetIntegrityError(
+                "CDP iframe instrumentation-breakpoint removal is invalid"
+            )
+        state.iframe_instrumentation_removed = True
+        self._queue_command(
+            source,
+            "Debugger.resume",
+            {},
+            label="iframe:Debugger.resume:conditional-installation",
+            on_success=lambda response, child=source: self._iframe_debugger_resume_ack(
+                child, response
+            ),
+        )
+
+    def _iframe_debugger_resume_ack(
+        self,
+        source: CdpTargetSource,
+        result: Mapping[str, Any],
+    ) -> None:
+        state = self._state(source.session_path)
+        if (
+            state.phase != "resuming"
+            or not state.iframe_debugger_paused
+            or not state.iframe_instrumentation_removed
+            or state.iframe_debugger_resume_acknowledged
+            or result != {}
+        ):
+            raise CdpTargetIntegrityError("CDP iframe debugger resume is invalid")
+        state.iframe_debugger_paused = False
+        state.iframe_debugger_resume_acknowledged = True
+        self._maybe_remove_iframe_regular_breakpoint(source)
+        self._maybe_trigger_iframe_synthetic(source)
+        self._maybe_finish_iframe_prearm(source)
+
+    def _maybe_trigger_iframe_synthetic(self, source: CdpTargetSource) -> None:
+        state = self._state(source.session_path)
+        unique_context_id = state.iframe_default_context_unique_id
+        if (
+            state.target_type != "iframe"
+            or state.phase != "resuming"
+            or not state.iframe_initial_resume_acknowledged
+            or not isinstance(unique_context_id, str)
+            or state.iframe_synthetic_issued
+            or state.iframe_debugger_paused
+        ):
+            return
+        state.iframe_synthetic_issued = True
+        self._queue_command(
+            source,
+            *_iframe_synthetic_trigger_command(unique_context_id),
+            label="iframe:Runtime.evaluate:pre-author-trigger",
+            on_success=lambda result, child=source: self._iframe_synthetic_ack(child, result),
+        )
+
+    def _iframe_synthetic_ack(
+        self,
+        source: CdpTargetSource,
+        result: Mapping[str, Any],
+    ) -> None:
+        state = self._state(source.session_path)
+        remote = result.get("result")
+        if (
+            state.phase != "resuming"
+            or not state.iframe_synthetic_issued
+            or state.iframe_synthetic_completed
+            or not state.iframe_pause_seen
+            or state.iframe_debugger_paused
+            or result.get("exceptionDetails") is not None
+            or not isinstance(remote, Mapping)
+            or remote.get("type") != "boolean"
+            or remote.get("value") is not True
+        ):
+            raise CdpTargetIntegrityError("CDP iframe synthetic barrier result is invalid")
+        state.iframe_synthetic_completed = True
+        self._maybe_finish_iframe_prearm(source)
+
+    def _maybe_remove_iframe_regular_breakpoint(self, source: CdpTargetSource) -> None:
+        state = self._state(source.session_path)
+        breakpoint_id = state.iframe_regular_breakpoint_id
+        if (
+            state.target_type != "iframe"
+            or state.phase != "resuming"
+            or not state.iframe_installation_received
+            or not state.iframe_debugger_resume_acknowledged
+            or not isinstance(breakpoint_id, str)
+            or state.iframe_regular_remove_issued
+        ):
+            return
+        state.iframe_regular_remove_issued = True
+        self._queue_command(
+            source,
+            "Debugger.removeBreakpoint",
+            {"breakpointId": breakpoint_id},
+            label="iframe:Debugger.removeBreakpoint:conditional-installation",
+            on_success=lambda result, child=source: self._iframe_regular_remove_ack(child, result),
+        )
+
+    def _iframe_regular_remove_ack(
+        self,
+        source: CdpTargetSource,
+        result: Mapping[str, Any],
+    ) -> None:
+        state = self._state(source.session_path)
+        if (
+            state.phase != "resuming"
+            or not state.iframe_regular_remove_issued
+            or state.iframe_regular_removed
+            or result != {}
+        ):
+            raise CdpTargetIntegrityError("CDP iframe conditional-breakpoint removal is invalid")
+        state.iframe_regular_removed = True
+        self._maybe_finish_iframe_prearm(source)
+
+    def _maybe_finish_iframe_prearm(self, source: CdpTargetSource) -> None:
+        state = self._state(source.session_path)
+        if state.target_type != "iframe" or state.phase != "resuming":
+            return
+        if all(
+            (
+                state.iframe_initial_resume_acknowledged,
+                state.iframe_default_context_id is not None,
+                state.iframe_default_context_unique_id is not None,
+                state.iframe_synthetic_completed,
+                state.iframe_pause_seen,
+                not state.iframe_debugger_paused,
+                state.iframe_instrumentation_removed,
+                state.iframe_debugger_resume_acknowledged,
+                state.iframe_installation_received,
+                state.iframe_regular_removed,
+                source in self._egress_shim_receipts,
+                source in self._popup_guard_receipts,
+            )
+        ):
+            state.phase = "ready"
+
     def _resume_ack(self, source: CdpTargetSource) -> None:
         state = self._state(source.session_path)
         if state.phase != "resuming":
             raise CdpTargetIntegrityError("CDP child resume acknowledgement is out of sequence")
+        if state.target_type == "iframe":
+            if state.iframe_initial_resume_acknowledged:
+                raise CdpTargetIntegrityError(
+                    "CDP iframe initial resume acknowledgement was duplicated"
+                )
+            state.iframe_initial_resume_acknowledged = True
+            self._maybe_trigger_iframe_synthetic(source)
+            self._maybe_finish_iframe_prearm(source)
+            return
         state.phase = "ready"
 
     def _shutdown_resume_ack(self, source: CdpTargetSource) -> None:
@@ -2172,7 +2737,10 @@ class RecursiveCdpTargetRouter:
             if pending is None:
                 raise CdpTargetIntegrityError("nested CDP response has no pending command")
             if payload.get("error") is not None:
-                raise CdpTargetIntegrityError(f"nested CDP command {pending.label} failed")
+                detail = _sanitised_protocol_error(payload["error"])
+                raise CdpTargetIntegrityError(
+                    f"nested CDP command {pending.label} failed ({detail})"
+                )
             if pending.policy_decision:
                 if "result" not in payload or type(payload["result"]) is not dict:
                     raise CdpTargetIntegrityError(
@@ -2203,6 +2771,10 @@ class RecursiveCdpTargetRouter:
             self._received(source.session_path, params)
         elif method in _TARGET_LIFECYCLE_METHODS:
             self._target_lifecycle_event(method, params)
+        elif method in _IFRAME_CONTEXT_EVENTS:
+            self._handle_iframe_context_event(source, method, params)
+        elif method == "Debugger.paused":
+            self._handle_debugger_paused(source, params)
         elif method in _NON_REPLAYABLE_EGRESS_EVENTS:
             self._handle_non_replayable_egress(source, method, params)
         elif method in _FORWARDED_METHODS:
@@ -2448,10 +3020,7 @@ class BrowserSharedWorkerGuard:
             raise CdpTargetIntegrityError(
                 "browser shared-worker guard barrier did not identify the root page"
             )
-        if (
-            self._root_tab_target_id is None
-            or self._root_tab_session_id is None
-        ):
+        if self._root_tab_target_id is None or self._root_tab_session_id is None:
             raise CdpTargetIntegrityError(
                 "browser popup-tab tripwire did not identify exactly one unpaused root tab"
             )
@@ -2491,6 +3060,7 @@ class BrowserSharedWorkerGuard:
             raise CdpTargetIntegrityError(
                 "browser popup-tab tripwire cannot produce successful evidence"
             )
+        self._prove_shared_worker_guard_lifecycles()
         self._router.finish_shared_worker_guard()
         self._disable_and_detach()
         self._finished = True
@@ -2517,19 +3087,15 @@ class BrowserSharedWorkerGuard:
             raise CdpTargetIntegrityError(
                 "browser popup-tab close acknowledgement remains unresolved"
             )
-        for _ in range(_POPUP_TAB_LIFECYCLE_BARRIER_LIMIT):
+        for _ in range(_BROWSER_TARGET_LIFECYCLE_BARRIER_LIMIT):
             barrier = self._send(*_SHARED_WORKER_GUARD_BARRIER)
             infos = barrier.get("targetInfos")
-            if not isinstance(infos, list) or not all(
-                isinstance(info, Mapping) for info in infos
-            ):
+            if not isinstance(infos, list) or not all(isinstance(info, Mapping) for info in infos):
                 raise CdpTargetIntegrityError(
                     "browser popup-tab lifecycle barrier returned malformed targets"
                 )
             live_target_ids = {
-                info.get("targetId")
-                for info in infos
-                if isinstance(info.get("targetId"), str)
+                info.get("targetId") for info in infos if isinstance(info.get("targetId"), str)
             }
             if all(
                 popup.detached and popup.target_id not in live_target_ids
@@ -2538,6 +3104,42 @@ class BrowserSharedWorkerGuard:
                 return
         raise CdpTargetIntegrityError(
             "browser popup-tab close did not reach an exact detached lifecycle"
+        )
+
+    def _prove_shared_worker_guard_lifecycles(self) -> None:
+        """Drain ordered browser events without synthesising guardian retirement."""
+
+        _guarded, unresolved, guardian_session_count = (
+            self._router.shared_worker_guard_lifecycle_state()
+        )
+        if not unresolved and guardian_session_count == 0:
+            return
+        for _ in range(_BROWSER_TARGET_LIFECYCLE_BARRIER_LIMIT):
+            barrier = self._send(*_SHARED_WORKER_GUARD_BARRIER)
+            infos = barrier.get("targetInfos")
+            if not isinstance(infos, list) or not all(isinstance(info, Mapping) for info in infos):
+                raise CdpTargetIntegrityError(
+                    "browser shared-worker lifecycle barrier returned malformed targets"
+                )
+            live_target_ids: set[str] = set()
+            for info in infos:
+                target_id = info.get("targetId")
+                if not isinstance(target_id, str) or not target_id or target_id in live_target_ids:
+                    raise CdpTargetIntegrityError(
+                        "browser shared-worker lifecycle barrier returned malformed identities"
+                    )
+                live_target_ids.add(target_id)
+            guarded, unresolved, guardian_session_count = (
+                self._router.shared_worker_guard_lifecycle_state()
+            )
+            if (
+                not unresolved
+                and guardian_session_count == 0
+                and live_target_ids.isdisjoint(guarded)
+            ):
+                return
+        raise CdpTargetIntegrityError(
+            "browser shared-worker guardian detach did not reach an exact lifecycle"
         )
 
     def _disable_and_detach(self) -> None:
@@ -2690,9 +3292,7 @@ class BrowserSharedWorkerGuard:
         popup.close_requested = True
         close_result = self._send("Target.closeTarget", {"targetId": target_id})
         if set(close_result) != {"success"} or close_result.get("success") is not True:
-            raise CdpTargetIntegrityError(
-                "browser popup-tab tripwire close was not acknowledged"
-            )
+            raise CdpTargetIntegrityError("browser popup-tab tripwire close was not acknowledged")
         popup.close_acknowledged = True
         if callback_error is not None:
             raise callback_error
@@ -2748,9 +3348,7 @@ class BrowserSharedWorkerGuard:
         def validate() -> None:
             target_id = event.get("targetId")
             if not isinstance(target_id, str) or not target_id:
-                raise CdpTargetIntegrityError(
-                    "browser page-target destruction event is malformed"
-                )
+                raise CdpTargetIntegrityError("browser page-target destruction event is malformed")
             if target_id in self._popup_tabs:
                 popup = self._popup_tabs[target_id]
                 if not popup.close_requested or popup.destroyed:

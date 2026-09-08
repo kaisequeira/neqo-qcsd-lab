@@ -9,6 +9,7 @@ commands only verify the immutable receipt and installed driver bytes.
 from __future__ import annotations
 
 import argparse
+import copy
 import contextlib
 import hashlib
 import importlib.metadata
@@ -47,9 +48,9 @@ EXPECTED_PLAYWRIGHT_PACKAGE_PRE_PATCH_TREE = {
     "total_bytes": 131_856_713,
 }
 EXPECTED_PLAYWRIGHT_PACKAGE_POST_PATCH_TREE = {
-    "sha256": "2a233521c12cfc6612d2ebcb535ab8cf24a5554e36ad1f367097f70bdfbec07e",
+    "sha256": "fdd7094c7b4a9b9a045b1107f357ae9f9f534716f5766c29aa824c421dcca27d",
     "file_count": 401,
-    "total_bytes": 131_857_569,
+    "total_bytes": 131_857_836,
 }
 CHROMIUM_DISTRIBUTION_TREE_DOMAIN = "qcsd-chromium-distribution-tree-v1"
 EXPECTED_CHROMIUM_DISTRIBUTION_TREE = {
@@ -58,21 +59,21 @@ EXPECTED_CHROMIUM_DISTRIBUTION_TREE = {
     "total_bytes": 616_583_533,
 }
 EXPECTED_PLAYWRIGHT_DRIVER_CONTENT_SHA256 = (
-    "f2f774b92c6074dcab28bc5a0afa13b43c70e372057558b7246d4ba168602d51"
+    "4d8f576c788db015ecfd977fb3868a437c55ba45b39da7943990f3938ee7798f"
 )
 EXPECTED_PLAYWRIGHT_DRIVER_PAYLOAD_SHA256 = (
-    "926b894666e6b5d6dcdb31dc28d581a9cb22eba1f6dc924be74b49402c44e3c3"
+    "91982e3a741cc7bc58c4b3abe85358cd63946ed6db11e15dd754b0e7cf51409f"
 )
 EXPECTED_PLAYWRIGHT_DRIVER_RECEIPT_SHA256 = (
-    "7194034787b5c1c34ffd88d62cf9969b1510fca7955a0ed7b7c3168f23a8bfb2"
+    "709f81c4f07b3b06eb6bd4c29f4b6eb69a5e8157f8378638b75a453226ed0caa"
 )
 CHROMIUM_SHARED_WORKER_PAUSE_FIX_COMMIT = "0606a60db66fc14d6fd76c8d532392b26504b308"
 CHROMIUM_SHARED_WORKER_PAUSE_FIX_POSITION = 1_529_406
-RECEIPT_SCHEMA_VERSION = 6
+RECEIPT_SCHEMA_VERSION = 7
 RECEIPT_TYPE = "qcsd-playwright-cdp-ownership"
-RECEIPT_DOMAIN = "qcsd-playwright-cdp-ownership-v6"
-CONTENT_DOMAIN = "qcsd-playwright-cdp-driver-content-v6"
-OWNERSHIP_POLICY = "qcsd-conditional-exclusive-recursive-cdp-target-ownership-v6"
+RECEIPT_DOMAIN = "qcsd-playwright-cdp-ownership-v7"
+CONTENT_DOMAIN = "qcsd-playwright-cdp-driver-content-v7"
+OWNERSHIP_POLICY = "qcsd-conditional-exclusive-recursive-cdp-target-ownership-v7"
 OWNERSHIP_MARKER_NAME = "QCSD_EXCLUSIVE_CDP_TARGET_OWNERSHIP"
 OWNERSHIP_MARKER_VALUE = "1"
 # These are the ambient switches read by the pinned Python/Node driver which can
@@ -120,6 +121,13 @@ OWNERSHIP_POLICY_RECEIPT = {
         "chromium_position": CHROMIUM_SHARED_WORKER_PAUSE_FIX_POSITION,
         "required_semantics": "wait-for-debugger-on-start-holds-new-shared-worker",
     },
+    "exclusive_context_route": {
+        "playwright_fetch_resource_types": ["Document"],
+        "request_stage": "Request",
+        "purpose": "pre-io-popup-and-document-navigation-policy",
+        "subresource_admission_owner": "qcsd-recursive-cdp-fetch",
+        "http_credentials": "rejected-before-network-manager-state-mutation",
+    },
     "browser_service_containment": {
         "dns_over_https_policy": {"DnsOverHttpsMode": "off"},
         "network_prediction_policy": {"NetworkPredictionOptions": 2},
@@ -127,15 +135,51 @@ OWNERSHIP_POLICY_RECEIPT = {
         "ordinary_playwright_launch": True,
     },
 }
+LEGACY_RECEIPT_SCHEMA_VERSION = 6
+LEGACY_OWNERSHIP_POLICY = "qcsd-conditional-exclusive-recursive-cdp-target-ownership-v6"
+LEGACY_OWNERSHIP_POLICY_RECEIPT = {
+    "name": LEGACY_OWNERSHIP_POLICY,
+    "activation_environment_variable": OWNERSHIP_MARKER_NAME,
+    "activation_value": OWNERSHIP_MARKER_VALUE,
+    "inactive_semantics": "native-playwright-unfiltered-auto-attach",
+    "driver_start_environment_lock": "held-only-through-sync-playwright-enter",
+    "forbidden_driver_environment_variables": list(FORBIDDEN_DRIVER_ENVIRONMENT_VARIABLES),
+    "chromium_child_environment": dict(_CHROMIUM_CHILD_ENVIRONMENT_ITEMS),
+    "shared_worker_pause_fix": {
+        "chromium_commit": CHROMIUM_SHARED_WORKER_PAUSE_FIX_COMMIT,
+        "chromium_position": CHROMIUM_SHARED_WORKER_PAUSE_FIX_POSITION,
+        "required_semantics": "wait-for-debugger-on-start-holds-new-shared-worker",
+    },
+    "browser_service_containment": {
+        "dns_over_https_policy": {"DnsOverHttpsMode": "off"},
+        "network_prediction_policy": {"NetworkPredictionOptions": 2},
+        "same_approved_origin_speculation_prefetch_required": True,
+        "ordinary_playwright_launch": True,
+    },
+}
+LEGACY_EXPECTED_PLAYWRIGHT_DRIVER_CONTENT_SHA256 = (
+    "f2f774b92c6074dcab28bc5a0afa13b43c70e372057558b7246d4ba168602d51"
+)
+LEGACY_EXPECTED_PLAYWRIGHT_DRIVER_PAYLOAD_SHA256 = (
+    "926b894666e6b5d6dcdb31dc28d581a9cb22eba1f6dc924be74b49402c44e3c3"
+)
+LEGACY_EXPECTED_PLAYWRIGHT_DRIVER_RECEIPT_SHA256 = (
+    "7194034787b5c1c34ffd88d62cf9969b1510fca7955a0ed7b7c3168f23a8bfb2"
+)
+LEGACY_EXPECTED_PLAYWRIGHT_DRIVER_BINDING = {
+    "receipt_sha256": LEGACY_EXPECTED_PLAYWRIGHT_DRIVER_RECEIPT_SHA256,
+    "payload_sha256": LEGACY_EXPECTED_PLAYWRIGHT_DRIVER_PAYLOAD_SHA256,
+    "content_sha256": LEGACY_EXPECTED_PLAYWRIGHT_DRIVER_CONTENT_SHA256,
+    "policy": copy.deepcopy(LEGACY_OWNERSHIP_POLICY_RECEIPT),
+    "browsers_json_sha256": EXPECTED_BROWSERS_JSON_SHA256,
+    "chromium_executable_sha256": EXPECTED_CHROMIUM_SHA256,
+}
 DEFAULT_RECEIPT = Path("/usr/share/qcsd-lab/playwright-cdp-ownership.json")
 DEFAULT_BROWSER_ROOT = Path("/opt/qcsd-playwright")
 DEFAULT_CONFIGURED_EXECUTABLE = Path("/usr/local/bin/qcsd-chromium")
 _DRIVER_RELATIVE_ROOT = Path("driver/package/lib/server/chromium")
 DEFAULT_RESOLVED_EXECUTABLE = (
-    DEFAULT_BROWSER_ROOT
-    / f"chromium-{EXPECTED_CHROMIUM_REVISION}"
-    / "chrome-linux"
-    / "chrome"
+    DEFAULT_BROWSER_ROOT / f"chromium-{EXPECTED_CHROMIUM_REVISION}" / "chrome-linux" / "chrome"
 )
 DEFAULT_CHROMIUM_SUBPROCESS_WRAPPER = Path("/usr/local/libexec/qcsd-chromium-child")
 DEFAULT_CHROMIUM_MANAGED_POLICY = Path(
@@ -164,6 +208,10 @@ DEFAULT_DRIVER_ROOT = DEFAULT_PLAYWRIGHT_PACKAGE_ROOT / _DRIVER_RELATIVE_ROOT
 _DIGEST_LENGTH = 64
 _ATTACH_EXPRESSION = b"{ autoAttach: true, waitForDebuggerOnStart: true, flatten: true }"
 _REPLACEMENT_COUNT = 2
+_NETWORK_FETCH_PATTERN_EXPRESSION = b'patterns: [{ urlPattern: "*", requestStage: "Request" }]'
+_HTTP_CREDENTIALS_ASSIGNMENT = (
+    b"  async authenticate(credentials) {\n    this._credentials = credentials;"
+)
 _OWNERSHIP_ENVIRONMENT_LOCK = threading.RLock()
 _VALIDATION_CACHE_LOCK = threading.Lock()
 _DEFAULT_VALIDATION_CACHE: tuple[int, bytes] | None = None
@@ -174,23 +222,18 @@ class _DriverFileSpec:
     filename: str
     pre_patch_sha256: str
     post_patch_sha256: str
-    excluded_target_types: tuple[str, ...]
+    patches: tuple["_DriverPatchSpec", ...]
 
 
-_FILE_SPECS = (
-    _DriverFileSpec(
-        filename="crBrowser.js",
-        pre_patch_sha256=("c72c8906948a54a3d78049148c53c1bacd9dd54cbe2fce48e4e2ad7d032a03b2"),
-        post_patch_sha256=("ec4f6badc590bc3928b8a148c9e6afa2232e34ab779f41e66a9a2803d09315ba"),
-        excluded_target_types=("iframe", "worker", "shared_worker", "tab"),
-    ),
-    _DriverFileSpec(
-        filename="crPage.js",
-        pre_patch_sha256=("71aab16b0912f23cb9aa3095b8072bfc6fbd6e47e4e13a7be3684b796aa1cd28"),
-        post_patch_sha256=("718c618ff2342acba85b88efe4f87d3a0c6ded00a61829409b387f9eebd0a79e"),
-        excluded_target_types=("iframe", "worker", "shared_worker"),
-    ),
-)
+@dataclass(frozen=True)
+class _DriverPatchSpec:
+    kind: str
+    preimage: bytes
+    replacement: bytes
+    replacement_count: int
+    receipt_parameters: tuple[tuple[str, str | tuple[str, ...]], ...]
+
+
 _RECEIPT_KEYS = {
     "schema_version",
     "artifact_type",
@@ -243,9 +286,9 @@ _FILE_RECORD_KEYS = {
     "path",
     "pre_patch_sha256",
     "post_patch_sha256",
-    "replacement_count",
-    "excluded_target_types",
+    "patches",
 }
+_PATCH_RECORD_KEYS = {"kind", "replacement_count", "parameters"}
 
 
 def _sha256(value: bytes) -> str:
@@ -274,6 +317,140 @@ def _replacement(excluded_target_types: Sequence[str]) -> bytes:
         f'...(process.env.{OWNERSHIP_MARKER_NAME} === "{OWNERSHIP_MARKER_VALUE}" ? '
         f"{{ filter: [{filters}, {{}}] }} : {{}}) }}"
     ).encode()
+
+
+def _exclusive_fetch_pattern_replacement() -> bytes:
+    return (
+        'patterns: [{ urlPattern: "*", '
+        f'...(process.env.{OWNERSHIP_MARKER_NAME} === "{OWNERSHIP_MARKER_VALUE}" ? '
+        '{ resourceType: "Document" } : {}), requestStage: "Request" }]'
+    ).encode()
+
+
+def _exclusive_http_credentials_replacement() -> bytes:
+    return (
+        "  async authenticate(credentials) {\n"
+        f"    if (process.env.{OWNERSHIP_MARKER_NAME} === "
+        f'"{OWNERSHIP_MARKER_VALUE}" && credentials !== null)\n'
+        '      throw new Error("QCSD exclusive CDP ownership forbids HTTP credentials");\n'
+        "    this._credentials = credentials;"
+    ).encode()
+
+
+def _target_ownership_patch(excluded_target_types: tuple[str, ...]) -> _DriverPatchSpec:
+    return _DriverPatchSpec(
+        kind="conditional-target-auto-attach-filter",
+        preimage=_ATTACH_EXPRESSION,
+        replacement=_replacement(excluded_target_types),
+        replacement_count=_REPLACEMENT_COUNT,
+        receipt_parameters=(("excluded_target_types", excluded_target_types),),
+    )
+
+
+_FILE_SPECS = (
+    _DriverFileSpec(
+        filename="crBrowser.js",
+        pre_patch_sha256=("c72c8906948a54a3d78049148c53c1bacd9dd54cbe2fce48e4e2ad7d032a03b2"),
+        post_patch_sha256=("ec4f6badc590bc3928b8a148c9e6afa2232e34ab779f41e66a9a2803d09315ba"),
+        patches=(_target_ownership_patch(("iframe", "worker", "shared_worker", "tab")),),
+    ),
+    _DriverFileSpec(
+        filename="crPage.js",
+        pre_patch_sha256=("71aab16b0912f23cb9aa3095b8072bfc6fbd6e47e4e13a7be3684b796aa1cd28"),
+        post_patch_sha256=("718c618ff2342acba85b88efe4f87d3a0c6ded00a61829409b387f9eebd0a79e"),
+        patches=(_target_ownership_patch(("iframe", "worker", "shared_worker")),),
+    ),
+    _DriverFileSpec(
+        filename="crNetworkManager.js",
+        pre_patch_sha256=("55562bd3e4c190d3306c0ff1504655e7521889f25994bd6ac88d3f405693fadb"),
+        post_patch_sha256=("c10daf1b5c5c6c64e1c545ff7d7bb16f9990aa71c4fe64e081c3a43157d4531a"),
+        patches=(
+            _DriverPatchSpec(
+                kind="exclusive-document-route-fetch-pattern",
+                preimage=_NETWORK_FETCH_PATTERN_EXPRESSION,
+                replacement=_exclusive_fetch_pattern_replacement(),
+                replacement_count=1,
+                receipt_parameters=(
+                    ("exclusive_resource_types", ("Document",)),
+                    ("inactive_resource_types", ("all",)),
+                    ("request_stage", "Request"),
+                ),
+            ),
+            _DriverPatchSpec(
+                kind="exclusive-http-credentials-rejection",
+                preimage=_HTTP_CREDENTIALS_ASSIGNMENT,
+                replacement=_exclusive_http_credentials_replacement(),
+                replacement_count=1,
+                receipt_parameters=(
+                    ("exclusive_http_credentials", "rejected"),
+                    ("rejection_timing", "before-network-manager-state-mutation"),
+                    ("inactive_semantics", "native-playwright"),
+                ),
+            ),
+        ),
+    ),
+)
+
+
+def _patch_parameters(specification: _DriverPatchSpec) -> dict[str, str | list[str]]:
+    return {
+        key: list(value) if isinstance(value, tuple) else value
+        for key, value in specification.receipt_parameters
+    }
+
+
+def _file_receipt(
+    specification: _DriverFileSpec,
+    path: Path,
+) -> dict[str, object]:
+    return {
+        "path": str(path),
+        "pre_patch_sha256": specification.pre_patch_sha256,
+        "post_patch_sha256": specification.post_patch_sha256,
+        "patches": [
+            {
+                "kind": patch.kind,
+                "replacement_count": patch.replacement_count,
+                "parameters": _patch_parameters(patch),
+            }
+            for patch in specification.patches
+        ],
+    }
+
+
+def _patched_content(specification: _DriverFileSpec, source: bytes) -> bytes:
+    if _sha256(source) != specification.pre_patch_sha256:
+        raise ValueError(
+            f"Playwright {specification.filename} is not the exact unpatched "
+            f"{PLAYWRIGHT_VERSION} preimage"
+        )
+    result = source
+    for patch in specification.patches:
+        if (
+            not patch.kind
+            or patch.replacement_count < 1
+            or not patch.preimage
+            or not patch.replacement
+            or patch.preimage == patch.replacement
+            or result.count(patch.preimage) != patch.replacement_count
+            or patch.replacement in result
+        ):
+            raise ValueError(
+                f"Playwright {specification.filename} is not the exact unpatched "
+                f"{PLAYWRIGHT_VERSION} preimage"
+            )
+        result = result.replace(patch.preimage, patch.replacement)
+    if not _valid_patched_content(specification, result):
+        raise ValueError(f"Playwright {specification.filename} patch output differs from policy")
+    return result
+
+
+def _valid_patched_content(specification: _DriverFileSpec, content: bytes) -> bool:
+    return _sha256(content) == specification.post_patch_sha256 and all(
+        content.count(patch.preimage) == 0
+        and content.count(patch.replacement) == patch.replacement_count
+        for patch in specification.patches
+    )
 
 
 def chromium_child_environment() -> dict[str, str]:
@@ -623,10 +800,7 @@ def _browser_service_containment_files(
     )
     if expected_network_prediction_option == CHROMIUM_NETWORK_PREDICTION_NEVER:
         policy_sha256 = EXPECTED_CHROMIUM_MANAGED_POLICY_SHA256
-    elif (
-        expected_network_prediction_option
-        == CHROMIUM_NETWORK_PREDICTION_ENABLED_CONTROL
-    ):
+    elif expected_network_prediction_option == CHROMIUM_NETWORK_PREDICTION_ENABLED_CONTROL:
         policy_sha256 = EXPECTED_CHROMIUM_CONTROL_POLICY_SHA256
     else:
         raise ValueError("Chromium network-prediction policy option is invalid")
@@ -899,13 +1073,10 @@ def expected_playwright_driver_receipt() -> dict[str, Any]:
         for specification in _FILE_SPECS
     }
     files = {
-        specification.filename: {
-            "path": str(paths[specification.filename]),
-            "pre_patch_sha256": specification.pre_patch_sha256,
-            "post_patch_sha256": specification.post_patch_sha256,
-            "replacement_count": _REPLACEMENT_COUNT,
-            "excluded_target_types": list(specification.excluded_target_types),
-        }
+        specification.filename: _file_receipt(
+            specification,
+            paths[specification.filename],
+        )
         for specification in _FILE_SPECS
     }
     browser_manifest = {
@@ -1161,25 +1332,7 @@ def patch_playwright_driver(
             label=f"Playwright {specification.filename}",
             expected_owner_uid=expected_owner_uid,
         )
-        replacement = _replacement(specification.excluded_target_types)
-        if (
-            _sha256(source) != specification.pre_patch_sha256
-            or source.count(_ATTACH_EXPRESSION) != _REPLACEMENT_COUNT
-            or replacement in source
-        ):
-            raise ValueError(
-                f"Playwright {specification.filename} is not the exact unpatched "
-                f"{PLAYWRIGHT_VERSION} preimage"
-            )
-        result = source.replace(_ATTACH_EXPRESSION, replacement)
-        if (
-            _sha256(result) != specification.post_patch_sha256
-            or result.count(_ATTACH_EXPRESSION) != 0
-            or result.count(replacement) != _REPLACEMENT_COUNT
-        ):
-            raise ValueError(
-                f"Playwright {specification.filename} patch output differs from policy"
-            )
+        result = _patched_content(specification, source)
         paths[specification.filename] = path
         originals[specification.filename] = source
         patched[specification.filename] = result
@@ -1219,13 +1372,10 @@ def patch_playwright_driver(
         }
 
         files = {
-            specification.filename: {
-                "path": str(paths[specification.filename]),
-                "pre_patch_sha256": specification.pre_patch_sha256,
-                "post_patch_sha256": specification.post_patch_sha256,
-                "replacement_count": _REPLACEMENT_COUNT,
-                "excluded_target_types": list(specification.excluded_target_types),
-            }
+            specification.filename: _file_receipt(
+                specification,
+                paths[specification.filename],
+            )
             for specification in _FILE_SPECS
         }
         receipt: dict[str, Any] = {
@@ -1404,14 +1554,17 @@ def validate_playwright_driver(
         filename = specification.filename
         record = records.get(filename)
         expected_path = root / filename
+        recorded_patches = record.get("patches") if isinstance(record, Mapping) else None
         if (
             not isinstance(record, Mapping)
             or set(record) != _FILE_RECORD_KEYS
-            or record.get("path") != str(expected_path)
-            or record.get("pre_patch_sha256") != specification.pre_patch_sha256
-            or record.get("post_patch_sha256") != specification.post_patch_sha256
-            or record.get("replacement_count") != _REPLACEMENT_COUNT
-            or record.get("excluded_target_types") != list(specification.excluded_target_types)
+            or not isinstance(recorded_patches, list)
+            or len(recorded_patches) != len(specification.patches)
+            or any(
+                not isinstance(patch, Mapping) or set(patch) != _PATCH_RECORD_KEYS
+                for patch in recorded_patches
+            )
+            or record != _file_receipt(specification, expected_path)
         ):
             raise ValueError(f"Playwright {filename} receipt binding is invalid")
         content, _ = _regular_file(
@@ -1419,12 +1572,7 @@ def validate_playwright_driver(
             label=f"Playwright {filename}",
             expected_owner_uid=expected_owner_uid,
         )
-        replacement = _replacement(specification.excluded_target_types)
-        if (
-            _sha256(content) != specification.post_patch_sha256
-            or content.count(_ATTACH_EXPRESSION) != 0
-            or content.count(replacement) != _REPLACEMENT_COUNT
-        ):
+        if not _valid_patched_content(specification, content):
             raise ValueError(f"Playwright {filename} patched content is invalid")
         paths[filename] = expected_path
         contents[filename] = content
@@ -1545,9 +1693,7 @@ def _runtime_policy_directory_inventory(
     except OSError as error:
         raise ValueError("Chromium managed-policy directory cannot be read") from error
     if len(managed_entries) != 1 or managed_entries[0] != managed_policy:
-        raise ValueError(
-            "Chromium managed-policy directory must contain only the bound policy"
-        )
+        raise ValueError("Chromium managed-policy directory must contain only the bound policy")
     _regular_file(
         managed_policy,
         label="Chromium managed policy",
@@ -1602,10 +1748,7 @@ def validate_qualification_playwright_driver_once(
     if expected_network_prediction_option == CHROMIUM_NETWORK_PREDICTION_NEVER:
         receipt = validate_default_playwright_driver_once()
         active_policy = dict(receipt["chromium_managed_policy"])
-    elif (
-        expected_network_prediction_option
-        == CHROMIUM_NETWORK_PREDICTION_ENABLED_CONTROL
-    ):
+    elif expected_network_prediction_option == CHROMIUM_NETWORK_PREDICTION_ENABLED_CONTROL:
         _reject_driver_environment_overrides()
         pinned_chromium_executable_path()
         version = _require_version(None)
@@ -1654,12 +1797,7 @@ def validate_qualification_playwright_driver_once(
                 label=f"Playwright {specification.filename}",
                 expected_owner_uid=0,
             )
-            replacement = _replacement(specification.excluded_target_types)
-            if (
-                _sha256(content) != specification.post_patch_sha256
-                or content.count(_ATTACH_EXPRESSION) != 0
-                or content.count(replacement) != _REPLACEMENT_COUNT
-            ):
+            if not _valid_patched_content(specification, content):
                 raise ValueError("Playwright patched driver differs under control policy")
         if (
             version != PLAYWRIGHT_VERSION
@@ -1690,8 +1828,7 @@ def validate_qualification_playwright_driver_once(
         ),
         "policy_directory_inventory": inventory,
         "qualification_only_policy_substitution": (
-            expected_network_prediction_option
-            == CHROMIUM_NETWORK_PREDICTION_ENABLED_CONTROL
+            expected_network_prediction_option == CHROMIUM_NETWORK_PREDICTION_ENABLED_CONTROL
         ),
     }
 

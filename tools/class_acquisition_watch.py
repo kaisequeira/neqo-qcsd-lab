@@ -690,14 +690,16 @@ _BUILD_STORAGE_PREFLIGHT_KEYS = {
     "passed",
 }
 _CDP_TARGET_INSTRUMENTATION_POLICY = (
-    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v10"
+    "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v12"
 )
 _PLAYWRIGHT_VERSION = "1.57.0"
 _CHROMIUM_VERSION = "143.0.7499.4"
 _CHROMIUM_EXECUTABLE = "/usr/local/bin/qcsd-chromium"
-_PINNED_CDP_SCHEMA_VERSION = 9
+_PINNED_CDP_SCHEMA_VERSION = 11
 _HISTORICAL_PINNED_CDP_SCHEMA_VERSION = 8
-_PINNED_CDP_CONTRACT_SCHEMA_VERSION = 8
+_HISTORICAL_PINNED_CDP_SCHEMA_VERSIONS = frozenset({8, 9})
+_PINNED_CDP_CONTRACT_SCHEMA_VERSION = 10
+_HISTORICAL_PINNED_CDP_CONTRACT_SCHEMA_VERSION = 8
 _BOOTSTRAP_PREARM_SUMMARY_SCHEMA_VERSION = 1
 _EGRESS_PREARM_SUMMARY_SCHEMA_VERSION = 2
 _PINNED_CDP_TARGET_ACTIVITY_SCHEMA_VERSION = 1
@@ -797,16 +799,16 @@ _PLAYWRIGHT_BROWSERS_JSON_SHA256 = (
     "b509d013de89d621a142818e0937de356fbb0169096922c08581a4f83e463b8e"
 )
 _CHROMIUM_EXECUTABLE_SHA256 = "6f72e258e11d85ec413b1671422c83d65af9f9ddcbc811657a43700b324ce928"
-_PLAYWRIGHT_DRIVER_CONTENT_SHA256 = (
+_LEGACY_PLAYWRIGHT_DRIVER_CONTENT_SHA256 = (
     "f2f774b92c6074dcab28bc5a0afa13b43c70e372057558b7246d4ba168602d51"
 )
-_PLAYWRIGHT_DRIVER_PAYLOAD_SHA256 = (
+_LEGACY_PLAYWRIGHT_DRIVER_PAYLOAD_SHA256 = (
     "926b894666e6b5d6dcdb31dc28d581a9cb22eba1f6dc924be74b49402c44e3c3"
 )
-_PLAYWRIGHT_DRIVER_RECEIPT_SHA256 = (
+_LEGACY_PLAYWRIGHT_DRIVER_RECEIPT_SHA256 = (
     "7194034787b5c1c34ffd88d62cf9969b1510fca7955a0ed7b7c3168f23a8bfb2"
 )
-_PLAYWRIGHT_DRIVER_OWNERSHIP_POLICY = {
+_LEGACY_PLAYWRIGHT_DRIVER_OWNERSHIP_POLICY = {
     "name": "qcsd-conditional-exclusive-recursive-cdp-target-ownership-v6",
     "activation_environment_variable": "QCSD_EXCLUSIVE_CDP_TARGET_OWNERSHIP",
     "activation_value": "1",
@@ -849,6 +851,34 @@ _PLAYWRIGHT_DRIVER_OWNERSHIP_POLICY = {
         "ordinary_playwright_launch": True,
     },
 }
+_LEGACY_EXPECTED_PLAYWRIGHT_DRIVER_BINDING = {
+    "receipt_sha256": _LEGACY_PLAYWRIGHT_DRIVER_RECEIPT_SHA256,
+    "payload_sha256": _LEGACY_PLAYWRIGHT_DRIVER_PAYLOAD_SHA256,
+    "content_sha256": _LEGACY_PLAYWRIGHT_DRIVER_CONTENT_SHA256,
+    "policy": _LEGACY_PLAYWRIGHT_DRIVER_OWNERSHIP_POLICY,
+    "browsers_json_sha256": _PLAYWRIGHT_BROWSERS_JSON_SHA256,
+    "chromium_executable_sha256": _CHROMIUM_EXECUTABLE_SHA256,
+}
+_PLAYWRIGHT_DRIVER_CONTENT_SHA256 = (
+    "4d8f576c788db015ecfd977fb3868a437c55ba45b39da7943990f3938ee7798f"
+)
+_PLAYWRIGHT_DRIVER_PAYLOAD_SHA256 = (
+    "91982e3a741cc7bc58c4b3abe85358cd63946ed6db11e15dd754b0e7cf51409f"
+)
+_PLAYWRIGHT_DRIVER_RECEIPT_SHA256 = (
+    "709f81c4f07b3b06eb6bd4c29f4b6eb69a5e8157f8378638b75a453226ed0caa"
+)
+_PLAYWRIGHT_DRIVER_OWNERSHIP_POLICY = {
+    **_LEGACY_PLAYWRIGHT_DRIVER_OWNERSHIP_POLICY,
+    "name": "qcsd-conditional-exclusive-recursive-cdp-target-ownership-v7",
+    "exclusive_context_route": {
+        "playwright_fetch_resource_types": ["Document"],
+        "request_stage": "Request",
+        "purpose": "pre-io-popup-and-document-navigation-policy",
+        "subresource_admission_owner": "qcsd-recursive-cdp-fetch",
+        "http_credentials": "rejected-before-network-manager-state-mutation",
+    },
+}
 _EXPECTED_PLAYWRIGHT_DRIVER_BINDING = {
     "receipt_sha256": _PLAYWRIGHT_DRIVER_RECEIPT_SHA256,
     "payload_sha256": _PLAYWRIGHT_DRIVER_PAYLOAD_SHA256,
@@ -867,16 +897,59 @@ _EXPECTED_BROWSER_TOOL_IDENTITY = {
     "playwright_driver": _EXPECTED_PLAYWRIGHT_DRIVER_BINDING,
 }
 _PINNED_CDP_CONTRACT = {
-    # Probe schema 9 adds the build-completion identity.  The independently
-    # versioned browser/probe behaviour contract itself remains v8.
+    # Probe schema 11 binds both the paused-OOPIF pre-author instrumentation
+    # semantics and Document-only Playwright routing under exclusive QCSD
+    # ownership. The independently versioned browser/probe behaviour contract
+    # advances with those semantic boundaries.
     "schema_version": _PINNED_CDP_CONTRACT_SCHEMA_VERSION,
-    "policy": "pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v8",
+    "policy": "pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v10",
     "instrumentation_policy": _CDP_TARGET_INSTRUMENTATION_POLICY,
     "playwright_version": _PLAYWRIGHT_VERSION,
     "chromium_executable": _CHROMIUM_EXECUTABLE,
     "chromium_version": _CHROMIUM_VERSION,
     "playwright_driver_ownership_policy": _PLAYWRIGHT_DRIVER_OWNERSHIP_POLICY,
     "playwright_driver_binding": _EXPECTED_PLAYWRIGHT_DRIVER_BINDING,
+    "playwright_browsers_json_sha256": _PLAYWRIGHT_BROWSERS_JSON_SHA256,
+    "chromium_executable_sha256": _CHROMIUM_EXECUTABLE_SHA256,
+    "network_scope": "docker-network-none-loopback-only",
+    "observation_timeout_ms": 10_000,
+    "required_quiet_interval_ms": 250,
+    "target_activity_schema_version": _PINNED_CDP_TARGET_ACTIVITY_SCHEMA_VERSION,
+    "required_target_types": ["iframe", "shared_worker", "worker"],
+    "required_observations": [
+        "cross-site-iframe-network-request",
+        "dedicated-and-shared-worker-network-requests",
+        "dedicated-worker-fetch-paused-on-owning-page-session",
+        "shared-worker-fetch-paused-on-guarded-shared-worker-session",
+        "shared-worker-bootstrap-held-through-secondary-fetch-prearm",
+        "target-lifecycle-activity-resets-quiescence",
+        "duplicate-url-occurrences-remain-distinct",
+        "all-deterministic-http-responses-finished-successfully",
+        "router-ledger-extra-info-and-server-shutdown-complete",
+        "all-runnable-targets-prearmed-against-non-urlloader-egress",
+        "context-websocket-route-installed-before-first-page",
+        "zero-service-worker-and-non-replayable-egress-attempts",
+        "required-effective-chromium-egress-switches",
+        "unprivileged-zero-capability-runtime",
+        "paused-runnable-target-first-script-prearmed-before-execution",
+        "dedicated-and-shared-worker-response-bodies-consumed",
+        "document-only-playwright-route-with-recursive-cdp-subresource-ownership",
+        "shared-worker-guardian-real-detach-ordered-before-final-proof",
+    ],
+    "non_replayable_egress_policy": _NON_REPLAYABLE_EGRESS_POLICY,
+    "packet_level_egress_completeness_claimed": False,
+}
+_HISTORICAL_PINNED_CDP_CONTRACT = {
+    "schema_version": _HISTORICAL_PINNED_CDP_CONTRACT_SCHEMA_VERSION,
+    "policy": "pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v8",
+    "instrumentation_policy": (
+        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v10"
+    ),
+    "playwright_version": _PLAYWRIGHT_VERSION,
+    "chromium_executable": _CHROMIUM_EXECUTABLE,
+    "chromium_version": _CHROMIUM_VERSION,
+    "playwright_driver_ownership_policy": _LEGACY_PLAYWRIGHT_DRIVER_OWNERSHIP_POLICY,
+    "playwright_driver_binding": _LEGACY_EXPECTED_PLAYWRIGHT_DRIVER_BINDING,
     "playwright_browsers_json_sha256": _PLAYWRIGHT_BROWSERS_JSON_SHA256,
     "chromium_executable_sha256": _CHROMIUM_EXECUTABLE_SHA256,
     "network_scope": "docker-network-none-loopback-only",
@@ -933,6 +1006,10 @@ _PINNED_CDP_HTTP_STATUS_COUNTS = {
 }
 _PINNED_CDP_SERVER_REQUEST_COUNTS = {
     path: sum(statuses.values()) for path, statuses in _PINNED_CDP_HTTP_STATUS_COUNTS.items()
+}
+_PINNED_CDP_WORKER_RESPONSE_CONSUMPTION = {
+    "dedicated_worker": "qcsd-dedicated-response-consumed",
+    "shared_worker": "qcsd-shared-response-consumed",
 }
 _PINNED_CDP_BOOTSTRAP_PREARM_SUMMARY = {
     "schema_version": _BOOTSTRAP_PREARM_SUMMARY_SCHEMA_VERSION,
@@ -1431,9 +1508,7 @@ def _source_binding_sha256(binding: AcquisitionBinding) -> str:
                 "prepare_image": binding.prepare_image,
                 "provenance_sha256": binding.provenance_sha256,
                 "source": dict(binding.source),
-                "source_binding_preimage_schema_version": (
-                    SOURCE_BINDING_PREIMAGE_SCHEMA_VERSION
-                ),
+                "source_binding_preimage_schema_version": (SOURCE_BINDING_PREIMAGE_SCHEMA_VERSION),
             }
         )
     )
@@ -4133,6 +4208,7 @@ def _validate_pinned_cdp_observation(value: Any) -> None:
         "shared_worker_network_request",
         "dedicated_worker_fetch_paused_on_page",
         "shared_worker_fetch_paused_on_shared_worker",
+        "worker_response_consumption",
         "http_status_counts",
         "server_request_counts",
         "bootstrap_prearm_summary",
@@ -4187,6 +4263,7 @@ def _validate_pinned_cdp_observation(value: Any) -> None:
         or topology["event_count"] < sum(_PINNED_CDP_SERVER_REQUEST_COUNTS.values())
         or topology.get("duplicate_request_occurrences") != 2
         or topology.get("worker_network_target_types") != ["shared_worker", "worker"]
+        or topology.get("worker_response_consumption") != _PINNED_CDP_WORKER_RESPONSE_CONSUMPTION
         or http_status_counts != _PINNED_CDP_HTTP_STATUS_COUNTS
         or server_request_counts != _PINNED_CDP_SERVER_REQUEST_COUNTS
         or prearm != _PINNED_CDP_BOOTSTRAP_PREARM_SUMMARY

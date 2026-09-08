@@ -53,30 +53,53 @@ def driver_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> DriverFix
     driver_root = package_root / "driver/package/lib/server/chromium"
     driver_root.mkdir(parents=True)
 
+    production_specifications = {
+        specification.filename: specification for specification in playwright_driver._FILE_SPECS
+    }
     specifications = []
     originals: dict[str, bytes] = {}
     patched: dict[str, bytes] = {}
-    for filename, excluded in (
-        ("crBrowser.js", ("iframe", "worker", "shared_worker", "tab")),
-        ("crPage.js", ("iframe", "worker", "shared_worker")),
-    ):
-        source = (
-            f"// {filename}\nfirst(".encode()
-            + playwright_driver._ATTACH_EXPRESSION
-            + b");\nsecond("
-            + playwright_driver._ATTACH_EXPRESSION
-            + b");\n"
+    inputs = []
+    for filename in ("crBrowser.js", "crPage.js"):
+        patch = production_specifications[filename].patches[0]
+        inputs.append(
+            (
+                filename,
+                (
+                    f"// {filename}\nfirst(".encode()
+                    + patch.preimage
+                    + b");\nsecond("
+                    + patch.preimage
+                    + b");\n"
+                ),
+                (patch,),
+            )
         )
-        result = source.replace(
-            playwright_driver._ATTACH_EXPRESSION,
-            playwright_driver._replacement(excluded),
+    network_patches = production_specifications["crNetworkManager.js"].patches
+    inputs.append(
+        (
+            "crNetworkManager.js",
+            (
+                b"// crNetworkManager.js\n"
+                + network_patches[0].preimage
+                + b";\n"
+                + network_patches[1].preimage
+                + b"\n"
+            ),
+            network_patches,
         )
+    )
+    for filename, source, patches in inputs:
+        result = source
+        for patch in patches:
+            assert result.count(patch.preimage) == patch.replacement_count
+            result = result.replace(patch.preimage, patch.replacement)
         specifications.append(
             playwright_driver._DriverFileSpec(
                 filename=filename,
                 pre_patch_sha256=playwright_driver._sha256(source),
                 post_patch_sha256=playwright_driver._sha256(result),
-                excluded_target_types=excluded,
+                patches=patches,
             )
         )
         (driver_root / filename).write_bytes(source)
@@ -165,7 +188,9 @@ def driver_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> DriverFix
 
     subprocess_wrapper = tmp_path / "runtime/libexec/qcsd-chromium-child"
     subprocess_wrapper.parent.mkdir(parents=True)
-    subprocess_wrapper.write_bytes(b"#!/bin/sh\nexec /fixture/chromium --disable-crashpad-for-testing \"$@\"\n")
+    subprocess_wrapper.write_bytes(
+        b'#!/bin/sh\nexec /fixture/chromium --disable-crashpad-for-testing "$@"\n'
+    )
     subprocess_wrapper.chmod(0o555)
     monkeypatch.setattr(
         playwright_driver,
@@ -174,9 +199,7 @@ def driver_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> DriverFix
     )
     managed_policy = tmp_path / "runtime/policies/managed/qcsd-network-prediction.json"
     managed_policy.parent.mkdir(parents=True)
-    managed_policy.write_bytes(
-        b'{"DnsOverHttpsMode":"off","NetworkPredictionOptions":2}\n'
-    )
+    managed_policy.write_bytes(b'{"DnsOverHttpsMode":"off","NetworkPredictionOptions":2}\n')
     managed_policy.chmod(0o444)
     monkeypatch.setattr(
         playwright_driver,
@@ -220,7 +243,8 @@ def test_production_contract_matches_pinned_playwright_and_live_prototype() -> N
     assert playwright_driver.EXPECTED_CHROMIUM_REVISION == "1200"
     assert playwright_driver.EXPECTED_CHROMIUM_VERSION == "143.0.7499.4"
     assert playwright_driver.SUPPORTED_ARCHITECTURE == "aarch64"
-    assert playwright_driver.RECEIPT_SCHEMA_VERSION == 6
+    assert playwright_driver.RECEIPT_SCHEMA_VERSION == 7
+    assert playwright_driver.LEGACY_RECEIPT_SCHEMA_VERSION == 6
     assert playwright_driver.CHROMIUM_SHARED_WORKER_PAUSE_FIX_COMMIT == (
         "0606a60db66fc14d6fd76c8d532392b26504b308"
     )
@@ -230,6 +254,14 @@ def test_production_contract_matches_pinned_playwright_and_live_prototype() -> N
         "chromium_position": 1_529_406,
         "required_semantics": "wait-for-debugger-on-start-holds-new-shared-worker",
     }
+    assert playwright_driver.OWNERSHIP_POLICY_RECEIPT["exclusive_context_route"] == {
+        "playwright_fetch_resource_types": ["Document"],
+        "request_stage": "Request",
+        "purpose": "pre-io-popup-and-document-navigation-policy",
+        "subresource_admission_owner": "qcsd-recursive-cdp-fetch",
+        "http_credentials": "rejected-before-network-manager-state-mutation",
+    }
+    assert "exclusive_context_route" not in (playwright_driver.LEGACY_OWNERSHIP_POLICY_RECEIPT)
     assert playwright_driver.EXPECTED_BROWSERS_JSON_SHA256 == (
         "b509d013de89d621a142818e0937de356fbb0169096922c08581a4f83e463b8e"
     )
@@ -249,9 +281,9 @@ def test_production_contract_matches_pinned_playwright_and_live_prototype() -> N
         "total_bytes": 131_856_713,
     }
     assert playwright_driver.EXPECTED_PLAYWRIGHT_PACKAGE_POST_PATCH_TREE == {
-        "sha256": "2a233521c12cfc6612d2ebcb535ab8cf24a5554e36ad1f367097f70bdfbec07e",
+        "sha256": "fdd7094c7b4a9b9a045b1107f357ae9f9f534716f5766c29aa824c421dcca27d",
         "file_count": 401,
-        "total_bytes": 131_857_569,
+        "total_bytes": 131_857_836,
     }
     assert playwright_driver.EXPECTED_CHROMIUM_DISTRIBUTION_TREE == {
         "sha256": "d5cd88dc445b6d4af2f220552e09f3180d22fed4142164c1b8b595cdecf014b5",
@@ -287,9 +319,9 @@ def test_production_contract_matches_pinned_playwright_and_live_prototype() -> N
         "SELENIUM_REMOTE_URL",
     )
     assert playwright_driver.EXPECTED_PLAYWRIGHT_DRIVER_BINDING == {
-        "receipt_sha256": ("7194034787b5c1c34ffd88d62cf9969b1510fca7955a0ed7b7c3168f23a8bfb2"),
-        "payload_sha256": ("926b894666e6b5d6dcdb31dc28d581a9cb22eba1f6dc924be74b49402c44e3c3"),
-        "content_sha256": ("f2f774b92c6074dcab28bc5a0afa13b43c70e372057558b7246d4ba168602d51"),
+        "receipt_sha256": ("709f81c4f07b3b06eb6bd4c29f4b6eb69a5e8157f8378638b75a453226ed0caa"),
+        "payload_sha256": ("91982e3a741cc7bc58c4b3abe85358cd63946ed6db11e15dd754b0e7cf51409f"),
+        "content_sha256": ("4d8f576c788db015ecfd977fb3868a437c55ba45b39da7943990f3938ee7798f"),
         "policy": playwright_driver.OWNERSHIP_POLICY_RECEIPT,
         "browsers_json_sha256": playwright_driver.EXPECTED_BROWSERS_JSON_SHA256,
         "chromium_executable_sha256": playwright_driver.EXPECTED_CHROMIUM_SHA256,
@@ -315,20 +347,90 @@ def test_production_contract_matches_pinned_playwright_and_live_prototype() -> N
     assert specifications["crBrowser.js"].post_patch_sha256 == (
         "ec4f6badc590bc3928b8a148c9e6afa2232e34ab779f41e66a9a2803d09315ba"
     )
-    assert specifications["crPage.js"].excluded_target_types == (
-        "iframe",
-        "worker",
-        "shared_worker",
+    assert specifications["crNetworkManager.js"].pre_patch_sha256 == (
+        "55562bd3e4c190d3306c0ff1504655e7521889f25994bd6ac88d3f405693fadb"
     )
-    assert specifications["crBrowser.js"].excluded_target_types == (
-        "iframe",
-        "worker",
-        "shared_worker",
-        "tab",
+    assert specifications["crNetworkManager.js"].post_patch_sha256 == (
+        "c10daf1b5c5c6c64e1c545ff7d7bb16f9990aa71c4fe64e081c3a43157d4531a"
     )
-    replacement = playwright_driver._replacement(specifications["crPage.js"].excluded_target_types)
+    page_patch = specifications["crPage.js"].patches[0]
+    browser_patch = specifications["crBrowser.js"].patches[0]
+    assert playwright_driver._patch_parameters(page_patch) == {
+        "excluded_target_types": ["iframe", "worker", "shared_worker"]
+    }
+    assert playwright_driver._patch_parameters(browser_patch) == {
+        "excluded_target_types": ["iframe", "worker", "shared_worker", "tab"]
+    }
+    replacement = page_patch.replacement
     assert b'process.env.QCSD_EXCLUSIVE_CDP_TARGET_OWNERSHIP === "1"' in replacement
     assert replacement.endswith(b": {}) }")
+    fetch_patch, credentials_patch = specifications["crNetworkManager.js"].patches
+    assert fetch_patch.replacement == (
+        b'patterns: [{ urlPattern: "*", '
+        b'...(process.env.QCSD_EXCLUSIVE_CDP_TARGET_OWNERSHIP === "1" ? '
+        b'{ resourceType: "Document" } : {}), requestStage: "Request" }]'
+    )
+    assert credentials_patch.replacement == (
+        b"  async authenticate(credentials) {\n"
+        b'    if (process.env.QCSD_EXCLUSIVE_CDP_TARGET_OWNERSHIP === "1" '
+        b"&& credentials !== null)\n"
+        b'      throw new Error("QCSD exclusive CDP ownership forbids HTTP credentials");\n'
+        b"    this._credentials = credentials;"
+    )
+    assert playwright_driver.LEGACY_EXPECTED_PLAYWRIGHT_DRIVER_BINDING == {
+        "receipt_sha256": ("7194034787b5c1c34ffd88d62cf9969b1510fca7955a0ed7b7c3168f23a8bfb2"),
+        "payload_sha256": ("926b894666e6b5d6dcdb31dc28d581a9cb22eba1f6dc924be74b49402c44e3c3"),
+        "content_sha256": ("f2f774b92c6074dcab28bc5a0afa13b43c70e372057558b7246d4ba168602d51"),
+        "policy": playwright_driver.LEGACY_OWNERSHIP_POLICY_RECEIPT,
+        "browsers_json_sha256": playwright_driver.EXPECTED_BROWSERS_JSON_SHA256,
+        "chromium_executable_sha256": playwright_driver.EXPECTED_CHROMIUM_SHA256,
+    }
+    assert (
+        playwright_driver.LEGACY_EXPECTED_PLAYWRIGHT_DRIVER_BINDING["policy"]
+        is not playwright_driver.LEGACY_OWNERSHIP_POLICY_RECEIPT
+    )
+    assert (
+        playwright_driver.LEGACY_EXPECTED_PLAYWRIGHT_DRIVER_BINDING["policy"][
+            "browser_service_containment"
+        ]
+        is not playwright_driver.LEGACY_OWNERSHIP_POLICY_RECEIPT["browser_service_containment"]
+    )
+
+
+def test_network_manager_patch_is_exact_marker_gated_and_native_when_inactive() -> None:
+    specification = next(
+        value for value in playwright_driver._FILE_SPECS if value.filename == "crNetworkManager.js"
+    )
+    fetch_patch, credentials_patch = specification.patches
+
+    assert fetch_patch.preimage == (b'patterns: [{ urlPattern: "*", requestStage: "Request" }]')
+    assert fetch_patch.replacement == (
+        b'patterns: [{ urlPattern: "*", '
+        b'...(process.env.QCSD_EXCLUSIVE_CDP_TARGET_OWNERSHIP === "1" ? '
+        b'{ resourceType: "Document" } : {}), requestStage: "Request" }]'
+    )
+    assert b'resourceType: "Document"' not in fetch_patch.preimage
+    assert b' ? { resourceType: "Document" } : {})' in fetch_patch.replacement
+    assert playwright_driver._patch_parameters(fetch_patch) == {
+        "exclusive_resource_types": ["Document"],
+        "inactive_resource_types": ["all"],
+        "request_stage": "Request",
+    }
+
+    assert credentials_patch.preimage == (
+        b"  async authenticate(credentials) {\n    this._credentials = credentials;"
+    )
+    assert credentials_patch.replacement.startswith(
+        b"  async authenticate(credentials) {\n"
+        b'    if (process.env.QCSD_EXCLUSIVE_CDP_TARGET_OWNERSHIP === "1" '
+        b"&& credentials !== null)\n"
+    )
+    assert credentials_patch.replacement.endswith(credentials_patch.preimage.split(b"\n", 1)[1])
+    assert playwright_driver._patch_parameters(credentials_patch) == {
+        "exclusive_http_credentials": "rejected",
+        "rejection_timing": "before-network-manager-state-mutation",
+        "inactive_semantics": "native-playwright",
+    }
 
 
 def test_driver_session_starts_with_exact_markers_and_lifetimes_overlap(
@@ -588,14 +690,13 @@ def test_default_validation_cache_is_exact_isolated_and_nonroot_only(
         return copy.deepcopy(expected)
 
     monkeypatch.setattr(playwright_driver, "validate_playwright_driver", validate)
+
     def inventory() -> list[dict[str, object]]:
         nonlocal policy_inventories
         policy_inventories += 1
         return []
 
-    monkeypatch.setattr(
-        playwright_driver, "_runtime_policy_directory_inventory", inventory
-    )
+    monkeypatch.setattr(playwright_driver, "_runtime_policy_directory_inventory", inventory)
     monkeypatch.setattr(playwright_driver.os, "geteuid", lambda: 1_000)
     monkeypatch.setattr(
         playwright_driver,
@@ -643,9 +744,7 @@ def test_default_validation_cache_rechecks_executable_environment_on_every_hit(
         return copy.deepcopy(expected)
 
     monkeypatch.setattr(playwright_driver, "validate_playwright_driver", validate)
-    monkeypatch.setattr(
-        playwright_driver, "_runtime_policy_directory_inventory", lambda: []
-    )
+    monkeypatch.setattr(playwright_driver, "_runtime_policy_directory_inventory", lambda: [])
     monkeypatch.setattr(playwright_driver.os, "geteuid", lambda: 1_000)
     monkeypatch.setattr(
         playwright_driver,
@@ -684,9 +783,7 @@ def test_default_validation_cache_fails_closed_before_caching(
         "validate_playwright_driver",
         lambda: copy.deepcopy(receipt),
     )
-    monkeypatch.setattr(
-        playwright_driver, "_runtime_policy_directory_inventory", lambda: []
-    )
+    monkeypatch.setattr(playwright_driver, "_runtime_policy_directory_inventory", lambda: [])
     monkeypatch.setattr(playwright_driver.os, "geteuid", lambda: 1_000)
     monkeypatch.setattr(
         playwright_driver,
@@ -739,9 +836,7 @@ def test_default_validation_cache_rechecks_every_policy_root_before_return(
             alternate_policy_roots=alternates,
         )
 
-    monkeypatch.setattr(
-        playwright_driver, "_runtime_policy_directory_inventory", inventory
-    )
+    monkeypatch.setattr(playwright_driver, "_runtime_policy_directory_inventory", inventory)
     monkeypatch.setattr(
         playwright_driver,
         "validate_playwright_driver",
@@ -756,9 +851,7 @@ def test_default_validation_cache_rechecks_every_policy_root_before_return(
             None,
         ),
     )
-    monkeypatch.setattr(
-        playwright_driver, "_require_default_runtime_immutability", lambda: 1_000
-    )
+    monkeypatch.setattr(playwright_driver, "_require_default_runtime_immutability", lambda: 1_000)
 
     assert playwright_driver.validate_default_playwright_driver_once() == expected
     if rogue_root == "recommended":
@@ -819,7 +912,7 @@ def test_patch_is_exact_create_only_and_receipt_is_canonical(
     assert driver_fixture.receipt.stat().st_mode & 0o222 == 0
     assert receipt["payload_sha256"] == playwright_driver._payload_sha256(receipt)
     assert receipt["policy"] == playwright_driver.OWNERSHIP_POLICY_RECEIPT
-    assert receipt["schema_version"] == 6
+    assert receipt["schema_version"] == 7
     assert receipt["browser_manifest"]["chromium_revision"] == "1200"
     assert receipt["chromium_executable"]["version_output"] == ("Chromium 143.0.7499.4")
     assert receipt["playwright_package_tree"] == {
@@ -835,9 +928,26 @@ def test_patch_is_exact_create_only_and_receipt_is_canonical(
         "archive_sha256": playwright_driver.CHROMIUM_ARCHIVE_SHA256,
         **playwright_driver.EXPECTED_CHROMIUM_DISTRIBUTION_TREE,
     }
+    specifications = {
+        specification.filename: specification for specification in playwright_driver._FILE_SPECS
+    }
+    assert set(receipt["files"]) == {
+        "crBrowser.js",
+        "crNetworkManager.js",
+        "crPage.js",
+    }
+    for filename, specification in specifications.items():
+        assert receipt["files"][filename] == playwright_driver._file_receipt(
+            specification,
+            driver_fixture.driver_root / filename,
+        )
     for filename, expected in driver_fixture.patched.items():
         assert (driver_fixture.driver_root / filename).read_bytes() == expected
-        assert expected.count(playwright_driver._ATTACH_EXPRESSION) == 0
+        specification = specifications[filename]
+        assert playwright_driver._valid_patched_content(specification, expected)
+        for patch in specification.patches:
+            assert expected.count(patch.preimage) == 0
+            assert expected.count(patch.replacement) == patch.replacement_count
 
     with pytest.raises(FileExistsError, match="create-only"):
         playwright_driver.patch_playwright_driver(
@@ -891,16 +1001,18 @@ def test_patch_rejects_wrong_already_or_partially_patched_driver_without_mutatio
     driver_fixture: DriverFixture,
     state: str,
 ) -> None:
-    browser = driver_fixture.driver_root / "crBrowser.js"
-    page = driver_fixture.driver_root / "crPage.js"
+    paths = {
+        filename: driver_fixture.driver_root / filename for filename in driver_fixture.originals
+    }
+    browser = paths["crBrowser.js"]
     if state == "wrong":
         browser.write_bytes(driver_fixture.originals["crBrowser.js"] + b"// drift\n")
     elif state == "already-patched":
-        browser.write_bytes(driver_fixture.patched["crBrowser.js"])
-        page.write_bytes(driver_fixture.patched["crPage.js"])
+        for filename, content in driver_fixture.patched.items():
+            paths[filename].write_bytes(content)
     else:
         browser.write_bytes(driver_fixture.patched["crBrowser.js"])
-    before = {path: path.read_bytes() for path in (browser, page)}
+    before = {path: path.read_bytes() for path in paths.values()}
     driver_fixture.receipt.parent.mkdir()
 
     with pytest.raises(ValueError, match="pinned tree|exact unpatched"):
@@ -910,7 +1022,7 @@ def test_patch_rejects_wrong_already_or_partially_patched_driver_without_mutatio
         )
 
     assert not driver_fixture.receipt.exists()
-    assert {path: path.read_bytes() for path in (browser, page)} == before
+    assert {path: path.read_bytes() for path in paths.values()} == before
 
 
 def test_patch_rejects_non_exact_replacement_count(
@@ -918,12 +1030,10 @@ def test_patch_rejects_non_exact_replacement_count(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     first = playwright_driver._FILE_SPECS[0]
+    patch = first.patches[0]
     path = driver_fixture.driver_root / first.filename
-    source = b"only(" + playwright_driver._ATTACH_EXPRESSION + b")\n"
-    result = source.replace(
-        playwright_driver._ATTACH_EXPRESSION,
-        playwright_driver._replacement(first.excluded_target_types),
-    )
+    source = b"only(" + patch.preimage + b")\n"
+    result = source.replace(patch.preimage, patch.replacement)
     path.write_bytes(source)
     monkeypatch.setattr(
         playwright_driver,
@@ -933,7 +1043,7 @@ def test_patch_rejects_non_exact_replacement_count(
                 filename=first.filename,
                 pre_patch_sha256=playwright_driver._sha256(source),
                 post_patch_sha256=playwright_driver._sha256(result),
-                excluded_target_types=first.excluded_target_types,
+                patches=first.patches,
             ),
             *playwright_driver._FILE_SPECS[1:],
         ),
@@ -1012,7 +1122,15 @@ def test_patch_requires_the_configured_receipt_owner(
 
 @pytest.mark.parametrize(
     "target",
-    ["driver", "manifest", "package-extra", "executable", "browser-extra", "receipt"],
+    [
+        "driver",
+        "manifest",
+        "package-extra",
+        "executable",
+        "browser-extra",
+        "receipt",
+        "receipt-network-patch",
+    ],
 )
 def test_verifier_rejects_every_bound_surface_tamper(
     driver_fixture: DriverFixture,
@@ -1036,7 +1154,12 @@ def test_verifier_rejects_every_bound_surface_tamper(
     else:
         driver_fixture.receipt.chmod(0o644)
         value = json.loads(driver_fixture.receipt.read_text(encoding="utf-8"))
-        value["policy"] = "tampered"
+        if target == "receipt":
+            value["policy"] = "tampered"
+        else:
+            value["files"]["crNetworkManager.js"]["patches"][0]["parameters"][
+                "exclusive_resource_types"
+            ] = ["XHR"]
         driver_fixture.receipt.write_bytes(playwright_driver._canonical_json(value))
         driver_fixture.receipt.chmod(0o444)
 
@@ -1167,6 +1290,7 @@ def test_verifier_is_read_only_and_rejects_retargeted_executable(
         for path in (
             driver_fixture.receipt,
             driver_fixture.driver_root / "crBrowser.js",
+            driver_fixture.driver_root / "crNetworkManager.js",
             driver_fixture.driver_root / "crPage.js",
             driver_fixture.driver_root.parents[2] / "browsers.json",
             driver_fixture.resolved_executable,

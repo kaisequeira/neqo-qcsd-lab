@@ -12,6 +12,7 @@ from qcsd_lab.browser_egress import (
     NonReplayableEgressGuard,
     POPUP_GUARD_MARKER,
     POPUP_NAVIGATION_API,
+    TARGET_EGRESS_BINDING,
     TARGET_EGRESS_SHIM_SCHEMA_VERSION,
     target_egress_apis,
 )
@@ -22,6 +23,8 @@ from qcsd_lab.cdp_targets import (
     CdpTargetIntegrityError,
     CdpTargetSource,
     RecursiveCdpTargetRouter,
+    _IFRAME_INSTALLATION_KIND,
+    _sanitised_protocol_error,
     validate_bootstrap_prearm_summary,
 )
 
@@ -53,6 +56,12 @@ class _FakeNonFlatSession:
         self.emit_adoption_attachment = True
         self.before_adoption_attachment: Any = None
         self.before_nested_command: Any = None
+        self.auto_iframe_prearm = True
+        self.iframe_context_before_resume_ack = True
+        self.iframe_receipt_before_debugger_resume_ack = True
+        self.iframe_contexts: dict[tuple[str, ...], tuple[int, str]] = {}
+        self.iframe_pause_emitted: set[tuple[str, ...]] = set()
+        self.iframe_installation_emitted: set[tuple[str, ...]] = set()
 
     def on(self, event: str, handler: Any) -> None:
         self.handlers[event] = handler
@@ -181,10 +190,145 @@ class _FakeNonFlatSession:
         if method in self.hold_methods:
             self.held.append((route, command_id, method, self._result(route, method, params)))
             return
-        self._deliver(route, {"id": command_id, "result": self._result(route, method, params)})
+        result = self._result(route, method, params)
+        is_iframe = self.route_info[route]["type"] == "iframe"
+        if self.auto_iframe_prearm and is_iframe and method == "Runtime.runIfWaitingForDebugger":
+            if self.iframe_context_before_resume_ack:
+                self.emit_iframe_default_context(route)
+            self._deliver(route, {"id": command_id, "result": result})
+            if not self.iframe_context_before_resume_ack:
+                self.emit_iframe_default_context(route)
+            return
+        if (
+            self.auto_iframe_prearm
+            and is_iframe
+            and method == "Runtime.evaluate"
+            and "uniqueContextId" in params
+        ):
+            if route not in self.iframe_pause_emitted:
+                self.emit_iframe_instrumentation_pause(route)
+            self._deliver(route, {"id": command_id, "result": result})
+            return
+        if self.auto_iframe_prearm and is_iframe and method == "Debugger.resume":
+            if self.iframe_receipt_before_debugger_resume_ack:
+                self.emit_iframe_installation_receipt(route)
+            self._deliver(route, {"id": command_id, "result": result})
+            if not self.iframe_receipt_before_debugger_resume_ack:
+                self.emit_iframe_installation_receipt(route)
+            return
+        self._deliver(route, {"id": command_id, "result": result})
         if method == "Target.sendMessageToTarget":
             child_route = (*route, params["sessionId"])
             self._process(child_route, json.loads(params["message"]))
+
+    def emit_iframe_default_context(
+        self,
+        route: tuple[str, ...],
+        *,
+        context_id: int | None = None,
+        unique_context_id: str | None = None,
+        is_default: bool = True,
+        context_type: str | None = None,
+        frame_id: str | None = None,
+    ) -> None:
+        if context_id is None:
+            context_id = 100 + len(self.iframe_contexts)
+        if unique_context_id is None:
+            unique_context_id = f"unique-{'-'.join(route)}-{context_id}"
+        if is_default:
+            self.iframe_contexts[route] = (context_id, unique_context_id)
+        self.emit(
+            route,
+            "Runtime.executionContextCreated",
+            {
+                "context": {
+                    "id": context_id,
+                    "uniqueId": unique_context_id,
+                    "origin": "https://frame.test",
+                    "name": "",
+                    "auxData": {
+                        "isDefault": is_default,
+                        "type": context_type or ("default" if is_default else "isolated"),
+                        "frameId": frame_id or str(self.route_info[route]["targetId"]),
+                    },
+                }
+            },
+        )
+
+    def emit_iframe_instrumentation_pause(
+        self,
+        route: tuple[str, ...],
+        *,
+        reason: str = "instrumentation",
+        location: Mapping[str, Any] | None = None,
+        hit_breakpoints: list[str] | None = None,
+    ) -> None:
+        instrumentation_id = f"instrumentation-{'-'.join(route)}"
+        self.iframe_pause_emitted.add(route)
+        self.emit(
+            route,
+            "Debugger.paused",
+            {
+                "reason": reason,
+                "callFrames": [
+                    {
+                        "callFrameId": f"frame-{'-'.join(route)}",
+                        "location": dict(
+                            location
+                            or {
+                                "scriptId": f"script-{'-'.join(route)}",
+                                "lineNumber": 0,
+                                "columnNumber": 0,
+                            }
+                        ),
+                    }
+                ],
+                "hitBreakpoints": (
+                    [instrumentation_id] if hit_breakpoints is None else hit_breakpoints
+                ),
+            },
+        )
+
+    def emit_iframe_installation_receipt(
+        self,
+        route: tuple[str, ...],
+        *,
+        already_installed: bool = False,
+        execution_context_id: int | None = None,
+        mutate: Any = None,
+    ) -> None:
+        context = self.iframe_contexts.get(route)
+        if context is None and execution_context_id is None:
+            raise AssertionError("iframe installation receipt has no test context")
+        receipt: dict[str, Any] = {
+            "schema_version": TARGET_EGRESS_SHIM_SCHEMA_VERSION,
+            "policy": NON_REPLAYABLE_EGRESS_POLICY,
+            "kind": _IFRAME_INSTALLATION_KIND,
+            "target_type": "iframe",
+            "egress_shim": {
+                "schema_version": TARGET_EGRESS_SHIM_SCHEMA_VERSION,
+                "policy": NON_REPLAYABLE_EGRESS_POLICY,
+                "protected_apis": [],
+                "unavailable_apis": sorted(target_egress_apis("iframe")),
+                "failed_apis": [],
+                "already_installed": already_installed,
+            },
+            "popup_guard_installed": True,
+        }
+        if mutate is not None:
+            mutate(receipt)
+        self.iframe_installation_emitted.add(route)
+        self.emit(
+            route,
+            "Runtime.bindingCalled",
+            {
+                "name": TARGET_EGRESS_BINDING,
+                "payload": json.dumps(receipt, sort_keys=True, separators=(",", ":")),
+                "executionContextId": (
+                    execution_context_id if execution_context_id is not None else context[0]
+                ),
+            },
+        )
 
     def release_held(self, method: str) -> None:
         selected = next((item for item in self.held if item[2] == method), None)
@@ -193,6 +337,14 @@ class _FakeNonFlatSession:
         self.held.remove(selected)
         route, command_id, _method, result = selected
         self._deliver(route, {"id": command_id, "result": result})
+
+    def release_held_error(self, method: str, error: object) -> None:
+        selected = next((item for item in self.held if item[2] == method), None)
+        if selected is None:
+            raise AssertionError(f"no held command for {method}")
+        self.held.remove(selected)
+        route, command_id, _method, _result = selected
+        self._deliver(route, {"id": command_id, "error": error})
 
     def _result(
         self,
@@ -204,8 +356,17 @@ class _FakeNonFlatSession:
             return {"targetInfo": dict(self.route_info[route])}
         if method == "Page.addScriptToEvaluateOnNewDocument":
             return {"identifier": f"init-{'-'.join(route) or 'root'}"}
+        if method == "Debugger.setInstrumentationBreakpoint":
+            return {"breakpointId": f"instrumentation-{'-'.join(route)}"}
+        if method == "Debugger.setBreakpoint":
+            return {
+                "breakpointId": f"conditional-{'-'.join(route)}",
+                "actualLocation": dict((params or {})["location"]),
+            }
         if method == "Runtime.evaluate":
             expression = str((params or {}).get("expression", ""))
+            if (params or {}).get("uniqueContextId") is not None:
+                return {"result": {"type": "boolean", "value": expression == "true"}}
             if POPUP_GUARD_MARKER in expression and "=== true" in expression:
                 return {"result": {"type": "boolean", "value": True}}
             target_type = str(self.route_info[route]["type"])
@@ -259,6 +420,8 @@ class _FakeBrowserSession:
         self.emit_popup_detach = True
         self.emit_popup_destroy = True
         self.auto_attach_root_tab = True
+        self.before_get_targets: Any = None
+        self.get_targets_result: dict[str, Any] | None = None
         self.attached_targets: dict[str, tuple[str, dict[str, Any]]] = {}
         self.root_tab_info: dict[str, Any] = {
             "targetId": "root-tab",
@@ -302,6 +465,10 @@ class _FakeBrowserSession:
                 }
             )
         if method == "Target.getTargets":
+            if self.before_get_targets is not None:
+                self.before_get_targets()
+            if self.get_targets_result is not None:
+                return self.get_targets_result
             return {"targetInfos": [dict(info) for info in self.target_infos]}
         if method == "Target.closeTarget":
             target_id = parameters.get("targetId")
@@ -565,7 +732,7 @@ def test_policy_is_pinned_and_root_is_instrumented_before_navigation() -> None:
     router, _observed = _router(session)
 
     assert CDP_TARGET_INSTRUMENTATION_POLICY == (
-        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v10"
+        "playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v12"
     )
     assert [method for route, method, _params in session.commands if route == ()] == [
         "Target.getTargetInfo",
@@ -602,11 +769,15 @@ def test_oopif_and_worker_are_fully_configured_before_resume() -> None:
         "Runtime.addBinding",
         "Page.addScriptToEvaluateOnNewDocument",
         "Fetch.enable",
-        "Runtime.evaluate",
-        "Runtime.evaluate",
+        "Debugger.setInstrumentationBreakpoint",
         "Target.setAutoAttach",
         "Target.getTargetInfo",
         "Runtime.runIfWaitingForDebugger",
+        "Runtime.evaluate",
+        "Debugger.setBreakpoint",
+        "Debugger.removeBreakpoint",
+        "Debugger.resume",
+        "Debugger.removeBreakpoint",
     ]
     worker_expected = [
         "Debugger.enable",
@@ -626,6 +797,32 @@ def test_oopif_and_worker_are_fully_configured_before_resume() -> None:
     assert [
         method for seen, method, _params in session.commands if seen == worker
     ] == worker_expected
+    iframe_commands = [
+        (method, params) for seen, method, params in session.commands if seen == iframe
+    ]
+    synthetic = next(params for method, params in iframe_commands if method == "Runtime.evaluate")
+    assert synthetic == {
+        "expression": "true",
+        "uniqueContextId": "unique-iframe-session-100",
+        "returnByValue": True,
+        "awaitPromise": False,
+    }
+    exact_breakpoint = next(
+        params for method, params in iframe_commands if method == "Debugger.setBreakpoint"
+    )
+    assert exact_breakpoint["location"] == {
+        "scriptId": "script-iframe-session",
+        "lineNumber": 0,
+        "columnNumber": 0,
+    }
+    assert "iframe-pre-author-installation" in exact_breakpoint["condition"]
+    assert exact_breakpoint["condition"].rstrip().endswith("})()")
+    assert [
+        params for method, params in iframe_commands if method == "Debugger.removeBreakpoint"
+    ] == [
+        {"breakpointId": "instrumentation-iframe-session"},
+        {"breakpointId": "conditional-iframe-session"},
+    ]
 
     _complete_request(session, iframe, "same-request-id", "https://frame.test/a")
     _complete_request(session, worker, "same-request-id", "https://worker.test/a")
@@ -641,6 +838,380 @@ def test_oopif_and_worker_are_fully_configured_before_resume() -> None:
     session.detach((), session_id="iframe-session")
     session.detach((), session_id="worker-session")
     _clean_shutdown(router)
+
+
+@pytest.mark.parametrize(
+    ("context_before_resume_ack", "receipt_before_debugger_resume_ack"),
+    [(True, True), (True, False), (False, True), (False, False)],
+)
+def test_iframe_pre_author_barrier_handles_both_context_resume_orders(
+    context_before_resume_ack: bool,
+    receipt_before_debugger_resume_ack: bool,
+) -> None:
+    session = _FakeNonFlatSession(hold_methods={"Runtime.evaluate"})
+    session.iframe_context_before_resume_ack = context_before_resume_ack
+    session.iframe_receipt_before_debugger_resume_ack = receipt_before_debugger_resume_ack
+    router, _observed = _router(session)
+    iframe = session.attach(
+        (), session_id="iframe-session", target_id="iframe-target", target_type="iframe"
+    )
+
+    iframe_commands = [
+        (method, params) for route, method, params in session.commands if route == iframe
+    ]
+    methods = [method for method, _params in iframe_commands]
+    assert methods.index("Debugger.setInstrumentationBreakpoint") < methods.index(
+        "Runtime.runIfWaitingForDebugger"
+    )
+    assert methods.index("Target.getTargetInfo") < methods.index("Runtime.runIfWaitingForDebugger")
+    assert methods[-1] == "Runtime.evaluate"
+    assert "Debugger.setBreakpoint" not in methods
+    assert iframe_commands[-1][1]["uniqueContextId"] == "unique-iframe-session-100"
+    assert router.egress_prearm_summary["pending_total"] == 1
+
+    session.emit_iframe_instrumentation_pause(iframe)
+    session.release_held("Runtime.evaluate")
+    router.raise_if_failed()
+    assert router.egress_prearm_summary["pending_total"] == 0
+    assert router.shutdown_ready is True
+
+    session.detach((), session_id="iframe-session")
+    _clean_shutdown(router)
+
+
+def test_iframe_author_script_may_reach_the_barrier_before_initial_resume_ack() -> None:
+    session = _FakeNonFlatSession(
+        hold_methods={"Runtime.runIfWaitingForDebugger", "Runtime.evaluate"}
+    )
+    router, _observed = _router(session)
+    iframe = session.attach(
+        (), session_id="iframe-session", target_id="iframe-target", target_type="iframe"
+    )
+
+    session.emit_iframe_default_context(iframe)
+    session.emit_iframe_instrumentation_pause(
+        iframe,
+        location={"scriptId": "author-script", "lineNumber": 4, "columnNumber": 7},
+    )
+    router.raise_if_failed()
+    assert not any(
+        route == iframe and method == "Runtime.evaluate"
+        for route, method, _params in session.commands
+    )
+
+    session.release_held("Runtime.runIfWaitingForDebugger")
+    synthetic_index = next(
+        index
+        for index, (route, method, _params) in enumerate(session.commands)
+        if route == iframe and method == "Runtime.evaluate"
+    )
+    breakpoint_index = next(
+        index
+        for index, (route, method, _params) in enumerate(session.commands)
+        if route == iframe and method == "Debugger.setBreakpoint"
+    )
+    assert breakpoint_index < synthetic_index
+    session.release_held("Runtime.evaluate")
+    router.raise_if_failed()
+    assert router.egress_prearm_summary["pending_total"] == 0
+
+    session.detach((), session_id="iframe-session")
+    _clean_shutdown(router)
+
+
+def test_iframe_synthetic_trigger_waits_for_an_exact_default_context() -> None:
+    session = _FakeNonFlatSession(hold_methods={"Runtime.evaluate"})
+    session.auto_iframe_prearm = False
+    router, _observed = _router(session)
+    iframe = session.attach(
+        (), session_id="iframe-session", target_id="iframe-target", target_type="iframe"
+    )
+    assert not any(
+        route == iframe and method == "Runtime.evaluate"
+        for route, method, _params in session.commands
+    )
+
+    session.emit_iframe_default_context(
+        iframe,
+        context_id=91,
+        unique_context_id="isolated-context",
+        is_default=False,
+    )
+    router.raise_if_failed()
+    assert not any(
+        route == iframe and method == "Runtime.evaluate"
+        for route, method, _params in session.commands
+    )
+
+    session.emit_iframe_default_context(iframe, context_id=92, unique_context_id="exact-default")
+    command = next(
+        params
+        for route, method, params in session.commands
+        if route == iframe and method == "Runtime.evaluate"
+    )
+    assert command["uniqueContextId"] == "exact-default"
+    session.emit_iframe_instrumentation_pause(iframe)
+    session.emit_iframe_installation_receipt(iframe)
+    session.release_held("Runtime.evaluate")
+    assert router.egress_prearm_summary["pending_total"] == 0
+
+    session.detach((), session_id="iframe-session")
+    _clean_shutdown(router)
+
+
+@pytest.mark.parametrize(
+    "event",
+    [
+        {
+            "context": {
+                "id": True,
+                "uniqueId": "context",
+                "auxData": {
+                    "isDefault": True,
+                    "type": "default",
+                    "frameId": "iframe-target",
+                },
+            }
+        },
+        {
+            "context": {
+                "id": 7,
+                "uniqueId": "",
+                "auxData": {
+                    "isDefault": True,
+                    "type": "default",
+                    "frameId": "iframe-target",
+                },
+            }
+        },
+        {
+            "context": {
+                "id": 7,
+                "uniqueId": "context",
+                "auxData": {
+                    "isDefault": True,
+                    "type": "isolated",
+                    "frameId": "iframe-target",
+                },
+            }
+        },
+        {
+            "context": {
+                "id": 7,
+                "uniqueId": "context",
+                "auxData": {
+                    "isDefault": True,
+                    "type": "default",
+                    "frameId": "other-frame",
+                },
+            }
+        },
+    ],
+)
+def test_iframe_malformed_default_context_fails_closed(event) -> None:
+    session = _FakeNonFlatSession()
+    session.auto_iframe_prearm = False
+    router, _observed = _router(session)
+    iframe = session.attach(
+        (), session_id="iframe-session", target_id="iframe-target", target_type="iframe"
+    )
+
+    session.emit(iframe, "Runtime.executionContextCreated", event)
+    with pytest.raises(CdpTargetIntegrityError, match="execution context|identity"):
+        router.raise_if_failed()
+
+
+def test_iframe_duplicate_or_destroyed_default_context_fails_closed() -> None:
+    session = _FakeNonFlatSession(hold_methods={"Runtime.evaluate"})
+    session.auto_iframe_prearm = False
+    router, _observed = _router(session)
+    iframe = session.attach(
+        (), session_id="iframe-session", target_id="iframe-target", target_type="iframe"
+    )
+    session.emit_iframe_default_context(iframe, context_id=20, unique_context_id="first-default")
+    session.emit_iframe_default_context(iframe, context_id=21, unique_context_id="second-default")
+    with pytest.raises(CdpTargetIntegrityError, match="more than one default"):
+        router.raise_if_failed()
+
+    session = _FakeNonFlatSession(hold_methods={"Runtime.evaluate"})
+    session.auto_iframe_prearm = False
+    router, _observed = _router(session)
+    iframe = session.attach(
+        (), session_id="iframe-session", target_id="iframe-target", target_type="iframe"
+    )
+    session.emit_iframe_default_context(
+        iframe, context_id=22, unique_context_id="destroyed-default"
+    )
+    session.emit(
+        iframe,
+        "Runtime.executionContextDestroyed",
+        {
+            "executionContextId": 22,
+            "executionContextUniqueId": "destroyed-default",
+        },
+    )
+    with pytest.raises(CdpTargetIntegrityError, match="destroyed before prearm"):
+        router.raise_if_failed()
+
+
+def test_iframe_context_clear_and_unverified_detach_fail_closed() -> None:
+    session = _FakeNonFlatSession(hold_methods={"Runtime.evaluate"})
+    session.auto_iframe_prearm = False
+    router, _observed = _router(session)
+    iframe = session.attach(
+        (), session_id="iframe-session", target_id="iframe-target", target_type="iframe"
+    )
+    session.emit(iframe, "Runtime.executionContextsCleared", {})
+    router.raise_if_failed()
+    session.emit_iframe_default_context(iframe)
+    session.emit_iframe_instrumentation_pause(iframe)
+    session.emit_iframe_installation_receipt(iframe)
+    session.release_held("Runtime.evaluate")
+    session.detach((), session_id="iframe-session")
+    _clean_shutdown(router)
+
+    session = _FakeNonFlatSession(hold_methods={"Runtime.evaluate"})
+    session.auto_iframe_prearm = False
+    router, _observed = _router(session)
+    iframe = session.attach(
+        (), session_id="iframe-session", target_id="iframe-target", target_type="iframe"
+    )
+    session.emit_iframe_default_context(iframe)
+    session.emit(iframe, "Runtime.executionContextsCleared", {})
+    with pytest.raises(CdpTargetIntegrityError, match="cleared before prearm"):
+        router.raise_if_failed()
+
+    session = _FakeNonFlatSession(hold_methods={"Runtime.evaluate"})
+    session.auto_iframe_prearm = False
+    router, _observed = _router(session)
+    iframe = session.attach(
+        (), session_id="iframe-session", target_id="iframe-target", target_type="iframe"
+    )
+    session.emit_iframe_default_context(iframe)
+    session.detach((), session_id="iframe-session")
+    with pytest.raises(CdpTargetIntegrityError, match="work pending"):
+        router.raise_if_failed()
+
+
+@pytest.mark.parametrize(
+    ("reason", "location", "message"),
+    [
+        ("other", None, "debugger pause"),
+        (
+            "instrumentation",
+            {"scriptId": "", "lineNumber": 0, "columnNumber": 0},
+            "call-frame location",
+        ),
+        (
+            "instrumentation",
+            {"scriptId": "script", "lineNumber": True, "columnNumber": 0},
+            "call-frame location",
+        ),
+    ],
+)
+def test_iframe_malformed_instrumentation_pause_fails_closed(
+    reason: str,
+    location: Mapping[str, Any] | None,
+    message: str,
+) -> None:
+    session = _FakeNonFlatSession(hold_methods={"Runtime.evaluate"})
+    session.auto_iframe_prearm = False
+    router, _observed = _router(session)
+    iframe = session.attach(
+        (), session_id="iframe-session", target_id="iframe-target", target_type="iframe"
+    )
+    session.emit_iframe_default_context(iframe)
+    session.emit_iframe_instrumentation_pause(iframe, reason=reason, location=location)
+    with pytest.raises(CdpTargetIntegrityError, match=message):
+        router.raise_if_failed()
+
+
+def test_iframe_duplicate_instrumentation_pause_fails_closed() -> None:
+    session = _FakeNonFlatSession(hold_methods={"Runtime.evaluate"})
+    session.auto_iframe_prearm = False
+    router, _observed = _router(session)
+    iframe = session.attach(
+        (), session_id="iframe-session", target_id="iframe-target", target_type="iframe"
+    )
+    session.emit_iframe_default_context(iframe)
+    session.emit_iframe_instrumentation_pause(iframe)
+    router.raise_if_failed()
+    session.emit_iframe_instrumentation_pause(iframe)
+    with pytest.raises(CdpTargetIntegrityError, match="debugger pause is invalid"):
+        router.raise_if_failed()
+
+
+@pytest.mark.parametrize(
+    ("already_installed", "execution_context_id"),
+    [(True, None), (False, 999)],
+)
+def test_iframe_installation_receipt_must_be_first_and_context_bound(
+    already_installed: bool,
+    execution_context_id: int | None,
+) -> None:
+    session = _FakeNonFlatSession(hold_methods={"Runtime.evaluate"})
+    session.auto_iframe_prearm = False
+    router, _observed = _router(session)
+    iframe = session.attach(
+        (), session_id="iframe-session", target_id="iframe-target", target_type="iframe"
+    )
+    session.emit_iframe_default_context(iframe)
+    session.emit_iframe_instrumentation_pause(iframe)
+    session.emit_iframe_installation_receipt(
+        iframe,
+        already_installed=already_installed,
+        execution_context_id=execution_context_id,
+    )
+    with pytest.raises(CdpTargetIntegrityError, match="installation order|receipt is invalid"):
+        router.raise_if_failed()
+
+
+def test_nested_protocol_error_preserves_bounded_code_and_message() -> None:
+    session = _FakeNonFlatSession(hold_methods={"Debugger.setInstrumentationBreakpoint"})
+    router, _observed = _router(session)
+    session.auto_iframe_prearm = False
+    session.attach((), session_id="iframe-session", target_id="iframe-target", target_type="iframe")
+
+    session.release_held_error(
+        "Debugger.setInstrumentationBreakpoint",
+        {"code": -32000, "message": "Cannot find\ndefault execution context"},
+    )
+    with pytest.raises(
+        CdpTargetIntegrityError,
+        match=r"code=-32000, message=Cannot find default execution context",
+    ):
+        router.raise_if_failed()
+
+
+def test_nested_protocol_error_rejects_unbounded_code_and_bounds_message() -> None:
+    with pytest.raises(CdpTargetIntegrityError, match="malformed error"):
+        _sanitised_protocol_error({"code": 10**1_000, "message": "arbitrary"})
+
+    detail = _sanitised_protocol_error({"code": -32000, "message": "x" * 1_000})
+    assert detail == f"code=-32000, message={'x' * 240}"
+    assert len(detail) == len("code=-32000, message=") + 240
+
+
+def test_iframe_synthetic_response_is_a_required_terminal_command() -> None:
+    session = _FakeNonFlatSession(hold_methods={"Runtime.evaluate"})
+    router, _observed = _router(session)
+    iframe = session.attach(
+        (), session_id="iframe-session", target_id="iframe-target", target_type="iframe"
+    )
+    session.emit_iframe_instrumentation_pause(iframe)
+    router.raise_if_failed()
+    assert router.egress_prearm_summary["pending_total"] == 0
+    assert router.shutdown_ready is False
+
+    session.release_held_error(
+        "Runtime.evaluate",
+        {"code": -32000, "message": "synthetic context disappeared"},
+    )
+    with pytest.raises(
+        CdpTargetIntegrityError,
+        match=r"pre-author-trigger failed \(code=-32000, message=synthetic context disappeared\)",
+    ):
+        router.raise_if_failed()
 
 
 def test_iframe_attachment_rejects_an_explicit_foreign_browser_context() -> None:
@@ -1258,10 +1829,10 @@ def test_shared_worker_guard_installs_the_exact_browser_level_filter() -> None:
             "Target.setDiscoverTargets",
             {
                 "discover": True,
-                    "filter": [
-                        {"type": "page", "exclude": False},
-                        {"type": "service_worker", "exclude": False},
-                        {"exclude": True},
+                "filter": [
+                    {"type": "page", "exclude": False},
+                    {"type": "service_worker", "exclude": False},
+                    {"exclude": True},
                 ],
             },
         ),
@@ -1296,10 +1867,11 @@ def test_browser_guard_tracks_exactly_one_unpaused_root_tab_without_adoption() -
     assert not [
         command
         for command in page_session.commands
-        if command[1] == "Target.attachToTarget"
-        and command[2].get("targetId") == "root-tab"
+        if command[1] == "Target.attachToTarget" and command[2].get("targetId") == "root-tab"
     ]
-    assert not [command for command in browser_session.commands if command[0] == "Target.closeTarget"]
+    assert not [
+        command for command in browser_session.commands if command[0] == "Target.closeTarget"
+    ]
     router.raise_if_failed()
     _clean_shutdown(router)
 
@@ -1351,8 +1923,7 @@ def test_waiting_popup_tab_is_receipted_closed_and_never_adopted() -> None:
     assert not [
         command
         for command in page_session.commands
-        if command[1] == "Target.attachToTarget"
-        and command[2].get("targetId") == "popup-tab"
+        if command[1] == "Target.attachToTarget" and command[2].get("targetId") == "popup-tab"
     ]
     popup = guard._popup_tabs["popup-tab"]
     assert popup.close_requested is True
@@ -1512,9 +2083,10 @@ def test_popup_tab_abort_requires_close_ack_and_exact_detach_lifecycle() -> None
 
     with pytest.raises(CdpTargetIntegrityError, match="exact detached lifecycle"):
         guard.finish_abort()
-    assert sum(
-        command == "Target.getTargets" for command, _parameters in browser_session.commands
-    ) == 4
+    assert (
+        sum(command == "Target.getTargets" for command, _parameters in browser_session.commands)
+        == 4
+    )
     assert not any(
         command == "Target.setAutoAttach" and parameters.get("autoAttach") is False
         for command, parameters in browser_session.commands
@@ -1725,13 +2297,13 @@ def test_exact_guarded_shared_worker_is_adopted_once_and_fully_instrumented() ->
     ] == [
         "Debugger.enable",
         "Network.enable",
-            "Network.setCacheDisabled",
-            "Network.setBypassServiceWorker",
-            "Runtime.enable",
-            "Runtime.addBinding",
-            "Fetch.enable",
-            "Runtime.evaluate",
-            "Target.setAutoAttach",
+        "Network.setCacheDisabled",
+        "Network.setBypassServiceWorker",
+        "Runtime.enable",
+        "Runtime.addBinding",
+        "Fetch.enable",
+        "Runtime.evaluate",
+        "Target.setAutoAttach",
         "Target.getTargetInfo",
         "Runtime.runIfWaitingForDebugger",
     ]
@@ -3128,7 +3700,12 @@ def test_abort_disposes_permanently_pending_shared_worker_prearm() -> None:
         router.finish()
 
 
-def test_live_browser_guard_session_blocks_finish() -> None:
+def _shared_worker_ready_for_guardian_shutdown() -> tuple[
+    RecursiveCdpTargetRouter,
+    _FakeBrowserSession,
+    BrowserSharedWorkerGuard,
+    str,
+]:
     page_session = _FakeNonFlatSession()
     router, _observed = _router(page_session)
     browser_session, guard = _start_shared_worker_guard(page_session, router)
@@ -3166,7 +3743,140 @@ def test_live_browser_guard_session_blocks_finish() -> None:
 
     _begin_shutdown(router)
     page_session.detach((), session_id="shared-page-session")
+    return router, browser_session, guard, target_id
+
+
+def test_live_browser_guard_session_blocks_finish() -> None:
+    _router_value, _browser_session, guard, _target_id = (
+        _shared_worker_ready_for_guardian_shutdown()
+    )
     with pytest.raises(CdpTargetIntegrityError, match="guard|session|pending|unresolved"):
+        guard.finish()
+
+
+def test_guardian_shutdown_barrier_requires_real_detach_and_orders_cleanup() -> None:
+    router, browser_session, guard, target_id = _shared_worker_ready_for_guardian_shutdown()
+
+    def detach_on_barrier() -> None:
+        browser_session.before_get_targets = None
+        browser_session.detach(
+            guardian_session_id="shared-guardian-session",
+            target_id=target_id,
+        )
+
+    browser_session.before_get_targets = detach_on_barrier
+    guard.finish()
+    router.finish()
+
+    assert [method for method, _params in browser_session.commands][-3:] == [
+        "Target.getTargets",
+        "Target.setAutoAttach",
+        "Target.setDiscoverTargets",
+    ]
+    assert browser_session.detached is True
+
+
+def test_guardian_shutdown_needs_no_barrier_after_prior_exact_detach() -> None:
+    router, browser_session, guard, target_id = _shared_worker_ready_for_guardian_shutdown()
+    browser_session.detach(
+        guardian_session_id="shared-guardian-session",
+        target_id=target_id,
+    )
+    initial_barriers = sum(
+        method == "Target.getTargets" for method, _params in browser_session.commands
+    )
+
+    guard.finish()
+    router.finish()
+
+    assert (
+        sum(method == "Target.getTargets" for method, _params in browser_session.commands)
+        == initial_barriers
+    )
+
+
+def test_guardian_shutdown_barrier_retries_until_real_detach() -> None:
+    router, browser_session, guard, target_id = _shared_worker_ready_for_guardian_shutdown()
+    barrier_count = 0
+
+    def detach_on_second_barrier() -> None:
+        nonlocal barrier_count
+        barrier_count += 1
+        if barrier_count == 2:
+            browser_session.before_get_targets = None
+            browser_session.detach(
+                guardian_session_id="shared-guardian-session",
+                target_id=target_id,
+            )
+
+    browser_session.before_get_targets = detach_on_second_barrier
+    guard.finish()
+    router.finish()
+
+    assert barrier_count == 2
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        {},
+        {"targetInfos": {}},
+        {"targetInfos": [{}]},
+        {
+            "targetInfos": [
+                {"targetId": "duplicate"},
+                {"targetId": "duplicate"},
+            ]
+        },
+    ],
+)
+def test_guardian_shutdown_barrier_rejects_malformed_target_inventory(
+    result: dict[str, Any],
+) -> None:
+    _router_value, browser_session, guard, _target_id = _shared_worker_ready_for_guardian_shutdown()
+    browser_session.get_targets_result = result
+
+    with pytest.raises(CdpTargetIntegrityError, match="malformed"):
+        guard.finish()
+
+
+def test_guardian_shutdown_barrier_does_not_synthesise_missing_detach() -> None:
+    _router_value, browser_session, guard, _target_id = _shared_worker_ready_for_guardian_shutdown()
+    initial_barriers = sum(
+        method == "Target.getTargets" for method, _params in browser_session.commands
+    )
+
+    with pytest.raises(CdpTargetIntegrityError, match="exact lifecycle"):
+        guard.finish()
+
+    assert (
+        sum(method == "Target.getTargets" for method, _params in browser_session.commands)
+        == initial_barriers + 3
+    )
+    assert browser_session.detached is False
+
+
+def test_guardian_shutdown_requires_detached_target_to_be_absent() -> None:
+    _router_value, browser_session, guard, target_id = _shared_worker_ready_for_guardian_shutdown()
+    browser_session.target_infos.append(
+        {
+            "targetId": target_id,
+            "type": "shared_worker",
+            "url": "https://worker.test/shared.js",
+            "browserContextId": "root-context",
+            "attached": True,
+        }
+    )
+
+    def detach_on_barrier() -> None:
+        browser_session.before_get_targets = None
+        browser_session.detach(
+            guardian_session_id="shared-guardian-session",
+            target_id=target_id,
+        )
+
+    browser_session.before_get_targets = detach_on_barrier
+    with pytest.raises(CdpTargetIntegrityError, match="exact lifecycle"):
         guard.finish()
 
 
