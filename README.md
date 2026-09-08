@@ -1,6 +1,6 @@
 # QCSD lab
 
-Documentation audit: 2026-09-08, Australia/Sydney (AEST, UTC+10)
+Documentation audit: 2026-09-09, Australia/Sydney (AEST, UTC+10)
 
 This repository is the experiment orchestrator for the QCSD Neqo fork. It has
 one workflow: freeze a workload, expand a campaign into sequential samples,
@@ -216,9 +216,52 @@ with SHA-256
 was preserved at
 `/var/tmp/qcsd-v65-retired-audit-1000.mGz0IvTU`. The active lifecycle
 namespace is empty and `lifecycle-recover` passes. This is operational
-retirement, not scientific evidence. V66 is consumed and non-evidentiary; v67
-is the exact next allocator-authorised cohort and must obtain a fresh
-build/completion pair.
+retirement, not scientific evidence. V66 is consumed and non-evidentiary.
+
+V67 then completed the canonical fresh pull/no-cache three-image build for
+exact clean Lab `93f7cfc0d5feb0b286e00056c32f2b7364f62c25` / Rust
+`ce0d7a21756ce795d6f50d750a1c25e0fa006327`. Its schema-5 build receipt has
+whole-file SHA-256
+`4fd5795fd208571c3bbf57180e96369858b7c480b780384ea05dccb576f39f5a`;
+its schema-1 completion receipt has SHA-256
+`bc45ce64d4b18100033c8fa103b9a376055bbcd58779613c6340b184930ea1d3`
+and payload SHA-256
+`5c0259496a53fdd7a1418b9d5ba48253e05968ef9e94da735025ab554d7a7b6c`.
+The collection, preparation, and reference-image identities are
+`sha256:7b8be222cce7cbe03d780888bdd6dd24bfd5809015b707bd1745ce58004c1a80`,
+`sha256:59f2c846b7c80d5f246df233b4bb2759e94bdbe86e4ed12a69dc5c1aab4c5750`,
+and
+`sha256:ab538984c91f5703b8d826ae79d97f1d9104b117128991876c72882752b121be`.
+This is valid build evidence only.
+
+V67's first pinned-CDP execution used the exact preparation image but failed
+before receipt: a debugger-paused OOPIF had no default execution context while
+the then-current router issued contextless `Runtime.evaluate`. Same-image live
+diagnostics exposed Chromium `-32000` (`Cannot find default execution context`)
+and separately an unconsumed dedicated-worker response. These diagnostics are
+non-evidentiary. Clean Lab implementation checkpoint
+`01547462b212ac946aa4a47936e0fd99e2b09c78` adds the paused-OOPIF two-stage
+exact-location `Debugger` barrier and exact worker response-consumption
+completion tokens. It has no successful source-bound live receipt and must be
+rebuilt from fresh cohort v68. V67 authorises no downstream capture and every
+extended-campaign scientific numerator remains zero. The positive worker/OOPIF
+prototype and forbidden-worker negative control pass only as non-evidentiary
+live diagnostics; no driver-schema-7 receipt exists. Later complete-probe
+diagnostics exposed intermittent
+post-context-close shared-worker guardian event-delivery lag (3/6 baseline).
+An exact `Target.getTargets` ordering-barrier prototype retained strict real
+detach and passed 10/10. The corresponding instrumentation-v12 production
+implementation is present in that clean checkpoint. Final focused validation
+passed 526 tests with four opt-in image-only skips; the complete Lab suite
+reported 4,477 passed, 17 skipped, and 26 warnings in 4,888.30 seconds
+(1:21:28). A preceding frozen-source mounted live batch passed 10/10 in fresh
+disposable containers with no guardian or other failure, at a mean 2.1736
+seconds. The final review then added only a signed-32-bit/240-character bound
+for sanitised CDP error diagnostics and a non-aliasing legacy-policy copy; both
+are covered by the final test results, but the earlier live batch is not
+presented as committed-source evidence. These remain source-only engineering
+checks and non-evidentiary live diagnostics, not an overall gate or receipt
+pass.
 
 Summary schema 4 binds the typed schedule-stop policy, stop timestamp,
 sub-cell capacity, direction counts at stop, and exact post-stop advertised
@@ -842,7 +885,7 @@ consumed without a build/completion receipt. V64 subsequently passed its clean
 schema-5 build and schema-1 completion pair for Lab `81dd702a…` and unchanged
 Rust/gitlink `ce0d7a21…`. Its pinned-CDP launch then failed before receipt
 publication because the image's automatically created mode-`0444` policy
-ancestors were not searchable. Current Lab `18d4ab3…` repairs that source
+ancestors were not searchable. V67-bound Lab `18d4ab3…` repairs that source
 boundary and passes 66/66 targeted tests, but the fix postdates v64 and is not
 image-backed evidence. V65 exported its collection image after the embedded
 Rust gate passed, then failed the immediately-before-prepare-build source
@@ -851,8 +894,11 @@ Git metadata. It has no build/completion receipt and its collection image is
 inadmissible. V66 durably published its claim pair, then failed lifecycle
 admission on v65's still-intact uncommitted static-tag transaction before any
 v66 Docker build. The exact v65 retirement audit is preserved and the active
-lifecycle namespace is now empty. V66 is consumed and non-evidentiary; v67 is
-the exact next successor. No pinned-CDP, timing, regression, code-gate,
+lifecycle namespace is now empty. V66 is consumed and non-evidentiary. V67
+subsequently passed its exact clean build/completion pair, then failed
+pinned-CDP before receipt on the paused-OOPIF default-context deadlock.
+Post-v67 source repairs the barrier and worker completion contract, so fresh
+v68 must rebuild. No authorising pinned-CDP, timing, regression, code-gate,
 controlled, or foundation receipt exists, and every downstream scientific
 counter remains zero.
 
@@ -994,10 +1040,12 @@ not scientific evidence.
 
 V64 has an immutable clean build-execution/completion pair for Lab
 `81dd702a…` and Rust/gitlink `ce0d7a21…`, but its pinned-CDP probe failed before
-receipt publication. Current Lab `18d4ab3…` fixes the policy-directory defect
-and has 66/66 targeted engineering tests, but has no fresh image-backed build
-authority. Pinned-CDP, browser-egress, reference, regression-bound code-gate,
-and foundation receipts for the current source are absent. Browser-egress is
+receipt publication. V67 bound the `18d4ab3…` policy-directory repair in a
+fresh three-image build, then its pinned-CDP probe failed before receipt on the
+paused-OOPIF default-context deadlock. The changed post-v67 CDP/worker source
+has no fresh image-backed build authority. Pinned-CDP, browser-egress,
+reference, regression-bound code-gate, and foundation receipts for that source
+are absent. Browser-egress is
 0/110, timing stress is 0/12, regression is 0/18, and controlled qualification
 is 0/160. Real acquisition observations remain zero.
 Pilot fitting, qualification, and compatibility are 0/480, 0/720, and 0/1,080;
@@ -1055,8 +1103,10 @@ its durable claim pair from Lab `d73ee3f…`, then stopped before any Docker bui
 when lifecycle admission found v65's intact uncommitted static-tag transaction.
 After an exact no-owner/no-object audit, that v65 transaction was preserved in
 the retired audit directory and the active namespace now passes recovery. V66
-has no build/completion receipt and cannot be retried. V67 is the exact next
-allocator-authorised cohort. It must pass a fresh build/completion pair,
+has no build/completion receipt and cannot be retried. V67 then passed its
+fresh build/completion pair but failed pinned-CDP before receipt. The changed
+post-v67 source makes v68 the exact next allocator-authorised cohort. It must
+pass a fresh build/completion pair,
 pinned-CDP gate, 110/110 browser-egress gate, isolated reference, 12/12 timing
 stress, 18/18 regression, regression-bound code gate, and 160/160 controlled
 qualification before expanded-class acquisition can begin. V55–v66 cannot be
@@ -1267,9 +1317,11 @@ documentation audit refreshed its sealed Git metadata with `git status`. It is
 consumed, has no build/completion receipt, and its image cannot be used. V66
 then published its durable claim pair but failed lifecycle admission on that
 intact v65 transaction before any Docker build. Its exact audit and retirement
-left the active namespace empty and recoverable, but cannot advance v66. V67 is
-the exact next allocator-authorised value; no current-head build/completion
-pair or downstream scientific authority exists.
+left the active namespace empty and recoverable, but cannot advance v66. V67
+later passed its build/completion pair for clean Lab `93f7cfc0…` / Rust
+`ce0d7a21…` and failed pinned-CDP before receipt. That pair remains valid build
+evidence, but the post-v67 CDP/worker repair requires fresh v68 and no
+downstream scientific authority exists.
 
 The build-execution schema-4 integration is committed at clean Lab
 `69a14ebe48f78d08a8b36d3e573955ec64f00ff9`. V61 exercised it but failed before
@@ -1338,21 +1390,33 @@ later process running as that owner, so adversarial archival integrity requires
 an independently protected copy or seal.
 
 The completion identity is carried by current reference-execution schema 2,
-code-gate schema 2, study-environment schema 3, pinned-CDP receipt schema 9,
+code-gate schema 2, study-environment schema 3, pinned-CDP outer receipt schema
+11,
 browser-egress foundation schema 3, class-foundation schema 4,
 qualification-authority schema 2, controlled-qualification receipt schema 2,
 class-readiness schema 3, historical-corpus snapshot schema 2, formal-cohort
 manifest schema 3, capture-admission schema 4, and successor
-decision/readiness schema 3. The nested pinned-CDP probe contract remains schema
-8; successor policy/restart/cohort/plan remain schema 2. Acquisition provenance
+decision/readiness schema 3. The nested pinned-CDP probe contract is schema 10
+with policy
+`pinned-playwright-chromium-exclusive-target-topology-egress-and-argv-v10`;
+target instrumentation is policy
+`playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v12`,
+and the egress-prearm summary remains schema 2. Historical outer receipt
+schemas 8/9 remain frozen to nested contract schema 8, target-instrumentation
+policy v10, and driver schema 6; they remain readable for their exact
+historical source but cannot authorise new capture. The unexecuted intermediary
+outer schema 10/nested schema 9 contract and target-instrumentation policy v11
+are not accepted by current admission. Successor
+policy/restart/cohort/plan remain schema 2. Acquisition provenance
 remains schema 5 with checkpoint 2, active-batch 1, terminal 3 and completion 2.
 Readers used by current admission, mutation, or publication paths reject the
 immediately preceding schema. Where explicitly supported, separate historical
 inspection callers opt in without gaining current mutation or publication
 authority. Schemas 3–5 record builds through
 `docker --host <pinned-local-endpoint>`; schema 2 used the pinned context. No
-schema-5 execution/completion pair or downstream current receipt has been
-emitted.
+downstream current receipt has been emitted. V67's valid schema-5/schema-1
+build pair binds exact clean source `93f7cfc0…`; post-v67 changed source has no
+pair and must start again at v68.
 
 Earlier on 1 September 2026, a read-only probe found only about 2.19 GB
 available on the backing C: volume and Docker again exposed data-device I/O
@@ -1453,11 +1517,30 @@ this exact bounded render, not resources requiring scrolling, interaction,
 account state, or activity beginning after the hard cap.
 
 Browser discovery is bound to
-`playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v10`,
+`playwright-1.57-filtered-public-cdp-guarded-shared-worker-tab-and-egress-v12`,
 Playwright 1.57.0, and the full Chromium revision 1200/version 143.0.7499.4
-distribution. A receipt-schema-6 image-build patch changes only the two pinned
-Playwright `crBrowser.js` and `crPage.js` auto-attach expressions, and activates
-their target filters only for an exclusive QCSD driver process. Driver starts
+distribution. Clean implementation checkpoint `01547462…09c78` carries
+driver-receipt schema 7, which supersedes historical schema 6 and makes
+Playwright request interception marker-gated and
+`Document`-only under the exclusive QCSD owner; raw QCSD CDP remains the sole
+subresource admission owner. With the marker absent, native wildcard
+interception remains unchanged; with it active, non-null HTTP credentials are
+rejected before Playwright mutates network-manager state. Schema 7 is
+implemented but remains unbuilt and unexecuted in a fresh image. The pinned
+contract binds post-patch `crNetworkManager.js` SHA-256
+`c10daf1b5c5c6c64e1c545ff7d7bb16f9990aa71c4fe64e081c3a43157d4531a`,
+the 401-file/131,857,836-byte package tree at
+`fdd7094c7b4a9b9a045b1107f357ae9f9f534716f5766c29aa824c421dcca27d`,
+and content/payload/receipt SHA-256 values
+`4d8f576c788db015ecfd977fb3868a437c55ba45b39da7943990f3938ee7798f`,
+`91982e3a741cc7bc58c4b3abe85358cd63946ed6db11e15dd754b0e7cf51409f`,
+and
+`709f81c4f07b3b06eb6bd4c29f4b6eb69a5e8157f8378638b75a453226ed0caa`.
+The pinned image-build patch changes the exact Playwright `crBrowser.js` and
+`crPage.js` auto-attach expressions and the `crNetworkManager.js` Fetch pattern
+and HTTP-credential assignment. Its target filters activate only for an
+exclusive QCSD driver process.
+Driver starts
 hold a process-wide lock only until the Node driver has inherited the exact
 ownership marker; active and ordinary browser lifetimes may then overlap.
 Every Chromium launch uses the immutable `/usr/local/bin/qcsd-chromium` path
@@ -1475,12 +1558,25 @@ until the non-flat adopter has issued every initial setup envelope; the
 terminal summary requires every hold to be released after setup and no hold to
 remain pending. Every child acknowledges `Debugger`, `Network`, cache/service-
 worker bypass, recursive auto-attach, and an explicit target-information
-barrier before resume; the root page and iframe sessions also enable request-
+barrier before resume. For a runnable OOPIF, the pre-author barrier arms
+`Debugger.setInstrumentationBreakpoint(beforeScriptExecution)`, installs a
+regular breakpoint at the first call-frame's exact location, and uses its
+false-returning condition to install the iframe egress shim and popup guard and
+emit a strict typed binding receipt before the first author statement. After
+the instrumentation breakpoint is removed, the target resumes and the exact
+breakpoint is removed only after that receipt validates with
+`already_installed=false`. A no-script iframe is triggered by a synthetic
+evaluation bound to its exact `uniqueContextId` only after both the resume
+acknowledgement and default-context creation. The root page and iframe sessions
+also enable request-
 stage `Fetch`. Actual `Network.requestWillBeSent` occurrences alone create
 replay-resource ledger entries. `Fetch.requestPaused` remains the before-I/O
 policy gate and is reconciled against that Network evidence, including
 Chromium's page-owned interception of dedicated-worker requests and the guarded
-shared-worker session's own interception.
+shared-worker session's own interception. A dedicated/shared-worker fetch is
+complete only after its response body is consumed, its expected typed token is
+emitted, and its Network lifecycle terminates; issuing the fetch or observing
+only `Network.requestWillBeSent` is insufficient.
 
 Request identities include the session path, target ID and generation, Network
 request ID, and occurrence index; only unique page/iframe redirect migration is
@@ -1515,16 +1611,23 @@ stream.
 
 The create-only `./qcsd-lab test pinned-cdp` command exercises the real pinned
 Playwright 1.57.0/Chromium 143.0.7499.4 topology in the exact preparation image
-named by a versioned no-cache build receipt and its completion. Current receipt
-schema 9 embeds the unchanged probe-contract schema 8 and binds the exact
-driver receipt and browser identity, public-CDP v10 policy, successful HTTP
+named by a versioned no-cache build receipt and its completion. Current outer
+receipt schema 11 embeds probe-contract schema 10/policy v10 and binds the exact
+driver receipt and browser identity, target-instrumentation policy v12,
+successful HTTP
 response inventory, shared-worker prearm terminal summary, and sanitised
 target-lifecycle generation/count evidence. It runs as the host UID:GID with all
 capabilities dropped and Docker networking disabled, while a local
 in-container server proves cross-site iframe, worker/shared-worker,
 duplicate-URL, redirect, and complete shutdown behaviour. Success publishes a
 canonical hash-bound receipt containing only minimised topology counts and
-booleans. The receipt binds its cohort, build receipt and payload hashes,
+booleans. The egress-prearm summary remains schema 2. Historical outer receipt
+schemas 8 and 9 remain frozen to nested contract schema 8,
+target-instrumentation policy v10, and driver schema 6; they remain readable
+for exact historical evidence but cannot authorise new capture. Outer schema
+10, nested contract schema 9, and instrumentation policy v11 were unexecuted
+intermediaries and cannot authorise current capture. The receipt binds its
+cohort, build receipt and payload hashes,
 collection source, exact preparation image/source, observed isolation, and
 probe contract. The current driver creates both a page-owned CDP session for
 page/iframe interception and a distinct browser-owned session for
@@ -1544,7 +1647,7 @@ and v62 and v63 each stopped after their collection role when the mandatory
 three-role build/completion boundary and launched this gate against the exact
 preparation image and correct managed-policy input, but failed before receipt:
 `COPY --chmod=0444` had auto-created the missing policy parent directories as
-mode `0444`, so they could not be searched. Current Lab `18d4ab3…` explicitly
+mode `0444`, so they could not be searched. V67-bound Lab `18d4ab3…` explicitly
 creates those roots as mode `0555` and rejects any unsearchable directory; its
 66/66 targeted tests are source-only evidence. V65 subsequently exported its
 collection image after the embedded Rust gate passed, but the transaction
@@ -1553,8 +1656,14 @@ refreshed sealed Git metadata with `git status`. It published no
 build/completion or pinned-CDP receipt, and that image cannot be used. The next
 cohort, v66, stopped even earlier: lifecycle admission found the intact v65
 static-tag transaction before any Docker build. Its exact retirement audit does
-not make either cohort reusable. The next attempt therefore requires a fresh
-v67 no-cache build/completion pair. Pass the canonical receipt to the foundation
+not make either cohort reusable. V67 then passed the fresh no-cache
+build/completion pair for exact clean Lab `93f7cfc0…` / Rust `ce0d7a21…`, but
+its first pinned-CDP execution failed before receipt on the paused-OOPIF
+default-context deadlock. Same-image diagnostics also isolated the missing
+worker response consumption. Clean implementation checkpoint `01547462…09c78`
+implements both repairs; because that source differs from v67, the next attempt
+requires a fresh v68
+build/completion pair. Pass the canonical receipt to the foundation
 command as `--pinned-cdp-receipt "$PINNED_CDP"`. It is the sixth
 explicit foundation hard gate: the foundation binds the receipt and payload
 hashes, its exact build binding, and the fixed probe-contract hash, and requires
@@ -1916,8 +2025,10 @@ metadata reproof failed, so no receipt or image is reusable. V66's
 byte-identical durable pair consumes v66: lifecycle admission found the intact
 v65 static-tag transaction before any Docker build. The audited transaction is
 now preserved outside the empty active namespace, but v66 remains
-non-evidentiary. V67 is the exact next permitted value and must be built from
-the current exact clean source before any downstream gate runs.
+non-evidentiary. V67 later passed its exact clean build/completion pair and
+failed pinned-CDP before receipt. Its post-v67 source repair changes the
+authority identity; v68 is the exact next permitted value and must be built
+from the resulting exact clean source before any downstream gate runs.
 
 ```bash
 set -euo pipefail
@@ -2948,7 +3059,8 @@ bound by the exact cohort build/completion pair. That image checksum-downloads o
 the pinned arm64 Chromium revision-1200 archive, safely extracts its fixed
 466-file distribution, and revalidates the archive, executable, browser
 manifest, complete Chromium distribution, complete Playwright package before
-and after its two-file conditional patch, and the create-only driver receipt.
+and after its three-file conditional patch (`crBrowser.js`, `crPage.js`, and
+`crNetworkManager.js`), and the create-only driver receipt.
 The launcher rejects an alternate
 build or destination path, a conflicting image override, a symlink, and an
 existing destination before the probe. It runs as the invoking UID:GID, drops
@@ -2956,7 +3068,14 @@ every capability, and uses Docker network mode `none`. Its guarded writable
 mount can create the one requested receipt but over-mounts every pre-existing
 sibling evidence object read-only. The loopback HTTP server exercises a
 cross-site iframe, dedicated and shared workers, duplicate URLs, a redirect,
-request-stage interception ownership, and deliberate context shutdown. A
+request-stage interception ownership, and deliberate context shutdown. The
+current outer receipt is schema 11 with nested probe-contract schema 10/policy
+v10 and target-instrumentation policy v12; its egress-prearm summary remains
+schema 2. The held OOPIF must pass the two-stage exact-location `Debugger`
+barrier before author code, while both workers must consume their response bodies
+and emit the exact typed completion token before their Network lifecycle closes.
+Historical outer schemas 8/9 remain readable for their driver-schema-6
+evidence but cannot authorise new capture. A
 failure or interruption publishes no receipt. Before launch the wrapper also
 requires the exact clean Lab/Neqo checkout embedded in the preparation image,
 so dirty or alternate launcher/module bytes cannot claim the guarded execution
