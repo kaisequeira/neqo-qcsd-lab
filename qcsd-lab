@@ -9586,7 +9586,7 @@ browser_egress_live_docker_binding() {
     echo "browser-egress live Docker binding projection failed" >&2
     return 1
   }
-  printf '%s\n' "${QCSD_DOCKER_OUTPUT_BROWSER_EGRESS_DAEMON}"
+  browser_egress_live_docker_json="${QCSD_DOCKER_OUTPUT_BROWSER_EGRESS_DAEMON}"
 }
 
 browser_egress_reconcile_filesystem() {
@@ -9999,7 +9999,7 @@ browser_egress_record_failed_attempt() {
 
 browser_egress_live_docker_json=""
 if [[ "${1:-}" == "test" && "${2:-}" == "browser-egress" ]]; then
-  browser_egress_live_docker_json="$(browser_egress_live_docker_binding)" || exit 1
+  browser_egress_live_docker_binding || exit 1
 fi
 
 if [[ "${1:-}" == "test" && "${2:-}" == "browser-egress" &&

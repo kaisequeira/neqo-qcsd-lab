@@ -3016,9 +3016,58 @@ def test_browser_egress_live_daemon_is_admitted_at_every_evidence_boundary() -> 
     assert '"${_QCSD_DOCKER_PINNED_CONTEXT}"' in projection
     assert '"${_QCSD_DOCKER_PINNED_HOST}"' in projection
     assert '"${_QCSD_DOCKER_PINNED_SERVER_ID}"' in projection
+    assert (
+        'browser_egress_live_docker_json="${QCSD_DOCKER_OUTPUT_BROWSER_EGRESS_DAEMON}"'
+        in projection
+    )
 
     assert launcher.count('--live-docker-json "${browser_egress_live_docker_json}"') == 7
-    assert 'browser_egress_live_docker_json="$(browser_egress_live_docker_binding)"' in launcher
+    assert "browser_egress_live_docker_binding || exit 1" in launcher
+    assert '"$(browser_egress_live_docker_binding)"' not in launcher
+
+
+def test_browser_egress_live_daemon_projection_stays_in_supervisor_process(
+    tmp_path: Path,
+) -> None:
+    launcher = (Path(__file__).parents[1] / "qcsd-lab").read_text(encoding="utf-8")
+    function = (
+        "browser_egress_live_docker_binding() {"
+        + launcher.split("browser_egress_live_docker_binding() {", maxsplit=1)[1].split(
+            "\n}\n\nbrowser_egress_reconcile_filesystem()", maxsplit=1
+        )[0]
+        + "\n}\n"
+    )
+    script = tmp_path / "live-docker-binding.sh"
+    script.write_text(
+        "set -euo pipefail\n"
+        + function
+        + "supervisor_pid=$BASHPID\n"
+        + "browser_egress_live_docker_json=''\n"
+        + "qcsd_invoking_uid=1000\nqcsd_invoking_gid=1000\nimage_id=image\n"
+        + "_QCSD_DOCKER_PINNED_CONTEXT=default\n"
+        + "_QCSD_DOCKER_PINNED_HOST=unix:///var/run/docker.sock\n"
+        + "_QCSD_DOCKER_PINNED_SERVER_ID=server\n"
+        + "_qcsd_docker_api() { printf '{\"probe\":\"%s\"}\\n' \"$1\"; }\n"
+        + "qcsd_capture_attached_docker_output() {\n"
+        + "  local -n output=$1\n"
+        + "  [[ \"$BASHPID\" == \"$supervisor_pid\" ]] || return 91\n"
+        + "  output='{\"daemon\":\"bound\"}'\n"
+        + "}\n"
+        + "browser_egress_live_docker_binding\n"
+        + "[[ \"$browser_egress_live_docker_json\" == '{\"daemon\":\"bound\"}' ]]\n",
+        encoding="utf-8",
+    )
+    completed = subprocess.run(
+        ["bash", str(script)],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+    assert completed.returncode == 0, (completed.stdout, completed.stderr)
+    assert completed.stdout == ""
 
 
 def test_browser_egress_stale_topology_wrapper_retires_only_validated_ids(
