@@ -154,10 +154,37 @@ transaction is archived intact at
 SHA-256
 `86bab71f40ec6739b4d84392f2bd0091579113f13016ad6a665fb0efea24c54a`.
 `lifecycle-recover` passes and the active lifecycle namespace is empty. V63 is
-consumed and non-evidentiary. V64 is the exact next allocator-authorised
-cohort, but it must not be claimed until Docker Desktop and WSL have been
-cleanly restarted and repeated exact interop/backing-volume checks pass. Every
-scientific numerator remains zero.
+consumed and non-evidentiary.
+
+After a clean Docker Desktop/WSL restart and repeated exact host-health checks,
+v64 claimed clean Lab `81dd702affed4066322faa21ff27f3c7b842ed6b` and unchanged
+Rust/gitlink `ce0d7a21756ce795d6f50d750a1c25e0fa006327`. Its byte-identical
+claim and consumed-claim records have SHA-256
+`fa3af0eb119e791a8ec49d010fe695dd5506bcee3dba2de4f6cd95e3cab0850f`.
+The pull/no-cache transaction completed all three roles and published the
+schema-5 build receipt with SHA-256
+`c50238b3304017dff3cc25a42bfdb3be2f11095a4c6ee6cbe76358c2d7e8c856`
+and the schema-1 completion receipt with SHA-256
+`8cc62d21c6f0409e12c163d6864cd9aee4156a7866870bad487aced8dcca2ecf`.
+The exact collection, preparation, and isolated-reference image IDs are,
+respectively,
+`sha256:794e9696f48aef21a4eb1087502a0fcb7b61374efa4eeb99d82c90fccf0d3ccb`,
+`sha256:368babba9e51251a5ac7b9adea22f10eb088bbd459cc539eae9a40a57f7f1933`,
+and
+`sha256:33c629712b93e1242142e9a9f97c0fb0b5e03ca31a459b5c08d850666b729ad9`.
+
+The ensuing pinned-CDP launch used that exact preparation image and the
+correct managed-policy input, but failed before it could publish a receipt.
+Dockerfile `COPY --chmod=0444` had auto-created missing policy parent
+directories with mode `0444`, leaving them without a search bit. Clean Lab
+implementation checkpoint `18d4ab3144e04f0a012ffcba54d349b4046c4336`
+explicitly creates every such
+directory as root-owned mode `0555` before the copies and makes the runtime
+validator reject any directory with no search bit. The 66/66 targeted tests
+pass. This is source-only engineering evidence: it postdates v64 and cannot
+repair that cohort. V64 has no pinned-CDP or later receipt; every downstream
+scientific counter remains zero. V65 is the exact next allocator-authorised
+cohort and must obtain a fresh build/completion pair.
 
 Summary schema 4 binds the typed schedule-stop policy, stop timestamp,
 sub-cell capacity, direction counts at stop, and exact post-stop advertised
@@ -777,11 +804,15 @@ only the unreceipted collection role before the mandatory `before-prepare`
 backing-volume probe failed closed; its intact failed transaction is archived
 and the active lifecycle namespace is empty. V63 repeated that host-boundary
 failure after its own collection role completed, and is likewise durably
-consumed without a build/completion receipt. V64 is the exact next successor,
-but requires a clean Docker Desktop/WSL restart before allocation. No
-current-source build/completion pair, pinned-CDP, timing, regression, code-gate,
-controlled, or foundation receipt exists, and every scientific counter remains
-zero.
+consumed without a build/completion receipt. V64 subsequently passed its clean
+schema-5 build and schema-1 completion pair for Lab `81dd702a…` and unchanged
+Rust/gitlink `ce0d7a21…`. Its pinned-CDP launch then failed before receipt
+publication because the image's automatically created mode-`0444` policy
+ancestors were not searchable. Current Lab `18d4ab3…` repairs that source
+boundary and passes 66/66 targeted tests, but the fix postdates v64 and is not
+image-backed evidence. V65 is the exact next successor. No pinned-CDP, timing,
+regression, code-gate, controlled, or foundation receipt exists, and every
+downstream scientific counter remains zero.
 
 The retained post-v55 Lab engineering lineage also hardens durable Docker HANDOFF
 retirement. It permits at most one additional read-only absence observation,
@@ -919,11 +950,14 @@ all corresponding Docker objects absent. It issued no Docker-object removal
 and left unrelated Docker inventory unchanged. This is operational recovery,
 not scientific evidence.
 
-For current authority, a build-execution/completion pair and its pinned-CDP,
-browser-egress, reference, regression-bound code-gate, and foundation receipts
-are absent;
-timing stress is 0/12, regression is 0/18, and controlled qualification is
-0/160. Real acquisition observations remain zero.
+V64 has an immutable clean build-execution/completion pair for Lab
+`81dd702a…` and Rust/gitlink `ce0d7a21…`, but its pinned-CDP probe failed before
+receipt publication. Current Lab `18d4ab3…` fixes the policy-directory defect
+and has 66/66 targeted engineering tests, but has no fresh image-backed build
+authority. Pinned-CDP, browser-egress, reference, regression-bound code-gate,
+and foundation receipts for the current source are absent. Browser-egress is
+0/110, timing stress is 0/12, regression is 0/18, and controlled qualification
+is 0/160. Real acquisition observations remain zero.
 Pilot fitting, qualification, and compatibility are 0/480, 0/720, and 0/1,080;
 authoritative fitting and final qualification are 0/2,000 and 0/600;
 certification and canaries are 0/900 and 0/1,000; formal capture is 0/16,000.
@@ -965,15 +999,18 @@ V62 is separately consumed by its durable claim: its collection role built,
 but the mandatory `before-prepare` WSL backing-volume probe failed before any
 preparation/reference image or build/completion receipt. Its archived
 transaction does not advance a gate. V63 repeated that collection-only,
-pre-prepare failure and is also durably consumed without a receipt. V64 is the
-exact next allocator-authorised cohort; after the required clean Docker
-Desktop/WSL restart, it must pass the pull/no-cache
-schema-5 build and schema-1 completion publication,
-pinned-CDP gate, 110/110 browser-egress gate, isolated reference, 12/12 timing
-stress, 18/18 regression, regression-bound code gate, and 160/160 controlled
-qualification before expanded-class acquisition can begin. V55–v63 cannot be
-retried. The complete current status and earlier cohort chronology are
-retained in the authoritative workspace
+pre-prepare failure and is also durably consumed without a receipt. V64 passed
+its pull/no-cache schema-5 build and schema-1 completion publication, then
+failed the pinned-CDP gate before receipt because the correct policy file sat
+beneath mode-`0444`, non-searchable directories automatically created by
+`COPY --chmod=0444`. It is consumed and cannot be repaired in place. V65 is the
+exact next allocator-authorised cohort; from the `18d4ab3…` implementation it
+must pass a new build/completion pair, pinned-CDP gate, 110/110 browser-egress
+gate, isolated reference, 12/12 timing stress, 18/18 regression,
+regression-bound code gate, and 160/160 controlled qualification before
+expanded-class acquisition can begin. V55–v64 cannot be retried. The complete
+current status and earlier cohort chronology are retained in the authoritative
+workspace
 [`PROJECT.md`](../PROJECT.md).
 
 The current Lab boundary additionally classifies typed client defence/QCSD
@@ -1167,9 +1204,14 @@ provisional collection image. Its mandatory `before-prepare` storage probe
 failed before a preparation/reference image or build/completion receipt, and
 the failed transaction is archived outside the now-empty active lifecycle
 namespace. V63 then repeated the same collection-only, pre-prepare failure and
-is permanently consumed by its durable claim pair. V64 is therefore the exact
-next allocator-authorised value and remains absent and unclaimed; no current
-build/completion pair, downstream receipt, or scientific authority exists.
+is permanently consumed by its durable claim pair. V64 is likewise consumed
+by its byte-identical claim pair. Unlike v62 and v63, it published a clean
+schema-5 build/schema-1 completion pair for Lab `81dd702a…` and Rust/gitlink
+`ce0d7a21…`; unlike a qualified cohort, it then failed pinned-CDP before a
+receipt because the image's policy ancestors were not searchable. Current Lab
+`18d4ab3…` contains the source fix only. V65 is the exact next
+allocator-authorised value; no current-head build/completion pair or downstream
+scientific authority exists.
 
 The build-execution schema-4 integration is committed at clean Lab
 `69a14ebe48f78d08a8b36d3e573955ec64f00ff9`. V61 exercised it but failed before
@@ -1440,10 +1482,15 @@ older cohort can acquire this evidence retroactively; v60 failed before it
 produced a preparation image or build receipt, v61 repeated the
 pinned-frontend path-lifetime failure before any layer, image, IID, or receipt,
 and v62 and v63 each stopped after their collection role when the mandatory
-`before-prepare` storage probe failed through WSL interop. The next attempt
-therefore requires a clean Docker Desktop/WSL restart followed by the
-then-current exact clean Lab head under allocator-authorised cohort v64, plus a
-fresh no-cache build/completion pair. Pass the canonical
+`before-prepare` storage probe failed through WSL interop. V64 passed its clean
+three-role build/completion boundary and launched this gate against the exact
+preparation image and correct managed-policy input, but failed before receipt:
+`COPY --chmod=0444` had auto-created the missing policy parent directories as
+mode `0444`, so they could not be searched. Current Lab `18d4ab3…` explicitly
+creates those roots as mode `0555` and rejects any unsearchable directory; its
+66/66 targeted tests are source-only evidence. The next attempt therefore
+requires a fresh v65 no-cache build/completion pair from that exact clean head.
+Pass the canonical
 receipt to the foundation command as `--pinned-cdp-receipt "$PINNED_CDP"`. It is the sixth
 explicit foundation hard gate: the foundation binds the receipt and payload
 hashes, its exact build binding, and the fixed probe-contract hash, and requires
@@ -1797,9 +1844,10 @@ publishes the claim. Receipt absence does not make a pre-receipt failure
 reusable. The checked-in genesis ledger remains dense through v61, while the
 durable v62 claim/consumed-claim pair consumes v62 after its partial failed
 build. V63's second durable claim/consumed-claim pair likewise consumes v63
-after its collection-only failure. V64 is the exact next permitted value and
-must remain unclaimed until the required Docker Desktop/WSL restart and
-repeated exact host-health checks pass.
+after its collection-only failure. V64's byte-identical durable pair consumes
+v64; its build/completion pair passed, but its pre-receipt pinned-CDP failure
+prevents reuse. V65 is the exact next permitted value and must be built from
+the current exact clean source before any downstream gate runs.
 
 ```bash
 set -euo pipefail
