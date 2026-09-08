@@ -92,8 +92,9 @@ failed process state as unresolved, so this operational retirement is not
 scientific evidence and advances no gate.
 
 The clean post-v61 Lab implementation checkpoint is
-`c55b08aa06fbb4ac16e3655d6d3911109d853730`, with unchanged clean Rust/gitlink
-`ce0d7a21756ce795d6f50d750a1c25e0fa006327`. It combines the linked-config
+`c55b08aa06fbb4ac16e3655d6d3911109d853730`; clean documentation head
+`2d96c924e653aa45ffef5964ff216ba6307cbb0c` exercised it with unchanged clean
+Rust/gitlink `ce0d7a21756ce795d6f50d750a1c25e0fa006327`. It combines the linked-config
 repair with build-execution schema 5, the separate build-completion schema-1
 success boundary, dense cohort-allocation authority, host-side build-carrier
 admission, completion-bound downstream schemas, the pinned-CDP browser-session
@@ -107,12 +108,35 @@ and cleanup conservatively censuses separately retained crash residues. The
 exact committed source passed
 `4424 passed, 16 skipped, 26 warnings in 4975.41s (1:22:55)`. These are
 engineering checks, not campaign
-evidence. No v62 build/completion pair or downstream current receipt exists,
-and every scientific numerator remains zero. The checked-in consumed ledger
-contains the dense prefix v1–v61 and has SHA-256
+evidence. V62 then claimed those exact heads. Its claim and consumed-claim
+records are byte-identical, with SHA-256
+`c459e8bfac1edc0adf8a200dbb924841e39182e4f1f22e0b9e93a15bb117d62a`.
+The checked-in genesis consumed ledger remains the dense prefix v1–v61, with
+SHA-256
 `32c44e09f536d4cf4e3d8586fc1a5ed2d5cc7cb8fe11e92c60378042488690ad`;
-v62 is the exact next allocator-authorised version but is absent, unclaimed,
-and unlaunched.
+the durable claim nevertheless consumes v62.
+
+V62's zero-cache collection-role build completed as Buildx record
+`lqrgsctuz9ff4eu7qbaikxtql` and exported the unreceipted provisional collection
+image
+`sha256:dc03f05b4faeb3c94973674e3ffda8f87d65fe7a2cdc6122525ea5847cf34211`.
+The mandatory `before-prepare` PowerShell backing-volume probe then failed
+closed with WSL `UtilAcceptVsock: accept4 failed 110`; contemporaneous kernel
+evidence recorded an order-7 allocation failure in
+`vmbus_alloc_ring`/`hvs_probe`. No preparation or reference image was built,
+and no build-execution, build-completion, reference, or later receipt exists.
+The failed transaction is archived intact below
+`/var/tmp/qcsd-v62-retired-audit-1000.9HxJv9LV`; its `SUPERVISION` record has
+SHA-256
+`b0cb14049b52612d331f95e3d4eb253034fdabf8002c15bae9c676d7ec6ce0bb`.
+`lifecycle-recover` passes and the active lifecycle namespace is empty.
+
+A later exact backing-volume probe at `2026-09-08T11:43:52Z` passed with one
+`Healthy`/`OK` NTFS volume and 323,819,671,552 available bytes. Docker was
+healthy with zero running and 11 stopped containers. That operational recovery
+cannot retroactively complete v62 or make its provisional image evidentiary.
+V63 is the exact next allocator-authorised cohort and is absent and unclaimed.
+Every scientific numerator remains zero.
 
 Summary schema 4 binds the typed schedule-stop policy, stop timestamp,
 sub-cell capacity, direction counts at stop, and exact post-stop advertised
@@ -727,8 +751,11 @@ commits the post-v61 linked-config fix, schema-5 build/schema-1 completion,
 dense allocation, host admission, downstream-authority rollout, pinned-CDP
 session repair, post-`setsid()` exact-command binding, and lifecycle
 signal-linearisation repair against the unchanged Rust/gitlink. The ledger
-consumes v1–v61; v62 is its exact next
-successor but is absent, unclaimed, and unlaunched. No current-source
+remains checked in through v61. V62 consumed its durable claim and completed
+only the unreceipted collection role before the mandatory `before-prepare`
+backing-volume probe failed closed; its intact failed transaction is archived
+and the active lifecycle namespace is empty. V63 is the exact next successor
+and is absent and unclaimed. No current-source
 build/completion pair, pinned-CDP, timing, regression, code-gate, controlled,
 or foundation receipt exists, and every scientific counter remains zero.
 
@@ -909,13 +936,16 @@ not scientific evidence. Clean Lab
 `c55b08aa06fbb4ac16e3655d6d3911109d853730` commits the
 linked-config and completion-authority rollout plus the pinned-CDP session and
 lifecycle signal-linearisation repairs and post-`setsid()` exact-command
-binding. The consumed ledger is dense through v61; v62 is the exact next
-allocator-authorised cohort but remains
-absent, unclaimed, and unlaunched. It must pass the pull/no-cache
+binding. The checked-in genesis consumed ledger remains dense through v61.
+V62 is separately consumed by its durable claim: its collection role built,
+but the mandatory `before-prepare` WSL backing-volume probe failed before any
+preparation/reference image or build/completion receipt. Its archived
+transaction does not advance a gate. V63 is the exact next allocator-authorised
+cohort and remains absent and unclaimed. It must pass the pull/no-cache
 schema-5 build and schema-1 completion publication,
 pinned-CDP gate, 110/110 browser-egress gate, isolated reference, 12/12 timing
 stress, 18/18 regression, regression-bound code gate, and 160/160 controlled
-qualification before expanded-class acquisition can begin. V55–v61 cannot be
+qualification before expanded-class acquisition can begin. V55–v62 cannot be
 retried. The complete current status and earlier cohort chronology are
 retained in the authoritative workspace
 [`PROJECT.md`](../PROJECT.md).
@@ -1104,10 +1134,15 @@ stable non-symlink pathname beside the lifecycle lock; no live linked config is
 retained between build leases. Its basename binds the UID, guardian process
 start time and nonce. It also adds exact-path removal only after users drain
 and a conservative process-reference census for separately retained published
-crash residue. The checked-in consumed ledger contains the dense prefix v1–v61,
-so v62 is the exact next allocator-authorised value. V62 is absent and
-unclaimed: no current
-build/completion pair, downstream receipt, or scientific authority exists.
+crash residue. The checked-in genesis consumed ledger contains the dense prefix
+v1–v61. V62's identical durable claim/consumed-claim records consume the next
+version even though its build stopped after exporting only an unreceipted
+provisional collection image. Its mandatory `before-prepare` storage probe
+failed before a preparation/reference image or build/completion receipt, and
+the failed transaction is archived outside the now-empty active lifecycle
+namespace. V63 is therefore the exact next allocator-authorised value and is
+absent and unclaimed; no current build/completion pair, downstream receipt, or
+scientific authority exists.
 
 The build-execution schema-4 integration is committed at clean Lab
 `69a14ebe48f78d08a8b36d3e573955ec64f00ff9`. V61 exercised it but failed before
@@ -1375,12 +1410,12 @@ and a loopback-only interface inventory. Mocked tests and the deliberately
 non-evidentiary development-image diagnostics cannot substitute for that
 receipt. The receipt producer and current browser contract postdate v59, so no
 older cohort can acquire this evidence retroactively; v60 failed before it
-produced a preparation image or build receipt, and v61 repeated the
-pinned-frontend path-lifetime failure before any layer, image, IID, or receipt.
-The next attempt therefore uses clean Lab
-`c55b08aa06fbb4ac16e3655d6d3911109d853730` under
-allocator-authorised cohort v62, which is currently absent and unclaimed, plus
-a fresh no-cache build/completion pair. Pass the canonical
+produced a preparation image or build receipt, v61 repeated the
+pinned-frontend path-lifetime failure before any layer, image, IID, or receipt,
+and v62 stopped after its collection role when the mandatory `before-prepare`
+storage probe failed. The next attempt therefore requires the then-current
+exact clean Lab head under allocator-authorised cohort v63, which is absent and
+unclaimed, plus a fresh no-cache build/completion pair. Pass the canonical
 receipt to the foundation command as `--pinned-cdp-receipt "$PINNED_CDP"`. It is the sixth
 explicit foundation hard gate: the foundation binds the receipt and payload
 hashes, its exact build binding, and the fixed probe-contract hash, and requires
@@ -1731,8 +1766,9 @@ shell prologue rejects malformed or already-published destinations;
 `./qcsd-lab build` additionally requires the checked-in consumed ledger to be a
 dense prefix and the requested version to be its exact successor before it
 publishes the claim. Receipt absence does not make a pre-receipt failure
-reusable: the ledger consumes v61. V62 is the exact next permitted value, but
-it remains absent and unclaimed.
+reusable. The checked-in genesis ledger remains dense through v61, while the
+durable v62 claim/consumed-claim pair consumes v62 after its partial failed
+build. V63 is the exact next permitted value and remains absent and unclaimed.
 
 ```bash
 set -euo pipefail
